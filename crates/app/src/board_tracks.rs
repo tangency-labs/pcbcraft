@@ -25,6 +25,7 @@ use serde_json::json;
 use std::{collections::BTreeSet, sync::Arc};
 use uuid::Uuid;
 
+mod planning;
 mod preparation;
 
 /// Screen distance within which the pointer snaps to a pad center, track end or via.
@@ -104,6 +105,9 @@ struct SegmentDrag {
 #[derive(Debug)]
 pub(super) struct State {
     preparation: preparation::Preparation,
+    planning: planning::Planning,
+    snap: Option<(String, Point, RouteContact)>,
+    snap_source: Option<ViewInput>,
     retry_route: Option<Draft>,
     rules_source: Option<(BoardTarget, Option<pcbcraft_engine::board::rules::Settings>)>,
     class_defaults: bool,
@@ -149,6 +153,9 @@ impl Default for State {
     fn default() -> Self {
         Self {
             preparation: Default::default(),
+            planning: Default::default(),
+            snap: None,
+            snap_source: None,
             retry_route: None,
             rules_source: None,
             class_defaults: false,
@@ -288,6 +295,8 @@ impl State {
     }
     /// Drop the tool, any unfinished route and pending key requests. Selection and sizes remain.
     pub(super) fn cancel(&mut self) {
+        self.snap = None;
+        self.planning.cancel();
         self.preparation.cancel();
         self.retry_route = None;
         self.committed = None;
@@ -313,6 +322,8 @@ impl State {
     /// Escape drops an unfinished route first, then exits the tool, then clears the selection.
     /// Returns false when there was nothing to escape.
     pub(super) fn escape(&mut self) -> bool {
+        self.snap = None;
+        self.planning.cancel();
         if self.preparation.committing() {
             self.preparation.cancel();
             self.retry_route = None;
@@ -341,20 +352,59 @@ impl State {
     }
     /// Whether a tool, unfinished route or accepted pending commit owns canvas input.
     pub(super) fn busy(&self) -> bool {
-        self.tool || self.via_tool || self.draft.is_some() || self.moving.is_some() || self.segment.is_some() || self.preparation.committing()
+        self.tool
+            || self.via_tool
+            || self.draft.is_some()
+            || self.moving.is_some()
+            || self.segment.is_some()
+            || self.preparation.committing()
+            || self.planning.committing()
     }
     /// Current preparation state for the focused route's status bar.
     pub(super) fn preparation_status(&self) -> Option<String> {
-        self.preparation.status()
+        if self.planning.status().is_some() && !self.planning.current_ready() {
+            self.planning.status()
+        } else {
+            self.preparation.status().or_else(|| self.planning.status())
+        }
     }
     /// Property controls remain read-only until the accepted copper edit is published or canceled.
     pub(super) fn committing(&self) -> bool {
-        self.preparation.committing()
+        self.preparation.committing() || self.planning.committing()
     }
 
     /// The displacement to paint selected copper with: a move in progress, or one just submitted.
     fn shift(&self) -> Option<(i64, i64)> {
         self.moving.as_ref().map(|moving| moving.offset).or(self.committed_move)
+    }
+}
+
+impl State {
+    /// A retained contact cannot survive an edit, reopen or input-owner replacement.
+    fn sync_snap_source(&mut self, source: Option<ViewInput>) {
+        if self.snap_source != source {
+            self.snap = None;
+            self.snap_source = source;
+        }
+    }
+    /// Keep a magnetic copper target through a wider release radius than its pickup radius.
+    /// Revision/layer cancellation clears the latch, and free/grid points never latch.
+    fn snap_target(
+        &mut self,
+        candidate: (Point, Option<RouteContact>),
+        pointer: Pos2,
+        camera: &Camera,
+        rect: Rect,
+        layer: &str,
+    ) -> (Point, Option<RouteContact>) {
+        if let Some((previous_layer, at, contact)) = &self.snap
+            && previous_layer == layer
+            && camera.screen(*at, rect).distance(pointer) <= SNAP_PX * 1.5
+        {
+            return (*at, Some(contact.clone()));
+        }
+        self.snap = candidate.1.as_ref().map(|contact| (layer.to_owned(), candidate.0, contact.clone()));
+        candidate
     }
 }
 
@@ -551,6 +601,7 @@ fn route_target(
 
 /// The KiCad-style two-leg posture from `a` to `b`: one straight run along the major axis and one
 /// 45° diagonal, in either order. Returns the new vertices after `a`, without duplicates.
+#[cfg(test)]
 fn leg(a: Point, b: Point, diagonal_first: bool) -> Vec<Point> {
     let (dx, dy) = (b.x_nm - a.x_nm, b.y_nm - a.y_nm);
     let (adx, ady) = (dx.abs(), dy.abs());
@@ -564,6 +615,7 @@ fn leg(a: Point, b: Point, diagonal_first: bool) -> Vec<Point> {
 }
 
 /// Extend fixed vertices with a leg, skipping repeated points.
+#[cfg(test)]
 fn extended(points: &[Point], to: Point, diagonal_first: bool) -> Vec<Point> {
     let mut path = points.to_vec();
     if let Some(&last) = points.last() {
@@ -597,6 +649,7 @@ fn width_px(camera: &Camera, rect: Rect, width_nm: i64) -> f32 {
 /// Build the one route transaction for a finished path, with its vias and the current sizes.
 /// A path without a single segment produces nothing.
 fn add(state: &mut State, draft: Draft) -> Option<Command> {
+    state.planning.cancel();
     state.retry_route = Some(draft.clone());
     if draft.points.len() < 2 {
         return None;
@@ -679,6 +732,7 @@ pub(super) fn interact(
     kinds: Kinds,
 ) -> Interaction {
     state.sync_rules(view);
+    state.sync_snap_source(source);
     let mut out = Interaction::default();
     if !state.preparation.committing() {
         state.committed = None;
@@ -697,7 +751,9 @@ pub(super) fn interact(
         egui::Popup::close_id(ui.ctx(), egui::Popup::default_response_id(response));
     }
     if !enabled || stale_route {
+        state.planning.cancel();
         state.preparation.cancel();
+        state.snap = None;
         state.draft = None;
     }
     if !route_available {
@@ -714,7 +770,7 @@ pub(super) fn interact(
     let move_copper = std::mem::take(&mut state.move_requested);
     let select_connected = std::mem::take(&mut state.connected_requested);
     let drag_segment = std::mem::take(&mut state.drag_segment_requested);
-    if state.preparation.committing() {
+    if state.preparation.committing() || state.planning.committing() {
         if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
             state.escape();
         }
@@ -811,6 +867,8 @@ pub(super) fn interact(
         if (backspace || action == Some(RouteAction::Back))
             && let Some(draft) = &mut state.draft
         {
+            state.planning.cancel();
+            state.preparation.cancel();
             // Undo the most recent step: a via at the last vertex first, then the vertex itself.
             if draft.changes.last().is_some_and(|(at, _)| *at + 1 == draft.points.len()) {
                 draft.changes.pop();
@@ -830,28 +888,29 @@ pub(super) fn interact(
             && next != draft.layer
         {
             let (at, _) = route_target(pointer, camera, rect, view, &draft.layer, snap_to_grid, false);
-            let path = extended(&draft.points, at, state.diagonal_first);
-            let index = path.len() - 1;
-            if index > 0 && path.len() <= MAX_PATH_POINTS && !draft.changes.iter().any(|(existing, _)| *existing == index) {
-                if let Some(policy) = &draft.via_rules {
-                    match policy.via_sizes(state.via_diameter_override, state.via_drill_override) {
-                        Ok((diameter, drill)) => {
-                            state.via_diameter_nm = diameter;
-                            state.via_drill_nm = drill;
-                        }
-                        Err(error) => {
-                            out.error = Some(error.to_string());
-                            return out;
-                        }
+            if let Some(policy) = &draft.via_rules {
+                match policy.via_sizes(state.via_diameter_override, state.via_drill_override) {
+                    Ok((diameter, drill)) => {
+                        state.via_diameter_nm = diameter;
+                        state.via_drill_nm = drill;
+                    }
+                    Err(error) => {
+                        out.error = Some(error.to_string());
+                        return out;
                     }
                 }
-                draft.points = path;
-                draft.changes.push((index, next.clone()));
-                draft.layer = next.clone();
-                out.switch_layer = Some(next);
             }
+            state.planning.request(
+                draft,
+                view.target,
+                at,
+                state.diagonal_first,
+                (state.width_nm, state.via_diameter_nm, state.via_drill_nm),
+                Some(planning::Action::Via(next)),
+            );
             return out;
         }
+
         if finish || action == Some(RouteAction::Finish) {
             if let Some(draft) = state.draft.take() {
                 out.command = add(state, draft);
@@ -863,6 +922,7 @@ pub(super) fn interact(
             return out;
         }
         let (at, contact) = route_target(pointer, camera, rect, view, layer, snap_to_grid, state.draft.is_none());
+        let (at, contact) = state.snap_target((at, contact), pointer, camera, rect, layer);
         match state.draft.take() {
             None => {
                 match Uuid::parse_str(layer)
@@ -884,16 +944,16 @@ pub(super) fn interact(
                     Err(error) => out.error = Some(error),
                 }
             }
-            Some(mut draft) => {
-                let path = extended(&draft.points, at, state.diagonal_first);
-                if path.len() <= MAX_PATH_POINTS {
-                    draft.points = path;
-                }
-                if (contact.is_some() || response.double_clicked()) && draft.points.len() >= 2 {
-                    out.command = add(state, draft);
-                } else {
-                    state.draft = Some(draft);
-                }
+            Some(draft) => {
+                state.planning.request(
+                    &draft,
+                    view.target,
+                    at,
+                    state.diagonal_first,
+                    (state.width_nm, state.via_diameter_nm, state.via_drill_nm),
+                    Some(planning::Action::Vertex { finish: contact.is_some() || response.double_clicked() }),
+                );
+                state.draft = Some(draft);
             }
         }
         return out;
@@ -1161,16 +1221,28 @@ pub(super) fn paint_draft(
         return;
     }
     let Some(layer) = state.draft.as_ref().map(|draft| draft.layer.as_str()).or(active.filter(|_| state.tool)) else { return };
+    let layer = layer.to_owned();
     let snap_to_grid = !painter.ctx().input(|input| input.modifiers.ctrl);
-    let (at, contact) = route_target(pointer, camera, rect, view, layer, snap_to_grid, state.draft.is_none());
+    let (at, contact) = route_target(pointer, camera, rect, view, &layer, snap_to_grid, state.draft.is_none());
+    let (at, contact) = state.snap_target((at, contact), pointer, camera, rect, &layer);
     if let Some(draft) = &state.draft {
-        let path = extended(&draft.points, at, state.diagonal_first);
+        state.planning.request(draft, view.target, at, state.diagonal_first, (state.width_nm, state.via_diameter_nm, state.via_drill_nm), None);
+        let path = state.planning.preview(draft, state.width_nm);
+        let mut changes = draft.changes.clone();
+        if let Some(next) = state.planning.via_layer()
+            && path.len() > 1
+        {
+            let at = path.len() - 1;
+            if !changes.iter().any(|(existing, _)| *existing == at) {
+                changes.push((at, next.to_owned()));
+            }
+        }
         // Queue the exact geometry already resolved for painting; do not project every pad
         // a second time merely to prepare the same pointer request.
-        if (2..=MAX_PATH_POINTS).contains(&path.len()) && Some(draft.layer.as_str()) == active {
+        if state.planning.current_ready() && (2..=MAX_PATH_POINTS).contains(&path.len()) && Some(draft.layer.as_str()) == active {
             let mut params = json!({"board":view.target.board,"layer":draft.start,"width_nm":state.width_nm,"points":path,"expected_revision":draft.source.revision});
-            if !draft.changes.is_empty() {
-                params["layer_changes"] = json!(draft.changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect::<Vec<_>>());
+            if !changes.is_empty() {
+                params["layer_changes"] = json!(changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect::<Vec<_>>());
                 params["via_diameter_nm"] = json!(state.via_diameter_nm);
                 params["via_drill_nm"] = json!(state.via_drill_nm);
             }
@@ -1183,7 +1255,7 @@ pub(super) fn paint_draft(
         } else if !state.preparation.committing() {
             state.preparation.cancel();
         }
-        let layers = segment_layers(&draft.start, &draft.changes, path.len());
+        let layers = segment_layers(&draft.start, &changes, path.len());
         let path: Vec<_> = path.into_iter().map(|point| camera.screen(point, rect)).collect();
         let width = width_px(camera, rect, state.width_nm);
         let clearance = width_px(camera, rect, draft.clearance_nm);
@@ -1191,13 +1263,13 @@ pub(super) fn paint_draft(
         for pair in path.windows(2) {
             pcbcraft_chrome::board::routing_clearance(painter, [pair[0], pair[1]], width, clearance);
         }
-        for (index, _) in &draft.changes {
+        for (index, _) in &changes {
             pcbcraft_chrome::board::routing_clearance(painter, [path[*index]; 2], via_width.max(4.0), clearance);
         }
         for (pair, layer) in path.windows(2).zip(layers) {
             pcbcraft_chrome::board::track(painter, [pair[0], pair[1]], width, layer_color(view, appearance, layer), false, true);
         }
-        for (index, _) in &draft.changes {
+        for (index, _) in &changes {
             pcbcraft_chrome::board::via(painter, path[*index], via_width / 2., width_px(camera, rect, state.via_drill_nm) / 2., false, true, None);
         }
     }
@@ -1210,6 +1282,34 @@ pub(super) fn paint_draft(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The target stays latched in the release band and changes only beyond it or on a new layer.
+    #[test]
+    fn magnetic_route_target_has_pickup_and_release_hysteresis() {
+        let camera = Camera::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 800.));
+        let a = Point { x_nm: 0, y_nm: 0 };
+        let b = Point { x_nm: 1_000_000, y_nm: 0 };
+        let at = camera.screen(a, rect);
+        let mut state = State::default();
+        state.snap_target((a, Some(RouteContact::Pad(Some("Net A".into())))), at, &camera, rect, "front");
+        assert_eq!(state.snap_target((b, None), at + egui::vec2(10., 0.), &camera, rect, "front").0, a);
+        assert_eq!(state.snap_target((b, None), at + egui::vec2(13., 0.), &camera, rect, "front").0, b);
+        state.snap_target((a, Some(RouteContact::Pad(None))), at, &camera, rect, "front");
+        assert_eq!(state.snap_target((b, None), at, &camera, rect, "back").0, b);
+        state.snap_target((a, Some(RouteContact::Pad(None))), at, &camera, rect, "front");
+        state.escape();
+        assert_eq!(state.snap_target((b, None), at, &camera, rect, "front").0, b);
+        let mut session = pcbcraft_engine::Session::default();
+        session.apply("project.new", &json!({"create_board":true})).unwrap();
+        let mut view = crate::editor_view::EditorView::new(crate::editor_view::ViewId(10));
+        view.bind_opened_project(&session);
+        state.sync_snap_source(view.input(&session));
+        state.snap_target((a, Some(RouteContact::Pad(None))), at, &camera, rect, "front");
+        session.apply("project.rename", &json!({"name":"Changed while hovering"})).unwrap();
+        state.sync_snap_source(view.input(&session));
+        assert_eq!(state.snap_target((b, None), at, &camera, rect, "front").0, b);
+    }
 
     /// Board transitions reset local sizes without authored rules; initial synchronization and
     /// ordinary edits on the same board preserve an explicitly selected upcoming size.

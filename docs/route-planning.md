@@ -3,7 +3,7 @@
 `board::route::walkaround` is the engine's first routing solver for
 [#246](https://github.com/tangency-labs/pcbcraft/issues/246). It plans one route on
 one copper layer around existing copper and returns points; it never edits the
-board. The PCB route tool does not use it yet. Agents reach it through the
+board. The PCB route tool uses it for its single-layer preview and vertex targets. Agents reach it through the
 read-only `pcb.plan_route` command.
 
 ## What a plan does
@@ -79,11 +79,42 @@ the revision, history and saved bytes do not change.
 The command is in the engine catalog, so headless MCP discovers it. The live
 editor forwards engine commands to its session like other read-only queries.
 
+## Interactive routing
+
+X starts the existing route tool. Pointer requests capture the view, board, revision,
+layer, width, posture and fixed vertices. They coalesce into one current search;
+a previous legal path can stay visible while a replacement is being solved. Copper
+snapping has an 8-pixel pickup radius and a 12-pixel release radius, so nearby
+contacts do not alternate at the pickup boundary.
+
+A click freezes its exact target until its plan and the ordinary full-path copper
+validation finish. The pointer cannot replace that clicked target. A blocked or
+incomplete plan reports its state and fixes no new vertex. The full route, including
+through vias, publishes through the existing prepared `pcb.add_tracks` transaction
+with one undo entry. Escape, focus/view release, hidden or changed active layers,
+size changes, shared edits and project replacement revoke pending adoption.
+
+`Session::route_planning` captures a reusable `PlanningContext` without projecting
+pads. `prepare_route_plan` returns a read-only `PlanningJob`. Hosts check its source
+and their input generation before adopting a result. Contact projection yields
+in ranges of at most 32 footprints or the supplied contact-pair budget. Search
+retains its continuation rather than rerunning earlier probes, advancing at most
+eight probe/contact suspension boundaries per call. Final contour, class-policy
+and index construction remain bounded by supported model limits rather than a
+strict wall-clock slice. Native work uses the existing two-worker limit; browsers
+use the existing frame-batch queue. Dropping or canceling a job changes no project.
+
+The synchronous command and resumable editor search run the same solver; existing
+MCP clients can continue to plan and submit points with the captured revision.
+Neither the query nor a displayed ghost grants authority to bypass final validation.
+
 ## Limits
 
-Vias and layer changes, arcs, zones, differential pairs, length tuning and
-moving existing copper are not planned. The route tool's interactive preview,
-snap hysteresis and commit gesture are later #246 slices.
+The solver plans one copper layer at a time. The editor retains its existing through-via
+and layer-change gesture, validating each proposed via with the entire path before
+changing layer. It does not search for a multilayer route or choose via locations.
+Arcs, zones, differential pairs, length tuning and moving existing copper remain
+outside this solver. Routing on filled zones needs current fill integration from #232.
 
 ## Measurement
 
@@ -99,3 +130,11 @@ records the connected-path validation cost and corrected search-limit outcomes.
 
 The [review follow-up](../tools/performance/baselines/issue246/review376-followup/README.md)
 records bounded previous hints and obstacle avoidance when reusing a plan.
+
+`board_perf walkaround_jobs ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT` adds
+capture, maximum individual preparation/search batches, complete validation,
+atomic publication, pointer replacement and cancellation acknowledgement costs.
+Every batched plan must equal the synchronous result, and the existing exhaustive
+copper oracle checks new geometry outside timed intervals. The browser diagnostic
+exports `run_walkaround_jobs` with the same inputs. These service measurements and
+rendered replay readbacks do not certify physical input-to-visible preview latency.

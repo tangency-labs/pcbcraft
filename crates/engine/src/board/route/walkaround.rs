@@ -36,8 +36,6 @@ const HYSTERESIS: f64 = 0.1;
 pub(super) enum Stop {
     /// The probe budget or a search bound ran out.
     Exhausted,
-    /// The caller's cancellation flag was raised.
-    Canceled,
     /// The captured query refused a probe (an invalid layer or object index).
     Failed(CommandError),
 }
@@ -96,7 +94,7 @@ pub(super) struct Walker<'a> {
     outline: drc::Outline,
     budget: usize,
     probes: usize,
-    cancel: &'a dyn Fn() -> bool,
+    progress: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     /// Legs already confirmed legal, so repeated checks cost no budget.
     clear: BTreeSet<(i64, i64, i64, i64)>,
     /// The side of the head-to-target line the previous result ran on, if any.
@@ -106,7 +104,12 @@ pub(super) struct Walker<'a> {
 impl<'a> Walker<'a> {
     /// Capture the head's copper contacts and the board outline. The request was validated by
     /// the caller; an invalid layer still fails here before any probe is charged.
-    pub(super) fn new(query: &'a ClearanceQuery, request: &Request, budget: usize, cancel: &'a dyn Fn() -> bool) -> Result<Self, CommandError> {
+    pub(super) fn new(
+        query: &'a ClearanceQuery,
+        request: &Request,
+        budget: usize,
+        progress: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Result<Self, CommandError> {
         let layers = [request.layer];
         let half = request.width_nm as f64 / 2.;
         let at_head = Contour::capsule(request.head, request.head, half);
@@ -129,7 +132,7 @@ impl<'a> Walker<'a> {
             outline: view.outline_edges(),
             budget,
             probes: 0,
-            cancel,
+            progress,
             clear: BTreeSet::new(),
             prefer_side: None,
         };
@@ -142,19 +145,19 @@ impl<'a> Walker<'a> {
         self.probes
     }
 
-    /// Plan the route. Errors are budget exhaustion, cancellation or a refused probe.
-    pub(super) fn run(&mut self, request: &Request) -> Result<Plan, Stop> {
-        let head = self.check(self.head, self.head)?;
+    /// Plan the route, yielding between work units. Errors are budget exhaustion or a refused probe; the owner cancels by dropping the continuation.
+    pub(super) async fn run(&mut self, request: &Request) -> Result<Plan, Stop> {
+        let head = self.check(self.head, self.head).await?;
         if !head.legal {
             return Ok(self.plan(vec![self.head], Outcome::Blocked { last_legal: self.head }, head.blockers.first().map(|b| b.0)));
         }
         if self.head == self.target {
             return Ok(self.plan(vec![self.head], Outcome::Reached, None));
         }
-        if self.continues(&request.previous)? {
+        if self.continues(&request.previous).await? {
             return Ok(self.plan(request.previous.clone(), Outcome::Reached, None));
         }
-        let walked = self.walk(self.head, self.target, request.flipped)?;
+        let walked = self.walk(self.head, self.target, request.flipped).await?;
         if walked.points.len() > MAX_PATH_POINTS {
             return Ok(self.plan(vec![self.head], Outcome::Incomplete, None));
         }
@@ -172,7 +175,7 @@ impl<'a> Walker<'a> {
 
     /// Whether the previous result still applies unchanged: same ends, posture legs only, and
     /// every leg still legal. Reusing it keeps a stationary pointer's route from oscillating.
-    fn continues(&mut self, previous: &[Point]) -> Result<bool, Stop> {
+    async fn continues(&mut self, previous: &[Point]) -> Result<bool, Stop> {
         if previous.len() < 2
             || previous.len() > MAX_PATH_POINTS
             || previous.first() != Some(&self.head)
@@ -181,25 +184,24 @@ impl<'a> Walker<'a> {
         {
             return Ok(false);
         }
-        Ok(self.confirm(previous.to_vec())?.points == previous)
+        Ok(self.confirm(previous.to_vec()).await?.points == previous)
     }
 
     /// Exactly check the leg `a`–`b` against captured copper and the board outline, charging
     /// one probe unless the same leg was already confirmed. Contact with the head's islands is
     /// exempt unless it joins distinct nets; copper of the route's own single net never becomes
     /// a hull, though it still makes a leg illegal when a short widens the leg's membership.
-    fn check(&mut self, a: Point, b: Point) -> Result<Leg, Stop> {
+    async fn check(&mut self, a: Point, b: Point) -> Result<Leg, Stop> {
         let key = (a.x_nm, a.y_nm, b.x_nm, b.y_nm);
         if self.clear.contains(&key) {
             return Ok(Leg { legal: true, blockers: Vec::new() });
         }
-        if (self.cancel)() {
-            return Err(Stop::Canceled);
-        }
+        super::search::yield_unit().await;
         if self.probes >= self.budget {
             return Err(Stop::Exhausted);
         }
         self.probes += 1;
+        self.progress.store(self.probes, std::sync::atomic::Ordering::Relaxed);
         let contour = Contour::capsule(a, b, self.half);
         let results = match &self.path_membership {
             Some(nets) => self.query.probe_membership(&contour, &self.layers, nets, None),
@@ -240,12 +242,12 @@ impl<'a> Walker<'a> {
 
     /// The farthest lattice point of the leg `a`–`b` reached legally, by bisection. Each kept
     /// point was confirmed; `a` is returned when no step, or less than [`MIN_REACH_NM`], is legal.
-    fn reach(&mut self, a: Point, b: Point) -> Result<Point, Stop> {
+    async fn reach(&mut self, a: Point, b: Point) -> Result<Point, Stop> {
         let (steps, _) = lattice(a, b);
         let (mut lo, mut hi) = (0, steps);
         while hi - lo > 1 {
             let mid = lo + (hi - lo) / 2;
-            if self.check(a, along(a, b, mid, steps))?.legal {
+            if self.check(a, along(a, b, mid, steps)).await?.legal {
                 lo = mid;
             } else {
                 hi = mid;
@@ -264,7 +266,7 @@ impl<'a> Walker<'a> {
     /// Each obstacle is gone round on the preferred side first. Should the walk then block,
     /// it resumes from the most recent obstacle's other side, at most [`MAX_RETRIES`] times;
     /// when every try blocks, the first try's legal prefix and blocker are reported.
-    fn walk(&mut self, from: Point, to: Point, flipped: bool) -> Result<Walked, Stop> {
+    async fn walk(&mut self, from: Point, to: Point, flipped: bool) -> Result<Walked, Stop> {
         let mut points = vec![from];
         let (mut cur, mut flip, mut reached, mut blocker) = (from, flipped, false, None);
         let (mut blocks, mut retries) = (0, 0);
@@ -282,7 +284,7 @@ impl<'a> Walker<'a> {
                 }
                 let mut failing = None;
                 for (i, leg) in legs.windows(2).enumerate() {
-                    let verdict = self.check(leg[0], leg[1])?;
+                    let verdict = self.check(leg[0], leg[1]).await?;
                     if !verdict.legal {
                         failing = Some((i, verdict.blockers));
                         break;
@@ -307,7 +309,7 @@ impl<'a> Walker<'a> {
                 let mut detours = Vec::new();
                 if let Some((_, index, hull)) = first {
                     for ccw in [true, false] {
-                        if let Some(detour) = self.detour(&legs, hull.clone(), index, to, ccw, flip)? {
+                        if let Some(detour) = self.detour(&legs, hull.clone(), index, to, ccw, flip).await? {
                             detours.push(detour);
                         }
                     }
@@ -332,7 +334,7 @@ impl<'a> Walker<'a> {
                         // A wall (the board edge), a short or copper with no way round: go as
                         // far as is legal.
                         points.extend(legs[1..=leg].iter().copied());
-                        points.push(self.reach(a, b)?);
+                        points.push(self.reach(a, b).await?);
                         true
                     }
                 }
@@ -360,9 +362,9 @@ impl<'a> Walker<'a> {
         }
         let mut points = simplify(&points);
         if reached {
-            points = self.shortcut(&points, flipped)?;
+            points = self.shortcut(&points, flipped).await?;
         }
-        let mut confirmed = self.confirm(points)?;
+        let mut confirmed = self.confirm(points).await?;
         confirmed.reached &= reached && confirmed.points.last() == Some(&to);
         if !confirmed.reached && confirmed.blocker.is_none() {
             confirmed.blocker = blocker;
@@ -375,8 +377,8 @@ impl<'a> Walker<'a> {
     /// crossing another island does not authorize joining it. If a leg fails, shorten to its legal prefix
     /// and recompute membership: discarded contacts must not authorize that prefix. Speculative
     /// search/reuse checks never retain this context or its cached clear legs.
-    fn confirm(&mut self, points: Vec<Point>) -> Result<Walked, Stop> {
-        let result = self.confirm_path(points);
+    async fn confirm(&mut self, points: Vec<Point>) -> Result<Walked, Stop> {
+        let result = self.confirm_path(points).await;
         self.path_membership = None;
         self.clear.clear();
         result
@@ -385,7 +387,7 @@ impl<'a> Walker<'a> {
     /// Trim failing legs until the entire prefix is legal under its own complete membership.
     /// Each pass discards a segment or shortens its last leg; the explicit bound also covers
     /// pathological changes in net-class rules while contacts disappear.
-    fn confirm_path(&mut self, mut points: Vec<Point>) -> Result<Walked, Stop> {
+    async fn confirm_path(&mut self, mut points: Vec<Point>) -> Result<Walked, Stop> {
         let mut reached = true;
         let mut blocker = None;
         for _ in 0..MAX_PATH_POINTS * 2 {
@@ -394,9 +396,7 @@ impl<'a> Walker<'a> {
             }
             let mut contacts = BTreeSet::new();
             for leg in points.windows(2) {
-                if (self.cancel)() {
-                    return Err(Stop::Canceled);
-                }
+                super::search::yield_unit().await;
                 let contour = Contour::capsule(leg[0], leg[1], self.half);
                 for index in self.query.candidates(&contour, &self.layers).map_err(Stop::Failed)? {
                     if self.query.objects()[index].contour.gap(&contour) <= 0. {
@@ -410,10 +410,10 @@ impl<'a> Walker<'a> {
             self.clear.clear();
             let mut trimmed = None;
             for (index, leg) in points.windows(2).enumerate() {
-                let verdict = self.check(leg[0], leg[1])?;
+                let verdict = self.check(leg[0], leg[1]).await?;
                 if !verdict.legal {
                     blocker = verdict.blockers.first().map(|b| b.0).or(blocker);
-                    let last = self.reach(leg[0], leg[1])?;
+                    let last = self.reach(leg[0], leg[1]).await?;
                     trimmed = Some((index, last));
                     break;
                 }
@@ -458,7 +458,7 @@ impl<'a> Walker<'a> {
 
     /// Follow `hull` round from where `legs` enter it until an elbow to `to` leaves it, merging
     /// copper met on the way. `None` when this sense meets a wall or has no exit; exhausted merge bounds propagate.
-    fn detour(&mut self, legs: &[Point], mut hull: Hull, first: usize, to: Point, ccw: bool, flip: bool) -> Result<Option<Detour>, Stop> {
+    async fn detour(&mut self, legs: &[Point], mut hull: Hull, first: usize, to: Point, ccw: bool, flip: bool) -> Result<Option<Detour>, Stop> {
         let mut members = vec![first];
         let mut excluded = false;
         'merge: for _ in 0..=MAX_MERGES {
@@ -487,7 +487,7 @@ impl<'a> Walker<'a> {
                 if c == v {
                     continue;
                 }
-                let verdict = self.check(c, v)?;
+                let verdict = self.check(c, v).await?;
                 if !verdict.legal {
                     let met = verdict.blockers.into_iter().find(|(index, _)| !members.contains(index));
                     if let Some((index, clearance)) = met
@@ -508,7 +508,7 @@ impl<'a> Walker<'a> {
     }
 
     /// Replace runs of corners with elbows where those are legal. Ends never move.
-    fn shortcut(&mut self, points: &[Point], flip: bool) -> Result<Vec<Point>, Stop> {
+    async fn shortcut(&mut self, points: &[Point], flip: bool) -> Result<Vec<Point>, Stop> {
         let n = points.len();
         if n < 3 {
             return Ok(points.to_vec());
@@ -521,7 +521,7 @@ impl<'a> Walker<'a> {
             'search: for j in (i + 2..=(i + SHORTCUT_SPAN).min(n - 1)).rev() {
                 for f in [flip, !flip] {
                     let legs = elbow(points[i], points[j], self.posture, f);
-                    if legs.len() >= 2 && self.legal(&legs)? {
+                    if legs.len() >= 2 && self.legal(&legs).await? {
                         via = Some(legs);
                         next = j;
                         break 'search;
@@ -538,9 +538,9 @@ impl<'a> Walker<'a> {
     }
 
     /// Whether every leg of the polyline is legal, stopping at the first that is not.
-    fn legal(&mut self, points: &[Point]) -> Result<bool, Stop> {
+    async fn legal(&mut self, points: &[Point]) -> Result<bool, Stop> {
         for leg in points.windows(2) {
-            if !self.check(leg[0], leg[1])?.legal {
+            if !self.check(leg[0], leg[1]).await?.legal {
                 return Ok(false);
             }
         }

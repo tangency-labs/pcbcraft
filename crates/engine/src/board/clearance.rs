@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 mod index;
 mod overlay;
+pub(crate) mod preparation;
 pub use overlay::{ObstacleId, Overlay, OverlayDecision, OverlayResults};
 
 /// At most one prepared geometry per session, shared across its views without retaining history
@@ -143,7 +144,6 @@ impl Session {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::InvalidParams("unknown board target".into()))?;
         let rules = view.resolve_rules(overrides)?;
-        let copper_layers = view.layers().into_iter().filter(|l| l.purpose == super::setup::LayerPurpose::Copper).map(|l| l.id).collect();
         let geometry = self.clearance_cache.try_lock().ok().and_then(|cache| {
             cache.as_ref().filter(|c| c.target == target && Weak::ptr_eq(&c.snapshot, &Arc::downgrade(&snapshot))).map(|c| c.geometry.clone())
         });
@@ -154,18 +154,37 @@ impl Session {
             }
             geometry
         });
-        // Charge the cold index build to preparation, keeping the first local lookup ready.
-        let _ = geometry.index();
-        let net_rules = super::class_rules::NetRules::new(view, rules.clone())?;
-        let class_rules = net_rules.as_ref().map(|rules| rules.capture(view, &geometry)).transpose()?.map(Arc::new);
-        let clearance_nm = class_rules.as_ref().map_or(rules.values.clearance_nm, |context| context.max_clearance(rules.values.clearance_nm));
-        Ok(ClearanceQuery {
-            authority: Authority {
+        ClearanceQuery::from_geometry(
+            &super::work::Source {
                 snapshot,
                 session: self.clearance_identity.clone(),
                 target,
                 opening: self.history_root_revision(),
                 revision: self.revision(),
+                effective: rules,
+            },
+            geometry,
+        )
+    }
+}
+
+impl ClearanceQuery {
+    /// Resolve policy over prepared contacts, preserving the source's session and board authority.
+    fn from_geometry(source: &super::work::Source, geometry: Arc<BoardGeometry>) -> Result<Self, CommandError> {
+        let view = source.snapshot.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable".into()))?;
+        let rules = source.effective.clone();
+        let copper_layers = view.layers().into_iter().filter(|l| l.purpose == super::setup::LayerPurpose::Copper).map(|l| l.id).collect();
+        let _ = geometry.index();
+        let net_rules = super::class_rules::NetRules::new(view, rules.clone())?;
+        let class_rules = net_rules.as_ref().map(|rules| rules.capture(view, &geometry)).transpose()?.map(Arc::new);
+        let clearance_nm = class_rules.as_ref().map_or(rules.values.clearance_nm, |context| context.max_clearance(rules.values.clearance_nm));
+        Ok(Self {
+            authority: Authority {
+                snapshot: source.snapshot.clone(),
+                session: source.session.clone(),
+                target: source.target,
+                opening: source.opening,
+                revision: source.revision,
                 clearance_nm,
                 rules,
                 class_rules,
@@ -175,9 +194,7 @@ impl Session {
             net_rules,
         })
     }
-}
 
-impl ClearanceQuery {
     /// Captured source, opening, board, revision and effective rule.
     pub fn authority(&self) -> &Authority {
         &self.authority

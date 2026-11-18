@@ -195,6 +195,52 @@ impl Driver {
             "params":{"board":artifact.board.board,"tracks":[self.track],"dx_nm":0,"dy_nm":100_000,"expected_revision":app.session.revision()}}})))
     }
 
+    /// Layer input now awaits its full-path/via validation before the active layer changes.
+    /// Other actions still assert their state on the first accepted pass.
+    pub(super) fn pending(&self, app: &PcbApp, artifact: &Artifact, index: usize) -> bool {
+        matches!(artifact.trace[index].id.as_str(), "layer.down" | "layer.up") && app.views.active.board.tracks.committing()
+    }
+
+    /// Drive only a pending validated layer transition, with a wall-clock and frame bound.
+    /// No input is repeated, and the normal final layer/cancellation assertions still apply.
+    fn settle(
+        &self,
+        app: &mut PcbApp,
+        ctx: &egui::Context,
+        artifact: &Artifact,
+        index: usize,
+        frame_id: &mut usize,
+        samples: &mut BTreeMap<String, Vec<f64>>,
+    ) -> Result<()> {
+        let id = &artifact.trace[index].id;
+        if !matches!(id.as_str(), "layer.down" | "layer.up") {
+            return Ok(());
+        }
+        let started = super::clock_ms();
+        let mut settling = BTreeMap::new();
+        for _ in 0..10_000 {
+            if !self.pending(app, artifact, index) {
+                break;
+            }
+            if super::clock_ms() - started > 5_000. {
+                return Err("layer validation did not settle within five seconds".into());
+            }
+            frame(app, ctx, Vec::new(), *frame_id, &mut settling, &format!("settle.{id}"));
+            *frame_id += 1;
+            #[cfg(not(target_arch = "wasm32"))]
+            std::thread::yield_now();
+        }
+        if self.pending(app, artifact, index) {
+            return Err("layer validation exceeded its frame bound".into());
+        }
+        for suffix in ["ui", "tessellate"] {
+            let key = format!("replay.settle.{id}.{suffix}");
+            let total = settling.remove(&key).map_or(0., |values| values.into_iter().sum());
+            samples.entry(key).or_default().push(total);
+        }
+        Ok(())
+    }
+
     /// Reject missed routing input, ineffective layer changes and cancellation that authors data.
     pub(super) fn verify(&self, app: &PcbApp, artifact: &Artifact, index: usize) -> Result<()> {
         let step = &artifact.trace[index];
@@ -231,9 +277,12 @@ pub(super) fn run(artifact: &Artifact, samples: &mut BTreeMap<String, Vec<f64>>)
     for i in 0..WARMUP {
         frame(&mut app, &ctx, Vec::new(), i, &mut warmup, "warmup");
     }
+    let mut frame_id = WARMUP;
     for (index, step) in artifact.trace.iter().enumerate() {
         let events = driver.input(&mut app, artifact, index, samples)?;
-        frame(&mut app, &ctx, events, index + WARMUP, samples, &step.id);
+        frame(&mut app, &ctx, events, frame_id, samples, &step.id);
+        frame_id += 1;
+        driver.settle(&mut app, &ctx, artifact, index, &mut frame_id, samples)?;
         driver.verify(&app, artifact, index)?;
     }
     driver.finish(&app)
@@ -258,13 +307,16 @@ mod tests {
             frame(&mut app, &ctx, Vec::new(), i, &mut samples, "warmup");
         }
         let mut index = 0;
+        let mut frame_id = WARMUP;
         while index < artifact.trace.len() {
             let mut events = driver.input(&mut app, &artifact, index, &mut samples).unwrap();
             if !artifact.trace[index].capture_after() {
                 index += 1;
                 events.extend(driver.input(&mut app, &artifact, index, &mut samples).unwrap());
             }
-            frame(&mut app, &ctx, events, index + WARMUP, &mut samples, &artifact.trace[index].id);
+            frame(&mut app, &ctx, events, frame_id, &mut samples, &artifact.trace[index].id);
+            frame_id += 1;
+            driver.settle(&mut app, &ctx, &artifact, index, &mut frame_id, &mut samples).unwrap();
             driver.verify(&app, &artifact, index).unwrap();
             index += 1;
         }

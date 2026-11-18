@@ -1,0 +1,575 @@
+{
+  "artifact_sha256": "ecd7cd83034ff6aeab0deb2f8ba56208969202abcf661985f579366ffda04cc0",
+  "batch_units": 256,
+  "correctness": "batched plans equal synchronous results; unchanged source; exhaustive validation of new copper; one atomic revision per reached route; canceled coalesced work retired",
+  "environment": {
+    "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0\nLLVM version: 23.1.5",
+    "hardware": "AMD Ryzen 9 7950X 16-Core Processor",
+    "notes": "Three-sample correctness/service-cost check; no tail-latency or shipping-release claim. Final source includes resumable interactive routing; background load uncontrolled. Flags --use-angle=swiftshader --enable-unsafe-swiftshader; 1400x900 CSS; DPR 1; WebGL. board_perf_web_bg.wasm sha256 bf4e3d750778118ab68fb56a1ba64758a7f501e87a6a910589af334981718569 board_perf_web.js sha256 ab5a2df6ef0fd8d3fdafa7bb47e7e31423d8005cca9698a8860e614c39867dc9 Flags --use-angle=swiftshader --enable-unsafe-swiftshader; 1400x900 CSS; DPR 1; WebGL. board_perf_web_bg.wasm sha256 bf4e3d750778118ab68fb56a1ba64758a7f501e87a6a910589af334981718569 board_perf_web.js sha256 ab5a2df6ef0fd8d3fdafa7bb47e7e31423d8005cca9698a8860e614c39867dc9",
+    "os": "Linux-7.2.13-200.fc44.x86_64-x86_64-with-glibc2.43",
+    "power": "Power/governor and background load uncontrolled",
+    "profile": "dev debug=2 incremental=0",
+    "revision": "33b4470 + interactive walkaround local diff b8a48a382843075b325d99ef6f2d665df3dc8f7e5eaa59036e00e3368cff3c55",
+    "runtime": "Chrome 156.0.8078.79 headless jobs; SwiftShader; dev WASM without wasm-opt"
+  },
+  "iterations": 1,
+  "metrics": [
+    {
+      "id": "planning.atomic_publish.airwire.0",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.atomic_publish.airwire.1",
+      "max_ms": 0.10000002384185791,
+      "p50_ms": 0.10000002384185791,
+      "p95_ms": 0.10000002384185791,
+      "p99_ms": 0.10000002384185791,
+      "samples_ms": [
+        0.10000002384185791
+      ]
+    },
+    {
+      "id": "planning.atomic_publish.airwire.2",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.atomic_publish.airwire.3",
+      "max_ms": 0.10000002384185791,
+      "p50_ms": 0.10000002384185791,
+      "p95_ms": 0.10000002384185791,
+      "p99_ms": 0.10000002384185791,
+      "samples_ms": [
+        0.10000002384185791
+      ]
+    },
+    {
+      "id": "planning.atomic_publish.airwire.4",
+      "max_ms": 0.09999990463256836,
+      "p50_ms": 0.09999990463256836,
+      "p95_ms": 0.09999990463256836,
+      "p99_ms": 0.09999990463256836,
+      "samples_ms": [
+        0.09999990463256836
+      ]
+    },
+    {
+      "id": "planning.atomic_publish.airwire.5",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.atomic_publish.channel",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.atomic_publish.crowded",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.0.Planning route",
+      "max_ms": 4.100000023841858,
+      "p50_ms": 4.100000023841858,
+      "p95_ms": 4.100000023841858,
+      "p99_ms": 4.100000023841858,
+      "samples_ms": [
+        4.100000023841858
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.0.Preparing route obstacles",
+      "max_ms": 2.600000023841858,
+      "p50_ms": 2.600000023841858,
+      "p95_ms": 2.600000023841858,
+      "p99_ms": 2.600000023841858,
+      "samples_ms": [
+        2.600000023841858
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.1.Planning route",
+      "max_ms": 2,
+      "p50_ms": 2,
+      "p95_ms": 2,
+      "p99_ms": 2,
+      "samples_ms": [
+        2
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.1.Preparing route obstacles",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.2.Planning route",
+      "max_ms": 0.2999999523162842,
+      "p50_ms": 0.2999999523162842,
+      "p95_ms": 0.2999999523162842,
+      "p99_ms": 0.2999999523162842,
+      "samples_ms": [
+        0.2999999523162842
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.2.Preparing route obstacles",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.3.Planning route",
+      "max_ms": 0.20000004768371582,
+      "p50_ms": 0.20000004768371582,
+      "p95_ms": 0.20000004768371582,
+      "p99_ms": 0.20000004768371582,
+      "samples_ms": [
+        0.20000004768371582
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.3.Preparing route obstacles",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.4.Planning route",
+      "max_ms": 0.10000002384185791,
+      "p50_ms": 0.10000002384185791,
+      "p95_ms": 0.10000002384185791,
+      "p99_ms": 0.10000002384185791,
+      "samples_ms": [
+        0.10000002384185791
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.4.Preparing route obstacles",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.5.Planning route",
+      "max_ms": 0.2999999523162842,
+      "p50_ms": 0.2999999523162842,
+      "p95_ms": 0.2999999523162842,
+      "p99_ms": 0.2999999523162842,
+      "samples_ms": [
+        0.2999999523162842
+      ]
+    },
+    {
+      "id": "planning.batch_max.airwire.5.Preparing route obstacles",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.batch_max.channel.Planning route",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.batch_max.channel.Preparing route obstacles",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.batch_max.crowded.Planning route",
+      "max_ms": 1.0999999046325684,
+      "p50_ms": 1.0999999046325684,
+      "p95_ms": 1.0999999046325684,
+      "p99_ms": 1.0999999046325684,
+      "samples_ms": [
+        1.0999999046325684
+      ]
+    },
+    {
+      "id": "planning.batch_max.crowded.Preparing route obstacles",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.cancel_acknowledgement",
+      "max_ms": 0.09999990463256836,
+      "p50_ms": 0.09999990463256836,
+      "p95_ms": 0.09999990463256836,
+      "p99_ms": 0.09999990463256836,
+      "samples_ms": [
+        0.09999990463256836
+      ]
+    },
+    {
+      "id": "planning.capture.airwire.0",
+      "max_ms": 0.10000002384185791,
+      "p50_ms": 0.10000002384185791,
+      "p95_ms": 0.10000002384185791,
+      "p99_ms": 0.10000002384185791,
+      "samples_ms": [
+        0.10000002384185791
+      ]
+    },
+    {
+      "id": "planning.capture.airwire.1",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.capture.airwire.2",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.capture.airwire.3",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.capture.airwire.4",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.capture.airwire.5",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.capture.channel",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.capture.crowded",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.context_capture",
+      "max_ms": 0.19999992847442627,
+      "p50_ms": 0.19999992847442627,
+      "p95_ms": 0.19999992847442627,
+      "p99_ms": 0.19999992847442627,
+      "samples_ms": [
+        0.19999992847442627
+      ]
+    },
+    {
+      "id": "planning.queue_replace",
+      "max_ms": 0.10000002384185791,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0.10000002384185791,
+      "samples_ms": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0.10000002384185791,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "id": "planning.total.airwire.0",
+      "max_ms": 8.5,
+      "p50_ms": 8.5,
+      "p95_ms": 8.5,
+      "p99_ms": 8.5,
+      "samples_ms": [
+        8.5
+      ]
+    },
+    {
+      "id": "planning.total.airwire.1",
+      "max_ms": 2.299999952316284,
+      "p50_ms": 2.299999952316284,
+      "p95_ms": 2.299999952316284,
+      "p99_ms": 2.299999952316284,
+      "samples_ms": [
+        2.299999952316284
+      ]
+    },
+    {
+      "id": "planning.total.airwire.2",
+      "max_ms": 0.3999999761581421,
+      "p50_ms": 0.3999999761581421,
+      "p95_ms": 0.3999999761581421,
+      "p99_ms": 0.3999999761581421,
+      "samples_ms": [
+        0.3999999761581421
+      ]
+    },
+    {
+      "id": "planning.total.airwire.3",
+      "max_ms": 0.6000000238418579,
+      "p50_ms": 0.6000000238418579,
+      "p95_ms": 0.6000000238418579,
+      "p99_ms": 0.6000000238418579,
+      "samples_ms": [
+        0.6000000238418579
+      ]
+    },
+    {
+      "id": "planning.total.airwire.4",
+      "max_ms": 0.10000002384185791,
+      "p50_ms": 0.10000002384185791,
+      "p95_ms": 0.10000002384185791,
+      "p99_ms": 0.10000002384185791,
+      "samples_ms": [
+        0.10000002384185791
+      ]
+    },
+    {
+      "id": "planning.total.airwire.5",
+      "max_ms": 0.5,
+      "p50_ms": 0.5,
+      "p95_ms": 0.5,
+      "p99_ms": 0.5,
+      "samples_ms": [
+        0.5
+      ]
+    },
+    {
+      "id": "planning.total.channel",
+      "max_ms": 0,
+      "p50_ms": 0,
+      "p95_ms": 0,
+      "p99_ms": 0,
+      "samples_ms": [
+        0
+      ]
+    },
+    {
+      "id": "planning.total.crowded",
+      "max_ms": 4.199999928474426,
+      "p50_ms": 4.199999928474426,
+      "p95_ms": 4.199999928474426,
+      "p99_ms": 4.199999928474426,
+      "samples_ms": [
+        4.199999928474426
+      ]
+    },
+    {
+      "id": "planning.validation.airwire.0",
+      "max_ms": 2.299999952316284,
+      "p50_ms": 2.299999952316284,
+      "p95_ms": 2.299999952316284,
+      "p99_ms": 2.299999952316284,
+      "samples_ms": [
+        2.299999952316284
+      ]
+    },
+    {
+      "id": "planning.validation.airwire.1",
+      "max_ms": 2.399999976158142,
+      "p50_ms": 2.399999976158142,
+      "p95_ms": 2.399999976158142,
+      "p99_ms": 2.399999976158142,
+      "samples_ms": [
+        2.399999976158142
+      ]
+    },
+    {
+      "id": "planning.validation.airwire.2",
+      "max_ms": 2.100000023841858,
+      "p50_ms": 2.100000023841858,
+      "p95_ms": 2.100000023841858,
+      "p99_ms": 2.100000023841858,
+      "samples_ms": [
+        2.100000023841858
+      ]
+    },
+    {
+      "id": "planning.validation.airwire.3",
+      "max_ms": 2,
+      "p50_ms": 2,
+      "p95_ms": 2,
+      "p99_ms": 2,
+      "samples_ms": [
+        2
+      ]
+    },
+    {
+      "id": "planning.validation.airwire.4",
+      "max_ms": 1.8000000715255737,
+      "p50_ms": 1.8000000715255737,
+      "p95_ms": 1.8000000715255737,
+      "p99_ms": 1.8000000715255737,
+      "samples_ms": [
+        1.8000000715255737
+      ]
+    },
+    {
+      "id": "planning.validation.airwire.5",
+      "max_ms": 1.899999976158142,
+      "p50_ms": 1.899999976158142,
+      "p95_ms": 1.899999976158142,
+      "p99_ms": 1.899999976158142,
+      "samples_ms": [
+        1.899999976158142
+      ]
+    },
+    {
+      "id": "planning.validation.channel",
+      "max_ms": 1.7999999523162842,
+      "p50_ms": 1.7999999523162842,
+      "p95_ms": 1.7999999523162842,
+      "p99_ms": 1.7999999523162842,
+      "samples_ms": [
+        1.7999999523162842
+      ]
+    },
+    {
+      "id": "planning.validation.crowded",
+      "max_ms": 1.8000000715255737,
+      "p50_ms": 1.8000000715255737,
+      "p95_ms": 1.8000000715255737,
+      "p99_ms": 1.8000000715255737,
+      "samples_ms": [
+        1.8000000715255737
+      ]
+    }
+  ],
+  "queues": [
+    {
+      "canceled": 1,
+      "completed": 1,
+      "pending_capacity": 1,
+      "replaced": 30,
+      "running_capacity": 1
+    }
+  ],
+  "schema": "pcbcraft-walkaround-jobs-performance/1",
+  "search_units_per_batch": 8,
+  "unmeasured": [
+    "physical input-to-visible preview latency",
+    "compositor presentation",
+    "endurance"
+  ]
+}

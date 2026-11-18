@@ -54,8 +54,10 @@ board, snapshot, revision and effective-clearance authority, with conservative
 candidates and an exhaustive reference. Native circular arcs remain separate work.
 [Walkaround route planning](route-planning.md) (`pcb.plan_route`) uses the same query
 to plan single-layer H/V/45° routes round existing copper with class-aware widths,
-clearances and board-edge clearance, without editing; the route tool's interactive
-use of it is later #246 work. Captured local queries
+clearances and board-edge clearance. The route tool uses resumable searches, magnetic
+target hysteresis and full-path validation before adopting clicked vertices or vias;
+final publication still uses one shared copper transaction. Full preview/commit latency
+qualification remains under #246. Captured local queries
 now reuse a layer-aware packed index and support disposable geometry overlays;
 see the [query contract](copper-clearance-query.md) and
 [measurement limits](../tools/performance/baselines/issue244/README.md).

@@ -16,9 +16,12 @@ use uuid::Uuid;
 
 mod hull;
 mod posture;
+mod preparation;
+mod search;
 #[cfg(test)]
 mod tests;
 mod walkaround;
+pub use preparation::{PlanningContext, PlanningJob};
 
 pub use posture::Posture;
 
@@ -78,6 +81,12 @@ pub struct Plan {
 /// other copper, including copper of unknown membership, is an obstacle at its pair clearance.
 /// The result is a pure function of the query, request and budget unless `cancel` returns true.
 pub fn walkaround(query: &ClearanceQuery, request: &Request, budget: usize, cancel: &dyn Fn() -> bool) -> Result<Plan, CommandError> {
+    validate(query, request, budget)?;
+    search::complete(query, request, budget, cancel)
+}
+
+/// Reject malformed requests before any search work or asynchronous capture.
+fn validate(query: &ClearanceQuery, request: &Request, budget: usize) -> Result<(), CommandError> {
     if !crate::wire::valid_point(&request.head) || !crate::wire::valid_point(&request.target) {
         return Err(CommandError::InvalidParams("Route points must be bounded board coordinates.".into()));
     }
@@ -91,14 +100,7 @@ pub fn walkaround(query: &ClearanceQuery, request: &Request, budget: usize, canc
     if !(1..=MAX_BUDGET).contains(&budget) {
         return Err(CommandError::InvalidParams(format!("A route budget must be from 1 to {MAX_BUDGET} probes.")));
     }
-    let mut walker = walkaround::Walker::new(query, request, budget, cancel)?;
-    let head = vec![request.head];
-    match walker.run(request) {
-        Ok(plan) => Ok(plan),
-        Err(walkaround::Stop::Exhausted) => Ok(Plan { points: head, outcome: Outcome::Incomplete, blocker: None, probes: walker.probes() }),
-        Err(walkaround::Stop::Canceled) => Ok(Plan { points: head, outcome: Outcome::Canceled, blocker: None, probes: walker.probes() }),
-        Err(walkaround::Stop::Failed(error)) => Err(error),
-    }
+    Ok(())
 }
 
 impl Session {

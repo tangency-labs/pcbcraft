@@ -15,6 +15,45 @@ use std::collections::BTreeSet;
 
 const WIDTH: i64 = 250_000;
 
+/// Suspension preserves the exact synchronous plan, with bounded probe progress and no edits.
+#[test]
+fn captured_planning_yields_and_matches_the_shared_solver() {
+    let mut s = board();
+    add(&mut s, ADD_VIA, json!({"at":p(4_000_000,10_000_000),"via_diameter_nm":600_000,"via_drill_nm":300_000}));
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let request = request(&s, p(1_000_000, 10_000_000), p(7_000_000, 11_000_000));
+    let expected = plan(&s, &request);
+    for batch in [1, 7, 256] {
+        let context = s.route_planning(view(&s).target).unwrap();
+        let mut job = s.prepare_route_plan(&context, request.clone(), DEFAULT_BUDGET).unwrap();
+        assert!(!job.step(0));
+        assert!(job.take_result().unwrap().is_none());
+        let mut completed = false;
+        for _ in 0..100_000 {
+            let before = job.progress().completed;
+            completed = job.step(batch);
+            assert!(job.progress().completed <= before + batch);
+            if completed {
+                break;
+            }
+        }
+        assert!(completed);
+        assert_eq!(job.take_result().unwrap().unwrap(), expected);
+        assert!(job.take_result().unwrap().is_none());
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    }
+    let context = s.route_planning(view(&s).target).unwrap();
+    let mut abandoned = s.prepare_route_plan(&context, request.clone(), DEFAULT_BUDGET).unwrap();
+    assert!(!abandoned.step(1));
+    drop(abandoned);
+    let mut next = s.prepare_route_plan(&context, request.clone(), DEFAULT_BUDGET).unwrap();
+    while !next.step(256) {}
+    assert_eq!(next.take_result().unwrap().unwrap(), expected);
+    s.apply("project.rename", &json!({"name":"Changed while planning"})).unwrap();
+    assert!(!next.source().is_current(&s));
+    assert!(s.prepare_route_plan(&context, request, DEFAULT_BUDGET).is_err());
+}
+
 fn p(x_nm: i64, y_nm: i64) -> Point {
     Point { x_nm, y_nm }
 }

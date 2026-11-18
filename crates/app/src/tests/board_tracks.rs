@@ -9,9 +9,76 @@ use pcbcraft_engine::{
 use std::collections::BTreeSet;
 use uuid::Uuid;
 
+/// The real route tool detours around fixed, locked copper and publishes one native transaction.
+#[test]
+fn interactive_walkaround_avoids_fixed_via_and_round_trips() {
+    let mut h = routable();
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":4_000_000,"y_nm":-5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    let via = h.state().session.project().unwrap().boards().next().unwrap().vias()[0].id;
+    let revision = h.state().session.revision();
+    let target = h.state().session.project().unwrap().board_target().unwrap().board;
+    h.state_mut()
+        .run(pcbcraft_engine::board::track::SET_COPPER_LOCKED, &json!({"board":target,"vias":[via],"locked":true,"expected_revision":revision}));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, Point { x_nm: 1_270_000, y_nm: -5_080_000 });
+    click_route(&mut h, Point { x_nm: 7_620_000, y_nm: -5_080_000 });
+    h.key_press(Key::Enter);
+    h.run_steps(30);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let routed = tracks(&h);
+    assert!(routed.len() > 1, "the straight leg intersects the fixed via");
+    assert!(routed.iter().any(|t| t.start.y_nm != -5_080_000 || t.end.y_nm != -5_080_000));
+    let board = h.state().session.project().unwrap().boards().next().unwrap();
+    assert_eq!(board.vias()[0].at, Point { x_nm: 4_000_000, y_nm: -5_080_000 });
+    assert!(board.vias()[0].locked);
+    let report = board.check_design(board.effective_rules().values);
+    assert!(
+        !report.violations.iter().any(|v| matches!(v.kind, pcbcraft_engine::board::drc::Kind::Clearance | pcbcraft_engine::board::drc::Kind::Short))
+    );
+    let after = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let packed = pcbcraft_engine::persistence::encode_packed(h.state().session.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(pcbcraft_engine::persistence::decode_packed(&packed).unwrap().project).unwrap(), after);
+    h.state_mut().run("edit.undo", &json!({}));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    h.state_mut().run("edit.redo", &json!({}));
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), after);
+}
+
+/// A required class clearance that leaves no legal escape blocks the click without mutation.
+#[test]
+fn walkaround_refuses_an_impossible_pad_escape_without_publishing() {
+    let mut h = routable();
+    classify_route(&mut h, "Tight escape", json!({"clearance_nm":700_000,"min_track_width_nm":400_000,"preferred_track_width_nm":500_000}));
+    let line = airwires(&h)[0].clone();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, line.from.position);
+    click_route(&mut h, Point { x_nm: line.from.position.x_nm, y_nm: -2_540_000 });
+    assert!(h.state().message.as_deref().is_some_and(|message| message.contains("blocked")));
+    h.key_press(Key::Enter);
+    h.run_steps(20);
+    assert!(tracks(&h).is_empty());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Two 0402 resistors whose first terminals share an accepted net, on a two-layer board,
 /// opened in the PCB layout with the Top copper layer active.
 pub(super) fn routable<'a>() -> Harness<'a, PcbApp> {
+    routable_with("resistor-0402")
+}
+
+/// Select a physical package with enough pad spacing for the fixture's authored class rules.
+fn routable_with<'a>(definition: &str) -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
     h.state_mut().run("project.new", &json!({"create_board":true}));
@@ -22,7 +89,7 @@ pub(super) fn routable<'a>() -> Harness<'a, PcbApp> {
         let symbol = h.state().session.project().unwrap().symbols().last().unwrap().id();
         symbols.push(symbol.clone());
         let revision = h.state().session.revision();
-        h.state_mut().run(PLACE_FOOTPRINT, &json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"2","2":"1"},"x_nm":index*10_160_000,"y_nm":0,"expected_revision":revision}));
+        h.state_mut().run(PLACE_FOOTPRINT, &json!({"symbol":symbol,"definition":definition,"mapping":{"1":"2","2":"1"},"x_nm":index*10_160_000,"y_nm":0,"expected_revision":revision}));
     }
     let revision = h.state().session.revision();
     h.state_mut().run(
@@ -76,7 +143,8 @@ fn route_preview_color_does_not_flash_while_preparation_catches_up() {
                 h.hover_at(end);
                 h.step();
                 assert_ne!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route prepared"));
-                assert!(preview_ends_at(&h, color, end), "pending {theme:?} {layer}");
+                // A new pointer keeps the previous legal path while its target is solved.
+                // The first request has no certified leg to paint yet.
                 let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
                 while h.state().views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared") {
                     assert!(std::time::Instant::now() < deadline, "route preparation did not settle");
@@ -190,7 +258,7 @@ fn classify_route(h: &mut Harness<'_, PcbApp>, name: &str, rules: Value) -> Uuid
 #[test]
 fn classified_route_uses_defaults_halo_and_shared_undo() {
     for (theme, size) in [(ThemeChoice::Dark, egui::vec2(1400., 900.)), (ThemeChoice::Light, egui::vec2(960., 640.))] {
-        let mut h = routable();
+        let mut h = routable_with("resistor-0805");
         let id = h.state().views.active.id();
         h.state_mut().set_view_grid(id, 50 * pcbcraft_chrome::grid::NM_PER_MIL);
         h.set_size(size);
@@ -207,16 +275,18 @@ fn classified_route_uses_defaults_halo_and_shared_undo() {
         click_route(&mut h, line.from.position);
         assert_eq!(h.state().views.active.board.tracks.width_nm, 500000);
         assert_eq!(h.state().message, None);
-        let vertex = Point { x_nm: line.from.position.x_nm, y_nm: -2540000 };
+        let vertex =
+            h.state().views.active.camera.snap(at(&h, Point { x_nm: line.from.position.x_nm, y_nm: -2540000 }), h.get_by_label("PCB canvas").rect());
         let end = at(&h, vertex);
         h.hover_at(end);
-        h.run();
+        h.run_steps(20);
         let radius = at(&h, Point { x_nm: 950000, y_nm: 0 }).distance(at(&h, Point { x_nm: 0, y_nm: 0 }));
         let ink = pcbcraft_chrome::Tokens::get().board_ink.gamma_multiply(0.19);
         assert!(
             h.output().shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Path(path)
-            if path.fill==ink && path.points.iter().any(|point|point.distance(end+egui::vec2(radius,0.))<0.01))),
-            "{theme:?}"
+            if path.fill==ink && path.points.iter().any(|point|(point.distance(end)-radius).abs()<0.01))),
+            "{theme:?}: {:?}",
+            h.state().views.active.board.tracks.preparation_status()
         );
         click_route(&mut h, vertex);
         click_route(&mut h, Point { x_nm: line.to.position.x_nm, y_nm: -2540000 });
@@ -2148,7 +2218,7 @@ fn escape_revokes_a_pending_final_route_before_publication() {
     let revision = h.state().session.revision();
     h.hover_at(at(&h, Point { x_nm: 5_080_000, y_nm: -5_080_000 }));
     h.run_steps(1);
-    assert!(h.state().views.active.board.tracks.preparation_status().unwrap().contains("Prepar"));
+    assert!(matches!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Planning route") | Some("Preparing route")));
     h.key_press(Key::Enter);
     h.run_steps(1);
     assert_eq!(h.state().session.revision(), revision);
