@@ -343,8 +343,9 @@ the finding by bounds, its message says the comparison is conservative.
 `pcb.export_fabrication` generates the addressed board's fabrication files without
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
 and `fabrication.origin`, the placement origin every coordinate is measured from:
-Gerber X2 copper per layer, mask and paste top and bottom, top silkscreen and the outline,
-and one Excellon plated drill file. It needs a board setup and a closed Board Outline.
+Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
+plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
+resolvable placement origin.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. One
 `execute` request generates the file contents once; `apply` still validates
