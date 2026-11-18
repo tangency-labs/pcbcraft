@@ -140,7 +140,8 @@ pub struct BoardRef {
     #[serde(deserialize_with = "hyphenated")]
     pub id: Uuid,
     pub name: String,
-    /// The source captured by the board's last accepted update; null before the first one.
+    /// The source capture stored in the board's accepted baseline, including one initialized
+    /// from the current state; null if there is no accepted baseline.
     #[serde(deserialize_with = "nullable_capture")]
     pub source: Option<crate::board::update::SourceCapture>,
 }

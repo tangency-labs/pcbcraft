@@ -3615,7 +3615,11 @@ impl Session {
                 self.export_fabrication(params)?;
             }
             netlist::EXPORT_BOARD_NETLIST => {
-                self.export_board_netlist(params)?;
+                if params["dry_run"].as_bool() == Some(true) {
+                    self.board_netlist_report(params)?;
+                } else {
+                    self.export_board_netlist(params)?;
+                }
             }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_NET | SET_VIA_SIZE | DELETE_TRACKS => {

@@ -39,7 +39,7 @@ moving that terminal from `unconnected` into `nets`. Board copper is not consult
 | `format` | `pcbcraft-netlist/1` with `basis: schematic`, `pcbcraft-netlist/2` with `basis: accepted`. The reader refuses any other value and either tag on the other basis. |
 | `project` | The project's UUID and display name. |
 | `basis` | Which connectivity the nets describe: `schematic` or `accepted`. |
-| `board` | Only with `accepted`: the board's UUID, name and the `source` capture (`capture_id`, `content_digest`) of its last accepted update, null before the first. |
+| `board` | Only with `accepted`: the board's UUID, name and the `source` capture (`capture_id`, `content_digest`) stored in its accepted baseline, including a baseline initialized with **Use current state**. `source` is null if there is no accepted baseline. |
 | `components` | Every component, ordered by the number in its ID. In an `accepted` netlist, each component the board accepted, including one since deleted from the schematic. |
 | `nets` | Every net with at least one part terminal, ordered by its first terminal. |
 | `unconnected` | Terminals of placed units that are on no net. In an `accepted` netlist, the accepted terminals on no accepted net. |

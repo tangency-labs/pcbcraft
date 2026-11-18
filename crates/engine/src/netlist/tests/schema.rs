@@ -3,6 +3,18 @@
 use serde_json::{Value, value::RawValue};
 use std::{cmp::Ordering, collections::BTreeMap};
 
+const UUID_PATTERN: &str = "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$";
+
+/// Check the hex groups independently of the netlist UUID reader.
+fn is_hyphenated_uuid(text: &str) -> bool {
+    text.len() == 36 && text.bytes().enumerate().all(|(i, byte)| if matches!(i, 8 | 13 | 18 | 23) { byte == b'-' } else { byte.is_ascii_hexdigit() })
+}
+
+/// Decode a node without losing the path of an invalid key or string.
+fn decode<'a, T: serde::Deserialize<'a>>(raw: &'a RawValue, at: &str) -> Result<T, String> {
+    serde_json::from_str(raw.get()).map_err(|error| format!("{at}: {error}"))
+}
+
 /// Significant decimal digits and their power of ten; zero has no sign or scale.
 struct Decimal {
     negative: bool,
@@ -56,18 +68,33 @@ struct Instance<'a> {
     number: Option<Decimal>,
     object: Option<BTreeMap<String, Box<RawValue>>>,
     array: Option<Vec<Box<RawValue>>>,
+    scalar: Option<Value>,
 }
 
 impl<'a> Instance<'a> {
-    /// Decode only this node's container; numbers remain exact at every nested path.
-    fn read(raw: &'a RawValue) -> Self {
+    /// Decode this node; container children keep their raw tokens until visited.
+    fn read(raw: &'a RawValue, at: &str) -> Result<Self, String> {
         let first = raw.get().as_bytes()[0];
-        Self {
+        Ok(Self {
             raw,
             number: matches!(first, b'-' | b'0'..=b'9').then(|| Decimal::read(raw.get())),
-            object: (first == b'{').then(|| serde_json::from_str(raw.get()).unwrap()),
-            array: (first == b'[').then(|| serde_json::from_str(raw.get()).unwrap()),
+            object: (first == b'{').then(|| decode(raw, at)).transpose()?,
+            array: (first == b'[').then(|| decode(raw, at)).transpose()?,
+            scalar: matches!(first, b'"' | b'f' | b't' | b'n').then(|| decode(raw, at)).transpose()?,
+        })
+    }
+
+    /// Reject invalid Unicode before a negation or alternative can hide a decoding error.
+    fn check_encoding(&self, at: &str) -> Result<(), String> {
+        for (key, child) in self.object.iter().flatten() {
+            let at = format!("{at}.{key}");
+            Self::read(child, &at)?.check_encoding(&at)?;
         }
+        for (index, child) in self.array.iter().flatten().enumerate() {
+            let at = format!("{at}[{index}]");
+            Self::read(child, &at)?.check_encoding(&at)?;
+        }
+        Ok(())
     }
 
     /// JSON Schema's mathematical type, including decimal and exponent integer spellings.
@@ -84,7 +111,7 @@ impl<'a> Instance<'a> {
 
     /// Compare constants recursively. Numeric schema constants must be finite u64 values;
     /// an unsupported numeric rule fails instead of silently rounding it.
-    fn equals(&self, rule: &Value) -> Result<bool, String> {
+    fn equals(&self, rule: &Value, at: &str) -> Result<bool, String> {
         if let Some(number) = &self.number {
             return match rule {
                 Value::Number(bound) => Ok(number.compare_bound(bound.as_u64().ok_or("unsupported numeric schema constant")?) == Ordering::Equal),
@@ -99,7 +126,8 @@ impl<'a> Instance<'a> {
                 }
                 for (key, value) in properties {
                     let Some(child) = object.get(key) else { return Ok(false) };
-                    if !Instance::read(child).equals(value)? {
+                    let at = format!("{at}.{key}");
+                    if !Instance::read(child, &at)?.equals(value, &at)? {
                         return Ok(false);
                     }
                 }
@@ -110,25 +138,27 @@ impl<'a> Instance<'a> {
                 if array.len() != items.len() {
                     return Ok(false);
                 }
-                for (child, rule) in array.iter().zip(items) {
-                    if !Instance::read(child).equals(rule)? {
+                for (index, (child, rule)) in array.iter().zip(items).enumerate() {
+                    let at = format!("{at}[{index}]");
+                    if !Instance::read(child, &at)?.equals(rule, &at)? {
                         return Ok(false);
                     }
                 }
                 Ok(true)
             }
-            _ if self.object.is_some() || self.array.is_some() => Ok(false),
-            _ => Ok(serde_json::from_str::<Value>(self.raw.get()).unwrap() == *rule),
+            _ => Ok(self.scalar.as_ref() == Some(rule)),
         }
     }
 }
 
 /// Validate raw JSON against the keyword forms used by the published schemas.
 pub(super) fn check_text(root: &Value, schema: &Value, text: &str, at: &str) -> Result<(), String> {
-    supported(root)?;
-    supported(schema)?;
+    supported(root, root)?;
+    supported(root, schema)?;
     let raw: Box<RawValue> = serde_json::from_str(text).map_err(|error| format!("{at}: {error}"))?;
-    check(root, schema, &Instance::read(&raw), at)
+    let instance = Instance::read(&raw, at)?;
+    instance.check_encoding(at)?;
+    check(root, schema, &instance, at)
 }
 
 /// Check the unsigned numeric domain of schema constants, including nested containers,
@@ -153,35 +183,52 @@ fn supported_constant(value: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// Reject unknown keywords and unsupported numeric rules before matching alternatives or
-/// negations, where a schema error must not be mistaken for an instance mismatch.
-fn supported(schema: &Value) -> Result<(), String> {
+/// Resolve a supported local JSON Pointer to a schema object.
+fn reference<'a>(root: &'a Value, rule: &Value) -> Result<&'a Value, String> {
+    let pointer = rule
+        .as_str()
+        .and_then(|text| text.strip_prefix('#'))
+        .filter(|pointer| pointer.starts_with('/'))
+        .ok_or("only local JSON Pointer references are supported")?;
+    let target = root.pointer(pointer).ok_or_else(|| format!("unresolved schema reference #{pointer}"))?;
+    if !target.is_object() {
+        return Err(format!("schema reference #{pointer} does not target an object"));
+    }
+    Ok(target)
+}
+
+/// Reject unknown keywords, invalid references and unsupported numeric rules before matching
+/// alternatives or negations, where schema errors could look like instance mismatches.
+fn supported(root: &Value, schema: &Value) -> Result<(), String> {
     let schema = schema.as_object().ok_or("unsupported non-object schema")?;
     for (keyword, rule) in schema {
         match keyword.as_str() {
-            "$schema" | "$id" | "title" | "description" | "$ref" | "type" | "maxItems" | "required" => {}
+            "$schema" | "$id" | "title" | "description" | "type" | "maxItems" | "required" => {}
+            "$ref" => {
+                reference(root, rule)?;
+            }
             "const" => supported_constant(rule)?,
             "enum" => {
                 for value in rule.as_array().ok_or("unsupported schema enum")? {
                     supported_constant(value)?;
                 }
             }
-            "minimum" | "maximum" => {
+            "minimum" | "maximum" | "maxLength" => {
                 rule.as_u64().ok_or("unsupported numeric schema bound")?;
             }
             "$defs" | "properties" => {
                 for child in rule.as_object().ok_or("unsupported schema map")?.values() {
-                    supported(child)?;
+                    supported(root, child)?;
                 }
             }
-            "items" | "not" => supported(rule)?,
+            "items" | "not" => supported(root, rule)?,
             "anyOf" => {
                 for child in rule.as_array().ok_or("unsupported schema alternatives")? {
-                    supported(child)?;
+                    supported(root, child)?;
                 }
             }
             "additionalProperties" if rule == false => {}
-            "pattern" if rule == "^[0-9a-f]{64}$" => {}
+            "pattern" if rule == "^[0-9a-f]{64}$" || rule == UUID_PATTERN => {}
             "format" if rule == "uuid" => {}
             other => return Err(format!("unsupported schema keyword {other}")),
         }
@@ -196,8 +243,7 @@ fn check(root: &Value, schema: &Value, value: &Instance<'_>, at: &str) -> Result
         match keyword.as_str() {
             "$schema" | "$id" | "title" | "description" | "$defs" => {}
             "$ref" => {
-                let pointer = rule.as_str().and_then(|r| r.strip_prefix('#')).ok_or(format!("{at}: only local references"))?;
-                check(root, root.pointer(pointer).ok_or(format!("{at}: missing {pointer}"))?, value, at)?;
+                check(root, reference(root, rule)?, value, at)?;
             }
             "type" => {
                 let allowed = rule.as_array().cloned().unwrap_or_else(|| vec![rule.clone()]);
@@ -207,14 +253,14 @@ fn check(root: &Value, schema: &Value, value: &Instance<'_>, at: &str) -> Result
                 }
             }
             "const" => {
-                if !value.equals(rule)? {
+                if !value.equals(rule, at)? {
                     return Err(format!("{at}: not {rule}"));
                 }
             }
             "enum" => {
                 let mut found = false;
                 for rule in rule.as_array().unwrap() {
-                    found |= value.equals(rule)?;
+                    found |= value.equals(rule, at)?;
                 }
                 if !found {
                     return Err(format!("{at}: {} not in {rule}", value.raw.get()));
@@ -237,18 +283,22 @@ fn check(root: &Value, schema: &Value, value: &Instance<'_>, at: &str) -> Result
                     return Err(format!("{at}: more than {rule} items"));
                 }
             }
-            "pattern" if rule == "^[0-9a-f]{64}$" => {
-                if value.kind() == "string" {
-                    let text: String = serde_json::from_str(value.raw.get()).unwrap();
-                    if text.len() != 64 || !text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
-                        return Err(format!("{at}: not a lowercase SHA-256"));
-                    }
+            "maxLength" => {
+                let limit = rule.as_u64().ok_or(format!("{at}: unsupported string length limit"))?;
+                if value.scalar.as_ref().and_then(Value::as_str).is_some_and(|text| text.chars().count() as u64 > limit) {
+                    return Err(format!("{at}: more than {limit} characters"));
                 }
             }
-            "format" if rule == "uuid" => {
-                if value.kind() == "string" {
-                    let text: String = serde_json::from_str(value.raw.get()).unwrap();
-                    super::super::parse_hyphenated(&text).ok_or_else(|| format!("{at}: not a hyphenated UUID"))?;
+            "pattern" if rule == "^[0-9a-f]{64}$" => {
+                if let Some(text) = value.scalar.as_ref().and_then(Value::as_str)
+                    && (text.len() != 64 || !text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+                {
+                    return Err(format!("{at}: not a lowercase SHA-256"));
+                }
+            }
+            "pattern" | "format" if (keyword == "pattern" && rule == UUID_PATTERN) || (keyword == "format" && rule == "uuid") => {
+                if value.scalar.as_ref().and_then(Value::as_str).is_some_and(|text| !is_hyphenated_uuid(text)) {
+                    return Err(format!("{at}: not a hyphenated UUID"));
                 }
             }
             "required" => {
@@ -262,7 +312,8 @@ fn check(root: &Value, schema: &Value, value: &Instance<'_>, at: &str) -> Result
                 if let Some(object) = &value.object {
                     for (name, property) in rule.as_object().unwrap() {
                         if let Some(child) = object.get(name) {
-                            check(root, property, &Instance::read(child), &format!("{at}.{name}"))?;
+                            let at = format!("{at}.{name}");
+                            check(root, property, &Instance::read(child, &at)?, &at)?;
                         }
                     }
                 }
@@ -277,7 +328,8 @@ fn check(root: &Value, schema: &Value, value: &Instance<'_>, at: &str) -> Result
             }
             "items" => {
                 for (index, item) in value.array.iter().flatten().enumerate() {
-                    check(root, rule, &Instance::read(item), &format!("{at}[{index}]"))?;
+                    let at = format!("{at}[{index}]");
+                    check(root, rule, &Instance::read(item, &at)?, &at)?;
                 }
             }
             "not" => {
@@ -319,6 +371,28 @@ fn raw_instance_kinds_preserve_numeric_tokens() {
     }
 }
 
+/// Invalid Unicode is a path-qualified input error, even in an otherwise ignored child.
+#[test]
+fn fixture_checker_reports_unpaired_surrogates() {
+    let pattern = serde_json::json!({"pattern":"^[0-9a-f]{64}$"});
+    let uuid = serde_json::json!({"format":"uuid"});
+    let scalar = serde_json::json!({"const":"well formed"});
+    let nested = serde_json::json!({"not":{"properties":{"items":{"items":{"type":"integer"}}}}});
+    let accepts_object = serde_json::json!({"anyOf":[{"type":"object"},{"properties":{"nested":{"type":"object"}}}]});
+    for (rule, text, path) in [
+        (&pattern, r#""\uDC00""#, "$"),
+        (&uuid, r#""\uD800""#, "$"),
+        (&scalar, r#""\uDC00""#, "$"),
+        (&nested, r#"{"items":[18446744073709551615.0,"\uDC00"]}"#, "$.items[1]"),
+        (&accepts_object, r#"{"nested":{"\uDC00":0}}"#, "$.nested"),
+    ] {
+        let error = check_text(rule, rule, text, "$").unwrap_err();
+        assert!(error.starts_with(&format!("{path}: ")), "{text}: {error}");
+    }
+    let valid = serde_json::json!({"const":{"😀":"😀"}});
+    check_text(&valid, &valid, r#"{"\uD83D\uDE00":"\uD83D\uDE00"}"#, "$").unwrap();
+}
+
 /// Adjacent large integers and tiny fractional residues remain distinct at integer bounds.
 #[test]
 fn raw_numbers_preserve_integer_and_bound_semantics() {
@@ -351,6 +425,41 @@ fn unsupported_rules_are_not_instance_mismatches() {
     ] {
         assert_eq!(check_text(&schema, &schema, "1", "$"), Err("unsupported schema keyword multipleOf".to_owned()));
     }
+}
+
+/// A missing or malformed reference is a schema error, not a false alternative.
+#[test]
+fn fixture_checker_preflights_local_references() {
+    let missing = serde_json::json!({"$ref":"#/$defs/missing"});
+    for schema in [
+        serde_json::json!({"not":missing}),
+        serde_json::json!({"anyOf":[{"type":"integer"},missing]}),
+        serde_json::json!({"$defs":{"unused":missing},"type":"integer"}),
+    ] {
+        assert_eq!(check_text(&schema, &schema, "1", "$"), Err("unresolved schema reference #/$defs/missing".to_owned()));
+    }
+    let bad_target = serde_json::json!({"title":"not a schema", "not":{"$ref":"#/title"}});
+    assert_eq!(check_text(&bad_target, &bad_target, "1", "$"), Err("schema reference #/title does not target an object".to_owned()));
+    let root = serde_json::json!({"$defs":{"integer":{"type":"integer"}}});
+    let valid = serde_json::json!({"not":{"$ref":"#/$defs/integer"}});
+    check_text(&root, &valid, "1e-1", "$").unwrap();
+    assert_eq!(check_text(&root, &valid, "1.0", "$"), Err("$: matches excluded value".to_owned()));
+}
+
+/// Format 2 asserts UUID shape even if a validator treats `format` as annotation only.
+#[test]
+fn board_schema_uuid_pattern_without_format_annotation() {
+    let mut uuid = super::schema_v2()["$defs"]["uuid"].clone();
+    assert_eq!(uuid.as_object_mut().unwrap().remove("format"), Some(serde_json::json!("uuid")));
+    for good in ["abcdef01-2345-6789-abcd-ef0123456789", "ABCDEF01-2345-6789-ABCD-EF0123456789", "aBcDeF01-2345-6789-AbCd-eF0123456789"] {
+        check_text(&uuid, &uuid, &serde_json::json!(good).to_string(), "$.board.id").unwrap();
+    }
+    for bad in ["not-a-uuid", "abcdef0123456789abcdef0123456789", "abcdef01-2345-6789-abcd-ef012345678g"] {
+        let result = check_text(&uuid, &uuid, &serde_json::json!(bad).to_string(), "$.board.id");
+        assert_eq!(result, Err("$.board.id: not a hyphenated UUID".to_owned()), "{bad:?}");
+    }
+    let trailing = r#""abcdef01-2345-6789-abcd-ef0123456789\n""#;
+    assert_eq!(check_text(&uuid, &uuid, trailing, "$.board.id"), Err("$.board.id: more than 36 characters".to_owned()));
 }
 
 /// Unsupported numeric constants fail before matching, including nested const/enum values

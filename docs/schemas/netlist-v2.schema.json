@@ -67,7 +67,9 @@
   "$defs": {
     "uuid": {
       "type": "string",
-      "format": "uuid"
+      "format": "uuid",
+      "maxLength": 36,
+      "pattern": "^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
     },
     "board": {
       "type": "object",
@@ -85,7 +87,7 @@
           "type": "string"
         },
         "source": {
-          "description": "The source captured by the board's last accepted update; null before the first one.",
+          "description": "The source capture stored in the board's accepted baseline, including one initialized from the current state; null if there is no accepted baseline.",
           "anyOf": [
             {
               "type": "object",

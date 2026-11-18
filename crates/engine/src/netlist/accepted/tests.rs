@@ -224,6 +224,26 @@ fn board_export_is_byte_identical_and_edits_nothing() {
     assert_eq!(Netlist::parse(text).unwrap(), board(&session).netlist);
 }
 
+/// A dry apply can project a board even when rendering the document would fail.
+#[test]
+fn board_netlist_apply_dry_run_skips_rendering() {
+    let Fixture { mut session, .. } = synced();
+    let mut project = (*session.snapshot().unwrap()).clone();
+    let baseline = Arc::make_mut(Arc::make_mut(&mut project.board).baseline.as_mut().unwrap());
+    // Deliberately make the projected capture fail document serialization, not projection.
+    baseline.source.capture_id = Uuid::nil();
+    session.open_snapshot(Arc::new(project));
+    let revision = session.revision();
+    let dry = json!({"dry_run":true});
+    assert!(session.execute(EXPORT_BOARD_NETLIST, &dry).is_ok());
+    assert_eq!(session.apply(EXPORT_BOARD_NETLIST, &dry).unwrap(), revision);
+    for params in [json!({}), json!({"dry_run":false})] {
+        let full = session.apply(EXPORT_BOARD_NETLIST, &params);
+        assert!(matches!(full, Err(CommandError::Unavailable(ref message)) if message.contains("invalid board source capture identity")), "{full:?}");
+    }
+    assert_eq!(session.revision(), revision);
+}
+
 /// Before its first update a board without placements has accepted nothing; with placements
 /// but no baseline its accepted state is unknown and the export refuses.
 #[test]
