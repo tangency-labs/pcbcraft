@@ -448,7 +448,7 @@ impl PcbApp {
             });
             if stop && !open {
                 self.close_without_waiting(ctx);
-            } else if stop && let Err(error) = self.stop_waiting_for_file() {
+            } else if stop && let Err(error) = self.stop_waiting_for_file(None) {
                 self.message = Some(error);
             } else if cancel || dismissed {
                 // Keep the worker and its immutable snapshot; only withdraw the quit request.

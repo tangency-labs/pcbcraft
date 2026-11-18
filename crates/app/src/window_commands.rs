@@ -1077,7 +1077,12 @@ mod live {
             id: "file.abandon",
             title: "Stop waiting",
             summary: "Stop waiting for a running open, such as one stalled on an unresponsive disk, so other commands can run. Its late result is discarded and the current project is unchanged; file.last reports it abandoned. Saves are refused, since they may still be writing: the person can close PCBCraft without waiting in the editor.",
-            params: &[],
+            params: &[Param {
+                name: "operation",
+                summary: "The file.operation.id inspect_editor reported for the stalled open; a different running job is left alone",
+                required: true,
+                kind: Kind::Integer { min: 1, max: i64::MAX, step: 1 },
+            }],
         },
     ];
 
@@ -1800,7 +1805,7 @@ mod live {
                     self.message = None;
                     self.file_notice = None;
                 }
-                ("file.abandon", _, _) => self.stop_waiting_for_file()?,
+                ("file.abandon", _, _) => self.stop_waiting_for_file(params["operation"].as_u64())?,
                 ("file.open", _, _) => {
                     // The GUI asks Save / Don't Save here; a live client saves first instead.
                     if self.files.dirty(&self.session) {

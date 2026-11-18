@@ -148,31 +148,38 @@ fn stopping_a_stalled_open_releases_the_editor() {
     let blocked = tool(&mut h, connection, "execute", json!({"command": "view.fit", "params": {"view": 0}}));
     assert!(blocked["content"][0]["text"].as_str().unwrap().contains("file operation"), "{blocked}");
 
-    let inspected = window(&mut h, connection, "file.abandon", json!({}));
+    let id = payload(tool(&mut h, connection, "inspect_editor", json!({})))["file"]["operation"]["id"].as_u64().unwrap();
+    let stale = tool(&mut h, connection, "execute", json!({"command": "file.abandon", "params": {"operation": id + 1}}));
+    assert!(stale["content"][0]["text"].as_str().unwrap().contains("no longer running"), "{stale}");
+    let inspected = window(&mut h, connection, "file.abandon", json!({"operation": id}));
     assert_eq!(inspected["file"]["operation"], Value::Null);
     assert_eq!(inspected["file"]["last"]["status"], "abandoned");
-    assert!(late(), "the stalled worker's result is received and dropped");
+    assert!(late(), "the stalled worker's result is received");
     h.run();
+    assert!(!h.state().files.holds_stalled(), "and dropped on the next frame");
     assert!(Arc::ptr_eq(&before, &h.state().session().snapshot().unwrap()));
     window(&mut h, connection, "view.fit", json!({"view": 0}));
 
     let _save = h.state_mut().files.stall("save", Some("/stalled/board"), revision);
-    let refused = tool(&mut h, connection, "execute", json!({"command": "file.abandon", "params": {}}));
+    let refused = tool(&mut h, connection, "execute", json!({"command": "file.abandon", "params": {"operation": id + 1}}));
     assert!(refused["content"][0]["text"].as_str().unwrap().contains("may still be writing"), "{refused}");
     assert!(h.state().files.busy());
 }
 
-/// Abandoned opens whose workers keep running are bounded; one that ends frees its place.
+/// A live client's abandoned opens whose workers keep running are bounded, and one that ends
+/// frees its place. Closing in the editor is never held by the limit.
 #[test]
 fn abandoned_open_workers_are_bounded() {
     let mut app = PcbApp::default();
     let mut late = Vec::new();
-    for _ in 0..4 {
+    for id in 1..=4 {
         late.push(app.files.stall("open", Some("/stalled"), 0));
-        app.files.abandon().unwrap();
+        app.files.abandon(Some(id)).unwrap();
     }
     let _fifth = app.files.stall("open", Some("/stalled"), 0);
-    assert!(app.files.abandon().unwrap_err().contains("Too many"));
+    assert!(app.files.abandon(Some(5)).unwrap_err().contains("Too many"));
     assert!(late.pop().unwrap()(), "one stalled worker ends");
-    app.files.abandon().unwrap();
+    app.files.abandon(Some(5)).unwrap();
+    let _sixth = app.files.stall("open", Some("/stalled"), 0);
+    app.files.abandon(None).expect("closing ignores the limit");
 }

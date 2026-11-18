@@ -5,6 +5,11 @@ use std::sync::mpsc;
 use super::{Job, Outcome, ProjectFiles, StandIn, StandInSave, native};
 
 impl ProjectFiles {
+    /// Whether any abandoned open's worker or late result is still held.
+    pub(crate) fn holds_stalled(&self) -> bool {
+        !self.stalled.is_empty()
+    }
+
     /// Leave a job running that only the test ends, as a worker stalled on an unresponsive disk
     /// would. The returned closure delivers a late failure and reports whether anyone received it.
     pub(crate) fn stall(&mut self, operation: &'static str, destination: Option<&str>, revision: u64) -> impl FnOnce() -> bool + use<> {

@@ -112,10 +112,11 @@ impl PcbApp {
         }
     }
 
-    /// Stop waiting for a stalled open (see `ProjectFiles::abandon`). A held action goes on as
+    /// Stop waiting for a stalled open (see `ProjectFiles::abandon`): a live client names the
+    /// job it observed, the person closing names none. A held action goes on as
     /// [`Self::finish_waiting`] decides once no job runs.
-    pub(crate) fn stop_waiting_for_file(&mut self) -> Result<(), String> {
-        self.message = Some(self.files.abandon()?);
+    pub(crate) fn stop_waiting_for_file(&mut self, expected: Option<u64>) -> Result<(), String> {
+        self.message = Some(self.files.abandon(expected)?);
         self.file_notice = None;
         Ok(())
     }

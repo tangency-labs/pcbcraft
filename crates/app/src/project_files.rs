@@ -383,6 +383,7 @@ impl ProjectFiles {
     /// A save that named an Untitled project renames it in the session too, history included,
     /// without changing the revision; cancelled and failed saves leave the session as it was.
     pub(super) fn poll(&mut self, session: &mut Session, ctx: &egui::Context) -> Option<Update> {
+        self.release_stalled();
         let job = self.job.as_mut()?;
         #[cfg(target_arch = "wasm32")]
         if let Some(download) = &mut job.download {
