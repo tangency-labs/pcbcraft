@@ -115,6 +115,8 @@ pub struct Counterparts {
     pub source: Source,
     pub status: Status,
     pub component: Option<String>,
+    /// The unplaced package choice must be accepted through Update PCB before placement.
+    pub pending_update: bool,
     pub terminals: Vec<TerminalTarget>,
     pub pads: Vec<PadTarget>,
 }
@@ -122,14 +124,19 @@ pub struct Counterparts {
 impl Counterparts {
     /// Start with no resolved identities so invalid/stale sources cannot leak another target.
     fn empty(source: Source, status: Status) -> Self {
-        Self { source, status, component: None, terminals: Vec::new(), pads: Vec::new() }
+        Self { source, status, component: None, pending_update: false, terminals: Vec::new(), pads: Vec::new() }
     }
 
-    /// Versioned query data; legacy cross_probe keeps its singular response unchanged.
+    /// Versioned query data, omitting `pending_update` unless review is required.
+    /// Legacy cross_probe keeps its singular response unchanged.
     pub fn inspect(&self) -> Value {
-        json!({"format":"pcbcraft-counterparts/1","source":self.source.inspect(),"status":self.status,"component":self.component,
+        let mut value = json!({"format":"pcbcraft-counterparts/1","source":self.source.inspect(),"status":self.status,"component":self.component,
             "terminals":self.terminals.iter().map(|target| Source::Terminal(*target).inspect()).collect::<Vec<_>>(),
-            "pads":self.pads.iter().map(|target| Source::Pad(*target).inspect()).collect::<Vec<_>>()})
+            "pads":self.pads.iter().map(|target| Source::Pad(*target).inspect()).collect::<Vec<_>>()});
+        if self.pending_update {
+            value["pending_update"] = json!(true);
+        }
+        value
     }
 }
 
@@ -212,7 +219,10 @@ impl Project {
             result.status = match self.package_assignments().get(&component) {
                 None => Status::Unassigned,
                 Some(assignment) if self.assignment_definition(&assignment.key()).is_none() => Status::UnresolvedMapping,
-                Some(_) => Status::UnplacedPackage,
+                Some(assignment) => {
+                    result.pending_update = assignment.pending_update(self);
+                    Status::UnplacedPackage
+                }
             };
             return;
         };

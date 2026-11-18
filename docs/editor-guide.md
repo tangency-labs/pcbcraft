@@ -809,19 +809,40 @@ These rule values are fixed defaults until net classes and board rules arrive (#
 zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
 not a manufacturing sign-off.
 
-**Manufacture → Fabrication → Outputs** generates a ZIP (suggested name
-`<project>-fabrication.zip`) with Gerber X2 files for each copper layer, the top
-and bottom solder mask, paste and silkscreen,
+**Manufacture → Fabrication → Outputs** generates a ZIP to save or download
+(suggested name `<project>-fabrication.zip`), with Gerber X2 files for each
+copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
 through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
 with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Gerber coordinates
 are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves going up,
-so both shift exactly when the origin moves by a whole micrometre. Mask
-and paste openings match the pads exactly, leaving any expansion to the fabricator, and
-vias are tented. It needs a board setup and a closed Board Outline, says so otherwise,
-and never edits the project. The same generated files under the same generator
-build produce the same ZIP bytes. Run DRC first: outputs do not check the design.
+so both shift exactly when the origin moves by a whole micrometre. Mask openings use
+pads on the corresponding outer copper layer; paste includes only surface-mount pads,
+not through-hole pads. Neither adds process expansion. Vias receive no automatic mask
+opening, but authored mask artwork can open them. The shape approximations below also
+apply to these openings. Generation needs a board setup, a
+closed Board Outline and a resolvable placement origin, and reports missing prerequisites.
+It does not edit the project. Repeated generation from the same captured inputs and
+exporter build produces the same archive; project names affect filenames and exporter
+versions appear in the Gerber header. Saving can be cancelled, busy or fail at the
+destination; generation alone is not a successful save. Run DRC first: outputs do not
+check the design.
+
+For pads exported on a layer, round pads use standard circular (`C`) flashes.
+Rectangular (`R`) and obround (`O`) flashes require library-pad and placement rotations
+to each be multiples of 90° and the resolved corners to form a nondegenerate axis-aligned
+rectangle. Sizes follow the final X/Y axes, not either rotation in isolation. Rectangles
+also require their resolved midpoint to equal the integer pad center; odd-sized or
+otherwise uncentered rectangles retain their resolved polygon regions. Obrounds require
+width and height to have the same parity, so their capsule endpoints are integral and
+match the engine land contour. Mixed-parity or other rotated obrounds retain the existing
+approximate round-ended stroke (a C flash when both resolved sides are equal). Other
+rectangles remain regions, including net-cardinal poses reached through non-cardinal
+intermediate rotations. Very small collapsed rectangular pads can emit a retraced path
+with zero area. Rounded rectangles emit polygon regions with chorded corners when the
+resolved radius is positive, or the four resolved corners when it clamps to zero.
+Export adds no native arcs and does not change saved pad geometry.
 
 Copper filenames receive numeric suffixes when sanitized names collide with
 another output, including names that differ only in case. Fixed mask, paste,

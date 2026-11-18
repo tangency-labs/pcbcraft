@@ -98,7 +98,7 @@ fn replacement(s: &mut Session) {
 /// Deliver worker results through the same editor-side revision and dirty-state logic.
 fn complete(files: &mut ProjectFiles, session: &mut Session, result: Result<Outcome, String>) -> Option<Update> {
     let (send, receiver) = mpsc::channel();
-    files.job = Some(Job { receiver, revision: session.revision() });
+    files.job = Some(Job { receiver, revision: session.revision(), operation: "test", destination: None });
     send.send(result).unwrap();
     files.poll(session, &egui::Context::default())
 }
@@ -202,7 +202,7 @@ fn startup_home_enters_the_workspace_only_after_a_successful_open() {
     for result in [Ok(Outcome::Cancelled), Err("Could not open fixture".to_owned()), load(&root).map(Outcome::Opened)] {
         let (send, receiver) = mpsc::channel();
         let app = harness.state_mut();
-        app.files.job = Some(Job { receiver, revision: app.session.revision() });
+        app.files.job = Some(Job { receiver, revision: app.session.revision(), operation: "test", destination: None });
         // A pending file job deliberately keeps repainting while waiting for its worker.
         harness.step();
         harness.get_by_label("Open Project");
@@ -445,7 +445,7 @@ fn folder_save_does_not_mark_later_edits_saved() {
     apply(&mut s, MOVE_SYMBOL, json!({"symbol":"symbol-2","x_nm":1270000,"y_nm":0}));
     let staged = s.snapshot().unwrap();
     let (send, receiver) = mpsc::channel();
-    files.job = Some(Job { receiver, revision: s.revision() });
+    files.job = Some(Job { receiver, revision: s.revision(), operation: "test", destination: None });
     std::thread::scope(|scope| {
         let (ready, wait) = mpsc::sync_channel(0);
         let (release, resume) = mpsc::sync_channel(0);
@@ -963,7 +963,7 @@ fn recent_history_records_only_successful_file_jobs() {
     }
     let (send, receiver) = mpsc::channel();
     let ctx = egui::Context::default();
-    files.job = Some(Job { receiver, revision: session.revision() });
+    files.job = Some(Job { receiver, revision: session.revision(), operation: "test", destination: None });
     assert!(files.open_path(path.clone(), session.revision(), &ctx).is_err());
     assert!(files.busy());
     send.send(load(&path).map(Outcome::Opened)).unwrap();
@@ -972,7 +972,7 @@ fn recent_history_records_only_successful_file_jobs() {
     assert_eq!(session.project().unwrap().name, "Keep edits");
     assert_eq!(files.recent.to_text(), before);
     let (send, receiver) = mpsc::channel();
-    files.job = Some(Job { receiver, revision: session.revision() });
+    files.job = Some(Job { receiver, revision: session.revision(), operation: "test", destination: None });
     drop(send);
     assert!(matches!(files.poll(&mut session, &ctx), Some(Update::Error(_))));
     assert!(!files.busy());

@@ -660,6 +660,21 @@ unsaved, and GUI **Undo**/**Redo** use the same history. Inspect after each step
 to verify the result. If another edit changed the revision, inspect again before
 retrying. The live editor runs the same project commands as a headless session.
 
+To check existing part pins against native libraries already loaded in the session,
+call `execute` with:
+
+```json
+{"command":"library.available_revisions","params":{},"inspect":false}
+```
+
+Read `outdated_instances` for stable instance IDs and `instances` for exact pinned
+and latest addresses, source status and diagnostics. This is read-only: it does
+not refresh a library, change geometry or adopt a revision. Missing sources are
+unknown, and available does not imply compatible. Native parts compare the owning
+part rather than separately updating its drawing dependencies. See
+[query available revisions](native-library-sources.md#query-available-revisions)
+for the result contract; dedicated update review and adoption remain future work.
+
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and
@@ -770,13 +785,24 @@ Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
-With a configured board and a closed Board Outline, **Manufacture → Fabrication → Outputs**
-exports one ZIP with an embedded `manifest.json` for checking Gerber and drill
-member byte sizes and SHA-256, without editing the design. Desktop can replace
-the same ZIP on re-export. In the browser, Outputs requests one download; check
-that your browser saved it. Output names remain unique when layer names collide
-after sanitization; the [editor guide](editor-guide.md) describes the files and
-save behavior.
+With a configured board, a closed Board Outline and a resolvable placement origin,
+**Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
+The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
+Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
+destination errors can prevent a successful save. In the browser, Outputs requests
+one download; check that your browser saved it.
+
+For pads exported on a layer, round pads retain C flashes.
+R/O flashes require individually quarter-turn library and placement rotations and a
+nondegenerate resolved axis rectangle. Rectangles also need an integral centered midpoint;
+obrounds need matching width/height parity. Other rectangles retain resolved regions;
+other obrounds retain approximate round-ended strokes or equal-sided C flashes.
+Rounded rectangles use regions with chorded corners only if a positive radius survives
+resolution. A collapsed tiny rectangle can emit a retraced path with no area. Mask uses
+outer-layer pads without process expansion; paste excludes through-hole pads.
+Output names remain unique when layer names collide after sanitization; the
+[editor guide](editor-guide.md) describes the eligibility, shape approximations,
+file contents and save behavior.
 
 ### Browse libraries
 
