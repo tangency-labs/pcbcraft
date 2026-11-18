@@ -529,7 +529,7 @@ fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
     }
 }
 
-/// Clipboard refuses an otherwise valid multi-footprint fragment with one non-first active lock.
+/// Copy can capture an unlocked neighbor, but a selection containing a locked placement is refused.
 /// An omitted or explicit false flag does not change the canonical unlocked encoding.
 #[test]
 fn clipboard_refuses_active_footprint_locks_without_changing_unlocked_fragments() {
@@ -544,6 +544,9 @@ fn clipboard_refuses_active_footprint_locks_without_changing_unlocked_fragments(
     let text = fragment.to_text().unwrap();
     assert_eq!(BoardFragment::from_text(&text).unwrap().to_text().unwrap(), text);
     let locked = with_placement_lock(&original, locked_id, true);
+    let unlocked_only = BoardSelection { footprints: vec![format!("footprint-{}", original.board.footprints[0].id)], ..Default::default() };
+    let copied = BoardFragment::capture(&locked, &unlocked_only, false).unwrap();
+    assert_eq!(copied.counts(), (1, 0, 0, 0));
     for cut in [false, true] {
         BoardFragment::capture(&original, &selection, cut).unwrap();
         let error = BoardFragment::capture(&locked, &selection, cut).unwrap_err();

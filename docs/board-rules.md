@@ -74,12 +74,13 @@ assignments (24), thermal/insulation material reports (25) and footprint locks (
 Each accepts the earlier physical fields, including track/via locks. Format 19
 requires a valid rule record, older board headers reject it, and higher compatible
 formats permit omission. An explicitly null or invalid rule record is refused
-before adoption. Removing the record returns to the format required by the
-board's remaining data.
+before adoption.
 
-A board without authored rules retains its existing byte encoding. Folder and
-`.pc` archive saves preserve rule IDs and exact values; undo/redo restores the
-same intent. The legacy diagnostic single-document encoder refuses to discard
+An unchanged canonical board without authored rules round-trips byte-for-byte
+through the codec. Clearing authored rules rewrites the board document and can
+lower its format to the one required by the remaining data. Folder and `.pc`
+archive saves preserve authored rule IDs and exact values; undo/redo restores
+the same intent. The legacy diagnostic single-document encoder refuses to discard
 rules. This slice does not change the project, board-folder or archive layout.
 
 The [net-class catalog and explicit-set resolver](net-classes.md) are available
