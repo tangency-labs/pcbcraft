@@ -102,7 +102,7 @@ pub(crate) struct Footprint {
     /// and technical graphics use the back layers. Omitted for top-side placements.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) bottom: bool,
-    /// Board-local lock intent; omitted while false. Manipulation protection is a separate policy.
+    /// Board-local lock for direct placement transforms and deletion; omitted while false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) locked: bool,
     /// Additional reference displacement from the library default in footprint-local coordinates.
@@ -239,7 +239,7 @@ impl Footprint {
     }
 
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
-    /// Always include the storage-only `locked` boolean, including when false.
+    /// Always include the `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         let mut value = json!({"id":format!("footprint-{}",self.id),"board":project.board_target().map(|target|target.board),
             "component":format!("component-{}",self.component),"definition":self.definition,"definition_revision":self.definition_revision,
@@ -338,6 +338,11 @@ impl Board {
     /// Return placement records in stable ID order for independently diffable saves.
     pub(crate) fn footprints(&self) -> &[Footprint] {
         &self.footprints
+    }
+    /// Find an authored placement by its stable ID without resolving pads or connectivity.
+    fn placement(&self, id: u64) -> Option<&Footprint> {
+        let index = self.footprints.binary_search_by_key(&id, |footprint| footprint.id).ok()?;
+        self.footprints.get(index)
     }
     /// Resolve only the exact pinned definition; missing revisions never use the current catalog.
     pub(crate) fn definition_for(&self, footprint: &Footprint) -> Option<&definition::FootprintDefinition> {

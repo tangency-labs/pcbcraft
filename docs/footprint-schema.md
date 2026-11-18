@@ -10,10 +10,9 @@ transactions.
 In board formats 34 and 35, the placed footprint owns `locked`, an optional
 boolean that defaults to false and is omitted by fresh canonical encoding when
 false. An active footprint lock requires format 34, or 35 when arcs are also
-present; the flag does not change
-the pinned library definition or mapping. This is
-[storage and inspection only](pcb-layout-workflow.md#footprint-lock-metadata-storage-only),
-not a lock command or edit-protection contract. The historical format-15
+present; the flag does not change the pinned library definition or mapping. See
+[the placement edit policy](pcb-layout-workflow.md#placed-footprint-locks) for the
+commands that respect this flag. The historical format-15
 placement schema below remains frozen and does not accept this newer field.
 
 Board format 15 adds local reference position and print overrides. Earlier board

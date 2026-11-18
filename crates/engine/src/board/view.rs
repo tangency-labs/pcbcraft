@@ -295,9 +295,7 @@ impl<'a> BoardView<'a> {
         if id != format!("footprint-{ordinal}") {
             return None;
         }
-        let placements = self.project.board.footprints();
-        let index = placements.binary_search_by_key(&ordinal, |footprint| footprint.id).ok()?;
-        placements.get(index)
+        self.project.board.placement(ordinal)
     }
 
     /// Resolve only supplied placements against one immutable accepted-net index. Empty or

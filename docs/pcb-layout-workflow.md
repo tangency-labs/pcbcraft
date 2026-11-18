@@ -258,9 +258,9 @@ ribbon's planned entries and the editor guide have a stated destination.
 - **Board text** on copper and silkscreen needs independently
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for tracks and vias is implemented under #249 through per-object
-  flags and the shared snapshot publication guard. Footprint lock commands/protection, zone locks and an
-  optional locked-object selection filter remain broader #81 work; footprint
-  lock metadata has the storage-only contract below.
+  flags and the shared snapshot publication guard. Existing footprint locks protect
+  direct placement edits as described below. Footprint lock authoring, zone locks
+  and a locked-object selection filter are not available yet.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
@@ -269,7 +269,7 @@ ribbon's planned entries and the editor guide have a stated destination.
 
 Copy and paste of board objects is in progress separately in #197 through #202.
 
-## Footprint lock metadata (storage only)
+## Placed-footprint locks
 
 Placed footprints retain an optional `locked` flag in native board format 34,
 or 35 when the board also contains arcs. Inspection and typed board views report
@@ -277,12 +277,18 @@ a boolean, defaulting to false for older files. Fresh canonical encoding omits
 false and preserves true; Native Save can reuse an unchanged board document
 verbatim, including explicit false. Without active locks the encoder chooses
 the format required by the remaining board data. Reports are optional under
-formats 34 and 35. This slice
-does **not** expose a lock/unlock command or GUI action, nor does the flag yet
-protect footprint movement, rotation, flipping, alignment or deletion. It is not
-a fixed-obstacle promise. Those shared-command and enforcement workflows remain
-under #81. Clipboard Copy, Cut, Duplicate and Paste refuse active footprint
-locks; that is a clipboard restriction, not Delete protection. Diagnostic
+formats 34 and 35.
+
+A locked footprint remains selectable and inspectable. The shared move, rotate,
+flip, align/distribute and delete commands protect existing locks. A selection
+containing a locked footprint is refused as a whole, naming each locked placement,
+even if it would serve as a stationary alignment anchor. A single-footprint
+transform that explicitly leaves the pose unchanged remains a no-op. Refusals
+make no board or Undo/Redo changes. These locks do not govern reference-text edits,
+schematic-to-board updates or routing obstacles. There is no lock/unlock command
+or GUI toggle for footprints yet.
+
+Clipboard Copy, Cut, Duplicate and Paste still refuse active footprint locks. Diagnostic
 single-file storage also refuses the flag when true. Canonical clipboard
 fragments without active footprint locks keep their previous encoding. See
 [clipboard](clipboard.md#pcb-canvas) and
