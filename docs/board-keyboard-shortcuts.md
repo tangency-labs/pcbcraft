@@ -22,7 +22,9 @@ Esc/R/Shift+R handling is code-cited, not exercised live. For command chords,
 macOS uses **⌘** where **Ctrl** is shown below. The routing grid bypass and
 the route-time layer keys read the physical **Ctrl** key, as noted in their
 rows. The browser build omits the desktop-only project keys and has not been
-separately verified for this inventory.
+separately verified for this inventory. macOS and Windows have not been tested
+for this inventory either; the macOS modifier notation describes the bindings,
+not a verified platform run.
 
 ## Reading the conditions
 
@@ -31,15 +33,16 @@ receives the event, no dialog, popup or modal panel is open, no text field or
 the Assistant owns input. Board-specific additions:
 
 - The layer keys (**PageUp**, **PageDown**, **+**, **−**) run ahead of the other
-  checks — they are suppressed only while a text field owns input or a popup is
-  open.
-- While a paste or duplicate preview is armed, none of the board keys below
-  run; the preview owns input and answers only Esc and R/Shift+R.
+  board-key checks, with their own text-field, Assistant, dialog and popup gates.
+  They can still change the active layer while a paste or duplicate preview is
+  armed, because they run before the clipboard-preview guard. That guard blocks
+  the remaining board-key dispatch; the preview handles Esc and R/Shift+R itself.
 - A footprint transform in progress (move draft, reference drag or the movement
   tool) blocks **X**, **Ctrl+Shift+X** and **Ctrl+Shift+M**.
-- Pointer-scoped bindings (**`**, **U**, **D**, and hover-directed uses of
-  **M**, **R**, **F**) act on what is under the pointer or on the current
-  selection, and need the pointer over the canvas.
+- Hover-directed actions (**`**, **D**, and hover-directed uses of **U**, **M**,
+  **R**, **F**) need the pointer over the canvas. **U** can instead use selected
+  copper, and **M**, **R**, **F** can act on a single selected footprint when
+  the pointer is outside the canvas; the shared input gates still apply.
 
 ## Application and edit keys
 
@@ -49,12 +52,15 @@ focused board view: New/Open/Save/Preferences/Quit, Undo/Redo, the clipboard
 chords, **N**/**Shift+N** grid stepping, **Ctrl+U** units and **Esc** on Home.
 Board differences:
 
-- **Ctrl+A** selects all board items — the schematic has no Select All binding.
+- **Ctrl+A** selects visible board items enabled by the selection filters — the
+  schematic has no Select All binding.
 - The clipboard chords operate on board selections (footprints, tracks, vias,
-  zones, drawings). Duplicating linked footprints goes through the **PCB Paste
-  Options** dialog first; paste and duplicate then arm a placement preview that
-  owns input until it is placed or cancelled — while armed, **R**/**Shift+R**
-  rotate the ghost and **Esc** drops it.
+  drawings). Copy, cut and duplicate reject the entire selection if it includes
+  a zone; deselect zones before using those operations. Duplicating linked
+  footprints goes through the **PCB Paste Options** dialog first; paste and
+  duplicate then arm a placement preview that owns input until it is placed or
+  cancelled — while armed, **R**/**Shift+R** rotate the ghost and **Esc** drops it,
+  while the layer keys remain available as described above.
 
 ## Board tool keys
 
@@ -73,12 +79,12 @@ shared focus gates still apply.
 
 | Key | Action | Conditions |
 | --- | --- | --- |
-| Ctrl+A | Select all | Selects every board item; suppressed while a tool or clipboard preview owns input |
+| Ctrl+A | Select all | Selects visible board items enabled by the selection filters; hidden-layer items are excluded. Suppressed while a tool or clipboard preview owns input |
 | Delete | Delete selection | Removes the selection. While a track, zone or drawing tool owns a selection, Delete routes to that tool instead |
 | M | Move | Hovered or single-selected footprint (or a selected reference designator): picks it up for click placement. A multi-item selection containing footprints, zones or drawings: picks the group up. A copper-only selection: the track module's own move. A selected item also responds when the pointer is elsewhere |
 | R / Shift+R | Rotate 90° | Rotates the hovered or single-selected footprint, or the active move/placement preview, counterclockwise and clockwise. The board has no mirror keys |
 | F | Flip side | Moves the hovered or single-selected footprint (or move draft) to the opposite board side |
-| U | Select connected copper | Seeds from copper under the pointer, or the current selection when the pointer is over none; expands to the whole connected set |
+| U | Select connected copper | Seeds from copper under the pointer, or selected copper when no copper is hovered, including when the pointer is outside the canvas; expands to the connected set allowed by visibility and selection filters |
 | D | Drag track segment | Requires a track under the pointer (not over a footprint); moves the segment, click commits |
 | ` (backtick) | Highlight net | Highlights the net under the pointer, respecting copper-layer visibility; over empty space it clears the highlight |
 | Esc | Cancel | Order: a pending DRC job first, then movement, measure, tracks, zones, drawing, a move draft, reference drag, placement preview, box selection, then the selection itself; panels, popups and dialogs come earlier still |
@@ -124,6 +130,11 @@ it.
 | Double-click | `board_tracks.rs` and `board_drawing.rs` (`double_clicked` finishes the draft) | — |
 
 ## Notes for contributors
+
+The board/schematic differences and input exceptions below and in this inventory
+are [reported to #168](https://github.com/tangency-labs/pcbcraft/issues/168#issuecomment-6967295238)
+for later shortcut consolidation. This page records existing behavior without
+choosing new bindings or defaults.
 
 - Board keys deliberately reuse letters the schematic gives other meanings:
   **X** routes instead of mirroring, **R**/**Shift+R** rotate both directions
