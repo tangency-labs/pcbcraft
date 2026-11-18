@@ -771,13 +771,12 @@ non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
 With a configured board and a closed Board Outline, **Manufacture → Fabrication → Outputs**
-saves a ZIP and a new neighboring `<archive filename>.manifest.json` on desktop,
-without editing the design. Choose a fresh name if the companion already exists;
-Outputs won't replace it. Writes are sequential. Avoid concurrent writers and
-always compare the ZIP's name, size and SHA-256 to the sidecar after saving.
-In the browser, Outputs requests both downloads; allow and check them. Output
-names remain unique when layer names collide after sanitization; the
-[editor guide](editor-guide.md) describes the files and recovery behavior.
+exports one ZIP with an embedded `manifest.json` for checking Gerber and drill
+member byte sizes and SHA-256, without editing the design. Desktop can replace
+the same ZIP on re-export. In the browser, Outputs requests one download; check
+that your browser saved it. Output names remain unique when layer names collide
+after sanitization; the [editor guide](editor-guide.md) describes the files and
+save behavior.
 
 ### Browse libraries
 

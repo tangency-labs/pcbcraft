@@ -480,8 +480,8 @@ impl PcbApp {
             .is_some_and(|view| crate::board_tracks::can_route(view, board.active_layer.as_deref(), &board.hidden_layers))
     }
 
-    /// Capture the focused board's ZIP and member records on the editor loop. The native worker
-    /// binds the chosen filename and writes both files; the browser path requests downloads.
+    /// Capture the focused board's complete ZIP on the editor loop. The native worker saves it
+    /// at the chosen path; the browser path requests one download.
     /// Missing setup or outline and a busy export slot are reported without editing the project.
     pub(super) fn export_fabrication(&mut self, ctx: &egui::Context) {
         let Some(target) = self.views.active.board.target else { return };

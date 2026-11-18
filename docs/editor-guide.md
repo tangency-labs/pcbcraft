@@ -831,32 +831,20 @@ umask. The archive is flushed before replacement and its directory is flushed
 afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
 
-On desktop, Outputs saves a new `<archive filename>.manifest.json` beside the ZIP
-without adding a member to the archive. Its `generator_version`,
-`archive` record and ordered `files` list describe this capture. Each artifact
-record contains `name`, `size_bytes` and lowercase hexadecimal `sha256` of the
-exact bytes; member sizes refer to uncompressed UTF-8 content, including line
-endings. The archive record names the selected ZIP filename, even after a desktop
-save-dialog rename. The JSON has no wall clock; at the same generator version,
-the same capture and archive name give identical JSON. It is an integrity sidecar, not a design or
-release manifest: it does not establish source identity, configuration or DRC/ERC
-freshness and cannot authorize a synchronized release.
+The ZIP contains `manifest.json` alongside the Gerber and drill members. Its
+`generator_version` and ordered `files` list describe the same capture. Each
+record contains the member `name`, `size_bytes` and lowercase hexadecimal
+`sha256` of its uncompressed UTF-8 bytes, including line endings. To check a
+member, compare its extracted byte length and SHA-256 with that record. The
+manifest lists neither itself nor the outer ZIP and does not depend on the save
+name. It checks file integrity, not source identity, configuration or DRC/ERC
+freshness, and cannot authorize a synchronized release.
 
-Desktop checks the companion path and stages both files before installing the
-ZIP followed by the companion. It never replaces an existing
-companion. If the path is occupied or invalid, try a shorter or unused ZIP name;
-to reuse a name with an existing companion, move that companion out of the way
-first. Cancelling the desktop save dialog writes neither file.
-
-The two installs are not atomic as a pair. A late error or interruption can
-leave a new ZIP without its new companion. On Unix, a directory sync error can
-leave installed files visible with durability unconfirmed. One editor limits its
-own active export requests, not other writers to the destination. Avoid writing
-concurrently to the same destination and always compare the ZIP's filename,
-byte length and SHA-256 with the companion, even after both writes complete.
-The browser only requests two downloads; it cannot confirm completion or
-cancellation. Allow multiple downloads and check both files, including whether
-the browser changed the ZIP filename.
+Desktop re-export can replace the same ZIP without moving any old companion
+file. Cancelling the save dialog writes nothing. One editor limits its own
+active export requests, not other writers to the destination. The browser
+requests one ZIP download and cannot confirm completion or cancellation; check
+your browser for the saved ZIP.
 
 Press **Backtick** over a visible pad, track or via to highlight its net. Visible
 pads, tracks and vias on that net brighten in their own colors while the rest

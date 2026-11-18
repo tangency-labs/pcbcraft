@@ -2510,10 +2510,10 @@ impl PcbApp {
         self.adopt_opened_library(&ctx);
         self.sync_library_bindings();
         match self.fabrication_exports.poll() {
-            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Wrote ZIP and manifest; verify they match".into()),
+            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication ZIP".into()),
             #[cfg(any(test, target_arch = "wasm32"))]
-            Some(Ok(board_outputs::Outcome::DownloadsRequested)) => {
-                self.file_notice = Some("Requested ZIP and manifest downloads; check that your browser saved both".into());
+            Some(Ok(board_outputs::Outcome::DownloadRequested)) => {
+                self.file_notice = Some("Requested fabrication ZIP download; check your browser".into());
             }
             Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
             Some(Err(error)) => self.message = Some(error),

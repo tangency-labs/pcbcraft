@@ -65,51 +65,38 @@ impl Artifact {
     }
 }
 
-/// A derived integrity sidecar. It does not certify design freshness or release compatibility.
+/// Integrity records for the generated files, not the ZIP itself or the design state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Manifest {
     pub generator_version: String,
-    pub archive: Artifact,
     pub files: Vec<Artifact>,
 }
 
-/// Immutable ZIP bytes and their member records, built together from captured outputs.
+impl Manifest {
+    /// Describe the exact uncompressed bytes that are passed to the ZIP writer.
+    fn from_outputs(outputs: &[Output]) -> Self {
+        Self {
+            generator_version: env!("CARGO_PKG_VERSION").into(),
+            files: outputs.iter().map(|output| Artifact::new(output.name.clone(), output.contents.as_bytes())).collect(),
+        }
+    }
+}
+
+/// Immutable ZIP bytes, including the manifest, built from captured outputs.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Archive {
     bytes: Vec<u8>,
-    files: Vec<Artifact>,
 }
 
 impl Archive {
-    /// Pack the existing outputs unchanged and record every member's exact UTF-8 bytes.
-    /// ZIP failures return an error; no project or output file is edited.
+    /// Pack the captured outputs and their manifest without editing the project or writing files.
     pub fn new(outputs: &[Output]) -> Result<Self, String> {
-        Ok(Self {
-            bytes: zip(outputs)?,
-            files: outputs.iter().map(|output| Artifact::new(output.name.clone(), output.contents.as_bytes())).collect(),
-        })
+        Ok(Self { bytes: zip(outputs)? })
     }
 
-    /// The complete deterministic ZIP, with no manifest member added to it.
+    /// The complete deterministic ZIP, independent of its destination filename.
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
-    }
-
-    /// Bind this capture to its destination filename, including a save-dialog rename.
-    /// Renaming does not regenerate the board or any archive bytes.
-    pub fn manifest(&self, archive_name: &str) -> Manifest {
-        Manifest {
-            generator_version: env!("CARGO_PKG_VERSION").into(),
-            archive: Artifact::new(archive_name.into(), &self.bytes),
-            files: self.files.clone(),
-        }
-    }
-
-    /// Encode the sidecar deterministically as UTF-8 JSON with a final newline.
-    pub fn manifest_json(&self, archive_name: &str) -> Result<Vec<u8>, String> {
-        let mut bytes = serde_json::to_vec_pretty(&self.manifest(archive_name)).map_err(|error| error.to_string())?;
-        bytes.push(b'\n');
-        Ok(bytes)
     }
 }
 
@@ -442,10 +429,15 @@ impl BoardView<'_> {
     }
 }
 
-/// Pack outputs with fixed timestamps and Unix regular-file metadata on every platform.
-/// The same outputs give the same bytes; ZIP encoding failures are returned as errors.
+/// Pack the outputs and their `manifest.json` with fixed timestamps and Unix file metadata.
+/// The same outputs give the same bytes. A reserved member name or encoding failure is an error.
 pub fn zip(outputs: &[Output]) -> Result<Vec<u8>, String> {
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+    const MANIFEST_NAME: &str = "manifest.json";
+    if outputs.iter().any(|output| output.name.eq_ignore_ascii_case(MANIFEST_NAME)) {
+        return Err(format!("{MANIFEST_NAME} is reserved for fabrication integrity records"));
+    }
+    let manifest = serde_json::to_string_pretty(&Manifest::from_outputs(outputs)).map_err(|error| error.to_string())?;
     let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default()
         .system(zip::System::Unix)
@@ -456,6 +448,8 @@ pub fn zip(outputs: &[Output]) -> Result<Vec<u8>, String> {
         writer.start_file(&output.name, options).map_err(|e| e.to_string())?;
         writer.write_all(output.contents.as_bytes()).map_err(|e| e.to_string())?;
     }
+    writer.start_file(MANIFEST_NAME, options).map_err(|e| e.to_string())?;
+    writeln!(writer, "{manifest}").map_err(|e| e.to_string())?;
     writer.finish().map(|cursor| cursor.into_inner()).map_err(|e| e.to_string())
 }
 
@@ -465,7 +459,7 @@ impl Session {
         self.fabrication(params).map(|fabrication| fabrication.files)
     }
 
-    /// Capture the addressed board's existing outputs and archive together without editing.
+    /// Capture the addressed board's outputs and their manifest in one ZIP without editing.
     pub fn export_fabrication_archive(&self, params: &Value) -> Result<Archive, CommandError> {
         let fabrication = self.fabrication(params)?;
         Archive::new(&fabrication.files).map_err(CommandError::Unavailable)
@@ -479,13 +473,11 @@ impl Session {
         view.fabrication().map_err(CommandError::Unavailable)
     }
 
-    /// The execute result: file text, resolved origin and integrity of the same captured files.
-    /// The manifest names the suggested ZIP; clients choosing another name must rebind it.
+    /// Return file text, resolved origin and the same member records as the ZIP manifest.
     pub(crate) fn fabrication_report(&self, params: &Value) -> Result<Value, CommandError> {
         let fabrication = self.fabrication(params)?;
-        let archive = Archive::new(&fabrication.files).map_err(CommandError::Unavailable)?;
-        let name = archive_name(&self.open_project()?.name);
-        Ok(json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": archive.manifest(&name)}))
+        let manifest = Manifest::from_outputs(&fabrication.files);
+        Ok(json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": manifest}))
     }
 }
 

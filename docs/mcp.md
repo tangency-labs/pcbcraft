@@ -347,20 +347,17 @@ Gerber X2 copper per layer, top and bottom mask, paste and silkscreen, the outli
 and one Excellon plated drill file. It needs a board setup and a closed Board Outline.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
-validates board and file generation, not ZIP construction; `execute` generates the
-file contents once and builds the ZIP to derive the additional `fabrication.manifest`.
-Neither operation writes files or changes the project or revision; `execute` does
-not return ZIP bytes.
+validates board and file generation, not ZIP construction; `execute` also returns
+`fabrication.manifest` for the same captured files. Neither operation writes files
+or changes the project or revision; `execute` does not build or return a ZIP.
 
-The manifest contains `generator_version`, an `archive` record and ordered `files`
-records with `name`, `size_bytes` and lowercase hexadecimal `sha256`. The archive
-record covers the exact ZIP bytes from the engine's encoder; member records cover
-uncompressed UTF-8 bytes. The archive name is the suggested portable
-`<project>-fabrication.zip`. An archive check requires the original ZIP bytes or a
-byte-identical ZIP from the same encoder; repacking file text into an arbitrary ZIP
-need not reproduce the archive digest. A client saving a byte-identical ZIP under
-another name must use that name in its sidecar. The metadata supports byte checks,
-not source identity, configuration or check freshness. See
+The manifest matches the `manifest.json` embedded in the fabrication ZIP for the
+same capture: `generator_version` and ordered `files` records with `name`,
+`size_bytes` and lowercase hexadecimal `sha256` of the uncompressed UTF-8 bytes.
+It lists only the generated files, not itself. Clients that used
+`fabrication.manifest.archive` must adapt: the outer ZIP name, size and digest are
+no longer reported. Member records are independent of the ZIP filename. They
+support byte checks, not source identity, configuration or check freshness. See
 [desktop/browser publication limits](editor-guide.md).
 
 `project.export_netlist` generates the project's netlist without editing it;

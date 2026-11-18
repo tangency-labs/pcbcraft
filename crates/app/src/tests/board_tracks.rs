@@ -1174,8 +1174,8 @@ fn mixed_via_sizes_are_read_only_in_properties() {
     assert!(h.query_by_label("Selected via pad").is_some() && h.query_by_label("Mixed").is_none());
 }
 
-/// Outputs explains a missing outline, then captures the engine's ZIP and member data without
-/// editing. Injected outcomes exercise the notices, not the native dialog or browser downloads.
+/// Outputs explains a missing outline, then captures the engine's complete ZIP without editing.
+/// Injected outcomes exercise the notices, not the native dialog or browser runtime.
 #[test]
 fn outputs_export_one_archive_of_fabrication_files() {
     let mut h = routable();
@@ -1200,13 +1200,11 @@ fn outputs_export_one_archive_of_fabrication_files() {
     let outputs = h.state().session.export_fabrication(&json!({})).unwrap();
     assert!(outputs.iter().any(|o| o.name.ends_with("-Top.gbr")) && outputs.iter().any(|o| o.name.ends_with("-PTH.drl")));
     assert_eq!(archive.bytes(), pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
-    let report = h.state_mut().session.execute(pcbcraft_engine::board::fabrication::EXPORT_FABRICATION, &json!({})).unwrap();
-    assert_eq!(serde_json::to_value(archive.manifest(&name)).unwrap(), report["fabrication"]["manifest"]);
     assert!(h.state().fabrication_exports.busy());
     h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved)).unwrap();
     h.run();
     assert!(!h.state().fabrication_exports.busy());
-    let writes_notice = "Wrote ZIP and manifest; verify they match";
+    let writes_notice = "Saved fabrication ZIP";
     assert!(h.query_by_label(writes_notice).is_some(), "the board status bar shows file results");
     click(&mut h, "Manufacture");
     click(&mut h, "Generate fabrication outputs");
@@ -1221,16 +1219,16 @@ fn outputs_export_one_archive_of_fabrication_files() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "cancelling edits nothing");
     click(&mut h, "Manufacture");
     click(&mut h, "Generate fabrication outputs");
-    h.state_mut().fabrication_exports.complete_captured(Err("ZIP published, but its manifest failed".into())).unwrap();
+    h.state_mut().fabrication_exports.complete_captured(Err("Archive published, but syncing its directory failed".into())).unwrap();
     h.run();
-    assert!(h.state().message.as_deref().unwrap().contains("manifest failed"));
+    assert!(h.state().message.as_deref().unwrap().contains("syncing its directory failed"));
     assert!(h.state().file_notice.is_none());
     assert!(h.query_by_label(writes_notice).is_none());
     click(&mut h, "Manufacture");
     click(&mut h, "Generate fabrication outputs");
-    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::DownloadsRequested)).unwrap();
+    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::DownloadRequested)).unwrap();
     h.run();
-    assert!(h.state().file_notice.as_deref().unwrap().contains("check that your browser saved both"));
+    assert_eq!(h.state().file_notice.as_deref(), Some("Requested fabrication ZIP download; check your browser"));
     assert!(h.query_by_label(writes_notice).is_none());
 }
 

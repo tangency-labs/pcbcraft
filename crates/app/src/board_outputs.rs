@@ -1,22 +1,20 @@
-//! Fabrication output export: the existing Gerber/drill archive and an integrity sidecar.
+//! Fabrication output export: one ZIP containing Gerber/drill files and their manifest.
 //!
-//! The UI thread captures deterministic ZIP bytes and member records. A native worker selects
-//! the destination, serializes the filename-bound sidecar and writes the files; browser builds
-//! request downloads instead. The editor allows one active export request; it does not lock
-//! destinations or track browser downloads. Dropping the application never joins the worker,
-//! and a worker that stops reports a disconnect instead of leaving the slot busy.
+//! The UI thread captures the complete ZIP bytes. A native worker selects and writes the
+//! destination; browser builds request one download instead. The editor allows one active
+//! export request; it does not lock destinations or track browser downloads. Dropping the
+//! application never joins the worker, and a worker that stops reports a disconnect.
 use pcbcraft_engine::board::fabrication::Archive;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
-/// How an export request ended. On desktop `Saved` means both writes completed, not that the
-/// files were checked as a matching pair. The browser path receives no completion or
-/// cancellation signal from the browser, and UI tests inject the outcome.
+/// How an export request ended. `Saved` means desktop publication completed. A browser
+/// request gets no completion or cancellation signal, and UI tests inject the outcome.
 #[derive(Debug)]
 #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 pub(super) enum Outcome {
     Saved,
     #[cfg(any(test, target_arch = "wasm32"))]
-    DownloadsRequested,
+    DownloadRequested,
     Cancelled,
 }
 
@@ -49,7 +47,7 @@ impl Exports {
         Some(result)
     }
 
-    /// Start desktop publication or request browser downloads from the capture. Refuses while
+    /// Start desktop publication or request a browser download from the capture. Refuses while
     /// this editor's export slot is busy; neither path rereads the design.
     pub(super) fn start(&mut self, ctx: &egui::Context, name: String, archive: Archive) -> Result<(), String> {
         if self.busy() {
@@ -91,60 +89,16 @@ impl Exports {
     }
 }
 
-/// Ask where to save, then publish ZIP and sidecar sequentially, not as an atomic pair.
-/// Cancellation writes neither; any publication failure is reported rather than success.
+/// Ask where to save, then publish the captured ZIP at the selected path.
+/// Cancellation writes nothing; publication errors are reported rather than success.
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
 fn native(name: &str, archive: &Archive) -> Result<Outcome, String> {
     let Some(path) = rfd::FileDialog::new().set_title("Save fabrication outputs").set_file_name(name).add_filter("Zip archive", &["zip"]).save_file()
     else {
         return Ok(Outcome::Cancelled);
     };
-    publish_package(&path, archive)?;
+    publish_archive_with_sync(&path, archive.bytes(), sync_directory)?;
     Ok(Outcome::Saved)
-}
-
-/// Check and stage the unselected companion before replacing the selected ZIP. Never replace
-/// a companion, even if it appears after the check; use a fresh destination for a new pair.
-#[cfg(not(target_arch = "wasm32"))]
-fn publish_package(path: &std::path::Path, archive: &Archive) -> Result<(), String> {
-    publish_package_with_sync(path, archive, sync_directory)
-}
-
-/// Publish the staged ZIP followed by a no-clobber companion. Directory sync runs after each
-/// installation. Errors distinguish a failed companion install from an installed but unconfirmed
-/// durable entry. There is no rollback or coordination with other writers of the ZIP.
-#[cfg(not(target_arch = "wasm32"))]
-fn publish_package_with_sync(
-    path: &std::path::Path,
-    archive: &Archive,
-    mut sync: impl FnMut(&std::path::Path) -> std::io::Result<()>,
-) -> Result<(), String> {
-    use std::{fs, io::ErrorKind};
-    let name = path.file_name().and_then(|name| name.to_str()).ok_or("The archive filename must be valid UTF-8 for its manifest.")?;
-    let companion_name = format!("{name}.manifest.json");
-    let sidecar = path.with_file_name(&companion_name);
-    let refusal = |reason: &str| {
-        format!("Cannot write manifest {}: {reason}. Choose a shorter or unused ZIP filename, or move the existing companion.", sidecar.display())
-    };
-    // Bound the Windows basename explicitly; path lookup can report an oversized name as absent.
-    #[cfg(windows)]
-    if companion_name.encode_utf16().count() > 255 {
-        return Err(refusal("the companion filename exceeds 255 UTF-16 code units"));
-    }
-    match fs::symlink_metadata(&sidecar) {
-        Ok(_) => return Err(refusal("the companion path already exists and will not be replaced")),
-        Err(error) if error.kind() == ErrorKind::NotFound => {}
-        Err(error) => return Err(refusal(&error.to_string())),
-    }
-    let manifest = archive.manifest_json(name)?;
-    let parent = output_directory(path);
-    let staged = stage_output(parent, &manifest, None).map_err(|error| refusal(&error.to_string()))?;
-    publish_archive_with_sync(path, archive.bytes(), &mut sync)
-        .map_err(|error| format!("Manifest not installed; archive publication failed (the ZIP may already be replaced): {error}"))?;
-    staged
-        .persist_noclobber(&sidecar)
-        .map_err(|error| format!("ZIP published, but its manifest failed to install: {}", refusal(&error.error.to_string())))?;
-    sync(parent).map_err(|error| format!("ZIP and manifest installed, but syncing the manifest directory failed; durability is unconfirmed: {error}"))
 }
 
 /// Stage, flush and rename before invoking the directory-sync boundary. Any earlier failure
@@ -236,15 +190,21 @@ extern "C" {
     fn download(bytes: &[u8], name: &str, media_type: &str) -> Result<(), JsValue>;
 }
 
-/// Request both browser downloads from the capture. Browsers can silently block multiple
-/// downloads, so a successful request is not a confirmed filesystem save.
+/// Request the captured ZIP through the browser bridge.
 #[cfg(all(target_arch = "wasm32", not(test)))]
 fn download_archive(name: &str, archive: &Archive) -> Result<Outcome, String> {
-    let manifest = archive.manifest_json(name)?;
-    download(archive.bytes(), name, "application/zip").map_err(|error| format!("ZIP download failed; manifest not requested: {error:?}"))?;
-    download(&manifest, &format!("{name}.manifest.json"), "application/json")
-        .map_err(|error| format!("ZIP download requested, but manifest download failed: {error:?}"))?;
-    Ok(Outcome::DownloadsRequested)
+    request_zip_download(name, archive, download)
+}
+
+/// Hand the full capture to a single download request, without claiming a filesystem save.
+#[cfg(any(all(test, not(target_arch = "wasm32")), all(target_arch = "wasm32", not(test))))]
+fn request_zip_download<E: std::fmt::Debug>(
+    name: &str,
+    archive: &Archive,
+    request: impl FnOnce(&[u8], &str, &str) -> Result<(), E>,
+) -> Result<Outcome, String> {
+    request(archive.bytes(), name, "application/zip").map_err(|error| format!("ZIP download request failed: {error:?}"))?;
+    Ok(Outcome::DownloadRequested)
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
