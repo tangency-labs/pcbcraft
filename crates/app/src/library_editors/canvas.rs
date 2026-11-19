@@ -258,12 +258,13 @@ impl Document {
         }
         workspace::ribbon_separator(ui);
         let tools = [button(Icon::Sheet, "Duplicate", selected), button(Icon::Nets, "Array", selected)];
-        let extra = [button(Icon::Sheet, "Copy", selected), button(Icon::Sheet, "Paste", enabled)];
+        let extra = [button(Icon::Sheet, "Copy", selected), button(Icon::Sheet, "Cut", selected), button(Icon::Sheet, "Paste", enabled)];
         if let Some(index) = workspace::ribbon_group_with_menu(ui, "Copy", &tools, &extra) {
             match index {
                 0 => self.duplicate(),
                 1 => self.array_requested = true,
                 2 => self.copy(ui.ctx()),
+                3 => self.cut(ui.ctx()),
                 _ => self.paste(ui.ctx()),
             }
         }
@@ -385,6 +386,18 @@ impl Document {
         {
             self.error = Some(error);
         }
+    }
+    /// Cut stores the selection on the internal clipboard and removes it as one undoable edit.
+    fn cut(&mut self, ctx: &egui::Context) {
+        if self.pending() {
+            self.error = Some("Apply or reset the property fields before cutting.".into());
+            return;
+        }
+        if self.selection.is_empty() {
+            return;
+        }
+        self.copy(ctx);
+        self.delete();
     }
     /// R rotates the placement prototype or applies a validated rotation to the selected objects.
     fn rotate(&mut self) {
@@ -723,7 +736,7 @@ impl Document {
                 if command && ui.input(|i| i.key_pressed(egui::Key::A)) {
                     let _ = self.select_many(item.objects.keys().copied().collect());
                 }
-                // Command-only C/V arrive as normalized clipboard events on desktop; a raw
+                // Command-only C/X/V arrive as normalized clipboard events on desktop; a raw
                 // key press only appears when another modifier bypasses that translation.
                 // egui-winit emits Paste("") when the OS clipboard read is empty and
                 // PasteImage when it holds only an image — both mean "paste intent" here.
@@ -731,6 +744,7 @@ impl Document {
                 // in the same batch cancels the chord, and a focus-loss batch must not
                 // arm a preview the reset at the top of this canvas just cleared.
                 let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
+                let cut = ui.input(|i| i.focused && i.events.iter().any(|event| matches!(event, egui::Event::Cut)));
                 let pasted = ui.input(|i| {
                     i.focused
                         && i.events.iter().fold(false, |armed, event| match event {
@@ -742,6 +756,9 @@ impl Document {
                 });
                 if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
                     self.copy(ui.ctx());
+                }
+                if cut || (command && ui.input(|i| i.focused && i.key_pressed(egui::Key::X))) {
+                    self.cut(ui.ctx());
                 }
                 if pasted {
                     self.paste(ui.ctx());

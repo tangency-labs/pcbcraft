@@ -1044,6 +1044,32 @@ fn normalized_clipboard_events_drive_library_copy_and_paste() {
         );
         h.key_press(egui::Key::Escape);
         h.run();
+        // Cut is copy + delete as one undoable edit; the cut selection still pastes.
+        let count = h.state().library_editors.documents[&id].session.snapshot().objects.len();
+        h.event(egui::Event::Cut);
+        h.run();
+        let doc = &h.state().library_editors.documents[&id];
+        assert_eq!(doc.session.snapshot().objects.len(), count - 1, "{kind:?} cut removes the selection");
+        assert_eq!(doc.session.revision(), revision + 1, "{kind:?} cut is a single undoable edit");
+        h.event(egui::Event::Paste(String::new()));
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+            "{kind:?} the cut selection must reach the internal clipboard"
+        );
+        h.key_press(egui::Key::Escape);
+        h.run();
+        crate::tests::click(&mut h, "Undo Library Edit");
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&id].session.snapshot().objects.len(), count, "{kind:?} one undo restores the cut objects");
+        // The raw shifted chord reaches the same cut op (re-hover after the
+        // Undo click moved the pointer off the canvas).
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = [first].into_iter().collect();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::X);
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&id].session.snapshot().objects.len(), count - 1, "{kind:?} raw shifted X must cut as well");
     }
     // Pending property fields still refuse a normalized Paste.
     let mut app = PcbApp::default();
@@ -1069,6 +1095,16 @@ fn normalized_clipboard_events_drive_library_copy_and_paste() {
     assert!(doc.pending(), "unapplied fields must survive focus changes");
     assert!(matches!(doc.tool, canvas::Tool::Select));
     assert!(doc.error.is_some(), "pending property fields must refuse a normalized Paste");
+    // A pending draft also refuses Cut rather than discarding unapplied fields.
+    let revision = doc.session.revision();
+    let count = doc.session.snapshot().objects.len();
+    h.state_mut().library_editors.documents.get_mut(&id).unwrap().error = None;
+    h.event(egui::Event::Cut);
+    h.run();
+    let doc = &h.state().library_editors.documents[&id];
+    assert_eq!(doc.session.revision(), revision, "pending property fields must refuse a normalized Cut");
+    assert_eq!(doc.session.snapshot().objects.len(), count);
+    assert!(doc.error.is_some(), "cut must surface the pending-fields error");
 }
 
 /// Native keyboard→clipboard translation drives the library paste op for every OS
