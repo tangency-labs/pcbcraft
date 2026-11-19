@@ -276,24 +276,6 @@ impl Planning {
                     Some(Ok(())) => {}
                 }
             }
-            if matches!(wanted.action.as_ref(), Some(Action::Via(_))) {
-                // A via can be requested at the fixed head, where no new track was validated.
-                // Before adopting either path, probe the actual through land at the ready endpoint.
-                let context = self.context.as_ref()?;
-                let at = *points.last()?;
-                match context.try_through_via_clears_mechanical(session, at, sizes.1) {
-                    Ok(Some(true)) => {}
-                    Ok(None) => return None,
-                    Ok(Some(false)) => {
-                        wanted.action = None;
-                        return Some(Err("Via land is too close to a non-plated hole".into()));
-                    }
-                    Err(error) => {
-                        wanted.action = None;
-                        return Some(Err(error.to_string()));
-                    }
-                }
-            }
             let action = wanted.action.take()?;
             self.wanted = None;
             return Some(Ok((points, action)));

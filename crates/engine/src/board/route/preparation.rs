@@ -19,20 +19,6 @@ impl PlanningContext {
         &self.source
     }
 
-    /// Validate the via land against this gesture's prepared obstacles without waiting or rebuilding.
-    /// A busy or cold query returns None, not permission to change layers.
-    pub fn try_through_via_clears_mechanical(&self, session: &Session, at: Point, diameter_nm: i64) -> Result<Option<bool>, CommandError> {
-        if !self.source.is_current(session) || diameter_nm <= 0 {
-            return Err(CommandError::InvalidParams("stale route source or invalid via diameter".into()));
-        }
-        let query = match self.preparation.try_lock() {
-            Ok(preparation) => preparation.cached()?,
-            Err(TryLockError::WouldBlock) => return Ok(None),
-            Err(TryLockError::Poisoned(_)) => return Err(CommandError::Unavailable("Route obstacle preparation failed".into())),
-        };
-        query.map(|query| query.through_via_clears_mechanical(at, diameter_nm)).transpose()
-    }
-
     /// Capture read-only work only when the obstacle query is already prepared. A busy/cold
     /// context returns None without building or waiting. The owner must check source authority
     /// before displaying/adopting results; this capture grants no document edit authority.

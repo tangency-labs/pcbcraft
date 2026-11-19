@@ -68,6 +68,114 @@ fn circular_npth_native_codec_is_lazy_and_closed() {
     assert_eq!(write_saved(&definition).unwrap(), legacy);
 }
 
+/// Load an authored fixture and place its mapped component. Route tests optionally connect
+/// terminal 1 to a real schematic net before accepting the board's source.
+fn place_mounting_fixture(item: &crate::authoring::Item, connected: bool) -> Session {
+    let definition = item.footprint().unwrap();
+    let mut s = session();
+    let manifest =
+        json!({"format":crate::library::LIBRARY_FORMAT,"id":definition.library,"name":"Synthetic mounting fixture","license":definition.license})
+            .to_string();
+    let native = item.export_native().unwrap().to_string();
+    s.execute("library.load_source", &json!({"source":"mounting-fixture","documents":{"library.json":manifest,"footprints/mounting.json":native}}))
+        .unwrap();
+    let first = symbol(&mut s, "resistor");
+    let component = s.project().unwrap().components().next().unwrap().id();
+    if connected {
+        s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":12_700_000,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+        let second = s.project().unwrap().symbols().last().unwrap().id();
+        s.apply(
+            crate::CONNECT_PINS,
+            &json!({"from":{"symbol":first,"terminal":"1"},"to":{"symbol":second,"terminal":"1"},"expected_revision":s.revision()}),
+        )
+        .unwrap();
+    }
+    s.apply(crate::ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    s
+}
+
+/// Board and pad anchor for an interactive route to one non-plated opening.
+fn mounting_route_fixture(connected: bool) -> Session {
+    use crate::authoring::{Action, Item, Kind, Primitive};
+    let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    let hole = CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 };
+    editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
+    place_mounting_fixture(editor.snapshot().as_ref(), connected)
+}
+
+/// Make a legal thin track to a via on the right side of the opening. Optionally continue
+/// after that first transition and return to the initial layer at a distant second via.
+fn mounting_route(s: &Session, distance_nm: i64, two_transitions: bool) -> Value {
+    use crate::board::track::tests::{copper_layers, view};
+    let board = view(s);
+    let layers = copper_layers(s);
+    let footprint = board.footprints().next().unwrap();
+    let start = footprint.pads.iter().find(|pad| pad.number == "2").unwrap().center;
+    let hole = footprint.non_plated_holes[0];
+    let end = Point { x_nm: hole.center.x_nm + distance_nm, y_nm: hole.center.y_nm };
+    let mut points = vec![start, Point { x_nm: start.x_nm, y_nm: -3_000_000 }, Point { x_nm: end.x_nm, y_nm: -3_000_000 }, end];
+    let mut changes = vec![json!({"at":3,"layer":layers[1]})];
+    if two_transitions {
+        points.push(Point { x_nm: end.x_nm + 4_000_000, y_nm: end.y_nm });
+        changes.push(json!({"at":4,"layer":layers[0]}));
+    }
+    json!({"board":board.target.board,"layer":layers[0],"points":points,"layer_changes":changes,
+        "width_nm":200_000,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()})
+}
+
+/// Use the same resumed candidate validation as interactive Finish, without adopting the edit.
+fn prepare_mounting_route(s: &Session, params: &Value) -> Result<crate::board::track::preparation::PreparedCopperEdit, crate::CommandError> {
+    let target = crate::board::track::tests::view(s).target;
+    let source = s.copper_preparation(target).unwrap();
+    let mut job = s.prepare_interactive_route_with(&source, params)?;
+    assert!((0..256).any(|_| job.step(32)), "synthetic route preparation finishes");
+    job.take_result().map(|result| result.expect("completed job has a verdict"))
+}
+
+/// Finish checks earlier transitions again after the route's global via size grows.
+#[test]
+fn interactive_finish_rechecks_earlier_vias_at_final_diameter() {
+    let mut s = mounting_route_fixture(false);
+    let first = mounting_route(&s, 2_200_000, false);
+    assert!(prepare_mounting_route(&s, &first).is_ok(), "first via fits at the adopted diameter");
+    let mut full = mounting_route(&s, 2_200_000, true);
+    assert!(prepare_mounting_route(&s, &full).is_ok(), "both transitions fit the original size");
+    full["via_diameter_nm"] = json!(1_400_000);
+    let before = s.snapshot().unwrap();
+    let revision = s.revision();
+    let error = prepare_mounting_route(&s, &full).err().expect("growing the first via intersects the opening");
+    assert!(error.to_string().contains("Via land at (5200000, 5000000)"), "{error}");
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &before));
+    assert_eq!(s.revision(), revision);
+    s.apply(crate::ADD_TRACKS, &full).unwrap();
+    assert_eq!(crate::board::track::tests::view(&s).vias().len(), 2, "direct DRC fixture edits are still available");
+}
+
+/// A via touching no saved copper still inherits the stricter class of its candidate track.
+#[test]
+fn interactive_via_uses_the_connected_route_clearance() {
+    use crate::nets::{Anchor, AnchorKind, ClassTarget};
+    let mut s = mounting_route_fixture(true);
+    let initial = mounting_route(&s, 2_350_000, false);
+    assert!(prepare_mounting_route(&s, &initial).is_ok(), "0.45 mm clears the board default");
+    s.apply(crate::net_classes::CREATE, &json!({"name":"Mounting clearance","rules":{"clearance_nm":500_000},"expected_revision":s.revision()}))
+        .unwrap();
+    let project = s.project().unwrap();
+    let placed = crate::board::track::tests::view(&s).footprints().next().unwrap();
+    let object = *project.components.iter().find(|(_, component)| component.id() == placed.component).unwrap().0;
+    let anchor =
+        Anchor { kind: AnchorKind::Terminal, project: project.id, scope: project.net_scope(), occurrence: Uuid::nil(), object, terminal: "1".into() };
+    let class = project.net_classes().definitions[0].id;
+    s.apply(crate::nets::SET_CLASSES, &json!({"target":ClassTarget::Derived{anchor},"classes":[class],"expected_revision":s.revision()})).unwrap();
+    let classified = mounting_route(&s, 2_350_000, false);
+    let error = prepare_mounting_route(&s, &classified).err().expect("0.45 mm does not satisfy the route's 0.50 mm rule");
+    assert!(error.to_string().contains("Via land at (5350000, 5000000)"), "{error}");
+    let farther = mounting_route(&s, 2_410_000, false);
+    assert!(prepare_mounting_route(&s, &farther).is_ok(), "0.51 mm satisfies that same rule");
+}
+
 /// Author two physical holes next to two mapped electrical pads, then place the
 /// package using the same native authoring and board transactions as clients.
 #[test]
@@ -110,18 +218,7 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
     assert_eq!(definition.non_plated_holes.len(), 2);
     assert_eq!(Item::edit_footprint(&definition).unwrap().footprint().unwrap().non_plated_holes, definition.non_plated_holes);
 
-    let mut s = session();
-    let manifest =
-        json!({"format":crate::library::LIBRARY_FORMAT,"id":definition.library,"name":"Synthetic mounting fixture","license":definition.license})
-            .to_string();
-    let native = editor.snapshot().export_native().unwrap().to_string();
-    s.execute("library.load_source", &json!({"source":"mounting-fixture","documents":{"library.json":manifest,"footprints/mounting.json":native}}))
-        .unwrap();
-    symbol(&mut s, "resistor");
-    let component = s.project().unwrap().components().next().unwrap().id();
-    s.apply(crate::ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
-    s.apply(crate::INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
-    s.apply(crate::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let mut s = place_mounting_fixture(editor.snapshot().as_ref(), false);
     let target = s.project().unwrap().board_target().unwrap();
     let view = |p: &crate::Project| p.board_view(target).unwrap().footprints().next().unwrap().non_plated_holes;
     assert_eq!(view(s.project().unwrap()), definition.non_plated_holes);
@@ -177,29 +274,6 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
         assert_eq!(plan.outcome, crate::board::route::Outcome::Blocked { last_legal: item.at });
         assert_eq!(plan.blocker.as_deref(), Some(item.name.as_str()));
     }
-
-    // A thin route may end here, but a wide via at its fixed head reaches the opening.
-    let layer = query.objects().iter().find(|item| item.mechanical).unwrap().layers[0];
-    let at = Point { x_nm: centers[0].x_nm + 2_100_000, y_nm: centers[0].y_nm };
-    let context = s.route_planning(target).unwrap();
-    assert_eq!(context.try_through_via_clears_mechanical(&s, at, 1_200_000).unwrap(), None);
-    let request = crate::board::route::Request {
-        head: at,
-        target: at,
-        layer,
-        origin: None,
-        width_nm: 200_000,
-        posture: crate::board::route::Posture::default(),
-        flipped: false,
-        previous: Vec::new(),
-    };
-    let mut job = s.prepare_route_plan(&context, request, 128).unwrap();
-    assert!((0..256).any(|_| job.step(32)), "synthetic fixed-head planning finishes");
-    let plan = job.take_result().unwrap().unwrap();
-    assert_eq!(plan.outcome, crate::board::route::Outcome::Reached);
-    assert_eq!(plan.points, vec![at]);
-    assert_eq!(context.try_through_via_clears_mechanical(&s, at, 300_000).unwrap(), Some(true));
-    assert_eq!(context.try_through_via_clears_mechanical(&s, at, 1_200_000).unwrap(), Some(false));
 
     s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":id,"x_nm":0,"y_nm":0,"rotation":90,"side":"back","expected_revision":s.revision()}))
         .unwrap();
