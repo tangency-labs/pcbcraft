@@ -135,7 +135,8 @@ fn desktop_open_and_close(path: &Path) -> Result<(), String> {
     let (send, receiver) = mpsc::channel();
     app.files.job = Some(Job { receiver, revision: app.session.revision(), operation: "open", destination: None });
     send.send(Ok(Outcome::Opened(loaded))).unwrap();
-    let _ = ctx.run_ui(egui::RawInput::default(), |ui| app.frame(ui));
+    let mut output = ctx.run_ui(egui::RawInput::default(), |ui| app.frame(ui));
+    output.textures_delta.clear();
     assert!(app.session.project().is_some_and(|current| current.same_document(&opened)), "editor did not adopt {}", path.display());
     assert!(!app.files.dirty(&app.session), "opening {} made it dirty", path.display());
     assert!(!app.close_allowed);
