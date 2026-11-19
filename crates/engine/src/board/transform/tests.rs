@@ -604,14 +604,22 @@ fn place_plated_mounting_hole(s: &mut Session) -> String {
     crate::board::track::tests::view(s).footprint_ids().last().unwrap()
 }
 
-/// Three placements align to the physical edge of a locked plated mounting hole even when it
-/// is in the selection. The hole and its drill stay fixed; repetition, undo and reopen agree.
+/// Three placements align to the physical edge of a locked, rotated bottom-side mounting
+/// hole even when it is in the selection. Its placement and plated drill stay fixed.
 #[test]
 fn align_to_locked_plated_mounting_hole_keeps_the_reference_fixed() {
     use crate::board::track::tests::view;
     let mut fixture =
         pitch_connectors(&[Point { x_nm: -10_000_000, y_nm: 0 }, Point { x_nm: -12_000_000, y_nm: 12_000_000 }, Point { x_nm: 0, y_nm: 24_000_000 }]);
     let reference = place_plated_mounting_hole(&mut fixture);
+    let position = view(&fixture).footprint(&reference).unwrap().position;
+    fixture
+        .apply(
+            SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":reference,"x_nm":position.x_nm,"y_nm":position.y_nm,
+                "rotation":90,"side":"back","expected_revision":fixture.revision()}),
+        )
+        .unwrap();
     let original = fixture.snapshot().unwrap();
     let ids: Vec<_> = view(&fixture).footprint_ids().collect();
     assert_eq!(ids.len(), 4);
@@ -626,8 +634,13 @@ fn align_to_locked_plated_mounting_hole_keeps_the_reference_fixed() {
     assert_eq!(hole.pads.len(), 1);
     assert!(hole.pads[0].through_hole);
     assert_eq!(hole.pads[0].drill_nm, Some(3_200_000));
-    let left = bounds(&hole)[0];
-    assert_eq!(left, 15_200_000);
+    assert!(hole.bottom);
+    assert_eq!(hole.rotation, 90);
+    assert_eq!(hole.pads[0].center, Point { x_nm: 17_000_000, y_nm: -9_300_000 });
+    // At 90 degrees the local 0.7 mm offset runs along Y, not X. The 5 mm land
+    // therefore starts 2.5 mm left of the placement origin, irrespective of drill size.
+    let left = 14_500_000;
+    assert_eq!(bounds(&hole)[0], left);
     let (hole_at, hole_pads) = (hole.position, hole.pads);
     let revision = s.revision();
     let mut params =
@@ -640,7 +653,8 @@ fn align_to_locked_plated_mounting_hole_keeps_the_reference_fixed() {
     let fixed = view(&s).footprint(&reference).unwrap();
     assert_eq!(fixed.position, hole_at);
     assert_eq!(fixed.pads, hole_pads);
-    assert!(fixed.locked);
+    assert_eq!(fixed.rotation, 90);
+    assert!(fixed.bottom && fixed.locked);
     let aligned = encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(encode_documents(decode_documents(&aligned).unwrap()).unwrap(), aligned);
     params["expected_revision"] = json!(s.revision());
