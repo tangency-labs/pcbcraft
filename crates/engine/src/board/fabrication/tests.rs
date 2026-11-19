@@ -594,7 +594,11 @@ fn rounded_pad_macros_read_back_radius_and_orientation() {
             if (local, placed) == (0, 37) {
                 let revision = s.revision();
                 let returned = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
-                assert_eq!(returned["fabrication"], serde_json::to_value(&fabrication).unwrap());
+                let capture = s.export_fabrication_archive(&json!({})).unwrap();
+                assert_eq!(
+                    returned["fabrication"],
+                    json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": embedded_manifest(&capture)})
+                );
                 assert_eq!(s.revision(), revision);
                 assert_eq!(zip(&fabrication.files).unwrap(), zip(&view(&s).fabrication_outputs().unwrap()).unwrap());
             }
