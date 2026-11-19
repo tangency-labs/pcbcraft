@@ -110,3 +110,6 @@ iteration must reproduce the first iteration's plans, and each first reached pla
 is committed through `pcb.shove_tracks` on a fresh session and checked against the
 exhaustive pair reference outside the timed boundary. These are solver service
 costs, not editor preview or commit latency.
+
+The [#247 evidence](../tools/performance/baselines/issue247/README.md) records the
+first runs on the `channels-v1` and `dense-v1` fixtures.
