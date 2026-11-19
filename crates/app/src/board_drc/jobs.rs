@@ -25,7 +25,7 @@ impl Work for CheckJob {
     }
 }
 impl Work for pcbcraft_engine::board::track::preparation::CopperEditJob {
-    type Output = pcbcraft_engine::board::track::preparation::PreparedCopperEdit;
+    type Output = Result<pcbcraft_engine::board::track::preparation::PreparedCopperEdit, pcbcraft_engine::CommandError>;
     fn source(&self) -> &CheckSource {
         self.source()
     }
@@ -35,8 +35,9 @@ impl Work for pcbcraft_engine::board::track::preparation::CopperEditJob {
     fn step(&mut self, budget: usize) -> bool {
         self.step(budget)
     }
+    /// Keep engine refusals in the completed output, distinct from worker failures.
     fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
-        self.take_result().map_err(|e| e.to_string())
+        Ok(self.take_result().transpose())
     }
 }
 
@@ -61,13 +62,27 @@ pub(crate) struct Request<J: Work = CheckJob> {
     pub id: u64,
     pub job: J,
 }
+/// Scheduling can fail before engine validation; only capacity indicates contention.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScheduleFailure {
+    #[cfg(not(target_arch = "wasm32"))]
+    Capacity,
+    #[cfg(not(target_arch = "wasm32"))]
+    Spawn,
+}
+
 /// A terminal completion carries its source; canceled work contains no report.
 pub(crate) struct Completion<T = Report> {
     pub id: u64,
     pub source: CheckSource,
     pub report: Result<Option<T>, String>,
-    /// Scheduling failed before engine validation, so an explicit retry may run again.
-    pub retryable: bool,
+    pub schedule_failure: Option<ScheduleFailure>,
+}
+impl<T> Completion<T> {
+    /// Only scheduling failures may be retried by the owner without changing the command.
+    pub fn retryable(&self) -> bool {
+        self.schedule_failure.is_some()
+    }
 }
 /// Bounded scheduling retains one active and one replaceable pending request per owner.
 pub(crate) struct Queue<J: Work = CheckJob> {
@@ -187,7 +202,7 @@ mod incremental {
                 id: request.id,
                 source: request.job.source().clone(),
                 report: if self.canceled { Ok(None) } else { request.job.take_output() },
-                retryable: false,
+                schedule_failure: None,
             })
         }
 
@@ -250,7 +265,7 @@ mod native {
         cancel: Arc<AtomicBool>,
         progress: Arc<Mutex<CheckProgress>>,
         result: Receiver<Result<Option<J::Output>, String>>,
-        retryable: bool,
+        schedule_failure: Option<ScheduleFailure>,
     }
     impl<J: Work> Running<J> {
         /// Own a snapshot on one worker; its one-result channel never blocks publication.
@@ -263,7 +278,7 @@ mod native {
             let id = request.id;
             let Some(slot) = WorkerSlot::acquire() else {
                 let _ = tx.try_send(Err("Snapshot worker capacity reached; retry after a running job completes".into()));
-                return Self { id, source, cancel, progress, result, retryable: true };
+                return Self { id, source, cancel, progress, result, schedule_failure: Some(ScheduleFailure::Capacity) };
             };
             let failed = tx.clone();
             let spawned = std::thread::Builder::new().name("pcbcraft-snapshot".into()).spawn(move || {
@@ -284,11 +299,11 @@ mod native {
                 };
                 let _ = tx.try_send(report);
             });
-            let retryable = spawned.is_err();
+            let schedule_failure = spawned.is_err().then_some(ScheduleFailure::Spawn);
             if let Err(error) = spawned {
                 let _ = failed.try_send(Err(format!("Could not start snapshot job: {error}")));
             }
-            Self { id, source, cancel, progress, result, retryable }
+            Self { id, source, cancel, progress, result, schedule_failure }
         }
         /// Captured source, absent after an incremental request has been consumed.
         pub fn source(&self) -> Option<&CheckSource> {
@@ -309,7 +324,7 @@ mod native {
                 Err(TryRecvError::Empty) => return None,
                 Err(TryRecvError::Disconnected) => Err("Snapshot worker stopped before completing".into()),
             };
-            Some(Completion { id: self.id, source: self.source.clone(), report, retryable: self.retryable })
+            Some(Completion { id: self.id, source: self.source.clone(), report, schedule_failure: self.schedule_failure })
         }
     }
 
@@ -336,7 +351,7 @@ mod native {
                 cancel: Arc::new(AtomicBool::new(false)),
                 progress: Arc::new(Mutex::new(job.progress())),
                 result,
-                retryable: false,
+                schedule_failure: None,
             };
             assert!(running.poll().unwrap().report.unwrap_err().contains("stopped"));
         }
@@ -366,8 +381,34 @@ mod native {
                 std::thread::yield_now();
             };
             assert_eq!(session.revision(), revision);
-            session.commit_copper_edit(completion.report.unwrap().unwrap()).unwrap();
+            session.commit_copper_edit(completion.report.unwrap().unwrap().unwrap()).unwrap();
             assert_eq!(session.revision(), revision + 1);
+            assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
+        }
+        /// The native result channel preserves an engine refusal without publishing an edit.
+        #[test]
+        fn native_copper_worker_preserves_engine_failure() {
+            let _lock = TEST_LOCK.lock().unwrap();
+            let mut session = pcbcraft_engine::Session::default();
+            session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
+            session
+                .apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &serde_json::json!({"copper_layers":2,"expected_revision":session.revision()}))
+                .unwrap();
+            let before = session.inspect();
+            let params = serde_json::json!({"tracks":[{"track":uuid::Uuid::from_u128(1),"start":{"x_nm":0,"y_nm":0},"end":{"x_nm":1_000_000,"y_nm":0}}],"expected_revision":session.revision()});
+            let job = session.prepare_copper_edit(pcbcraft_engine::RESHAPE_TRACKS, &params).unwrap();
+            let mut running = Running::start(Request { id: 1, job });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let completion = loop {
+                if let Some(done) = running.poll() {
+                    break done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            assert!(!completion.retryable());
+            assert!(matches!(completion.report, Ok(Some(Err(pcbcraft_engine::CommandError::NotFound(message)))) if message == "unknown track"));
+            assert_eq!(session.inspect(), before);
             assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
         }
         /// Excess native work is refused without spawning a third worker or waiting.
@@ -386,8 +427,14 @@ mod native {
             session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
             let mut running = Running::start(Request { id: 1, job: session.design_check_job(&serde_json::json!({})).unwrap() });
             let completion = running.poll().unwrap();
-            assert!(completion.retryable);
-            assert!(completion.report.unwrap_err().contains("capacity"));
+            assert!(completion.retryable());
+            assert_eq!(completion.schedule_failure, Some(ScheduleFailure::Capacity));
+            let failure = crate::live_control::snapshot_worker_failure(completion.schedule_failure, completion.report.unwrap_err());
+            assert_eq!(failure.code(), "busy");
+            assert_eq!(failure.message(), "Snapshot worker capacity reached; retry after a running job completes");
+            let spawn = crate::live_control::snapshot_worker_failure(Some(ScheduleFailure::Spawn), "Could not start snapshot job: test".into());
+            assert_eq!(spawn.code(), "unavailable");
+            assert_eq!(spawn.message(), "Could not start snapshot job: test");
             drop(first);
             drop(second);
             assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);

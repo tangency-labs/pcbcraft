@@ -98,7 +98,7 @@ impl Project {
     pub fn resized_sheet_symbol(&self, object: &str, at: Point, size: Point) -> Result<Self, CommandError> {
         let id = schematic::wiring::parse_id(object, "sheet-symbol-").ok_or_else(|| CommandError::InvalidParams("invalid sheet symbol ID".into()))?;
         let index =
-            self.subsheets.iter().position(|s| s.id == id).ok_or_else(|| CommandError::InvalidParams("unknown sheet symbol on this sheet".into()))?;
+            self.subsheets.iter().position(|s| s.id == id).ok_or_else(|| CommandError::NotFound("unknown sheet symbol on this sheet".into()))?;
         let minimum = self.sheet_symbol_min_size(&self.subsheets[index]);
         if size.x_nm < minimum.x_nm || size.y_nm < minimum.y_nm {
             return Err(CommandError::InvalidParams("sheet size must leave room for its pins".into()));
@@ -117,21 +117,18 @@ impl Project {
     pub fn moved_hierarchy(&self, object: &str, at: Point) -> Result<Self, CommandError> {
         let mut next = self.clone();
         if let Some(id) = schematic::wiring::parse_id(object, "sheet-symbol-") {
-            let index = next
-                .subsheets
-                .iter()
-                .position(|s| s.id == id)
-                .ok_or_else(|| CommandError::InvalidParams("unknown sheet symbol on this sheet".into()))?;
+            let index =
+                next.subsheets.iter().position(|s| s.id == id).ok_or_else(|| CommandError::NotFound("unknown sheet symbol on this sheet".into()))?;
             Arc::make_mut(&mut next.sheet_mut().subsheets)[index].at = at;
         } else if let Some(id) = schematic::wiring::parse_id(object, "label-") {
             let index = next
                 .labels
                 .iter()
                 .position(|l| l.id == id)
-                .ok_or_else(|| CommandError::InvalidParams("unknown hierarchical label on this sheet".into()))?;
+                .ok_or_else(|| CommandError::NotFound("unknown hierarchical label on this sheet".into()))?;
             Arc::make_mut(&mut next.sheet_mut().labels)[index].at = at;
         } else {
-            return Err(CommandError::InvalidParams("unknown hierarchy object ID".into()));
+            return Err(CommandError::NotFound("unknown hierarchy object ID".into()));
         }
         next.validate_hierarchy().map_err(CommandError::InvalidParams)?;
         Ok(next)
@@ -304,7 +301,7 @@ impl Session {
             PLACE_SHEET | CREATE_CHILD => {
                 let child = if id == CREATE_CHILD {
                     if project.sheets.len() >= sheets::MAX_SHEETS {
-                        return Err(CommandError::Unavailable("project already has 64 sheets".into()));
+                        return Err(CommandError::CapExceeded("project already has 64 sheets".into()));
                     }
                     let name = name_param(params)?;
                     if project.sheets().any(|s| s.name.to_lowercase() == name.to_lowercase()) {
@@ -331,7 +328,7 @@ impl Session {
                     .subsheets
                     .iter()
                     .find(|b| Some(b.id) == object)
-                    .ok_or_else(|| CommandError::InvalidParams("unknown sheet symbol on this sheet".into()))?;
+                    .ok_or_else(|| CommandError::NotFound("unknown sheet symbol on this sheet".into()))?;
                 if block.at == point && project.sheet_symbol_size(block) == size {
                     return Ok(());
                 }
@@ -342,7 +339,7 @@ impl Session {
                     .subsheets
                     .iter()
                     .position(|s| Some(s.id) == object)
-                    .ok_or_else(|| CommandError::InvalidParams("unknown sheet symbol on this sheet".into()))?;
+                    .ok_or_else(|| CommandError::NotFound("unknown sheet symbol on this sheet".into()))?;
                 if id == MOVE_SHEET {
                     let point = at()?;
                     if project.subsheets[index].at == point {
@@ -367,13 +364,13 @@ impl Session {
                             .labels
                             .iter()
                             .position(|l| Some(l.id) == object)
-                            .ok_or_else(|| CommandError::InvalidParams("unknown hierarchical label on this sheet".into()))?,
+                            .ok_or_else(|| CommandError::NotFound("unknown hierarchical label on this sheet".into()))?,
                     )
                 } else {
                     None
                 };
                 if existing.is_none() && project.labels.len() >= MAX_LABELS {
-                    return Err(CommandError::Unavailable("sheet already has 64 hierarchical labels".into()));
+                    return Err(CommandError::CapExceeded("sheet already has 64 hierarchical labels".into()));
                 }
                 let slot = existing
                     .filter(|&i| project.labels[i].direction.right() == direction.right())
@@ -382,7 +379,7 @@ impl Session {
                         (0..MAX_LABELS as u8)
                             .find(|slot| !project.labels.iter().any(|label| label.slot == *slot && label.direction.right() == direction.right()))
                     })
-                    .ok_or_else(|| CommandError::Unavailable("no free sheet pin slot".into()))?;
+                    .ok_or_else(|| CommandError::CapExceeded("no free sheet pin slot".into()))?;
                 let label = Label {
                     id: match existing {
                         Some(index) => project.labels[index].id,
@@ -408,7 +405,7 @@ impl Session {
                     .labels
                     .iter()
                     .find(|l| Some(l.id) == object)
-                    .ok_or_else(|| CommandError::InvalidParams("unknown hierarchical label on this sheet".into()))?
+                    .ok_or_else(|| CommandError::NotFound("unknown hierarchical label on this sheet".into()))?
                     .id;
                 Arc::make_mut(&mut project.sheet_mut().labels).retain(|l| l.id != label);
                 let active = project.sheet_index;

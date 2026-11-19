@@ -235,7 +235,7 @@ fn leg_at(path: &[Point], at: Point) -> Result<usize, CommandError> {
 fn interior(piece: &[Point]) -> Result<Vec<Point>, CommandError> {
     let bends = piece.get(1..piece.len().saturating_sub(1)).unwrap_or_default().to_vec();
     if bends.len() > MAX_BENDS {
-        return Err(CommandError::Unavailable(format!("a wire piece would have more than {MAX_BENDS} bends")));
+        return Err(CommandError::CapExceeded(format!("a wire piece would have more than {MAX_BENDS} bends")));
     }
     Ok(bends)
 }
@@ -260,13 +260,13 @@ impl Session {
         self.check_revision(params)?;
         let project = self.open_project()?;
         if project.wires.len() >= MAX_WIRES {
-            return Err(CommandError::Unavailable("the schematic wire limit has been reached".to_owned()));
+            return Err(CommandError::CapExceeded("the schematic wire limit has been reached".to_owned()));
         }
         let parse = |key: &str| Anchor::parse(&params[key]).ok_or_else(|| CommandError::InvalidParams(format!("invalid {key} wire endpoint")));
         let anchors = [parse("from")?, parse("to")?];
         let positions = anchors.map(|anchor| anchor.position(project));
         let [Some(from), Some(to)] = positions else {
-            return Err(CommandError::InvalidParams("wire endpoint does not exist".to_owned()));
+            return Err(CommandError::NotFound("wire endpoint does not exist".to_owned()));
         };
         if from == to {
             return Err(CommandError::InvalidParams("a wire needs distinct endpoint positions".to_owned()));
@@ -364,12 +364,12 @@ impl Session {
     fn replace_wire(&mut self, index: usize, pieces: Vec<Piece>) -> Result<(), CommandError> {
         let project = self.open_project()?;
         if project.wires.len() - 1 + pieces.len() > MAX_WIRES {
-            return Err(CommandError::Unavailable("the schematic wire limit has been reached".to_owned()));
+            return Err(CommandError::CapExceeded("the schematic wire limit has been reached".to_owned()));
         }
         let mut next = if pieces.is_empty() { 0 } else { self.next_object_id()? };
         // At most two new endpoints per piece, then the new wire IDs, which must be the highest.
         if next > MAX_OBJECT_ID - 3 * pieces.len() as u64 {
-            return Err(CommandError::Unavailable("project has exhausted its object IDs".to_owned()));
+            return Err(CommandError::CapExceeded("project has exhausted its object IDs".to_owned()));
         }
         let original = project.wires[index].clone();
         let [from, to] = original.endpoints;
@@ -422,11 +422,8 @@ impl Session {
     fn wire_target(&self, params: &Value) -> Result<(usize, Vec<Point>, Point), CommandError> {
         let id = params["wire"].as_str().and_then(|value| parse_id(value, "wire-"));
         let project = self.open_project()?;
-        let index = project
-            .wires
-            .iter()
-            .position(|wire| Some(wire.ordinal) == id)
-            .ok_or_else(|| CommandError::InvalidParams("wire does not exist".to_owned()))?;
+        let index =
+            project.wires.iter().position(|wire| Some(wire.ordinal) == id).ok_or_else(|| CommandError::NotFound("wire does not exist".to_owned()))?;
         let at = serde_json::from_value::<Point>(params["at"].clone())
             .ok()
             .filter(valid_point)
@@ -443,11 +440,8 @@ impl Session {
         self.check_revision(params)?;
         let id = params["wire"].as_str().and_then(|value| parse_id(value, "wire-"));
         let project = self.open_project()?;
-        let index = project
-            .wires
-            .iter()
-            .position(|wire| Some(wire.ordinal) == id)
-            .ok_or_else(|| CommandError::InvalidParams("wire does not exist".to_owned()))?;
+        let index =
+            project.wires.iter().position(|wire| Some(wire.ordinal) == id).ok_or_else(|| CommandError::NotFound("wire does not exist".to_owned()))?;
         let mut candidate = project.clone();
         Arc::make_mut(&mut candidate.sheet_mut().wires).remove(index);
         candidate.prune_junctions();

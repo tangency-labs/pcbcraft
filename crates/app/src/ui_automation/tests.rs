@@ -28,7 +28,7 @@ fn command(h: &mut Harness<'_, PcbApp>, id: &str, params: Value) -> Result<Value
         let owner = live.automation_owner(false, live.current());
         h.state_mut().automation.authorize(owner);
     }
-    result
+    result.map_err(|failure| failure.to_string())
 }
 
 /// The headless harness does not call eframe's raw hook; use that identical hook before a pass.

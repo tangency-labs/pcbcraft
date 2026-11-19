@@ -193,7 +193,7 @@ impl Fragment {
             }
         } else {
             if next.sheets.len() + descendants.len() > crate::sheets::MAX_SHEETS {
-                return Err(invalid("pasted subtree exceeds the 64-sheet limit"));
+                return Err(CommandError::CapExceeded("pasted subtree exceeds the 64-sheet limit".into()));
             }
             let mut names: BTreeSet<_> = next.sheets.iter().map(|s| s.sheet_name.to_lowercase()).collect();
             for source in sources.iter().skip(1) {
@@ -219,7 +219,7 @@ impl Fragment {
                     let occupied = &next.sheets[dest_index].labels;
                     copy.slot = (0..model::MAX_LABELS as u8)
                         .find(|slot| !occupied.iter().any(|l| l.direction.right() == copy.direction.right() && l.slot == *slot))
-                        .ok_or_else(|| invalid("no free parent pin slot"))?;
+                        .ok_or_else(|| CommandError::CapExceeded("no free parent pin slot".into()))?;
                 }
                 copy.name.push_str(&options.net_name_suffix);
                 Arc::make_mut(&mut Arc::make_mut(&mut next.sheets)[dest_index].labels).push(copy);

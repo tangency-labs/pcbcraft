@@ -1,9 +1,15 @@
 //! MCP tool definitions and dispatch. Every tool wraps an engine or window command, or an inspection.
 
-use pcbcraft_engine::command_api::{CAPABILITIES, COMMAND_API_VERSION, catalog_revision};
+use pcbcraft_engine::{
+    command_api::{CAPABILITIES, COMMAND_API_VERSION, catalog_revision},
+    error_codes::ErrorCode,
+};
 use serde_json::{Value, json};
 
-use crate::backend::{Backend, is_window_command, needs_live_editor};
+use crate::{
+    Failure,
+    backend::{Backend, is_window_command, needs_live_editor},
+};
 
 /// What a tool may do, for the client's approval prompts (MCP tool annotations). Clients that
 /// auto-approve on these hints must not be told less than the truth.
@@ -123,20 +129,26 @@ fn listing(commands: &Value, all: &[Value]) -> Value {
     })
 }
 
-/// A failed command is a tool result the agent can read, not a protocol error.
-/// Return a failed MCP tool result without turning it into a JSON-RPC protocol error.
-pub(crate) fn failure(message: &str) -> Value {
-    json!({"isError": true, "content": [{"type": "text", "text": message}]})
+/// A failed command is a tool result the agent can read, not a protocol error. The message
+/// stays the first text part as clients have always read it; the second part and the
+/// structured result carry the stable code and details.
+pub(crate) fn failure(failure: &Failure) -> Value {
+    let error = json!({"error": failure.to_json()});
+    json!({
+        "isError": true,
+        "content": [{"type": "text", "text": failure.message()}, {"type": "text", "text": error.to_string()}],
+        "structuredContent": error,
+    })
 }
 
 /// Describe a command from the backend's own discovery, so a live editor's window commands are
 /// described too. A window command a headless session lacks says what it needs.
-fn describe_command(backend: &mut dyn Backend, id: &str) -> Result<Value, String> {
+fn describe_command(backend: &mut dyn Backend, id: &str) -> Result<Value, Failure> {
     let commands = backend.call("engine.commands", json!({}))?;
     match commands.as_array().into_iter().flatten().find(|command| command["id"] == id) {
         Some(command) => Ok(command.clone()),
-        None if is_window_command(id) => Err(needs_live_editor(&format!("`{id}`"))),
-        None => Err(format!("unknown command `{id}`")),
+        None if is_window_command(id) && !backend.has_live_editor() => Err(needs_live_editor(&format!("`{id}`"))),
+        None => Err(Failure::new(ErrorCode::UnknownCommand, format!("unknown command `{id}`"))),
     }
 }
 
@@ -163,10 +175,10 @@ pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
         "resolve_counterparts" => backend.call("project.resolve_counterparts", args.clone()),
         "inspect_project" => backend.call("project.inspect", json!({})),
         "inspect_editor" => backend.call("editor.inspect", json!({})),
-        _ => Err(format!("unknown tool `{name}`")),
+        _ => Err(Failure::new(ErrorCode::InvalidRequest, format!("unknown tool `{name}`"))),
     };
     match result {
         Ok(value) => text(&value),
-        Err(message) => failure(&message),
+        Err(error) => failure(&error),
     }
 }

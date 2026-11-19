@@ -3,7 +3,11 @@
 This guide starts with schematic editing and continues through the supported
 PCB tools and shared MCP commands. The [capability table](capabilities.md)
 records current limits, while the [documentation map](README.md) links focused
-guides and format references. The two-resistor example below is an original
+guides and format references. Before replacing an existing board setup through
+MCP, use `pcb.preview_board_setup` with the candidate setup and current revision
+to review affected objects, consent and refusals without changing the project.
+[Setup review](board-materials.md#review-a-setup-edit) explains token-based Apply
+and cancellation. The two-resistor example below is an original
 development fixture; the polished MVP demo and its end-to-end acceptance remain
 separate work.
 

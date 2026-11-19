@@ -9,7 +9,12 @@ use std::{
 use craft_control::{Frame, read_frame, write_frame};
 
 use crate::backend::Backend;
-use crate::tools::{call_tool, check_arguments, failure, tool_definitions};
+use pcbcraft_engine::error_codes::ErrorCode;
+
+use crate::{
+    Failure,
+    tools::{call_tool, check_arguments, failure, tool_definitions},
+};
 use serde::{
     Deserializer,
     de::{MapAccess, Visitor},
@@ -208,7 +213,9 @@ impl Server {
         })
     }
 
-    /// Dispatch a request, surfacing duplicate remap keys inside the checked tool call.
+    /// Answer one JSON-RPC method. A command failure, including duplicate raw remap keys
+    /// inside a checked tool call, carries `isError` and a stable PCBCraft code. An unknown
+    /// method or resource, invalid tool envelope, or resource read failure is a JSON-RPC error.
     fn request(&mut self, method: &str, params: &Value, remap_error: Option<&'static str>) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
@@ -231,7 +238,7 @@ impl Server {
                 };
                 check_arguments(name, &args).map_err(|e| (INVALID_PARAMS, e))?;
                 if let Some(message) = remap_error {
-                    return Ok(failure(message));
+                    return Ok(failure(&Failure::new(ErrorCode::InvalidParams, message)));
                 }
                 Ok(call_tool(self.backend.as_mut(), name, &args))
             }
@@ -248,7 +255,7 @@ impl Server {
                     "pcbcraft://commands" => self.backend.call("engine.commands", json!({})),
                     _ => return Err((RESOURCE_NOT_FOUND, format!("unknown resource `{uri}`"))),
                 }
-                .map_err(|e| (INTERNAL_ERROR, e))?;
+                .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
                 Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": v.to_string()}]}))
             }
             _ => Err((METHOD_NOT_FOUND, format!("method `{method}` not found"))),

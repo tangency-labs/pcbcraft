@@ -271,9 +271,9 @@ impl Session {
         let id = target.ordinal().ok_or_else(|| CommandError::InvalidParams("Invalid part identity.".into()))?;
         let marked = params["marked"].as_bool().ok_or_else(|| CommandError::InvalidParams("marked must be a boolean.".into()))?;
         let original = self.open_project()?;
-        let part = original.components.get(&id).ok_or_else(|| CommandError::InvalidParams("Unknown part instance.".into()))?;
+        let part = original.components.get(&id).ok_or_else(|| CommandError::NotFound("Unknown part instance.".into()))?;
         if !marked && !part.no_connects.contains_key(&target.terminal) && !part.definition.pins().iter().any(|pin| pin.number == target.terminal) {
-            return Err(CommandError::InvalidParams("Unknown terminal.".into()));
+            return Err(CommandError::NotFound("Unknown terminal.".into()));
         }
         let expected = if marked {
             if original.component_terminal(id, &target.terminal).is_none() {
@@ -284,7 +284,7 @@ impl Session {
                     .pins()
                     .iter()
                     .find(|pin| pin.number == target.terminal)
-                    .ok_or_else(|| CommandError::InvalidParams("Unknown terminal.".into()))?
+                    .ok_or_else(|| CommandError::NotFound("Unknown terminal.".into()))?
                     .electrical_type,
             )
         } else {
@@ -297,14 +297,14 @@ impl Session {
             && !part.no_connects.contains_key(&target.terminal)
             && (part.no_connects.len() >= 128 || original.no_connect_count() >= MAX_MARKERS)
         {
-            return Err(CommandError::Unavailable("No-connect marker limit reached.".into()));
+            return Err(CommandError::CapExceeded("No-connect marker limit reached.".into()));
         }
         let mut project =
             if original.layout.is_none() { original.with_board_folders(".").map_err(CommandError::InvalidParams)? } else { original.clone() };
         if !project.has_sheet_occurrences() {
             project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
         }
-        let part = Arc::make_mut(&mut project.components).get_mut(&id).ok_or_else(|| CommandError::InvalidParams("Unknown part instance.".into()))?;
+        let part = Arc::make_mut(&mut project.components).get_mut(&id).ok_or_else(|| CommandError::NotFound("Unknown part instance.".into()))?;
         if let Some(electrical_type) = expected {
             part.no_connects.insert(target.terminal, electrical_type);
         } else {

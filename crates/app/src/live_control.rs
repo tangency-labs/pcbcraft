@@ -12,8 +12,11 @@ use std::{
 };
 
 use craft_control::loopback::{AcceptedPeer, Listener, Token};
-use pcbcraft_engine::Session;
-use pcbcraft_mcp::live::{Editor, TOKEN_ENV, call_editor};
+use pcbcraft_engine::{Session, error_codes::ErrorCode};
+use pcbcraft_mcp::{
+    Failure,
+    live::{Editor, TOKEN_ENV, call_editor},
+};
 use serde_json::{Value, json};
 
 use crate::{Dialog, PcbApp, window_commands};
@@ -61,11 +64,12 @@ impl Request {
         Instant::now() >= self.deadline || !self.connected.load(Ordering::Acquire)
     }
 
-    /// Send the editor's answer. A peer that has already given up is ignored.
-    pub(super) fn answer(self, result: Result<Value, String>) {
+    /// Send the editor's answer. A failure keeps its message in `error` and adds its stable
+    /// `code` and `details`. A peer that has already given up is ignored.
+    pub(super) fn answer(self, result: Result<Value, Failure>) {
         let _ = self.reply.try_send(match result {
             Ok(result) => json!({"result": result}),
-            Err(error) => json!({"error": error}),
+            Err(failure) => json!({"error": failure.message(), "code": failure.code(), "details": failure.details()}),
         });
     }
 }
@@ -162,7 +166,7 @@ impl LiveControl {
         if !request.expired() {
             return Ok(Some(request));
         }
-        request.answer(Err("The live request expired or disconnected before the editor received it".to_owned()));
+        request.answer(Err(Failure::new(ErrorCode::Cancelled, "The live request expired or disconnected before the editor received it")));
         Ok(None)
     }
 }
@@ -190,6 +194,25 @@ impl std::fmt::Debug for Request {
     }
 }
 
+/// Only exhausted worker capacity is a busy refusal; spawn and runtime failures remain unavailable.
+pub(crate) fn snapshot_worker_failure(kind: Option<crate::board_drc::jobs::ScheduleFailure>, message: String) -> Failure {
+    let code = match kind {
+        Some(crate::board_drc::jobs::ScheduleFailure::Capacity) => ErrorCode::Busy,
+        _ => ErrorCode::Unavailable,
+    };
+    Failure::new(code, message)
+}
+
+/// Why deferred work was dropped: the project changed under a still-valid request, or the
+/// request was canceled, expired or lost its endpoint.
+fn obsolete(valid: bool, message: &str, revision: u64) -> Failure {
+    if valid {
+        Failure::new(ErrorCode::StaleRevision, message).with_details(serde_json::Map::from_iter([("current_revision".into(), revision.into())]))
+    } else {
+        Failure::new(ErrorCode::Cancelled, message)
+    }
+}
+
 impl PcbApp {
     /// Recognize the existing read-only command while preserving the live dispatcher's policy.
     pub(super) fn defer_design_check(&mut self, _ctx: &egui::Context, body: &Value) -> bool {
@@ -200,15 +223,15 @@ impl PcbApp {
     pub(super) fn start_remote_check(&mut self, ctx: &egui::Context, request: Request, chat: bool) {
         use pcbcraft_mcp::live::Editor as _;
         if request.expired() {
-            request.answer(Err("Design check request expired".into()));
+            request.answer(Err(Failure::new(ErrorCode::Cancelled, "Design check request expired")));
             return;
         }
         if self.remote_check.queue.busy() {
-            request.answer(Err("A design check is already running; retry after it completes".into()));
+            request.answer(Err(Failure::new(ErrorCode::Busy, "A design check is already running; retry after it completes")));
             return;
         }
         if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(pcbcraft_engine::CHECK_DESIGN) {
-            request.answer(Err(reason));
+            request.answer(Err(Failure::new(ErrorCode::Unavailable, reason)));
             return;
         }
         let params = &request.body()["params"]["params"];
@@ -220,7 +243,7 @@ impl PcbApp {
                 self.remote_check.request = Some((request, chat, port));
                 ctx.request_repaint();
             }
-            Err(error) => request.answer(Err(error.to_string())),
+            Err(error) => request.answer(Err(error.into())),
         }
     }
 
@@ -238,19 +261,20 @@ impl PcbApp {
         if !valid || !self.remote_check.queue.authority_current(&self.session) {
             self.remote_check.queue.cancel();
             if let Some((request, _, _)) = self.remote_check.request.take() {
-                request.answer(Err("Design check canceled or request expired".into()));
+                request.answer(Err(obsolete(valid, "Design check canceled or request expired", self.session.revision())));
             }
         }
         if let Some(completion) = self.remote_check.queue.poll()
             && let Some((request, _, _)) = self.remote_check.request.take()
         {
             let result = if !completion.source.is_current(&self.session) {
-                Err("Project changed during design check; retry against the current revision".into())
+                Err(Failure::new(ErrorCode::StaleRevision, "Project changed during design check; retry against the current revision")
+                    .with_details(serde_json::Map::from_iter([("current_revision".into(), self.session.revision().into())])))
             } else {
-                completion.report.and_then(|report| {
+                completion.report.map_err(|message| snapshot_worker_failure(completion.schedule_failure, message)).and_then(|report| {
                     report
                         .map(|report| json!({"revision":completion.source.revision(),"design_check":report}))
-                        .ok_or_else(|| "Design check canceled".into())
+                        .ok_or_else(|| Failure::new(ErrorCode::Cancelled, "Design check canceled"))
                 })
             };
             request.answer(result);
@@ -269,16 +293,16 @@ impl PcbApp {
     /// Capture a read-only preparation job after policy checks, without executing a mutation.
     pub(super) fn start_remote_copper(&mut self, ctx: &egui::Context, request: Request, chat: bool) {
         if request.expired() {
-            request.answer(Err("Copper edit request expired or disconnected".into()));
+            request.answer(Err(Failure::new(ErrorCode::Cancelled, "Copper edit request expired or disconnected")));
             return;
         }
         if self.remote_copper.queue.busy() {
-            request.answer(Err("A copper edit is already preparing; retry after it completes".into()));
+            request.answer(Err(Failure::new(ErrorCode::Busy, "A copper edit is already preparing; retry after it completes")));
             return;
         }
         let command = request.body()["params"]["command"].as_str().unwrap_or_default();
         if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(command) {
-            request.answer(Err(reason));
+            request.answer(Err(Failure::new(ErrorCode::Unavailable, reason)));
             return;
         }
         match self.session.prepare_copper_edit(command, &request.body()["params"]["params"]) {
@@ -288,12 +312,13 @@ impl PcbApp {
                 self.remote_copper.request = Some((request, chat, port));
                 ctx.request_repaint();
             }
-            Err(error) => request.answer(Err(error.to_string())),
+            Err(error) => request.answer(Err(error.into())),
         }
     }
 
     /// Recheck endpoint, turn, modal and snapshot authority immediately before the shared atomic
-    /// transaction. Failed, canceled or obsolete work returns an error without partial state.
+    /// transaction. Failed, canceled or obsolete work returns an error without partial state;
+    /// engine refusals retain their code across the worker boundary.
     pub(super) fn poll_remote_copper(&mut self, ctx: &egui::Context) {
         let valid = self.remote_copper.request.as_ref().is_some_and(|(request, chat, port)| {
             !request.expired()
@@ -306,7 +331,7 @@ impl PcbApp {
         if !valid || !self.remote_copper.queue.authority_current(&self.session) {
             self.remote_copper.queue.cancel();
             if let Some((request, _, _)) = self.remote_copper.request.take() {
-                request.answer(Err("Copper preparation canceled, disconnected or stale".into()));
+                request.answer(Err(obsolete(valid, "Copper preparation canceled, disconnected or stale", self.session.revision())));
             }
         }
         if let Some(completion) = self.remote_copper.queue.poll()
@@ -315,14 +340,18 @@ impl PcbApp {
             let revision = self.session.revision();
             let command = request.body()["params"]["command"].as_str().unwrap_or_default();
             let refusal = (LiveEditor { app: self, ctx }).refusal(command);
-            let result = if request.expired() || !completion.source.is_current(&self.session) {
-                Err("Copper preparation canceled or project changed".into())
+            const OBSOLETE: &str = "Copper preparation canceled or project changed";
+            let result = if request.expired() {
+                Err(Failure::new(ErrorCode::Cancelled, OBSOLETE))
+            } else if !completion.source.is_current(&self.session) {
+                Err(Failure::new(ErrorCode::StaleRevision, OBSOLETE)
+                    .with_details(serde_json::Map::from_iter([("current_revision".into(), revision.into())])))
             } else if let Some(reason) = refusal {
-                Err(reason)
+                Err(Failure::new(ErrorCode::Unavailable, reason))
             } else {
-                completion.report.and_then(|edit| {
-                    let edit = edit.ok_or("Copper preparation canceled")?;
-                    self.session.commit_copper_edit(edit).map_err(|e| e.to_string())?;
+                completion.report.map_err(|message| snapshot_worker_failure(completion.schedule_failure, message)).and_then(|edit| {
+                    let edit = edit.ok_or_else(|| Failure::new(ErrorCode::Cancelled, "Copper preparation canceled"))??;
+                    self.session.commit_copper_edit(edit)?;
                     Ok(if request.body()["params"]["inspect"].as_bool() == Some(false) {
                         json!({"revision":self.session.revision()})
                     } else {
@@ -362,9 +391,9 @@ impl PcbApp {
         for (approval, answer) in self.assistant.take_answers() {
             let crate::assistant::Source::Tool { request, command } = approval.source else { continue };
             if answer == crate::assistant::Answer::Deny {
-                request.answer(Err(format!("The person denied `{command}`. Ask them before trying again.")));
+                request.answer(Err(Failure::new(ErrorCode::Denied, format!("The person denied `{command}`. Ask them before trying again."))));
             } else if !belongs(&request) {
-                request.answer(Err(stopped(&format!("`{command}`"))));
+                request.answer(Err(Failure::new(ErrorCode::Cancelled, stopped(&format!("`{command}`")))));
             } else {
                 self.run_chat_request(ctx, request);
             }
@@ -376,7 +405,7 @@ impl PcbApp {
                 break request;
             }
             let what = request.body()["params"]["command"].as_str().map_or_else(|| "the request".to_owned(), |command| format!("`{command}`"));
-            request.answer(Err(stopped(&what)));
+            request.answer(Err(Failure::new(ErrorCode::Cancelled, stopped(&what))));
         };
         let method = request.body()["method"].as_str().unwrap_or_default().to_owned();
         let command = request.body()["params"]["command"].as_str().map(str::to_owned);
@@ -432,8 +461,10 @@ pub(super) struct LiveEditor<'a> {
 impl Editor for LiveEditor<'_> {
     /// UI actions retain normal dialog and text-field interaction rather than bypassing them
     /// through project commands. The queue validates native focus and endpoint ownership.
-    fn ui_command(&mut self, id: &str, params: &Value) -> Result<Value, String> {
-        self.app.automation_command(self.ctx, id, params)
+    /// UI handler refusals read as unavailable, apart from parameters the catalog refuses.
+    fn ui_command(&mut self, id: &str, params: &Value) -> Result<Value, Failure> {
+        crate::ui_automation::check_command(id, params)?;
+        self.app.automation_command(self.ctx, id, params).map_err(Failure::from)
     }
     fn session(&mut self) -> &mut Session {
         &mut self.app.session
@@ -492,8 +523,11 @@ impl Editor for LiveEditor<'_> {
         window_commands::inspect_editor(self.app)
     }
 
-    fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), String> {
-        self.app.run_window_command(self.ctx, id, params)
+    /// An unknown id or parameters the window catalog refuses fail with their own codes;
+    /// a handler's refusal reads as unavailable.
+    fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), Failure> {
+        window_commands::check_command(id, params)?;
+        self.app.run_window_command(self.ctx, id, params).map_err(Failure::from)
     }
 }
 
@@ -573,7 +607,7 @@ fn serve_peer(
     let generation = generation.load(Ordering::Acquire);
     let connected = Arc::new(AtomicBool::new(true));
     if send.try_send(Request { body, deadline, reply, generation, connected: connected.clone() }).is_err() {
-        let _ = peer.send(&json!({"error": "The PCBCraft editor is busy"}));
+        let _ = peer.send(&json!({"error": "The PCBCraft editor is busy", "code": ErrorCode::Busy.as_str(), "details": {}}));
         return;
     }
     ctx.request_repaint();
@@ -687,21 +721,29 @@ mod checker_tests {
         for _ in 0..100 {
             app.poll_remote_check(&ctx);
         }
-        assert!(reply.try_recv().unwrap()["error"].is_string());
+        let changed = reply.try_recv().unwrap();
+        assert_eq!(changed["error"], "Design check canceled or request expired");
+        assert_eq!(changed["code"], "stale_revision", "{changed}");
+        assert_eq!(changed["details"], json!({"current_revision": rev + 1}));
         assert_eq!(app.session.revision(), rev + 1);
         let (r, reply) = request(&app, true);
         app.start_remote_check(&ctx, r, false);
         for _ in 0..100 {
             app.poll_remote_check(&ctx);
         }
-        assert!(reply.try_recv().unwrap()["error"].is_string());
+        let expired = reply.try_recv().unwrap();
+        assert_eq!(expired["error"], "Design check request expired");
+        assert_eq!(expired["code"], "cancelled", "{expired}");
         let (r, reply) = request(&app, false);
         app.start_remote_check(&ctx, r, false);
         app.live_control = None;
         for _ in 0..100 {
             app.poll_remote_check(&ctx);
         }
-        assert!(reply.try_recv().unwrap()["error"].is_string());
+        let revoked = reply.try_recv().unwrap();
+        assert_eq!(revoked["code"], "cancelled");
+        assert_eq!(revoked["error"], "Design check canceled or request expired");
+        assert_eq!(app.session.revision(), rev + 1);
         assert!(!app.remote_check.queue.busy());
     }
 }
@@ -762,7 +804,9 @@ mod copper_tests {
                 6 => {
                     let (r, second, _) = request(&app, body);
                     app.start_remote_copper(&ctx, r, false);
-                    assert!(second.try_recv().unwrap()["error"].as_str().unwrap().contains("already"));
+                    let busy = second.try_recv().unwrap();
+                    assert!(busy["error"].as_str().unwrap().contains("already"));
+                    assert_eq!(busy["code"], "busy");
                 }
                 _ => {}
             }
@@ -775,11 +819,104 @@ mod copper_tests {
                 assert_eq!(app.session.project().unwrap().boards().next().unwrap().tracks().len(), 1);
                 app.session.apply("edit.undo", &Value::Null).unwrap();
             } else {
-                assert!(result["error"].is_string(), "{mode}: {result}");
+                let reason = if mode == 5 {
+                    format!("Finish the current dialog or file operation in the editor before running `{}`", pcbcraft_engine::ADD_TRACKS)
+                } else {
+                    "Copper preparation canceled, disconnected or stale".to_owned()
+                };
+                assert_eq!(result["error"], reason, "{mode}: {result}");
+                let code = match mode {
+                    1 => "stale_revision",
+                    5 => "unavailable",
+                    _ => "cancelled",
+                };
+                assert_eq!(result["code"], code, "{mode}: {result}");
             }
             assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
             assert!(!app.remote_copper.queue.busy());
         }
+    }
+    /// Deferred admission shares headless validation, after live lease/queue/host checks.
+    #[test]
+    fn malformed_deferred_copper_matches_headless_before_queuing() {
+        use pcbcraft_mcp::{Backend, Headless};
+        let (mut app, ctx, _) = fixture();
+        let snapshot = app.session.snapshot().unwrap();
+        app.session = Session::default();
+        app.session.open_snapshot(snapshot.clone());
+        let mut headless = Headless::with_project(snapshot);
+        let before = app.session.inspect();
+        let revision = app.session.revision();
+        for (expected, code, reason) in
+            [(revision, "invalid_params", "has no parameter `no_such_parameter`"), (revision + 1, "stale_revision", "project changed")]
+        {
+            let body = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::RESHAPE_TRACKS,"params":{
+                "board":uuid::Uuid::from_u128(1),"tracks":[],"expected_revision":expected,"no_such_parameter":true}}});
+            assert!(app.defer_copper(&body));
+            let (request, reply, _) = request(&app, body.clone());
+            app.start_remote_copper(&ctx, request, false);
+            let live = reply.try_recv().unwrap();
+            let failure = headless.call("engine.execute", body["params"].clone()).unwrap_err();
+            assert_eq!(failure.code(), code);
+            assert!(failure.message().contains(reason), "{failure}");
+            assert_eq!(live["code"], failure.code());
+            assert_eq!(live["error"], failure.message());
+            assert_eq!(live["details"], *failure.details());
+            assert!(!app.remote_copper.queue.busy());
+            assert!(app.remote_copper.request.is_none());
+            assert_eq!(app.session.inspect(), before);
+            assert_eq!(headless.call("project.inspect", Value::Null).unwrap(), before);
+        }
+    }
+
+    /// A missing track fails during queued preparation, with the same code and reason as the
+    /// headless command on the same snapshot, revision and input. Neither route changes history.
+    #[test]
+    fn deferred_copper_engine_failure_matches_headless_without_changing_history() {
+        use pcbcraft_mcp::{Backend, Headless};
+        let (mut app, ctx, _) = fixture();
+        let snapshot = app.session.snapshot().unwrap();
+        app.session = pcbcraft_engine::Session::default();
+        app.session.open_snapshot(snapshot.clone());
+        let mut headless = Headless::with_project(snapshot);
+        for name in ["First copper edit", "Copper error fixture"] {
+            let params = json!({"name":name});
+            app.session.apply("project.rename", &params).unwrap();
+            headless.call("engine.execute", json!({"command":"project.rename","params":params})).unwrap();
+        }
+        app.session.apply("edit.undo", &Value::Null).unwrap();
+        headless.call("engine.execute", json!({"command":"edit.undo","params":null})).unwrap();
+        let before = app.session.inspect();
+        assert_eq!(headless.call("project.inspect", Value::Null).unwrap(), before);
+        assert_eq!(before["can_undo"], true);
+        assert_eq!(before["can_redo"], true);
+        let snapshot = app.session.snapshot().unwrap();
+        let board = app.session.project().unwrap().board_target().unwrap().board;
+        let body = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::RESHAPE_TRACKS,"inspect":false,"params":{
+            "board":board,"tracks":[{"track":uuid::Uuid::from_u128(1),"start":{"x_nm":0,"y_nm":0},"end":{"x_nm":1_000_000,"y_nm":0}}],
+            "expected_revision":app.session.revision()}}});
+        assert!(app.defer_copper(&body));
+        let (r, reply, _) = request(&app, body.clone());
+        app.start_remote_copper(&ctx, r, false);
+        assert!(app.remote_copper.queue.busy());
+        assert!(app.remote_copper.request.is_some());
+        assert!(matches!(reply.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        for _ in 0..100 {
+            app.poll_remote_copper(&ctx);
+        }
+        let result = reply.try_recv().unwrap();
+        let failure = headless.call("engine.execute", body["params"].clone()).unwrap_err();
+        assert_eq!(failure.code(), "not_found");
+        assert_eq!(failure.message(), "unknown track");
+        assert_eq!(failure.details(), &json!({}));
+        assert_eq!(result["code"], failure.code(), "{result}");
+        assert_eq!(result["error"], failure.message());
+        assert_eq!(result["details"], *failure.details());
+        assert_eq!(app.session.inspect(), before);
+        assert_eq!(headless.call("project.inspect", Value::Null).unwrap(), before);
+        assert!(Arc::ptr_eq(&app.session.snapshot().unwrap(), &snapshot));
+        assert!(!app.remote_copper.queue.busy());
+        assert!(app.remote_copper.request.is_none());
     }
     /// The actual socket worker revokes a deferred request when it observes a client disconnect,
     /// rather than keeping that mutation alive until the original request timeout. Trailing

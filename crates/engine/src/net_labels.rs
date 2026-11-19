@@ -89,7 +89,7 @@ impl Project {
             .net_labels
             .iter()
             .position(|label| label.id == id)
-            .ok_or_else(|| CommandError::InvalidParams("unknown net label on this sheet".into()))?;
+            .ok_or_else(|| CommandError::NotFound("unknown net label on this sheet".into()))?;
         let label = &mut Arc::make_mut(&mut next.sheet_mut().net_labels)[index];
         label.at = at;
         label.rotation = rotation;
@@ -235,7 +235,7 @@ impl Session {
                     .net_labels
                     .iter()
                     .position(|l| Some(l.id) == id)
-                    .ok_or_else(|| CommandError::InvalidParams("unknown net label on this sheet".into()))?,
+                    .ok_or_else(|| CommandError::NotFound("unknown net label on this sheet".into()))?,
             )
         };
         if command == DELETE {
@@ -246,7 +246,7 @@ impl Session {
             }
         } else {
             if index.is_none() && project.net_labels.len() >= MAX_LABELS {
-                return Err(CommandError::Unavailable("sheet already has 256 named labels".into()));
+                return Err(CommandError::CapExceeded("sheet already has 256 named labels".into()));
             }
             let id = match index {
                 Some(index) => project.net_labels[index].id,
