@@ -79,6 +79,7 @@ availability by themselves.
 | Net identity policy | [Persistent net identity](net-identity.md), including broader multiboard requirements |
 | Earlier net-registry rollout | [Path to the registry](net-registry-path.md), retained as a planning record; implemented slices are linked under Reference and formats |
 | Sheet paper, title blocks and parameters | [Sheet frames, parameters and templates](sheet-frames-and-parameters.md), a proposal for [#46](https://github.com/tangency-labs/pcbcraft/issues/46) |
+| Parametric board (RFC, proposal) | [RFC 0001: Parametric board](RFC/0001-parametric-board.md): board parameters, a sketched outline, parts held to edges and the update that carries their copper, for [#153](https://github.com/tangency-labs/pcbcraft/issues/153) |
 | Future multiboard and reusable circuits | [Overview](multiboard-and-sheet-instances.md) · [Circuit definitions and instances](circuit-instances.md) · [Storage and migration](multiboard-storage.md) · [Assembly and outputs](multiboard-assembly-and-outputs.md) |
 
 ## Verification and history
