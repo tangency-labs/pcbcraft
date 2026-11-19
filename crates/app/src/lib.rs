@@ -639,12 +639,11 @@ impl PcbApp {
 
     /// Resolve the path named on the command line against the launching directory, so `.` and
     /// a bare `project.json` or `.pc` name keep a parent directory and a file name for the
-    /// ordinary open. An absolute path keeps its spelling. A relative path that still has no
-    /// file name (for example `..`) is canonicalized to its existing directory.
+    /// ordinary open. This is lexical resolution only; filesystem lookup for a nameless
+    /// directory such as `..` or a drive/share root belongs to the native file worker.
     #[cfg(not(target_arch = "wasm32"))]
     fn resolve_startup_path(path: std::path::PathBuf) -> std::path::PathBuf {
-        let resolved = std::path::absolute(&path).unwrap_or(path);
-        if resolved.file_name().is_some() { resolved } else { std::fs::canonicalize(&resolved).unwrap_or(resolved) }
+        std::path::absolute(&path).unwrap_or(path)
     }
 
     /// Print one startup open failure line to the launching terminal, and keep it for tests.

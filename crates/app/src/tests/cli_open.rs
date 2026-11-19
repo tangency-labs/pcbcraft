@@ -82,6 +82,53 @@ fn a_startup_path_resolves_before_the_open() {
     assert_eq!(PcbApp::resolve_startup_path(absolute.clone()), absolute, "an absolute path keeps its spelling");
 }
 
+/// Parent-directory lookup and archive loading both complete through the native worker.
+/// Each case owns its fixture; no process-wide current-directory change races other tests.
+#[test]
+fn parent_directory_and_unicode_archive_startup_paths_open() {
+    for archive in [false, true] {
+        let (_copy, project_json) = dual_led_copy();
+        let root = project_json.parent().unwrap();
+        let path = if archive {
+            let path = root.join("board with spaces — 電路.pc");
+            let project = pcbcraft_storage::open(&project_json).unwrap();
+            std::fs::write(&path, pcbcraft_engine::persistence::encode_packed(project).unwrap()).unwrap();
+            path
+        } else {
+            std::fs::create_dir(root.join("child")).unwrap();
+            root.join("child").join("..")
+        };
+        // Unix preserves `..` lexically. A first-frame canonicalize would resolve it here;
+        // Windows' lexical GetFullPathNameW is allowed to remove it without disk lookup.
+        #[cfg(unix)]
+        if !archive {
+            assert_eq!(PcbApp::resolve_startup_path(path.clone()).as_os_str(), path.as_os_str());
+        }
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc).with_startup_project(path));
+        h.run();
+        finish_file(&mut h);
+        assert_eq!(h.state().session.project().unwrap().name, "Dual LED · transistor flasher");
+        assert!(!h.state().home);
+        assert!(!h.state().startup_open_pending);
+        assert!(h.state().startup_reports.is_empty());
+        assert!(!h.state().files.dirty(&h.state().session));
+    }
+}
+
+/// Drive, UNC and extended-length roots resolve lexically even when no share is reachable.
+/// These tests deliberately stop before opening a remote path.
+#[cfg(windows)]
+#[test]
+fn windows_startup_roots_do_not_need_a_filesystem_lookup() {
+    for spelling in [r"C:\", r"\\pcbcraft-unreachable\share\", r"\\?\C:\", r"\\?\UNC\pcbcraft-unreachable\share\"] {
+        let path = std::path::PathBuf::from(spelling);
+        assert_eq!(PcbApp::resolve_startup_path(path.clone()), path);
+    }
+    let resolved = PcbApp::resolve_startup_path(r"C:board with spaces.pc".into());
+    assert!(resolved.is_absolute());
+    assert_eq!(resolved.file_name().unwrap(), "board with spaces.pc");
+}
+
 /// The resolved startup path reaches the ordinary open: `.` no longer fails as a nameless
 /// project file. The launching directory holds no project, so the open reports its own error.
 #[test]
@@ -103,6 +150,9 @@ fn an_abandoned_startup_open_clears_the_terminal_report() {
     let revision = h.state().session.revision();
     let _late = h.state_mut().files.stall("open", Some("/stalled/project"), revision);
     h.state_mut().startup_open_pending = true;
+    assert!(h.state_mut().stop_waiting_for_file(Some(u64::MAX)).is_err());
+    assert!(h.state().files.busy(), "a stale job ID preserves the running open");
+    assert!(h.state().startup_open_pending, "a stale job ID preserves the startup arming");
     h.state_mut().stop_waiting_for_file(None).unwrap();
     assert!(!h.state().startup_open_pending, "an abandoned startup open clears the arming");
     assert!(h.state().startup_reports.is_empty(), "abandoning prints nothing to the terminal");
@@ -122,9 +172,7 @@ fn an_abandoned_startup_open_clears_the_terminal_report() {
 /// here, not on worker timing.
 #[test]
 fn the_terminal_report_survives_frames_without_a_file_result() {
-    let dir = tempfile::tempdir().unwrap();
-    let mut h =
-        Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc).with_startup_project(dir.path().join("gone")));
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc));
     let app = h.state_mut();
     app.startup_open_pending = true;
     for _ in 0..4 {
@@ -135,7 +183,12 @@ fn the_terminal_report_survives_frames_without_a_file_result() {
     assert!(!app.startup_open_pending, "a message result consumes the arming");
     app.report_startup_open(Some(&project_files::Update::Error("Could not open".to_owned())));
     assert!(!app.startup_open_pending, "the report happens once; a later error finds the arming already spent");
+    assert!(app.startup_reports.is_empty(), "a later error after an ordinary message is not a startup failure");
+    app.startup_open_pending = true;
+    app.report_startup_open(Some(&project_files::Update::Error("Startup failed".to_owned())));
+    app.report_startup_open(Some(&project_files::Update::Error("Later failed".to_owned())));
     assert_eq!(app.startup_reports.len(), 1, "the failed result prints once to the terminal");
+    assert_eq!(app.startup_reports[0], "Startup failed");
     app.startup_open_pending = true;
     app.report_startup_open(Some(&project_files::Update::Opened));
     assert!(!app.startup_open_pending, "an opened result consumes the arming too");

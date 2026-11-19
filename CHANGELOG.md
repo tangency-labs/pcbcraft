@@ -231,6 +231,7 @@ and net classes and zones remain separate work.
 On desktop, `pcbcraft <path>` opens a project folder, its `project.json` or a
 `.pc` archive as the app starts, without a picker; the opened project enters the
 workspace and joins recent projects. A startup open that fails reports the error
-in the status bar, keeps Home usable and prints the same line once to the
-launching terminal. The launcher takes no options and at most one path, so a
+in the status bar, keeps Home usable and writes the same line once to stderr
+when available. Windows GUI release builds need stderr redirection to capture
+diagnostics. The launcher takes no options and at most one path, so a
 usage error prints one line and exits before any window opens.

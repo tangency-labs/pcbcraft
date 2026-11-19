@@ -76,6 +76,32 @@ mod cli_tests {
         assert_eq!(startup_project(args(&["pcbcraft", "boards/uc2/project.json"])), Ok(Some(PathBuf::from("boards/uc2/project.json"))));
     }
 
+    /// Windows separators, drive-relative paths, UNC paths, spaces and Unicode stay one
+    /// positional argument. Parsing must not reinterpret a drive or slash as an option.
+    #[test]
+    fn native_path_spellings_are_preserved() {
+        for path in [
+            r"C:\boards\my board\project.json",
+            r"C:board.pc",
+            r"\boards\board.pc",
+            r"\\server\share\board.pc",
+            r"\\?\C:\boards\board.pc",
+            "boards/電路 α.pc",
+        ] {
+            assert_eq!(startup_project(args(&["pcbcraft", path])), Ok(Some(PathBuf::from(path))));
+        }
+    }
+
+    /// Native Windows arguments can contain unpaired UTF-16 code units; option detection
+    /// may use lossy text, but the accepted path must retain the original OS string.
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_preserve_unpaired_utf16() {
+        use std::os::windows::ffi::OsStringExt;
+        let path = OsString::from_wide(&[b'C' as u16, b':' as u16, b'\\' as u16, 0xd800, b'.' as u16, b'p' as u16, b'c' as u16]);
+        assert_eq!(startup_project([OsString::from("pcbcraft"), path.clone()]), Ok(Some(PathBuf::from(path))));
+    }
+
     /// A second positional argument is refused with one usage line.
     #[test]
     fn a_second_path_is_a_usage_error() {
