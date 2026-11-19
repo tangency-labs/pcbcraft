@@ -627,6 +627,7 @@ impl PcbApp {
     #[cfg(not(target_arch = "wasm32"))]
     fn begin_startup_open(&mut self, ctx: &egui::Context) {
         let Some(path) = self.startup_open.take() else { return };
+        let path = Self::resolve_startup_path(path);
         self.file_notice = None;
         if let Some(error) = self.files.open_path(path, self.session.revision(), ctx).err() {
             self.print_startup_failure(&error);
@@ -634,6 +635,16 @@ impl PcbApp {
         } else {
             self.startup_open_pending = true;
         }
+    }
+
+    /// Resolve the path named on the command line against the launching directory, so `.` and
+    /// a bare `project.json` or `.pc` name keep a parent directory and a file name for the
+    /// ordinary open. An absolute path keeps its spelling. A relative path that still has no
+    /// file name (for example `..`) is canonicalized to its existing directory.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_startup_path(path: std::path::PathBuf) -> std::path::PathBuf {
+        let resolved = std::path::absolute(&path).unwrap_or(path);
+        if resolved.file_name().is_some() { resolved } else { std::fs::canonicalize(&resolved).unwrap_or(resolved) }
     }
 
     /// Print one startup open failure line to the launching terminal, and keep it for tests.
