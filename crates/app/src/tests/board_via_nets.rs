@@ -83,7 +83,7 @@ fn via_assignment_controls_place_clear_and_restore_history() {
         assert!(via.net_assignment.is_some());
         let project = h.state().session.project().unwrap();
         let view = project.boards().next().unwrap();
-        assert_eq!(view.copper_nets()[&via.id], "GND");
+        assert_eq!(view.copper_nets().unwrap()[&via.id], "GND");
         assert_eq!(view.inspect_vias()[0]["connected_to_pad"], false);
         h.state_mut().views.active.board.tracks.selected.insert(via.id);
         h.state_mut().views.active.board.properties_collapsed = false;

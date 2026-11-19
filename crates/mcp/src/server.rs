@@ -122,6 +122,10 @@ impl Server {
         })
     }
 
+    /// Answer one JSON-RPC method. A tool that runs and fails is still a result (with
+    /// `isError` and its code); an unknown method or resource, tool arguments its schema
+    /// refuses, or a backend failure while reading a resource is a JSON-RPC error, which
+    /// carries the message without a PCBCraft code.
     fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
@@ -158,7 +162,7 @@ impl Server {
                     "pcbcraft://commands" => self.backend.call("engine.commands", json!({})),
                     _ => return Err((RESOURCE_NOT_FOUND, format!("unknown resource `{uri}`"))),
                 }
-                .map_err(|e| (INTERNAL_ERROR, e))?;
+                .map_err(|e| (INTERNAL_ERROR, e.to_string()))?;
                 Ok(json!({"contents": [{"uri": uri, "mimeType": "application/json", "text": v.to_string()}]}))
             }
             _ => Err((METHOD_NOT_FOUND, format!("method `{method}` not found"))),

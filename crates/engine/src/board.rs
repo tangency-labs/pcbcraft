@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod arc;
 pub mod assembly_profile;
 pub mod assignment;
 pub mod class_rules;
@@ -20,10 +21,13 @@ pub mod fabrication;
 pub mod geometry;
 pub mod identity;
 mod library_migration;
+#[cfg(test)]
+mod lock_storage_tests;
 pub mod materials;
 pub mod movement;
 pub mod origin;
 pub mod outline;
+mod pair_index;
 pub mod ratsnest;
 pub mod reference;
 pub mod route;
@@ -97,6 +101,9 @@ pub(crate) struct Footprint {
     /// and technical graphics use the back layers. Omitted for top-side placements.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) bottom: bool,
+    /// Board-local lock intent; omitted while false. Manipulation protection is a separate policy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) locked: bool,
     /// Additional reference displacement from the library default in footprint-local coordinates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reference_offset: Option<Point>,
@@ -139,6 +146,7 @@ impl Footprint {
             y_nm: position.y_nm,
             rotation: 0,
             bottom: false,
+            locked: false,
             reference_offset: None,
             reference_text: None,
         }
@@ -225,10 +233,11 @@ impl Footprint {
         Some(self.point(local))
     }
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
+    /// Always include the storage-only `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         let mut value = json!({"id":format!("footprint-{}",self.id),"board":project.board_target().map(|target|target.board),
             "component":format!("component-{}",self.component),"definition":self.definition,"definition_revision":self.definition_revision,
-            "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,"side":if self.bottom {"back"} else {"front"},
+            "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,"side":if self.bottom {"back"} else {"front"},"locked":self.locked,
             "pins":project.board.pad_numbers(self).into_iter().filter_map(|pad| {
                 let point=self.pad_position(pad,&project.board)?;
                 let pin=self.component_pin(pad).map(|(_, pin)| pin);
@@ -307,6 +316,8 @@ pub(crate) struct Board {
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.
     pub(crate) vias: Vec<track::Via>,
+    /// Exact circular tracks; unsupported conductive consumers must refuse this board.
+    pub(crate) arcs: Vec<arc::ArcTrack>,
     pub(crate) definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,
     footprints: Vec<Footprint>,
     by_component: BTreeMap<u64, usize>,
@@ -360,14 +371,14 @@ impl Board {
     }
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
-    /// Format-3/4 history also retains the last visible typed quantity; older history
+    /// Format 3 and later also retain the last visible typed quantity; older history
     /// stays text-only until a real board update accepts the newer vocabulary.
     pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let assigned = self.assignments.remove(&component).is_some();
         let changed_display = display.and_then(|part| {
             let baseline = self.baseline.as_ref()?;
             let historical = baseline.components.get(&component)?;
-            let quantity = if matches!(baseline.format.as_str(), update::QUANTITY_FORMAT | update::DISPLAY_FORMAT) {
+            let quantity = if matches!(baseline.format.as_str(), update::QUANTITY_FORMAT | update::DISPLAY_FORMAT | update::NET_ORIGIN_FORMAT) {
                 update::PartInstanceState::quantity_for(part)
             } else {
                 None

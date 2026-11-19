@@ -233,6 +233,10 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
       - name: Check browser performance diagnostics
         run: cargo check --locked --profile ci -p pcbcraft-app --features performance-harness --example board_perf_web --target wasm32-unknown-unknown
+      - name: Check browser geometry without and with the kernel
+        run: |
+          cargo check --locked --profile ci -p pcbcraft-geometry --target wasm32-unknown-unknown --no-default-features
+          cargo check --locked --profile ci -p pcbcraft-geometry --target wasm32-unknown-unknown --no-default-features --features wasm-kernel
       - name: Install trunk
         run: |
           mkdir -p "$HOME/.local/bin"

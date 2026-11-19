@@ -164,12 +164,13 @@ impl BoardView<'_> {
     /// Unknown objects fail, unknown membership returns None, and conflicting physical islands
     /// or pending splits refuse assignment. No class/net name or arbitrary first member is used.
     pub fn net_class_target_for_copper(self, object: &str) -> Result<Option<crate::nets::ClassTarget>, CommandError> {
+        self.require_linear_copper().map_err(CommandError::Unavailable)?;
         let geometry = BoardGeometry::new(self);
         let index = geometry
             .items
             .iter()
             .position(|item| item.name == object)
-            .ok_or_else(|| CommandError::InvalidParams("Unknown selected copper object.".into()))?;
+            .ok_or_else(|| CommandError::NotFound("Unknown selected copper object.".into()))?;
         let memberships: Vec<_> = geometry
             .members
             .iter()
@@ -191,6 +192,7 @@ impl BoardView<'_> {
     /// assignments means no geometry preparation. Unknown free space has board defaults only;
     /// through-via queries omit the layer and combine contacts across all copper layers.
     pub fn route_rules_at(self, at: crate::schematic::Point, layer: Option<Uuid>) -> Result<Option<Applied>, CommandError> {
+        self.require_linear_copper().map_err(CommandError::Unavailable)?;
         if !crate::wire::valid_point(&at) {
             return Err(CommandError::InvalidParams("Route contact is out of range.".into()));
         }

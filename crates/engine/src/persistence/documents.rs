@@ -83,6 +83,9 @@ const ASSIGNED_VIA_BOARD_FORMAT: &str = "pcbcraft-board/24";
 const ZONE_BOARD_FORMAT: &str = "pcbcraft-board/20";
 const RULES_BOARD_FORMAT: &str = "pcbcraft-board/19";
 const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
+const ARC_BOARD_FORMAT: &str = "pcbcraft-board/26";
+const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/34";
+const ARC_LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/35";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
@@ -334,6 +337,8 @@ impl From<&crate::wire::GeneratedLeg> for GeneratedLegRecord<'static> {
 struct BoardDocument {
     format: String,
     #[serde(default, deserialize_with = "present")]
+    arcs: Option<Vec<crate::board::arc::ArcTrack>>,
+    #[serde(default, deserialize_with = "present")]
     zones: Option<Vec<crate::board::zones::Zone>>,
     #[serde(default, deserialize_with = "present")]
     rules: Option<crate::board::rules::Settings>,
@@ -385,14 +390,18 @@ pub fn is_document_path(path: &str) -> bool {
     }
 }
 
-/// Bound and validate every part before constructing a project. No partial state is returned.
+/// Bound and validate every part before returning a project. A failed decode returns no partial project.
 /// Parse each sheet once, collecting interfaces before resolving wire endpoint ownership.
 /// Reject locked tracks or vias under older board headers; board format 18 requires
 /// at least one authored track or via lock. Board format 19 requires validated rules and
 /// may also carry locks; older board headers reject the rules field. Board format 21
 /// requires a validated placement origin and may carry rules and every earlier field.
-/// Board format 22 requires a nonempty assembly profile adoption list. Board format 23
-/// requires an authored stack field and allows adoptions alongside the earlier board fields.
+/// Format 26 requires arcs without active footprint locks; format 34 requires an active
+/// footprint lock without arcs; format 35 requires both. Other compatible records keep
+/// their existing validation rules. Formats 27–33 are not supported. Missing footprint
+/// locks default to false. Board format 22 requires a nonempty assembly profile adoption
+/// list. Board format 23 requires an authored stack field and allows adoptions alongside
+/// the earlier board fields.
 /// Project/17 requires a nonempty validated net registry in the sole instance home;
 /// older project/instance headers refuse that vocabulary instead of discarding it.
 /// Project/24 and project/39 require a nonempty part-group catalog. Expanded memberships use
@@ -917,6 +926,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             graphics: None,
             tracks: None,
             vias: None,
+            arcs: None,
             baseline: None,
             footprints: vec![],
         }
@@ -925,17 +935,30 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
+    let arc_and_footprint_lock_format = board.format == ARC_LOCKED_FOOTPRINT_BOARD_FORMAT;
+    let curved = board.format == ARC_BOARD_FORMAT || arc_and_footprint_lock_format;
+    if curved != board.arcs.is_some() || board.arcs.as_ref().is_some_and(Vec::is_empty) {
+        return Err("board.json: arcs require format 26 or 35 and a nonempty array; format 26 requires arcs, as does format 35.".into());
+    }
+    let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT || arc_and_footprint_lock_format;
+    if footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
+        return Err("board.json: footprint locks require board format 34 or 35; each requires an authored footprint lock.".into());
+    }
+    let arc_or_footprint_locks = curved || footprint_locks;
     let reported = board.format == REPORT_BOARD_FORMAT;
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
-    if (assigned_vias && !has_assigned_vias) || (!reported && !assigned_vias && has_assigned_vias) {
-        return Err("board.json: explicit via assignments require format 24 or 25; format 24 requires an assignment.".into());
+    if (assigned_vias && !has_assigned_vias) || (!arc_or_footprint_locks && !reported && !assigned_vias && has_assigned_vias) {
+        return Err("board.json: explicit via assignments require format 24, 25, 26, 34 or 35; format 24 requires an assignment.".into());
     }
     let profiled = board.format == PROFILE_BOARD_FORMAT;
     let stacked = board.format == STACK_BOARD_FORMAT;
-    if (profiled && board.assembly_profiles.is_none()) || (!reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
+    if (profiled && board.assembly_profiles.is_none())
+        || (!arc_or_footprint_locks && !reported && !assigned_vias && !profiled && !stacked && board.assembly_profiles.is_some())
     {
-        return Err("board.json: assembly profile adoptions require format 22, 23, 24 or 25. Format 22 requires at least one profile.".into());
+        return Err(
+            "board.json: assembly profile adoptions require format 22, 23, 24, 25, 26, 34 or 35. Format 22 requires at least one profile.".into()
+        );
     }
     if board.assembly_profiles.as_ref().is_some_and(|adoptions| adoptions.is_empty()) {
         return Err("board.json: an empty assembly_profiles array is not allowed".into());
@@ -943,23 +966,33 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     profile_catalog.validate(board.assembly_profiles.as_deref().unwrap_or_default())?;
     let originated = board.format == ORIGIN_BOARD_FORMAT;
     if (originated && board.placement_origin.is_none())
-        || (!reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
+        || (!arc_or_footprint_locks && !reported && !assigned_vias && !originated && !profiled && !stacked && board.placement_origin.is_some())
     {
-        return Err("board.json: a placement origin requires format 21, 22, 23, 24 or 25, and format 21 requires a placement origin.".into());
+        return Err(
+            "board.json: a placement origin requires format 21, 22, 23, 24, 25, 26, 34 or 35, and format 21 requires a placement origin.".into()
+        );
     }
     if let Some(origin) = &board.placement_origin {
         origin.validate()?;
     }
     let zoned = board.format == ZONE_BOARD_FORMAT;
     if (zoned && board.zones.is_none())
-        || (!reported && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
+        || (!arc_or_footprint_locks && !reported && !assigned_vias && !zoned && !originated && !profiled && !stacked && board.zones.is_some())
         || board.zones.as_ref().is_some_and(|zones| zones.is_empty())
     {
-        return Err("board.json: zones require format 20, 21, 22, 23, 24 or 25 and a nonempty array; format 20 requires zones.".into());
+        return Err("board.json: zones require format 20, 21, 22, 23, 24, 25, 26, 34 or 35 and a nonempty array; format 20 requires zones.".into());
     }
     let ruled = board.format == RULES_BOARD_FORMAT;
     if (ruled && board.rules.is_none())
-        || (!reported && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && board.rules.is_some())
+        || (!arc_or_footprint_locks
+            && !reported
+            && !assigned_vias
+            && !ruled
+            && !stacked
+            && !profiled
+            && !originated
+            && !zoned
+            && board.rules.is_some())
     {
         return Err("board.json: authored rules require format 19 or later, and format 19 requires rules.".into());
     }
@@ -969,10 +1002,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let locked = board.format == LOCKED_COPPER_BOARD_FORMAT;
     let authored_locks = board.tracks.as_ref().is_some_and(|tracks| tracks.iter().any(|track| track.locked))
         || board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.locked));
-    if !reported && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && locked != authored_locks {
+    if !arc_or_footprint_locks && !reported && !assigned_vias && !ruled && !stacked && !profiled && !originated && !zoned && locked != authored_locks
+    {
         return Err("board.json: locked copper requires board format 18, which requires an authored lock.".into());
     }
-    let locked = locked || ruled || stacked || profiled || originated || zoned || assigned_vias || reported;
+    let locked = locked || ruled || stacked || profiled || originated || zoned || assigned_vias || reported || arc_or_footprint_locks;
     let multipad = board.format == MULTIPAD_BOARD_FORMAT;
     let extended = board.footprints.iter().any(|footprint| {
         footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
@@ -1008,6 +1042,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | STACK_BOARD_FORMAT
             | REPORT_BOARD_FORMAT
             | ZONE_BOARD_FORMAT
+            | ARC_BOARD_FORMAT
+            | LOCKED_FOOTPRINT_BOARD_FORMAT
+            | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
     );
     if board.tracks.as_ref().is_some_and(|items| items.is_empty()) || board.vias.as_ref().is_some_and(|items| items.is_empty()) {
         return Err("board.json: empty tracks or vias arrays are not allowed".into());
@@ -1029,6 +1066,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                     | STACK_BOARD_FORMAT
                     | REPORT_BOARD_FORMAT
                     | ZONE_BOARD_FORMAT
+                    | ARC_BOARD_FORMAT
+                    | LOCKED_FOOTPRINT_BOARD_FORMAT
+                    | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
             ))
     {
         return Err("board.json: vias require board format 13 or later, and format 13 requires at least one via".into());
@@ -1119,6 +1159,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | STACK_BOARD_FORMAT
             | REPORT_BOARD_FORMAT
             | ZONE_BOARD_FORMAT
+            | ARC_BOARD_FORMAT
+            | LOCKED_FOOTPRINT_BOARD_FORMAT
+            | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
     ) && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
@@ -1145,6 +1188,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | STACK_BOARD_FORMAT
                 | REPORT_BOARD_FORMAT
                 | ZONE_BOARD_FORMAT
+                | ARC_BOARD_FORMAT
+                | LOCKED_FOOTPRINT_BOARD_FORMAT
+                | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
         ) && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
@@ -1164,7 +1210,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let setup = match (board.format.as_str(), board.setup) {
         (
-            REPORT_BOARD_FORMAT
+            ARC_BOARD_FORMAT
+            | LOCKED_FOOTPRINT_BOARD_FORMAT
+            | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+            | REPORT_BOARD_FORMAT
             | ASSIGNED_VIA_BOARD_FORMAT
             | STACK_BOARD_FORMAT
             | PROFILE_BOARD_FORMAT
@@ -1173,7 +1222,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | RULES_BOARD_FORMAT,
             Some(value),
         ) => Some(decode_setup(&value, false)?),
-        (ASSIGNED_VIA_BOARD_FORMAT | PROFILE_BOARD_FORMAT | ORIGIN_BOARD_FORMAT | ZONE_BOARD_FORMAT | RULES_BOARD_FORMAT, None) => None,
+        (
+            ARC_BOARD_FORMAT
+            | LOCKED_FOOTPRINT_BOARD_FORMAT
+            | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+            | ASSIGNED_VIA_BOARD_FORMAT
+            | PROFILE_BOARD_FORMAT
+            | ORIGIN_BOARD_FORMAT
+            | ZONE_BOARD_FORMAT
+            | RULES_BOARD_FORMAT,
+            None,
+        ) => None,
         (LOCKED_COPPER_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         (LOCKED_COPPER_BOARD_FORMAT, None) => None,
         (STROKED_BOARD_FORMAT, None) => None,
@@ -1209,12 +1268,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
-    if reported != setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format) {
-        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, which requires at least one of them.".into());
+    let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
+    if (reported && !material_reports) || (!arc_or_footprint_locks && !reported && material_reports) {
+        return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34 or 35; format 25 requires at least one of them.".into());
     }
     let stack_fields = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_stack_format);
-    if (stacked && !stack_fields) || (!reported && !assigned_vias && !stacked && stack_fields) {
-        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24 or 25; format 23 requires at least one of them.".into());
+    if (stacked && !stack_fields) || (!arc_or_footprint_locks && !reported && !assigned_vias && !stacked && stack_fields) {
+        return Err("board.json: copper roles, base copper, copper thickness qualifiers and finished board thickness require board format 23, 24, 25, 26, 34 or 35; format 23 requires at least one of them.".into());
     }
     let mut definitions = Vec::new();
     let mut symbol_copies = BTreeMap::new();
@@ -1394,6 +1454,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         routed.tracks = tracks;
         routed.vias = vias;
     }
+    let mut arcs = board.arcs.unwrap_or_default();
+    crate::board::arc::validate(project_data, &arcs).map_err(|error| format!("board.json: {error}"))?;
+    arcs.sort_by_key(|arc| arc.id);
+    Arc::make_mut(&mut project_data.board).arcs = arcs;
     crate::part_instances::storage::validate_project(project_data)?;
     if let Some(catalog) = net_classes {
         project_data.net_classes = Arc::new(catalog);
@@ -1980,7 +2044,7 @@ impl DocumentsEncoder {
                         self.cursor = id;
                     } else {
                         if !self.project.board.assignments.is_empty() {
-                            self.bytes.extend_from_slice(b"  ],\n  \"footprints\": [\n");
+                            self.bytes.extend_from_slice(BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS);
                         }
                         self.next();
                     }
@@ -2190,7 +2254,7 @@ impl DocumentsEncoder {
 
     /// Close the last array and object and retain the exact bytes under the document's path.
     fn finish_document(&mut self, path: String) -> Result<(), String> {
-        self.bytes.extend_from_slice(b"  ]\n}\n");
+        self.bytes.extend_from_slice(DOCUMENT_END);
         if self.bytes.len() > MAX_DOCUMENT_BYTES {
             self.size_limit_exceeded = true;
             return Err(format!("{path}: encoded document exceeds its size limit"));
@@ -2200,21 +2264,65 @@ impl DocumentsEncoder {
     }
 }
 
-/// Keep legacy bytes until authored content requires a newer format. Select the highest
-/// applicable format: copper roles, base copper, copper thickness qualifiers or finished board
-/// thickness require 23; material reports require 25 and accept all earlier content optionally.
-/// Explicit via intent otherwise requires 24 and accepts those stack fields and
-/// assembly profile adoptions. Profile adoptions alone require 22; a placement origin at least 21;
+const BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS: &[u8] = b"  ],\n  \"footprints\": [\n";
+const DOCUMENT_END: &[u8] = b"  ]\n}\n";
+
+/// Count native board bytes without retaining the output. Stop at the same cap as Save.
+#[derive(Default)]
+struct BoardByteCounter(usize);
+
+impl Write for BoardByteCounter {
+    /// Refuse the first excess byte; never return a partial successful write.
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > MAX_DOCUMENT_BYTES - self.0 {
+            return Err(std::io::Error::other("board document exceeds the 16 MiB limit"));
+        }
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    /// No output is buffered.
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Check the native board document before adopting an edited copper-bearing board. Use the
+/// native writer's header, record framing, serialized fields and closing bytes.
+pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
+    let mut bytes = BoardByteCounter::default();
+    board_header(&mut bytes, project)?;
+    let mut first = true;
+    for assignment in project.board.assignments.values() {
+        record(&mut bytes, &mut first, assignment)?;
+    }
+    if !project.board.assignments.is_empty() {
+        bytes.write_all(BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS).map_err(|error| error.to_string())?;
+        first = true;
+    }
+    for footprint in project.board.footprints() {
+        record(&mut bytes, &mut first, footprint)?;
+    }
+    bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
+}
+
+/// Preserve canonical legacy encodings until authored content requires a newer format. Arcs
+/// alone select 26, active footprint locks alone select 34, and both together select 35.
+/// These formats retain earlier physical fields. Material reports require at least 25;
+/// explicit via intent at least 24; copper roles, base copper, copper thickness qualifiers
+/// or finished board thickness at least 23; assembly profile adoptions at least 22;
+/// a placement origin at least 21;
 /// zone outlines at least 20; validated board rules at least 19; and authored copper locks
-/// at least 18. Each format accepts earlier fields. Independent
+/// at least 18. Earlier extensions remain subject to their own prerequisites. Independent
 /// assignments use version 7, earlier local rectangles version 8, layer graphics
 /// version 9, explicitly enabled accepted baselines version 10, pending
 /// desired package choices version 11, copper tracks version 12, vias version 13,
 /// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
-fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
+fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     crate::board::zones::validate(project)?;
+    crate::board::arc::validate(project, &project.board.arcs)?;
     let board = &project.board;
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
@@ -2233,8 +2341,16 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
             baseline.components.values().any(|component| component.package.as_ref().is_some_and(|package| package.extended()))
         });
 
+    let arc_or_lock_format = match (!board.arcs.is_empty(), board.footprints().iter().any(|footprint| footprint.locked)) {
+        (true, true) => Some(ARC_LOCKED_FOOTPRINT_BOARD_FORMAT),
+        (true, false) => Some(ARC_BOARD_FORMAT),
+        (false, true) => Some(LOCKED_FOOTPRINT_BOARD_FORMAT),
+        (false, false) => None,
+    };
     if let Some(setup) = setup {
-        let format = if setup.requires_report_format() {
+        let format = if let Some(format) = arc_or_lock_format {
+            format
+        } else if setup.requires_report_format() {
             REPORT_BOARD_FORMAT
         } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
             ASSIGNED_VIA_BOARD_FORMAT
@@ -2283,16 +2399,16 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         } else {
             CONFIGURED_BOARD_FORMAT
         };
-        bytes.extend_from_slice(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes());
+        bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes()).map_err(|error| error.to_string())?;
         if !setup.materials().is_empty() {
-            bytes.extend_from_slice(b"    \"materials\": [\n");
+            bytes.write_all(b"    \"materials\": [\n").map_err(|error| error.to_string())?;
             let mut first = true;
             for material in setup.materials() {
                 record(bytes, &mut first, material)?;
             }
-            bytes.extend_from_slice(b"    ],\n");
+            bytes.write_all(b"    ],\n").map_err(|error| error.to_string())?;
         }
-        bytes.extend_from_slice(b"    \"layers\": [\n");
+        bytes.write_all(b"    \"layers\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for layer in setup.layers() {
             record(bytes, &mut first, layer)?;
@@ -2302,7 +2418,7 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         for stratum in &setup.stackup().strata {
             record(bytes, &mut first, stratum)?;
         }
-        bytes.extend_from_slice(b"      ]");
+        bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
         let stackup = setup.stackup();
         for (field, value) in [
             ("finished_thickness_nm", stackup.finished_thickness_nm),
@@ -2313,9 +2429,11 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
                 write!(bytes, ",\n      \"{field}\": {value}").map_err(|e| e.to_string())?;
             }
         }
-        bytes.extend_from_slice(b"\n    }\n  },\n");
+        bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
     } else {
-        let format = if board.vias.iter().any(|via| via.net_assignment.is_some()) {
+        let format = if let Some(format) = arc_or_lock_format {
+            format
+        } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
             ASSIGNED_VIA_BOARD_FORMAT
         } else if !board.assembly_profiles.is_empty() {
             PROFILE_BOARD_FORMAT
@@ -2358,18 +2476,18 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         } else {
             BOARD_FORMAT
         };
-        bytes.extend_from_slice(format!("{{\n  \"format\": \"{format}\",\n").as_bytes());
+        bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
     if let Some(baseline) = &board.baseline {
         let encoded = baseline.encode()?;
-        bytes.extend_from_slice(b"  \"baseline\": ");
+        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
         for (index, line) in encoded.split(|byte| *byte == b'\n').enumerate() {
             if index != 0 {
-                bytes.extend_from_slice(b"\n  ");
+                bytes.write_all(b"\n  ").map_err(|error| error.to_string())?;
             }
-            bytes.extend_from_slice(line);
+            bytes.write_all(line).map_err(|error| error.to_string())?;
         }
-        bytes.extend_from_slice(b",\n");
+        bytes.write_all(b",\n").map_err(|error| error.to_string())?;
     }
     if let Some(rules) = &board.rules {
         rules.validate()?;
@@ -2390,56 +2508,63 @@ fn board_header(bytes: &mut Vec<u8>, project: &Project) -> Result<(), String> {
         writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     if let Some(graphics) = &board.drawings {
-        bytes.extend_from_slice(b"  \"graphics\": {\n    \"layers\": [\n");
+        bytes.write_all(b"  \"graphics\": {\n    \"layers\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for layer in &graphics.layers {
             record(bytes, &mut first, layer)?;
         }
-        bytes.extend_from_slice(b"    ],\n    \"items\": [\n");
+        bytes.write_all(b"    ],\n    \"items\": [\n").map_err(|error| error.to_string())?;
         first = true;
         for item in &graphics.items {
             record(bytes, &mut first, item)?;
         }
-        bytes.extend_from_slice(b"    ]\n  },\n");
+        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
     }
     if !board.zones.is_empty() {
-        bytes.extend_from_slice(b"  \"zones\": [\n");
+        bytes.write_all(b"  \"zones\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for zone in &board.zones {
             record(bytes, &mut first, zone)?;
         }
-        bytes.extend_from_slice(b"  ],\n");
+        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+    }
+    if !board.arcs.is_empty() {
+        bytes.write_all(b"  \"arcs\": [\n").map_err(|error| error.to_string())?;
+        let mut first = true;
+        for arc in &board.arcs {
+            record(bytes, &mut first, arc)?;
+        }
+        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
     if !board.tracks.is_empty() {
-        bytes.extend_from_slice(b"  \"tracks\": [\n");
+        bytes.write_all(b"  \"tracks\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for track in &board.tracks {
             record(bytes, &mut first, track)?;
         }
-        bytes.extend_from_slice(b"  ],\n");
+        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
     if !board.vias.is_empty() {
-        bytes.extend_from_slice(b"  \"vias\": [\n");
+        bytes.write_all(b"  \"vias\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
         for via in &board.vias {
             record(bytes, &mut first, via)?;
         }
-        bytes.extend_from_slice(b"  ],\n");
+        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
-    bytes.extend_from_slice(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" });
+    bytes.write_all(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" }).map_err(|error| error.to_string())?;
     Ok(())
 }
 
 /// Keep commas on their own lines so adding a record never rewrites the previous record.
-fn record(bytes: &mut Vec<u8>, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
     if !*first {
-        bytes.extend_from_slice(b"\n    ,\n");
+        bytes.write_all(b"\n    ,\n").map_err(|error| error.to_string())?;
     }
     *first = false;
-    bytes.extend_from_slice(b"    ");
+    bytes.write_all(b"    ").map_err(|error| error.to_string())?;
     serde_json::to_writer(&mut *bytes, value).map_err(|e| e.to_string())?;
-    bytes.push(b'\n');
-    Ok(())
+    bytes.write_all(b"\n").map_err(|error| error.to_string())
 }
 
 /// Serialize a small header field without introducing unstable object ordering.

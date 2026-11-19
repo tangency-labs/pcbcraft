@@ -33,6 +33,8 @@ const MULTIPAD_FORMAT: &str = "pcbcraft-board-baseline/2";
 pub(crate) const QUANTITY_FORMAT: &str = "pcbcraft-board-baseline/3";
 /// Accepted display names freeze generated metadata and occurrence qualification.
 pub(crate) const DISPLAY_FORMAT: &str = "pcbcraft-board-baseline/4";
+/// Unnamed singleton nets retain the distinction between schematic and pad-only origin.
+pub(crate) const NET_ORIGIN_FORMAT: &str = "pcbcraft-board-baseline/5";
 /// Bound decoded history independently of the live component count.
 pub const MAX_BASELINE_BYTES: usize = 16 * 1024 * 1024;
 
@@ -233,6 +235,14 @@ fn primary_quantity_record<'de, D: Deserializer<'de>>(deserializer: D) -> Result
     Value::deserialize(deserializer).map(Some)
 }
 
+/// The accepted origin of a board net, distinct from its name or current schematic match.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetOrigin {
+    Schematic,
+    PadOnly,
+}
+
 /// Historical terminal membership, not a second editable connectivity graph or
 /// a persistent net ID. Names are display metadata and cannot establish identity.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -243,6 +253,25 @@ pub struct NetState {
     pub display_name: Option<String>,
     pub terminals: Vec<TerminalKey>,
     pub names: Vec<String>,
+    /// Explicit for unnamed singletons in format 5; absent in older formats.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "origin_record")]
+    pub origin: Option<NetOrigin>,
+}
+
+impl NetState {
+    /// Named nets and multi-terminal nets necessarily came from the schematic.
+    /// Older unnamed singleton records cannot establish their origin.
+    pub(crate) fn accepted_origin(&self) -> Option<NetOrigin> {
+        if self.needs_origin() { self.origin } else { Some(NetOrigin::Schematic) }
+    }
+
+    fn needs_origin(&self) -> bool {
+        self.terminals.len() == 1 && self.names.is_empty()
+    }
+}
+
+fn origin_record<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<NetOrigin>, D::Error> {
+    NetOrigin::deserialize(deserializer).map(Some)
 }
 
 /// An omitted name preserves legacy input; an explicit null is never a presentation record.
@@ -326,7 +355,9 @@ impl Baseline {
                 desired.get(&terminal.component).and_then(|package| package.mapping.get(&terminal.terminal)).is_some_and(|pads| pads.pads().len() > 1)
             });
             if terminals.len() >= 2 || (!terminals.is_empty() && (!graph.net_names(index).is_empty() || multiple_lands)) {
-                nets.push(NetState { terminals, names: graph.net_names(index).to_vec(), display_name: Some(graph.net_name(index)) });
+                let names = graph.net_names(index).to_vec();
+                let origin = (terminals.len() == 1 && names.is_empty()).then_some(NetOrigin::Schematic);
+                nets.push(NetState { terminals, names, display_name: Some(graph.net_name(index)), origin });
             }
         }
         // Unwired terminals are absent from the electrical graph, but their multiple
@@ -337,13 +368,20 @@ impl Baseline {
                 for (terminal, pads) in &package.mapping {
                     let key = TerminalKey { component, terminal: terminal.clone() };
                     if pads.pads().len() > 1 && !connected.contains(&key) {
-                        nets.push(NetState { display_name: Some("Unconnected".into()), terminals: vec![key], names: Vec::new() });
+                        nets.push(NetState {
+                            display_name: Some("Unconnected".into()),
+                            terminals: vec![key],
+                            names: Vec::new(),
+                            origin: Some(NetOrigin::PadOnly),
+                        });
                     }
                 }
             }
         }
         nets.sort_by(|left, right| left.terminals.cmp(&right.terminals));
-        let format = if nets.iter().any(|net| net.display_name.is_some()) {
+        let format = if nets.iter().any(|net| net.origin.is_some()) {
+            NET_ORIGIN_FORMAT
+        } else if nets.iter().any(|net| net.display_name.is_some()) {
             DISPLAY_FORMAT
         } else if components.values().any(|part| part.primary_quantity.is_some()) {
             QUANTITY_FORMAT
@@ -437,7 +475,7 @@ impl Baseline {
     /// historical component IDs against the current schematic.
     pub fn validate(&self) -> Result<(), String> {
         self.source.validate()?;
-        if !matches!(self.format.as_str(), FORMAT | MULTIPAD_FORMAT | QUANTITY_FORMAT | DISPLAY_FORMAT)
+        if !matches!(self.format.as_str(), FORMAT | MULTIPAD_FORMAT | QUANTITY_FORMAT | DISPLAY_FORMAT | NET_ORIGIN_FORMAT)
             || (self.format == FORMAT && self.components.values().any(|component| component.package.as_ref().is_some_and(Package::extended)))
             || self.project.is_nil()
             || self.board.is_nil()
@@ -460,7 +498,7 @@ impl Baseline {
             crate::schematic::check_reference(&component.reference)?;
             crate::schematic::check_value(&component.value)?;
             if let Some(quantity) = &component.primary_quantity {
-                if !matches!(self.format.as_str(), QUANTITY_FORMAT | DISPLAY_FORMAT) {
+                if !matches!(self.format.as_str(), QUANTITY_FORMAT | DISPLAY_FORMAT | NET_ORIGIN_FORMAT) {
                     return Err("historical primary quantities require board baseline format 3".into());
                 }
                 quantity.validate()?;
@@ -478,10 +516,17 @@ impl Baseline {
         if self.nets.len() > MAX_SYMBOLS * 64 || !self.nets.windows(2).all(|pair| pair[0].terminals < pair[1].terminals) {
             return Err("board baseline nets exceed bounds or are not canonical".into());
         }
+        let stores_origin = self.format == NET_ORIGIN_FORMAT;
+        let stores_display = matches!(self.format.as_str(), DISPLAY_FORMAT | NET_ORIGIN_FORMAT);
+        if stores_origin && !self.nets.iter().any(NetState::needs_origin) {
+            return Err("board baseline format 5 requires an unnamed singleton net".into());
+        }
         let mut seen = BTreeSet::new();
         for net in &self.nets {
-            if (self.format != DISPLAY_FORMAT && net.display_name.is_some())
-                || (self.format == DISPLAY_FORMAT && net.display_name.is_none())
+            if net.origin.is_some() != (stores_origin && net.needs_origin()) {
+                return Err("invalid accepted net origin or baseline version".into());
+            }
+            if net.display_name.is_some() != stores_display
                 || net.display_name.as_ref().is_some_and(|name| name.is_empty() || name.len() > 65_536 || name.chars().any(char::is_control))
             {
                 return Err("invalid accepted net display name or baseline version".into());

@@ -233,7 +233,7 @@ impl Project {
                         }
                         inherited.insert(binding.clone());
                         if inherited.len() > super::classes::MAX_BINDINGS {
-                            return Err(CommandError::Unavailable("Net assignment origin limit exceeded.".into()));
+                            return Err(CommandError::CapExceeded("Net assignment origin limit exceeded.".into()));
                         }
                     }
                 }

@@ -253,18 +253,18 @@ impl BoardState {
         &mut self,
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
-    ) -> Arc<crate::board_appearance::Connectivity> {
+    ) -> Result<Arc<crate::board_appearance::Connectivity>, String> {
         if let Some(cache) = &self.copper_connectivity_cache
             && Some(cache.source) == source
             && cache.target == board.target
         {
-            return cache.connectivity.clone();
+            return Ok(cache.connectivity.clone());
         }
-        let (copper, nets) = board.copper_with_nets();
+        let (copper, nets) = board.copper_with_nets()?;
         let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets, names_pending: board.net_names_pending() });
         self.copper_connectivity_cache =
             source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone() });
-        connectivity
+        Ok(connectivity)
     }
 
     /// Share revision-keyed accepted geometry between frames; navigation never invalidates it.
@@ -280,7 +280,7 @@ impl BoardState {
         {
             return Some(cached.clone());
         }
-        let result = board.ratsnest().map(std::sync::Arc::new);
+        let result = board.ratsnest().ok().map(std::sync::Arc::new);
         self.ratsnest_cache = source.zip(result.clone());
         result
     }

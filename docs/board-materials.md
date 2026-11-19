@@ -46,6 +46,46 @@ Portable manufacturer/process profiles are a separate planned resource; see
 [project settings and fabrication profiles](pcb-representation.md#project-settings-and-fabrication-profiles)
 for their import, pinning and update contract.
 
+## Review a setup edit
+
+`pcb.preview_board_setup` takes the same `setup`, optional `silkscreen` and
+`resolve_existing_footprints` values as Apply, with `expected_revision` and an
+optional explicit `board` UUID. It returns `board_setup_preview`: removed and
+added layer identities, surviving copper layers' changed one-based positions,
+and affected tracks, through vias, zone outlines, drawings and footprint pads
+by ID and kind. Pads use a footprint ID and pad number. Each affected object's
+`layers` lists the original layer or original copper span in stack order. When
+an all-copper pad or through via expands to new layers, those layers appear in
+`added_layers`, not in its original span. Zone outlines are intent, not filled
+copper. The report states whether populated-board consent is required and gives
+the category and short message of any refusal found by the same candidate
+validation and edit preparation as Apply. To obtain structured affected-object
+details, call Preview; Apply returns only the refusal itself. No object is
+deleted or reassigned by a review.
+
+The returned `plan_token` is a disposable session-local capability. Pass it to
+`pcb.set_board_setup` with the identical candidate, consent and silkscreen
+settings to apply that review; changing consent requires another preview.
+A later preview replaces it; `pcb.cancel_board_setup_preview` revokes only the
+named current token. An edit, Undo, Redo or reopening invalidates it, as does
+adopting a saved snapshot even if the revision does not change. Another session
+cannot use it, even on the same saved project. Successful Apply consumes it,
+including a no-op; a refused Apply does not. The recovery journal records the
+resulting document changes, not the spent token. Omitting the token retains
+ordinary revision-checked Apply behavior.
+
+Preview and cancellation change neither the project snapshot, saved bytes,
+revision nor Undo/Redo. One bounded review (at most 8 MiB serialized) is retained
+outside history. Native callers read the same typed report through
+`Session::board_setup_preview`. Complete changes lists have a 2 MiB encoded budget,
+charged before retaining each object's copper span. Preview fails instead of
+truncating an oversized list, leaving any current token and authored state
+untouched. This reporting budget does not change Apply's error category or
+message. Live and headless MCP return the same change list. The Board setup form does not yet display this detailed review. No saved
+format or external integration ownership changes: clients, including future
+simulation/parametric adapters, inspect stable board/layer IDs and submit
+reviewed candidates through the shared command path rather than rewriting files.
+
 ## Material identity and reports
 
 `setup.materials` contains up to 64 embedded definitions, addressed by UUID `id`
@@ -223,20 +263,26 @@ when it applies other edits but does not edit them yet.
 
 ## Persistence and limits
 
-Material-aware fields use `pcbcraft-board/3`. A project using only the original
-layer catalog, labels and thicknesses retains version 2 byte-for-byte on a no-op
-round trip. Opening version 2 does not infer materials, reports or construction.
-Version 3 embeds all selected definitions in `board.json`; it needs no source
-library to reopen. Each material revision and each dielectric gap has a stable
+The original layer catalog, labels and thicknesses use `pcbcraft-board/2`;
+material-aware setup needs at least `pcbcraft-board/3`. These formats apply when
+no other authored data needs a later format. A canonical version-2 document
+round-trips byte-for-byte through the codec and does not acquire inferred materials,
+reports or construction. Version 3 and compatible later formats embed all selected
+definitions in `board.json`, with no source library needed. Each material revision
+and each dielectric gap has a stable
 record line, with ordered plies nested within their gap. Unknown versions and
 fields, unresolved pins and duplicate JSON keys fail before project adoption.
 
 Copper roles, base copper, copper thickness qualifiers and finished board
-thickness need at least `pcbcraft-board/23` when one of them is present. Thermal
-conductivity, thermal expansion, dielectric strength and CTI reports use
-`pcbcraft-board/25`, chosen only when one of them is present; it may also carry
-every format 23 field. Older headers refuse these reports, and a board without
-them keeps its earlier format and bytes.
+thickness require at least `pcbcraft-board/23` when one of them is present.
+Explicit via assignments require at least board/24. Thermal conductivity,
+thermal expansion, dielectric strength and CTI reports require at least board/25;
+format 25 requires at least one such report. [Circular copper records](circular-copper-records.md)
+require at least board/26, and footprint locks require at least board/34.
+Compatible earlier extensions can coexist and keep their usual prerequisites.
+Removing reports selects the format required by the remaining authored data.
+Older headers refuse unsupported extensions, and canonical boards without them
+retain their earlier format and bytes.
 
 Version 3 does not introduce a reusable material library,
 manufacturing qualification, rule requirements, flex regions or an impedance

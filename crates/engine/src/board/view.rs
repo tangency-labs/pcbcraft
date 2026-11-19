@@ -172,6 +172,8 @@ pub struct FootprintView<'a> {
     pub pending_removal: bool,
     /// Placed on the bottom side, mirrored and on the back layers.
     pub bottom: bool,
+    /// Board-local lock intent. This storage foundation does not yet enforce manipulation protection.
+    pub locked: bool,
 }
 
 impl Project {
@@ -203,7 +205,7 @@ impl Project {
         match id {
             None => Ok(default),
             Some(id) if id == default.board.to_string() => Ok(default),
-            Some(_) => Err(crate::CommandError::InvalidParams("unknown board ID".to_owned())),
+            Some(_) => Err(crate::CommandError::NotFound("unknown board ID".to_owned())),
         }
     }
 }
@@ -272,9 +274,9 @@ impl<'a> BoardView<'a> {
         self.resolve_footprints(ids.iter().filter_map(move |id| self.placement(id)))
     }
 
-    /// Resolve placements lazily without assuming starter-definition geometry.
-    /// Accepted terminal membership is indexed once per traversal, rather than
-    /// scanning every net for every pad. The index borrows only this snapshot.
+    /// Resolve placements lazily without assuming starter-definition geometry. Each view
+    /// includes the placement's stored `locked` flag, not an edit-permission decision.
+    /// Accepted terminal membership is indexed once per traversal from this snapshot.
     pub fn footprints(self) -> impl Iterator<Item = FootprintView<'a>> {
         self.footprints_range(0, usize::MAX)
     }
@@ -364,6 +366,7 @@ impl<'a> BoardView<'a> {
                 ),
                 pending_removal: !self.project.component_is_board_eligible(footprint.component),
                 bottom: footprint.bottom,
+                locked: footprint.locked,
             })
         })
     }

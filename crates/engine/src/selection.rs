@@ -240,7 +240,7 @@ impl Selection {
             }
             let path = project.wire_path(wire).into_iter().map(|point| translated(point, delta)).collect::<Result<Vec<_>, _>>()?;
             let [Some(from), Some(to)] = wire.endpoints().map(|end| next.endpoint_position(end)) else {
-                return Err(CommandError::InvalidParams("wire endpoint does not exist".to_owned()));
+                return Err(CommandError::NotFound("wire endpoint does not exist".to_owned()));
             };
             let path = crate::schematic::orthogonal_path(std::iter::once(from).chain(path).chain(std::iter::once(to)), true);
             if path.len() < 2 || path.len() > crate::wire::MAX_BENDS + 2 {

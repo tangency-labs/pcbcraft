@@ -127,6 +127,36 @@ fn ten_edits_survive_a_kill() {
     assert!(saved_files.keys().all(|path| !path.to_string_lossy().contains("kill-test")));
 }
 
+/// Tokenized board setup Apply recovers its document changes without recording spent authority.
+#[test]
+fn setup_preview_token_does_not_enter_recovery_records() {
+    use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, PREVIEW_BOARD_SETUP, SET_BOARD_SETUP};
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    session.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":session.revision()})).unwrap();
+    let setup = session.project().unwrap().board_setup().unwrap().with_copper_count(4).unwrap();
+    let revision = session.revision();
+    let recorder = Arc::new(JournalRecorder::start(dir.path().to_owned(), "entry".to_owned()).unwrap());
+    session.observe_edits(Some(recorder.clone()));
+    let report = session.execute(PREVIEW_BOARD_SETUP, &json!({"setup":setup,"expected_revision":revision})).unwrap();
+    let token = report["board_setup_preview"]["plan_token"].as_str().unwrap();
+    session.apply(SET_BOARD_SETUP, &json!({"setup":setup,"plan_token":token,"expected_revision":revision})).unwrap();
+    session.observe_edits(None);
+    Arc::try_unwrap(recorder).unwrap().finish().unwrap();
+
+    let bytes = fs::read(entry_file(dir.path(), "entry", "journal")).unwrap();
+    let mut frames = bytes.strip_prefix(MAGIC).unwrap();
+    read_frame(&mut frames).unwrap().unwrap();
+    let (record, _) = decode_record(&read_frame(&mut frames).unwrap().unwrap()).unwrap();
+    assert_eq!(record.command, SET_BOARD_SETUP);
+    assert_eq!(record.params, json!({"setup":setup,"expected_revision":revision}));
+    assert!(read_frame(&mut frames).unwrap().is_none());
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
+}
+
 /// A journal with the given edits applied on top of a new project, and the documents after each.
 fn journal_with(dir: &Path, edits: usize) -> (EditJournal, Vec<Documents>) {
     let mut session = Session::default();

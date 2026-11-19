@@ -5,10 +5,11 @@
 //! Board Outline get one Gerber file in millimeters with nanometer resolution (format 4.6).
 //! Plated holes (vias and through-hole pads) go in one Excellon file. Every coordinate is written
 //! in the board's output frame: measured from its placement origin with Y up, seen from the top.
-//! Mask and paste openings follow the pad copper exactly; any expansion is left to the
-//! fabricator's process. Vias are tented (no mask opening). Bottom-side footprints put their
-//! pads on back copper, mask and paste and their silkscreen on the bottom legend. Arcs and
-//! zones are not produced yet.
+//! Openings use the pad exporter without process expansion: mask includes pads on the outer
+//! copper layer, while paste excludes through-hole pads. Obround strokes and chorded corners
+//! retain their existing approximations. Vias receive no automatic mask opening; authored mask
+//! artwork can still open them. Mounting-side pads follow the placement side; silkscreen follows
+//! the top or bottom legend. Arcs and zones are not produced yet.
 use super::{
     definition::{GraphicPurpose, PadShape},
     origin::{Frame, Resolved},
@@ -18,6 +19,7 @@ use super::{
 use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -49,9 +51,72 @@ pub struct Fabrication {
     pub files: Vec<Output>,
 }
 
-/// Accumulates Gerber drawing operations and the circular apertures they use.
+/// Integrity of the exact bytes of one generated artifact, not a design-state identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Artifact {
+    pub name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+impl Artifact {
+    /// Describe bytes without normalizing their encoding, whitespace or line endings.
+    fn new(name: String, bytes: &[u8]) -> Self {
+        Self { name, size_bytes: bytes.len() as u64, sha256: format!("{:x}", Sha256::digest(bytes)) }
+    }
+}
+
+/// Integrity records for the generated files, not the ZIP itself or the design state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Manifest {
+    pub generator_version: String,
+    pub files: Vec<Artifact>,
+}
+
+impl Manifest {
+    /// Describe the exact uncompressed bytes that are passed to the ZIP writer.
+    fn from_outputs(outputs: &[Output]) -> Self {
+        Self {
+            generator_version: env!("CARGO_PKG_VERSION").into(),
+            files: outputs.iter().map(|output| Artifact::new(output.name.clone(), output.contents.as_bytes())).collect(),
+        }
+    }
+}
+
+/// Immutable ZIP bytes, including the manifest, built from captured outputs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Archive {
+    bytes: Vec<u8>,
+}
+
+impl Archive {
+    /// Pack the captured outputs and their manifest without editing the project or writing files.
+    pub fn new(outputs: &[Output]) -> Result<Self, String> {
+        Ok(Self { bytes: zip(outputs)? })
+    }
+
+    /// The complete deterministic ZIP, independent of its destination filename.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// The suggested archive name, using the same portable project-name rules as its members.
+pub fn archive_name(project: &str) -> String {
+    format!("{}-fabrication.zip", file_part(project))
+}
+
+/// Standard apertures retain shape as well as size when sharing D-codes.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Aperture {
+    Circle(i64),
+    Rectangle(i64, i64),
+    Obround(i64, i64),
+}
+
+/// Accumulates Gerber drawing operations and the standard apertures they use.
 struct Gerber {
-    apertures: BTreeMap<i64, usize>,
+    apertures: BTreeMap<Aperture, usize>,
     body: String,
     current: Option<usize>,
     frame: Frame,
@@ -62,10 +127,10 @@ impl Gerber {
         Self { apertures: BTreeMap::new(), body: String::new(), current: None, frame }
     }
 
-    /// Select (defining on first use) the circular aperture of this diameter.
-    fn aperture(&mut self, diameter_nm: i64) {
+    /// Select an aperture, assigning its D-code on first use.
+    fn aperture(&mut self, aperture: Aperture) {
         let next = 10 + self.apertures.len();
-        let code = *self.apertures.entry(diameter_nm.max(1)).or_insert(next);
+        let code = *self.apertures.entry(aperture).or_insert(next);
         if self.current != Some(code) {
             let _ = writeln!(self.body, "D{code}*");
             self.current = Some(code);
@@ -74,7 +139,7 @@ impl Gerber {
 
     /// Stroke a polyline with a round aperture; a single point is flashed.
     fn stroke(&mut self, points: &[Point], width_nm: i64) {
-        self.aperture(width_nm);
+        self.aperture(Aperture::Circle(width_nm.max(1)));
         let Some(first) = points.first() else { return };
         if points.len() == 1 {
             let _ = writeln!(self.body, "{}D03*", xy(self.frame, *first));
@@ -86,7 +151,7 @@ impl Gerber {
         }
     }
 
-    /// Fill a closed polygon as a region.
+    /// Emit a closed region path. A collapsed pad can produce a retraced, zero-area path.
     fn region(&mut self, polygon: &[Point]) {
         let Some(first) = polygon.first() else { return };
         self.body.push_str("G36*\n");
@@ -97,10 +162,29 @@ impl Gerber {
         self.body.push_str("G37*\n");
     }
 
-    /// Draw one pad's copper exactly, by shape: a region for rectangles (rounded corners as
-    /// short chords), a flash for circles and a round-ended stroke for ovals.
-    fn pad(&mut self, pad: &PadView) {
+    /// Flash R/O only for individually cardinal library and placement rotations and a resolved
+    /// rectangle. R also needs an integral midpoint; O needs integral capsule endpoints to match
+    /// the engine's land contour. Other R lands remain regions, even if tiny corners collapse.
+    /// Other O lands retain the approximate round-ended stroke (a circle for equal sides).
+    /// Rounded rectangles use regions with chorded corners only when the resolved radius is positive.
+    fn pad(&mut self, pad: &PadView, cardinal: bool) {
         let Some(corners) = pad.copper else { return };
+        if cardinal && let Some((width, height)) = axis_aligned_size(&corners) {
+            let aperture = match pad.shape {
+                PadShape::Rectangle
+                    if corners[0].x_nm + corners[2].x_nm == 2 * pad.center.x_nm && corners[0].y_nm + corners[2].y_nm == 2 * pad.center.y_nm =>
+                {
+                    Some(Aperture::Rectangle(width, height))
+                }
+                PadShape::Oval if width % 2 == height % 2 => Some(Aperture::Obround(width, height)),
+                _ => None,
+            };
+            if let Some(aperture) = aperture {
+                self.aperture(aperture);
+                let _ = writeln!(self.body, "{}D03*", xy(self.frame, pad.center));
+                return;
+            }
+        }
         let side = |a: Point, b: Point| (((b.x_nm - a.x_nm) as f64).hypot((b.y_nm - a.y_nm) as f64)).round() as i64;
         let (w, h) = (side(corners[0], corners[1]), side(corners[1], corners[2]));
         match pad.shape {
@@ -131,13 +215,42 @@ impl Gerber {
         let _ = writeln!(text, "%TF.FileFunction,{function}*%");
         let _ = writeln!(text, "%TF.FilePolarity,{polarity}*%");
         text.push_str("%FSLAX46Y46*%\n%MOMM*%\n%LPD*%\nG01*\n");
-        for (diameter, code) in &self.apertures {
-            let _ = writeln!(text, "%ADD{code}C,{}*%", mm(*diameter, 6));
+        for (aperture, code) in &self.apertures {
+            match *aperture {
+                Aperture::Circle(diameter) => {
+                    let _ = writeln!(text, "%ADD{code}C,{}*%", mm(diameter, 6));
+                }
+                Aperture::Rectangle(width, height) | Aperture::Obround(width, height) => {
+                    let kind = if matches!(aperture, Aperture::Rectangle(..)) { 'R' } else { 'O' };
+                    let _ = writeln!(text, "%ADD{code}{kind},{}X{}*%", mm(width, 6), mm(height, 6));
+                }
+            }
         }
         text.push_str(&self.body);
         text.push_str("M02*\n");
         text
     }
+}
+
+/// Resolve global X/Y sizes of a nondegenerate ordered axis-aligned rectangle. Opposite corners
+/// share a midpoint and adjacent edges use different axes. Untransformed R/O apertures use these
+/// axes with strictly positive sizes (Ucamco Gerber 2026.05 section 4.4).
+fn axis_aligned_size(corners: &[Point; 4]) -> Option<(i64, i64)> {
+    if !(0..4).all(|i| {
+        let (a, b) = (corners[i], corners[(i + 1) % 4]);
+        (a.x_nm == b.x_nm) != (a.y_nm == b.y_nm)
+    }) {
+        return None;
+    }
+    if (corners[0].x_nm == corners[1].x_nm) == (corners[1].x_nm == corners[2].x_nm)
+        || corners[0].x_nm + corners[2].x_nm != corners[1].x_nm + corners[3].x_nm
+        || corners[0].y_nm + corners[2].y_nm != corners[1].y_nm + corners[3].y_nm
+    {
+        return None;
+    }
+    let width = corners.iter().map(|p| p.x_nm).max()? - corners.iter().map(|p| p.x_nm).min()?;
+    let height = corners.iter().map(|p| p.y_nm).max()? - corners.iter().map(|p| p.y_nm).min()?;
+    (width > 0 && height > 0).then_some((width, height))
 }
 
 /// A Gerber coordinate pair in integer nanometers (format 4.6 mm) in the output frame.
@@ -161,7 +274,7 @@ fn mm(nm: i64, decimals: usize) -> String {
     format!("{sign}{}.{:0width$}", magnitude / scale, magnitude % scale, width = decimals as usize)
 }
 
-/// A rectangle's outline with each corner replaced by a quarter arc of `radius`.
+/// Chord each corner for a positive resolved radius; otherwise return the four input corners.
 fn rounded(corners: &[Point; 4], radius: i64) -> Vec<Point> {
     if radius <= 0 {
         return corners.to_vec();
@@ -235,14 +348,17 @@ fn unique_file_names(files: &mut [Output], copper_count: usize) {
 impl BoardView<'_> {
     /// Build every fabrication file for this board, in a fixed order. See [`Self::fabrication`].
     pub fn fabrication_outputs(self) -> Result<Vec<Output>, String> {
+        self.require_linear_copper()?;
         self.fabrication().map(|fabrication| fabrication.files)
     }
 
     /// Build every fabrication file for this board, in a fixed order, measured from the board's
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
+    /// Circular copper is refused before generating any straight-only output.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     pub fn fabrication(self) -> Result<Fabrication, String> {
+        self.require_linear_copper()?;
         let setup = self.setup().ok_or("Initialize the board setup before generating fabrication outputs.")?;
         let copper: Vec<_> = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).collect();
         // Copper layers in physical stack order, top first.
@@ -264,7 +380,24 @@ impl BoardView<'_> {
         let origin = self.placement_origin()?;
         let frame = origin.frame();
         let base = file_part(&self.project().name);
-        let pads: Vec<PadView> = self.footprints().flat_map(|footprint| footprint.pads).filter(|pad| pad.copper.is_some()).collect();
+        let pads: Vec<_> = self
+            .footprints()
+            .flat_map(|footprint| {
+                let definition = self.placement(&footprint.id).and_then(|placed| self.project().board.definition_for(placed));
+                let cardinal_pads: BTreeSet<_> = definition
+                    .into_iter()
+                    .flat_map(|d| &d.pads)
+                    .filter(|pad| pad.rotation.is_multiple_of(90))
+                    .map(|pad| pad.number.as_str())
+                    .collect();
+                let placed_cardinal = footprint.rotation.is_multiple_of(90);
+                footprint.pads.into_iter().filter_map(move |pad| {
+                    pad.copper?;
+                    let cardinal = placed_cardinal && cardinal_pads.contains(pad.number.as_str());
+                    Some((pad, cardinal))
+                })
+            })
+            .collect();
         let on =
             |pad: &PadView, layer: uuid::Uuid| matches!(&pad.copper_layers, Some(CopperLayers::Resolved { layers, .. }) if layers.contains(&layer));
         let mut files = Vec::new();
@@ -272,8 +405,8 @@ impl BoardView<'_> {
         for (index, layer_id) in order.iter().enumerate() {
             let Some(layer) = copper.iter().find(|layer| layer.id == *layer_id) else { continue };
             let mut gerber = Gerber::new(frame);
-            for pad in pads.iter().filter(|pad| on(pad, layer.id)) {
-                gerber.pad(pad);
+            for (pad, cardinal) in pads.iter().filter(|(pad, _)| on(pad, layer.id)) {
+                gerber.pad(pad, *cardinal);
             }
             let mut tracks: Vec<_> = self.tracks().iter().filter(|track| track.layer == layer.id).collect();
             tracks.sort_by_key(|track| (track.width_nm, track.id));
@@ -299,16 +432,16 @@ impl BoardView<'_> {
         let back = order.last().copied().filter(|_| order.len() > 1);
         for (side, label, layer) in [("Top", "Mask_Top", front), ("Bot", "Mask_Bottom", back)] {
             let mut gerber = Gerber::new(frame);
-            for pad in pads.iter().filter(|pad| layer.is_some_and(|layer| on(pad, layer))) {
-                gerber.pad(pad);
+            for (pad, cardinal) in pads.iter().filter(|(pad, _)| layer.is_some_and(|layer| on(pad, layer))) {
+                gerber.pad(pad, *cardinal);
             }
             board_graphics(&mut gerber, self, LayerPurpose::Mask, Some(if side == "Top" { Side::Front } else { Side::Back }));
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Soldermask,{side}"), "Negative") });
         }
         for (side, label, layer) in [("Top", "Paste_Top", front), ("Bot", "Paste_Bottom", back)] {
             let mut gerber = Gerber::new(frame);
-            for pad in pads.iter().filter(|pad| !pad.through_hole && layer.is_some_and(|layer| on(pad, layer))) {
-                gerber.pad(pad);
+            for (pad, cardinal) in pads.iter().filter(|(pad, _)| !pad.through_hole && layer.is_some_and(|layer| on(pad, layer))) {
+                gerber.pad(pad, *cardinal);
             }
             board_graphics(&mut gerber, self, LayerPurpose::Paste, Some(if side == "Top" { Side::Front } else { Side::Back }));
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Paste,{side}"), "Positive") });
@@ -373,10 +506,15 @@ impl BoardView<'_> {
     }
 }
 
-/// Pack outputs with fixed timestamps and Unix regular-file metadata on every platform.
-/// The same outputs give the same bytes; ZIP encoding failures are returned as errors.
+/// Pack the outputs and their `manifest.json` with fixed timestamps and Unix file metadata.
+/// The same outputs give the same bytes. A reserved member name or encoding failure is an error.
 pub fn zip(outputs: &[Output]) -> Result<Vec<u8>, String> {
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+    const MANIFEST_NAME: &str = "manifest.json";
+    if outputs.iter().any(|output| output.name.eq_ignore_ascii_case(MANIFEST_NAME)) {
+        return Err(format!("{MANIFEST_NAME} is reserved for fabrication integrity records"));
+    }
+    let manifest = serde_json::to_string_pretty(&Manifest::from_outputs(outputs)).map_err(|error| error.to_string())?;
     let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default()
         .system(zip::System::Unix)
@@ -387,6 +525,8 @@ pub fn zip(outputs: &[Output]) -> Result<Vec<u8>, String> {
         writer.start_file(&output.name, options).map_err(|e| e.to_string())?;
         writer.write_all(output.contents.as_bytes()).map_err(|e| e.to_string())?;
     }
+    writer.start_file(MANIFEST_NAME, options).map_err(|e| e.to_string())?;
+    writeln!(writer, "{manifest}").map_err(|e| e.to_string())?;
     writer.finish().map(|cursor| cursor.into_inner()).map_err(|e| e.to_string())
 }
 
@@ -394,6 +534,12 @@ impl Session {
     /// Generate the addressed board's fabrication files without editing anything.
     pub fn export_fabrication(&self, params: &Value) -> Result<Vec<Output>, CommandError> {
         self.fabrication(params).map(|fabrication| fabrication.files)
+    }
+
+    /// Capture the addressed board's outputs and their manifest in one ZIP without editing.
+    pub fn export_fabrication_archive(&self, params: &Value) -> Result<Archive, CommandError> {
+        let fabrication = self.fabrication(params)?;
+        Archive::new(&fabrication.files).map_err(CommandError::Unavailable)
     }
 
     /// Generate the addressed board's fabrication files and the origin they use, without editing.
@@ -404,10 +550,11 @@ impl Session {
         view.fabrication().map_err(CommandError::Unavailable)
     }
 
-    /// The execute result for MCP: every file's name and text, and the origin they use.
+    /// Return file text, resolved origin and the same member records as the ZIP manifest.
     pub(crate) fn fabrication_report(&self, params: &Value) -> Result<Value, CommandError> {
         let fabrication = self.fabrication(params)?;
-        Ok(json!({"files": fabrication.files, "origin": fabrication.origin}))
+        let manifest = Manifest::from_outputs(&fabrication.files);
+        Ok(json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": manifest}))
     }
 }
 

@@ -2,7 +2,7 @@
 use super::*;
 use crate::{
     CommandError,
-    CommandError::{InvalidParams, Unavailable},
+    CommandError::{CapExceeded, InvalidParams, StaleRevision, Unavailable},
     Session,
     persistence::{ENTRY_POINT, decode_documents, decode_packed, encode_documents, encode_packed},
 };
@@ -229,7 +229,7 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
         }
         assert_eq!(s.project().unwrap().part_group_memberships().len(), MAX_MEMBERSHIPS);
         let snapshot = s.snapshot().unwrap();
-        refuse(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}), Unavailable, "already has 4096 symbols");
+        refuse(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}), CapExceeded, "already has 4096 symbols");
         assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
     }
 }
@@ -363,7 +363,8 @@ fn catalog_and_membership_edits_are_atomic_and_undoable() {
     }
     let stale = json!({"part_instance":part_instances[1],"groups":[power],"expected_revision":s.revision() - 1});
     let error = s.apply(SET_GROUPS, &stale).unwrap_err();
-    assert!(matches!(error, Unavailable(_)), "{error:?}");
+    assert!(matches!(error, StaleRevision { current } if current == revision), "{error:?}");
+    assert_eq!(error.details(), json!({"current_revision":revision}));
     let refusal = error.to_string();
     assert!(refusal.contains("project changed"), "{refusal}");
     assert!(Arc::ptr_eq(&assigned, &s.snapshot().unwrap()));

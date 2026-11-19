@@ -150,7 +150,7 @@ impl Session {
             .board
             .footprints
             .binary_search_by_key(&id.unwrap_or_default(), |footprint| footprint.id)
-            .map_err(|_| CommandError::InvalidParams("unknown footprint ID".into()))?;
+            .map_err(|_| CommandError::NotFound("unknown footprint ID".into()))?;
         let offset: Point =
             serde_json::from_value(params["offset"].clone()).map_err(|_| CommandError::InvalidParams("invalid footprint reference offset".into()))?;
         let mut footprint = project.board.footprints[index].clone();
@@ -181,7 +181,7 @@ impl Session {
             .collect();
         let project = self.open_project()?;
         if ids.is_empty() || ids.iter().any(|id| project.board.footprints.binary_search_by_key(id, |f| f.id).is_err()) {
-            return Err(CommandError::InvalidParams("unknown footprint ID".into()));
+            return Err(CommandError::NotFound("unknown footprint ID".into()));
         }
         let mut next = project.clone();
         let board = Arc::make_mut(&mut next.board);
@@ -231,7 +231,7 @@ impl Session {
             .iter()
             .map(|id| found.remove(&format!("footprint-{id}")))
             .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| CommandError::InvalidParams("unknown footprint ID".into()))?;
+            .ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
         let deltas = alignment(mode, &boxes)?;
         if deltas.iter().all(|delta| *delta == (0, 0)) {
             return Ok(());
@@ -244,8 +244,7 @@ impl Session {
                 continue;
             }
             moved_ids.insert(format!("footprint-{id}"));
-            let index =
-                board.footprints.binary_search_by_key(id, |f| f.id).map_err(|_| CommandError::InvalidParams("unknown footprint ID".into()))?;
+            let index = board.footprints.binary_search_by_key(id, |f| f.id).map_err(|_| CommandError::NotFound("unknown footprint ID".into()))?;
             let footprint = &mut board.footprints[index];
             let moved = Point { x_nm: footprint.x_nm.saturating_add(dx), y_nm: footprint.y_nm.saturating_add(dy) };
             (footprint.x_nm, footprint.y_nm) = (moved.x_nm, moved.y_nm);
@@ -271,7 +270,7 @@ impl Session {
             .board
             .footprints
             .binary_search_by_key(&id.unwrap_or_default(), |f| f.id)
-            .map_err(|_| CommandError::InvalidParams("unknown footprint ID".to_owned()))?;
+            .map_err(|_| CommandError::NotFound("unknown footprint ID".to_owned()))?;
         let current = &project.board.footprints[index];
         let mut footprint = current.clone();
         footprint.x_nm = params["x_nm"].as_i64().unwrap_or_default();

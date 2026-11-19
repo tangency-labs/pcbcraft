@@ -1,5 +1,7 @@
 /target
 /dist
+# Build output of the vendored crates (they are excluded from the workspace).
+vendor/*/target
 # Private notes for the maintainers: never commit.
 /HANDOFF.md
 .pcbcraft-save/

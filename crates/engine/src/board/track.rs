@@ -11,6 +11,7 @@ use super::geometry::{inside, segment_distance};
 use super::{
     definition::PadShape,
     geometry::Contour as PadContour,
+    pair_index::{Hit, PairIndex, Search},
     setup::LayerPurpose,
     view::{BoardView, CopperLayers},
 };
@@ -41,6 +42,8 @@ mod locks;
 pub mod preparation;
 pub(crate) use locks::protect_locked;
 #[cfg(test)]
+mod capacity_tests;
+#[cfg(test)]
 mod lock_tests;
 
 /// The width the PCB route tool starts with, 0.25 mm.
@@ -51,10 +54,11 @@ pub const MIN_WIDTH_NM: i64 = 10_000;
 pub const MAX_WIDTH_NM: i64 = 10_000_000;
 /// Vertices accepted for one routed path.
 pub const MAX_PATH_POINTS: usize = 256;
-/// Segments accepted on one board, bounding saved size and connectivity work.
-pub const MAX_TRACKS: usize = 4096;
+/// Track segments accepted on one board and in a command's track list. Clipboard text and
+/// routing work have separate limits; this count does not bound island-check latency.
+pub const MAX_TRACKS: usize = 65_536;
 /// Vias accepted on one board.
-pub const MAX_VIAS: usize = 2048;
+pub const MAX_VIAS: usize = 16_384;
 /// The via pad diameter the route tool starts with, 0.6 mm.
 pub const DEFAULT_VIA_DIAMETER_NM: i64 = 600_000;
 /// The via drill the route tool starts with, 0.3 mm.
@@ -143,24 +147,27 @@ impl Via {
     }
 }
 
-/// Validate every segment and via of a candidate board, then sort each by ID for diff-stable
-/// saves. Each track layer must be a copper layer of the board's setup; an unconfigured board
-/// has none. Vias need at least two copper layers to pass between.
-pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]) -> Result<(), String> {
-    if tracks.len() > MAX_TRACKS {
+/// Refuse an over-capacity board before inspecting records or deriving geometry.
+fn validate_counts(tracks: usize, vias: usize) -> Result<(), String> {
+    if tracks > MAX_TRACKS {
         return Err(format!("a board can hold at most {MAX_TRACKS} track segments"));
     }
-    if vias.len() > MAX_VIAS {
+    if vias > MAX_VIAS {
         return Err(format!("a board can hold at most {MAX_VIAS} vias"));
     }
-    let copper: BTreeSet<_> = project
-        .board
-        .setup
-        .iter()
-        .flat_map(|setup| setup.layers())
-        .filter(|layer| layer.purpose == LayerPurpose::Copper)
-        .map(|layer| layer.id)
-        .collect();
+    Ok(())
+}
+
+/// Copper-layer identities from the current board setup; empty on an unconfigured board.
+fn copper_layer_ids(project: &Project) -> BTreeSet<Uuid> {
+    project.board.setup.iter().flat_map(|setup| setup.layers()).filter(|layer| layer.purpose == LayerPurpose::Copper).map(|layer| layer.id).collect()
+}
+
+/// Validate every segment and via of a candidate board, then sort each by ID for diff-stable
+/// saves and bulk command lookups. Vias need at least two copper layers to pass between.
+pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]) -> Result<(), String> {
+    validate_counts(tracks.len(), vias.len())?;
+    let copper = copper_layer_ids(project);
     let mut ids = BTreeSet::new();
     for track in tracks.iter() {
         track.validate()?;
@@ -228,35 +235,41 @@ impl<'a> BoardView<'a> {
 
     /// Group physical pads, tracks and vias into islands joined by overlapping copper: tracks on
     /// a shared layer, vias on any layer. Legacy center-only markers and unconfigured pads have
-    /// no copper and stay isolated.
-    pub fn copper(self) -> Copper {
-        islands(&lands(self), self.tracks(), self.vias()).0
+    /// no copper and stay isolated. Circular copper returns an unsupported-geometry error.
+    pub fn copper(self) -> Result<Copper, String> {
+        self.require_linear_copper()?;
+        Ok(islands(&lands(self), self.tracks(), self.vias()).0)
     }
 
     /// Where routed copper would go if footprint `id` took the given pose: the tracks whose ends
     /// ride on its pads, with those ends moved as `pcb.set_footprint_transform` would move them.
-    /// For previews only; nothing is checked or edited, and an unknown ID carries nothing.
-    pub fn carried_tracks(self, id: &str, position: Point, rotation: u16, bottom: bool) -> Vec<Track> {
+    /// For previews only; nothing is edited, and an unknown ID carries nothing. Circular
+    /// copper returns an error rather than an incomplete straight-only preview.
+    pub fn carried_tracks(self, id: &str, position: Point, rotation: u16, bottom: bool) -> Result<Vec<Track>, String> {
+        self.require_linear_copper()?;
         let Some(number) = crate::schematic::wiring::parse_id(id, "footprint-").filter(|_| !self.tracks().is_empty()) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let mut next = self.project().clone();
         let board = std::sync::Arc::make_mut(&mut next.board);
-        let Ok(index) = board.footprints.binary_search_by_key(&number, |f| f.id) else { return Vec::new() };
+        let Ok(index) = board.footprints.binary_search_by_key(&number, |f| f.id) else { return Ok(Vec::new()) };
         let footprint = &mut board.footprints[index];
         (footprint.x_nm, footprint.y_nm, footprint.rotation, footprint.bottom) = (position.x_nm, position.y_nm, rotation, bottom);
-        let Some(after) = next.board_view(self.target) else { return Vec::new() };
-        carry(self, after, &BTreeSet::from([id.to_owned()]))
+        let Some(after) = next.board_view(self.target) else { return Ok(Vec::new()) };
+        Ok(carry(self, after, &BTreeSet::from([id.to_owned()])))
     }
 
     /// Resolve one unambiguous intended net per copper island, including explicit isolated vias.
     /// Conflicting contacts expose no arbitrary display net; physical islands remain separate.
-    pub fn copper_nets(self) -> BTreeMap<Uuid, String> {
-        self.copper_with_nets().1
+    /// Circular copper returns an error rather than incomplete membership.
+    pub fn copper_nets(self) -> Result<BTreeMap<Uuid, String>, String> {
+        self.copper_with_nets().map(|(_, nets)| nets)
     }
 
     /// Resolve physical islands and complete authored/contact-derived intent in one contact pass.
-    pub fn copper_with_nets(self) -> (Copper, BTreeMap<Uuid, String>) {
+    /// Circular copper returns an error before any partial geometry is resolved.
+    pub fn copper_with_nets(self) -> Result<(Copper, BTreeMap<Uuid, String>), String> {
+        self.require_linear_copper()?;
         let lands = lands(self);
         let (tracks, vias) = (self.tracks(), self.vias());
         let (copper, members) = islands(&lands, tracks, vias);
@@ -289,7 +302,7 @@ impl<'a> BoardView<'a> {
                 }
             }
         }
-        (copper, nets)
+        Ok((copper, nets))
     }
 }
 
@@ -375,14 +388,43 @@ fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs:
     builder.finish(lands, tracks, vias)
 }
 
-/// Resumable pair enumeration for the existing copper-island predicates. Each work unit
-/// considers one pair; pad-to-pad contacts stay separate from legacy clearance islands.
+/// Copper items (pads, tracks and vias together) below which island contact phases enumerate
+/// neighbors directly instead of building a bounds index. Retains the original small-board
+/// threshold for contact preparation.
+pub(super) const PAIRWISE_BELOW: usize = 128;
+
+/// Whether island contact phases enumerate lower-numbered neighbors directly for `items`
+/// copper items instead of using a bounds index. Both paths apply the same layer and contact tests.
+fn compares_every_pair(items: usize) -> bool {
+    items < PAIRWISE_BELOW
+}
+
+/// Resumable pair enumeration for the existing copper-island predicates. Small boards enumerate
+/// lower-numbered neighbors directly; larger ones traverse a four-axis bounds tree. A step
+/// charges every visited branch and leaf, not just emitted pairs. Overlap in all projections
+/// can still require visiting every eligible pair.
+/// Pad-to-pad contacts stay separate from legacy clearance islands.
 pub(super) struct IslandBuilder {
     parent: Vec<usize>,
     contours: Vec<PadContour>,
     bounds: Vec<[f64; 4]>,
     layers: Vec<Vec<Uuid>>,
-    pair: (usize, usize),
+    /// None when lower-numbered neighbors are enumerated directly.
+    index: Option<PairIndex>,
+    search: Search,
+    /// The node being joined to its lower-numbered neighbors.
+    node: usize,
+    /// That node's remaining neighbors to test.
+    nearby: Nearby,
+}
+
+/// The lower-numbered nodes still to test against the current node.
+enum Nearby {
+    /// Not looked up yet.
+    Lookup,
+    /// An active search. When enumerating directly, this is the exclusive upper bound of
+    /// the remaining neighbors. Indexed builders resume their separate traversal cursor.
+    Active(usize),
 }
 
 impl IslandBuilder {
@@ -394,9 +436,34 @@ impl IslandBuilder {
             .chain(tracks.iter().map(|t| PadContour::capsule(t.start, t.end, t.width_nm as f64 / 2.)))
             .chain(vias.iter().map(|v| PadContour::capsule(v.at, v.at, v.diameter_nm as f64 / 2.)))
             .collect();
-        let bounds = contours.iter().map(PadContour::bounds).collect();
+        let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
         let layers: Vec<_> = lands.iter().map(|l| l.layers.clone()).chain(tracks.iter().map(|t| vec![t.layer])).collect();
-        Self { parent: (0..contours.len()).collect(), contours, bounds, layers, pair: (lands.len(), 0) }
+        let pairwise = compares_every_pair(contours.len());
+        Self::with_path(lands.len(), contours, bounds, layers, pairwise)
+    }
+
+    /// Build on the chosen path; tests compare both paths on the same board.
+    fn with_path(lands: usize, contours: Vec<PadContour>, bounds: Vec<[f64; 4]>, layers: Vec<Vec<Uuid>>, pairwise: bool) -> Self {
+        let index = (!pairwise).then(|| PairIndex::new(contours.iter()));
+        Self {
+            parent: (0..contours.len()).collect(),
+            contours,
+            bounds,
+            layers,
+            index,
+            search: Search::default(),
+            node: lands,
+            nearby: Nearby::Lookup,
+        }
+    }
+
+    /// The same builder forced onto one path, to check that both give the same islands.
+    #[cfg(test)]
+    pub(super) fn on_path(self, pairwise: bool) -> Self {
+        let node = self.node;
+        let mut builder = Self::with_path(0, self.contours, self.bounds, self.layers, pairwise);
+        (builder.parent, builder.node) = (self.parent, node);
+        builder
     }
 
     /// Resume direct pad contacts from legacy roots, preserving the separate clearance map.
@@ -409,49 +476,52 @@ impl IslandBuilder {
                 }
             }
         }
-        builder.pair = (0, 0);
+        builder.node = 0;
+        builder.nearby = Nearby::Lookup;
         builder
     }
 
-    /// Evaluate at most `budget` direct pad pairs, without rechecking track/via contacts.
+    /// Evaluate at most `budget` work units of direct pad pairs, without rechecking track/via
+    /// contacts. Only pads, the first `pads` nodes, are joined.
     pub(super) fn step_pads(&mut self, pads: usize, budget: usize) -> bool {
-        for _ in 0..budget {
-            let (i, j) = self.pair;
-            if i >= pads {
-                return true;
-            }
-            if j >= i {
-                self.pair = (i + 1, 0);
-                continue;
-            }
-            self.pair.1 += 1;
-            let (a, b) = (self.bounds[i], self.bounds[j]);
-            if self.layers[i].iter().any(|layer| self.layers[j].contains(layer))
-                && a[0] <= b[2]
-                && b[0] <= a[2]
-                && a[1] <= b[3]
-                && b[1] <= a[3]
-                && self.contours[i].touches(&self.contours[j])
-            {
-                join(&mut self.parent, i, j);
-            }
-        }
-        self.pair.0 >= pads
+        self.advance(pads, budget)
     }
 
-    /// Evaluate at most `budget` pairs. Vias span the configured copper stack, as in
+    /// Evaluate at most `budget` work units. Vias span the configured copper stack, as in
     /// ordinary connectivity. A zero budget does no work and never claims completion early.
     pub(super) fn step(&mut self, budget: usize) -> bool {
+        self.advance(self.parent.len(), budget)
+    }
+
+    /// Join each remaining node before `end` to every lower-numbered node whose copper touches it on a
+    /// shared layer. Each pair is decided once, from its higher node, by the same predicate
+    /// whatever the index returns, so the islands do not depend on the lookup strategy.
+    fn advance(&mut self, end: usize, budget: usize) -> bool {
         for _ in 0..budget {
-            let (i, j) = self.pair;
-            if i >= self.parent.len() {
+            let i = self.node;
+            if i >= end {
                 return true;
             }
-            if j >= i {
-                self.pair = (i + 1, 0);
+            let next = match (&mut self.nearby, &self.index) {
+                (Nearby::Lookup, index) => {
+                    if let Some(index) = index {
+                        index.begin(&mut self.search, 0.);
+                    }
+                    self.nearby = Nearby::Active(i);
+                    continue;
+                }
+                (Nearby::Active(below), None) => below.checked_sub(1).inspect(|&j| *below = j),
+                (Nearby::Active(_), Some(index)) => match index.next(i, &mut self.search) {
+                    Hit::Pending => continue,
+                    Hit::Candidate(candidate) => Some(candidate),
+                    Hit::Done => None,
+                },
+            };
+            let Some(j) = next else {
+                self.node += 1;
+                self.nearby = Nearby::Lookup;
                 continue;
-            }
-            self.pair.1 += 1;
+            };
             let layers = match (self.layers.get(i), self.layers.get(j)) {
                 (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
                 (None, Some(b)) => !b.is_empty(),
@@ -462,7 +532,7 @@ impl IslandBuilder {
                 join(&mut self.parent, i, j);
             }
         }
-        self.pair.0 >= self.parent.len()
+        self.node >= end
     }
 
     /// Canonicalize completed roots to the existing pad/track/via identity maps.
@@ -722,10 +792,61 @@ impl Session {
     }
 }
 
-/// Construct and validate authored copper records without connectivity traversal or publication.
-/// Edit a private candidate; omitted creation sizes use source-contact class preferences or
-/// board defaults. Preparation validates final membership and explicit hard limits before publication.
+/// Count-checked route input, still without sizes or allocated board item identities.
+struct RouteAddition {
+    layer: Uuid,
+    points: Vec<Point>,
+    changes: Vec<LayerChange>,
+}
+
+/// Parse a route's ordered points and layer changes, counting even a final-vertex via
+/// before defaults or source geometry are queried.
+fn route_addition(project: &Project, params: &Value) -> Result<RouteAddition, CommandError> {
+    let layer = param(params, "layer")?;
+    let points: Vec<Point> = param(params, "points")?;
+    if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
+    }
+    let changes: Vec<LayerChange> = if params.get("layer_changes").is_some() { param(params, "layer_changes")? } else { Vec::new() };
+    let copper = copper_layer_ids(project);
+    if !copper.contains(&layer) {
+        return Err(CommandError::InvalidParams("tracks must stay on a copper layer of the board setup".into()));
+    }
+    let (mut previous, mut current) = (0, layer);
+    for change in &changes {
+        if change.at <= previous || change.at >= points.len() {
+            return Err(CommandError::InvalidParams("layer changes need strictly increasing vertex indices after the first".into()));
+        }
+        if !copper.contains(&change.layer) {
+            return Err(CommandError::InvalidParams("a layer change must move to a copper layer of the board setup".into()));
+        }
+        if change.layer == current {
+            return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
+        }
+        (previous, current) = (change.at, change.layer);
+    }
+    validate_counts(project.board.tracks.len() + points.len() - 1, project.board.vias.len() + changes.len()).map_err(CommandError::InvalidParams)?;
+    Ok(RouteAddition { layer, points, changes })
+}
+
+/// Edit a private candidate without publishing. Refuse inevitable count overflow before
+/// resolving source-contact defaults (which may build connectivity) or allocating identities.
+/// Preparation validates final membership and explicit hard limits before publication.
 fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+    let route = (command == ADD_TRACKS).then(|| route_addition(project, params)).transpose()?;
+    let via_at = if command == ADD_VIA {
+        let at: Point = param(params, "at")?;
+        if !crate::wire::valid_point(&at) {
+            return Err(CommandError::InvalidParams("the via position is out of range".into()));
+        }
+        validate_counts(project.board.tracks.len(), project.board.vias.len() + 1).map_err(CommandError::InvalidParams)?;
+        if project.board.vias.iter().any(|via| via.at == at) {
+            return Err(CommandError::InvalidParams("a via already sits at this position".into()));
+        }
+        Some(at)
+    } else {
+        None
+    };
     let promoted = if command == ADD_VIA && params.get("target").is_some() { Some(project.with_via_target(&params["target"])?) } else { None };
     let original = project;
     let project = promoted.as_ref().map_or(project, |(p, _)| p);
@@ -745,11 +866,10 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         let view = project
             .board_view(project.resolve_board(params.get("board").and_then(Value::as_str))?)
             .ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
-        let (at, layer) = if command == ADD_TRACKS {
-            let points: Vec<Point> = param(params, "points")?;
-            (*points.first().ok_or_else(|| CommandError::InvalidParams("A route needs a starting point.".into()))?, Some(param(params, "layer")?))
+        let (at, layer) = if let Some(route) = &route {
+            (route.points[0], Some(route.layer))
         } else {
-            (param(params, "at")?, None)
+            (via_at.ok_or_else(|| CommandError::InvalidParams("A via needs a position.".into()))?, None)
         };
         if let Some((_, address)) = &promoted {
             let resolved = project.resolve_net_assignment(*address)?;
@@ -764,36 +884,12 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
     let mut tracks = project.board.tracks.clone();
     let mut vias = project.board.vias.clone();
     let mut added = BTreeSet::new();
-    if command == ADD_TRACKS {
-        let mut layer: Uuid = param(params, "layer")?;
+    if let Some(RouteAddition { mut layer, points, changes }) = route {
         let explicit_width = params.get("width_nm").map(|_| param(params, "width_nm")).transpose()?;
         let width_nm = match &policy {
             Some(policy) => policy.track_width(explicit_width)?,
             None => explicit_width.unwrap_or(effective.preferred_track_width_nm),
         };
-        let points: Vec<Point> = param(params, "points")?;
-        if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|pair| pair[0] == pair[1]) {
-            return Err(CommandError::InvalidParams(format!("a route needs 2 to {MAX_PATH_POINTS} points with distinct neighbors")));
-        }
-        let changes: Vec<LayerChange> = if params.get("layer_changes").is_some() { param(params, "layer_changes")? } else { Vec::new() };
-        let copper: BTreeSet<_> = project
-            .board
-            .setup
-            .iter()
-            .flat_map(|setup| setup.layers())
-            .filter(|record| record.purpose == LayerPurpose::Copper)
-            .map(|record| record.id)
-            .collect();
-        let mut previous = 0;
-        for change in &changes {
-            if change.at <= previous || change.at >= points.len() {
-                return Err(CommandError::InvalidParams("layer changes need strictly increasing vertex indices after the first".into()));
-            }
-            if !copper.contains(&change.layer) {
-                return Err(CommandError::InvalidParams("a layer change must move to a copper layer of the board setup".into()));
-            }
-            previous = change.at;
-        }
         let size = |name| -> Result<i64, CommandError> {
             if params.get(name).is_none() {
                 Ok(match name {
@@ -817,9 +913,6 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         let mut changes = changes.iter().peekable();
         for (index, pair) in points.windows(2).enumerate() {
             if let Some(change) = changes.next_if(|change| change.at == index) {
-                if change.layer == layer {
-                    return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
-                }
                 layer = change.layer;
                 let id = crate::fresh_id()?;
                 added.insert(id);
@@ -831,21 +924,11 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         // A change at the final vertex ends the route on a via, ready to continue on that layer.
         if let Some(change) = changes.next() {
-            if change.layer == layer {
-                return Err(CommandError::InvalidParams("a layer change must move to a different copper layer".into()));
-            }
             let id = crate::fresh_id()?;
             added.insert(id);
             vias.push(Via { id, net_assignment: None, locked: false, at: points[change.at], diameter_nm, drill_nm });
         }
-    } else if command == ADD_VIA {
-        let at: Point = param(params, "at")?;
-        if !crate::wire::valid_point(&at) {
-            return Err(CommandError::InvalidParams("the via position is out of range".into()));
-        }
-        if vias.iter().any(|via| via.at == at) {
-            return Err(CommandError::InvalidParams("a via already sits at this position".into()));
-        }
+    } else if let Some(at) = via_at {
         let id = crate::fresh_id()?;
         added.insert(id);
         let explicit_diameter = params.get("via_diameter_nm").map(|_| param(params, "via_diameter_nm")).transpose()?;
@@ -856,7 +939,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         };
         vias.push(Via { id, net_assignment: promoted.as_ref().map(|(_, a)| *a), locked: false, at, diameter_nm, drill_nm });
     } else if command == super::via_nets::SET_VIA_NET {
-        let changed = ids(params, "vias", |id| vias.iter().any(|v| v.id == *id))?;
+        let changed = ids(params, "vias", |id| vias.binary_search_by_key(id, |v| v.id).is_ok())?;
         if changed.is_empty()
             || (params.get("target").is_some() && params.get("automatic").is_some())
             || params.get("target").is_some() == (params.get("automatic") == Some(&json!(true)))
@@ -869,20 +952,21 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         } else {
             (project.clone(), None)
         };
-        for via in vias.iter_mut().filter(|v| changed.contains(&v.id)) {
+        let mut assigned = BTreeSet::new();
+        for via in vias.iter_mut().filter(|v| changed.contains(&v.id) && v.net_assignment != assignment) {
             via.net_assignment = assignment;
+            assigned.insert(via.id);
+        }
+        if assigned.is_empty() {
+            return Ok((None, assigned));
         }
         let mut next = next;
         std::sync::Arc::make_mut(&mut next.board).vias = vias;
         protect_locked(original, &next)?;
-        let changed = changed
-            .into_iter()
-            .filter(|id| original.board.vias.iter().find(|v| v.id == *id) != next.board.vias.iter().find(|v| v.id == *id))
-            .collect::<BTreeSet<_>>();
-        return Ok(((!changed.is_empty()).then_some(next), changed));
+        return Ok((Some(next), assigned));
     } else if command == MOVE_TRACKS {
-        let moved_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
-        let moved_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        let moved_tracks = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
+        let moved_vias = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
         let (dx, dy): (i64, i64) = (param(params, "dx_nm")?, param(params, "dy_nm")?);
         if moved_tracks.is_empty() && moved_vias.is_empty() {
             return Err(CommandError::InvalidParams("name at least one track or via to move".into()));
@@ -910,12 +994,12 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         let positions: BTreeMap<Uuid, usize> = tracks.iter().enumerate().map(|(position, track)| (track.id, position)).collect();
         for ends in &ends {
-            let &position = positions.get(&ends.track).ok_or_else(|| CommandError::InvalidParams("unknown track".into()))?;
+            let &position = positions.get(&ends.track).ok_or_else(|| CommandError::NotFound("unknown track".into()))?;
             (tracks[position].start, tracks[position].end) = (ends.start, ends.end);
         }
         added.extend(unique);
     } else if command == SET_TRACK_WIDTH {
-        let changed = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
+        let changed = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
         if changed.is_empty() {
             return Err(CommandError::InvalidParams("name at least one track".into()));
         }
@@ -925,7 +1009,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         added.extend(changed);
     } else if command == SET_VIA_SIZE {
-        let changed = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        let changed = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
         if changed.is_empty() {
             return Err(CommandError::InvalidParams("name at least one via".into()));
         }
@@ -935,8 +1019,8 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         added.extend(changed);
     } else {
-        let gone_tracks = ids(params, "tracks", |id| tracks.iter().any(|track| track.id == *id))?;
-        let gone_vias = ids(params, "vias", |id| vias.iter().any(|via| via.id == *id))?;
+        let gone_tracks = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
+        let gone_vias = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
         if gone_tracks.is_empty() && gone_vias.is_empty() {
             return Err(CommandError::InvalidParams("name at least one track or via to delete".into()));
         }

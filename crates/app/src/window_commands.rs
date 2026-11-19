@@ -7,7 +7,7 @@ use egui::Context;
 
 use crate::PcbApp;
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) use live::{inspect_editor, window_catalog};
+pub(super) use live::{check_command, inspect_editor, window_catalog};
 
 /// A contextual panel that a window shows or hides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +171,8 @@ mod live {
         Footprints,
         /// Persistent document/object UUID, resolved against the addressed view before acting.
         Object,
+        /// An absolute file system path of at most 4096 characters, the unit schema `maxLength` uses.
+        Path,
     }
 
     impl Kind {
@@ -199,6 +201,7 @@ mod live {
                     json!({"type": "integer", "minimum": 0})
                 }
                 Self::Object => json!({"type":"string","format":"uuid"}),
+                Self::Path => json!({"type":"string","minLength":1,"maxLength":4096}),
                 Self::Query => json!({"type":"string","maxLength":512}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
                 Self::Bool => json!({"type": "boolean"}),
@@ -255,6 +258,7 @@ mod live {
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
                 Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
+                Self::Path => value.as_str().is_some_and(|path| path.chars().count() <= 4096 && std::path::Path::new(path).is_absolute()),
                 Self::Inspection => crate::inspection_selection::parse(value).is_ok(),
                 Self::Selection => Selection::parse(value).is_some(),
                 Self::Footprints => footprints(value).is_some(),
@@ -276,6 +280,7 @@ mod live {
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
                 Self::Object => "must be an object UUID from project inspection".to_owned(),
+                Self::Path => "must be an absolute path of at most 4096 characters".to_owned(),
                 Self::Query => "must be library search text of at most 512 bytes".into(),
                 Self::Name => "must be a name".to_owned(),
                 Self::Bool => "must be true or false".to_owned(),
@@ -1066,14 +1071,66 @@ mod live {
         WindowCommand {
             id: "file.save",
             title: "Save",
-            summary: "Save the project to the location it was opened from or last saved to, as File › Save does. Inspect the editor for when the save finishes. An Untitled project must first be saved in the editor.",
+            summary: "Save the project to the location it was opened from or last saved to, as File › Save does. Inspect the editor for when the save finishes. Use file.save_as while inspect_editor's file.location is null.",
             params: &[],
+        },
+        WindowCommand {
+            id: "file.save_as",
+            title: "Save As",
+            summary: "Save the project to a new folder or .pc archive, as File › Save As does without the picker. An existing file or project folder is refused; an empty folder is used as the project folder. An Untitled project takes the destination's name. Keep the reply's file.operation.id and poll inspect_editor: read file.last.status only when file.last.id equals it; a greater file.last.id means a later job replaced the result, which is then unavailable.",
+            params: &[
+                Param {
+                    name: "path",
+                    summary: "Absolute path of the new project folder or archive; an archive without .pc gets it",
+                    required: true,
+                    kind: Kind::Path,
+                },
+                Param {
+                    name: "format",
+                    summary: "A project folder or a portable .pc archive",
+                    required: true,
+                    kind: Kind::Choice(&["folder", "archive"]),
+                },
+            ],
+        },
+        WindowCommand {
+            id: "file.open",
+            title: "Open",
+            summary: "Open a project folder, its entry point or a .pc archive in place of the current project, as File › Open does without the picker. Refused while the current project has unsaved changes. Keep the reply's file.operation.id and poll inspect_editor: read file.last.status only when file.last.id equals it; a greater file.last.id means a later job replaced the result, which is then unavailable.",
+            params: &[Param {
+                name: "path",
+                summary: "Absolute path of the project folder, entry point or archive",
+                required: true,
+                kind: Kind::Path,
+            }],
+        },
+        WindowCommand {
+            id: "file.abandon",
+            title: "Stop waiting",
+            summary: "Stop waiting for a running open, such as one stalled on an unresponsive disk, so other commands can run. Its late result is discarded and the current project is unchanged; file.last reports it abandoned. Saves are refused, since they may still be writing; the person can close PCBCraft without waiting in the editor.",
+            params: &[Param {
+                name: "operation",
+                summary: "The file.operation.id inspect_editor reported for the stalled open; a different running job is left alone",
+                required: true,
+                kind: Kind::Integer { min: 1, max: i64::MAX, step: 1 },
+            }],
         },
     ];
 
     /// Every window command, described for live discovery.
     pub(crate) fn window_catalog() -> Vec<Value> {
         CATALOG.iter().map(|command| command.to_json()).collect()
+    }
+
+    /// Refuse an unknown window command or parameters its description rules out, with the
+    /// codes engine commands use, before any handler runs.
+    pub(crate) fn check_command(id: &str, params: &Value) -> Result<(), pcbcraft_mcp::Failure> {
+        use pcbcraft_engine::error_codes::ErrorCode;
+        let command = CATALOG
+            .iter()
+            .find(|command| command.id == id)
+            .ok_or_else(|| pcbcraft_mcp::Failure::new(ErrorCode::UnknownCommand, format!("unknown command `{id}`")))?;
+        command.check(params).map_err(|message| pcbcraft_mcp::Failure::new(ErrorCode::InvalidParams, message))
     }
 
     /// Show a theme the way window commands name it.
@@ -1311,6 +1368,7 @@ mod live {
             "revision": app.session.revision(),
             "unsaved": app.files.dirty(&app.session),
             "file_operation": app.files.busy(),
+            "file": app.files.inspect(&app.session),
             "dialog_open": !matches!(app.dialog, Dialog::None),
             "text_editing": app.views.editing_text(),
             "home": app.home,
@@ -1794,6 +1852,30 @@ mod live {
                         return Err(message);
                     }
                 }
+                ("file.save_as", _, _) => {
+                    if self.session.project().is_none() {
+                        return Err("No project is open.".to_owned());
+                    }
+                    let format = if params["format"] == "archive" { crate::SaveFormat::Archive } else { crate::SaveFormat::Folder };
+                    let path = std::path::PathBuf::from(params["path"].as_str().unwrap_or_default());
+                    self.files.save_to(&self.session, format, path, ctx)?;
+                    self.message = None;
+                    self.file_notice = None;
+                }
+                ("file.abandon", _, _) => self.stop_waiting_for_file(params["operation"].as_u64())?,
+                ("file.open", _, _) => {
+                    // The GUI asks Save / Don't Save here; a live client saves first instead.
+                    if self.files.dirty(&self.session) {
+                        return Err(
+                            "The open project has unsaved changes. Save them first, or discard them in the editor, before opening another project."
+                                .to_owned(),
+                        );
+                    }
+                    let path = std::path::PathBuf::from(params["path"].as_str().unwrap_or_default());
+                    self.files.open_path(path, self.session.revision(), ctx)?;
+                    self.message = None;
+                    self.file_notice = None;
+                }
                 _ => return Err(format!("`{id}` can't run now")),
             }
             debug_assert!(self.views.host == self.views.main);
@@ -1837,6 +1919,89 @@ mod live {
                     "{}\nin docs/schemas/command-contracts.json set \"command_api_version\": {api_version} and the \"window_commands\" section to:\n  \"window_commands\": {section}",
                     changes.join("\n")
                 ),
+            }
+        }
+
+        /// With host policy permitting dispatch, window and UI catalogs refuse unknown keys
+        /// and array parameter lists with `invalid_params`, and unknown ids with
+        /// `unknown_command`, before handlers run.
+        #[test]
+        fn live_window_and_ui_refusals_carry_published_codes() {
+            let mut app = PcbApp::default();
+            app.session.apply("project.new", &json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let revision = app.session.revision();
+            let mut ids: Vec<String> = CATALOG.iter().map(|command| command.id.to_owned()).collect();
+            ids.extend(crate::ui_automation::catalog().iter().map(|command| command["id"].as_str().unwrap().to_owned()));
+            let mut code = |command: &str, params: Value| {
+                let request = json!({"method": "engine.execute", "params": {"command": command, "params": params}});
+                let failure =
+                    pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &request).expect_err(command);
+                (failure.code().to_owned(), failure.message().to_owned())
+            };
+            for id in &ids {
+                let unknown = code(id, json!({"no_such_parameter": 1}));
+                assert_eq!(unknown, ("invalid_params".into(), format!("`{id}` has no parameter `no_such_parameter`")), "{id}");
+                let non_object = code(id, json!([1]));
+                assert_eq!(non_object, ("invalid_params".into(), format!("`{id}` takes an object of parameters")), "{id}");
+            }
+            for id in ["view.no_such_command", "ui.no_such_command"] {
+                assert_eq!(code(id, json!({})), ("unknown_command".into(), format!("unknown command `{id}`")));
+            }
+            assert_eq!(app.session.revision(), revision);
+        }
+
+        /// Omitted and null parameters keep the empty-map convention; required keys still apply.
+        #[test]
+        fn live_null_parameters_keep_the_empty_map_convention() {
+            let mut app = PcbApp::default();
+            app.session.apply("project.new", &json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let before = app.session.inspect();
+            for given in [None, Some(Value::Null), Some(json!({}))] {
+                for id in ["ui.inspect", "ui.cancel", "app.set_preferences", "view.center", "ui.handles"] {
+                    let mut request = json!({"method":"engine.execute","params":{"command":id}});
+                    if let Some(params) = &given {
+                        request["params"]["params"] = params.clone();
+                    }
+                    let result = pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &request);
+                    if matches!(id, "view.center" | "ui.handles") {
+                        let error = result.unwrap_err();
+                        assert_eq!(error.code(), "invalid_params");
+                        assert!(error.message().starts_with(&format!("`{id}` needs `")), "{error}");
+                    } else {
+                        result.unwrap();
+                    }
+                    assert_eq!(app.session.inspect(), before);
+                }
+            }
+        }
+
+        /// Window policy can refuse before catalog classification; UI keeps its separate lifecycle.
+        #[test]
+        fn live_window_policy_precedes_catalog_classification() {
+            let mut app = PcbApp::default();
+            app.session.apply("project.new", &json!({})).unwrap();
+            let ctx = egui::Context::default();
+            let before = app.session.inspect();
+            for (id, params, code, reason) in [
+                ("view.no_such_command", json!({}), "unknown_command", "unknown command"),
+                ("view.center", json!([1]), "invalid_params", "takes an object of parameters"),
+            ] {
+                let request = json!({"method":"engine.execute","params":{"command":id,"params":params}});
+                app.dialog = crate::Dialog::About;
+                let blocked =
+                    pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &request).unwrap_err();
+                assert_eq!(blocked.code(), "unavailable");
+                assert!(blocked.message().contains("Finish the current dialog or file operation"), "{blocked}");
+                let ui = json!({"method":"engine.execute","params":{"command":"ui.inspect","params":null}});
+                pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &ui).unwrap();
+                app.dialog = crate::Dialog::None;
+                let permitted =
+                    pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx }, &request).unwrap_err();
+                assert_eq!(permitted.code(), code);
+                assert!(permitted.message().contains(reason), "{permitted}");
+                assert_eq!(app.session.inspect(), before);
             }
         }
 

@@ -152,6 +152,14 @@ views. A definition used on two boards contributes separate physical parts;
 project totals should identify each board and its quantity. Build variants can
 filter assembly population, but must not duplicate board identities.
 
+The current Gerber/drill export embeds `manifest.json` in its ZIP (see
+[Outputs](editor-guide.md)). It records generator version and the generated
+members' names, uncompressed byte sizes and SHA-256, but not the source identity,
+configuration or freshness required below. Desktop stages and publishes one ZIP;
+it does not coordinate competing writers. A browser download request and MCP
+metadata are not desktop publication. This does not implement export-history
+discovery, validated release packaging or the synchronized-release contract.
+
 Each export run should include a small record naming its board or project scope,
 source capture ID and content digest, projected input digest, selected variant or
 configuration, generator version and produced files. A source snapshot must cover

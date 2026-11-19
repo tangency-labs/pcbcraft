@@ -3,9 +3,17 @@
 This guide starts with schematic editing and continues through the supported
 PCB tools and shared MCP commands. The [capability table](capabilities.md)
 records current limits, while the [documentation map](README.md) links focused
-guides and format references. The two-resistor example below is an original
+guides and format references. Before replacing an existing board setup through
+MCP, use `pcb.preview_board_setup` with the candidate setup and current revision
+to review affected objects, consent and refusals without changing the project.
+[Setup review](board-materials.md#review-a-setup-edit) explains token-based Apply
+and cancellation. The two-resistor example below is an original
 development fixture; the polished MVP demo and its end-to-end acceptance remain
 separate work.
+
+Footprint lock flags currently have a [storage-only contract](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
+There is no footprint lock toggle/command or move/delete protection to try yet;
+track/via locks remain the supported interactive locking workflow.
 
 ## Build and open an example
 
@@ -519,6 +527,14 @@ Saving retains drawing and layer identities without moving footprints or creatin
 a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.
 
+The interactive route tool supports straight segments only. `pcb.set_arc_tracks`
+replaces the board's complete list of exact circular records in the open project.
+Save the project separately to write those changes to disk. Boards containing
+arcs display an unsupported-geometry explanation instead of an incomplete PCB
+view; DRC, queries, clipboard and fabrication refuse them.
+See [circular copper records](circular-copper-records.md) before trying that
+storage command. Undo or remove the records to resume ordinary PCB editing.
+
 To route a track, activate a copper layer and press **X**. The crosshair follows
 the pointer, and the target marker shows nearby grid points and copper contacts.
 The preview keeps a lighter shade of the layer color while background preparation
@@ -656,6 +672,21 @@ unsaved, and GUI **Undo**/**Redo** use the same history. Inspect after each step
 to verify the result. If another edit changed the revision, inspect again before
 retrying. The live editor runs the same project commands as a headless session.
 
+To check existing part pins against native libraries already loaded in the session,
+call `execute` with:
+
+```json
+{"command":"library.available_revisions","params":{},"inspect":false}
+```
+
+Read `outdated_instances` for stable instance IDs and `instances` for exact pinned
+and latest addresses, source status and diagnostics. This is read-only: it does
+not refresh a library, change geometry or adopt a revision. Missing sources are
+unknown, and available does not imply compatible. Native parts compare the owning
+part rather than separately updating its drawing dependencies. See
+[query available revisions](native-library-sources.md#query-available-revisions)
+for the result contract; dedicated update review and adoption remain future work.
+
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and
@@ -766,10 +797,24 @@ Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
-With a configured board and a closed Board Outline, **Manufacture → Fabrication → Outputs**
-saves a fabrication ZIP without editing the design. Output names remain unique
-when layer names collide after sanitization; the [editor guide](editor-guide.md)
-describes the generated files and desktop save behavior.
+With a configured board, a closed Board Outline and a resolvable placement origin,
+**Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
+The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
+Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
+destination errors can prevent a successful save. In the browser, Outputs requests
+one download; check that your browser saved it.
+
+For pads exported on a layer, round pads retain C flashes.
+R/O flashes require individually quarter-turn library and placement rotations and a
+nondegenerate resolved axis rectangle. Rectangles also need an integral centered midpoint;
+obrounds need matching width/height parity. Other rectangles retain resolved regions;
+other obrounds retain approximate round-ended strokes or equal-sided C flashes.
+Rounded rectangles use regions with chorded corners only if a positive radius survives
+resolution. A collapsed tiny rectangle can emit a retraced path with no area. Mask uses
+outer-layer pads without process expansion; paste excludes through-hole pads.
+Output names remain unique when layer names collide after sanitization; the
+[editor guide](editor-guide.md) describes the eligibility, shape approximations,
+file contents and save behavior.
 
 ### Browse libraries
 

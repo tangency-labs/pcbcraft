@@ -5,6 +5,7 @@ use super::{
     drawing::{Drawing, Drawings},
     setup::{Layer, LayerPurpose},
     track::{Track, Via},
+    view::BoardTarget,
 };
 use crate::{
     CommandError, Project, Session,
@@ -335,8 +336,12 @@ fn circuit_selection(project: &Project, components: &BTreeSet<u64>) -> Selection
 impl BoardFragment {
     /// Capture selected physical objects plus their exact placed packages and closed logical
     /// component scope. Circuit fragments retain source sheet identities; no flattening is implicit.
-    /// Selections containing zones are refused in full until their clipboard format is supported.
+    /// Selections containing zones and boards containing circular copper are refused in full
+    /// until their clipboard formats and geometry are supported.
     pub fn capture(project: &Project, selection: &BoardSelection, cut: bool) -> Result<Self, CommandError> {
+        if !project.board.arcs.is_empty() {
+            return Err(CommandError::Unavailable(super::arc::UNSUPPORTED.into()));
+        }
         if !selection.zones.is_empty() {
             return Err(invalid("Zone clipboard copying is not supported yet. Deselect zones before copying or cutting."));
         }
@@ -411,12 +416,16 @@ impl BoardFragment {
 
     /// Decode untrusted bounded text, using native schematic codecs and the existing physical
     /// geometry validators before any destination is addressed or any identity is allocated.
+    /// Footprint lock intent has no clipboard envelope yet and is refused without adoption.
     pub fn from_text(text: &str) -> Result<Self, CommandError> {
         if text.len() > crate::clipboard::MAX_BYTES {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft board fragment."))?;
+        if envelope.footprints.iter().any(|footprint| footprint.locked) {
+            return Err(invalid("footprint locks are not supported by the board clipboard format"));
+        }
         let assigned = envelope.vias.iter().any(|v| v.net_assignment.is_some());
         let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
         if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2" | "pcbcraft-clipboard/3" | "pcbcraft-clipboard/4")
@@ -567,7 +576,11 @@ impl BoardFragment {
     }
 
     /// Encode exact packages, geometry and circuit fragments without source files or board setup.
+    /// Refuse footprint lock intent rather than lose it under a released clipboard envelope.
     pub fn to_text(&self) -> Result<String, CommandError> {
+        if self.footprints.iter().any(|footprint| footprint.locked) {
+            return Err(invalid("footprint locks are not supported by the board clipboard format"));
+        }
         let circuits = self
             .circuits
             .iter()
@@ -686,6 +699,9 @@ impl BoardFragment {
         check_copper: bool,
     ) -> Result<(Project, BoardSelection), CommandError> {
         let target = destination.resolve_board(None)?;
+        if !destination.board.arcs.is_empty() {
+            return Err(CommandError::Unavailable(super::arc::UNSUPPORTED.into()));
+        }
         let mapping = self.layer_mapping(destination, &options.layers)?;
         let mut next = destination.clone();
         let mut components = BTreeMap::new();
@@ -847,27 +863,40 @@ impl BoardFragment {
 }
 
 impl Session {
-    /// Export a revision-bound, explicitly addressed physical selection through GUI/MCP commands.
-    pub(crate) fn copy_board(&self, params: &Value, cut: bool) -> Result<String, CommandError> {
-        crate::check_params(crate::command(COPY).ok_or_else(|| invalid("copy command unavailable"))?, params)?;
-        self.check_revision(params)?;
-        let project = self.open_project()?;
-        project.resolve_board(params.get("board").and_then(Value::as_str))?;
-        let selection = BoardSelection::parse(&params["items"]).ok_or_else(|| invalid("invalid board selection"))?;
-        BoardFragment::capture(project, &selection, cut)?.to_text()
-    }
-    /// Remove a mixed physical selection atomically, leaving its logical components and accepted
-    /// package history available for relocation. Inner command histories are never published.
-    pub(crate) fn delete_board_items(&mut self, params: &Value, cut: bool) -> Result<(), CommandError> {
+    /// Read the addressed physical selection only at the requested session revision.
+    fn board_clipboard_selection(&self, params: &Value) -> Result<(&Project, BoardTarget, BoardSelection), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let selection = BoardSelection::parse(&params["items"]).ok_or_else(|| invalid("invalid board selection"))?;
+        Ok((project, target, selection))
+    }
+    /// Export a revision-bound, explicitly addressed physical selection without an edit.
+    pub(crate) fn copy_board(&self, params: &Value) -> Result<String, CommandError> {
+        crate::check_params(crate::command(COPY).ok_or_else(|| invalid("copy command unavailable"))?, params)?;
+        let (project, _, selection) = self.board_clipboard_selection(params)?;
+        BoardFragment::capture(project, &selection, false)?.to_text()
+    }
+    /// Encode and check the clipboard text before deleting anything, even for callers that only
+    /// ask for the revision. Report the single edit only after the deletion is adopted.
+    pub(crate) fn cut_board(&mut self, params: &Value) -> Result<String, CommandError> {
+        self.validate_project_command(CUT, params)?;
+        let (project, target, selection) = self.board_clipboard_selection(params)?;
+        let text = BoardFragment::capture(project, &selection, true)?.to_text()?;
+        self.publish_board_deletion(target, selection)?;
+        self.report_committed(CUT, params);
+        Ok(text)
+    }
+    /// Remove a selection without producing clipboard text or applying the clipboard byte limit.
+    pub(crate) fn delete_board_items(&mut self, params: &Value) -> Result<(), CommandError> {
+        let (_, target, selection) = self.board_clipboard_selection(params)?;
+        self.publish_board_deletion(target, selection)
+    }
+    /// Remove a nonempty physical selection atomically, leaving its logical components and
+    /// accepted package history available for relocation. Inner command histories stay private.
+    fn publish_board_deletion(&mut self, target: BoardTarget, selection: BoardSelection) -> Result<(), CommandError> {
         if selection.is_empty() {
             return Err(invalid("select physical objects to delete"));
-        }
-        if cut {
-            BoardFragment::capture(project, &selection, true)?;
         }
         let mut transaction = Self {
             libraries: self.libraries.clone(),
