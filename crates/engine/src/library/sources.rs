@@ -15,6 +15,8 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, OnceLock},
 };
+pub(crate) use updates::adoption::COMMAND as FOOTPRINT_REVISION_COMMAND;
+pub use updates::adoption::{APPLY_FOOTPRINT_REVISION, FootprintRevisionJob, PreparedFootprintRevision};
 
 /// Maximum loaded source registrations in one session, including bundled native libraries.
 pub const MAX_SOURCES: usize = 32;

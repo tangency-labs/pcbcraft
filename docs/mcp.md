@@ -242,7 +242,7 @@ edits or reach file controls. Headless sessions cannot run them.
 
 `list_commands` keeps returning the command array as its first text part. A
 second text part, also given as the result's `structuredContent`, reads
-`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
+`{"command_api_version": 2, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
 
 - `command_api_version` is one number for the whole public command contract,
@@ -352,7 +352,7 @@ use `engine.execute_versioned` with a required non-null `params.version` beside
 `params.command`. For example:
 
 ```json
-{"method":"engine.execute_versioned","params":{"command":"edit.undo","version":1}}
+{"method":"engine.execute_versioned","params":{"command":"edit.undo","version":2}}
 ```
 
 A missing or null pin on that method is `invalid_request`; an older editor

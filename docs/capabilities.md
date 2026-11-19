@@ -242,8 +242,10 @@ sources explicitly, and makes no compatibility or adoption decision; see
 [query available revisions](native-library-sources.md#query-available-revisions).
 [Preview footprint pad changes](native-library-sources.md#preview-footprint-pad-changes)
 reports altered pads and lost contact for straight track ends and through vias
-on one placed instance. It does not check standalone circular track ends, move
-copper, resolve pad maps or adopt revisions.
+on one placed instance. It does not check standalone circular track ends or edit
+the project. A separate [reviewed Apply command](native-library-sources.md#apply-a-reviewed-footprint-revision)
+requires a complete pad map, pins the exact replacement and leaves copper in
+place. Undo restores the old package in one step.
 Schematic, PCB layout, symbol and footprint editors share manual zoom up to
 102400%, with pointer-anchored wheel/pinch navigation and content-specific Fit.
 

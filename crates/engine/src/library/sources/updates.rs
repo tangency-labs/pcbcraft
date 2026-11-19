@@ -4,6 +4,7 @@ use crate::{CommandError, Project, board::footprint_delta, part_groups::part_ins
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+pub(super) mod adoption;
 #[cfg(test)]
 mod preview_tests;
 #[cfg(test)]
@@ -53,6 +54,61 @@ pub(super) fn inspect(project: &Project, catalog: &Catalog, revision: u64) -> Re
 /// Compare a placed instance's pinned geometry against the same update root as discovery.
 /// Native parts retain their selected package ID; a missing package is not replaced with any other.
 pub(super) fn preview_footprint(project: &Project, catalog: &Catalog, revision: u64, params: &Value) -> Result<Value, CommandError> {
+    let update = footprint_update(project, catalog, params)?;
+    let delta = footprint_delta::compare(&project.board, update.placement, update.pinned, &update.candidate, params["pad"].as_str())?;
+    let acceptance = params.get("pad").is_none().then(|| update.acceptance(project, catalog, revision, &delta));
+    Ok(json!({"project": project.id(), "board": update.board, "revision": revision, "catalog_generation": catalog.generation(),
+        "part_instance": update.instance.id(), "reference": update.instance.reference(), "footprint": format!("footprint-{}", update.placement.id),
+        "pinned_root": update.root, "candidate_root": update.latest, "candidate_root_digest": update.digest,
+        "pinned_footprint": footprint_key(update.pinned), "candidate_footprint": footprint_key(&update.candidate), "delta": delta,
+        "current_mapping": update.assignment.mapping, "current_unconnected_pads": update.assignment.unconnected_pads,
+        "candidate_package": update.native.and_then(|(part, package)| part.definition.packages.get(package)), "acceptance": acceptance}))
+}
+
+/// The immutable address of one exact footprint definition.
+fn footprint_key(definition: &crate::board::definition::FootprintDefinition) -> Key {
+    Key { library: definition.library.clone(), id: definition.id.clone(), kind: Kind::Footprint, revision: definition.revision }
+}
+
+struct FootprintUpdate<'a> {
+    board: uuid::Uuid,
+    instance: &'a crate::PartInstance,
+    placement: &'a crate::Footprint,
+    assignment: &'a crate::board::assignment::Assignment,
+    pinned: &'a crate::board::definition::FootprintDefinition,
+    candidate: std::sync::Arc<crate::board::definition::FootprintDefinition>,
+    root: Key,
+    latest: &'a Key,
+    digest: Value,
+    native: Option<(&'a super::ResolvedPart, &'a str)>,
+}
+
+impl FootprintUpdate<'_> {
+    /// Bind review to the exact target, project revision, catalog generation and candidate content.
+    fn acceptance(&self, project: &Project, catalog: &Catalog, revision: u64, delta: &footprint_delta::Delta<'_>) -> String {
+        use sha2::{Digest, Sha256};
+        let dependency_digest = self.native.map(|(part, _)| super::part_digest(part));
+        let value = json!([
+            "footprint-review",
+            project.id(),
+            self.board,
+            revision,
+            catalog.generation(),
+            self.instance.ordinal,
+            self.placement,
+            self.assignment,
+            self.root,
+            self.latest,
+            self.digest,
+            dependency_digest,
+            delta
+        ]);
+        format!("{:x}", Sha256::digest(value.to_string()))
+    }
+}
+
+/// Resolve the current update root with the same conflict checks for preview and apply.
+fn footprint_update<'a>(project: &'a Project, catalog: &'a Catalog, params: &Value) -> Result<FootprintUpdate<'a>, CommandError> {
     let invalid = |message: &str| CommandError::InvalidParams(message.into());
     let target = project.resolve_board(params["board"].as_str())?;
     let instance = params["part_instance"]
@@ -66,16 +122,11 @@ pub(super) fn preview_footprint(project: &Project, catalog: &Catalog, revision: 
         .ok_or_else(|| CommandError::Unavailable("Part instance has no placed footprint".into()))?;
     let pinned =
         project.board.definition_for(placement).ok_or_else(|| CommandError::Unavailable("Placed footprint has no pinned native geometry".into()))?;
-    let assignment = project.package_assignments().get(&instance.ordinal);
-    if !assignment.is_some_and(|assignment| placement.key().as_ref() == Some(&assignment.key())) {
-        return Err(invalid("Placed footprint and current package choice differ; preview needs a matching pinned choice"));
-    }
-    let footprint_key = |definition: &crate::board::definition::FootprintDefinition| Key {
-        library: definition.library.clone(),
-        kind: Kind::Footprint,
-        id: definition.id.clone(),
-        revision: definition.revision,
-    };
+    let assignment = project
+        .package_assignments()
+        .get(&instance.ordinal)
+        .filter(|assignment| placement.key().as_ref() == Some(&assignment.key()))
+        .ok_or_else(|| invalid("Placed footprint and current package choice differ; preview needs a matching pinned choice"))?;
     let (root, package) = if let Some(selection) = &instance.part {
         let part = &selection.resolved.definition;
         let package = selection.package.as_deref().ok_or_else(|| invalid("Part instance has no selected native package"))?;
@@ -94,19 +145,23 @@ pub(super) fn preview_footprint(project: &Project, catalog: &Catalog, revision: 
         let reason = diagnostic.as_deref().unwrap_or("No unambiguous newer revision is loaded");
         return Err(CommandError::Unavailable(format!("{status}: {reason}")));
     };
-    let candidate = if let Some(package) = package {
+    let (candidate, native) = if let Some(package) = package {
         let part = catalog
             .resolve_part(&Reference { library: latest.library.clone(), id: latest.id.clone(), revision: latest.revision })
             .map_err(CommandError::Unavailable)?;
-        part.footprints.get(package).cloned().ok_or_else(|| invalid("Newer part revision does not contain the selected package"))?
+        let candidate = part.footprints.get(package).cloned().ok_or_else(|| invalid("Newer part revision does not contain the selected package"))?;
+        (candidate, Some((part, package)))
     } else {
-        catalog.item(latest).map_err(CommandError::Unavailable)?.footprint().ok_or_else(|| invalid("Newer revision has no footprint geometry"))?
+        (
+            catalog
+                .item(latest)
+                .map_err(CommandError::Unavailable)?
+                .footprint()
+                .ok_or_else(|| invalid("Newer revision has no footprint geometry"))?,
+            None,
+        )
     };
-    let delta = footprint_delta::compare(&project.board, placement, pinned, &candidate, params["pad"].as_str())?;
-    Ok(json!({"project": project.id(), "board": target.board, "revision": revision, "catalog_generation": catalog.generation(),
-        "part_instance": instance.id(), "reference": instance.reference(), "footprint": format!("footprint-{}", placement.id),
-        "pinned_root": root, "candidate_root": latest, "candidate_root_digest": digest,
-        "pinned_footprint": footprint_key(pinned), "candidate_footprint": footprint_key(&candidate), "delta": delta}))
+    Ok(FootprintUpdate { board: target.board, instance, placement, assignment, pinned, candidate, root, latest, digest, native })
 }
 
 /// Present the same discovery fields for every update root without computing any geometry.

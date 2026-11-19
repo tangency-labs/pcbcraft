@@ -608,6 +608,56 @@ impl Baseline {
         Ok(())
     }
 
+    /// Keep the accepted logical source and net membership, except where a lone terminal
+    /// gains or loses a physical connection between its own pads. Never use pending schematic
+    /// edits to infer what the accepted board meant.
+    pub(crate) fn replace_reviewed_package(&mut self, previous: &Footprint, assignment: &super::assignment::Assignment) -> Result<(), String> {
+        self.validate_footprint(previous)?;
+        let component = self.components.get_mut(&previous.component).ok_or("Missing accepted part instance.")?;
+        let package = Package::from_assignment(assignment);
+        package.validate(&component.terminals)?;
+        if self.format == FORMAT && package.extended() {
+            self.format = MULTIPAD_FORMAT.into();
+        }
+        let mut extra_lands: BTreeSet<_> = package.mapping.iter().filter(|(_, pads)| pads.pads().len() > 1).map(|(pin, _)| pin.clone()).collect();
+        // Do not guess the provenance of an unnamed singleton when a package edit would remove it.
+        if self.nets.iter().any(|net| {
+            net.needs_origin()
+                && net.terminals[0].component == previous.component
+                && !extra_lands.contains(&net.terminals[0].terminal)
+                && net.origin.is_none()
+        }) {
+            return Err("Cannot remove an accepted connection without explicit net origin.".into());
+        }
+        component.package = Some(package);
+        self.nets.retain(|net| {
+            if net.needs_origin() && net.terminals[0].component == previous.component {
+                return extra_lands.remove(&net.terminals[0].terminal);
+            }
+            for key in net.terminals.iter().filter(|key| key.component == previous.component) {
+                extra_lands.remove(&key.terminal);
+            }
+            true
+        });
+        if self.format == NET_ORIGIN_FORMAT && extra_lands.is_empty() && !self.nets.iter().any(NetState::needs_origin) {
+            self.format = DISPLAY_FORMAT.into();
+        }
+        if !extra_lands.is_empty() {
+            if self.nets.iter().any(|net| net.display_name.is_none() || (net.needs_origin() && net.origin.is_none())) {
+                return Err("Cannot add an accepted connection without explicit net display names and singleton origins.".into());
+            }
+            self.format = NET_ORIGIN_FORMAT.into();
+            self.nets.extend(extra_lands.into_iter().map(|terminal| NetState {
+                display_name: Some("Unconnected".into()),
+                terminals: vec![TerminalKey { component: previous.component, terminal }],
+                names: Vec::new(),
+                origin: Some(NetOrigin::PadOnly),
+            }));
+            self.nets.sort_by(|left, right| left.terminals.cmp(&right.terminals));
+        }
+        self.validate()
+    }
+
     /// Validate an accepted unplaced package without resolving live component state.
     pub(crate) fn validate_assignment(&self, assignment: &super::assignment::Assignment) -> bool {
         self.components.get(&assignment.component).and_then(|component| component.package.as_ref()) == Some(&Package::from_assignment(assignment))
