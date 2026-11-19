@@ -140,6 +140,9 @@ and layer-change gesture, validating each proposed via with the entire path befo
 changing layer. It does not search for a multilayer route or choose via locations.
 Arcs, zones, differential pairs, length tuning and moving existing copper remain
 outside this solver. Routing on filled zones needs current fill integration from #232.
+A board containing [circular copper records](circular-copper-records.md) refuses
+query capture and `pcb.plan_route` rather than planning against incomplete
+straight-only copper.
 
 ## Measurement
 

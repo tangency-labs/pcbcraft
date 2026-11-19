@@ -59,13 +59,13 @@ fn ratsnest(project: &crate::Project) -> Ratsnest {
 fn accepted_geometry_is_board_qualified_deterministic_and_mapping_aware() {
     let mut session = fixture();
     let board = session.project().unwrap().board_target().unwrap();
-    assert!(session.project().unwrap().board_view(board).unwrap().ratsnest().is_none());
+    assert_eq!(session.project().unwrap().board_view(board).unwrap().ratsnest().unwrap_err(), "board has no accepted connectivity");
     session.apply(super::super::update::INITIALIZE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
     let project = session.project().unwrap();
     let mut foreign = project.board_view(board).unwrap();
     foreign.target.board = uuid::Uuid::from_u128(99);
     assert!(!foreign.has_accepted_connectivity());
-    assert!(foreign.ratsnest().is_none());
+    assert_eq!(foreign.ratsnest().unwrap_err(), "board has no accepted connectivity");
     let original = ratsnest(project);
     assert_eq!(original, ratsnest(project));
     assert_eq!((original.net_count, original.terminal_count, original.lines.len()), (1, 3, 2));

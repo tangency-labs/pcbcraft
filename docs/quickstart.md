@@ -527,6 +527,14 @@ Saving retains drawing and layer identities without moving footprints or creatin
 a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.
 
+The interactive route tool supports straight segments only. `pcb.set_arc_tracks`
+replaces the board's complete list of exact circular records in the open project.
+Save the project separately to write those changes to disk. Boards containing
+arcs display an unsupported-geometry explanation instead of an incomplete PCB
+view; DRC, queries, clipboard and fabrication refuse them.
+See [circular copper records](circular-copper-records.md) before trying that
+storage command. Undo or remove the records to resume ordinary PCB editing.
+
 To route a track, activate a copper layer and press **X**. The crosshair follows
 the pointer, and the target marker shows nearby grid points and copper contacts.
 The preview keeps a lighter shade of the layer color while background preparation

@@ -235,35 +235,41 @@ impl<'a> BoardView<'a> {
 
     /// Group physical pads, tracks and vias into islands joined by overlapping copper: tracks on
     /// a shared layer, vias on any layer. Legacy center-only markers and unconfigured pads have
-    /// no copper and stay isolated.
-    pub fn copper(self) -> Copper {
-        islands(&lands(self), self.tracks(), self.vias()).0
+    /// no copper and stay isolated. Circular copper returns an unsupported-geometry error.
+    pub fn copper(self) -> Result<Copper, String> {
+        self.require_linear_copper()?;
+        Ok(islands(&lands(self), self.tracks(), self.vias()).0)
     }
 
     /// Where routed copper would go if footprint `id` took the given pose: the tracks whose ends
     /// ride on its pads, with those ends moved as `pcb.set_footprint_transform` would move them.
-    /// For previews only; nothing is checked or edited, and an unknown ID carries nothing.
-    pub fn carried_tracks(self, id: &str, position: Point, rotation: u16, bottom: bool) -> Vec<Track> {
+    /// For previews only; nothing is edited, and an unknown ID carries nothing. Circular
+    /// copper returns an error rather than an incomplete straight-only preview.
+    pub fn carried_tracks(self, id: &str, position: Point, rotation: u16, bottom: bool) -> Result<Vec<Track>, String> {
+        self.require_linear_copper()?;
         let Some(number) = crate::schematic::wiring::parse_id(id, "footprint-").filter(|_| !self.tracks().is_empty()) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let mut next = self.project().clone();
         let board = std::sync::Arc::make_mut(&mut next.board);
-        let Ok(index) = board.footprints.binary_search_by_key(&number, |f| f.id) else { return Vec::new() };
+        let Ok(index) = board.footprints.binary_search_by_key(&number, |f| f.id) else { return Ok(Vec::new()) };
         let footprint = &mut board.footprints[index];
         (footprint.x_nm, footprint.y_nm, footprint.rotation, footprint.bottom) = (position.x_nm, position.y_nm, rotation, bottom);
-        let Some(after) = next.board_view(self.target) else { return Vec::new() };
-        carry(self, after, &BTreeSet::from([id.to_owned()]))
+        let Some(after) = next.board_view(self.target) else { return Ok(Vec::new()) };
+        Ok(carry(self, after, &BTreeSet::from([id.to_owned()])))
     }
 
     /// Resolve one unambiguous intended net per copper island, including explicit isolated vias.
     /// Conflicting contacts expose no arbitrary display net; physical islands remain separate.
-    pub fn copper_nets(self) -> BTreeMap<Uuid, String> {
-        self.copper_with_nets().1
+    /// Circular copper returns an error rather than incomplete membership.
+    pub fn copper_nets(self) -> Result<BTreeMap<Uuid, String>, String> {
+        self.copper_with_nets().map(|(_, nets)| nets)
     }
 
     /// Resolve physical islands and complete authored/contact-derived intent in one contact pass.
-    pub fn copper_with_nets(self) -> (Copper, BTreeMap<Uuid, String>) {
+    /// Circular copper returns an error before any partial geometry is resolved.
+    pub fn copper_with_nets(self) -> Result<(Copper, BTreeMap<Uuid, String>), String> {
+        self.require_linear_copper()?;
         let lands = lands(self);
         let (tracks, vias) = (self.tracks(), self.vias());
         let (copper, members) = islands(&lands, tracks, vias);
@@ -296,7 +302,7 @@ impl<'a> BoardView<'a> {
                 }
             }
         }
-        (copper, nets)
+        Ok((copper, nets))
     }
 }
 

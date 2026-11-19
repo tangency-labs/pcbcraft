@@ -144,6 +144,7 @@ fn footprint_locks_require_their_own_nonempty_format() {
         (23, "unsupported board format or incompatible setup"),
         (24, "format 24 requires an assignment"),
         (25, "unsupported board format or incompatible setup"),
+        (26, "format 26 requires arcs"),
     ] {
         marker["format"] = json!(format!("pcbcraft-board/{version}"));
         incomplete.insert(marker_path.clone(), serde_json::to_vec(&marker).unwrap());
@@ -151,7 +152,7 @@ fn footprint_locks_require_their_own_nonempty_format() {
         assert!(error.contains(reason), "{version}: {error}");
     }
     // Reservations are not implemented formats, even when no lock or other extension is present.
-    for version in 26..=33 {
+    for version in 27..=33 {
         marker["format"] = json!(format!("pcbcraft-board/{version}"));
         incomplete.insert(marker_path.clone(), serde_json::to_vec(&marker).unwrap());
         let error = decode_documents(&incomplete).unwrap_err();
@@ -159,17 +160,93 @@ fn footprint_locks_require_their_own_nonempty_format() {
     }
 }
 
-/// Reject the unsupported header above format 34 without triggering the true-lock gate.
+/// Author one exact arc through the command and return the full record expected on disk.
+fn add_arc(session: &mut Session) -> Value {
+    let target = session.project().unwrap().board_target().unwrap().board;
+    let arc = json!({
+        "id": uuid::Uuid::from_u128(0xa11c), "layer": track::tests::copper_layers(session)[0],
+        "width_nm": 250_000, "center": {"x_nm":0,"y_nm":0},
+        "start": {"x_nm":5_000_000,"y_nm":0}, "end": {"x_nm":0,"y_nm":5_000_000},
+        "direction": "clockwise"
+    });
+    session.apply(arc::SET_ARCS, &json!({"board": target, "expected_revision": session.revision(), "arcs": [arc.clone()]})).unwrap();
+    arc
+}
+
+/// Round-trip each header and return to the exact lower-format bytes when either feature is removed.
 #[test]
-fn board_format_35_is_unsupported() {
+fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
+    let mut session = track::tests::routed_fixture();
+    let neither = session.snapshot().unwrap();
+    let lock_only = with_lock(&neither, true);
+    let target = neither.board_target().unwrap().board;
+    let arc = add_arc(&mut session);
+    let arc_only = session.snapshot().unwrap();
+    let both = with_lock(&arc_only, true);
+    let neither_docs = encode_documents(neither.clone()).unwrap();
+    let arc_docs = encode_documents(arc_only.clone()).unwrap();
+    let lock_docs = encode_documents(lock_only.clone()).unwrap();
+    let both_docs = encode_documents(both.clone()).unwrap();
+    let path = test_board_path(&neither_docs);
+    let baseline: Value = serde_json::from_slice(&neither_docs[&path]).unwrap();
+    assert!(!["pcbcraft-board/26", "pcbcraft-board/34", "pcbcraft-board/35"].contains(&baseline["format"].as_str().unwrap()));
+    assert!(baseline.get("arcs").is_none());
+    assert!(baseline["footprints"][0].get("locked").is_none());
+    for (snapshot, docs) in [(neither, &neither_docs), (arc_only, &arc_docs), (lock_only, &lock_docs), (both, &both_docs)] {
+        assert_eq!(encode_documents(decode_documents(docs).unwrap()).unwrap(), *docs);
+        let packed = encode_packed(snapshot).unwrap();
+        let reopened = decode_packed(&packed).unwrap().project;
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), *docs);
+        assert_eq!(encode_packed(reopened).unwrap(), packed);
+    }
+    for (docs, header, has_arc, has_lock) in
+        [(&arc_docs, "pcbcraft-board/26", true, false), (&lock_docs, "pcbcraft-board/34", false, true), (&both_docs, "pcbcraft-board/35", true, true)]
+    {
+        let board: Value = serde_json::from_slice(&docs[&path]).unwrap();
+        assert_eq!(board["format"], header);
+        assert_eq!(board.get("arcs"), has_arc.then(|| json!([arc.clone()])).as_ref());
+        assert_eq!(board["footprints"][0].get("locked"), has_lock.then_some(Value::Bool(true)).as_ref());
+    }
+    let reopened = decode_documents(&both_docs).unwrap();
+    assert_eq!(encode_documents(with_lock(&reopened, false)).unwrap(), arc_docs);
+    session.open_snapshot(reopened);
+    session.apply(arc::SET_ARCS, &json!({"board": target, "expected_revision": session.revision(), "arcs": []})).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), lock_docs);
+}
+
+/// Both features are required in format 35 and cannot be relabeled as either single-feature format.
+#[test]
+fn combined_format_requires_both_features() {
+    let mut session = track::tests::routed_fixture();
+    add_arc(&mut session);
+    let saved = encode_documents(with_lock(&session.snapshot().unwrap(), true)).unwrap();
+    let path = test_board_path(&saved);
+    let board: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/35");
+    for (header, reason) in [("pcbcraft-board/26", "footprint locks require"), ("pcbcraft-board/34", "arcs require")] {
+        let mut mislabeled = board.clone();
+        mislabeled["format"] = json!(header);
+        assert_invalid_board_record(&saved, &mislabeled, reason);
+    }
+    let mut missing_arcs = board.clone();
+    missing_arcs.as_object_mut().unwrap().remove("arcs");
+    assert_invalid_board_record(&saved, &missing_arcs, "format 35");
+    let mut missing_lock = board;
+    missing_lock["footprints"][0].as_object_mut().unwrap().remove("locked");
+    assert_invalid_board_record(&saved, &missing_lock, "requires an authored footprint lock");
+}
+
+/// Reject the next unassigned header without triggering either feature gate.
+#[test]
+fn board_format_36_is_unsupported() {
     let saved = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
     let path = test_board_path(&saved);
     let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
     assert_eq!(board["format"], "pcbcraft-board/1");
     assert!(board["footprints"][0].get("locked").is_none());
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
-    board["format"] = json!("pcbcraft-board/35");
-    assert_invalid_board_record(&saved, &board, "unsupported board format or incompatible setup: pcbcraft-board/35");
+    board["format"] = json!("pcbcraft-board/36");
+    assert_invalid_board_record(&saved, &board, "unsupported board format or incompatible setup: pcbcraft-board/36");
 }
 
 /// Board formats 23 and 25 need their own content even when setup is valid. A report does

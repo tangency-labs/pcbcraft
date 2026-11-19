@@ -179,10 +179,10 @@ fn requests(view: pcbcraft_engine::board::view::BoardView<'_>) -> Result<Vec<(St
         .ok_or("fixture requires front copper")?
         .id;
     let mut cases: Vec<(String, Point, Point)> = view
-        .ratsnest()
-        .map(|ratsnest| ratsnest.lines.into_iter().take(AIRWIRES).collect::<Vec<_>>())
-        .unwrap_or_default()
+        .ratsnest()?
+        .lines
         .into_iter()
+        .take(AIRWIRES)
         .enumerate()
         .map(|(index, line)| (format!("airwire.{index}"), line.from.position, line.to.position))
         .collect();

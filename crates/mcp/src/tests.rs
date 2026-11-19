@@ -1,3 +1,6 @@
+#[cfg(not(target_arch = "wasm32"))]
+mod arcs;
+
 use std::io::Cursor;
 
 #[cfg(not(target_arch = "wasm32"))]

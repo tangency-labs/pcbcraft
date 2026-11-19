@@ -159,6 +159,7 @@ enum ParamKind {
     TrackIds,
     LayerChanges,
     TrackEnds,
+    ArcTracks,
     AlignMode,
     BoardSide,
     RuleLength,
@@ -273,6 +274,7 @@ impl ParamKind {
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
+            Self::ArcTracks => board::arc::schema(),
             Self::PreviousRoute => {
                 let mut schema = board::track::path_schema();
                 schema["minItems"] = json!(0);
@@ -576,6 +578,14 @@ impl ParamKind {
                 })
                 .map(|_| ())
                 .ok_or("must contain 1–256 unique non-nil zone UUIDs"),
+            Self::ArcTracks => {
+                if !value.as_array().is_some_and(|arcs| arcs.len() <= board::arc::MAX_ARCS) {
+                    return Err("must contain at most 4096 exact circular arc records");
+                }
+                serde_json::from_value::<Vec<board::arc::ArcTrack>>(value.clone())
+                    .map_err(|_| "must contain exact circular arc records")
+                    .and_then(|arcs| arcs.iter().try_for_each(|arc| arc.validate()).map_err(|_| "invalid circular arc geometry"))
+            }
             Self::ZoneOptions => serde_json::from_value::<board::zones::Options>(value.clone())
                 .map_err(|_| "must contain complete zone options")
                 .and_then(|options| options.validate().map_err(|_| "zone option values are out of range")),
@@ -1979,6 +1989,27 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: board::arc::SET_ARCS,
+        title: "Store Circular Tracks",
+        summary: "Replace exact circular copper records. Geometry consumers refuse boards containing arcs; no conductive validation is performed. One undo step; dry_run returns the full before/after lists without changes.",
+        params: &[
+            Param { required: true, summary: "Board UUID from inspection; required even for a single board", ..BOARD },
+            EXPECTED_REVISION,
+            Param {
+                name: "arcs",
+                required: true,
+                summary: "Complete arc list with caller-owned stable UUIDs; empty removes all arcs",
+                kind: ParamKind::ArcTracks,
+            },
+            Param {
+                name: "dry_run",
+                required: false,
+                summary: "Validate and report the full diff without changing revision or history",
+                kind: ParamKind::Flag,
+            },
+        ],
+    },
+    Command {
         id: ADD_TRACKS,
         title: "Route Track",
         summary: "Add a path of straight copper segments, with a through via wherever it changes layer, in one undo step. Refused if its copper would join two different nets.",
@@ -3097,6 +3128,7 @@ impl Session {
             | DELETE_FOOTPRINTS
             | SET_RULES
             | SET_PLACEMENT_ORIGIN
+            | board::arc::SET_ARCS
             | SET_ASSEMBLY_PROFILE
             | PREVIEW_ASSEMBLY_PROFILE
             | ADOPT_ASSEMBLY_PROFILE
@@ -3182,7 +3214,7 @@ impl Session {
                 "id": p.id(),
                 "name": p.name,
                 "assembly_profiles":p.assembly_profiles(),
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.inspect_vias(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "arcs":board.arc_tracks(), "geometry_supported":board.arc_tracks().is_empty(), "vias":board.inspect_vias(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -3233,7 +3265,8 @@ impl Session {
         inspection
     }
 
-    /// Run a shared command. Document edits answer [`Self::inspect`]; library
+    /// Run a shared command. Document edits normally answer [`Self::inspect`]; circular
+    /// record replacement returns its full authored diff. Library
     /// queries return catalog data and board-update preview returns its bounded
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
@@ -3242,6 +3275,14 @@ impl Session {
     /// unless the command returns a stale query outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         self.refuse_stale(id, params)?;
+        if id == board::arc::SET_ARCS {
+            let before = self.revision;
+            let result = self.set_arc_tracks(params)?;
+            if self.revision != before {
+                self.report_committed(id, params);
+            }
+            return Ok(result);
+        }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
             return Ok(sheets::page::list_templates());
@@ -3363,6 +3404,10 @@ impl Session {
 
     /// Route a command to its query, library, sheet or project handler. See [`Self::apply`].
     fn apply_command(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        if id == board::arc::SET_ARCS {
+            self.set_arc_tracks(params)?;
+            return Ok(self.revision());
+        }
         // A read-only query that needs no project: accepted like `execute`, changing nothing.
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3383,6 +3428,13 @@ impl Session {
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
+        if id.starts_with("pcb.")
+            && id != board::arc::SET_ARCS
+            && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())
+        {
+            project.resolve_board(params.get("board").and_then(Value::as_str))?;
+            return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
+        }
         if id == ASSIGN_FOOTPRINT && params.get("board").is_some() {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
@@ -3429,6 +3481,10 @@ impl Session {
                 | SET_COPPER_LOCKED
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
+        }
+        if id == board::arc::SET_ARCS {
+            self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
+            return Ok(());
         }
         let handler_checks_state = self.project.is_some()
             && matches!(
@@ -4141,8 +4197,8 @@ impl Session {
         }
     }
 
-    /// Prepare an edit without publishing it. Locked copper, metadata, nets and zone ownership
-    /// are checked here so previews can run the same fallible preparation as a committed edit.
+    /// Prepare an edit without publishing it. Locked copper, unsupported circular geometry,
+    /// metadata, nets and zone ownership are checked here so previews share Apply's preparation.
     /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
     fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
@@ -4151,6 +4207,9 @@ impl Session {
         }
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
+            if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
+                return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
+            }
         }
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.

@@ -93,7 +93,7 @@ fn routing_a_connection_clears_its_airwire_saves_and_undoes() {
     assert_eq!(s.revision(), revision + 1, "one route is one edit");
     assert_eq!(view(&s).tracks().len(), 3);
     assert!(view(&s).tracks().windows(2).all(|pair| pair[0].id < pair[1].id), "tracks save in ID order");
-    let copper = view(&s).copper();
+    let copper = view(&s).copper().unwrap();
     assert_eq!(
         copper.pads[&(line.from.footprint.clone(), line.from.pad.number.as_str().to_owned())],
         copper.pads[&(line.to.footprint.clone(), line.to.pad.number.as_str().to_owned())]
@@ -452,7 +452,7 @@ fn a_track_crossing_a_pad_with_both_ends_outside_joins_its_island() {
     let crossing = [Point { x_nm: x, y_nm: a.1.y_nm - 1_000_000 }, Point { x_nm: x, y_nm: a.1.y_nm + 1_000_000 }];
     s.apply(ADD_TRACKS, &json!({"layer":front,"width_nm":100_000,"points":crossing,"expected_revision":s.revision()})).unwrap();
     let track = view(&s).tracks()[0].id;
-    let copper = view(&s).copper();
+    let copper = view(&s).copper().unwrap();
     assert_eq!(copper.pads[&(footprint.clone(), a.0.clone())], copper.tracks[&track], "the crossed pad joins the track's island");
     assert_ne!(copper.pads[&(footprint.clone(), b.0.clone())], copper.tracks[&track], "the neighboring pad stays separate");
 
@@ -657,7 +657,7 @@ fn copper_nets_follow_the_pads_they_reach() {
     route(&mut s, front, &[a, Point { x_nm: a.x_nm, y_nm: y }, Point { x_nm: b.x_nm, y_nm: y }, b]).unwrap();
     route(&mut s, front, &[Point { x_nm: 0, y_nm: 30_000_000 }, Point { x_nm: 2_000_000, y_nm: 30_000_000 }]).unwrap();
     let net = view(&s).footprints().flat_map(|f| f.pads).find(|p| p.center == a).unwrap().net.unwrap();
-    let nets = view(&s).copper_nets();
+    let nets = view(&s).copper_nets().unwrap();
     let routed: Vec<_> = view(&s).tracks().iter().filter(|t| t.start.y_nm != 30_000_000).map(|t| t.id).collect();
     assert_eq!(routed.len(), 3);
     assert!(routed.iter().all(|id| nets.get(id) == Some(&net)), "{nets:?}");

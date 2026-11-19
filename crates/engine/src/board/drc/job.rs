@@ -202,7 +202,7 @@ impl CheckJob {
                 self.clearance_walk = None;
             }
             6 => {
-                if let Some(r) = view.ratsnest_with_copper(&self.copper) {
+                if let Ok(r) = view.ratsnest_with_copper(&self.copper) {
                     for l in r.lines {
                         self.found.push(Violation {
                             kind: Kind::Unconnected,

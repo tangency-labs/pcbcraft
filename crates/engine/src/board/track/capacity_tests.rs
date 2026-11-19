@@ -501,8 +501,8 @@ fn count_overflows_refuse_before_classified_source_geometry() {
     FORBID_SYNCHRONOUS_GEOMETRY.set(false);
 }
 
-/// Fill to within one track record of the native board document ceiling. Three edits that fit
-/// the count limits would exhaust the remaining bytes; none can publish an unsaveable board.
+/// Fill to within one track record of the native board document ceiling. Straight-copper
+/// edits and an exact arc record exhaust the remaining bytes without publishing an unsaveable board.
 #[test]
 fn board_document_budget_refuses_addition_locking_and_via_assignment_atomically() {
     let (mut project, target, _, [front, _]) = classified_capacity_board(MAX_TRACKS - 1);
@@ -535,7 +535,15 @@ fn board_document_budget_refuses_addition_locking_and_via_assignment_atomically(
         &[
             (ADD_TRACKS, json!({"layer":front,"points":[at(-700 * MM,-900 * MM),at(-699 * MM,-900 * MM)],"width_nm":200_000}), byte_limit.clone()),
             (SET_COPPER_LOCKED, json!({"board":board,"tracks":track_ids,"locked":true}), byte_limit.clone()),
-            (SET_VIA_NET, json!({"board":board,"vias":via_ids,"target":target}), byte_limit),
+            (SET_VIA_NET, json!({"board":board,"vias":via_ids,"target":target}), byte_limit.clone()),
+            (
+                super::super::arc::SET_ARCS,
+                json!({"board":board,"arcs":[{
+                    "id":Uuid::from_u128(u128::MAX),"layer":front,"width_nm":250_000,
+                    "center":at(0,0),"start":at(5 * MM,0),"end":at(0,5 * MM),"direction":"clockwise"
+                }]}),
+                byte_limit,
+            ),
         ],
     );
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
