@@ -825,6 +825,77 @@ fn locked_placements_refuse_direct_edits_atomically() {
     assert_eq!(locked.revision(), revision + 1);
 }
 
+/// Count selected lookup and geometry work through live commands and real preview capture.
+#[test]
+fn sparse_placement_edits_bound_lookups_and_bounds_on_large_boards() {
+    use crate::{ALIGN_FOOTPRINTS, PLACE_FOOTPRINT, PLACE_RESISTOR};
+    use clipboard::BoardSelection;
+    use movement::MovePlan;
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    for i in 0..512 {
+        let (x_nm, y_nm) = match i {
+            0 => (0, 0),
+            255 => (10_000_000, 0),
+            511 => (20_000_000, 0),
+            _ => (i % 32 * 5_000_000, (i / 32 + 2) * 5_000_000),
+        };
+        session.apply(PLACE_RESISTOR, &json!({"x_nm":x_nm,"y_nm":y_nm,"expected_revision":session.revision()})).unwrap();
+        let symbol = session.project().unwrap().symbols().last().unwrap().id();
+        session
+            .apply(
+                PLACE_FOOTPRINT,
+                &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x_nm,"y_nm":y_nm,
+                    "expected_revision":session.revision()}),
+            )
+            .unwrap();
+    }
+    let original = session.snapshot().unwrap();
+    assert_eq!(original.board.footprints.len(), 512);
+    let target = original.board_target().unwrap();
+    let ids = [0, 255, 511].map(|i| format!("footprint-{}", original.board.footprints[i].id));
+    let selection = BoardSelection { footprints: ids.iter().cloned().collect(), ..Default::default() };
+    let measure = |run: &mut dyn FnMut()| {
+        PLACEMENT_LOOKUP_PROBES.set(0);
+        PLACEMENT_GEOMETRY_VISITS.set(0);
+        run();
+        (PLACEMENT_LOOKUP_PROBES.get(), PLACEMENT_GEOMETRY_VISITS.get())
+    };
+    // No movement is needed; the live commands still resolve the selected bounds.
+    // Test the unchanged snapshot to exclude publication and copper rebuilds from this bound.
+    for snapshot in [original.clone(), with_placement_lock(&original, original.board.footprints[511].id, true)] {
+        let locked = snapshot.board.footprints[511].locked;
+        session.open_snapshot(snapshot.clone());
+        for mode in ["top", "distribute_x"] {
+            let params = json!({"board":target.board,"footprints":ids,"mode":mode,"expected_revision":session.revision()});
+            let (probes, resolved) = measure(&mut || {
+                let result = session.execute(ALIGN_FOOTPRINTS, &params);
+                if locked {
+                    let error = result.unwrap_err();
+                    assert!(error.to_string().contains(&ids[2]), "{mode}: {error}");
+                } else {
+                    result.unwrap();
+                }
+            });
+            assert!((3..=72).contains(&probes), "{mode}: {probes} ID probes");
+            assert_eq!(resolved, if locked { 0 } else { 3 }, "{mode}: visit only selected bounds");
+            assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()), "{mode}");
+        }
+        let (probes, resolved) = measure(&mut || {
+            let result = MovePlan::new(snapshot.clone(), target, selection.clone());
+            if locked {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains(&ids[2]), "{error}");
+            } else {
+                result.unwrap();
+            }
+        });
+        assert!((3..=36).contains(&probes), "MovePlan: {probes} ID probes");
+        assert_eq!(resolved, 0, "no track ends to capture on the unrouted fixture");
+    }
+}
+
 /// Create a real Redo entry without changing the active snapshot or its existing Undo entry.
 fn add_redo_control(session: &mut Session) {
     let before = session.snapshot().unwrap();

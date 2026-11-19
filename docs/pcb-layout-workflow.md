@@ -283,10 +283,12 @@ A locked footprint remains selectable and inspectable. The shared move, rotate,
 flip, align/distribute and delete commands protect existing locks. A selection
 containing a locked footprint is refused as a whole, naming each locked placement,
 even if it would serve as a stationary alignment anchor. A single-footprint
-transform that explicitly leaves the pose unchanged remains a no-op. Refusals
-make no board or Undo/Redo changes. These locks do not govern reference-text edits,
-schematic-to-board updates or routing obstacles. There is no lock/unlock command
-or GUI toggle for footprints yet.
+transform that explicitly leaves the pose unchanged remains a no-op. Applying a
+reviewed schematic-to-board update that would remove a locked footprint also
+refuses the whole update and names the locked placement. Refusals make no board
+or Undo/Redo changes. These locks do not govern package changes that retain the
+placement, reference-text edits or routing obstacles. There is no lock/unlock
+command or GUI toggle for footprints yet.
 
 Clipboard Copy, Cut, Duplicate and Paste still refuse active footprint locks. Diagnostic
 single-file storage also refuses the flag when true. Canonical clipboard

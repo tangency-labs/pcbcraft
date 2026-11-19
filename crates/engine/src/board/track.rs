@@ -706,8 +706,12 @@ fn carrier<'a>(old: &'a [(Land, PadContour)], track: &Track, end: Point) -> Opti
         .map(|(land, _)| land)
 }
 
-/// Capture which unselected track ends follow selected pads, outside pointer-motion frames.
+/// Capture which track ends follow selected pads, outside pointer-motion frames.
+/// No tracks or no selected footprints means no pad geometry is needed.
 pub(super) fn carried_ends(view: BoardView<'_>, moved: &BTreeSet<String>) -> BTreeMap<Uuid, (bool, bool)> {
+    if view.tracks().is_empty() || moved.is_empty() {
+        return BTreeMap::new();
+    }
     let old = carrying_lands(view, moved);
     view.tracks()
         .iter()

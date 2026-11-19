@@ -65,8 +65,8 @@ impl AlignMode {
     }
 }
 
-/// Refuse an unknown or locked placement before preparing a direct edit. Report every selected
-/// lock using its stable ID and, when available, its live or last accepted reference.
+/// Refuse an unknown or locked placement before editing or removing the supplied placements.
+/// Report each lock using its stable ID and, when available, its live or last accepted reference.
 pub(super) fn require_unlocked_placements<'a>(
     project: &Project,
     placements: impl IntoIterator<Item = Option<&'a Footprint>>,
@@ -263,8 +263,7 @@ impl Session {
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
         require_unlocked_placements(project, ids.iter().map(|&id| project.board.placement(id)))?;
         let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
-        let mut found: std::collections::BTreeMap<String, [i64; 4]> =
-            view.footprints().filter(|f| wanted.contains(&f.id)).map(|f| (f.id.clone(), bounds(&f))).collect();
+        let mut found: std::collections::BTreeMap<String, [i64; 4]> = view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect();
         let boxes = ids
             .iter()
             .map(|id| found.remove(&format!("footprint-{id}")))

@@ -48,6 +48,55 @@ fn only_board_exclusion_changes_physical_membership() {
     assert!(!legacy.project().unwrap().component_is_board_eligible(u64::MAX));
 }
 
+/// Applying mixed locked and unlocked removals refuses the entire reviewed update.
+#[test]
+fn board_update_refuses_locked_removal_atomically() {
+    let mut session = initialized();
+    let mut project = session.project().unwrap().clone();
+    let footprints = &mut Arc::make_mut(&mut project.board).footprints;
+    let removed = [footprints[0].component, footprints[1].component];
+    footprints[1].locked = true; // There is no public footprint-lock authoring command yet.
+    let locked_id = footprints[1].id;
+    let locked_name = format!("{} (footprint-{locked_id})", project.components[&removed[1]].reference());
+    session.open_snapshot(Arc::new(project));
+    for id in removed {
+        flag(&mut session, id, "exclude_from_board", true);
+    }
+    // Leave a real Redo entry without changing the removals submitted for review.
+    flag(&mut session, removed[0], "do_not_populate", true);
+    session.apply("edit.undo", &json!({})).unwrap();
+    let report = plan(&mut session);
+    let changes = &session.cached_board_update().unwrap().changes;
+    assert!(changes.blockers.is_empty());
+    assert_eq!(changes.components, removed.map(|component| ComponentChange::Removed { component }));
+    let snapshot = session.snapshot().unwrap();
+    let bytes = encode_documents(snapshot.clone()).unwrap();
+    let revision = session.revision();
+    let history = |session: &Session| {
+        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.as_ref().map(Arc::as_ptr)).collect::<Vec<_>>())
+    };
+    let before_history = history(&session);
+    assert!(before_history.iter().all(|entries| !entries.is_empty()));
+    let params = json!({"plan_token":report["plan_token"],"expected_revision":revision});
+    let error = session.apply(APPLY_UPDATE, &params).unwrap_err();
+    assert!(matches!(&error, CommandError::InvalidParams(message) if message.contains(&locked_name)), "{error}");
+    assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+    assert_eq!(session.revision(), revision);
+    assert_eq!(history(&session), before_history);
+
+    // The same proposed removals are valid when neither footprint is locked.
+    let mut unlocked = snapshot.as_ref().clone();
+    Arc::make_mut(&mut unlocked.board).footprints[1].locked = false;
+    session.open_snapshot(Arc::new(unlocked));
+    let report = plan(&mut session);
+    edit(&mut session, APPLY_UPDATE, json!({"plan_token":report["plan_token"]}));
+    let board = &session.project().unwrap().board;
+    assert!(board.footprints().is_empty());
+    assert!(removed.iter().all(|id| !board.by_component.contains_key(id)));
+    assert!(board.baseline.as_ref().unwrap().components.is_empty());
+}
+
 /// Excluded choices remain useful authored intent without becoming physical
 /// pending packages. Reviewed removal retains their assets and later unexclude
 /// accepts that choice as an unplaced addition, with exact save/Undo behavior.

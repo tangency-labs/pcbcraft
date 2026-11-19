@@ -23,6 +23,12 @@ pub mod identity;
 mod library_migration;
 #[cfg(test)]
 mod lock_storage_tests;
+
+#[cfg(test)]
+std::thread_local! {
+    static PLACEMENT_LOOKUP_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PLACEMENT_GEOMETRY_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 pub mod materials;
 pub mod movement;
 pub mod origin;
@@ -102,7 +108,7 @@ pub(crate) struct Footprint {
     /// and technical graphics use the back layers. Omitted for top-side placements.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) bottom: bool,
-    /// Board-local lock for direct placement transforms and deletion; omitted while false.
+    /// Board-local lock for direct placement transforms and footprint removal; omitted while false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) locked: bool,
     /// Additional reference displacement from the library default in footprint-local coordinates.
@@ -341,7 +347,14 @@ impl Board {
     }
     /// Find an authored placement by its stable ID without resolving pads or connectivity.
     fn placement(&self, id: u64) -> Option<&Footprint> {
-        let index = self.footprints.binary_search_by_key(&id, |footprint| footprint.id).ok()?;
+        let index = self
+            .footprints
+            .binary_search_by_key(&id, |footprint| {
+                #[cfg(test)]
+                PLACEMENT_LOOKUP_PROBES.set(PLACEMENT_LOOKUP_PROBES.get() + 1);
+                footprint.id
+            })
+            .ok()?;
         self.footprints.get(index)
     }
     /// Resolve only the exact pinned definition; missing revisions never use the current catalog.
