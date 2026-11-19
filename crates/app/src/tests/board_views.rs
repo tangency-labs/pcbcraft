@@ -331,6 +331,78 @@ fn board_selection_reveals_the_owning_child_sheet_once() {
     }
 }
 
+/// Shared part units give a PCB footprint two possible sheet destinations. Keep a matching
+/// current sheet; otherwise use project order, not the most recently placed or displayed unit.
+#[test]
+fn board_follow_prefers_current_match_then_project_sheet_order() {
+    use crate::editor_view::DocumentTarget;
+    use pcbcraft_engine::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_UNIT, sheets::CREATE_SHEET};
+
+    let mut h = harness();
+    h.set_size(egui::vec2(1400., 900.));
+    let (first, later, empty, first_symbol, later_symbol, footprint) = {
+        let app = h.state_mut();
+        app.run("project.new", &json!({"create_board":true}));
+        app.run(
+            pcbcraft_engine::library::sources::LOAD,
+            &json!({"source":"units","documents":{
+                "library.json":include_str!("../../../../examples/native-parts/library.json"),
+                "symbols/dual.json":include_str!("../../../../examples/native-parts/symbols/dual-amplifier.json")}}),
+        );
+        let definition = app.session.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+        let first = app.session.project().unwrap().sheet_target();
+        for name in ["Later", "Empty"] {
+            let revision = app.session.revision();
+            app.run(CREATE_SHEET, &json!({"name":name,"expected_revision":revision}));
+        }
+        let project = app.session.snapshot().unwrap();
+        let later = project.sheets().nth(1).unwrap().target;
+        let empty = project.sheets().nth(2).unwrap().target;
+        // Allocate the lower symbol ID on the later sheet so ID order can't pass this test.
+        let revision = app.session.revision();
+        app.place_catalog_symbol(&definition, json!({"sheet":later.id(),"x_nm":0,"y_nm":0,"expected_revision":revision}));
+        let project = app.session.project().unwrap().for_sheet(later).unwrap();
+        let later_symbol = project.symbols()[0].id();
+        let component = project.symbols()[0].component_id();
+        let package = project.footprint_catalog().into_iter().find(|package| package.id == "soic8").unwrap();
+        let mut edit = |command, mut params: Value| {
+            params["expected_revision"] = json!(app.session.revision());
+            app.session.apply(command, &params).unwrap();
+            app.session.snapshot().unwrap()
+        };
+        let project = edit(PLACE_UNIT, json!({"sheet":first.id(),"component":component,"unit":"b","x_nm":0,"y_nm":0}));
+        let first_symbol = project.symbols()[0].id();
+        edit(
+            ASSIGN_FOOTPRINT,
+            json!({"component":component,"library":package.library,"definition":package.id,"definition_revision":package.revision,
+                "mapping":{"1":"1","2":"2","3":"3","4":"4","5":"5","6":"6"},"unconnected_pads":["7","8"]}),
+        );
+        let project = edit(PLACE_ASSIGNED_FOOTPRINT, json!({"component":component,"x_nm":0,"y_nm":0}));
+        let footprint = project.boards().next().unwrap().footprints().next().unwrap().id;
+        (first, later, empty, first_symbol, later_symbol, footprint)
+    };
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let schematic = ViewId(0);
+    let pcb = ViewId(2);
+    let app = h.state_mut();
+    app.views.bind(pcb);
+    assert_eq!(app.views.active.workspace, Workspace::Board);
+    let before = app.session.inspect();
+    for (shown, expected, symbol) in [(later, later, later_symbol), (empty, first, first_symbol)] {
+        app.views.view_mut(schematic).unwrap().open_document(DocumentTarget::Sheet(shown), &app.session);
+        app.views.select_board([footprint.clone()].into(), &app.session, SelectionFollow::Both);
+        assert_eq!(app.views.reveal_highlight(schematic, &app.session), shown != expected);
+        let view = app.views.view(schematic).unwrap();
+        assert_eq!(view.target(), Some(DocumentTarget::Sheet(expected)));
+        assert!(view.schematic.selection.is_empty());
+        assert_eq!(app.views.highlight_for(schematic, &app.session).single_symbol(), Some(symbol.as_str()));
+        assert_eq!(app.views.active.id(), pcb);
+        assert_eq!(app.session.inspect(), before);
+    }
+}
+
 /// Following a schematic selection pans using board coordinates and preserves zoom. The default
 /// leaves the board camera alone, and a consumed reveal does not undo subsequent manual navigation.
 #[test]

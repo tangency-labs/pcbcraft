@@ -664,11 +664,7 @@ impl EditorViews {
         if source != Workspace::Board || all.symbols.is_empty() {
             return false;
         }
-        let Some(target) =
-            current.sheets().map(|sheet| sheet.target).filter(|&target| target != current.sheet_target()).find(|&target| {
-                current.for_sheet(target).is_some_and(|project| project.symbols().iter().any(|unit| all.symbols.contains(&unit.id())))
-            })
-        else {
+        let Some(target) = current.first_sheet_for_symbols(&all) else {
             return false;
         };
         let Some(project) = view.reveal_sheet(target, session) else {

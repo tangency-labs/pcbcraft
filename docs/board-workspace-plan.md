@@ -387,7 +387,9 @@ navigation does not trigger another. When a schematic pane follows a PCB
 footprint selection, it stays on its current sheet if any linked symbol unit
 is there. Otherwise it displays the first sheet in project order containing a
 linked unit, then reveals the matching units on that sheet. The lookup uses
-placement and part-instance identity, not reference text or sheet names. The
+placement and part-instance identity, not reference text or sheet names. It
+looks up selected footprints and their placed units by ID, then searches sorted
+unit IDs in at most 64 sheets without projecting the non-matching sheets. The
 current model has one occurrence per sheet; with repeated definitions the
 placement's owning occurrence must identify the target, not the first use of
 that definition.
