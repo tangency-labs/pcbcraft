@@ -416,7 +416,7 @@ a malformed reply from another editor may omit the facts it describes.
 | `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
 | `stale_revision` | `expected_revision` is not the current revision. `details.current_revision` gives the current one; inspect it and retry. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
-| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs. |
+| `cap_exceeded` | The edit would pass a fixed limit, such as 4,096 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs. |
 | `needs_live_editor` | A window or `ui.` command, or `inspect_editor`, in a session without an open editor. |
 | `denied` | The person declined the request in the editor's assistant. |
 | `cancelled` | The request was stopped, timed out or lost its connection before it finished; nothing changed. |
