@@ -665,11 +665,16 @@ impl EditorViews {
         self.show_report_probe(source, board, parts, view.footprints_for_parts(parts), view, session);
     }
 
-    /// Recognize only the DRC report's footprint and pad addresses, not track/via IDs, text or
-    /// coordinates. Pads identify their owning footprint here; the finding marker locates the fault.
+    /// Project a current finding. The marker, not the owning placement, locates the fault.
     fn probe_drc_finding(&mut self, source: ViewId, board: BoardTarget, index: usize, session: &Session) {
         let Some(view) = session.project().and_then(|project| project.board_view(board)) else { return };
         let Some(items) = self.view(source).and_then(|view| view.board.drc.finding_items(session, board, index)) else { return };
+        let (parts, footprints) = Self::resolve_drc_items(items, view);
+        self.show_report_probe(source, board, &parts, footprints, view, session);
+    }
+
+    /// Recognize DRC footprint and pad addresses, not track/via IDs, text or coordinates.
+    fn resolve_drc_items(items: &[String], view: BoardView<'_>) -> (BTreeSet<u64>, BTreeSet<String>) {
         let owners: BTreeSet<_> = items.iter().map(|item| item.split_once(':').map_or(item.as_str(), |(owner, _)| owner)).collect();
         let mut parts = BTreeSet::new();
         let mut footprints = BTreeSet::new();
@@ -679,7 +684,7 @@ impl EditorViews {
                 footprints.insert(owner.to_owned());
             }
         }
-        self.show_report_probe(source, board, &parts, footprints, view, session);
+        (parts, footprints)
     }
 
     /// Resolve a report once. Work scales with the clicked row's addresses plus at most one
@@ -1636,6 +1641,64 @@ impl PcbApp {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// DRC item addresses identify placements and pad owners; unrelated physical items must
+    /// not leave a prior report's symbol or footprint highlights on screen.
+    #[test]
+    fn drc_report_addresses_project_only_existing_footprint_owners() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":true})).unwrap();
+        let mut symbols = Vec::new();
+        for x in [0, 5_080_000, 10_160_000] {
+            session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0})).unwrap();
+            let symbol = session.project().unwrap().symbols().last().unwrap().id();
+            session
+                .apply(
+                    pcbcraft_engine::PLACE_FOOTPRINT,
+                    &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x,"y_nm":0}),
+                )
+                .unwrap();
+            symbols.push(symbol);
+        }
+        let project = session.project().unwrap();
+        let board = project.board_target().unwrap();
+        let board_view = project.board_view(board).unwrap();
+        let ids: Vec<_> = board_view.footprint_ids().collect();
+        let track = "00000000-0000-4000-8000-000000000001";
+        let via = "00000000-0000-4000-8000-000000000002";
+        let cases: [(&str, Vec<String>, &[usize]); 3] = [
+            ("direct footprint", vec![ids[0].clone()], &[0]),
+            (
+                "direct and pad duplicates mixed with unrelated IDs",
+                vec![
+                    ids[0].clone(),
+                    format!("{}:1", ids[0]),
+                    format!("{}:2", ids[0]),
+                    format!("{}:1", ids[1]),
+                    track.to_owned(),
+                    via.to_owned(),
+                    "footprint-999999".to_owned(),
+                    ids[2].replacen("footprint-", "footprint-0", 1),
+                ],
+                &[0, 1],
+            ),
+            ("track and via only clear prior highlights", vec![track.to_owned(), via.to_owned()], &[]),
+        ];
+
+        let mut views = EditorViews::default();
+        views.bind_opened_project(&session);
+        let schematic = views.active.id();
+        let pcb = views.open_beside(schematic).unwrap();
+        views.switch_workspace(pcb, Workspace::Board, &session);
+        for (name, items, expected) in cases {
+            let (parts, footprints) = EditorViews::resolve_drc_items(&items, board_view);
+            views.show_report_probe(pcb, board, &parts, footprints, board_view, &session);
+            let expected_symbols: BTreeSet<_> = expected.iter().map(|&i| symbols[i].clone()).collect();
+            let expected_placements: BTreeSet<_> = expected.iter().map(|&i| ids[i].clone()).collect();
+            assert_eq!(views.schematic_paint_highlight(schematic, &session).symbols, expected_symbols, "{name}");
+            assert_eq!(*views.board_paint_highlight(pcb, &session), expected_placements, "{name}");
+        }
+    }
 
     /// A large connection-style row spanning 768 of 1,024 parts must visit at most one
     /// symbol per live unit on activation, with no report-sized copies on repeat paint.
