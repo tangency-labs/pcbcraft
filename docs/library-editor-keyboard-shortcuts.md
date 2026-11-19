@@ -14,10 +14,12 @@ E opened the selected object's properties, M started a move, the pending-fields
 refusal message appeared, Delete removed the selected object, Ctrl+Z restored
 it, Ctrl+S opened the publish dialog, Ctrl+Q opened the unsaved-items prompt,
 and Ctrl+, opened Preferences in all three workspaces. The earlier raw-key copy
-and paste paths (Ctrl+Shift+C/V) were exercised live. The library Ctrl+Shift+X
-fallback has automated coverage in
-`normalized_clipboard_events_drive_library_copy_and_paste`, rather than a recorded
-live library session. Plain Ctrl+C/X/V use the real `egui_winit` translation boundary —
+and paste paths (Ctrl+Shift+C/V) were exercised live. A subsequent native
+X11/Xvnc check for [PR #443](https://github.com/tangency-labs/pcbcraft/pull/443)
+exercised Ctrl+X, Ctrl+Shift+X, Ctrl+V placement and one-step Undo in both library
+editors on the `586a39f` ci-profile build. The automated test
+`normalized_clipboard_events_drive_library_copy_and_paste` covers these clipboard
+operations separately. Plain Ctrl+C/X/V use the real `egui_winit` translation boundary —
 `native_paste_translation_reaches_the_internal_library_paste` feeds the events
 the vendored translator emits for empty and image-only clipboards into the
 harness, and `clipboard_translation_tests` inside `vendor/egui-winit` checks
