@@ -110,7 +110,7 @@ class LibrarySchemaTests(unittest.TestCase):
         symbol["format"] = "pcbcraft-symbol/5"
         validator = self.checks["urn:pcbcraft:schema:symbol"]
         terminal = symbol["terminals"][0]
-        self.assertFalse(validator.is_valid(symbol))
+        validator.validate(symbol)
         terminal["alternates"] = [{"name": "ADC_IN", "electrical_type": "input"}]
         validator.validate(symbol)
         for invalid in ([], None, [{"name": "ADC_IN", "electrical_type": "unknown"}],

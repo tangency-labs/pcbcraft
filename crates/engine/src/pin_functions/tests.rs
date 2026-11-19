@@ -236,13 +236,16 @@ fn refuses_unknown_terminal_function_and_stale_request() {
     assert!(ink(session.project().unwrap()).contains(&"GPIO".to_owned()));
 }
 
-/// Save and reopen the authored choice with and without a board. Only project.json adopts the
-/// new choice format; the pinned symbol and other documents do not change on selection.
+/// Save and reopen a pin-function project with or without a board. Selecting or clearing
+/// a choice stays on /48 and only changes project.json.
 #[test]
-fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
+fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
     for board in [false, true] {
         let mut session = fixture(board);
         let before = encode_documents(session.snapshot().unwrap()).unwrap();
+        let primary: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
+        assert_eq!(primary["format"], "pcbcraft-project/48");
+        assert!(primary["components"][0].get("pin_functions").is_none());
         assert_eq!(before, encode_documents(decode_documents(&before).unwrap()).unwrap());
         let choice = params(&session, json!("ADC_IN"));
         session.apply(SET, &choice).unwrap();
@@ -260,10 +263,10 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
         assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
         assert_eq!(encode_documents(reopened).unwrap(), docs);
         assert_eq!(encode_documents(decode_packed(&encode_packed(selected).unwrap()).unwrap().project).unwrap(), docs);
-        let old: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
+        assert!(serde_json::to_vec(&stored["components"][0]["pin_functions"]).unwrap().len() <= 64);
+        assert!(docs[ENTRY_POINT].len() <= before[ENTRY_POINT].len() + 256);
         for (change, expected) in [
             ("old format", "require project format 48"),
-            ("missing", "require project format 48"),
             ("empty", "Invalid alternate pin function record count"),
             ("null", "invalid type: null, expected a sequence"),
             ("unknown", "Unknown or duplicate alternate pin function selection"),
@@ -272,14 +275,11 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
             let mut invalid = stored.clone();
             let component = &mut invalid["components"][0];
             match change {
-                "missing" => {
-                    component.as_object_mut().unwrap().remove("pin_functions");
-                }
                 "empty" => component["pin_functions"] = json!([]),
                 "null" => component["pin_functions"] = Value::Null,
                 "unknown" => component["pin_functions"][0]["function"] = json!("FIXME"),
                 "duplicate" => component["pin_functions"] = json!([component["pin_functions"][0], component["pin_functions"][0]]),
-                _ => invalid["format"] = old["format"].clone(),
+                _ => invalid["format"] = json!("pcbcraft-project/16"),
             }
             let mut changed = docs.clone();
             changed.insert(ENTRY_POINT.into(), serde_json::to_vec(&invalid).unwrap());
@@ -292,77 +292,22 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
     }
 }
 
-/// Open true flat, pre-occurrence bytes before selecting; verify exact old identity and bounded
-/// selection storage in both homes, with retained allocation metadata on pre-watermark Undo.
+/// Preview and apply both refuse missing current storage without modifying the project.
 #[test]
-fn first_pin_function_selection_adopts_legacy_storage_without_moving_identities() {
-    // Before /9, board ownership was implicit and the format could not describe a schematic-only project.
-    for (board, version) in [(true, 6), (true, 7), (true, 9), (false, 9)] {
-        let mut legacy = Project::clone(&crate::persistence::diagnostic_snapshot(fixture(board).snapshot().unwrap()));
-        legacy.layout = None;
-        let had_watermark = version != 6;
-        if !had_watermark {
-            legacy.numeric_id_high_water = None;
-        }
-        if version < 9 {
-            Arc::make_mut(&mut legacy.board).ownership = crate::board::identity::Ownership::Legacy;
-        }
-        let old = encode_documents(Arc::new(legacy)).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&old[ENTRY_POINT]).unwrap()["format"], format!("pcbcraft-project/{version}"));
-        let before = decode_documents(&old).unwrap();
-        assert_eq!(before.board_target().is_some(), board);
-        assert!(before.layout.is_none());
-        assert!(!before.has_sheet_occurrences());
-        assert_eq!(before.numeric_id_high_water.is_some(), had_watermark);
-        assert_eq!(encode_documents(before.clone()).unwrap(), old);
-        // A fresh session must start with the saved watermark, not the fixture's in-memory lineage.
-        let mut session = Session::default();
-        session.open_snapshot(before.clone());
-        let opened = session.snapshot().unwrap();
-        assert!(Arc::ptr_eq(&opened, &before));
-        assert_eq!(opened.numeric_id_high_water.is_some(), had_watermark);
-        let mut dry_run = params(&session, json!("ADC_IN"));
-        dry_run["dry_run"] = json!(true);
-        assert_eq!(session.execute(SET, &dry_run).unwrap()["pin_function_change"]["after"]["name"], "ADC_IN");
+fn pin_function_selection_requires_current_project_storage() {
+    let mut project = fixture(false).project().unwrap().clone();
+    project.layout = None;
+    let mut session = Session::default();
+    session.open_snapshot(Arc::new(project));
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    for dry_run in [true, false] {
+        let mut request = params(&session, json!("ADC_IN"));
+        request["dry_run"] = json!(dry_run);
+        assert!(matches!(session.execute(SET, &request), Err(CommandError::InvalidParams(message))
+            if message == "Alternate pin functions require current project storage."));
         assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
-        session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
-        let selected = session.snapshot().unwrap();
-        let docs = encode_documents(selected.clone()).unwrap();
-        let reopened = decode_documents(&docs).unwrap();
-        assert_eq!(reopened.id(), before.id());
-        assert_eq!(reopened.sheet_target(), before.sheet_target());
-        assert_eq!(reopened.board_target(), before.board_target());
-        assert_eq!(reopened.symbols(), before.symbols());
-        assert_eq!(reopened.components, before.components);
-        assert_eq!(reopened.netlist().unwrap().netlist.nets, before.netlist().unwrap().netlist.nets);
-        assert_eq!(reopened.footprint_assignments(), before.footprint_assignments());
-        assert_eq!(reopened.pin_function_count(), 1);
-        assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
-        assert!(docs.len() <= old.len() + usize::from(board));
-        let entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/48");
-        let records = &entry["components"][0]["pin_functions"];
-        assert_eq!(records, &json!([{"terminal":"1","function":"ADC_IN"}]));
-        assert!(serde_json::to_vec(records).unwrap().len() <= 64);
-        assert!(docs[ENTRY_POINT].len() <= old[ENTRY_POINT].len() + 2048);
-        assert_eq!(encode_documents(reopened).unwrap(), docs);
-        session.apply("edit.undo", &Value::Null).unwrap();
-        let restored = session.snapshot().unwrap();
-        assert!(!restored.has_sheet_occurrences());
-        assert_eq!(restored.pin_function_count(), 0);
-        assert_eq!(restored.numeric_id_high_water, selected.numeric_id_high_water);
-        let expected = Project::with_allocation_watermark(before, selected.numeric_id_high_water);
-        let undo = encode_documents(restored.clone()).unwrap();
-        assert_eq!(undo, encode_documents(expected).unwrap());
-        if had_watermark {
-            assert_eq!(undo, old);
-        } else {
-            // Undo of /6 keeps the adopted watermark, but does not adopt the folder/occurrence layout.
-            let undo_entry: Value = serde_json::from_slice(&undo[ENTRY_POINT]).unwrap();
-            assert_eq!(undo_entry["format"], "pcbcraft-project/7");
-            let undo_reopened = decode_documents(&undo).unwrap();
-            assert_eq!(undo_reopened.board_target(), restored.board_target());
-        }
+        assert_eq!(session.revision(), revision);
     }
 }
 
@@ -390,12 +335,7 @@ fn pin_function_storage_composes_with_profiles_and_memberships() {
             let original = session.snapshot().unwrap();
             let before = encode_documents(original.clone()).unwrap();
             let entry: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-            let prior_format = match (profile, compact) {
-                (true, _) => "pcbcraft-project/36",
-                (false, true) => "pcbcraft-project/39",
-                (false, false) => "pcbcraft-project/24",
-            };
-            assert_eq!(entry["format"], prior_format);
+            assert_eq!(entry["format"], "pcbcraft-project/48");
             assert_eq!(entry.get("assembly_profiles").is_some(), profile);
             let path = original.instances_document_path();
             let membership_home: Value = match &path {
@@ -425,8 +365,8 @@ fn pin_function_storage_composes_with_profiles_and_memberships() {
     }
 }
 
-/// A saved differential pair keeps its polarity and original instances header when a pin
-/// function is selected. Clearing the choice restores the exact preceding /45 bytes.
+/// A saved differential pair keeps its polarity and instances header when a selection
+/// is added to or cleared from the pin-function project.
 #[test]
 fn pin_function_storage_preserves_differential_pairs() {
     use crate::nets::{Pair, PairState};
@@ -447,7 +387,7 @@ fn pin_function_storage_preserves_differential_pairs() {
         Arc::make_mut(&mut project.net_registry).pairs = Arc::new(vec![Arc::new(pair.clone())]);
         session.change(project).unwrap();
         let before = encode_documents(session.snapshot().unwrap()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/45");
+        assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/48");
         session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
         let docs = encode_documents(session.snapshot().unwrap()).unwrap();
         assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/48");
@@ -463,10 +403,10 @@ fn pin_function_storage_preserves_differential_pairs() {
     }
 }
 
-/// Draft and canonical symbol versions appear only with alternates; editor Undo restores the
-/// working definition, and invalid authoring never advances its content history.
+/// Edits stay on the new draft and symbol formats after removing alternates. Invalid
+/// edits do not advance history; Undo still restores the original snapshot.
 #[test]
-fn alternate_definition_validates_and_versions_lazily() {
+fn alternate_definition_validates_and_keeps_current_formats() {
     let mut editor = editor();
     let draft = editor.snapshot();
     let encoded = draft.encode().unwrap();
@@ -499,8 +439,15 @@ fn alternate_definition_validates_and_versions_lazily() {
     let mut primitive = draft.objects[&1].clone();
     let Primitive::Pin { alternates, .. } = &mut primitive else { panic!("expected pin") };
     *alternates = good;
+    editor.execute(editor.revision(), Action::Replace { object: 1, primitive: primitive.clone() }).unwrap();
+    let Primitive::Pin { alternates, .. } = &mut primitive else { panic!("expected pin") };
+    alternates.clear();
     editor.execute(editor.revision(), Action::Replace { object: 1, primitive }).unwrap();
-    editor.execute(editor.revision(), Action::Undo).unwrap();
-    editor.execute(editor.revision(), Action::Undo).unwrap();
+    let current = Item::decode(&editor.snapshot().encode().unwrap()).unwrap();
+    assert_eq!(current.native().unwrap()["format"], library::SYMBOL_FORMAT_V5);
+    assert_eq!(serde_json::from_slice::<Value>(&current.encode().unwrap()).unwrap()["format"], "pcbcraft-library-item/5");
+    for _ in 0..3 {
+        editor.execute(editor.revision(), Action::Undo).unwrap();
+    }
     assert_eq!(editor.snapshot().native().unwrap()["format"], library::SYMBOL_FORMAT);
 }

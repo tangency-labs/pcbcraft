@@ -505,8 +505,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if !no_connect_format && project.components.iter().any(|part| part.no_connects.is_some()) {
         return Err("No-connect intent requires project format 19.".into());
     }
-    if pin_function_format != project.components.iter().any(|part| part.pin_functions.is_some()) {
-        return Err("Alternate pin functions require project format 48 and at least one selection.".into());
+    if !pin_function_format && project.components.iter().any(|part| part.pin_functions.is_some()) {
+        return Err("Alternate pin functions require project format 48.".into());
     }
     let part_format = matches!(
         project.format.as_str(),
@@ -1307,6 +1307,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             {
                 return Err(format!("{path}: saved symbol identity does not match its file name"));
             }
+            if !pin_function_format && definition.format() == crate::library::SYMBOL_FORMAT_V5 {
+                return Err(format!("{path}: alternate-capable symbol definitions require project format 48"));
+            }
             symbol_copies.insert((definition.library.clone(), definition.id.clone(), definition.revision()), definition);
             definitions.push(value);
         }
@@ -1688,7 +1691,9 @@ impl DocumentsEncoder {
                         })
                         .collect::<Vec<_>>();
                     let registrations = p.board.ownership.records();
-                    let has_metadata = p.components.values().any(|component| !component.metadata.is_empty());
+                    let (has_metadata, has_pin_function_symbols) = p.components.values().fold((false, false), |(metadata, functions), part| {
+                        (metadata || !part.metadata.is_empty(), functions || part.definition.format() == crate::library::SYMBOL_FORMAT_V5)
+                    });
                     let has_packages = !p.schematic_packages.assignments.is_empty();
                     if has_packages && (p.board_target().is_some() || p.numeric_id_high_water.is_none()) {
                         return Err("schematic package choices require no board and an allocation watermark".into());
@@ -1782,10 +1787,11 @@ impl DocumentsEncoder {
                     if pin_function_count > crate::pin_functions::MAX_CHOICES {
                         return Err("Alternate pin function selection limit reached.".into());
                     }
-                    if pin_function_count != 0 && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
-                        return Err("Alternate pin functions require adopted storage/occurrence metadata.".into());
+                    let pin_function_format = has_pin_function_symbols || pin_function_count != 0;
+                    if pin_function_format && !p.supports_pin_function_storage() {
+                        return Err("Alternate pin functions require current project storage.".into());
                     }
-                    let format = if pin_function_count != 0 {
+                    let format = if pin_function_format {
                         PIN_FUNCTION_PROJECT_FORMAT
                     } else if has_profiles && !has_pairs {
                         ASSEMBLY_PROFILE_PROJECT_FORMAT

@@ -13,7 +13,7 @@ The machine-readable schemas describe canonical standalone library files:
 | `pcbcraft-symbol/2` | [Version 2](schemas/symbol-v2.schema.json) | Optional explicit electrical behavior and instance defaults |
 | `pcbcraft-symbol/3` | [Version 3](schemas/symbol-v3.schema.json) | An explicit default category binding |
 | `pcbcraft-symbol/4` | [Version 4](schemas/symbol-v4.schema.json) | Up to 32 independently placed units sharing logical terminals; category remains optional |
-| `pcbcraft-symbol/5` | [Version 5](schemas/symbol-v5.schema.json) | Declared alternate functions on at least one logical terminal |
+| `pcbcraft-symbol/5` | [Version 5](schemas/symbol-v5.schema.json) | Optional alternate functions on logical terminals |
 
 [The dispatcher](schemas/symbol.schema.json) accepts these versions. All schemas
 use JSON Schema Draft 2020-12 and registered URNs; validation needs no network
@@ -53,8 +53,9 @@ through sixteen alternate functions. Names are case-sensitive, trimmed, single-l
 Types use the existing terminal vocabulary. Every appearance of that terminal must
 have an integrated pin lead; the choice does not override the lead's name visibility.
 Alternates and their order belong to the shared terminal, not its individual unit drawings.
-Formats 1–4 refuse the field. A draft containing alternate functions uses
-`pcbcraft-library-item/5`; without them it retains the prior editor format.
+Formats 1–4 refuse the field. Adding an alternate switches the draft to
+`pcbcraft-library-item/5` and its published symbol to `pcbcraft-symbol/5`.
+Removing the last alternate does not switch either record back.
 
 A placed part can select one alternate per terminal. Selection does not renumber,
 swap or move terminals or change connectivity. See [placed-part storage](native-project-storage.md#alternate-pin-function-records).

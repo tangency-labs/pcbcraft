@@ -539,7 +539,7 @@ impl Item {
         if !item.other_units.is_empty() {
             item.format = MULTI_UNIT_FORMAT.into();
         }
-        if item.has_alternate_functions() {
+        if definition.format() == library::SYMBOL_FORMAT_V5 {
             item.format = PIN_FUNCTION_FORMAT.into();
         }
         if !fork {
@@ -669,7 +669,7 @@ impl Item {
                 units.push(json!({"id":id,"drawing":drawing,"pins":pins}));
             }
             let terminals: Vec<_> = terminal_order.iter().map(|id| &terminal_map[id]).collect();
-            let mut value = json!({"format":if self.has_alternate_functions() { library::SYMBOL_FORMAT_V5 } else if !self.other_units.is_empty() { library::SYMBOL_FORMAT_V4 } else if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+            let mut value = json!({"format":if self.format == PIN_FUNCTION_FORMAT { library::SYMBOL_FORMAT_V5 } else if !self.other_units.is_empty() { library::SYMBOL_FORMAT_V4 } else if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":units});
             if let Some(behavior) = &self.behavior {
                 value["behavior"] = json!(behavior);
@@ -738,7 +738,7 @@ impl Item {
         let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
         if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | PIN_FUNCTION_FORMAT)
             || (self.format == NPTH_FORMAT) != self.has_npth()
-            || ((self.format == PIN_FUNCTION_FORMAT) != self.has_alternate_functions())
+            || (self.format != PIN_FUNCTION_FORMAT && self.has_alternate_functions())
             || (!self.other_units.is_empty() && (self.format == FORMAT || self.kind != Kind::Symbol))
             || (!self.unit_order.is_empty()
                 && (self.unit_order.len() != self.other_units.len() + 1
@@ -899,7 +899,9 @@ impl Session {
                         if next.kind != Kind::Symbol || !footprint::valid_id(&unit) || unit == next.unit || next.other_units.contains_key(&unit) {
                             return Err("A new symbol unit needs an unused portable identity.".into());
                         }
-                        next.format = MULTI_UNIT_FORMAT.into();
+                        if next.format != PIN_FUNCTION_FORMAT {
+                            next.format = MULTI_UNIT_FORMAT.into();
+                        }
                         if next.unit_order.is_empty() {
                             next.unit_order.push(next.unit.clone());
                         }
@@ -1019,10 +1021,8 @@ impl Session {
                         alternates.clone_from(shared_alternates);
                     }
                 }
-                if next.has_alternate_functions() {
+                if next.format != PIN_FUNCTION_FORMAT && next.has_alternate_functions() {
                     next.format = PIN_FUNCTION_FORMAT.into();
-                } else if next.format == PIN_FUNCTION_FORMAT {
-                    next.format = if next.other_units.is_empty() { FORMAT } else { MULTI_UNIT_FORMAT }.into();
                 }
                 next.revision = self.next_content_revision;
                 next.allocation = Allocation { object: cursor - 1, revision: self.next_content_revision };

@@ -339,8 +339,8 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
     if file.terminals.len() > MAX_TERMINALS || (!draft && file.terminals.is_empty()) {
         return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals"));
     }
-    if (format_version == 5) != file.terminals.iter().any(|terminal| terminal.alternates.is_some()) {
-        return Err("Alternate pin functions require pcbcraft-symbol/5 and at least one alternate.".into());
+    if format_version != 5 && file.terminals.iter().any(|terminal| terminal.alternates.is_some()) {
+        return Err("Alternate pin functions require pcbcraft-symbol/5.".into());
     }
     let mut numbers = BTreeSet::new();
     for terminal in &file.terminals {

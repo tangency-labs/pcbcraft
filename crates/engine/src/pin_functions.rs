@@ -85,15 +85,9 @@ impl Selections {
 }
 
 impl Project {
-    /// Adopt modern folder and occurrence metadata only on a candidate carrying choices.
-    /// This also lets paste retain choices when the destination was opened from legacy storage.
-    pub(crate) fn with_pin_function_storage(&self) -> Result<Self, String> {
-        let project = if let Some(layout) = &self.layout {
-            if self.numeric_id_high_water.is_some() { self.clone() } else { self.with_board_folders(&layout.root)? }
-        } else {
-            self.with_board_folders(".")?
-        };
-        if project.has_sheet_occurrences() { Ok(project) } else { project.with_sheet_occurrences() }
+    /// Pin-function documents use current folder, occurrence, and allocation metadata.
+    pub(crate) fn supports_pin_function_storage(&self) -> bool {
+        self.layout.is_some() && self.has_sheet_occurrences() && self.numeric_id_high_water.is_some()
     }
 
     /// Count sparse choices without visiting any components or pin appearances.
@@ -144,7 +138,7 @@ struct Target<'a> {
 
 impl Session {
     /// Resolve the pinned definition, then either report or commit the same validated change.
-    /// A dry run or unchanged selection never creates history or adopts project metadata.
+    /// A dry run or unchanged selection never creates history.
     pub(crate) fn set_pin_function(&mut self, params: &Value) -> Result<Value, CommandError> {
         self.check_revision(params)?;
         let invalid = |reason: &str| CommandError::InvalidParams(reason.to_owned());
@@ -168,30 +162,20 @@ impl Session {
         };
         let mut report = json!({"target":params["target"],"dry_run":dry_run,"changed":changed,
             "before":effective(previous.and_then(|name| pin.alternate(name)), pin),"after":effective(alternate, pin)});
-        if changed {
-            let adopt_storage = original.layout.is_none() || !original.has_sheet_occurrences() || original.numeric_id_high_water.is_none();
-            if dry_run {
-                if adopt_storage {
-                    original.with_pin_function_storage().map_err(CommandError::InvalidParams)?;
-                }
+        if changed && !original.supports_pin_function_storage() {
+            return Err(invalid("Alternate pin functions require current project storage."));
+        }
+        if changed && !dry_run {
+            let mut project = original.clone();
+            let mut choices = project.pin_functions.owner(id).cloned().unwrap_or_default();
+            if let Some(name) = next {
+                choices.insert(target.terminal.into(), name.into());
             } else {
-                let mut project =
-                    if adopt_storage { original.with_pin_function_storage().map_err(CommandError::InvalidParams)? } else { original.clone() };
-                let mut choices = project.pin_functions.owner(id).cloned().unwrap_or_default();
-                if let Some(name) = next {
-                    choices.insert(target.terminal.into(), name.into());
-                } else {
-                    choices.remove(target.terminal);
-                }
-                Arc::make_mut(&mut project.pin_functions).replace(id, choices).map_err(CommandError::InvalidParams)?;
-                if adopt_storage {
-                    self.change(project)?;
-                } else {
-                    // Existing storage already carries its allocation watermark. This edit owns
-                    // no identity or topology, and its only new value was validated above.
-                    self.publish_change(Arc::new(project), self.revision);
-                }
+                choices.remove(target.terminal);
             }
+            Arc::make_mut(&mut project.pin_functions).replace(id, choices).map_err(CommandError::InvalidParams)?;
+            // This edit owns no identity or topology, and its only new value was validated above.
+            self.publish_change(Arc::new(project), self.revision);
         }
         report["revision"] = json!(self.revision());
         Ok(report)

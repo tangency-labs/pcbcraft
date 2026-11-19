@@ -524,15 +524,11 @@ All appearances of the same part terminal share the selection. Omission uses the
 primary function. Empty, null, duplicate or unresolved records are refused; at
 most 4,096 selections may be stored per project.
 
-The header selects version 48 only while a selection exists. It composes with
-ordinary or compact part-group memberships and optional assembly profiles,
-without changing any board, sheet or instance document header. Projects without
-choices keep their previous entry-point encoding. A legacy installation layout
-adopts current folder and occurrence metadata on the first selection. Undo
-restores the previous layout and part contents; any allocation watermark adopted
-on that first edit is retained, so pre-watermark projects need not return to
-byte-identical encoding. Single-document diagnostic export refuses choices rather
-than omitting them.
+Projects that pin version-5 symbols use project format 48, with or without an
+explicit selection. This format composes with part-group memberships and assembly
+profiles without changing board, sheet, or instance document headers. Pin-function
+edits use the current folder and occurrence layout; they do not migrate projects.
+Single-document diagnostic export refuses choices rather than omitting them.
 
 ### Intentional no-connect records
 

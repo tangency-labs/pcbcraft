@@ -587,10 +587,7 @@ impl Session {
             reuse_sheets: params["reuse_sheets"].as_bool().unwrap_or(false),
         };
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
-        let (mut next, _) = fragment.placed(self.open_project()?, at, self.next_object_id()?, &options)?;
-        if (!next.has_sheet_occurrences() || next.layout.is_none()) && fragment.project.pin_function_count() != 0 {
-            next = next.with_pin_function_storage().map_err(invalid)?;
-        }
+        let (next, _) = fragment.placed(self.open_project()?, at, self.next_object_id()?, &options)?;
         let next = validate_candidate(next)?;
         self.change(next)?;
         Ok(())
