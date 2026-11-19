@@ -246,7 +246,9 @@ fn failed_candidate_validation_is_atomic_and_uninitialized_legacy_is_explicit() 
     let report = plan(&mut session);
     let snapshot = session.snapshot().unwrap();
     let revision = session.revision();
-    let proposed = &mut session.update_plan.as_mut().unwrap().proposed;
+    let Some(ReviewSlot::Eco(plan)) = session.update_plan.as_mut() else { panic!("missing native ECO preview") };
+    assert!(matches!(plan.payload, Payload::LegacyLazy));
+    let proposed = &mut plan.proposed;
     proposed.components.values_mut().next().unwrap().package.as_mut().unwrap().mapping.insert("1".into(), "INVALID".into());
     assert!(session.apply(APPLY_UPDATE, &json!({"plan_token":report["plan_token"],"expected_revision":revision})).is_err());
     assert_eq!(session.revision(), revision);

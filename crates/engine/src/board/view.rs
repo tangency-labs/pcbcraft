@@ -607,7 +607,7 @@ fn reference_graphics(project: &Project, footprint: &super::Footprint, reference
 
 /// Resolve rectangle corners from immutable local geometry, preserving exact odd dimensions
 /// before rotation. Pad and graphic orientation share the placement's transform.
-fn rectangle_points(footprint: &super::Footprint, center: Point, width: i64, height: i64, rotation: u16) -> [Point; 4] {
+pub(super) fn rectangle_points(footprint: &super::Footprint, center: Point, width: i64, height: i64, rotation: u16) -> [Point; 4] {
     let left = -width / 2;
     let top = -height / 2;
     [(left, top), (left + width, top), (left + width, top + height), (left, top + height)].map(|(x, y)| {

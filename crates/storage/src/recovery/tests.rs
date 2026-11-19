@@ -157,6 +157,55 @@ fn setup_preview_token_does_not_enter_recovery_records() {
     assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
 }
 
+/// A checked Cut writes one native patch; recovery reads its lost display witness from
+/// F1 bytes and never replays preview authority, clipboard adoption or placement edits.
+#[test]
+fn checked_relation_cut_recovers_lost_witness_and_exact_native_documents() {
+    use pcbcraft_engine::{PLACE_FOOTPRINT, persistence::encode_documents};
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = Session::default();
+    let run = |s: &mut Session, id: &str, mut args: Value| {
+        if pcbcraft_engine::command(id).unwrap().params.iter().any(|p| p.name == "expected_revision") {
+            args["expected_revision"] = json!(s.revision());
+        }
+        s.execute(id, &args)
+    };
+    run(&mut s, "project.new", json!({"create_board":true})).unwrap();
+    run(&mut s, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0})).unwrap();
+    let symbol = last_symbol(&s);
+    run(&mut s, PLACE_FOOTPRINT, json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":5_000_000,"y_nm":1_000_000}))
+        .unwrap();
+    let project = s.project().unwrap();
+    let fp = project.board_view(project.board_target().unwrap()).unwrap().footprint_ids().next().unwrap();
+    let feature = run(&mut s, "pcb.feature_catalog", json!({"fp":fp})).unwrap()["features"][0]["reference"].clone();
+    let row = run(&mut s, "pcb.add_relation", json!({"relation":{"kind":"horizontal","refs":[{"tag":"board.origin"},feature]}})).unwrap();
+    let witness = run(&mut s, "pcb.relations", json!({})).unwrap()["relations"][0]["measure"]["witnesses"].clone();
+    let recorder = Arc::new(JournalRecorder::start(dir.path().to_owned(), "entry".to_owned()).unwrap());
+    s.observe_edits(Some(recorder.clone()));
+    let args = json!({"items":{"footprints":[fp]}});
+    assert!(run(&mut s, "pcb.cut", args.clone()).is_err());
+    let report = run(&mut s, "pcb.preview_relation", json!({"intent":{"command":"pcb.cut","params":args}})).unwrap();
+    let preview = &report["relation_preview"];
+    let approval = json!({"token":preview["token"],"accept_loss":[row["id"]],"confirm_remaps":[]});
+    let result = run(&mut s, "pcb.apply_relation_preview", approval.clone()).unwrap();
+    assert!(result["clipboard"].is_string());
+    assert!(run(&mut s, "pcb.apply_relation_preview", approval).is_err());
+    s.observe_edits(None);
+    Arc::try_unwrap(recorder).unwrap().finish().unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert!(recovered.stop.is_none());
+    assert_eq!(recovered.commands, ["pcb.cut"]);
+    assert_eq!(recovered.documents, encode_documents(s.snapshot().unwrap()).unwrap());
+    let mut opened = Session::default();
+    opened.open_snapshot(recovered.project);
+    let findings = run(&mut opened, "pcb.relations", json!({})).unwrap();
+    assert_eq!(findings["relations"][0]["status"], "lost");
+    assert_eq!(findings["relations"][0]["last_resolved"], witness);
+    assert!(findings["relations"][0].get("measure").is_none());
+    let project = opened.project().unwrap();
+    assert_eq!(project.board_view(project.board_target().unwrap()).unwrap().footprint_ids().len(), 0);
+}
+
 /// A journal with the given edits applied on top of a new project, and the documents after each.
 fn journal_with(dir: &Path, edits: usize) -> (EditJournal, Vec<Documents>) {
     let mut session = Session::default();

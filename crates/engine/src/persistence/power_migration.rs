@@ -43,7 +43,8 @@ pub fn migrate_power_markers(mut documents: Documents) -> Result<Documents, Stri
     if !original.net_registry.records.is_empty() {
         return Err("Retired power annotations cannot coexist with persistent net registry records.".into());
     }
-    let mut session = crate::Session { defer_net_reconciliation: true, ..Default::default() };
+    let mut session =
+        crate::Session { defer_net_reconciliation: true, relation_stage: crate::board::relations::RelationStage::Raw, ..Default::default() };
     session.open_snapshot(original);
     let mut replacements = BTreeMap::new();
     for (path, mut marker, definition) in markers {

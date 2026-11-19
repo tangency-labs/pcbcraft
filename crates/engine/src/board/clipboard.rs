@@ -903,6 +903,7 @@ impl Session {
             project: self.snapshot(),
             revision: self.revision,
             history_root_revision: self.history_root_revision,
+            relation_stage: super::relations::RelationStage::Raw,
             ..Self::default()
         };
         if !selection.footprints.is_empty() {

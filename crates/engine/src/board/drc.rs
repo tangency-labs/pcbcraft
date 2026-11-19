@@ -540,7 +540,11 @@ impl Session {
     /// Validate the board address and rules, then report findings without editing anything.
     pub fn check_design(&self, params: &Value) -> Result<Value, CommandError> {
         let (view, effective) = self.design_check_inputs(params)?;
-        Ok(json!(view.check_design_resolved(effective)))
+        let mut report = json!(view.check_design_resolved(effective));
+        if view.project().board.relations.is_some() {
+            report["relations"] = super::relations::findings(view.project());
+        }
+        Ok(report)
     }
 
     /// Refuse a design check's bad board address or rules without running the check, so the

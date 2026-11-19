@@ -569,7 +569,11 @@ pub(crate) fn validate_candidate(mut project: Project) -> Result<Project, Comman
     crate::board::zones::validate(&project).map_err(invalid)?;
     let mut geometry = project.clone();
     geometry.net_registry = Arc::default();
-    Arc::make_mut(&mut geometry.board).zones.clear();
+    let board = Arc::make_mut(&mut geometry.board);
+    board.zones.clear();
+    // This is a native preliminary validation only. The outer transaction certifies
+    // retained F1 content after reconciliation and loss/remap finalization.
+    board.relations = None;
     let documents = crate::persistence::encode_documents(Arc::new(geometry)).map_err(invalid)?;
     crate::persistence::decode_documents(&documents).map_err(invalid)?;
     Ok(project)

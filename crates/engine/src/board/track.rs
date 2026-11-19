@@ -623,20 +623,31 @@ fn short_from_members(
     };
     let intent = project.board_intent_memberships();
     let intrinsic = super::via_nets::node_membership(project, lands, tracks.len(), vias, &intent);
-    members.iter().filter(|island| island.iter().any(|node| is_added(*node))).find_map(|island| {
-        let mut nets = island.iter().filter_map(|node| intrinsic[*node]);
-        let first = nets.next()?;
-        let second = nets.find(|net| *net != first)?;
-        let name = |id| {
-            intent
-                .names
-                .get(&id)
-                .cloned()
-                .or_else(|| island.iter().find_map(|n| (intrinsic[*n] == Some(id)).then(|| lands.get(*n)?.net.clone()).flatten()))
-                .unwrap_or_else(|| format!("net {}", id + 1))
-        };
-        Some((name(first), name(second)))
-    })
+    members
+        .iter()
+        .filter(|island| island.iter().any(|node| is_added(*node)))
+        .find_map(|island| intrinsic_short(island, lands, &intent, |node| intrinsic[node]))
+}
+
+/// Name two different intrinsic nets on the same already-selected physical island.
+pub(super) fn intrinsic_short(
+    island: &[usize],
+    lands: &[Land],
+    intent: &super::via_nets::Memberships,
+    net: impl Fn(usize) -> Option<usize>,
+) -> Option<(String, String)> {
+    let mut nets = island.iter().filter_map(|&node| net(node));
+    let first = nets.next()?;
+    let second = nets.find(|net| *net != first)?;
+    let name = |id| {
+        intent
+            .names
+            .get(&id)
+            .cloned()
+            .or_else(|| island.iter().find_map(|&n| (net(n) == Some(id)).then(|| lands.get(n)?.net.clone()).flatten()))
+            .unwrap_or_else(|| format!("net {}", id + 1))
+    };
+    Some((name(first), name(second)))
 }
 
 /// Map `point` from one placement of a pad land to another, keeping its place relative to the
