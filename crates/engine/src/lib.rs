@@ -7,6 +7,7 @@
 
 #[cfg(test)]
 mod allocation_tests;
+pub mod annotation;
 pub mod authoring;
 pub mod board;
 pub mod clipboard;
@@ -1583,6 +1584,20 @@ const CATALOG: &[Command] = &[
         params: &[SYMBOL, EXPECTED_REVISION],
     },
     Command {
+        id: annotation::PREVIEW,
+        title: "Preview schematic annotation",
+        summary: "Review reference designators without editing. Propose the lowest free references for unlocked placeholders and report duplicates.",
+        params: &[
+            Param {
+                required: false,
+                name: "sheet",
+                summary: "Limit to this sheet UUID; omission previews the whole project",
+                kind: ParamKind::SheetId,
+            },
+            Param { required: false, ..EXPECTED_REVISION },
+        ],
+    },
+    Command {
         id: SET_SYMBOL_FIELDS,
         title: "Edit Symbol Fields",
         summary: "Set reference, value, optional designator lock, metadata, field appearance and placement together. Attached wires follow center changes. References remain unique. Undoable.",
@@ -1593,7 +1608,7 @@ const CATALOG: &[Command] = &[
             Param {
                 required: false,
                 name: "designator_locked",
-                summary: "Record a designator lock for future annotation; omission preserves the current lock",
+                summary: "Protect the designator during automatic annotation; omission preserves the current lock",
                 kind: ParamKind::Flag,
             },
             Param {
@@ -3189,6 +3204,7 @@ impl Session {
             | MIRROR_SYMBOL
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
+            | annotation::PREVIEW
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
@@ -3348,10 +3364,10 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Authorized symbol-field dry runs return provisional document changes without publishing an edit.
-    /// Failed commands leave the project intact. Scope refusals precede validation; otherwise
-    /// a stale `expected_revision` is reported first unless the command returns a stale query
-    /// outcome, as `pcb.plan_route` does.
+    /// Authorized symbol-field dry runs and annotation previews return proposals without
+    /// publishing edits. Failed commands leave the project intact. Scope refusals precede
+    /// validation; otherwise a stale `expected_revision` is reported first unless the command
+    /// returns a stale query outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
@@ -3365,6 +3381,10 @@ impl Session {
         }
         if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
             return self.preview_symbol_fields(params);
+        }
+        if id == annotation::PREVIEW {
+            self.validate_project_command(id, params)?;
+            return self.preview_annotation(params);
         }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3632,6 +3652,7 @@ impl Session {
                 | MIRROR_SYMBOL
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
+                | annotation::PREVIEW
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
@@ -3826,6 +3847,9 @@ impl Session {
             MIRROR_SYMBOL => self.mirror_symbol(params)?,
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
+            annotation::PREVIEW => {
+                self.preview_annotation(params)?;
+            }
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,
@@ -4111,7 +4135,7 @@ impl Session {
     /// only this unit's text appearance. Omission preserves either. Invalid/dangling fields or
     /// board exclusion of a legacy placed component reject every accompanying change.
     /// With an accepted baseline, exclusion stages a reviewed physical removal.
-    /// The optional designator lock records intent for future annotation, not a ban on explicit
+    /// The optional designator lock protects automatic annotation, not a ban on explicit
     /// reference edits. Successful Apply does not guarantee the later native Save fits its limits.
     /// Validation/contact failures reject the entire edit; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
