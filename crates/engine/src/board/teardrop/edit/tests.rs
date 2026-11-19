@@ -94,6 +94,82 @@ fn ten_vias_report_two_clearance_blocks() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
 
+/// Exercise the shared command against real contours and authored board rules, then undo,
+/// redo, save, reopen and remove. The 35 µm threshold is a fixture rule, not a fabrication standard.
+#[test]
+fn command_adds_eight_reports_two_and_round_trips_intent() {
+    use crate::{
+        ADD_DRAWING, SET_RULES,
+        board::{
+            rules::Values,
+            setup::LayerPurpose,
+            teardrop::{EDIT_TEARDROPS, Record},
+        },
+        persistence::decode_documents,
+    };
+
+    let (mut session, intents, obstacles) = fixture(10, true);
+    let target = view(&session).target;
+    let outline = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let corners = [(-5_000_000, -5_000_000), (25_000_000, -5_000_000), (25_000_000, 45_000_000), (-5_000_000, 45_000_000)]
+        .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    session
+        .apply(ADD_DRAWING, &json!({"board":target.board,"layer":outline,"points":corners,"closed":true,"expected_revision":session.revision()}))
+        .unwrap();
+    let values = Values { clearance_nm: 35_000, ..Values::default() };
+    session.apply(SET_RULES, &json!({"board":target.board,"rules":values,"expected_revision":session.revision()})).unwrap();
+    let before = session.snapshot().unwrap();
+    let before_docs = encode_documents(before.clone()).unwrap();
+    let revision = session.revision();
+    let add: Vec<_> = intents.iter().rev().copied().map(Record::from).collect();
+    let mut params = json!({"board":target.board,"expected_revision":revision,"edits":{"add":add,"remove":[]},"dry_run":true});
+    let preview = session.execute(EDIT_TEARDROPS, &params).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    params["dry_run"] = json!(false);
+    let applied = session.execute(EDIT_TEARDROPS, &params).unwrap();
+    let diff = &applied["teardrops"];
+    let expected: Vec<_> = intents.iter().copied().enumerate().filter(|(i, _)| *i != 1 && *i != 7).map(|(_, intent)| Record::from(intent)).collect();
+    assert_eq!(diff["added"], json!(expected));
+    assert_eq!(diff["copper"].as_array().unwrap().len(), 8);
+    assert_eq!(diff["rejected"].as_array().unwrap().len(), 2);
+    for (report, ((obstacle, _), i)) in diff["rejected"].as_array().unwrap().iter().zip(obstacles.iter().zip([1, 7])) {
+        assert_eq!(report["intent"], json!(Record::from(intents[i])));
+        assert_eq!(report["reason"]["kind"], "rule");
+        let reason = &report["reason"]["detail"];
+        assert_eq!(reason["rule"], "copper_clearance");
+        assert_eq!(reason["other_object"], obstacle.to_string());
+        assert_eq!(reason["required_nm"], 35_000);
+        assert!((reason["actual_nm"].as_f64().unwrap() - 32_000.).abs() < 0.000_001);
+    }
+    for key in ["added", "removed", "copper", "rejected"] {
+        assert_eq!(preview["teardrops"][key], diff[key]);
+    }
+    assert_eq!(view(&session).teardrops(), expected.as_slice());
+    let applied_revision = session.revision();
+    assert!(session.execute(EDIT_TEARDROPS, &params).is_err(), "stale edit must be refused");
+    assert_eq!(session.revision(), applied_revision);
+    let current = session.snapshot().unwrap();
+    let saved = encode_documents(current.clone()).unwrap();
+    let board_json: serde_json::Value = serde_json::from_slice(saved.get("board.json").unwrap()).unwrap();
+    assert_eq!(board_json["format"], "pcbcraft-board/37");
+    assert_eq!(board_json["teardrops"], json!(expected));
+    assert!(view(&session).require_linear_copper().is_err());
+    session.execute("edit.undo", &serde_json::Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_docs);
+    session.execute("edit.redo", &serde_json::Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+    session.open_snapshot(decode_documents(&saved).unwrap());
+    assert_eq!(view(&session).teardrops(), expected.as_slice());
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+    let remove: Vec<_> = expected.iter().map(|record| record.id).collect();
+    let removed = session
+        .execute(EDIT_TEARDROPS, &json!({"board":target.board,"expected_revision":session.revision(),"edits":{"add":[],"remove":remove}}))
+        .unwrap();
+    assert_eq!(removed["teardrops"]["removed"], json!(expected));
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_docs);
+}
+
 /// A malformed second report fails the batch even after the first addition was accepted.
 #[test]
 fn refuses_malformed_rule_reports_without_returning_a_partial_plan() {

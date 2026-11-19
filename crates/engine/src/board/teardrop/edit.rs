@@ -2,6 +2,7 @@
 
 use super::{Error as ShapeError, StraightCopper, ViaTeardrop};
 use crate::board::view::{BoardTarget, BoardView};
+use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
@@ -9,7 +10,7 @@ use uuid::Uuid;
 mod tests;
 
 /// At most two centered via attachments per straight segment, one at each end.
-pub const MAX_INTENTS: usize = 2 * crate::board::track::MAX_TRACKS;
+pub const MAX_INTENTS: usize = 8192;
 
 /// One proposed edit to a board's straight-via intent list.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,7 +20,8 @@ pub enum Edit {
 }
 
 /// A rule that can prevent a copper addition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Rule {
     CopperClearance,
     /// Copper stays inside the outline without crossing, but is too close to an edge.
@@ -32,7 +34,7 @@ pub enum Rule {
 }
 
 /// The first blocking decision in the rule evaluator's stable order.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct RuleBlock {
     pub rule: Rule,
     /// Board-local item reference, not an obstacle index from a prepared query.
@@ -58,7 +60,8 @@ impl RuleBlock {
 }
 
 /// Why a proposed site contributes no new copper.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(tag = "kind", content = "detail", rename_all = "snake_case")]
 pub enum Refusal {
     Shape(ShapeError),
     Rule(RuleBlock),

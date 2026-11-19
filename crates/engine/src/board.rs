@@ -330,6 +330,8 @@ pub(crate) struct Board {
     pub(crate) vias: Vec<track::Via>,
     /// Exact circular tracks; unsupported conductive consumers must refuse this board.
     pub(crate) arcs: Vec<arc::ArcTrack>,
+    /// Board-owned straight via intent, never generated polygon coordinates.
+    pub(crate) teardrops: Vec<teardrop::Record>,
     pub(crate) definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,
     footprints: Vec<Footprint>,
     by_component: BTreeMap<u64, usize>,

@@ -1,7 +1,12 @@
 # Straight via teardrop records
 
-This engine boundary is not a layout feature or a native-file extension. No
-command, board document, renderer, rule checker or output uses it yet.
+`pcb.edit_teardrops` adds or removes checked straight-via teardrop intents.
+It takes a board UUID, the current `expected_revision`, and an `edits`
+object with `add` records and `remove` UUIDs. Each add record has `id`, `via`,
+`track` and `parameters`; use a fresh UUID for `id`. A `length` is
+`{"percent":20}` or `{"nanometres":100000}`; name the width limit
+`width_pct` and use `max_length_nm` and `max_width_nm` for optional caps.
+For an add-only or remove-only batch, supply an empty list for the other field.
 
 A straight-via intent names one physical board, a via and a straight track by
 identity. The track must end at the via center; the track supplies the layer
@@ -22,12 +27,12 @@ vertices back as authored data. This is an additive copper outline, not a drill
 outline or a checked routing decision. The isolated construction does not query
 other copper or need a curved track representation.
 
-Before board storage is enabled, the native format and supported attachment
-identities need approval. Persist only intent, not generated vertices. A
-consumer must not silently ignore active teardrop copper; clearance,
-connectivity, board DRC, pours and fabrication integration are not part of this
-boundary. No rule for clearance-based resizing or other attachment types is
-specified here.
+The native board stores only intent in [format 37](native-project-storage.md#straight-via-teardrop-intents).
+PCB rendering, routing, connectivity, board DRC, and fabrication do not consume
+these polygons yet and refuse boards with active intents rather than omitting them.
+Other board edits are blocked while intents exist; remove the intents before
+editing their sources. Automatic regeneration, clearance-based resizing, curved
+edges and other attachment types are not implemented.
 
 ## Add and remove preview
 
@@ -46,9 +51,12 @@ below the required clearance. An edge entering the copper interior is a
 separate crossing report, valid at zero gap and zero required clearance; copper
 outside the closed outline is a separate report regardless of edge distance.
 
-The rule evaluator is supplied by the caller; the planner has no default allow
-path. The synthetic fixture measures spacing to two authored obstacle tracks,
-not every board rule. No registered command or production evaluator calls the
-planner yet. A caller cannot treat a preview as authority to publish a later
-edit: an eventual command must check the current revision, enforce complete
-rules and publish all changes through the shared undo path.
+The command uses the board's copper clearance query, including applicable net
+class rules, and the same outline predicates as board DRC. An addition needs a
+closed outline and cannot join separate copper islands. It reports rejected
+intents with the rule, obstacle and distances or a geometry reason. Reports
+for approved additions include derived vertices. A `dry_run: true` previews
+this diff without changing the revision or undo history; applying the batch
+rechecks it and records the accepted additions and removals in one undo step.
+A fully rejected batch without removals does not take an undo step. Native save
+and reopen preserve the accepted intents, not the session's undo history.

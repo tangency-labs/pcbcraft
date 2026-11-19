@@ -260,7 +260,12 @@ impl BoardView<'_> {
                 kind: Kind::UnsupportedGeometry,
                 message,
                 at: Point { x_nm: 0, y_nm: 0 },
-                items: self.arc_tracks().iter().map(|a| a.id.to_string()).collect(),
+                items: self
+                    .arc_tracks()
+                    .iter()
+                    .map(|arc| arc.id.to_string())
+                    .chain(self.teardrops().iter().map(|record| record.id.to_string()))
+                    .collect(),
                 nets: Vec::new(),
             });
             return found.finish(rules, effective.sources);

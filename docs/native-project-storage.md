@@ -281,6 +281,18 @@ require a higher format. Those formats accept the origin. Boards without an
 origin measure outputs from board zero and use the format required by the remaining
 authored data.
 
+### Straight-via teardrop intents
+
+Board format `pcbcraft-board/37` requires a nonempty `teardrops` array and
+accepts existing straight-board fields, including footprint locks. Each record
+stores a stable UUID, the attached via and track UUIDs, and their sizing
+parameters. Vertices, net membership and rule reports are never written to the
+board. Encoding orders the records by UUID; decoding rejects duplicate
+identities/sites, dangling attachments and unrepresentable parameters or shapes.
+Older board formats reject the new array. Format 37 does not permit circular
+tracks. Removing all teardrops restores the format selected by the remaining data.
+See [straight via teardrops](teardrop-records.md) for the command and current limits.
+
 ### Placed-footprint lock metadata
 
 Board format `pcbcraft-board/34` adds optional boolean `locked` on placed
@@ -289,7 +301,7 @@ Repeated `locked` members, null and nonboolean `locked` values are refused.
 Format 34 works with or without setup when the other records allow it. For example,
 material reports, via assignments, stack fields, assembly profile adoptions,
 origin, rules, zones, silkscreen and copper retain their existing validation.
-Formats 34 and 35 accept active locks; other headers refuse `true` but accept an
+Formats 34, 35 and 37 accept active locks; other headers refuse `true` but accept an
 explicit `false` on an otherwise valid placement. Fresh canonical encoding omits
 false. Native Save can retain an unchanged board document verbatim, including
 explicit false, which older readers may reject. Formats 27–33 remain unsupported.
@@ -298,7 +310,7 @@ remaining data.
 
 A board with [circular copper records](circular-copper-records.md) but no active
 footprint locks uses format 26. A board with active footprint locks but no arcs
-uses format 34. Format 35 requires both features, so readers that support only one
+uses format 34 unless it contains straight-via teardrop intents. Format 35 requires both features, so readers that support only one
 of the earlier formats refuse the combined file instead of dropping records.
 Removing either feature selects the other feature's format; removing both
 selects the format required by the remaining content.

@@ -533,6 +533,7 @@ impl Encoder {
             || project.board.outline.is_some()
             || project.board.drawings.is_some()
             || !project.board.arcs.is_empty()
+            || !project.board.teardrops.is_empty()
             || !project.board.tracks.is_empty()
             || !project.board.vias.is_empty()
             || project.board.rules.is_some()
@@ -548,7 +549,7 @@ impl Encoder {
                 .any(|f| f.rotation != 0 || f.bottom || f.locked || f.reference_offset.is_some() || f.reference_text.is_some())
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, board rules, placement origins, assembly profiles, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation, bottom-side footprints, footprint locks, reference offsets or print overrides; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, board rules, placement origins, assembly profiles, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, teardrops, footprint rotation, bottom-side footprints, footprint locks, reference offsets or print overrides; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
