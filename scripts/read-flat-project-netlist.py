@@ -114,15 +114,44 @@ def endpoint(record, owners, placed_pins, junctions):
     raise ValueError(f"unsupported or unresolved wire endpoint: {record!r}")
 
 
+def count_fields(pairs):
+    """Reject ambiguous source counts rather than keeping the last duplicate key."""
+    fields = dict(pairs)
+    if len(fields) != len(pairs):
+        raise ValueError("expected counts must not contain duplicate keys")
+    return fields
+
+
+def compare_counts(netlist, expected):
+    """Compare independently supplied logical counts; refuse invalid counts or any mismatch."""
+    actual = {
+        "parts": len(netlist["parts"]),
+        "pins": sum(len(part[3]) for part in netlist["parts"]),
+        "nets": len(netlist["nets"]),
+    }
+    if not isinstance(expected, dict) or expected.keys() != actual.keys() or any(
+        type(count) is not int or count < 0 for count in expected.values()
+    ):
+        raise ValueError("expected counts must contain exactly parts, pins and nets as nonnegative integers")
+    mismatches = [f"{key}: expected {expected[key]}, got {value}" for key, value in actual.items() if expected[key] != value]
+    if mismatches:
+        raise ValueError("count mismatch: " + "; ".join(mismatches))
+    return actual
+
+
 def main():
-    """Print the documented projection or report why the example cannot read the input."""
+    """Print the projection or verified counts; report errors without a success result."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("folder", type=Path, help="trusted project directory, not a .pc archive")
+    parser.add_argument("--expected-counts", type=Path, help="compare to source-side JSON with parts, pins and nets")
     args = parser.parse_args()
     try:
         result = read_netlist(
             lambda path: json.loads((args.folder / path).read_text(encoding="utf-8"), object_pairs_hook=unique_object)
         )
+        if args.expected_counts is not None:
+            expected = json.loads(args.expected_counts.read_text(encoding="utf-8"), object_pairs_hook=count_fields)
+            result = compare_counts(result, expected)
     except (OSError, ValueError, TypeError, KeyError) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")
     print(json.dumps(result, ensure_ascii=True, indent=2))

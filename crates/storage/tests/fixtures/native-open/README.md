@@ -26,6 +26,10 @@ outside normal Open and are tested separately as diagnostic inputs.
 `dual-led-editing-demo-v3.pc`, not a saved project. It records the terminal
 membership from `examples/README.md` at the editing demo's source revision
 above, alongside saved part and pin fields, for the [independent reader comparison].
+`dual-led-editing-demo-source-counts.json` supplies the synthetic source-side
+counts for the same demo: six two-pin parts and one three-pin transistor, with
+four connected groups. The transistor's three unwired pins count as pins but
+not as nets. This fixture is not a decoded third-party board.
 
 [independent reader comparison]: ../../../../../docs/reading-native-projects.md#worked-example-one-flat-sheet
 [native Open compatibility boundary]: ../../../../../docs/native-project-storage.md#compatibility-and-fixtures
