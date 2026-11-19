@@ -48,7 +48,7 @@ impl Parameters {
             Length::Percent(pct) => percent(pct),
             Length::Nanometres(nm) => nm,
         };
-        (length.min(self.max_length_nm.unwrap_or(MAX_CENTER_NM)), percent(self.width_pct).min(self.max_width_nm.unwrap_or(MAX_CENTER_NM)))
+        (self.max_length_nm.map_or(length, |cap| length.min(cap)), percent(self.width_pct).min(self.max_width_nm.unwrap_or(MAX_CENTER_NM)))
     }
 }
 

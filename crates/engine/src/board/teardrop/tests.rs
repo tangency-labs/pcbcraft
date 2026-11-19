@@ -94,6 +94,23 @@ fn parameter_limits() {
     }
 }
 
+/// A long percentage request fits this track only when an explicit length cap shortens it.
+#[test]
+fn long_percent_extension_requires_an_explicit_cap() {
+    let center = point(-500_000_000, 0);
+    let outer = point(500_000_000, 0);
+    let diameter_nm = 10_000_000;
+    let parameters = Parameters { length: Length::Percent(u16::MAX), width_pct: 100, ..PARAMS };
+    let outline = |parameters: Parameters| {
+        let (extension, width_cap) = parameters.for_via(diameter_nm);
+        tangent_quad(center, outer, diameter_nm, 100_000, extension, width_cap)
+    };
+    // The old implicit cap made the reach 992,300,000 nm, short enough for this track.
+    assert_eq!(outline(parameters), Err(Error::TrackTooShort));
+    let capped = outline(Parameters { max_length_nm: Some(MAX_CENTER_NM), ..parameters }).unwrap();
+    assert_eq!(capped[1].x_nm, center.x_nm + diameter_nm / 2 + MAX_CENTER_NM);
+}
+
 /// Do not resolve a foreign board or a missing, nil or conflicting source identity.
 #[test]
 fn identity_and_attachment_are_checked() {
