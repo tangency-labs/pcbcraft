@@ -162,6 +162,43 @@ fn unroute_preparation_yields_and_preserves_report() {
     }
 }
 
+/// Sparse overlapping envelopes prune globally, including across the former block boundary.
+/// Poll once per charged index visit and compare source-ordered hits to a full scan.
+#[test]
+fn sparse_unroute_index_prunes_at_budget_one() {
+    const COUNT: usize = 16_384;
+    let bounds: Vec<_> = (0..COUNT)
+        .map(|id| {
+            let x = ((COUNT - id) * 10) as f64;
+            [x, -1., x + 10., 1.]
+        })
+        .collect();
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut build = std::pin::pin!(Index::new(&bounds));
+    let index = loop {
+        if let Poll::Ready(index) = build.as_mut().poll(&mut cx) {
+            break index;
+        }
+    };
+    for id in [0, 127, 128, COUNT / 2, COUNT - 1] {
+        let query = bounds[id];
+        let expected: Vec<_> = bounds.iter().enumerate().filter_map(|(other, b)| (query[0] <= b[2] && b[0] <= query[2]).then_some(other)).collect();
+        let mut search = std::pin::pin!(index.query(query));
+        let mut visits = 0;
+        let found = loop {
+            match search.as_mut().poll(&mut cx) {
+                Poll::Pending => {
+                    visits += 1;
+                    assert!(visits < 64, "sparse query {id} failed to prune the global hierarchy");
+                }
+                Poll::Ready(found) => break found,
+            }
+        };
+        assert!(visits > 1, "the sparse search must be resumable");
+        assert_eq!(found.into_iter().collect::<Vec<_>>(), expected);
+    }
+}
+
 /// Overlapping end caps let the shortest walk skip the pad-side segment. Remove both UUIDs,
 /// preserve the trunk, and report the left-to-middle edge even though `to` is the right pad.
 #[test]

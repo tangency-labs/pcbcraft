@@ -1,7 +1,6 @@
 //! Plan a directional pad-to-pad unroute without changing the source board.
 use super::*;
 use crate::board::{
-    clearance::index::Tree,
     ratsnest::Endpoint,
     view::{BoardTarget, CopperLayers, rectangle_points},
     work::yield_unit,
@@ -11,6 +10,11 @@ use std::{
     pin::Pin,
     task::{Context, Poll, Waker},
 };
+
+mod index;
+
+use index::Index;
+use serde_json::Map;
 
 type Prepared = Result<(Option<Project>, Value), CommandError>;
 
@@ -79,21 +83,33 @@ impl Session {
 async fn prepare(project: &Project, target: BoardTarget, params: &Value) -> Prepared {
     let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
     let Cut { tracks, vias, unrouted } = plan(view, &params["from"], &params["to"]).await?;
+    let mut deletion = Map::new();
+    let mut removed = Map::new();
+    for (key, ids) in [("tracks", tracks), ("vias", vias)] {
+        let mut report_ids = Vec::new();
+        let mut deletion_ids = Vec::new();
+        for id in ids {
+            yield_unit().await;
+            let value = Value::String(id.to_string());
+            deletion_ids.push(value.clone());
+            report_ids.push(value);
+        }
+        if !deletion_ids.is_empty() {
+            deletion.insert(key.to_owned(), Value::Array(deletion_ids));
+        }
+        removed.insert(key.to_owned(), Value::Array(report_ids));
+    }
     yield_unit().await;
-    let mut deletion = json!({});
-    if !tracks.is_empty() {
-        deletion["tracks"] = json!(tracks);
-    }
-    if !vias.is_empty() {
-        deletion["vias"] = json!(vias);
-    }
-    let (candidate, _) = edit_candidate(project, DELETE_TRACKS, &deletion)?;
+    // This shared validation/audit is synchronous; separate it from report construction.
+    let (candidate, _) = edit_candidate(project, DELETE_TRACKS, &Value::Object(deletion))?;
+    yield_unit().await;
     let dry_run = params["dry_run"].as_bool() == Some(true);
-    Ok((
-        candidate.filter(|_| !dry_run),
-        json!({"dry_run":dry_run,"removed":{"tracks":tracks,"vias":vias},
-        "requested":{"from":params["from"],"to":params["to"]},"unrouted":unrouted}),
-    ))
+    let mut report = Map::new();
+    report.insert("dry_run".into(), Value::Bool(dry_run));
+    report.insert("removed".into(), Value::Object(removed));
+    report.insert("requested".into(), json!({"from":params["from"],"to":params["to"]}));
+    report.insert("unrouted".into(), Value::Array(unrouted));
+    Ok((candidate.filter(|_| !dry_run), Value::Object(report)))
 }
 
 struct Cut {
@@ -317,15 +333,11 @@ struct Contacts {
     contours: Vec<PadContour>,
     bounds: Vec<[f64; 4]>,
     layers: Vec<Vec<Uuid>>,
-    index: Vec<Tree>,
+    index: Index,
     pads: usize,
 }
 impl Contacts {
-    /// Each packed block bounds index construction and lookup to 128 envelopes. Blocks and
-    /// their hits are visited in source order, preserving shortest-path tie breaking.
-    const BLOCK: usize = 128;
-
-    /// Project one geometry node at a time, then index one fixed-size block per unit.
+    /// Project one geometry node at a time, then build the global hierarchy cooperatively.
     async fn new(lands: &[Land], tracks: &[Track], vias: &[Via]) -> Self {
         let mut contours = Vec::new();
         let mut bounds = Vec::new();
@@ -348,44 +360,33 @@ impl Contacts {
             yield_unit().await;
             bounds.push(contour.bounds());
         }
-        let mut index = Vec::new();
-        for block in bounds.chunks(Self::BLOCK) {
-            yield_unit().await;
-            index.push(Tree::new(block.to_vec()));
-        }
+        let index = Index::new(&bounds).await;
         Self { contours, bounds, layers, index, pads: lands.len() }
     }
 
-    /// Query one bounded block, then check each candidate on its own work unit. Pad-only
-    /// checks use strict overlap; routed checks use the legacy inclusive contact predicate.
+    /// Prune disjoint subtrees and decide exact contacts in increasing source-ID order.
+    /// Direct pad overlap remains strict; routed contacts remain inclusive.
     async fn contacts(&self, node: usize, pads_only: bool) -> Vec<usize> {
         let mut result = Vec::new();
-        for (block, index) in self.index.iter().enumerate() {
+        for other in self.index.query(self.bounds[node]).await {
             yield_unit().await;
-            let start = block * Self::BLOCK;
-            if pads_only && start >= self.pads {
-                break;
+            if other == node || (pads_only && other >= self.pads) {
+                continue;
             }
-            for candidate in index.candidates(self.bounds[node], 0.) {
-                yield_unit().await;
-                let other = start + candidate;
-                let touching = if pads_only {
-                    other < self.pads
-                        && self.layers[node].iter().any(|layer| self.layers[other].contains(layer))
-                        && self.contours[node].overlaps(&self.contours[other])
-                } else {
-                    node.max(other) >= self.pads && routed_contact(&self.layers, &self.bounds, &self.contours, node.max(other), node.min(other))
-                };
-                if other != node && touching {
-                    result.push(other);
-                }
+            let touching = if pads_only {
+                self.layers[node].iter().any(|layer| self.layers[other].contains(layer)) && self.contours[node].overlaps(&self.contours[other])
+            } else {
+                node.max(other) >= self.pads && routed_contact(&self.layers, &self.bounds, &self.contours, node.max(other), node.min(other))
+            };
+            if touching {
+                result.push(other);
             }
         }
         result
     }
 
-    /// Mark and return one component in breadth-first order. Reuse visitation marks for
-    /// disjoint components so enumerating disconnected pads stays proportional to the graph.
+    /// Mark and return one component in breadth-first order. Reusing marks avoids
+    /// revisiting components while enumerating disconnected pads for the report.
     async fn walk(&self, root: usize, remove: &[bool], parent: &mut [Option<usize>]) -> Vec<usize> {
         let mut queue = vec![root];
         parent[root] = Some(root);
