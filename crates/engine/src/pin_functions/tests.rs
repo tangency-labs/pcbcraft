@@ -298,8 +298,7 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
 fn first_pin_function_selection_adopts_legacy_storage_without_moving_identities() {
     // Before /9, board ownership was implicit and the format could not describe a schematic-only project.
     for (board, version) in [(true, 6), (true, 7), (true, 9), (false, 9)] {
-        let mut session = fixture(board);
-        let mut legacy = Project::clone(&crate::persistence::diagnostic_snapshot(session.snapshot().unwrap()));
+        let mut legacy = Project::clone(&crate::persistence::diagnostic_snapshot(fixture(board).snapshot().unwrap()));
         legacy.layout = None;
         let had_watermark = version != 6;
         if !had_watermark {
@@ -316,7 +315,12 @@ fn first_pin_function_selection_adopts_legacy_storage_without_moving_identities(
         assert!(!before.has_sheet_occurrences());
         assert_eq!(before.numeric_id_high_water.is_some(), had_watermark);
         assert_eq!(encode_documents(before.clone()).unwrap(), old);
+        // A fresh session must start with the saved watermark, not the fixture's in-memory lineage.
+        let mut session = Session::default();
         session.open_snapshot(before.clone());
+        let opened = session.snapshot().unwrap();
+        assert!(Arc::ptr_eq(&opened, &before));
+        assert_eq!(opened.numeric_id_high_water.is_some(), had_watermark);
         let mut dry_run = params(&session, json!("ADC_IN"));
         dry_run["dry_run"] = json!(true);
         assert_eq!(session.execute(SET, &dry_run).unwrap()["pin_function_change"]["after"]["name"], "ADC_IN");
