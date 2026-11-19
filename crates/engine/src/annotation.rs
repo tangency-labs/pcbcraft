@@ -136,6 +136,7 @@ fn plan<'a>(targets: &[Target<'a>], parts: impl Iterator<Item = &'a PartInstance
 impl Session {
     /// Resolve the catalog-validated sheet scope and return proposals at the current revision.
     /// Omitted scope means the whole project, regardless of the active sheet. No preview is cached.
+    /// The returned revision is preview-only and grants no Apply authority.
     pub(super) fn preview_annotation(&self, params: &Value) -> Result<Value, CommandError> {
         let project = self.open_project()?;
         let scope = params.get("sheet").and_then(Value::as_str).map(|sheet| project.resolve_sheet(Some(sheet))).transpose()?;
