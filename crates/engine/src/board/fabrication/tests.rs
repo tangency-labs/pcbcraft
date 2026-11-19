@@ -155,8 +155,8 @@ fn read_rounded_macro(lines: &mut std::str::Lines<'_>) -> Result<ReadRounded, &'
                 read.strips.push((read_mm(width)?, start, end));
             }
             ["4", "1", "4", xy @ .., "0"] if read.outline.is_empty() && xy.len() == 10 => {
-                for pair in xy.chunks_exact(2) {
-                    read.outline.push(point(pair[0], pair[1])?);
+                for &[x, y] in xy.as_chunks::<2>().0 {
+                    read.outline.push(point(x, y)?);
                 }
                 if read.outline.first() != read.outline.last() {
                     return Err("open macro outline");
