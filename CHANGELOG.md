@@ -60,11 +60,12 @@ and the board. `part_groups.create`, `update`, `remove` and `inspect`
 manage the catalog, and `part_instances.set_groups` and
 `part_instances.inspect_groups` set and read a part instance's groups by its
 stable ID, so annotation does not change membership. A group that still has
-members cannot be removed. Projects with part groups save as
-`pcbcraft-project/24` (board instances `pcbcraft-instances/5` when memberships
-exist). Dense memberships use `pcbcraft-project/39` and board instances
-`pcbcraft-instances/7` through a compact UUID dictionary when expanded records
-exceed existing size limits; no supported membership is dropped. Earlier files
+members cannot be removed. Projects with part groups use project/24 (expanded
+memberships) or project/39 (compact) unless profiles, pairs or a designator lock
+select project/36, /45 or /51. Board instance documents use instances/5 or /7
+for the two representations, or instances/8 when pairs are present. The compact
+UUID dictionary keeps dense memberships within the existing size limits without
+dropping supported membership. Earlier files
 keep the expanded representation while it fits, and compact files keep their
 encoding after reopening. Unchanged saves preserve canonical encoder bytes;
 accepted noncanonical input may normalize. Copy/Cut leave part groups in their

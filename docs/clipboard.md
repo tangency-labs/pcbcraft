@@ -23,7 +23,10 @@ cancel leave the electrical revision, saved bytes and undo history unchanged.
 
 Copied objects receive new component, symbol, wire, junction and label IDs.
 References are renumbered by default; values, component metadata, field
-appearance and exact pinned definitions are preserved. No-connect intent follows
+appearance and exact pinned definitions are preserved. Part-instance designator
+locks survive Copy, Cut, Duplicate and Paste. A lock does not disable ordinary
+paste renumbering; use Paste Options to preserve the original reference, subject
+to the existing collision check. No-connect intent follows
 the copied part's new identity, with partial-unit copies retaining only flags on
 the captured terminals and whole-part copies retaining unresolved intent too.
 Partial-unit copy refuses unknown-terminal intent that cannot be assigned to one
@@ -132,10 +135,18 @@ ordinary Undo recovers it.
 one selected root and its complete reachable child tree, addressed by an explicit
 `root_sheet` UUID independently of native display order, with optional `cut_sheets`
 metadata. Orphan payload sheets/components, board owners, invalid
-records and oversized input are rejected. Flat schematic and PCB exports retain
-version 1, so existing flat interchange stays compatible; older clients reject
-version 2. Saved project formats are unchanged. Clipboard metadata suggests
+records and oversized input are rejected. Unlocked flat schematic exports retain
+version 1, and unlocked hierarchy exports retain version 2; older clients reject
+version 2. Copying does not change the source project's saved format. Clipboard metadata suggests
 relocation but never bypasses live ownership, cycle, revision or geometry checks.
+
+A schematic fragment containing any locked part instance uses
+`pcbcraft-clipboard/3` with project/51 in its native document map. With
+a non-null, non-nil `root_sheet` UUID it has the same closed-tree contract as
+version 2; an omitted or null root selects flat scope like version 1. Lock-free fragments retain those lower versions.
+Version 3 requires at least one lock, and versions 1/2 refuse lock-bearing
+fragments. Its `kind: "schematic"` distinguishes this contract from board
+version 3. The same size, identity, ownership and revision checks apply.
 
 Copy/Cut additionally accept optional `objects`, a unique array of root
 `sheet-symbol-N` and `label-N` IDs. `items` still supplies symbol/wire arrays,

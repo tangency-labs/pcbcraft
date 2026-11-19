@@ -21,6 +21,7 @@ pub const PASTE: &str = "schematic.paste";
 pub const MAX_BYTES: usize = 8 << 20;
 const FORMAT: &str = "pcbcraft-clipboard/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-clipboard/2";
+const DESIGNATOR_LOCK_FORMAT: &str = "pcbcraft-clipboard/3";
 mod hierarchy;
 mod preview;
 pub(crate) use hierarchy::hierarchy_objects;
@@ -213,15 +214,16 @@ impl Fragment {
     }
 
     /// Decode bounded native text: version 1 is flat; version 2 contains a closed hierarchy tree
-    /// or root interfaces. Unsupported versions, board owners, orphan scope and invalid records
-    /// fail before any destination edit or identity allocation.
+    /// or root interfaces. Version 3 requires locked parts and uses flat scope when root_sheet is
+    /// omitted or null, otherwise an explicit non-nil hierarchy root. All versions reject board
+    /// owners, orphan scope and invalid records before destination edits or identity allocation.
     pub fn from_text(text: &str) -> Result<Self, CommandError> {
         if text.len() > MAX_BYTES {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft design fragment."))?;
-        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT)
+        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | DESIGNATOR_LOCK_FORMAT)
             || envelope.kind != "schematic"
             || !crate::wire::valid_point(&envelope.anchor)
         {
@@ -229,7 +231,12 @@ impl Fragment {
         }
         let documents = envelope.documents.into_iter().map(|(path, text)| (path, text.into_bytes())).collect();
         let project = crate::persistence::decode_documents(&documents).map_err(invalid)?;
-        let project = if envelope.format == HIERARCHY_FORMAT {
+        let has_locks = project.components.values().any(|part| part.designator_locked);
+        if (envelope.format == DESIGNATOR_LOCK_FORMAT) != has_locks {
+            return Err(invalid("Designator locks require clipboard format 3 and at least one locked part instance."));
+        }
+        let hierarchy = envelope.format == HIERARCHY_FORMAT || (envelope.format == DESIGNATOR_LOCK_FORMAT && envelope.root_sheet.is_some());
+        let project = if hierarchy {
             let root =
                 envelope.root_sheet.filter(|id| !id.is_nil()).ok_or_else(|| invalid("hierarchy clipboard needs an explicit root sheet UUID"))?;
             Arc::new(
@@ -244,11 +251,12 @@ impl Fragment {
             project
         };
         let fragment = Self { project, anchor: envelope.anchor, cut_sheets: envelope.cut_sheets };
-        fragment.validate_scope(envelope.format == HIERARCHY_FORMAT)?;
+        fragment.validate_scope(hierarchy)?;
         Ok(fragment)
     }
 
     /// Serialize just the fragment; no paths, credentials, unused definitions or source files travel.
+    /// Locked references select format 3; unlocked flat/hierarchical fragments retain formats 1/2.
     pub fn to_text(&self) -> Result<String, CommandError> {
         let documents = crate::persistence::encode_documents(self.project.clone())
             .map_err(invalid)?
@@ -256,7 +264,14 @@ impl Fragment {
             .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)).map_err(invalid))
             .collect::<Result<_, _>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.has_hierarchy() { HIERARCHY_FORMAT } else { FORMAT }.into(),
+            format: if self.project.components.values().any(|part| part.designator_locked) {
+                DESIGNATOR_LOCK_FORMAT
+            } else if self.has_hierarchy() {
+                HIERARCHY_FORMAT
+            } else {
+                FORMAT
+            }
+            .into(),
             kind: "schematic".into(),
             anchor: self.anchor,
             documents,
@@ -286,14 +301,20 @@ impl Fragment {
 
     /// Build a cancellable placement candidate and its new selection. Copied connectivity remains
     /// separate from existing geometry except for explicitly retained named-net semantics.
+    /// A newly copied locked part adopts its required storage metadata in the candidate.
     pub fn placed(&self, destination: &Project, at: Point, first_id: u64, options: &PasteOptions) -> Result<(Project, Selection), CommandError> {
         if self.has_hierarchy() {
             return self.placed_hierarchy(destination, at, first_id, options);
         }
-        self.placed_with_parts(destination, at, first_id, options, &mut BTreeMap::new())
+        let (mut next, selected, introduced_lock) = self.placed_with_parts(destination, at, first_id, options, &mut BTreeMap::new())?;
+        if introduced_lock {
+            next.prepare_designator_metadata().map_err(invalid)?;
+        }
+        Ok((next, selected))
     }
 
-    /// A hierarchy paste shares this remap across sheets so a multi-unit part is copied once.
+    /// A hierarchy paste shares the remap across sheets so a multi-unit part is copied once.
+    /// Report whether this placement inserted any locked owners, excluding reused owners.
     fn placed_with_parts(
         &self,
         destination: &Project,
@@ -301,7 +322,7 @@ impl Fragment {
         first_id: u64,
         options: &PasteOptions,
         shared_parts: &mut BTreeMap<u64, u64>,
-    ) -> Result<(Project, Selection), CommandError> {
+    ) -> Result<(Project, Selection, bool), CommandError> {
         if options.reuse_sheets {
             return Err(invalid("flat fragments have no child sheets to relocate"));
         }
@@ -333,6 +354,7 @@ impl Fragment {
             pinned.insert((d.library.clone(), d.id.clone(), d.revision()), d);
         }
         let retained_parts: BTreeSet<_> = shared_parts.keys().copied().collect();
+        let mut introduced_lock = false;
         for component in self.project.components.values() {
             if let Some(id) = shared_parts.get(&component.ordinal) {
                 if !next.components.contains_key(id) {
@@ -373,6 +395,7 @@ impl Fragment {
                 copy.value.push_str(&options.net_name_suffix);
                 crate::schematic::check_value(&copy.value).map_err(invalid)?;
             }
+            introduced_lock |= copy.designator_locked;
             Arc::make_mut(&mut next.components).insert(id, copy);
         }
         for assignment in self.project.schematic_packages.assignments.values() {
@@ -462,7 +485,7 @@ impl Fragment {
         sheet.connectivity = Arc::default();
         next.numeric_id_high_water = Some(next.allocation_high_water().max(cursor.saturating_sub(1)));
         next.named_graph = Arc::default();
-        Ok((next, selected))
+        Ok((next, selected, introduced_lock))
     }
 }
 
@@ -560,7 +583,8 @@ impl Session {
 }
 
 /// Adopt required marker metadata and validate disposable geometry/assets before publication.
-/// Return the adopted candidate so the codec and transaction inspect the same occurrence IDs.
+/// Placement prepares metadata for copied locks. Return the adopted candidate so the codec
+/// and transaction inspect the same occurrence IDs.
 /// The previous net registry can still name removed anchors; publication reconciles its successor.
 /// Validate zone geometry/references before omitting them with the temporary registry; the real
 /// candidate retains both, and publication rechecks zones against the reconciled identities.

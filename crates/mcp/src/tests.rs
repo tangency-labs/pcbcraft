@@ -128,6 +128,31 @@ fn pin_remap_wire_refuses_duplicate_unit_names() {
     }
 }
 
+/// Designator preview data survives inspect:false, while applying the same shared command
+/// changes the instance lock and participates in ordinary Undo.
+#[test]
+fn designator_lock_preview_and_apply_share_mcp_dispatch() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let revision = session.revision();
+    let before = session.snapshot().unwrap();
+    let mut params = json!({"command":pcbcraft_engine::SET_SYMBOL_FIELDS,"params":{"symbol":"symbol-2","reference":"R1","value":"R","designator_locked":true,"dry_run":true,"expected_revision":revision},"inspect":false});
+    let preview = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap();
+    assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["provisional"], true);
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    params["params"]["dry_run"] = json!(false);
+    crate::backend::call_session(&mut session, "engine.execute", &params).unwrap();
+    assert!(session.project().unwrap().components().next().unwrap().designator_locked());
+    params["params"]["dry_run"] = json!(true);
+    let stale = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap_err();
+    assert_eq!(stale.code(), "stale_revision");
+    assert_eq!(stale.details(), &json!({"current_revision":session.revision()}));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
