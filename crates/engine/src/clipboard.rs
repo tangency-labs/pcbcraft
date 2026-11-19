@@ -22,6 +22,7 @@ pub const MAX_BYTES: usize = 8 << 20;
 const FORMAT: &str = "pcbcraft-clipboard/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-clipboard/2";
 const NPTH_FORMAT: &str = "pcbcraft-clipboard/6";
+const RATED_PART_FORMAT: &str = "pcbcraft-clipboard/8";
 mod hierarchy;
 mod preview;
 pub(crate) use hierarchy::hierarchy_objects;
@@ -213,16 +214,16 @@ impl Fragment {
         Ok(Self { project: Arc::new(fragment), anchor, cut_sheets })
     }
 
-    /// Decode bounded native text: version 1 is flat; version 2 contains a closed hierarchy tree
-    /// or root interfaces. Unsupported versions, board owners, orphan scope and invalid records
-    /// fail before any destination edit or identity allocation.
+    /// Decode bounded native text: /1 is flat, /2 carries hierarchy or root interfaces, and
+    /// /8 contains an authored device supply range in either scope. Unsupported versions,
+    /// board owners, orphan scope and invalid records fail before any edit or identity allocation.
     pub fn from_text(text: &str) -> Result<Self, CommandError> {
         if text.len() > MAX_BYTES {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft design fragment."))?;
-        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | NPTH_FORMAT)
+        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | NPTH_FORMAT | RATED_PART_FORMAT)
             || envelope.kind != "schematic"
             || !crate::wire::valid_point(&envelope.anchor)
         {
@@ -230,7 +231,9 @@ impl Fragment {
         }
         let documents = envelope.documents.into_iter().map(|(path, text)| (path, text.into_bytes())).collect();
         let project = crate::persistence::decode_documents(&documents).map_err(invalid)?;
-        let hierarchical = envelope.format == HIERARCHY_FORMAT || (envelope.format == NPTH_FORMAT && envelope.root_sheet.is_some());
+        let rated = envelope.format == RATED_PART_FORMAT;
+        let npth = envelope.format == NPTH_FORMAT;
+        let hierarchical = envelope.format == HIERARCHY_FORMAT || ((rated || npth) && envelope.root_sheet.is_some());
         let project = if hierarchical {
             let root =
                 envelope.root_sheet.filter(|id| !id.is_nil()).ok_or_else(|| invalid("hierarchy clipboard needs an explicit root sheet UUID"))?;
@@ -246,10 +249,13 @@ impl Fragment {
             project
         };
         let fragment = Self { project, anchor: envelope.anchor, cut_sheets: envelope.cut_sheets };
-        if (envelope.format == NPTH_FORMAT) != fragment.has_npth() {
+        if !rated && npth != fragment.has_npth() {
             return Err(invalid("clipboard format does not match its pinned non-plated holes"));
         }
         fragment.validate_scope(hierarchical)?;
+        if rated != fragment.has_rated_parts() {
+            return Err(invalid("Only schematic clipboard /8 carries device supply ranges, and it requires one."));
+        }
         Ok(fragment)
     }
 
@@ -273,7 +279,9 @@ impl Fragment {
             .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)).map_err(invalid))
             .collect::<Result<_, _>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.has_npth() {
+            format: if self.has_rated_parts() {
+                RATED_PART_FORMAT
+            } else if self.has_npth() {
                 NPTH_FORMAT
             } else if self.has_hierarchy() {
                 HIERARCHY_FORMAT
@@ -292,6 +300,14 @@ impl Fragment {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         Ok(text)
+    }
+
+    /// Only a rating in the copied dependency closure requires the newer envelopes.
+    pub(crate) fn has_rated_parts(&self) -> bool {
+        self.project
+            .components
+            .values()
+            .any(|component| component.part.as_ref().is_some_and(|part| !part.resolved.definition.terminal_ratings.is_empty()))
     }
 
     /// Original anchor for Paste at Original Position, independent of the target camera.

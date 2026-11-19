@@ -17,14 +17,18 @@ payload only when selected; endpoints whose owners are omitted become shared
 free endpoints. Copy/Cut return portable text through `Session::execute` and MCP,
 including with inspection suppressed.
 
-Flat data stays `pcbcraft-clipboard/1`; a rooted hierarchy/interface payload uses
-`pcbcraft-clipboard/2`, with `kind: "schematic"`, an anchor, explicit `root_sheet` UUID, native
-`documents` and optional `cut_sheets` metadata. Native document display order
+The base format is `pcbcraft-clipboard/1` for flat data and
+`pcbcraft-clipboard/2` for a rooted hierarchy/interface payload. Pinned
+non-plated holes require `/6` in either scope. A payload carrying a
+[device supply range](part-schema.md#device-supply-range) uses
+`pcbcraft-clipboard/8`, which can also carry pinned non-plated holes. All have `kind: "schematic"`, an
+anchor and native `documents`. Rooted payloads also carry an explicit
+`root_sheet` UUID and may carry `cut_sheets` metadata. Native document display order
 never determines the clipboard root. Native codecs qualify records, definitions,
 geometry, endpoint references and topology. Additional scope checks reject board
 owners, orphan sheets/components, empty roots and a hierarchy disguised as a
 legacy flat payload. The 8 MiB bound applies before JSON parsing. Older clients
-reject version 2; source project paths and runtime providers are not required.
+reject unsupported versions; source project paths and runtime providers are not required.
 
 Default paste creates fresh child UUIDs and numeric object/component/interface
 IDs. Existing names are retained when free, otherwise bounded copy names are

@@ -256,7 +256,7 @@ impl ParamKind {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
             Self::PartDraft => {
-                json!({"type":"object","description":"Bounded pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 native draft record"})
+                json!({"type":"object","description":"Bounded native reusable or manufacturer part draft record"})
             }
             Self::AuthoringItem => {
                 json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
@@ -1104,12 +1104,7 @@ const CATALOG: &[Command] = &[
         title: "Paste",
         summary: "Paste a portable schematic fragment with fresh identities in one undo step.",
         params: &[
-            Param {
-                name: "text",
-                required: true,
-                kind: ParamKind::ClipboardText,
-                summary: "pcbcraft-clipboard/1 or pcbcraft-clipboard/2 UTF-8 envelope",
-            },
+            Param { name: "text", required: true, kind: ParamKind::ClipboardText, summary: "Native schematic clipboard UTF-8 envelope" },
             SYMBOL_X,
             SYMBOL_Y,
             EXPECTED_REVISION,

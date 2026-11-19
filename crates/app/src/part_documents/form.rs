@@ -71,6 +71,7 @@ impl PcbApp {
                             properties::field(ui, "Units", |ui| {
                                 ui.label(symbol.units().iter().map(|unit| unit.unit_id()).collect::<Vec<_>>().join(", "));
                             });
+                            supply_ranges(ui, part, &symbol, &mut doc.pending, &mut doc.error);
                         }
                         match pcbcraft_chrome::part_form::reference(
                             ui,
@@ -207,6 +208,91 @@ impl PcbApp {
         }
     }
 }
+/// Edit both bounds of one power input in one Apply/undo. Pending text is session UI,
+/// never a native value; errors leave the previous authored range untouched.
+fn supply_ranges(
+    ui: &mut egui::Ui,
+    part: &mut PartDefinition,
+    symbol: &pcbcraft_engine::schematic::SymbolDefinition,
+    pending: &mut BTreeMap<String, String>,
+    error: &mut Option<String>,
+) {
+    use pcbcraft_engine::schematic::ElectricalType::PowerIn;
+    if part.terminal_ratings.is_empty() && !symbol.pins().iter().any(|pin| pin.electrical_type == PowerIn) {
+        return;
+    }
+    controls::collapsing(ui, "supply_ranges", "Device supply ranges", false, None, |ui| {
+        ui.label("Enter volts or SI-prefixed voltages. Leave either bound blank when unknown.");
+        for pin in symbol.pins().iter().filter(|pin| pin.electrical_type == PowerIn) {
+            let id = &pin.number;
+            ui.push_id(id, |ui| {
+                let name = pin.name.as_ref().map_or_else(|| id.clone(), |name| format!("{name} ({id})"));
+                ui.strong(name);
+                let range = part.supply_range(id);
+                let min = supply_input(ui, pending, id, "min", "Minimum (V)", range.and_then(|range| range.supply_min.as_ref()));
+                let max = supply_input(ui, pending, id, "max", "Maximum (V)", range.and_then(|range| range.supply_max.as_ref()));
+                if pending.contains_key(&min.0) || pending.contains_key(&max.0) {
+                    ui.horizontal(|ui| {
+                        if controls::button(ui, "Apply range").clicked() {
+                            match part.set_supply_range(id, &min.1, &max.1) {
+                                Ok(()) => {
+                                    pending.remove(&min.0);
+                                    pending.remove(&max.0);
+                                    *error = None;
+                                }
+                                Err(reason) => *error = Some(reason),
+                            }
+                        }
+                        if controls::button(ui, "Reset range").clicked() {
+                            pending.remove(&min.0);
+                            pending.remove(&max.0);
+                            *error = None;
+                        }
+                    });
+                }
+            });
+        }
+        // A newer symbol revision can invalidate an older terminal rating. Show it with
+        // a removal action instead of silently dropping it or making the draft unfixable.
+        let stale: Vec<_> = part
+            .terminal_ratings
+            .keys()
+            .filter(|id| symbol.pin_index(id).is_none_or(|index| symbol.pins()[index].electrical_type != PowerIn))
+            .cloned()
+            .collect();
+        for id in stale {
+            ui.push_id(&id, |ui| {
+                ui.label(format!("Terminal {id} is no longer a power input."));
+                if controls::button(ui, "Remove obsolete range").clicked() {
+                    *error = part.set_supply_range(&id, "", "").err();
+                }
+            });
+        }
+    });
+}
+
+/// Keep uncommitted bound text distinct from category field IDs and from a stored zero.
+fn supply_input(
+    ui: &mut egui::Ui,
+    pending: &mut BTreeMap<String, String>,
+    id: &str,
+    bound: &str,
+    label: &str,
+    current: Option<&TypedValue>,
+) -> (String, String) {
+    let key = format!("supply/{id}/{bound}");
+    let current = current.map(TypedValue::display).unwrap_or_default();
+    let mut text = pending.get(&key).cloned().unwrap_or_else(|| current.clone());
+    if properties::text(ui, label, &mut text).changed() {
+        if text == current {
+            pending.remove(&key);
+        } else {
+            pending.insert(key.clone(), text.clone());
+        }
+    }
+    (key, text)
+}
+
 /// The primary quantity is chosen only among the exact selected category's bounded fields.
 fn primary_value_form(ui: &mut egui::Ui, part: &mut PartDefinition, catalog: &Catalog) {
     if let Some(binding) = &mut part.category

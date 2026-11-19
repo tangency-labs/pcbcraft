@@ -33,6 +33,7 @@ impl Record {
             category: None,
             fixed_parameters: BTreeMap::new(),
             packages: BTreeMap::new(),
+            terminal_ratings: BTreeMap::new(),
         }))
     }
     /// Orderable drafts require a resolved published generic part and an explicit package.
@@ -101,6 +102,12 @@ impl Record {
         }
         Ok(())
     }
+    /// Keep session drafts and the publication preview on the same lazy native envelope.
+    fn select_rating_format(&mut self) {
+        if let Self::Part(part) = self {
+            part.select_rating_format();
+        }
+    }
     /// A derivative retains the original record's licence and portable provenance.
     pub fn copy(&self) -> Result<Self, String> {
         let mut copy = self.clone();
@@ -128,8 +135,11 @@ impl Record {
             return Err("Part draft exceeds 1 MiB.".into());
         }
         match self {
-            Self::Part(p) if p.packages.len() > 64 || p.fixed_parameters.len() > 64 => {
-                return Err("A part supports at most 64 packages and fixed parameters.".into());
+            Self::Part(p) => {
+                if p.packages.len() > 64 || p.fixed_parameters.len() > 64 {
+                    return Err("A part supports at most 64 packages and fixed parameters.".into());
+                }
+                p.validate_rating_values()?;
             }
             Self::Orderable(p) if p.specifications.len() > 64 => return Err("At most 64 specifications are supported.".into()),
             _ => {}
@@ -159,7 +169,10 @@ pub struct Session {
 }
 impl Session {
     /// Admit a bounded draft or already published record without allocating a content revision.
-    pub fn new(record: Record, published: bool) -> Result<Self, String> {
+    pub fn new(mut record: Record, published: bool) -> Result<Self, String> {
+        if !published {
+            record.select_rating_format();
+        }
         record.bounded()?;
         Ok(Self { saved: published.then(|| record.clone()), record, revision: 1, undo: Vec::new(), redo: Vec::new() })
     }
@@ -180,11 +193,12 @@ impl Session {
         self.saved.as_ref().map(Record::reference)
     }
     /// Replace one captured draft atomically. Stale clients and identity changes preserve history.
-    pub fn replace(&mut self, expected: u64, record: Record) -> Result<(), String> {
+    pub fn replace(&mut self, expected: u64, mut record: Record) -> Result<(), String> {
         self.check(expected)?;
         if self.record.kind() != record.kind() || self.record.reference() != record.reference() {
             return Err("Part document identity cannot change during editing.".into());
         }
+        record.select_rating_format();
         record.bounded()?;
         if record == self.record {
             return Ok(());
@@ -321,6 +335,7 @@ pub fn prepare_record(
     let mut published = if copy { record.copy()? } else { record.clone() };
     let next = if copy { 1 } else { latest.checked_add(1).ok_or("Library revision limit reached.")? };
     published.rebind(&Reference { library, id: published.reference().id, revision: next });
+    published.select_rating_format();
     published.validate(catalog)?;
     let (directory, text) = match &published {
         Record::Part(p) => ("parts", p.encode()?),
@@ -437,6 +452,12 @@ impl Record {
         let mut candidate = self.clone();
         match (&mut candidate, field, reference) {
             (Self::Part(p), ReferenceField::Symbol, reference) => {
+                // Terminal IDs are meaningful only within the same symbol lineage.
+                let same_symbol = p.symbol.as_ref().zip(reference.as_ref()).is_some_and(|(old, new)| old.library == new.library && old.id == new.id);
+                if !same_symbol {
+                    p.terminal_ratings.clear();
+                    p.select_rating_format();
+                }
                 p.symbol = reference;
                 if p.symbol.is_none() {
                     p.format = crate::library::parts::PART_FORMAT.into();
