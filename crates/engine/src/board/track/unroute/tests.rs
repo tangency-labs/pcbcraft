@@ -103,7 +103,7 @@ fn unroute_tee_preserves_shared_trunk() {
     assert_eq!(ratsnest.lines.iter().filter(|line| line.net == net).count(), 1);
     let after = encode_documents(session.snapshot().unwrap()).unwrap();
     let reopened = decode_documents(&after).unwrap();
-    assert_eq!(reopened.board_view(reopened.board_target().unwrap()).unwrap().ratsnest(), Some(ratsnest));
+    assert_eq!(reopened.board_view(reopened.board_target().unwrap()).unwrap().ratsnest(), Ok(ratsnest));
     session.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
     session.apply("edit.redo", &json!({})).unwrap();
