@@ -78,14 +78,14 @@ impl Overlay<'_> {
     /// Replacing a previous change consumes no extra slot; reject excess work before mutation.
     fn room(&self, existing: bool) -> Result<(), CommandError> {
         if !existing && self.changed.len() + self.added.len() >= 8192 {
-            return Err(CommandError::Unavailable("overlay supports at most 8192 changed objects".into()));
+            return Err(CommandError::CapExceeded("overlay supports at most 8192 changed objects".into()));
         }
         Ok(())
     }
 
     /// Resolve one original identity without letting a deleted source become a different object.
     fn source(&self, source: usize) -> Result<&Object, CommandError> {
-        self.query.objects().get(source).ok_or_else(|| CommandError::InvalidParams("unknown source copper object".into()))
+        self.query.objects().get(source).ok_or_else(|| CommandError::NotFound("unknown source copper object".into()))
     }
 
     /// Hide a source obstacle. Repeated deletion is idempotent and leaves the base untouched.
@@ -135,7 +135,7 @@ impl Overlay<'_> {
     /// Delete a previously added obstacle, releasing its overlay slot without editing the model.
     pub fn remove_added(&mut self, id: Uuid) -> Result<(), CommandError> {
         if !self.added.contains_key(&id) {
-            return Err(CommandError::InvalidParams("unknown overlay object identity".into()));
+            return Err(CommandError::NotFound("unknown overlay object identity".into()));
         }
         self.advance()?;
         self.added.remove(&id);
@@ -171,7 +171,7 @@ impl Overlay<'_> {
     /// An inherited object is replaced by the probe and excluded, including its old location.
     pub fn probe(&self, contour: &Contour, layers: &[Uuid], intended_from: Option<ObstacleId>) -> Result<OverlayResults, CommandError> {
         let nets = match intended_from {
-            Some(id) => self.object(id).ok_or_else(|| CommandError::InvalidParams("unknown overlay intent object".into()))?.intended_nets.clone(),
+            Some(id) => self.object(id).ok_or_else(|| CommandError::NotFound("unknown overlay intent object".into()))?.intended_nets.clone(),
             None => Vec::new(),
         };
         let gaps: Vec<_> = self

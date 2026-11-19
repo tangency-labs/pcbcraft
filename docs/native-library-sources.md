@@ -55,6 +55,14 @@ its folder again. A saved project retains its pinned definitions and opens
 without reopening the library. There is no separate session-upload group or
 Upload bundle entry point.
 
+**Export** (in the ribbon's Share group) writes the library selected in the tree to one
+`pcbcraft-library-bundle/1` file containing its original native documents, including
+`library.json` with the license. Desktop saves to a new file and never replaces an
+existing one; the browser downloads the file. Export doesn't change the library or any
+project and doesn't collect records from other libraries: the completion notice names
+other libraries the bundle depends on and any dependency that doesn't resolve. Project
+pins aren't exportable libraries.
+
 **Remove** forgets the registration/cache and leaves its files intact. **Delete library**
 is desktop-only for writable registered folders. Its confirmation names the
 folder, counts native item revisions and explains that projects keep their
@@ -125,6 +133,50 @@ pinned definition, alongside the existing library/item/revision identity.
 Personal source IDs and machine paths are not copied into project documents.
 Previously saved symbols without attribution retain their original encoding.
 Opening a project never searches or refreshes a library to replace its geometry.
+
+## Query available revisions
+
+`library.available_revisions` takes no parameters and requires an open project.
+It compares existing part instances with native revisions already loaded in the
+session, without refreshing sources or accessing the network. It works through
+the shared engine command, including live and headless MCP with `inspect: false`;
+there is no dedicated update-list GUI in this command.
+
+The result contains `project` (UUID), runtime `revision`, `catalog_generation`,
+`board` (UUID or null), `instances` and `outdated_instances`. Each instance row
+has its stable `part_instance` ID, display `reference`, and `items`. Native part
+instances compare their owning generic part, not independently advancing its
+symbol, category or package dependencies. Plain symbol instances compare their
+symbol and any standalone footprint choice, including before a board exists.
+Accepted board-history geometry is not an independent instance update root.
+
+Each item reports `pinned` and `latest` addresses (`library`, `kind`, `id`,
+`revision`), `status`, `latest_digest` and `diagnostic`. `latest` is the highest
+loaded revision of that exact identity and kind, or null. `latest_digest` is the
+native record's content digest, not a part dependency-closure placement digest.
+It is null if no candidate exists or the candidate conflicts or cannot resolve.
+A diagnostic explains a conflicting or unresolved candidate or conflicting pin;
+otherwise it is null. When both the pin and the candidate fail, the pin conflict
+is reported first, followed by the candidate error. Rows retain exact pins;
+instances and their IDs occur once, with items in address order.
+`outdated_instances` contains only instances with at least one `Update available` item.
+
+Statuses are `Matches source`, `Update available`, `Source unavailable`,
+`Project-only`, `Conflict` and `Unresolved`. An absent or unavailable source does
+not mean current. An older-only source is not an update; a missing exact source
+pin can still have a newer loaded candidate. Deliberate project variants remain
+`Project-only`. Same-address content conflicts take precedence over availability.
+For a candidate part, this includes symbol, category or footprint content that
+differs from a project pin at the same immutable address, even when the part
+otherwise resolves.
+A conflicting or unresolved highest revision is reported without falling back to
+an older candidate; generic-part candidates must resolve their exact dependencies.
+An unresolvable latest part is `Unresolved` even when it equals or is older than
+the project pin, unless an immutable-address conflict takes precedence.
+A valid newer revision means available, **not compatible or adopted**. Geometry,
+pins, project revision, dirty state, source registrations and Undo/Redo are unchanged.
+Reviewed differences, compatibility decisions and revision-checked adoption remain
+separate work.
 
 ## Edit and publish native items
 
@@ -251,7 +303,7 @@ and `placement: "here"`, `"beside"` or `"window"`. `inspect_editor` reports
 Type, query and selected exact key. `app.library_browse` changes those view-only
 choices; `type` is 0 All, 1 Symbol, 2 Footprint, 3 Generic part, 4 Orderable part.
 `app.library_source` uses the same source actions as the ribbon: `add`, `refresh`,
-`relocate`, `remove`, `delete`, and desktop `new` (a metadata form and folder picker). Add/relocate open host pickers, and Delete retains
+`relocate`, `remove`, `delete`, `export`, and desktop `new` (a metadata form and folder picker). Add/relocate/export open host pickers, and Delete retains
 the ordinary confirmation. Source folder I/O never runs on the editor thread.
 
 `app.library_catalog_edit` addresses a Parts Library `view` and opens its selected

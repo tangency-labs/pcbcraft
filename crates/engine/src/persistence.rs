@@ -18,7 +18,9 @@ use crate::{
 mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
+pub(crate) use documents::check_board_document_size;
 pub mod layout;
+mod part_group_storage;
 pub use documents::{
     Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
     encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
@@ -340,6 +342,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
                 library: None,
                 mapping: None,
                 bottom: false,
+                locked: false,
                 reference_offset: None,
                 reference_text: None,
             })
@@ -494,11 +497,14 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, occurrence IDs and sheet paper require split documents or an archive;
-    /// refuse loss.
+    /// drawings, rotation, active footprint locks, occurrence IDs, sheet paper, net classes and
+    /// part groups require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
+        }
+        if !project.part_groups.groups.is_empty() {
+            return Err("Part groups require split documents or a packed archive.".into());
         }
         if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
@@ -526,16 +532,23 @@ impl Encoder {
             || project.board.silkscreen.is_some()
             || project.board.outline.is_some()
             || project.board.drawings.is_some()
+            || !project.board.arcs.is_empty()
             || !project.board.tracks.is_empty()
             || !project.board.vias.is_empty()
             || project.board.rules.is_some()
             || project.board.placement_origin.is_some()
+            || !project.board.assembly_profiles.is_empty()
+            || !project.assembly_profiles.is_empty()
             || project.board.setup.is_some()
             || !project.board.definitions.is_empty()
-            || project.board.footprints().iter().any(|f| f.rotation != 0 || f.bottom || f.reference_offset.is_some() || f.reference_text.is_some())
+            || project
+                .board
+                .footprints()
+                .iter()
+                .any(|f| f.rotation != 0 || f.bottom || f.locked || f.reference_offset.is_some() || f.reference_text.is_some())
         {
             return Err(
-                "legacy single-file encoding cannot represent board setup, board rules, placement origins, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation, bottom-side footprints, reference offsets or print overrides; use split documents or a packed archive".to_owned()
+                "legacy single-file encoding cannot represent board setup, board rules, placement origins, assembly profiles, accepted board baselines, physical footprints, independent assignments, silkscreen settings, outlines, layer drawings, tracks, vias, footprint rotation, bottom-side footprints, footprint locks, reference offsets or print overrides; use split documents or a packed archive".to_owned()
             );
         }
         let name = serde_json::to_string(&project.name).map_err(|error| error.to_string())?;
@@ -724,7 +737,8 @@ pub fn read_bytes(mut input: impl Read) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Read bounded project data and validate all identities and connections before adoption.
+/// Read bounded single-file project data and validate identities and connections before adoption.
+/// Active footprint locks are refused here; they require the native split-board format.
 pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     if bytes.len() > MAX_PROJECT_BYTES {
         return Err("project exceeds the native file size limit".to_owned());
@@ -754,6 +768,9 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     }
     if document.sheet.symbols.iter().any(|s| s.mirrored.is_some()) {
         return Err("mirrored symbol placements require split sheet format 6".into());
+    }
+    if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.locked)) {
+        return Err("footprint locks require split board format 34".into());
     }
     if document.board.as_ref().is_some_and(|b| b.footprints.iter().any(|f| f.rotation != 0 || f.library.is_some())) {
         return Err("physical footprints and rotation require split board format 5 or 4 respectively".to_owned());
@@ -1048,6 +1065,10 @@ fn validate_with_hierarchy(
         net_registry: Arc::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
+        assembly_profiles: Arc::default(),
+        part_groups: Arc::default(),
+        part_group_memberships: Arc::default(),
+        prefer_compact_part_groups: false,
     };
     let ownership = crate::board::identity::Ownership::decode(boards, &result)?;
     Arc::make_mut(&mut result.board).ownership = ownership;

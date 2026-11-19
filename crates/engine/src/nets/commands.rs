@@ -32,7 +32,7 @@ impl Session {
         self.check_revision(params)?;
         let original = self.open_project()?;
         let (graph, anchor) = target(original, params)?;
-        let index = graph.network(&anchor).ok_or_else(|| CommandError::InvalidParams("Unknown net anchor.".into()))?;
+        let index = graph.network(&anchor).ok_or_else(|| CommandError::NotFound("Unknown net anchor.".into()))?;
         let (project, _) = promoted(original, &graph, &anchor, index)?;
         if project.net_registry == original.net_registry {
             return Ok(());
@@ -49,7 +49,7 @@ impl Session {
             .as_str()
             .and_then(|id| Uuid::parse_str(id).ok())
             .ok_or_else(|| CommandError::InvalidParams("Expected an ambiguous net UUID.".into()))?;
-        let source = original.net_registry.record(id).ok_or_else(|| CommandError::InvalidParams("Unknown persistent net UUID.".into()))?;
+        let source = original.net_registry.record(id).ok_or_else(|| CommandError::NotFound("Unknown persistent net UUID.".into()))?;
         let State::Ambiguous { branches, .. } = &source.state else {
             return Err(CommandError::InvalidParams("Net identity is not ambiguous.".into()));
         };
@@ -82,7 +82,7 @@ impl Session {
         if records.len() > MAX_RECORDS {
             return Err(CommandError::Unavailable("Net identity registry is full.".into()));
         }
-        project.net_registry = Arc::new(Registry { records: records.into_values().collect() });
+        project.net_registry = Arc::new(Registry { records: records.into_values().collect(), pairs: original.net_registry.pairs.clone() });
         project.net_registry.validate(&project).map_err(CommandError::InvalidParams)?;
         self.change(project)
     }
@@ -126,8 +126,8 @@ fn promoted(original: &Project, graph: &Graph, anchor: &super::Anchor, index: us
         project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
     }
     let mut registry = (*project.net_registry).clone();
-    let mut ids = registry.records.iter().map(|r| r.id).collect();
-    let record = graph.networks[index].record(allocate(&mut ids)?, Some(anchor)).map_err(CommandError::InvalidParams)?;
+    let mut ids = registry.reserved_ids();
+    let record = graph.networks[index].record(allocate(registry.records.len(), &mut ids)?, Some(anchor)).map_err(CommandError::InvalidParams)?;
     registry.records.push(record);
     registry.records.sort_by_key(|r| r.id);
     project.net_registry = Arc::new(registry);

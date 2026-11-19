@@ -109,6 +109,8 @@ pub(super) struct Interaction {
     pub(super) zone_edit: Option<crate::board_drawing::Command>,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
+    pub(super) inspection: Option<(pcbcraft_engine::board::Pad, egui::Modifiers)>,
+    pub(super) extend_inspection: bool,
     pub(super) items: Option<pcbcraft_engine::board::clipboard::BoardSelection>,
     pub(super) edit: Option<Draft>,
     pub(super) reference_edit: Option<ReferenceDrag>,
@@ -129,6 +131,10 @@ pub(super) struct Interaction {
 /// layer changes display priority for spanning lands without rebinding any geometry.
 /// Selection filters suppress picking and transform shortcuts, without hiding rendered geometry.
 /// Net highlighting shares derived connectivity keyed to the view's board/revision authority.
+/// Pad presses cannot start footprint/track drags; captured reference moves retain their
+/// ordinary source, enabled-input and focus checks while crossing pad copper.
+/// Idle pad presses take priority over owner/track picks, while captured reference moves retain
+/// their input until completion, cancellation or loss of their original source authority.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -144,9 +150,16 @@ pub(super) fn show(
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
     label: &str,
+    inspection: &[pcbcraft_engine::board::correspondence::Source],
     markers: &[(Point, bool)],
     unit: pcbcraft_chrome::units::Unit,
 ) -> Interaction {
+    if let Err(error) = project.require_linear_copper() {
+        state.tracks.take_key_requests();
+        ui.label(error);
+        ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
+        return Interaction::default();
+    }
     let idle = !crate::board_clipboard::busy(state);
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
@@ -194,13 +207,21 @@ pub(super) fn show(
     let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
     let extend_selection = modifiers.shift || modifiers.ctrl || modifiers.command;
-    let drag_start = response.drag_started_by(PointerButton::Primary) && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
+    let pad_at = |pointer| {
+        filters.pads.then(|| crate::inspection_selection::pad_at(project, &footprints, camera, rect, pointer, &state.hidden_layers)).flatten()
+    };
+    let pad_hover = response.hover_pos().and_then(pad_at);
+    // Classify the press before its first motion can leave the land and acquire owner authority.
+    let primary_drag = response.drag_started_by(PointerButton::Primary);
+    let pad_drag = primary_drag && ui.input(|i| i.pointer.press_origin()).and_then(pad_at).is_some();
+    let drag_start = !pad_drag && primary_drag && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
     let reference_press = response.contains_pointer()
         && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary))
         && !modifiers.shift
         && !modifiers.ctrl
         && !modifiers.command;
-    let reference_enabled = enabled
+    let reference_enabled = (state.reference_drag.is_some() || pad_hover.is_none())
+        && enabled
         && !lost_focus
         && filters.footprints
         && state.draft.is_none()
@@ -292,7 +313,7 @@ pub(super) fn show(
             && state.zones.source().is_none()
             && state.drawing.tool.is_none()
             && state.drawing.source().is_none(),
-        hovered.is_some(),
+        hovered.is_some() || pad_hover.is_some() || pad_drag,
         crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
     );
     state.zones.zone = true;
@@ -332,7 +353,11 @@ pub(super) fn show(
         filters.graphics,
     );
     let enabled = enabled && !edge.consumed && !route.consumed && !zone.consumed;
+    let inspection_pick = (enabled && idle && response.clicked_by(PointerButton::Primary)).then_some(pad_hover).flatten();
+    let enabled = enabled && inspection_pick.is_none();
     let mut out = Interaction {
+        inspection: inspection_pick.map(|pad| (pad, modifiers)),
+        extend_inspection: extend_selection,
         error: source.zip(route.error),
         drawing_edit: edge.command,
         zone_edit: zone.command,
@@ -497,7 +522,15 @@ pub(super) fn show(
         || requested
         || state.highlight_net.is_some()
         || state.tracks.route_contact().is_some())
-    .then(|| state.copper_connectivity(project, source));
+    .then(|| state.copper_connectivity(project, source))
+    .transpose();
+    let connectivity = match connectivity {
+        Ok(value) => value,
+        Err(error) => {
+            out.error = source.map(|source| (source, error));
+            return out;
+        }
+    };
     if requested && let Some(connectivity) = &connectivity {
         state.highlight_net =
             response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
@@ -511,7 +544,13 @@ pub(super) fn show(
     // Tracks on its pads are painted where the move carries them.
     let shown = state.draft.clone().or_else(|| out.edit.clone());
     let shown = shown.as_ref();
-    let carried = shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).unwrap_or_default();
+    let carried = match shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).transpose() {
+        Ok(value) => value.unwrap_or_default(),
+        Err(error) => {
+            out.error = source.map(|source| (source, error));
+            return out;
+        }
+    };
     let mut track_labels = crate::board_tracks::paint(
         ui,
         rect,
@@ -551,6 +590,7 @@ pub(super) fn show(
             }
         }
     }
+    let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
     for mut footprint in footprints {
         if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -576,10 +616,15 @@ pub(super) fn show(
         if (pads.is_empty() && graphics.is_empty()) || !(rect.intersects(bounds) || label_visible) {
             continue;
         }
-        if let Some(focus) = focus {
+        let inspected = inspected_pads.get(&footprint.id);
+        if inspected.is_some() || focus.is_some() {
             for pad in &mut pads {
-                let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
-                pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+                if inspected.is_some_and(|numbers| numbers.contains(&pad.number)) {
+                    pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(true)));
+                } else if let Some(focus) = focus {
+                    let emphasized = focus.contains_pad(&footprint.id, &pad.number, pad.net.as_deref());
+                    pad.color = Some(board::copper_emphasis(pad.color.unwrap_or(color), Some(emphasized)));
+                }
             }
         }
         if state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY) {
@@ -733,7 +778,7 @@ fn place_group(
         let components: BTreeSet<_> = placement.components.iter().map(String::as_str).collect();
         let ids: BTreeSet<_> = board.footprints().filter(|f| components.contains(f.component.as_str())).map(|f| f.id).collect();
         if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
-            && let Some(ratsnest) = board.ratsnest()
+            && let Ok(ratsnest) = board.ratsnest()
         {
             for line in ratsnest.lines.iter().filter(|line| ids.contains(&line.from.footprint) || ids.contains(&line.to.footprint)) {
                 let point = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {
@@ -799,7 +844,7 @@ fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egu
 
 /// Whether a pad has visible copper; unconfigured bindings remain visible, while legacy markers
 /// follow the board's overall copper visibility just as they do in normal footprint rendering.
-fn pad_visible(pad: &PadView, view: BoardView<'_>, hidden: &BTreeSet<String>) -> bool {
+pub(super) fn pad_visible(pad: &PadView, view: BoardView<'_>, hidden: &BTreeSet<String>) -> bool {
     match &pad.copper_layers {
         Some(CopperLayers::Resolved { layers, .. }) => layers.iter().any(|layer| !hidden.contains(&layer.to_string())),
         Some(CopperLayers::Unconfigured { .. }) => true,

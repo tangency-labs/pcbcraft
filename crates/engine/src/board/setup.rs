@@ -13,6 +13,7 @@ use crate::{CommandError, Session, fresh_id};
 mod tests;
 
 mod presets;
+pub mod preview;
 pub mod profile;
 pub use presets::StackupPreset;
 
@@ -525,6 +526,12 @@ impl BoardSetup {
             })
     }
 
+    /// Whether saving needs the board format that carries thermal conductivity, thermal
+    /// expansion, dielectric strength or tracking reports on a material.
+    pub(crate) fn requires_report_format(&self) -> bool {
+        self.materials.iter().any(Material::has_thermal_or_insulation_reports)
+    }
+
     /// Whether saving needs the board format that carries copper roles, base copper, copper
     /// thickness qualifiers or the declared finished board thickness.
     pub(crate) fn requires_stack_format(&self) -> bool {
@@ -764,6 +771,17 @@ impl Session {
     /// Optional silkscreen settings join the same validated edit, retaining no-op history semantics.
     pub(crate) fn set_board_setup(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
+        self.validate_board_setup_token(params)?;
+        if let Some(project) = self.board_setup_candidate(params)? {
+            self.change(project)?;
+        }
+        self.setup_preview = None;
+        Ok(())
+    }
+
+    /// Build the same candidate for Preview and Apply, checking setup-specific constraints.
+    /// Shared edit preparation checks cross-project invariants before any publication.
+    pub(super) fn board_setup_candidate(&self, params: &Value) -> Result<Option<crate::Project>, CommandError> {
         let setup: BoardSetup = serde_json::from_value(params["setup"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
         let project = self.open_project()?;
         let before = project.board.setup.as_ref().ok_or_else(|| CommandError::Unavailable("initialize board setup first".to_owned()))?;
@@ -803,9 +821,9 @@ impl Session {
             }
             crate::board::track::validate(&project, &mut project.board.tracks.clone(), &mut project.board.vias.clone())
                 .map_err(CommandError::InvalidParams)?;
-            self.change(project)?;
+            return Ok(Some(project));
         }
-        Ok(())
+        Ok(None)
     }
 }
 

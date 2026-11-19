@@ -8,9 +8,10 @@ use std::{
 };
 use uuid::Uuid;
 
-/// Allocate independently while refusing every live, ambiguous and retired registry UUID.
-pub(super) fn allocate(ids: &mut BTreeSet<Uuid>) -> Result<Uuid, CommandError> {
-    if ids.len() >= MAX_RECORDS {
+/// Allocate one net at the current record count. The collision set also reserves pair UUIDs,
+/// but those do not consume net-record capacity.
+pub(super) fn allocate(net_count: usize, ids: &mut BTreeSet<Uuid>) -> Result<Uuid, CommandError> {
+    if net_count >= MAX_RECORDS {
         return Err(CommandError::Unavailable("Net identity registry is full.".into()));
     }
     for _ in 0..4 {
@@ -70,7 +71,7 @@ fn source_anchor(anchor: &Anchor, scope: Scope) -> Anchor {
 /// Persist the exact numbers previously shown by a legacy graph before an edit can remove
 /// its naming anchors. Current explicit records keep their IDs, primary choices and bindings.
 fn adopt_numbers(registry: &mut Registry, graph: &Graph, plan: &super::numbering::Plan) -> Result<(), CommandError> {
-    let mut ids = registry.records.iter().map(|record| record.id).collect();
+    let mut ids = registry.reserved_ids();
     let mut last = plan.records.values().copied().chain(plan.networks.iter().flatten().copied()).max().unwrap_or(0);
     for record in &mut registry.records {
         if record.generated_number.is_none() {
@@ -89,7 +90,7 @@ fn adopt_numbers(registry: &mut Registry, graph: &Graph, plan: &super::numbering
         .collect();
     for (index, network) in graph.networks.iter().enumerate().filter(|(_, network)| network.meaningful()) {
         if !existing.contains(&index) {
-            let mut record = network.record(allocate(&mut ids)?, None).map_err(CommandError::InvalidParams)?;
+            let mut record = network.record(allocate(registry.records.len(), &mut ids)?, None).map_err(CommandError::InvalidParams)?;
             record.generated_number = plan.networks[index];
             registry.records.push(record);
         }
@@ -105,9 +106,13 @@ impl Project {
     /// by class and origin. Inherited classes must exist in the catalog, and meaningful splits
     /// require every inherited property to be shareable. Missing classes, unsupported split
     /// inheritance or a union above `MAX_BINDINGS` refuse the edit before session publication.
+    /// Stored pair members and review intent are preserved, not retargeted or evaluated here.
+    /// An explicit pair edit combined with a topology change is refused rather than discarded.
+    /// Newly adopted registries and changed registries on unchanged topology also validate,
+    /// even when they contain pairs but no net records.
     pub(crate) fn reconcile_nets(&mut self, before: Option<&Project>) -> Result<(), CommandError> {
         let Some(before) = before.filter(|before| before.same_document(self)) else {
-            return Ok(());
+            return self.net_registry.validate(self).map_err(CommandError::InvalidParams);
         };
         let old_scope = before.net_scope();
         let scope = self.net_scope();
@@ -142,10 +147,11 @@ impl Project {
             if identity_changed {
                 self.invalidate_net_presentation();
             }
-            if !self.net_registry.records.is_empty() {
-                self.net_registry.validate(self).map_err(CommandError::InvalidParams)?;
-            }
+            self.net_registry.validate(self).map_err(CommandError::InvalidParams)?;
             return Ok(());
+        }
+        if !Arc::ptr_eq(&self.net_registry.pairs, &registry.pairs) && self.net_registry.pairs != registry.pairs {
+            return Err(CommandError::InvalidParams("Differential pair edits cannot accompany net topology changes.".into()));
         }
         before.net_registry.validate(before).map_err(CommandError::InvalidParams)?;
         let plan = super::numbering::plan(&registry, &old.networks).map_err(CommandError::InvalidParams)?;
@@ -182,7 +188,7 @@ impl Project {
         }
         let chosen: BTreeMap<_, _> = by_source.iter().map(|(index, r)| (r.id, continuation(r, &targets[*index], &after))).collect();
         let mut result: BTreeMap<_, _> = registry.records.iter().map(|r| (r.id, r.clone())).collect();
-        let mut ids = result.keys().copied().collect();
+        let mut ids = registry.reserved_ids();
         let mut assigned = vec![None; after.networks.len()];
         let mut capture = None;
         let mut last_number = registry.records.iter().filter_map(|record| record.generated_number).max().unwrap_or(0);
@@ -197,7 +203,7 @@ impl Project {
             let mut record = if let Some(retained) = retained {
                 network.retained(retained).map_err(CommandError::InvalidParams)?
             } else {
-                let mut record = network.record(allocate(&mut ids)?, None).map_err(CommandError::InvalidParams)?;
+                let mut record = network.record(allocate(result.len(), &mut ids)?, None).map_err(CommandError::InvalidParams)?;
                 record.generated_number = Some(super::numbering::allocate(&mut last_number).map_err(CommandError::InvalidParams)?);
                 if persistent || parents.len() > 1 {
                     let snapshot = source_capture(&mut capture, before)?;
@@ -227,7 +233,7 @@ impl Project {
                         }
                         inherited.insert(binding.clone());
                         if inherited.len() > super::classes::MAX_BINDINGS {
-                            return Err(CommandError::Unavailable("Net assignment origin limit exceeded.".into()));
+                            return Err(CommandError::CapExceeded("Net assignment origin limit exceeded.".into()));
                         }
                     }
                 }
@@ -272,7 +278,7 @@ impl Project {
                 result.insert(record.id, next);
             }
         }
-        let next = Registry { records: result.into_values().collect() };
+        let next = Registry { records: result.into_values().collect(), pairs: registry.pairs };
         if next == *self.net_registry {
             return Ok(());
         }

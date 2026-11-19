@@ -12,6 +12,8 @@ use serde_json::Value;
 #[serde(default, deny_unknown_fields)]
 pub(super) struct Filters {
     pub symbols: bool,
+    pub pins: bool,
+    pub pads: bool,
     pub wires: bool,
     pub sheets: bool,
     pub labels: bool,
@@ -27,6 +29,8 @@ impl Default for Filters {
     fn default() -> Self {
         Self {
             symbols: true,
+            pins: false,
+            pads: false,
             wires: true,
             sheets: true,
             labels: true,
@@ -78,7 +82,7 @@ impl Filters {
         match workspace {
             Workspace::Schematic => vec![
                 row("symbols", "Symbols", self.symbols),
-                planned("pins", "Pins"),
+                row("pins", "Pins", self.pins),
                 row("wires", "Wires", self.wires),
                 row("labels", "Labels", self.labels),
                 row("no_connects", "No connects", self.no_connects),
@@ -90,7 +94,7 @@ impl Filters {
             ],
             Workspace::Board => vec![
                 row("footprints", "Footprints", self.footprints),
-                planned("pads", "Pads"),
+                row("pads", "Pads", self.pads),
                 row("tracks", "Tracks", self.tracks),
                 row("vias", "Vias", self.vias),
                 row("zones", "Zones", self.zones),
@@ -111,6 +115,8 @@ impl PcbApp {
         for (key, value) in params.as_object().ok_or("Selection filters must be an object")? {
             let field = match (view.workspace, key.as_str()) {
                 (Workspace::Schematic, "symbols") => &mut next.symbols,
+                (Workspace::Schematic, "pins") => &mut next.pins,
+                (Workspace::Board, "pads") => &mut next.pads,
                 (Workspace::Schematic, "wires") => &mut next.wires,
                 (Workspace::Schematic, "sheets") => &mut next.sheets,
                 (Workspace::Schematic, "labels") => &mut next.labels,
@@ -132,6 +138,12 @@ impl PcbApp {
         if next != view.filters {
             view.release_input();
             view.filters = next;
+            if !next.pins || !next.pads {
+                view.inspection.retain(|target| match target {
+                    pcbcraft_engine::board::correspondence::Source::Terminal(_) => next.pins,
+                    pcbcraft_engine::board::correspondence::Source::Pad(_) => next.pads,
+                });
+            }
             next.retain(&mut view.schematic.selection, project.as_deref());
             if !next.wires {
                 view.schematic.selected_leg = None;

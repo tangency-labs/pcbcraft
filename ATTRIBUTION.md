@@ -266,6 +266,7 @@ flat-bar treatment; no external source, artwork or dependency was added.
 | `crates/mcp/src/backend.rs`, `crates/mcp/src/tools.rs` | same paths | Kept the `Backend` seam and tool annotations. Wrote new tools over PCBCraft's commands. |
 | `apps/pcbcraft-web/` | `apps/solidcraft-web/` | Kept the Trunk setup, page layout and web runner start. Dropped offline use, installing, files and URL launch options. |
 | `.github/workflows/`, `deny.toml`, `rustfmt.toml`, `clippy.toml` | same paths | Cut down to what PCBCraft needs. `deny.toml` adds the license allow list. |
+| `crates/storage/src/recovery.rs` | `crates/engine/src/recovery.rs` at `73bdb6cdd39efc3899fb54e7217289a630a89efe` | Kept the per-user recovery folder rules, the override variable and the `<id>` entry with its held lock. Added the edit journal; dropped the legacy folder copy and reopen marker. |
 
 The Floating and Compact **Panel style** in `crates/chrome/src/workspace.rs`,
 `crates/chrome/src/workspace/panels.rs` and
@@ -365,6 +366,17 @@ crash reports use. The geometry crate's kernel-neutral API follows the same
 boundary rule as SolidCraft's `solidcraft-kernel`: no kernel type in the public
 API. The kernel dependency itself is described under
 [Solid geometry kernel](#solid-geometry-kernel).
+
+The board test `crates/geometry/tests/step_board.rs` adapts SolidCraft's
+`crates/kernel/examples/step_board_fixture.rs` at
+`73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR Apache-2.0, copyright (c)
+2026 SolidCraft contributors). It keeps the package and pin dimensions, the pin
+layout, the grid and the size set through environment variables. It defaults to
+2 components instead of 500 so a test run stays short, calls `solidcore-ops` and
+`solidcore-step` directly, leaves the package edges sharp, and reads the file
+back to report the read time and peak memory. The STEP fixtures in
+`crates/geometry/tests/fixtures/step` and their generator
+`scripts/generate-step-fixtures.py` are original.
 
 ## Adapted from PCBcraft Next
 
@@ -508,6 +520,16 @@ asset or new dependency is introduced.
 | `crates/chrome/assets/fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf` | IBM Plex Mono, IBM Corp., unmodified, by way of SolidCraft at the revision above | SIL OFL 1.1, text alongside |
 
 ## Dependencies
+
+The staged PR approval policy, CI profile and separation of Windows build/native-window smoke jobs follow
+SolidCraft's `Cargo.toml` and `.github/workflows/ci.yml` at revision
+`0f5a5e22d22492416af6009f59cd39facce2de75` (MIT OR Apache-2.0, SolidCraft
+contributors). PCBcraft follows the quick/approved-native/full-event staging,
+including deferred platform checks, with its own Cargo-metadata consumer selection.
+Its selection policy, Windows suite definitions, artifact
+staging, timeout/result checks and policy regressions are independently authored
+for this repository. The workflow retains existing pinned actions and adds the
+same pinned GitHub artifact upload/download actions used by that reference.
 
 `Cargo.lock` lists them, and `deny.toml` is the list of licenses allowed. `epaint_default_fonts`, which egui bundles as its fallback, is `(MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0`. A notices file for release binaries is still to do, and is needed before the first release. `webpki-root-certs`, the Mozilla root-certificate list that the desktop Assistant's HTTPS uses, is CDLA-Permissive-2.0 data. It allows use, changes and redistribution, places no conditions on PCBCraft's own code, and asks only that its license text ship with the data, so that notices file must include it.
 
@@ -1658,8 +1680,8 @@ introduced. Test projects use production commands and native codecs.
 
 ## Solid geometry kernel
 
-`crates/geometry` depends on `solidcore`, `solidcore-ops` and `solidcore-step`
-from [SolidCraft](https://github.com/tangency-labs/solidcraft) at revision
+`crates/geometry` depends on `solidcore`, `solidcore-ops`, `solidcore-record`
+and `solidcore-step` from [SolidCraft](https://github.com/tangency-labs/solidcraft) at revision
 `73bdb6cdd39efc3899fb54e7217289a630a89efe`, the revision already pinned for the
 Craft UI crates. Unlike the rest of SolidCraft, which is MIT OR Apache-2.0,
 these kernel crates are Apache-2.0 only, copyright (c) 2026 The solidcore
@@ -1668,8 +1690,17 @@ NVIDIA's [USD BRep](https://github.com/NVIDIA-Omniverse/usd-brep) (v1.0.1,
 Apache-2.0). Its `NOTICE` is retained unchanged in
 `crates/geometry/SOLIDCORE-NOTICE`; Apache-2.0 requires it to ship with
 distributed builds, so the release notices file described under
-[Dependencies](#dependencies) must include it. No kernel source is copied into
-this repository.
+[Dependencies](#dependencies) must include it.
+
+The local `vendor/solidcore-ops` package retains that revision's Apache-2.0 ops
+source, LICENSE and NOTICE, with a narrow STEP composition backport from
+[SolidCraft #17776](https://github.com/tangency-labs/solidcraft/pull/17776), commit
+`7dc89ee26e4d5f20c3bb93137fc35fb430e34245`. Its source hashes, exact diff and
+standalone manifest adjustments are recorded in
+[the patch record](vendor/solidcore-ops/PATCH.md). The three new nested/mapped
+STEP fixtures are original PCBcraft test data generated by the existing native
+fixture writer, with analytically authored placements and world bounds. No
+external CAD file, EDA implementation or artwork was incorporated.
 
 
 ## Copper-zone outlines
@@ -1693,3 +1724,59 @@ The mixed-board M follow-up composes PCBcraft's existing physical pad-contact
 policy, immutable previews and revision-checked transactions. Its selection-wide
 translation is original PCBcraft code, introduced after @travle1 reproduced the
 missing group pickup while testing #231. It adds no dependency or artwork.
+
+
+## Walkaround route planning
+
+The walkaround in `crates/engine/src/board/route/` (`walkaround.rs`, `hull.rs` and
+`posture.rs`) is adapted from Sparksmith
+(https://github.com/DAmesberger/sparksmith, `crates/editor-core/src/layout/router/walk.rs`,
+`hull.rs` and `crates/editor-core/src/layout/posture.rs`, with
+`docs/push-and-shove.md`) at revision `cdecce837f0f2651f418a32ae5281afad6e67294`,
+MIT OR Apache-2.0. The approach carried over is the walk itself: follow the colliding
+obstacle's fixed-direction hull round in the cheaper sense until the posture elbow to
+the target leaves it, merge copper met on the way, stop at the last legal point,
+then shortcut corner runs. PCBcraft's version was rewritten against its own
+interfaces: whole-nanometre integer hulls with even diagonal supports so corners and
+45° legs stay exact, every kept leg confirmed by the captured `ClearanceQuery` probe
+and the DRC outline predicates, head-island and membership rules from the snapshot
+query, a probe budget with incomplete, canceled and stale outcomes, and previous-plan
+continuity. No Sparksmith world model, shove, dependency or file format was imported.
+
+## Explicit via net assignments
+
+The optional scoped via target, snapshot-local membership projection and shared
+assignment command for #369 are original MIT OR Apache-2.0 PCBcraft work.
+Placement and Properties compose the existing Craft search field, table and modal
+form through chrome, with bounded result pages and keyboard row reveal. The
+chrome table adapter exposes the toolkit's existing reveal behavior. PCBcraft
+owns typed net identities, filtering and pagination, which have no domain-specific
+toolkit component. Both forms share typed chooser data with zones.
+No custom-drawn control, external EDA source,
+artwork, library data or dependency was added. Physical island construction,
+accepted-board review, the net registry and native codecs retain their ownership.
+
+The interactive walkaround continuation, bounded captured-query projection, view-owned
+request adoption and magnetic target hysteresis are original PCBcraft work under
+MIT OR Apache-2.0. They compose the existing solver and snapshot/copper scheduler;
+the Sparksmith attribution above still applies to the underlying search. Existing
+Craft copper, clearance, cursor, status and context-menu presentation is reused.
+No new generic control, external source, asset, dependency or native format was added.
+
+The responsiveness follow-up consumes read-only completions before paint and advances
+a bounded warm-query search before queuing its continuation. The separate starting
+contact used for same-net exemptions follows @travle1's unconnected-pad report;
+whole-path contact unions retain their short/class role. These are original PCBcraft
+changes with no new dependency, asset, external source or persisted format.
+
+
+## Pin and pad inspection selection
+
+The #397 runtime view selection and qualified live command are original PCBcraft
+work. Browser rows/disclosures, filter checkboxes and Properties labels reuse
+the existing chrome adapters and pinned Craft toolkit. The toolkit has no
+electronics endpoint inspection primitive, so the host draws original endpoint
+rings using the shared accent ink. Pad inspection reuses the existing copper
+emphasis and physical shape painter. Pad hit testing reuses the exact copper
+contours already used by connectivity; no external implementation, artwork,
+dependency or native format was introduced.

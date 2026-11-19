@@ -1,0 +1,17 @@
+{
+  "base": "a610c3df44e0c26ac7bc9f816d7262dfa8a37c8e",
+  "files": {
+    "crates/engine/src/board/route.rs": "1e6fc24288f6035b4b042b4403dc8067061b10cf918db9bc61b30cffc81335ab",
+    "crates/engine/src/board/route/walkaround.rs": "e66b2090b111c0d504f4597480575c620fdf576e0e078a58b2a4b7c926789c5e",
+    "crates/engine/src/board/route/tests.rs": "776a131a2d8033d20c27b523b55199d99c691e8fca72e905599396898edb8154",
+    "crates/engine/src/board/clearance.rs": "2b7656e62073fde42000f4a7d8088abaa561149d80b0c8c51c756f2fe918ac57",
+    "crates/engine/src/lib.rs": "fadcdf5634b61fe8d69e8f85e098eb8a1295c9360a75e56a2e1a025af84d0dfb",
+    "crates/app/src/performance/walkaround.rs": "d87338c3fa98fcd82f6b5f0d08ec26fc69d8fef1e71fbc13a87390d275a69fd1"
+  },
+  "fixtures": {
+    "channels-v1": "2bcba0154913f8e396b975f470040edc649342e4ed40bbe77af107c5ae2f0efa",
+    "dense-v1": "df1731d2e45075cf29c595d9e8c997bb284bbcc51e144ae99d49b0a25eec55da"
+  },
+  "notes": "Before is the four contributor commits rebased onto f3bb2882016f1b8d0c6623cfea3d135d197821bb; hashes identify the reviewed code after the fixes.",
+  "upstream_base": "f3bb2882016f1b8d0c6623cfea3d135d197821bb"
+}

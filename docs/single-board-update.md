@@ -105,6 +105,12 @@ A new board with no placements can preview against an empty accepted predecessor
 An existing placed board without a baseline needs explicit adoption through the
 initialization command below, because its earlier accepted state is unavailable.
 
+`pcb.export_netlist` returns accepted connectivity as a [netlist](netlist-format.md)
+with `basis: accepted`. Its findings summarize pending updates using this preview's
+counts when comparison is available. The exported connections exclude unapplied
+schematic wiring changes; board-only pad nets and live reference/value annotations
+follow the distinctions in the format guide.
+
 ## Initializing accepted state
 
 The command takes the addressed `board` and `expected_revision`, through the same
@@ -175,7 +181,7 @@ also a normal desired-assignment edit.
 
 | Baseline field | Meaning |
 | --- | --- |
-| `format` | `pcbcraft-board-baseline/1`, `/2` for extended mappings, or `/3` for retained typed quantities |
+| `format` | `pcbcraft-board-baseline/1`, `/2` for extended mappings, `/3` for retained typed quantities, `/4` for accepted net display names, or `/5` for explicit origin on unnamed one-terminal nets |
 | `project`, `board` | Explicit owners; both must match the loaded design |
 | `source` | Frozen source `capture_id` UUID and lowercase SHA-256 `content_digest` |
 | `components` | Canonical positive numeric ID keys, with historical symbol identity, reference/value, sorted terminal tokens and accepted package |

@@ -144,6 +144,7 @@ fn disabled_no_connect_canvas_returns_focus_loss_cancellation() {
             false,
             None,
             &Selection::default(),
+            &[],
             Default::default(),
             false,
             false,

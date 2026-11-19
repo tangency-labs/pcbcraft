@@ -68,7 +68,15 @@ The app bar shows the project name and an unsaved marker beside **Undo**, **Redo
 browser). The gear (or **Ctrl+,**) opens **Preferences**, with
 pages for Appearance (theme, interface scale, panel style, PCB grid, grid opacity, schematic grid outside paper, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor, and how middle- and right-button drag behave), Views (selection following),
-a list of Shortcuts and, on the desktop, the AI page for the Assistant.
+a list of Shortcuts and, on the desktop, the AI page for the Assistant. The
+[schematic keyboard shortcuts](keyboard-shortcuts.md) page inventories the
+schematic bindings with their focus and selection conditions; the
+[board keyboard shortcuts](board-keyboard-shortcuts.md) page does the same for
+the PCB editor, whose keys deliberately reuse several letters differently. The
+[library editor keyboard shortcuts](library-editor-keyboard-shortcuts.md) page
+covers the Symbol Editor, Footprint Editor and Parts Library workspaces, which
+dispatch their own small set of chords rather than the project-workspace
+bindings.
 Every workspace, including Home, the Parts Library and the symbol and footprint editors, ends the app bar with the
 same utilities in the same places: the version and **Report a bug** on wide windows, **Help** (except on the narrowest
 bars), **Preferences** and, on the desktop, the **Assistant** (**Ctrl+Shift+A**).
@@ -343,7 +351,8 @@ local cleanup does not route around obstacles or resolve conflicting net names
 ## Symbol properties and selection
 
 The **Selection filters** card sits below Properties in schematic and PCB views.
-Its checkboxes control symbols (including power/ground), wires, no-connect
+[Pins and Pads](pin-pad-selection.md) enable individual inspection selection and start off to preserve existing picking defaults.
+Its checkboxes also control symbols (including power/ground), wires, no-connect
 markers, local/global and hierarchical labels, and sheets in the schematic, and footprints and board graphics in PCB layout. **All items** toggles
 the supported categories together; **Reset** enables them all. Categories without
 individual selection support are disabled. Filtering does not hide geometry or
@@ -746,7 +755,10 @@ To route copper, select a copper layer such as **Top** and press **X** or use
 click will land in free space or a ring marks a nearby copper connection. Free
 points snap when the grid point is close to the cursor. Hold **Ctrl** to bypass
 the grid while pads, track ends and vias still snap to their exact positions.
-Click to start a route or add a run with one 45° bend. Use **/**
+Click to start a route or fix the current target. The preview uses clearance-aware
+45° walkaround around fixed copper, with a wider release radius for magnetic contacts.
+Clicked targets wait for full-path validation; blocked or incomplete searches fix no
+new vertex. Use **/**
 to flip whether the diagonal comes first. Click a copper connection, double-click
 or press **Enter** to finish.
 
@@ -754,7 +766,7 @@ The route preview uses a lighter shade of each segment's copper layer color. A
 halo shows the default copper clearance (0.2 mm) around the draft tracks and vias.
 Press **V** while routing to drop a through via at the pointer and continue on the
 other side: front copper leads to back, any other layer to front, and the view's
-active layer follows. While routing, **PgUp** and **PgDn** switch to front or back
+active layer follows once the proposed path and via validate. While routing, **PgUp** and **PgDn** switch to front or back
 copper, adding a via only when the layer changes. Hold **Ctrl** with either page
 key to place the via off-grid in free space. The **Via pad / drill** field beside the
 width field sets the pad diameter and drill (0.6 mm and 0.3 mm by default).
@@ -770,7 +782,12 @@ listing up to 1,000 findings. It reports a short when one copper island joins pa
 different intended nets, copper of different nets closer than the clearance
 (0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
 connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
-of its edge, and overlapping footprint courtyards. Short checks include direct pad
+of its edge, and overlapping footprint courtyards. Courtyards on the same side are
+compared by their actual rectangle and closed-polyline shapes after rotation and flip,
+so empty space between separate courtyard elements or inside a concave outline is free.
+Courtyards that only touch at an edge or corner pass; overlap and containment are
+reported. Circles, arcs, open lines and self-intersecting outlines are still compared by
+their bounds, and those findings say they are conservative. Short checks include direct pad
 contact and via-mediated connections, even with a zero clearance rule. A board with
 reviewed connectivity uses its accepted terminal membership; pending schematic edits
 do not change that intent until accepted. Clearance remains a separate check, so
@@ -792,18 +809,40 @@ These rule values are fixed defaults until net classes and board rules arrive (#
 zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
 not a manufacturing sign-off.
 
-**Manufacture → Fabrication → Outputs** saves one `<project>-fabrication.zip` with Gerber X2
-files for each copper layer, the top and bottom solder mask, paste and silkscreen,
+**Manufacture → Fabrication → Outputs** generates a ZIP to save or download
+(suggested name `<project>-fabrication.zip`), with Gerber X2 files for each
+copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
 through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
 with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Gerber coordinates
 are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves going up,
-so both shift exactly when the origin moves by a whole micrometre. Mask
-and paste openings match the pads exactly, leaving any expansion to the fabricator, and
-vias are tented. It needs a board setup and a closed Board Outline, says so otherwise,
-and never edits the project; the same board always produces the same archive. Run DRC
-first: outputs do not check the design.
+so both shift exactly when the origin moves by a whole micrometre. Mask openings use
+pads on the corresponding outer copper layer; paste includes only surface-mount pads,
+not through-hole pads. Neither adds process expansion. Vias receive no automatic mask
+opening, but authored mask artwork can open them. The shape approximations below also
+apply to these openings. Generation needs a board setup, a
+closed Board Outline and a resolvable placement origin, and reports missing prerequisites.
+It does not edit the project. Repeated generation from the same captured inputs and
+exporter build produces the same archive; project names affect filenames and exporter
+versions appear in the Gerber header. Saving can be cancelled, busy or fail at the
+destination; generation alone is not a successful save. Run DRC first: outputs do not
+check the design.
+
+For pads exported on a layer, round pads use standard circular (`C`) flashes.
+Rectangular (`R`) and obround (`O`) flashes require library-pad and placement rotations
+to each be multiples of 90° and the resolved corners to form a nondegenerate axis-aligned
+rectangle. Sizes follow the final X/Y axes, not either rotation in isolation. Rectangles
+also require their resolved midpoint to equal the integer pad center; odd-sized or
+otherwise uncentered rectangles retain their resolved polygon regions. Obrounds require
+width and height to have the same parity, so their capsule endpoints are integral and
+match the engine land contour. Mixed-parity or other rotated obrounds retain the existing
+approximate round-ended stroke (a C flash when both resolved sides are equal). Other
+rectangles remain regions, including net-cardinal poses reached through non-cardinal
+intermediate rotations. Very small collapsed rectangular pads can emit a retraced path
+with zero area. Rounded rectangles emit polygon regions with chorded corners when the
+resolved radius is positive, or the four resolved corners when it clamps to zero.
+Export adds no native arcs and does not change saved pad geometry.
 
 Copper filenames receive numeric suffixes when sanitized names collide with
 another output, including names that differ only in case. Fixed mask, paste,
@@ -812,6 +851,21 @@ preserve the existing file's permission bits and new archives follow the process
 umask. The archive is flushed before replacement and its directory is flushed
 afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
+
+The ZIP contains `manifest.json` alongside the Gerber and drill members. Its
+`generator_version` and ordered `files` list describe the same capture. Each
+record contains the member `name`, `size_bytes` and lowercase hexadecimal
+`sha256` of its uncompressed UTF-8 bytes, including line endings. To check a
+member, compare its extracted byte length and SHA-256 with that record. The
+manifest lists neither itself nor the outer ZIP and does not depend on the save
+name. It checks file integrity, not source identity, configuration or DRC/ERC
+freshness, and cannot authorize a synchronized release.
+
+Desktop re-export can replace the same ZIP without moving any old companion
+file. Cancelling the save dialog writes nothing. One editor limits its own
+active export requests, not other writers to the destination. The browser
+requests one ZIP download and cannot confirm completion or cancellation; check
+your browser for the saved ZIP.
 
 Press **Backtick** over a visible pad, track or via to highlight its net. Visible
 pads, tracks and vias on that net brighten in their own colors while the rest

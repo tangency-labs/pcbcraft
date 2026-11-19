@@ -162,18 +162,30 @@ the behavior or failure path being changed. Verify the affected native/browser
 behavior when platform interaction changes; a passing check on one target does
 not establish behavior on another.
 
-Before submitting a code PR for review, run the broader workspace checks once
-after the coherent change is complete. These are submission checks, not a
-requirement before every local commit. Reuse results for unchanged code; after
-further edits, repeat affected checks and broaden them when shared behavior or a
-concrete failure warrants it:
+For shared changes that need full workspace verification before submission, run
+the following checks once after the coherent change is complete. During
+development, use affected-crate checks and focused regressions. Reuse results
+for unchanged code; after further edits, repeat affected checks and broaden them
+when shared behavior or a concrete failure warrants it:
 
 ```sh
 cargo fmt --all --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
-cargo check --locked -p pcbcraft-web --target wasm32-unknown-unknown
+cargo clippy --locked --profile ci --workspace --all-targets -- -D warnings
+cargo test --locked --profile ci --workspace
+cargo check --locked --profile ci -p pcbcraft-web --target wasm32-unknown-unknown
 ```
+
+The `ci` profile keeps debug assertions and overflow checks, uses line-table debug
+information for workspace code and optimizes dependencies. It leaves ordinary
+development/debugger builds unchanged. [Continuous integration](docs/continuous-integration.md)
+describes the PR stages, Windows coverage, cache ownership and optional runner
+labels. Draft PRs skip CI. Ordinary code PR pushes receive repository checks and
+a quick compile; after review, `approved-for-ci` enables affected native packages
+and their dependents. Passing selected checks report success without an approval
+error. Windows, browser packaging, WASI, doctests and the opt-in harness are
+deferred to main, merge groups, nightly and manual runs. Manifest/lockfile changes
+still select dependency checks on PRs. Because this repository has no merge queue,
+a green PR does not establish full platform qualification before merge.
 
 The test suite includes loopback transport tests, so a sandbox that forbids local
 sockets cannot run the complete suite. Report that limitation rather than

@@ -171,7 +171,7 @@ artifact, not a new native project format. Do not hand-edit the embedded project
 | --- | ---: | ---: | ---: | --- |
 | `reference-v1` | 8 | 60 | 0 | Fast harness and comparison reference |
 | `dense-v1` | 128 | 1,008 | 112 | Mixed pad sizes, crowded long diagonals and alternating layers |
-| `capacity-v1` | 512 | 4,080 | 2,032 | Near current 4,096-track / 2,048-via limits |
+| `capacity-v1` | 512 | 4,080 | 2,032 | Near the former 4,096-track / 2,048-via limits |
 
 Geometry follows fixed integer patterns with recipe seed `237240`. Production
 commands allocate UUIDs, so regenerating a recipe does **not** recreate identical
@@ -417,7 +417,7 @@ The following original command-generated recipes extend the existing artifacts:
 
 | Recipe | Supported coverage |
 | --- | --- |
-| `board-limits-v1` | Exactly 4,096 tracks and 2,048 vias, with 512 footprints; the older `capacity-v1` artifact stays unchanged |
+| `board-limits-v1` | Exactly 4,096 tracks and 2,048 vias, the board limits when it was recorded, with 512 footprints; the older `capacity-v1` artifact stays unchanged |
 | `channels-v1` | 64 footprints, mixed widths/pad sizes, 410 tracks, through vias, two narrow parallel rails and 48 attached branches |
 | `hierarchy-v1` | The current 64-sheet limit, 63 explicit child links, shared global labels and one symbol per sheet |
 | `schematic-limits-v1` | The current 4,096-symbol / 64-sheet limits; eight physical footprints and explicit board exclusions for the other schematic parts |
@@ -523,6 +523,13 @@ revision per commit and stale-source rejection. The ordinary replay remains the
 matched before/after measure for pointer reversals, layer transitions, cancellation
 and concurrent MCP edits; these diagnostics do not establish presentation latency.
 
+The #246 walkaround solver adds `board_perf walkaround ARTIFACT ENVIRONMENT ITERATIONS REPORT`.
+Its separate `pcbcraft-walkaround-performance/1` report times complete plans over a
+captured query and requires identical plans on every iteration; first plans are
+committed through `pcb.add_tracks` against the exhaustive pair reference. See
+[walkaround route planning](route-planning.md#measurement). It measures solver
+service cost only; route-tool preview and commit latency need the tool integration.
+
 Copper preparation uses the same two-worker process limit and incremental browser
 logic as checking. Each view retains one running job, one coalesced desired input,
 one ready candidate and one immutable source context. Pad projection survives
@@ -549,3 +556,22 @@ the existing command's contact/lock checks passed, with clearance enforcement
 and walkaround/shove still owned by their subsequent issues. ERC jobs remain
 with the ERC feature. These checks do not qualify Wayland endurance/presentation
 latency.
+
+`board_perf pointer_latency ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT` exercises
+continuous pointer updates in native production frames and snapshot workers,
+paced at 60 Hz. It inspects whether the actual preview copper reaches each new
+target in its input frame, then confirms that cancellation preserves authored
+bytes. This native-only diagnostic accepts 1–20 repetitions and retains UI service
+samples; it does not measure GPU/compositor presentation. Its saved
+[before/after evidence](../tools/performance/baselines/issue246/responsiveness/README.md)
+records the frame-handoff regression and the additional bounded work on the UI
+thread separately.
+
+`board_perf commit_fixture ARTIFACT OUTPUT` derives the versioned
+`route-contact-commit-history-v1` trace while preserving the saved project's bytes
+and hash. Run it through `board_perf_window` or the browser rendered page. The
+first saved airwire with conductive pads at both ends supplies the contacts;
+legacy center-only markers are excluded without consulting solver outcomes.
+The trace waits for a fully validated preview, clicks a different final target,
+and records input-to-publication UI and GPU-readback intervals. Full DRC,
+one-step Undo/Redo, and exact native reopen run outside the commit interval.

@@ -112,7 +112,7 @@ pub(crate) fn publish(
         return Err("demo circuit has unexpected or unconnected nets".into());
     }
     let target = project.board_target().ok_or("demo has no board target")?;
-    let ratsnest = project.board_view(target).and_then(|board| board.ratsnest()).ok_or("demo has no accepted board connectivity")?;
+    let ratsnest = project.board_view(target).ok_or("demo has no board")?.ratsnest()?;
     if ratsnest.terminal_count != expected_terminals || !ratsnest.missing.is_empty() || !ratsnest.lines.is_empty() {
         return Err(format!("demo is not completely routed: {} airwires, {} missing terminals", ratsnest.lines.len(), ratsnest.missing.len()).into());
     }

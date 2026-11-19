@@ -7,12 +7,13 @@
 
 use crate::{ErrorCode, GeometryError, Result};
 
-/// Runs `f`, a sequence of kernel calls named `what`, and turns a panic inside it into
-/// [`ErrorCode::KernelInternal`] with the panic's message. `f`'s own result is returned unchanged.
+/// Runs `f`, a sequence of kernel calls named `what`, and turns an unwinding panic inside it into
+/// [`ErrorCode::KernelInternal`] with the panic's message. Aborting panics cannot be caught.
+/// `f`'s own result is returned unchanged.
 ///
 /// The kernel's state after a caught panic belongs to the kernel: solidcore's session replaces its
 /// kernel when one of its calls panics, and `f` must not hand out partly built bodies.
-#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+#[cfg_attr(all(target_arch = "wasm32", not(feature = "wasm-kernel")), allow(dead_code))]
 pub(crate) fn guard<T>(what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(result) => result,

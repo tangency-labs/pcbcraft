@@ -41,6 +41,11 @@ impl Target {
         if self.needs_manifest { "Project opened · Save will upgrade the project package".to_owned() } else { "Project opened".to_owned() }
     }
 
+    /// `archive` for a packed `.pc` file, `folder` for a project folder, as `file.save_as` names them.
+    pub(super) fn format(&self) -> &'static str {
+        if self.encoding == Encoding::Zip { "archive" } else { "folder" }
+    }
+
     /// Tell the editor whether this save added the archive's first manifest.
     pub(super) fn added_manifest(&self) -> bool {
         self.added_manifest
@@ -153,14 +158,9 @@ pub(super) fn save_new(
     snapshot: Arc<Project>,
     previous: Option<&(Arc<Project>, Target)>,
     format: SaveFormat,
-    mut path: PathBuf,
+    path: PathBuf,
 ) -> Result<Outcome, String> {
-    if format == SaveFormat::Archive && !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pc")) {
-        let mut name = path.file_name().ok_or("Missing project filename")?.to_os_string();
-        name.push(".pc");
-        path.set_file_name(name);
-    }
-    let path = normalize(&path)?;
+    let path = normalize(&with_extension(format, path)?)?;
     let original = snapshot.clone();
     let (snapshot, renamed) = match name_for(&snapshot, previous.is_some(), &path) {
         Some(named) => (Arc::new(named), Some(snapshot)),
@@ -185,6 +185,16 @@ pub(super) fn save_new(
     }
     target.documents = Some(Arc::new(documents));
     Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, renamed))
+}
+
+/// Add `.pc` to an archive destination without it (in any case); folders and `.pc` names are kept.
+pub(super) fn with_extension(format: SaveFormat, mut path: PathBuf) -> Result<PathBuf, String> {
+    if format == SaveFormat::Archive && !path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pc")) {
+        let mut name = path.file_name().ok_or("Missing project filename")?.to_os_string();
+        name.push(".pc");
+        path.set_file_name(name);
+    }
+    Ok(path)
 }
 
 /// Strip a project extension from a folder or archive file name.

@@ -67,9 +67,17 @@ fn committed_degrees(ui: &mut Ui, salt: (&str, impl std::hash::Hash + std::fmt::
     (commit && degrees != model).then_some(degrees)
 }
 
+/// Property controls return domain edits or a captured chooser request to their owning view.
+pub(super) enum CopperAction {
+    Command(&'static str, serde_json::Value),
+    ChooseViaNet(Vec<uuid::Uuid>),
+}
+
 /// Inspect selected copper and atomically change its lock state; locked or mixed-locked selections keep sizes read-only.
-/// Returns at most one command, submitted when a field is released or confirmed; the caller adds
-/// the board and `revision`. Length drafts belong to `view`, `revision` and the whole selection.
+/// Returns at most one command or a net-chooser request. The caller adds the board and `revision`
+/// to commands and captures the selection for chooser requests. Length drafts belong to `view`,
+/// `revision` and the whole selection.
+/// Committed numeric fields take priority over a simultaneous net-chooser request.
 /// Mixed track widths show the first width and set all of them; vias
 /// of different sizes show "Mixed" and stay read-only, since each via field sends both sizes.
 pub(super) fn copper_properties(
@@ -79,7 +87,8 @@ pub(super) fn copper_properties(
     unit: units::Unit,
     view: crate::editor_view::ViewId,
     revision: u64,
-) -> Option<(&'static str, serde_json::Value)> {
+    net_choices: &[crate::board_net_choice::NetChoice],
+) -> Option<CopperAction> {
     use pcbcraft_engine::board::track::{MAX_VIA_DIAMETER_NM, MAX_WIDTH_NM, MIN_VIA_DRILL_NM, MIN_WIDTH_NM};
     let tracks: Vec<_> = target.tracks().iter().filter(|track| selected.contains(&track.id)).collect();
     let vias: Vec<_> = target.vias().iter().filter(|via| selected.contains(&via.id)).collect();
@@ -113,7 +122,7 @@ pub(super) fn copper_properties(
         if !vias.is_empty() {
             params["vias"] = serde_json::json!(vias.iter().map(|via| via.id).collect::<Vec<_>>());
         }
-        return Some((pcbcraft_engine::SET_COPPER_LOCKED, params));
+        return Some(CopperAction::Command(pcbcraft_engine::SET_COPPER_LOCKED, params));
     }
     if let Some(first) = tracks.first() {
         let layers = target.layers();
@@ -135,6 +144,30 @@ pub(super) fn copper_properties(
                 pcbcraft_engine::SET_TRACK_WIDTH,
                 serde_json::json!({"tracks":tracks.iter().map(|t| t.id).collect::<Vec<_>>(),"width_nm":width}),
             ));
+        }
+        ui.end_row();
+    }
+    if let Some(first) = vias.first() {
+        let choices = net_choices;
+        let current = if vias.iter().any(|v| v.net_assignment != first.net_assignment) {
+            "Mixed".to_owned()
+        } else if let Some(address) = first.net_assignment {
+            let state = target.via_net_state(address);
+            choices.iter().find(|c| c.id == Some(address.net)).map_or_else(
+                || format!("{} ({state})", address.net),
+                |c| if state == "active" { c.label.clone() } else { format!("{} ({state})", c.label) },
+            )
+        } else {
+            "Automatic".to_owned()
+        };
+        ui.label("Net");
+        if ui.add_enabled_ui(!any_locked, |ui| crate::board_net_choice::trigger(ui, "Via net", &current)).inner.clicked() {
+            // Focus loss may have committed Width earlier in this frame. Publish that edit
+            // first; a subsequent click opens the chooser against its resulting revision.
+            return Some(match edit {
+                Some((command, params)) => CopperAction::Command(command, params),
+                None => CopperAction::ChooseViaNet(vias.iter().map(|v| v.id).collect()),
+            });
         }
         ui.end_row();
     }
@@ -169,7 +202,7 @@ pub(super) fn copper_properties(
         }
         ui.end_row();
     }
-    edit
+    edit.map(|(command, params)| CopperAction::Command(command, params))
 }
 
 /// An in-progress length edit, tied to the model value, display unit and project revision it

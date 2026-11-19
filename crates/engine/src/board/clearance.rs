@@ -2,6 +2,7 @@
 //! contact/separation predicates; the exhaustive path is a reference for later spatial indexes.
 use super::{
     geometry::Contour,
+    pair_index::{PairStep, PairWalk},
     track::{Land, islands, lands, with_pad_contacts},
     view::{BoardTarget, BoardView},
 };
@@ -14,6 +15,7 @@ use uuid::Uuid;
 
 mod index;
 mod overlay;
+pub(crate) mod preparation;
 pub use overlay::{ObstacleId, Overlay, OverlayDecision, OverlayResults};
 
 /// At most one prepared geometry per session, shared across its views without retaining history
@@ -67,6 +69,10 @@ impl Authority {
     /// profile indices expire with this authority; board-default-only queries omit the context.
     pub fn class_rules(&self) -> Option<&super::class_rules::Context> {
         self.class_rules.as_deref()
+    }
+    /// The captured board, for engine consumers that need more of the same snapshot than copper.
+    pub(crate) fn view(&self) -> Option<BoardView<'_>> {
+        self.snapshot.board_view(self.target)
     }
     /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
     /// Rule overrides are immutable inputs: a different override requires a new query.
@@ -137,9 +143,9 @@ impl Session {
     /// Rule changes invalidate the returned authority just like copper or connectivity changes.
     pub fn clearance_query_with_rules(&self, target: BoardTarget, overrides: &serde_json::Value) -> Result<ClearanceQuery, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
-        let view = snapshot.board_view(target).ok_or_else(|| CommandError::InvalidParams("unknown board target".into()))?;
+        let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
+        view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let rules = view.resolve_rules(overrides)?;
-        let copper_layers = view.layers().into_iter().filter(|l| l.purpose == super::setup::LayerPurpose::Copper).map(|l| l.id).collect();
         let geometry = self.clearance_cache.try_lock().ok().and_then(|cache| {
             cache.as_ref().filter(|c| c.target == target && Weak::ptr_eq(&c.snapshot, &Arc::downgrade(&snapshot))).map(|c| c.geometry.clone())
         });
@@ -150,18 +156,37 @@ impl Session {
             }
             geometry
         });
-        // Charge the cold index build to preparation, keeping the first local lookup ready.
-        let _ = geometry.index();
-        let net_rules = super::class_rules::NetRules::new(view, rules.clone())?;
-        let class_rules = net_rules.as_ref().map(|rules| rules.capture(view, &geometry)).transpose()?.map(Arc::new);
-        let clearance_nm = class_rules.as_ref().map_or(rules.values.clearance_nm, |context| context.max_clearance(rules.values.clearance_nm));
-        Ok(ClearanceQuery {
-            authority: Authority {
+        ClearanceQuery::from_geometry(
+            &super::work::Source {
                 snapshot,
                 session: self.clearance_identity.clone(),
                 target,
                 opening: self.history_root_revision(),
                 revision: self.revision(),
+                effective: rules,
+            },
+            geometry,
+        )
+    }
+}
+
+impl ClearanceQuery {
+    /// Resolve policy over prepared contacts, preserving the source's session and board authority.
+    fn from_geometry(source: &super::work::Source, geometry: Arc<BoardGeometry>) -> Result<Self, CommandError> {
+        let view = source.snapshot.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable".into()))?;
+        let rules = source.effective.clone();
+        let copper_layers = view.layers().into_iter().filter(|l| l.purpose == super::setup::LayerPurpose::Copper).map(|l| l.id).collect();
+        let _ = geometry.index();
+        let net_rules = super::class_rules::NetRules::new(view, rules.clone())?;
+        let class_rules = net_rules.as_ref().map(|rules| rules.capture(view, &geometry)).transpose()?.map(Arc::new);
+        let clearance_nm = class_rules.as_ref().map_or(rules.values.clearance_nm, |context| context.max_clearance(rules.values.clearance_nm));
+        Ok(Self {
+            authority: Authority {
+                snapshot: source.snapshot.clone(),
+                session: source.session.clone(),
+                target: source.target,
+                opening: source.opening,
+                revision: source.revision,
                 clearance_nm,
                 rules,
                 class_rules,
@@ -171,9 +196,7 @@ impl Session {
             net_rules,
         })
     }
-}
 
-impl ClearanceQuery {
     /// Captured source, opening, board, revision and effective rule.
     pub fn authority(&self) -> &Authority {
         &self.authority
@@ -251,14 +274,27 @@ impl ClearanceQuery {
     pub fn probe(&self, contour: &Contour, layers: &[Uuid], intended_from: Option<usize>) -> Result<Results, CommandError> {
         let nets = match intended_from {
             Some(index) => {
-                &self.geometry.items.get(index).ok_or_else(|| CommandError::InvalidParams("unknown source copper object".into()))?.intended_nets[..]
+                &self.geometry.items.get(index).ok_or_else(|| CommandError::NotFound("unknown source copper object".into()))?.intended_nets[..]
             }
             None => &[],
         };
+        self.probe_membership(contour, layers, nets, intended_from)
+    }
+
+    /// Evaluate a route leg with the complete connected route's intended memberships. The
+    /// optional replaced source retains the public single-contour probe's exclusion behavior;
+    /// a new route passes none so every existing contact is checked.
+    pub(super) fn probe_membership(
+        &self,
+        contour: &Contour,
+        layers: &[Uuid],
+        nets: &[usize],
+        replaced: Option<usize>,
+    ) -> Result<Results, CommandError> {
         let candidates = self.candidates(contour, layers)?;
         let gaps: Vec<_> = candidates
             .into_iter()
-            .filter(|index| Some(*index) != intended_from)
+            .filter(|index| Some(*index) != replaced)
             .map(|index| (index, contour.gap(&self.geometry.items[index].contour)))
             .collect();
         let connected: Vec<_> = nets
@@ -294,6 +330,13 @@ pub(super) struct BoardGeometry {
     index: OnceLock<Arc<index::Index>>,
 }
 
+// Used by the capacity regression to fail immediately if a doomed command starts
+// synchronous connectivity work. The guard applies only to that test thread.
+#[cfg(test)]
+thread_local! {
+    pub(in crate::board) static FORBID_SYNCHRONOUS_GEOMETRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl BoardGeometry {
     /// Publish a lazily built immutable index without making another query wait for a builder.
     /// Concurrent first queries may duplicate a bounded build; subsequent queries share one tree.
@@ -308,6 +351,8 @@ impl BoardGeometry {
     /// Resolve supported contours and the complete intended membership of every routed island.
     /// Keep legacy clearance islands separate from direct-pad contact traversal used for shorts.
     pub(crate) fn new(view: BoardView<'_>) -> Self {
+        #[cfg(test)]
+        assert!(!FORBID_SYNCHRONOUS_GEOMETRY.get(), "an over-capacity command started synchronous board geometry");
         let lands = lands(view);
         let (copper, members) = islands(&lands, view.tracks(), view.vias());
         Self::from_islands(view, lands, copper, members)
@@ -328,26 +373,26 @@ impl BoardGeometry {
         merged: Vec<Vec<usize>>,
     ) -> Self {
         let project = view.project();
-        let baseline = project.board.baseline.as_ref();
-        let accepted = baseline.map(|b| b.terminal_net_index());
-        let graph = baseline.is_none().then(|| project.electrical_connectivity());
-        let pad_nets: Vec<Option<usize>> = lands
+        let intent = project.board_intent_memberships();
+        let intrinsic = super::via_nets::node_membership(project, &lands, view.tracks().len(), view.vias(), &intent);
+        let names: Vec<Option<String>> = members
             .iter()
-            .map(|land| {
-                let pad = super::Pad::parse(&land.key.0, &land.key.1)?;
-                let (component, terminal) = project.board.component_pin_for(pad)?;
-                if let Some(accepted) = &accepted {
-                    accepted.get(&(component, terminal)).copied()
-                } else {
-                    graph.as_ref()?.net_index_for(project.component_terminal(component, terminal)?)
+            .map(|nodes| {
+                let unresolved = nodes
+                    .iter()
+                    .filter_map(|n| n.checked_sub(lands.len() + view.tracks().len()).and_then(|i| view.vias().get(i)))
+                    .any(|v| v.net_assignment.is_some_and(|a| project.via_net_state(a) != "active"));
+                let nets: BTreeSet<_> = nodes.iter().filter_map(|n| intrinsic[*n]).collect();
+                if unresolved || nets.len() != 1 {
+                    return None;
                 }
+                intent.names.get(nets.first()?).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone()))
             })
             .collect();
-        let names: Vec<Option<String>> = members.iter().map(|nodes| nodes.iter().find_map(|node| lands.get(*node)?.net.clone())).collect();
         let members = merged;
         let mut node_nets = vec![Vec::new(); lands.len() + view.tracks().len() + view.vias().len()];
         for nodes in &members {
-            let nets: Vec<_> = nodes.iter().filter_map(|node| pad_nets.get(*node).copied().flatten()).collect::<BTreeSet<_>>().into_iter().collect();
+            let nets: Vec<_> = nodes.iter().filter_map(|node| intrinsic.get(*node).copied().flatten()).collect::<BTreeSet<_>>().into_iter().collect();
             for &node in nodes {
                 node_nets[node] = nets.clone();
             }
@@ -361,7 +406,7 @@ impl BoardGeometry {
                 contour: land.contour(),
                 layers: land.layers.clone(),
                 island,
-                intended_nets: pad_nets[index].map(|net| vec![net]).unwrap_or_else(|| node_nets[index].clone()),
+                intended_nets: intrinsic[index].map(|net| vec![net]).unwrap_or_else(|| node_nets[index].clone()),
                 net: land.net.clone().or_else(|| names[island].clone()),
                 at,
             });
@@ -426,22 +471,50 @@ impl BoardGeometry {
     fn pairs(&self, clearance_nm: i64) -> impl Iterator<Item = Decision> + '_ {
         self.candidate_pairs(clearance_nm).filter_map(move |(i, j)| self.evaluate(i, j, clearance_nm))
     }
-    /// DRC needs only clearance decisions; skip its existing exemptions before narrow-phase
-    /// work, while the general query continues to expose contact independently for shorts.
-    /// Across different islands, unresolved membership remains a clearance obstacle even when
-    /// display names match: only one equal, resolved intended net proves a same-net exemption.
+    /// Build a conservative clearance cursor using the greatest applicable rule. Public
+    /// `pairs()` still returns its legacy AABB candidates, even when they do not violate.
+    pub(super) fn clearance_walk(&self, clearance_nm: i64, context: Option<&super::class_rules::Context>) -> PairWalk {
+        let maximum = context.map_or(clearance_nm, |context| context.max_clearance(clearance_nm));
+        PairWalk::new(self.items.iter().map(|item| &item.contour), maximum)
+    }
+
+    /// Apply the checker’s exemptions and exact spacing predicate to one canonical pair.
+    /// Only one equal, resolved intended net proves a same-net exemption; equal display names
+    /// do not exempt unresolved islands.
+    pub(super) fn clearance_decision(
+        &self,
+        i: usize,
+        j: usize,
+        clearance_nm: i64,
+        context: Option<&super::class_rules::Context>,
+    ) -> Option<Decision> {
+        let (a, b) = (&self.items[i], &self.items[j]);
+        if a.island == b.island || (a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets) {
+            return None;
+        }
+        self.evaluate(i, j, context.map_or(clearance_nm, |context| context.clearance(Some(i), j, clearance_nm)))
+    }
+
+    /// Stream conservative candidates for synchronous DRC without retaining an all-pairs table.
     pub(super) fn clearance_pairs<'a>(
         &'a self,
         clearance_nm: i64,
         context: Option<&'a super::class_rules::Context>,
     ) -> impl Iterator<Item = Decision> + 'a {
-        let maximum = context.map_or(clearance_nm, |context| context.max_clearance(clearance_nm));
-        self.candidate_pairs(maximum)
-            .filter(move |(i, j)| {
-                let (a, b) = (&self.items[*i], &self.items[*j]);
-                a.island != b.island && !(a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets)
-            })
-            .filter_map(move |(i, j)| self.evaluate(i, j, context.map_or(clearance_nm, |context| context.clearance(Some(i), j, clearance_nm))))
+        let mut walk = self.clearance_walk(clearance_nm, context);
+        std::iter::from_fn(move || {
+            loop {
+                match walk.step() {
+                    PairStep::Pending => (),
+                    PairStep::Done => return None,
+                    PairStep::Pair(i, j) => {
+                        if let Some(decision) = self.clearance_decision(i, j, clearance_nm, context) {
+                            return Some(decision);
+                        }
+                    }
+                }
+            }
+        })
     }
     /// Evaluate shape separation independently of the candidate-enumeration strategy.
     pub(super) fn evaluate(&self, i: usize, j: usize, clearance_nm: i64) -> Option<Decision> {

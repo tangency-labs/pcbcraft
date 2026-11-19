@@ -164,12 +164,13 @@ impl BoardView<'_> {
     /// Unknown objects fail, unknown membership returns None, and conflicting physical islands
     /// or pending splits refuse assignment. No class/net name or arbitrary first member is used.
     pub fn net_class_target_for_copper(self, object: &str) -> Result<Option<crate::nets::ClassTarget>, CommandError> {
+        self.require_linear_copper().map_err(CommandError::Unavailable)?;
         let geometry = BoardGeometry::new(self);
         let index = geometry
             .items
             .iter()
             .position(|item| item.name == object)
-            .ok_or_else(|| CommandError::InvalidParams("Unknown selected copper object.".into()))?;
+            .ok_or_else(|| CommandError::NotFound("Unknown selected copper object.".into()))?;
         let memberships: Vec<_> = geometry
             .members
             .iter()
@@ -191,6 +192,7 @@ impl BoardView<'_> {
     /// assignments means no geometry preparation. Unknown free space has board defaults only;
     /// through-via queries omit the layer and combine contacts across all copper layers.
     pub fn route_rules_at(self, at: crate::schematic::Point, layer: Option<Uuid>) -> Result<Option<Applied>, CommandError> {
+        self.require_linear_copper().map_err(CommandError::Unavailable)?;
         if !crate::wire::valid_point(&at) {
             return Err(CommandError::InvalidParams("Route contact is out of range.".into()));
         }
@@ -248,7 +250,7 @@ impl NetRules {
     pub(crate) fn new(view: BoardView<'_>, baseline: rules::Effective) -> Result<Option<Self>, CommandError> {
         let project = view.project();
         let terminals = project.classified_terminals()?;
-        if terminals.is_empty() {
+        if terminals.is_empty() && !view.vias().iter().any(|v| v.net_assignment.is_some()) {
             return Ok(None);
         }
         let accepted = project.board.baseline.as_ref().map(|baseline| baseline.terminal_net_index());
@@ -262,6 +264,14 @@ impl NetRules {
             };
             if let Some(membership) = membership {
                 by_membership.entry(membership).or_default().insert(id);
+            }
+        }
+        let intent = project.board_intent_memberships();
+        for via in view.vias() {
+            if let Some(address) = via.net_assignment.filter(|a| project.via_net_state(*a) == "active")
+                && let Some(member) = intent.ids.get(&address.net)
+            {
+                by_membership.entry(*member).or_default().insert(address.net);
             }
         }
         if by_membership.is_empty() {

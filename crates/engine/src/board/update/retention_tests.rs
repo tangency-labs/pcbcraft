@@ -179,11 +179,13 @@ fn accepted_pad_net_lookup_is_bound_to_each_lazy_snapshot_traversal() {
             display_name: None,
             terminals: vec![TerminalKey { component: ids[0], terminal: "1".into() }],
             names: vec!["RAIL".into(), "VCC".into()],
+            origin: None,
         },
         NetState {
             display_name: None,
             terminals: vec![TerminalKey { component: ids[0], terminal: "2".into() }, TerminalKey { component: ids[1], terminal: "1".into() }],
             names: vec![],
+            origin: None,
         },
     ];
     baseline.validate().unwrap();

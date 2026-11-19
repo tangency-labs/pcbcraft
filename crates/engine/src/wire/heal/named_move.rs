@@ -6,7 +6,7 @@ impl Edit {
     /// Capture against the old geometry, so fixed pins and unsplit interiors remain connected.
     /// Refresh marker attachment restrictions for the returned pose before subsequent cleanup.
     pub(super) fn pose_symbol(&mut self, index: usize, to: Point, rotation: u8, mirrored: bool) -> Result<(), CommandError> {
-        let symbol = self.project.symbols().get(index).ok_or_else(|| CommandError::InvalidParams("symbol does not exist".into()))?;
+        let symbol = self.project.symbols().get(index).ok_or_else(|| CommandError::NotFound("symbol does not exist".into()))?;
         let contact = self.project.power_terminals().find_map(|(end, _, from)| {
             let WireEndpoint::Terminal(pin) = end else { return None };
             if pin.symbol != symbol.ordinal {
@@ -150,7 +150,7 @@ impl Project {
     pub fn dragged_net_label(&self, id: u64, to: Point, rotation: u16, revision: u64, auto_heal: bool) -> Result<Self, CommandError> {
         let preview = self.preview_net_label(id, to, rotation)?;
         let end = WireEndpoint::NetLabel(id);
-        let from = self.endpoint_position(end).ok_or_else(|| CommandError::InvalidParams("unknown net label on this sheet".into()))?;
+        let from = self.endpoint_position(end).ok_or_else(|| CommandError::NotFound("unknown net label on this sheet".into()))?;
         if from == to {
             return Ok(preview);
         }

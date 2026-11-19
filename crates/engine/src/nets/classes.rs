@@ -115,7 +115,7 @@ impl Project {
         match target {
             ClassTarget::Persistent { project, scope, net } => {
                 if *project != self.id || *scope != self.net_scope() || self.net_registry.record(*net).is_none() {
-                    return Err(CommandError::InvalidParams("Unknown or foreign scoped net identity.".into()));
+                    return Err(CommandError::NotFound("Unknown or foreign scoped net identity.".into()));
                 }
                 Ok((Some(*net), None))
             }
@@ -143,7 +143,7 @@ impl Project {
     /// origins and equal-precedence conflicts. Ambiguous/retired identities are never a live result.
     pub fn resolve_net_assignment(&self, address: NetAddress) -> Result<BoundResolution, CommandError> {
         self.class_target(&ClassTarget::Persistent { project: address.project, scope: address.scope, net: address.net })?;
-        let record = self.net_registry.record(address.net).ok_or_else(|| CommandError::InvalidParams("Unknown net identity.".into()))?;
+        let record = self.net_registry.record(address.net).ok_or_else(|| CommandError::NotFound("Unknown net identity.".into()))?;
         if !matches!(record.state, State::Active {}) {
             return Err(CommandError::Unavailable("This net identity is retired or awaiting an explicit identity resolution.".into()));
         }
@@ -151,11 +151,18 @@ impl Project {
         Ok(BoundResolution { address, bindings: record.class_bindings.clone(), resolution: self.resolve_net_classes(&classes, self.board_target())? })
     }
 
+    /// Resolve a current chooser target without promoting it. Unregistered derived nets carry
+    /// board defaults; inactive saved targets return the ordinary reconciliation error.
+    pub fn resolve_net_target(&self, target: &ClassTarget) -> Result<Option<BoundResolution>, CommandError> {
+        let (id, _) = self.class_target(target)?;
+        id.map(|net| self.resolve_net_assignment(NetAddress { project: self.id, scope: self.net_scope(), net })).transpose()
+    }
+
     /// Inspect assignments/conflicts without editing documents or promoting derived networks.
     pub fn inspect_net_classes(&self, target: &ClassTarget) -> Result<Value, CommandError> {
         let (id, _) = self.class_target(target)?;
         if let Some(id) = id {
-            let record = self.net_registry.record(id).ok_or_else(|| CommandError::InvalidParams("Unknown net identity.".into()))?;
+            let record = self.net_registry.record(id).ok_or_else(|| CommandError::NotFound("Unknown net identity.".into()))?;
             let resolution = if matches!(record.state, State::Active {}) {
                 Some(self.resolve_net_assignment(NetAddress { project: self.id, scope: self.net_scope(), net: id })?.resolution)
             } else {
@@ -197,12 +204,12 @@ impl Session {
         let classes = net_classes::parse_set(&params["classes"])?;
         for id in &classes {
             if original.net_classes.get(*id).is_none() {
-                return Err(CommandError::InvalidParams("Unknown net class.".into()));
+                return Err(CommandError::NotFound("Unknown net class.".into()));
             }
         }
         let (existing, index) = original.class_target(&target)?;
         if let Some(id) = existing {
-            let record = original.net_registry.record(id).ok_or_else(|| CommandError::InvalidParams("Unknown net identity.".into()))?;
+            let record = original.net_registry.record(id).ok_or_else(|| CommandError::NotFound("Unknown net identity.".into()))?;
             if !matches!(record.state, State::Active {}) {
                 return Err(CommandError::InvalidParams("Class assignment requires an active net identity.".into()));
             }
@@ -225,8 +232,8 @@ impl Session {
                 return Err(CommandError::InvalidParams("A derived net needs a current anchor.".into()));
             };
             let graph = Graph::build(original).map_err(CommandError::InvalidParams)?;
-            let mut ids = registry.records.iter().map(|record| record.id).collect();
-            let id = allocate(&mut ids)?;
+            let mut ids = registry.reserved_ids();
+            let id = allocate(registry.records.len(), &mut ids)?;
             registry.records.push(
                 graph.networks[index.ok_or_else(|| CommandError::InvalidParams("Missing derived network.".into()))?]
                     .record(id, Some(&anchor))

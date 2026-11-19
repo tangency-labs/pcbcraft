@@ -11,6 +11,38 @@ pub struct Contour {
 }
 
 impl Contour {
+    /// Resolve a trusted pad through the same contour used for copper connectivity.
+    pub(super) fn pad(center: Point, corners: [Point; 4], shape: super::definition::PadShape, corner_radius_nm: i64) -> Self {
+        use super::definition::PadShape;
+        if shape == PadShape::Rectangle {
+            return Self { core: corners, radius: 0. };
+        }
+        let c = &corners;
+        let (ux, uy) = ((c[1].x_nm - c[0].x_nm) as f64, (c[1].y_nm - c[0].y_nm) as f64);
+        let (vx, vy) = ((c[3].x_nm - c[0].x_nm) as f64, (c[3].y_nm - c[0].y_nm) as f64);
+        let (w, h) = (ux.hypot(uy), vx.hypot(vy));
+        let radius = match shape {
+            PadShape::Rectangle => 0.,
+            PadShape::RoundedRectangle => (corner_radius_nm as f64).min(w.min(h) / 2.),
+            PadShape::Circle | PadShape::Oval => w.min(h).round() / 2.,
+        };
+        let (x, y) = if shape == PadShape::RoundedRectangle {
+            ((c[0].x_nm as f64 + c[2].x_nm as f64) / 2., (c[0].y_nm as f64 + c[2].y_nm as f64) / 2.)
+        } else {
+            (center.x_nm as f64, center.y_nm as f64)
+        };
+        let (iw, ih) = match shape {
+            PadShape::Circle => (0., 0.),
+            PadShape::Oval => ((w.round() / 2. - radius).max(0.), (h.round() / 2. - radius).max(0.)),
+            _ => ((w / 2. - radius).max(0.), (h / 2. - radius).max(0.)),
+        };
+        let core = [(-iw, -ih), (iw, -ih), (iw, ih), (-iw, ih)].map(|(a, b)| Point {
+            x_nm: (x + a * ux / w.max(1.) + b * vx / h.max(1.)).round() as i64,
+            y_nm: (y + a * uy / w.max(1.) + b * vy / h.max(1.)).round() as i64,
+        });
+        Self { core, radius }
+    }
+
     /// A round-ended segment in board nanometers. A zero-length skeleton is supported for
     /// preview endpoints and vias; width and coordinates obey the existing track limits.
     pub fn segment(start: Point, end: Point, width_nm: i64) -> Result<Self, crate::CommandError> {

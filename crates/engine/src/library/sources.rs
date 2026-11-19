@@ -1,10 +1,13 @@
 //! Validated native source snapshots and a disposable catalog, independent of project history.
 mod deletion;
+mod export;
 pub mod inventory;
+mod updates;
 use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
 use crate::{Command, CommandError, Param, ParamKind, Session, board::definition::FootprintDefinition, schematic::SymbolDefinition};
 pub use deletion::ItemRemoval;
+pub use export::Export;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -31,6 +34,8 @@ pub const REMOVE: &str = "library.remove_source";
 pub const LIST: &str = "library.list_sources";
 /// Search the latest unambiguous revision of each native record kind across sources.
 pub const SEARCH: &str = "library.search";
+/// Inspect later loaded revisions without changing project pins or history.
+pub const AVAILABLE_REVISIONS: &str = "library.available_revisions";
 /// Resolve a part's exact dependencies and validate its typed values and complete package maps.
 pub const RESOLVE_PART: &str = "library.resolve_part";
 /// Normalize typed quantity input into the canonical base-unit representation.
@@ -71,7 +76,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 8] = [
+pub(crate) const COMMANDS: [Command; 9] = [
     Command {
         id: PREPARE_PUBLICATION,
         title: "Prepare library publication",
@@ -164,6 +169,12 @@ pub(crate) const COMMANDS: [Command; 8] = [
             Param { name: "definition", summary: "Exact native part identity", required: true, kind: ParamKind::LibrarySource },
             Param { name: "definition_revision", summary: "Pinned part revision", required: true, kind: ParamKind::DefinitionRevision },
         ],
+    },
+    Command {
+        id: AVAILABLE_REVISIONS,
+        title: "List available library revisions",
+        summary: "Compare existing project instances with loaded native revisions. No adoption or network access; availability is not compatibility.",
+        params: &[],
     },
     Command {
         id: PARSE_QUANTITY,
@@ -331,6 +342,8 @@ pub struct NativeSource {
     license: String,
     items: Vec<Item>,
     problems: Vec<String>,
+    /// The original text, kept so the whole library can be exported unchanged.
+    documents: Documents,
 }
 impl NativeSource {
     /// Stable manifest identity, including for sources with no valid item documents.
@@ -359,7 +372,14 @@ impl NativeSource {
         if manifest.id.starts_with("project-") {
             return Err("library.json: project- library IDs are reserved for pinned project records".into());
         }
-        let mut source = Self { library: manifest.id, name: manifest.name, license: manifest.license, items: Vec::new(), problems: Vec::new() };
+        let mut source = Self {
+            library: manifest.id,
+            name: manifest.name,
+            license: manifest.license,
+            items: Vec::new(),
+            problems: Vec::new(),
+            documents: documents.clone(),
+        };
         for (path, text) in documents.iter().filter(|(path, _)| path.as_str() != "library.json") {
             match source.parse_item(path, text) {
                 Ok(item) => source.items.push(item),
@@ -670,6 +690,7 @@ impl Catalog {
                 license: String::new(),
                 items: Vec::new(),
                 problems: vec![error],
+                documents: Documents::new(),
             });
             // Embedded registrations are bounded by this repository's delivery adapter.
             let source_id = format!("bundled-{id}");
@@ -978,7 +999,9 @@ impl Session {
         Arc::make_mut(&mut self.libraries).mark_unavailable(id);
     }
 
-    /// Execute validated source commands, returning library inspection/search rather than project data.
+    /// Execute validated library commands without editing the project or its history.
+    /// Revision discovery treats the saved dependency closure as input, so inconsistent pins
+    /// are InvalidParams even when the command has no parameter fields.
     pub(crate) fn library_command(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         let command = crate::command(id).ok_or_else(|| CommandError::Unknown(id.into()))?;
         crate::check_params(command, params)?;
@@ -1056,6 +1079,10 @@ impl Session {
                 Ok(self.libraries.inspect())
             }
             LIST => Ok(self.libraries.inspect()),
+            AVAILABLE_REVISIONS => {
+                let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
+                updates::inspect(project, &self.libraries, self.revision()).map_err(CommandError::InvalidParams)
+            }
             PARSE_QUANTITY => {
                 let quantity: super::parts::Quantity =
                     serde_json::from_value(params["quantity"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;

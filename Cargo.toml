@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["apps/*", "crates/*"]
-exclude = ["vendor/eframe"]
+exclude = ["vendor/eframe", "vendor/egui-winit", "vendor/solidcore-ops"]
 
 [workspace.package]
 version = "0.1.0"
@@ -25,6 +25,7 @@ solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev
 # SolidCraft's B-rep kernel and STEP crates, at the same revision as the UI crates above.
 # Only pcbcraft-geometry depends on them (docs/geometry-kernel.md).
 solidcore-ops = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcore-record = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 solidcore-step = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 eframe = { version = "=0.37.0", default-features = false, features = ["default_fonts", "wgpu", "accesskit", "persistence", "clipboard"] }
 egui = "=0.37.0"
@@ -50,10 +51,30 @@ opt-level = "s"
 lto = "thin"
 codegen-units = 16
 
+# Routine verification keeps assertion/overflow checks, without full debugger metadata or LTO.
+[profile.ci]
+inherits = "dev"
+opt-level = 1
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true
+incremental = false
+
+[profile.ci.package."*"]
+opt-level = 2
+debug = false
+
 # Local native-root lifetime fix; source and patch boundary are recorded in vendor/eframe/PATCH.md.
 [patch.crates-io]
 eframe = { path = "vendor/eframe" }
 
+# Empty-clipboard paste-chord completion + test seams; see vendor/egui-winit/PATCH.md.
+egui-winit = { path = "vendor/egui-winit" }
+
 # Shared viewport callbacks require SolidCraft's published renderer fixes.
 egui-wgpu = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 winit = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+
+# Narrow backport of upstream STEP composition fixes; see vendor/solidcore-ops/PATCH.md.
+[patch."https://github.com/tangency-labs/solidcraft.git"]
+solidcore-ops = { path = "vendor/solidcore-ops" }

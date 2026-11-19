@@ -11,12 +11,16 @@ pub mod authoring;
 pub mod board;
 pub mod clipboard;
 pub mod clipboard_text;
+pub mod command_api;
+pub mod edits;
+pub mod error_codes;
 pub mod hierarchy;
 #[cfg(test)]
 mod identity_tests;
 pub mod instances;
 pub mod library;
 pub mod library_graphics;
+mod named_catalog;
 pub mod net_classes;
 pub mod net_labels;
 pub mod netlist;
@@ -24,18 +28,21 @@ pub mod nets;
 pub mod no_connect;
 pub mod parameters;
 pub mod part_authoring;
+pub mod part_groups;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;
 pub mod sheets;
 pub mod wire;
+pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
 pub use board::drawing::{ADD_DRAWING, DELETE_DRAWING, SET_DRAWING};
 pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
+pub use board::via_nets::SET_VIA_NET;
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -147,15 +154,23 @@ enum ParamKind {
     DrawingPoints,
     DrawingId,
     TrackPath,
+    PreviousRoute,
     TrackWidth,
     TrackIds,
     LayerChanges,
     TrackEnds,
+    ArcTracks,
     AlignMode,
     BoardSide,
     RuleLength,
     BoardRules,
     PlacementOrigin,
+    /// An assembly profile UUID from inspection.
+    AssemblyProfileId,
+    /// Immutable assembly profile content, or null to retire the addressed profile.
+    AssemblyProfile,
+    /// Positive content revision or null to clear a board adoption.
+    AssemblyProfileRevision,
     ClassRules,
     ClassSet,
     ClassId,
@@ -182,6 +197,10 @@ enum ParamKind {
     ParameterName,
     /// A bounded parameter value, or null to remove it.
     ParameterValue,
+    /// A route posture spelling, such as `diagonal`.
+    RoutePosture,
+    /// A route planner's probe budget.
+    RouteBudget,
     /// A bounded text whose references are resolved.
     ParameterText,
 }
@@ -199,9 +218,9 @@ impl ParamKind {
             Self::BoardSelection => json!({"type":"object","properties":{
                 "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
                 "drawings":{"type":"array","maxItems":512,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
-                "zones":{"type":"array","maxItems":board::zones::MAX_ZONES,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
-                "tracks":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
-                "vias":{"type":"array","maxItems":2048,"uniqueItems":true,"items":ParamKind::DrawingId.schema()}
+                "tracks":{"type":"array","maxItems":board::track::MAX_TRACKS,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
+                "vias":{"type":"array","maxItems":board::track::MAX_VIAS,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
+                "zones":{"type":"array","maxItems":board::zones::MAX_ZONES,"uniqueItems":true,"items":ParamKind::DrawingId.schema()}
             },"additionalProperties":false}),
             Self::SchematicPasteTargets => {
                 json!({"type":"object","maxProperties":sheets::MAX_SHEETS,"additionalProperties":{"type":"object","properties":{"sheet":ParamKind::SheetId.schema(),"at":ParamKind::Point.schema()},"required":["sheet","at"],"additionalProperties":false}})
@@ -255,6 +274,12 @@ impl ParamKind {
             Self::DrawingPoints => board::drawing::geometry_schema(),
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
+            Self::ArcTracks => board::arc::schema(),
+            Self::PreviousRoute => {
+                let mut schema = board::track::path_schema();
+                schema["minItems"] = json!(0);
+                schema
+            }
             Self::LayerChanges => board::track::layer_changes_schema(),
             Self::TrackEnds => {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
@@ -263,6 +288,9 @@ impl ParamKind {
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
             Self::PlacementOrigin => board::origin::schema(),
+            Self::AssemblyProfileId => json!({"type":"string","format":"uuid"}),
+            Self::AssemblyProfile => board::assembly_profile::schema(),
+            Self::AssemblyProfileRevision => json!({"type":["integer","null"],"minimum":1,"maximum":u32::MAX}),
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
@@ -275,6 +303,8 @@ impl ParamKind {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"uniqueItems":true,"items":{"type":"string","format":"uuid"}})
             }
             Self::Closed | Self::Locked => json!({"type":"boolean"}),
+            Self::RoutePosture => board::route::posture_schema(),
+            Self::RouteBudget => board::route::budget_schema(),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
             Self::Direction => json!({"type":"string", "enum":hierarchy::Direction::ALL.map(hierarchy::Direction::as_str)}),
@@ -388,6 +418,13 @@ impl ParamKind {
             Self::ClipboardLayers if serde_json::from_value::<BTreeMap<uuid::Uuid, uuid::Uuid>>(value.clone()).is_ok_and(|m| m.len() <= 128) => {
                 Ok(())
             }
+            // The counts are board::track::MAX_TRACKS and MAX_VIAS; a test keeps the text in step.
+            Self::BoardSelection if value["tracks"].as_array().is_some_and(|a| a.len() > board::track::MAX_TRACKS) => {
+                Err("must select at most 65536 tracks")
+            }
+            Self::BoardSelection if value["vias"].as_array().is_some_and(|a| a.len() > board::track::MAX_VIAS) => {
+                Err("must select at most 16384 vias")
+            }
             Self::BoardSelection => Err("must be bounded unique board object ID lists"),
             Self::SchematicPasteTargets => Err("must map source sheet UUIDs to explicit destination sheets and anchors"),
             Self::ClipboardLayers => Err("must map source layer UUIDs to destination layer UUIDs"),
@@ -486,10 +523,19 @@ impl ParamKind {
             }
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
             Self::Closed | Self::Locked if value.is_boolean() => Ok(()),
+            Self::RoutePosture if value.as_str().is_some_and(|name| board::route::Posture::NAMES.contains(&name)) => Ok(()),
+            Self::RouteBudget if value.as_u64().is_some_and(|n| (1..=board::route::MAX_BUDGET as u64).contains(&n)) => Ok(()),
             Self::TrackPath
                 if value
                     .as_array()
                     .is_some_and(|v| (2..=board::track::MAX_PATH_POINTS).contains(&v.len()) && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
+            {
+                Ok(())
+            }
+            Self::PreviousRoute
+                if value
+                    .as_array()
+                    .is_some_and(|v| v.len() <= board::track::MAX_PATH_POINTS && v.iter().all(|p| Self::Point.validate(p).is_ok())) =>
             {
                 Ok(())
             }
@@ -532,6 +578,14 @@ impl ParamKind {
                 })
                 .map(|_| ())
                 .ok_or("must contain 1–256 unique non-nil zone UUIDs"),
+            Self::ArcTracks => {
+                if !value.as_array().is_some_and(|arcs| arcs.len() <= board::arc::MAX_ARCS) {
+                    return Err("must contain at most 4096 exact circular arc records");
+                }
+                serde_json::from_value::<Vec<board::arc::ArcTrack>>(value.clone())
+                    .map_err(|_| "must contain exact circular arc records")
+                    .and_then(|arcs| arcs.iter().try_for_each(|arc| arc.validate()).map_err(|_| "invalid circular arc geometry"))
+            }
             Self::ZoneOptions => serde_json::from_value::<board::zones::Options>(value.clone())
                 .map_err(|_| "must contain complete zone options")
                 .and_then(|options| options.validate().map_err(|_| "zone option values are out of range")),
@@ -551,6 +605,18 @@ impl ParamKind {
             Self::BoardRules => Err("must contain complete board rule values or null to reset"),
             Self::PlacementOrigin if board::origin::parse(value).is_ok() => Ok(()),
             Self::PlacementOrigin => Err("must be a board_zero, outline_lower_left or in-range point origin, or null to reset"),
+            Self::AssemblyProfileId if serde_json::from_value::<uuid::Uuid>(value.clone()).is_ok_and(|id| !id.is_nil()) => Ok(()),
+            Self::AssemblyProfileId => Err("must identify an assembly profile by non-nil UUID"),
+            Self::AssemblyProfile if board::assembly_profile::valid_profile(value) => Ok(()),
+            Self::AssemblyProfile => {
+                Err("must be immutable profile content with a revision, name, provenance and valid corrections, or null to remove the profile")
+            }
+            Self::AssemblyProfileRevision
+                if value.is_null() || board::assembly_profile::integer(value).is_some_and(|n| n > 0 && n <= u32::MAX as i64) =>
+            {
+                Ok(())
+            }
+            Self::AssemblyProfileRevision => Err("must be a positive content revision or null"),
             Self::RuleLength if value.as_i64().is_some_and(|n| (0..=MAX_CENTER_NM).contains(&n)) => Ok(()),
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
@@ -569,6 +635,7 @@ impl ParamKind {
             {
                 Ok(())
             }
+            Self::TrackEnds if value.as_array().is_some_and(|items| items.len() > board::track::MAX_TRACKS) => Err("must list at most 65536 tracks"),
             Self::TrackEnds => Err("must list tracks with a UUID and bounded start and end points"),
             Self::AlignMode if value.as_str().and_then(AlignMode::parse).is_some() => Ok(()),
             Self::AlignMode => Err("must be an alignment mode"),
@@ -576,11 +643,15 @@ impl ParamKind {
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
             Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
             Self::TrackPath => Err("must contain 2–256 bounded vertices"),
+            Self::PreviousRoute => Err("must contain at most 256 bounded vertices"),
             Self::TrackWidth => Err("must be a track width from 10000 to 10000000 nanometers"),
+            Self::TrackIds if value.as_array().is_some_and(|ids| ids.len() > board::track::MAX_TRACKS) => Err("must list at most 65536 IDs"),
             Self::TrackIds => Err("must contain unique non-nil track UUIDs"),
             Self::DrawingPoints => Err("must contain 2–256 bounded vertices"),
             Self::DrawingId => Err("must identify a drawing or layer by non-nil UUID"),
             Self::Closed | Self::Locked => Err("must be a boolean"),
+            Self::RoutePosture => Err("must be diagonal or orthogonal"),
+            Self::RouteBudget => Err("must be a probe budget from 1 to 65536"),
             Self::HierarchyId
                 if value.as_str().is_some_and(|s| {
                     schematic::wiring::parse_id(s, "label-").is_some() || schematic::wiring::parse_id(s, "sheet-symbol-").is_some()
@@ -817,6 +888,7 @@ pub const DELETE_FOOTPRINTS: &str = "pcb.delete_footprints";
 pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
 /// Atomically replace a validated board setup while retaining its profile identity.
 pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
+pub use board::setup::preview::{CANCEL_BOARD_SETUP_PREVIEW, PREVIEW_BOARD_SETUP};
 /// Set board-local physical silkscreen text height, stroke width and pad clearance.
 pub const SET_SILKSCREEN: &str = "pcb.set_silkscreen";
 const BOARD: Param = Param {
@@ -1773,8 +1845,37 @@ const CATALOG: &[Command] = &[
                 summary: "Board print settings to apply atomically with setup",
                 kind: ParamKind::SilkscreenSettings,
             },
+            Param {
+                required: false,
+                name: "plan_token",
+                summary: "Current session's setup preview token; candidate and consent must match",
+                kind: ParamKind::Text,
+            },
             EXPECTED_REVISION,
         ],
+    },
+    Command {
+        id: PREVIEW_BOARD_SETUP,
+        title: "Preview Board Setup",
+        summary: "Review affected layers and objects, consent and Apply refusal without changing the project or history.",
+        params: &[
+            BOARD,
+            Param { required: true, name: "setup", summary: "Complete candidate setup to review", kind: ParamKind::BoardSetup },
+            Param {
+                required: false,
+                name: "resolve_existing_footprints",
+                summary: "Explicitly consent to compatible front/all-copper span changes",
+                kind: ParamKind::ResolveExistingFootprints,
+            },
+            Param { required: false, name: "silkscreen", summary: "Board print settings reviewed with setup", kind: ParamKind::SilkscreenSettings },
+            EXPECTED_REVISION,
+        ],
+    },
+    Command {
+        id: CANCEL_BOARD_SETUP_PREVIEW,
+        title: "Cancel Board Setup Preview",
+        summary: "Revoke only the named setup preview without changing the project or history.",
+        params: &[BOARD, Param { required: true, name: "plan_token", summary: "Current session's setup preview token", kind: ParamKind::Text }],
     },
     Command {
         id: SET_SILKSCREEN,
@@ -1799,6 +1900,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[5],
     library::sources::COMMANDS[6],
     library::sources::COMMANDS[7],
+    library::sources::COMMANDS[8],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -1887,6 +1989,27 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: board::arc::SET_ARCS,
+        title: "Store Circular Tracks",
+        summary: "Replace exact circular copper records. Geometry consumers refuse boards containing arcs; no conductive validation is performed. One undo step; dry_run returns the full before/after lists without changes.",
+        params: &[
+            Param { required: true, summary: "Board UUID from inspection; required even for a single board", ..BOARD },
+            EXPECTED_REVISION,
+            Param {
+                name: "arcs",
+                required: true,
+                summary: "Complete arc list with caller-owned stable UUIDs; empty removes all arcs",
+                kind: ParamKind::ArcTracks,
+            },
+            Param {
+                name: "dry_run",
+                required: false,
+                summary: "Validate and report the full diff without changing revision or history",
+                kind: ParamKind::Flag,
+            },
+        ],
+    },
+    Command {
         id: ADD_TRACKS,
         title: "Route Track",
         summary: "Add a path of straight copper segments, with a through via wherever it changes layer, in one undo step. Refused if its copper would join two different nets.",
@@ -1933,6 +2056,12 @@ const CATALOG: &[Command] = &[
         params: &[
             BOARD,
             EXPECTED_REVISION,
+            Param {
+                name: "target",
+                required: false,
+                summary: "Explicit scoped net target; omission follows contacted copper",
+                kind: ParamKind::ClassTarget,
+            },
             Param { name: "at", required: true, summary: "Via center in integer nanometers", kind: ParamKind::Point },
             Param { name: "via_diameter_nm", required: false, summary: "Via pad diameter in integer nanometers", kind: ParamKind::ViaDiameter },
             Param {
@@ -1975,6 +2104,18 @@ const CATALOG: &[Command] = &[
             EXPECTED_REVISION,
             Param { name: "tracks", required: true, summary: "Unique track segment UUIDs from board inspection", kind: ParamKind::TrackIds },
             Param { name: "width_nm", required: true, summary: "Track width in integer nanometers", kind: ParamKind::TrackWidth },
+        ],
+    },
+    Command {
+        id: SET_VIA_NET,
+        title: "Assign Via Net",
+        summary: "Set explicit via net intent, or clear it with automatic:true. Conflicting contact is refused atomically.",
+        params: &[
+            BOARD,
+            EXPECTED_REVISION,
+            Param { name: "vias", required: true, summary: "Unique existing via UUIDs", kind: ParamKind::TrackIds },
+            Param { name: "target", required: false, summary: "Active scoped net or current derived anchor", kind: ParamKind::ClassTarget },
+            Param { name: "automatic", required: false, summary: "True clears explicit assignment; exclusive with target", kind: ParamKind::Closed },
         ],
     },
     Command {
@@ -2036,6 +2177,54 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: SET_ASSEMBLY_PROFILE,
+        title: "Set Assembly Profile",
+        summary: "Pin immutable assembly output profile content in the project, or retire a profile without invalidating board adoptions.",
+        params: &[
+            Param { required: true, ..EXPECTED_REVISION },
+            Param { name: "profile", required: false, summary: "Profile UUID; omit to create an identity", kind: ParamKind::AssemblyProfileId },
+            Param {
+                name: "content",
+                required: true,
+                summary: "Immutable content with revision, name, provenance, optional vendor, bottom_side and corrections; null to retire",
+                kind: ParamKind::AssemblyProfile,
+            },
+        ],
+    },
+    Command {
+        id: PREVIEW_ASSEMBLY_PROFILE,
+        title: "Preview Assembly Profile Adoption",
+        summary: "Review changed corrections and actual placement values before adopting a pinned revision; read-only.",
+        params: &[
+            Param { required: true, ..BOARD },
+            Param { required: true, ..EXPECTED_REVISION },
+            Param { name: "profile", required: true, summary: "Profile UUID", kind: ParamKind::AssemblyProfileId },
+            Param {
+                name: "revision",
+                required: true,
+                summary: "Pinned content revision, or null to clear the adoption",
+                kind: ParamKind::AssemblyProfileRevision,
+            },
+        ],
+    },
+    Command {
+        id: ADOPT_ASSEMBLY_PROFILE,
+        title: "Adopt Assembly Profile",
+        summary: "Atomically accept a preview against the same project revision; only the addressed board changes.",
+        params: &[
+            Param { required: true, ..BOARD },
+            Param { required: true, ..EXPECTED_REVISION },
+            Param { name: "profile", required: true, summary: "Profile UUID", kind: ParamKind::AssemblyProfileId },
+            Param {
+                name: "revision",
+                required: true,
+                summary: "Pinned content revision, or null to clear the adoption",
+                kind: ParamKind::AssemblyProfileRevision,
+            },
+            Param { name: "acceptance", required: true, summary: "Acceptance digest from the preview", kind: ParamKind::LibraryDigest },
+        ],
+    },
+    Command {
         id: board::class_rules::ROUTE_RULES,
         title: "Inspect Routing Rules",
         summary: "Inspect scoped net-class routing defaults, hard limits, origins and conflicts at a current copper contact without editing.",
@@ -2043,6 +2232,43 @@ const CATALOG: &[Command] = &[
             BOARD,
             Param { name: "at", required: true, summary: "Current copper contact point in integer nanometres", kind: ParamKind::Point },
             Param { name: "layer", required: false, summary: "Copper layer UUID; omit for a through-via contact", kind: ParamKind::DrawingId },
+        ],
+    },
+    Command {
+        id: board::route::PLAN_ROUTE,
+        title: "Plan Route",
+        summary: "Plan one route on a copper layer around existing copper with effective width, clearance and board-edge rules, without editing. Feed reached points to pcb.add_tracks.",
+        params: &[
+            BOARD,
+            Param {
+                name: "from",
+                required: true,
+                summary: "Route head in integer nanometres; copper it touches lends the route its net",
+                kind: ParamKind::Point,
+            },
+            Param { name: "to", required: true, summary: "Target point in integer nanometres", kind: ParamKind::Point },
+            Param { name: "layer", required: true, summary: "Copper layer UUID of the addressed board", kind: ParamKind::DrawingId },
+            Param {
+                name: "width_nm",
+                required: false,
+                summary: "Track width; omitted uses the head contact's net-class or board preferred width",
+                kind: ParamKind::TrackWidth,
+            },
+            Param { name: "posture", required: false, summary: "diagonal (45°, default) or orthogonal (90°)", kind: ParamKind::RoutePosture },
+            Param { name: "flipped", required: false, summary: "Start with the elbow's other leg first", kind: ParamKind::Flag },
+            Param {
+                name: "previous",
+                required: false,
+                summary: "The last plan's points for this gesture; kept while still legal, and its side is preferred",
+                kind: ParamKind::PreviousRoute,
+            },
+            Param { name: "budget", required: false, summary: "Most exact clearance probes; defaults to 4096", kind: ParamKind::RouteBudget },
+            Param {
+                name: "expected_revision",
+                required: false,
+                summary: "Revision the caller planned against; a different current revision gives a stale outcome",
+                kind: ParamKind::Revision,
+            },
         ],
     },
     Command {
@@ -2106,6 +2332,20 @@ const CATALOG: &[Command] = &[
         title: "Generate Fabrication Outputs",
         summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and an Excellon drill file. Edits nothing; execute returns every file's name and text.",
         params: &[BOARD],
+    },
+    Command {
+        id: netlist::EXPORT_BOARD_NETLIST,
+        title: "Export Board Netlist",
+        summary: "Generate the board's accepted components, packages, terminal pads and nets as versioned JSON. Unapplied connectivity changes are reported as findings; reference and value follow the live component. Edits nothing; execute returns the file's name and text and any findings.",
+        params: &[
+            BOARD,
+            Param {
+                name: "dry_run",
+                required: false,
+                summary: "True returns the file name and findings without the file text",
+                kind: ParamKind::Flag,
+            },
+        ],
     },
     Command {
         id: SET_COPPER_LOCKED,
@@ -2261,6 +2501,61 @@ const CATALOG: &[Command] = &[
             summary: "Optional scoped target; omit to list current identities and eligible derived anchors",
         }],
     },
+    Command {
+        id: part_groups::CREATE,
+        title: "Create Part Group",
+        summary: "Create a project-wide part group without assigning part instances or allocating a board.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable group name; identity is an independent UUID" },
+        ],
+    },
+    Command {
+        id: part_groups::UPDATE,
+        title: "Update Part Group",
+        summary: "Rename a part group, preserving its UUID and membership and incrementing its revision only on change.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "group", kind: ParamKind::ClassId, required: true, summary: "Stable part-group UUID from inspection" },
+            Param { name: "name", kind: ParamKind::Text, required: true, summary: "Editable group name" },
+        ],
+    },
+    Command {
+        id: part_groups::REMOVE,
+        title: "Remove Part Group",
+        summary: "Remove a part group that no part instance belongs to; a group with members is refused and its members are listed.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "group", kind: ParamKind::ClassId, required: true, summary: "Stable part-group UUID from inspection" },
+        ],
+    },
+    Command {
+        id: part_groups::INSPECT,
+        title: "Inspect Part Groups",
+        summary: "Read the part-group catalog without reading membership or changing history.",
+        params: &[],
+    },
+    Command {
+        id: part_groups::SET_GROUPS,
+        title: "Set Part-Instance Groups",
+        summary: "Replace a part instance's complete group set in one undoable step. An empty set removes its memberships.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "part_instance", kind: ParamKind::Text, required: true, summary: "Stable part-instance ID from project inspection" },
+            Param { name: "groups", kind: ParamKind::ClassSet, required: true, summary: "Complete set of part-group UUIDs" },
+        ],
+    },
+    Command {
+        id: part_groups::INSPECT_GROUPS,
+        title: "Inspect Part-Instance Groups",
+        summary: "Read one part instance's groups, or every grouped part instance, without changing history.",
+        params: &[Param {
+            name: "part_instance",
+            kind: ParamKind::Text,
+            required: false,
+            summary: "Optional part-instance ID; omit to list every part instance that belongs to a group",
+        }],
+    },
     Command { id: "edit.undo", title: "Undo", summary: "Undo the last change.", params: &[] },
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
@@ -2282,13 +2577,60 @@ pub enum CommandError {
     InvalidParams(String),
     /// The command is real, but can't run in this state, like undo with nothing to undo.
     Unavailable(String),
+    /// The edit was prepared against a revision different from `current`.
+    StaleRevision {
+        current: u64,
+    },
+    /// An id names nothing in the project; some lookups report an id not of the expected form
+    /// this way too.
+    NotFound(String),
+    /// The edit would exceed a fixed limit.
+    CapExceeded(String),
+    /// The call states a command API version other than this build's.
+    VersionMismatch {
+        command: String,
+        stated: u64,
+        current: u32,
+    },
+}
+
+impl CommandError {
+    /// The stable code clients branch on; see [`error_codes`].
+    pub fn code(&self) -> error_codes::ErrorCode {
+        use error_codes::ErrorCode;
+        match self {
+            Self::Unknown(_) => ErrorCode::UnknownCommand,
+            Self::InvalidParams(_) => ErrorCode::InvalidParams,
+            Self::Unavailable(_) => ErrorCode::Unavailable,
+            Self::StaleRevision { .. } => ErrorCode::StaleRevision,
+            Self::NotFound(_) => ErrorCode::NotFound,
+            Self::CapExceeded(_) => ErrorCode::CapExceeded,
+            Self::VersionMismatch { .. } => ErrorCode::VersionMismatch,
+        }
+    }
+
+    /// Machine-readable facts about the failure, an empty object when there are none. Keys are
+    /// only ever added.
+    pub fn details(&self) -> Value {
+        match self {
+            Self::StaleRevision { current } => json!({"current_revision": current}),
+            Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
+            _ => json!({}),
+        }
+    }
 }
 
 impl std::fmt::Display for CommandError {
+    /// The message for people; the stale message names the current revision.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Unknown(id) => write!(f, "unknown command `{id}`"),
-            Self::InvalidParams(m) | Self::Unavailable(m) => f.write_str(m),
+            Self::InvalidParams(m) | Self::Unavailable(m) | Self::NotFound(m) | Self::CapExceeded(m) => f.write_str(m),
+            Self::StaleRevision { current } => write!(f, "project changed, inspect the current revision ({current}) and retry"),
+            Self::VersionMismatch { command, stated, current } => write!(
+                f,
+                "`{command}` was requested with command API version {stated}, but this session runs version {current}; refresh the command catalog"
+            ),
         }
     }
 }
@@ -2338,6 +2680,14 @@ pub struct Project {
     net_classes: Arc<net_classes::Catalog>,
     /// The project's own parameter values, `@project.Name`; stored only from project/22.
     parameters: Arc<parameters::Parameters>,
+    /// Immutable profile payloads are shared across project snapshots and history.
+    assembly_profiles: Arc<board::assembly_profile::Catalog>,
+    /// Authored part groups, independent of membership.
+    part_groups: Arc<part_groups::Catalog>,
+    /// Explicit part-group memberships, sorted by part instance and group; stored with the instances.
+    part_group_memberships: Arc<part_groups::Memberships>,
+    /// Retain the compact storage choice after opening, independent of membership identity.
+    prefer_compact_part_groups: bool,
 }
 
 impl Project {
@@ -2552,8 +2902,12 @@ pub struct Session {
     history_root_revision: u64,
     /// One runtime-only review capability; never serialized or counted as an authored edit.
     update_plan: Option<board::update::CachedPlan>,
+    /// One runtime-only setup review, never retained by authored history snapshots.
+    setup_preview: Option<board::setup::preview::CachedPreview>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
     defer_net_reconciliation: bool,
+    /// Told about each new history root and committed edit; never part of the project.
+    observer: Option<Arc<dyn edits::EditObserver>>,
 }
 
 impl Default for Session {
@@ -2569,7 +2923,9 @@ impl Default for Session {
             revision: 0,
             history_root_revision: 0,
             update_plan: None,
+            setup_preview: None,
             defer_net_reconciliation: false,
+            observer: None,
         }
     }
 }
@@ -2584,6 +2940,19 @@ impl Session {
         self.project.clone()
     }
 
+    /// Report later history roots and committed edits to `observer`, replacing any earlier one,
+    /// or stop reporting with `None`. Edits come from [`Self::apply`] and
+    /// [`Self::commit_copper_edit`]; roots from opens and from adopted save metadata, so every
+    /// change to the current project reaches the observer. An open project is reported at once as the first root, so
+    /// the observer always knows the state the next edit builds on. Neither the project nor its
+    /// history changes.
+    pub fn observe_edits(&mut self, observer: Option<Arc<dyn edits::EditObserver>>) {
+        if let (Some(observer), Some(project)) = (&observer, &self.project) {
+            observer.opened(project.clone());
+        }
+        self.observer = observer;
+    }
+
     /// Adopt a validated project as a new history root. Advance past its highest stored ID
     /// so old revision checks fail and newly created objects cannot reuse loaded IDs. Record the
     /// new root revision even when reopening the same snapshot, so views can reset local state.
@@ -2592,6 +2961,7 @@ impl Session {
     pub fn open_snapshot(&mut self, project: Arc<Project>) {
         self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
+        self.setup_preview = None;
         let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
@@ -2599,6 +2969,7 @@ impl Session {
         self.project = Some(if project.sheet_index == 0 { project } else { Arc::new(Project { sheet_index: 0, ..Project::clone(&project) }) });
         self.undo.clear();
         self.redo.clear();
+        self.report_opened();
     }
 
     pub fn revision(&self) -> u64 {
@@ -2611,6 +2982,7 @@ impl Session {
     /// identity/absence and retains a later root/folder choice made since the save began.
     /// Later created sheets retain their inspected compatibility IDs through occurrence adoption.
     /// The captured snapshot is replaced by the saved Arc so dirty-state comparisons stay valid.
+    /// When it changes anything, the edit observer is told the current project as a new root.
     pub fn adopt_saved_metadata(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
         if !saved.same_document(original) {
             return false;
@@ -2661,6 +3033,11 @@ impl Session {
         }
         if changed {
             self.update_plan = None;
+            if self.board_setup_preview().is_none() {
+                self.setup_preview = None;
+            }
+            // The adopted metadata is saved data, so it is a new base rather than an edit.
+            self.report_opened();
         }
         changed
     }
@@ -2722,6 +3099,7 @@ impl Session {
             | parameters::RESOLVE
             | "project.rename"
             | netlist::EXPORT_NETLIST
+            | library::sources::AVAILABLE_REVISIONS
             | no_connect::SET
             | no_connect::CHECK
             | net_classes::CREATE
@@ -2731,6 +3109,12 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
+            | part_groups::CREATE
+            | part_groups::UPDATE
+            | part_groups::REMOVE
+            | part_groups::INSPECT
+            | part_groups::SET_GROUPS
+            | part_groups::INSPECT_GROUPS
             | nets::PROMOTE
             | nets::RESOLVE_AMBIGUITY
             | PLACE_RESISTOR
@@ -2758,6 +3142,10 @@ impl Session {
             | DELETE_FOOTPRINTS
             | SET_RULES
             | SET_PLACEMENT_ORIGIN
+            | board::arc::SET_ARCS
+            | SET_ASSEMBLY_PROFILE
+            | PREVIEW_ASSEMBLY_PROFILE
+            | ADOPT_ASSEMBLY_PROFILE
             | SET_SILKSCREEN
             | board::zones::ADD_ZONE
             | board::zones::SET_ZONE
@@ -2768,12 +3156,15 @@ impl Session {
             | ALIGN_FOOTPRINTS
             | CHECK_DESIGN
             | board::class_rules::ROUTE_RULES
+            | board::route::PLAN_ROUTE
             | EXPORT_FABRICATION
+            | netlist::EXPORT_BOARD_NETLIST
             | ADD_TRACKS
             | ADD_VIA
             | MOVE_TRACKS
             | RESHAPE_TRACKS
             | SET_TRACK_WIDTH
+            | SET_VIA_NET
             | SET_VIA_SIZE
             | DELETE_TRACKS
             | SET_COPPER_LOCKED
@@ -2798,7 +3189,8 @@ impl Session {
             | board::clipboard::DELETE
             | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
-            SET_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
+            SET_BOARD_SETUP | PREVIEW_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
+            CANCEL_BOARD_SETUP_PREVIEW => self.board_setup_preview().is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
             _ => false,
@@ -2829,11 +3221,15 @@ impl Session {
     /// with per-property provenance; inspecting these fields never authors defaults.
     /// Each board's `placement_origin` reports the saved origin and the resolved one outputs
     /// use, or null when an outline-attached origin has no outline to attach to.
+    /// Project inspection includes its UUID for qualified queries and pinned profiles;
+    /// each board lists its exact adopted revisions.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
+                "id": p.id(),
                 "name": p.name,
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "vias":board.vias().iter().map(board::track::Via::inspect).collect::<Vec<_>>(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}})).collect::<Vec<_>>(),
+                "assembly_profiles":p.assembly_profiles(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "arcs":board.arc_tracks(), "geometry_supported":board.arc_tracks().is_empty(), "vias":board.inspect_vias(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -2842,6 +3238,7 @@ impl Session {
                 "schematic": if p.sheets.len()==1 {p.inspect_schematic()} else {Value::Null},
             });
             if !p.net_classes.definitions.is_empty() { inspected["net_classes"] = json!(p.net_classes()); }
+            if !p.part_groups.groups.is_empty() { inspected["part_groups"] = json!(p.part_groups()); }
             if !p.net_registry.records.is_empty() {
                 inspected["net_registry"]=match p.inspect_net_registry() {
                     Ok(registry)=>registry,
@@ -2883,12 +3280,24 @@ impl Session {
         inspection
     }
 
-    /// Run a shared command. Document edits answer [`Self::inspect`]; library
+    /// Run a shared command. Document edits normally answer [`Self::inspect`]; circular
+    /// record replacement returns its full authored diff. Library
     /// queries return catalog data and board-update preview returns its bounded
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
-    /// Failed commands leave the project intact.
+    /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
+    /// Failed commands leave the project intact; a stale `expected_revision` is reported first
+    /// unless the command returns a stale query outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        self.refuse_stale(id, params)?;
+        if id == board::arc::SET_ARCS {
+            let before = self.revision;
+            let result = self.set_arc_tracks(params)?;
+            if self.revision != before {
+                self.report_committed(id, params);
+            }
+            return Ok(result);
+        }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
             return Ok(sheets::page::list_templates());
@@ -2898,10 +3307,7 @@ impl Session {
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if matches!(id, board::clipboard::COPY | board::clipboard::CUT) {
-            let text = self.copy_board(params, id == board::clipboard::CUT)?;
-            if id == board::clipboard::CUT {
-                self.apply(id, params)?;
-            }
+            let text = if id == board::clipboard::CUT { self.cut_board(params)? } else { self.copy_board(params)? };
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if matches!(id, clipboard::COPY | clipboard::CUT) {
@@ -2914,6 +3320,10 @@ impl Session {
         if id.starts_with("library.") {
             return self.library_command(id, params);
         }
+        if id == PREVIEW_ASSEMBLY_PROFILE {
+            self.validate_project_command(id, params)?;
+            return self.preview_assembly_profile(params);
+        }
         if id == EXPORT_FABRICATION {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
@@ -2921,6 +3331,10 @@ impl Session {
         if id == netlist::EXPORT_NETLIST {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"netlist":self.netlist_report(params)?}));
+        }
+        if id == netlist::EXPORT_BOARD_NETLIST {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"netlist":self.board_netlist_report(params)?}));
         }
         if id == nets::INSPECT_CLASSES {
             self.validate_project_command(id, params)?;
@@ -2930,9 +3344,17 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.route_rule_query(params);
         }
+        if id == board::route::PLAN_ROUTE {
+            self.validate_project_command(id, params)?;
+            return self.route_plan_query(params);
+        }
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
+        }
+        if matches!(id, part_groups::INSPECT | part_groups::INSPECT_GROUPS) {
+            self.validate_project_command(id, params)?;
+            return self.part_group_query(id, params);
         }
         if matches!(id, parameters::LIST | parameters::RESOLVE) {
             self.validate_project_command(id, params)?;
@@ -2944,6 +3366,9 @@ impl Session {
         }
         if id == PREVIEW_UPDATE {
             return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
+        }
+        if id == PREVIEW_BOARD_SETUP {
+            return Ok(json!({"revision":self.revision,"board_setup_preview":self.board_setup_preview()}));
         }
         if id == CHECK_DESIGN {
             return Ok(json!({"revision":self.revision,"design_check":self.check_design(params)?}));
@@ -2958,7 +3383,50 @@ impl Session {
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
+    /// A stale `expected_revision` is reported before any other check, except for `pcb.plan_route`.
+    /// A command that advances the revision is reported to the edit observer once it has
+    /// been adopted; failures, no-ops and queries are not reported. Copper commands report
+    /// from their prepared publication path, which also serves direct prepared commits.
+    /// Board cut checks the encoded clipboard limit even though only the revision is returned.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        self.refuse_stale(id, params)?;
+        if id == board::clipboard::CUT {
+            self.cut_board(params)?;
+            return Ok(self.revision);
+        }
+        let before = self.revision;
+        let revision = self.apply_command(id, params)?;
+        if revision != before && !board::track::preparation::is_copper_edit(id) {
+            self.report_committed(id, params);
+        }
+        Ok(revision)
+    }
+
+    /// Tell the edit observer that `command` with `params` produced the current project.
+    pub(crate) fn report_committed(&self, command: &str, params: &Value) {
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.committed(edits::CommittedEdit {
+                command: command.to_owned(),
+                params: params.clone(),
+                revision: self.revision,
+                project: project.clone(),
+            });
+        }
+    }
+
+    /// Tell the edit observer that the current project is a new base for later edits.
+    fn report_opened(&self) {
+        if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
+            observer.opened(project.clone());
+        }
+    }
+
+    /// Route a command to its query, library, sheet or project handler. See [`Self::apply`].
+    fn apply_command(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        if id == board::arc::SET_ARCS {
+            self.set_arc_tracks(params)?;
+            return Ok(self.revision());
+        }
         // A read-only query that needs no project: accepted like `execute`, changing nothing.
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -2979,6 +3447,13 @@ impl Session {
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
+        if id.starts_with("pcb.")
+            && id != board::arc::SET_ARCS
+            && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())
+        {
+            project.resolve_board(params.get("board").and_then(Value::as_str))?;
+            return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
+        }
         if id == ASSIGN_FOOTPRINT && params.get("board").is_some() {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
@@ -2996,8 +3471,12 @@ impl Session {
                 | DELETE_FOOTPRINTS
                 | INITIALIZE_BOARD_SETUP
                 | SET_BOARD_SETUP
+                | PREVIEW_BOARD_SETUP
+                | CANCEL_BOARD_SETUP_PREVIEW
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
+                | PREVIEW_ASSEMBLY_PROFILE
+                | ADOPT_ASSEMBLY_PROFILE
                 | SET_SILKSCREEN
                 | board::zones::ADD_ZONE
                 | board::zones::SET_ZONE
@@ -3008,20 +3487,36 @@ impl Session {
                 | ALIGN_FOOTPRINTS
                 | CHECK_DESIGN
                 | board::class_rules::ROUTE_RULES
+                | board::route::PLAN_ROUTE
                 | EXPORT_FABRICATION
+                | netlist::EXPORT_BOARD_NETLIST
                 | ADD_TRACKS
                 | ADD_VIA
                 | MOVE_TRACKS
                 | RESHAPE_TRACKS
                 | SET_TRACK_WIDTH
+                | SET_VIA_NET
                 | SET_VIA_SIZE
                 | DELETE_TRACKS
                 | SET_COPPER_LOCKED
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
+        if id == board::arc::SET_ARCS {
+            self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
+            return Ok(());
+        }
         let handler_checks_state = self.project.is_some()
-            && matches!(id, INITIALIZE_BOARD_SETUP | SET_BOARD_SETUP | SET_SILKSCREEN | sheets::CREATE_SHEET | sheets::DELETE_SHEET);
+            && matches!(
+                id,
+                INITIALIZE_BOARD_SETUP
+                    | SET_BOARD_SETUP
+                    | PREVIEW_BOARD_SETUP
+                    | CANCEL_BOARD_SETUP_PREVIEW
+                    | SET_SILKSCREEN
+                    | sheets::CREATE_SHEET
+                    | sheets::DELETE_SHEET
+            );
         if !handler_checks_state && !self.available(id) {
             return Err(CommandError::Unavailable(match id {
                 sheets::CREATE_SHEET
@@ -3043,6 +3538,12 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
+                | part_groups::CREATE
+                | part_groups::UPDATE
+                | part_groups::REMOVE
+                | part_groups::INSPECT
+                | part_groups::SET_GROUPS
+                | part_groups::INSPECT_GROUPS
                 | nets::PROMOTE
                 | nets::RESOLVE_AMBIGUITY
                 | PLACE_RESISTOR
@@ -3070,6 +3571,8 @@ impl Session {
                 | DELETE_FOOTPRINTS
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
+                | PREVIEW_ASSEMBLY_PROFILE
+                | ADOPT_ASSEMBLY_PROFILE
                 | SET_SILKSCREEN
                 | DRAW_WIRE
                 | DELETE_WIRE
@@ -3084,7 +3587,9 @@ impl Session {
                 | MOVE_ITEMS
                 | DELETE_ITEMS
                 | INITIALIZE_BOARD_SETUP
-                | SET_BOARD_SETUP => "no project is open".to_owned(),
+                | SET_BOARD_SETUP
+                | PREVIEW_BOARD_SETUP
+                | CANCEL_BOARD_SETUP_PREVIEW => "no project is open".to_owned(),
                 "edit.undo" => "nothing to undo".to_owned(),
                 "edit.redo" => "nothing to redo".to_owned(),
                 _ => format!("`{id}` can't run now"),
@@ -3120,6 +3625,10 @@ impl Session {
                 net_registry: Arc::default(),
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
+                assembly_profiles: Arc::default(),
+                part_groups: Arc::default(),
+                part_group_memberships: Arc::default(),
+                prefer_compact_part_groups: false,
             })?,
             "project.rename" => {
                 let name = name_param(params)?;
@@ -3141,6 +3650,11 @@ impl Session {
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
+            }
+            part_groups::CREATE | part_groups::UPDATE | part_groups::REMOVE => self.edit_part_group(id, params)?,
+            part_groups::SET_GROUPS => self.set_part_instance_groups(params)?,
+            part_groups::INSPECT | part_groups::INSPECT_GROUPS => {
+                self.part_group_query(id, params)?;
             }
             nets::PROMOTE => self.promote_net(params)?,
             nets::RESOLVE_AMBIGUITY => self.resolve_net_ambiguity(params)?,
@@ -3178,7 +3692,7 @@ impl Session {
                     .as_str()
                     .and_then(|id| schematic::wiring::parse_id(id, "component-"))
                     .and_then(|id| self.project.as_ref()?.components.get(&id))
-                    .ok_or_else(|| CommandError::InvalidParams("unknown part instance".into()))?;
+                    .ok_or_else(|| CommandError::NotFound("unknown part instance".into()))?;
                 self.place_symbol(component.definition.clone(), params)?;
             }
             PLACE_SYMBOL => {
@@ -3196,7 +3710,7 @@ impl Session {
                     Some(revision) => self.libraries.symbol(library, id, revision),
                     None => self.libraries.latest_symbol(library, id),
                 }
-                .ok_or_else(|| CommandError::InvalidParams("unknown symbol definition".into()))?;
+                .ok_or_else(|| CommandError::NotFound("unknown symbol definition".into()))?;
                 if !legacy
                     && params["definition_digest"].as_str()
                         != Some(library::sources::symbol_digest(&definition).map_err(CommandError::InvalidParams)?.as_str())
@@ -3221,11 +3735,10 @@ impl Session {
                 self.prepare_text_clipboard(id, params)?;
             }
             board::clipboard::COPY => {
-                self.copy_board(params, false)?;
+                self.copy_board(params)?;
             }
-            board::clipboard::CUT => self.delete_board_items(params, true)?,
             board::movement::MOVE_ITEMS => self.move_board_items(params)?,
-            board::clipboard::DELETE => self.delete_board_items(params, false)?,
+            board::clipboard::DELETE => self.delete_board_items(params)?,
             board::clipboard::PASTE => self.paste_board(params)?,
             clipboard::COPY => {
                 self.copy_schematic(params, false)?;
@@ -3255,8 +3768,13 @@ impl Session {
             DELETE_FOOTPRINTS => self.delete_footprints(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
+            PREVIEW_BOARD_SETUP => self.preview_board_setup(params)?,
+            CANCEL_BOARD_SETUP_PREVIEW => self.cancel_board_setup_preview(params)?,
             SET_RULES => self.set_rules(params)?,
             SET_PLACEMENT_ORIGIN => self.set_placement_origin(params)?,
+            SET_ASSEMBLY_PROFILE => self.set_assembly_profile(params)?,
+            ADOPT_ASSEMBLY_PROFILE => self.adopt_assembly_profile(params)?,
+            PREVIEW_ASSEMBLY_PROFILE => return Err(CommandError::Unavailable("Use execute for an assembly profile preview.".into())),
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             board::zones::ADD_ZONE | board::zones::SET_ZONE | board::zones::DELETE_ZONES => self.edit_zone(id, params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
@@ -3265,11 +3783,23 @@ impl Session {
             board::class_rules::ROUTE_RULES => {
                 self.route_rule_query(params)?;
             }
+            board::route::PLAN_ROUTE => {
+                self.route_plan_query(params)?;
+            }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
             }
+            netlist::EXPORT_BOARD_NETLIST => {
+                if params["dry_run"].as_bool() == Some(true) {
+                    self.board_netlist_report(params)?;
+                } else {
+                    self.export_board_netlist(params)?;
+                }
+            }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
-            ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS => self.edit_tracks(id, params)?,
+            ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_NET | SET_VIA_SIZE | DELETE_TRACKS => {
+                self.edit_tracks(id, params)?
+            }
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),
@@ -3292,7 +3822,7 @@ impl Session {
         self.check_revision(params)?;
         let project = self.open_project()?;
         if project.all_symbols().count() >= MAX_SYMBOLS {
-            return Err(CommandError::Unavailable(format!("the schematic already has {MAX_SYMBOLS} symbols")));
+            return Err(CommandError::CapExceeded(format!("the schematic already has {MAX_SYMBOLS} symbols")));
         }
         // A project keeps one copy per library, ID and revision: reuse the one it already saves.
         let same = |saved: &&Arc<SymbolDefinition>| {
@@ -3313,7 +3843,7 @@ impl Session {
             .units
             .iter()
             .position(|drawing| drawing.unit_id() == unit)
-            .ok_or_else(|| CommandError::InvalidParams("unknown symbol unit".into()))?;
+            .ok_or_else(|| CommandError::NotFound("unknown symbol unit".into()))?;
         let defaults = definition.defaults.clone().unwrap_or_default();
         let ordinal = self.next_object_id()?;
         let existing = params.get("component").and_then(Value::as_str).and_then(|id| schematic::wiring::parse_id(id, "component-"));
@@ -3321,7 +3851,7 @@ impl Session {
             if project.units.contains_key(&(id, unit.clone())) {
                 return Err(CommandError::InvalidParams("part unit is already placed".into()));
             }
-            project.components.get(&id).ok_or_else(|| CommandError::InvalidParams("unknown part instance".into()))?.clone()
+            project.components.get(&id).ok_or_else(|| CommandError::NotFound("unknown part instance".into()))?.clone()
         } else {
             let mut reference_number = project
                 .components
@@ -3337,7 +3867,7 @@ impl Session {
                 reference_number += 1;
             }
             if reference_number > MAX_REFERENCE_NUMBER {
-                return Err(CommandError::Unavailable("no more reference numbers are available for this symbol type".to_owned()));
+                return Err(CommandError::CapExceeded("no more reference numbers are available for this symbol type".to_owned()));
             }
             if let Some(value) = params.get("value") {
                 schematic::check_value(value.as_str().unwrap_or_default()).map_err(CommandError::InvalidParams)?;
@@ -3384,7 +3914,7 @@ impl Session {
             .as_str()
             .and_then(schematic::parse_symbol_id)
             .and_then(|id| project.symbol_index(id))
-            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))?;
+            .ok_or_else(|| CommandError::NotFound("symbol does not exist".to_owned()))?;
         let position = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
         let rotation = params["rotation"].as_u64().map(|degrees| (degrees / 90) as u8).unwrap_or(project.symbols[index].rotation);
         if project.symbols[index].position != position || project.symbols[index].rotation != rotation {
@@ -3408,7 +3938,7 @@ impl Session {
             .as_str()
             .and_then(schematic::parse_symbol_id)
             .and_then(|id| project.symbol_index(id))
-            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".to_owned()))
+            .ok_or_else(|| CommandError::NotFound("symbol does not exist".to_owned()))
     }
 
     /// Turn a symbol a quarter turn counterclockwise, retaining exact naming contacts.
@@ -3648,7 +4178,7 @@ impl Session {
             return Err(CommandError::InvalidParams("these terminals are already joined by a wire".to_owned()));
         }
         if project.wires.len() >= MAX_WIRES {
-            return Err(CommandError::Unavailable(format!("the schematic already has {MAX_WIRES} wires")));
+            return Err(CommandError::CapExceeded(format!("the schematic already has {MAX_WIRES} wires")));
         }
         let mut project = project.clone();
         Arc::make_mut(&mut project.sheet_mut().wires).push(Wire {
@@ -3668,25 +4198,45 @@ impl Session {
             .max(self.project.as_ref().map_or(0, |project| project.allocation_high_water()))
             .checked_add(1)
             .filter(|id| *id <= MAX_OBJECT_ID)
-            .ok_or_else(|| CommandError::Unavailable("project has exhausted its object IDs".to_owned()))
+            .ok_or_else(|| CommandError::CapExceeded("project has exhausted its object IDs".to_owned()))
     }
 
     /// Reject an edit prepared against a project state that has since changed.
     fn check_revision(&self, params: &Value) -> Result<(), CommandError> {
         if params["expected_revision"].as_u64() != Some(self.revision) {
-            return Err(CommandError::Unavailable(format!("project changed, inspect the current revision ({}) and retry", self.revision)));
+            return Err(CommandError::StaleRevision { current: self.revision });
         }
         Ok(())
     }
 
-    /// Refuse changes to existing locked copper before publishing any state, then bound undo history. Preserve adopted allocation metadata across
-    /// content changes, adopting it for legacy allocations/retirements or component metadata. New edits clear redo;
-    /// revisions advance past every live ID allocated by a compound wire edit.
-    /// Net allocation and reconciliation validate before any session/history state is changed.
-    fn change(&mut self, mut project: Project) -> Result<(), CommandError> {
+    /// Report a stale `expected_revision` before any other check of a command that takes one:
+    /// those checks would judge the parameters against a state the caller has not seen. A
+    /// missing or malformed revision is left to parameter validation. Route planning retains
+    /// its public stale plan outcome and its existing validation order.
+    fn refuse_stale(&self, id: &str, params: &Value) -> Result<(), CommandError> {
+        if id == board::route::PLAN_ROUTE {
+            return Ok(());
+        }
+        let takes_revision = command(id).is_some_and(|command| command.params.iter().any(|param| param.name == EXPECTED_REVISION.name));
+        match params.get(EXPECTED_REVISION.name).and_then(Value::as_u64) {
+            Some(expected) if takes_revision && expected != self.revision => Err(CommandError::StaleRevision { current: self.revision }),
+            _ => Ok(()),
+        }
+    }
+
+    /// Prepare an edit without publishing it. Locked copper, unsupported circular geometry,
+    /// metadata, nets and zone ownership are checked here so previews share Apply's preparation.
+    /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
+    fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
+        if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
+            project.prune_part_group_memberships();
+        }
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
+            if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
+                return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
+            }
         }
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
@@ -3751,9 +4301,25 @@ impl Session {
         if !self.defer_net_reconciliation {
             project.reconcile_nets(self.project.as_deref())?;
         }
-        board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+        // A copper-bearing board must still fit the native board file after a physical edit.
+        // Do this before replacing the snapshot, changing history or notifying observers.
+        if (!project.board.tracks.is_empty() || !project.board.vias.is_empty())
+            && self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+        {
+            persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
+        } else {
+            board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+        }
+        Ok((project, highest))
+    }
+
+    /// Prepare and publish an edit, retaining the allocation watermark and bounded undo history.
+    /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
+    fn change(&mut self, project: Project) -> Result<(), CommandError> {
+        let (project, highest) = self.prepare_change(project)?;
         let project = self.retain_allocation_watermark(Arc::new(project));
         self.update_plan = None;
+        self.setup_preview = None;
         self.undo.push(self.project.replace(project));
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
@@ -3763,12 +4329,13 @@ impl Session {
         Ok(())
     }
 
-    /// Restore authored content and advance the revision, retaining the allocation watermark
-    /// from the state being left when both snapshots belong to the same project.
+    /// Restore authored content and advance the revision, retaining allocation and profile-revision
+    /// watermarks from the state being left when both snapshots belong to the same project.
     fn step(&mut self, forward: bool) {
         let (from, to) = if forward { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
         if let Some(state) = from.pop() {
             self.update_plan = None;
+            self.setup_preview = None;
             to.push(std::mem::replace(&mut self.project, state));
             self.revision += 1;
         }
@@ -3776,7 +4343,8 @@ impl Session {
             // The state just left is now at the end of the opposite history stack.
             let prior = if forward { self.undo.last() } else { self.redo.last() }.and_then(Option::as_ref);
             if let Some(prior) = prior.filter(|prior| prior.same_document(&project)) {
-                self.project = Some(Project::with_allocation_watermark(project, prior.numeric_id_high_water));
+                let project = Project::with_allocation_watermark(project, prior.numeric_id_high_water);
+                self.project = Some(Project::with_assembly_profile_watermarks(project, prior));
             }
         }
     }
@@ -3802,6 +4370,7 @@ fn fresh_id() -> Result<uuid::Uuid, CommandError> {
 fn assert_same_content(expected: &Arc<Project>, actual: &Arc<Project>) {
     assert!(actual.numeric_id_high_water.unwrap_or(0) >= expected.numeric_id_high_water.unwrap_or(0));
     let expected = Project::with_allocation_watermark(expected.clone(), actual.numeric_id_high_water);
+    let expected = Project::with_assembly_profile_watermarks(expected, actual);
     assert_eq!(persistence::encode_documents(expected).unwrap(), persistence::encode_documents(actual.clone()).unwrap());
 }
 
@@ -4204,27 +4773,43 @@ mod tests {
     fn invalid_placement_leaves_the_project_and_history_unchanged() {
         let mut s = Session::default();
         assert!(!s.available(PLACE_RESISTOR));
+        let unavailable = s.execute(PLACE_RESISTOR, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": s.revision()})).unwrap_err();
+        assert_eq!(unavailable.code(), error_codes::ErrorCode::Unavailable);
+        assert!(unavailable.to_string().contains("no project is open"), "{unavailable}");
         let valid = json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1});
-        assert!(s.execute(PLACE_RESISTOR, &valid).is_err());
         s.execute("project.new", &json!({"name": "blinky"})).unwrap();
         let before = s.inspect();
-        for definition in [json!("unknown"), json!(1)] {
+        for (definition, code) in [(json!("unknown"), error_codes::ErrorCode::NotFound), (json!(1), error_codes::ErrorCode::InvalidParams)] {
             let params = json!({"definition": definition, "x_nm": 0, "y_nm": 0, "expected_revision": 1});
-            assert!(matches!(s.execute(PLACE_SYMBOL, &params), Err(CommandError::InvalidParams(_))));
+            let error = s.execute(PLACE_SYMBOL, &params).unwrap_err();
+            assert_eq!(error.code(), code, "{params}");
+            let reason = if definition.is_string() { "unknown symbol definition" } else { "`definition` must identify a native symbol" };
+            assert!(error.to_string().contains(reason), "{params}: {error}");
             assert_eq!(s.inspect(), before);
         }
-        assert!(matches!(s.execute(PLACE_SYMBOL, &valid), Err(CommandError::InvalidParams(_))));
-        for params in [
-            json!({"x_nm": 0, "y_nm": 0}),
-            json!({"x_nm": "0", "y_nm": 0, "expected_revision": 1}),
-            json!({"x_nm": 0.25, "y_nm": 0, "expected_revision": 1}),
-            json!({"x_nm": MAX_CENTER_NM + 1, "y_nm": 0, "expected_revision": 1}),
-            json!({"x_nm": 0, "y_nm": -MAX_CENTER_NM - 1, "expected_revision": 1}),
-            json!({"x_nm": 0, "y_nm": 0, "expected_revision": 0}),
-            json!({"x_nm": 0, "y_nm": 0, "expected_revision": -1}),
-            json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1, "extra": "pin"}),
+        let missing = s.execute(PLACE_SYMBOL, &valid).unwrap_err();
+        assert_eq!(missing.code(), error_codes::ErrorCode::InvalidParams);
+        assert!(missing.to_string().contains("needs `definition`"), "{missing}");
+        for (params, reason) in [
+            (json!({"x_nm": 0, "y_nm": 0}), "needs `expected_revision`"),
+            (json!({"x_nm": "0", "y_nm": 0, "expected_revision": 1}), "`x_nm` must be a whole number of nanometers within the schematic bounds"),
+            (json!({"x_nm": 0.25, "y_nm": 0, "expected_revision": 1}), "`x_nm` must be a whole number of nanometers within the schematic bounds"),
+            (
+                json!({"x_nm": MAX_CENTER_NM + 1, "y_nm": 0, "expected_revision": 1}),
+                "`x_nm` must be a whole number of nanometers within the schematic bounds",
+            ),
+            (
+                json!({"x_nm": 0, "y_nm": -MAX_CENTER_NM - 1, "expected_revision": 1}),
+                "`y_nm` must be a whole number of nanometers within the schematic bounds",
+            ),
+            (json!({"x_nm": 0, "y_nm": 0, "expected_revision": 0}), "project changed"),
+            (json!({"x_nm": 0, "y_nm": 0, "expected_revision": -1}), "`expected_revision` must be a nonnegative integer revision"),
+            (json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1, "extra": "pin"}), "has no parameter `extra`"),
         ] {
-            assert!(s.execute(PLACE_RESISTOR, &params).is_err(), "{params}");
+            let error = s.execute(PLACE_RESISTOR, &params).unwrap_err();
+            let code = if reason == "project changed" { error_codes::ErrorCode::StaleRevision } else { error_codes::ErrorCode::InvalidParams };
+            assert_eq!(error.code(), code, "{params}");
+            assert!(error.to_string().contains(reason), "{params}: {error}");
             assert_eq!(s.inspect(), before);
         }
         s.execute(PLACE_RESISTOR, &valid).unwrap();

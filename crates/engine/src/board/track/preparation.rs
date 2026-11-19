@@ -8,7 +8,10 @@ use std::sync::{Arc, Mutex, TryLockError};
 
 /// Whether an existing shared command can use copper preparation; no new router policy is implied.
 pub fn is_copper_edit(command: &str) -> bool {
-    matches!(command, ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS)
+    matches!(
+        command,
+        super::super::via_nets::SET_VIA_NET | ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS
+    )
 }
 
 #[derive(Default)]
@@ -44,6 +47,8 @@ pub struct PreparedCopperEdit {
     source: Source,
     candidate: Option<Arc<Project>>,
     command: &'static str,
+    /// The parameters the edit was prepared with, reported with it once committed.
+    params: Value,
     class_rules: Option<crate::board::class_rules::Context>,
 }
 impl PreparedCopperEdit {
@@ -82,7 +87,8 @@ impl Session {
     /// Capture a board's immutable preparation context without projecting pads or copying project files.
     pub fn copper_preparation(&self, target: BoardTarget) -> Result<CopperPreparation, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
-        let view = snapshot.board_view(target).ok_or_else(|| CommandError::InvalidParams("unknown board target".into()))?;
+        let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
+        view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let effective = view.effective_rules();
         Ok(CopperPreparation {
             source: Source {
@@ -98,18 +104,31 @@ impl Session {
     }
     /// Validate catalog parameters, source and revision before queuing work. Reusing a context
     /// retains derived pads across pointer generations while every candidate is independently checked.
+    /// A stale `expected_revision` is reported first, as by [`Session::execute`].
     pub fn prepare_copper_edit_with(&self, context: &CopperPreparation, command: &str, params: &Value) -> Result<CopperEditJob, CommandError> {
+        let (command, target) = self.admit_copper_edit(command, params)?;
+        if target != context.source.target() || !context.source.is_current(self) {
+            return Err(CommandError::InvalidParams("copper preparation source is stale or belongs to another board".into()));
+        }
+        Ok(Self::copper_job(context, command, params))
+    }
+
+    /// Use project dispatch's validation order before resolving a preparation context.
+    fn admit_copper_edit(&self, command: &str, params: &Value) -> Result<(&'static str, BoardTarget), CommandError> {
+        self.refuse_stale(command, params)?;
         if !is_copper_edit(command) {
             return Err(CommandError::InvalidParams("command does not prepare copper".into()));
         }
         self.validate_project_command(command, params)?;
         self.check_revision(params)?;
         let target = self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
-        if target != context.source.target() || !context.source.is_current(self) {
-            return Err(CommandError::InvalidParams("copper preparation source is stale or belongs to another board".into()));
-        }
         let command = crate::command(command).ok_or_else(|| CommandError::Unknown(command.into()))?.id;
-        Ok(CopperEditJob {
+        Ok((command, target))
+    }
+
+    /// Construct work only for a validated command with a current preparation context.
+    fn copper_job(context: &CopperPreparation, command: &'static str, params: &Value) -> CopperEditJob {
+        CopperEditJob {
             context: context.clone(),
             command,
             params: params.clone(),
@@ -121,22 +140,25 @@ impl Session {
             work: 0,
             result: None,
             class_islands: None,
-        })
+        }
     }
     /// Prepare one existing copper command without adopting any authored state. Headless callers
     /// may drain the job; GUI/MCP hosts can schedule the same work and defer publication.
+    /// A stale `expected_revision` is reported before the board is resolved.
     pub fn prepare_copper_edit(&self, command: &str, params: &Value) -> Result<CopperEditJob, CommandError> {
-        let target = self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
-        self.prepare_copper_edit_with(&self.copper_preparation(target)?, command, params)
+        let (command, target) = self.admit_copper_edit(command, params)?;
+        Ok(Self::copper_job(&self.copper_preparation(target)?, command, params))
     }
     /// Consume an engine-validated candidate in one shared history transaction. Another session,
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
+    /// A committed candidate is reported to the edit observer as its prepared command.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
         }
         if let Some(candidate) = prepared.candidate {
             self.change((*candidate).clone())?;
+            self.report_committed(prepared.command, &prepared.params);
         }
         Ok(self.revision())
     }
@@ -200,6 +222,7 @@ impl CopperEditJob {
                         source: self.context.source.clone(),
                         candidate: self.candidate.take(),
                         command: self.command,
+                        params: self.params.clone(),
                         class_rules: None,
                     }));
                     return Ok(true);
@@ -236,11 +259,11 @@ impl CopperEditJob {
                 if let (Some(builder), Some(lands), Some(candidate)) = (self.builder.take(), &self.lands, &self.candidate) {
                     let (copper, members) = builder.finish(lands, &candidate.board.tracks, &candidate.board.vias);
                     if let Some((a, b)) =
-                        short_from_members(lands, &candidate.board.tracks, &candidate.board.vias, &members, &self.added, &BTreeSet::new())
+                        short_from_members(candidate, lands, &candidate.board.tracks, &candidate.board.vias, &members, &self.added, &BTreeSet::new())
                     {
                         return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
                     }
-                    if candidate.has_dimensional_net_classes() {
+                    if candidate.has_dimensional_net_classes() || candidate.board.vias.iter().any(|v| v.net_assignment.is_some()) {
                         self.builder = Some(IslandBuilder::pad_contacts(lands, &candidate.board.tracks, &candidate.board.vias, &members));
                         self.class_islands = Some((copper, members));
                     }
@@ -260,6 +283,9 @@ impl CopperEditJob {
                     let view =
                         candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
                     let (_, merged) = builder.finish(lands, view.tracks(), view.vias());
+                    if let Some((a, b)) = short_from_members(candidate, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
+                        return Err(CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")));
+                    }
                     let geometry = crate::board::clearance::BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
                     let context = crate::board::class_rules::NetRules::new(view, self.context.source.effective.clone())?
                         .map(|rules| rules.capture(view, &geometry))
@@ -291,6 +317,7 @@ impl CopperEditJob {
                     source: self.context.source.clone(),
                     candidate: self.candidate.take(),
                     command: self.command,
+                    params: self.params.clone(),
                     class_rules,
                 }));
             }

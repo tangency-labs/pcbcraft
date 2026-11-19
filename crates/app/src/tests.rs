@@ -19,6 +19,7 @@ mod board_properties;
 mod board_ratsnest;
 mod board_tracks;
 mod board_update;
+mod board_via_nets;
 mod board_views;
 mod board_zones;
 #[cfg(not(target_arch = "wasm32"))]
@@ -31,6 +32,7 @@ mod footprint_assignment;
 mod grab;
 mod grid_spacing;
 mod hierarchy;
+mod inspection_selection;
 mod mirror;
 mod multiple_sheets;
 mod multiunit;
@@ -1793,6 +1795,7 @@ fn dragging_a_symbol_preserves_connectivity_and_is_one_undo_step() {
 #[cfg(not(target_arch = "wasm32"))]
 mod live_mcp {
     mod coordinate_properties;
+    mod file_commands;
 
     use std::{
         thread,
@@ -2308,7 +2311,14 @@ fn stale_or_cancelled_free_wire_drafts_never_commit() {
         let before = harness.state().session().inspect();
         harness.key_press(Key::Enter);
         harness.run();
-        assert!(harness.state().views.active.schematic.tool.is_none());
+        if stale {
+            assert!(harness.state().views.active.schematic.tool.is_none());
+        } else {
+            assert!(matches!(harness.state().views.active.schematic.tool, Some(Tool::Wire { start: None, .. })));
+            harness.key_press(Key::Escape);
+            harness.run();
+            assert!(harness.state().views.active.schematic.tool.is_none());
+        }
         assert_eq!(harness.state().session().inspect(), before);
         assert_eq!(harness.state().session().project().unwrap().junctions().count(), 0);
     }
@@ -2352,6 +2362,8 @@ fn assert_equivalent_sessions(actual: &Session, expected: &Session) {
     let mut a = actual.inspect();
     let mut b = expected.inspect();
     for state in [&mut a, &mut b] {
+        assert_eq!(state["project"]["id"].as_str().unwrap().len(), 36);
+        state["project"]["id"] = Value::Null;
         for circuit_use in state["project"]["sheet_instances"]["circuit_uses"].as_array_mut().unwrap() {
             circuit_use["id"] = Value::Null;
         }

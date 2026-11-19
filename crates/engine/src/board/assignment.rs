@@ -64,6 +64,7 @@ impl Assignment {
             y_nm: position.y_nm,
             rotation: 0,
             bottom: false,
+            locked: false,
             reference_offset: None,
             reference_text: None,
         }
@@ -100,14 +101,20 @@ impl Assignment {
                     .is_none_or(|f| f.key() == Some(self.key()) && f.mapping.as_ref() == Some(&self.mapping)))
     }
 
+    /// Whether this board-eligible choice differs from an initialized board's accepted package.
+    pub(crate) fn pending_update(&self, project: &Project) -> bool {
+        project.component_is_board_eligible(self.component)
+            && project.board.baseline.as_ref().is_some_and(|baseline| !baseline.validate_assignment(self))
+    }
+
     /// Publish stable identities with explicit placement status for GUI and MCP.
     pub(crate) fn inspect(&self, project: &Project) -> Value {
         let mut value = serde_json::to_value(self).unwrap_or(Value::Null);
         value["component"] = json!(format!("component-{}", self.component));
         value["board"] = json!(project.board_target().map(|target| target.board));
         value["placed"] = json!(project.board.by_component.contains_key(&self.component));
-        if let Some(baseline) = &project.board.baseline {
-            value["pending_update"] = json!(project.component_is_board_eligible(self.component) && !baseline.validate_assignment(self));
+        if project.board.baseline.is_some() {
+            value["pending_update"] = json!(self.pending_update(project));
         }
         if project.board.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&self.component))
             && !project.component_is_board_eligible(self.component)
@@ -260,7 +267,7 @@ fn component_id(params: &Value, project: &Project) -> Result<u64, CommandError> 
     text.strip_prefix("component-")
         .and_then(|id| id.parse::<u64>().ok())
         .filter(|id| text == format!("component-{id}") && project.components.contains_key(id))
-        .ok_or_else(|| CommandError::InvalidParams("unknown component ID".into()))
+        .ok_or_else(|| CommandError::NotFound("unknown component ID".into()))
 }
 
 impl Session {
@@ -409,7 +416,7 @@ impl Session {
             let id = first_id
                 .checked_add(index as u64)
                 .filter(|id| *id <= crate::MAX_OBJECT_ID)
-                .ok_or_else(|| CommandError::Unavailable("project has exhausted its object IDs".into()))?;
+                .ok_or_else(|| CommandError::CapExceeded("project has exhausted its object IDs".into()))?;
             Arc::make_mut(&mut next.board)
                 .append(assignment.footprint(id, Point { x_nm: 0, y_nm: 0 }))
                 .map_err(|error| CommandError::InvalidParams(error.into()))?;

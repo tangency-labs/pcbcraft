@@ -3,9 +3,17 @@
 This guide starts with schematic editing and continues through the supported
 PCB tools and shared MCP commands. The [capability table](capabilities.md)
 records current limits, while the [documentation map](README.md) links focused
-guides and format references. The two-resistor example below is an original
+guides and format references. Before replacing an existing board setup through
+MCP, use `pcb.preview_board_setup` with the candidate setup and current revision
+to review affected objects, consent and refusals without changing the project.
+[Setup review](board-materials.md#review-a-setup-edit) explains token-based Apply
+and cancellation. The two-resistor example below is an original
 development fixture; the polished MVP demo and its end-to-end acceptance remain
 separate work.
+
+Footprint lock flags currently have a [storage-only contract](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
+There is no footprint lock toggle/command or move/delete protection to try yet;
+track/via locks remain the supported interactive locking workflow.
 
 ## Build and open an example
 
@@ -18,7 +26,7 @@ cargo build --locked -p pcbcraft -p pcbcraft-cli
 cargo run --locked -p pcbcraft
 ```
 
-GitHub access is required while the repository is private. The desktop app needs
+The repository is public, so the clone needs no GitHub sign-in. The desktop app needs
 a working graphical session; a headless shell can run the checks and MCP example
 described below. See [Contributing](../CONTRIBUTING.md) for the toolchain and
 browser build commands.
@@ -155,15 +163,15 @@ the same `VCC` net name, which can be changed before placement.
    header's **Expand** control returns to the large form with the same library,
    search and selection. The compact catalog stays open during placement and can
    be floated or docked at either edge from its **…** menu.
-3. Click an unconnected pin or free wire end to start directly, or hover a pin,
-   wire or grid point and press **W** to start there immediately. Connected nodes
-   use W or **Capture → Wire**, which waits for a first click. The green wire cursor
+3. Click an unconnected pin or free wire end to start directly, or press **W**
+   or choose **Capture → Wire** to activate the tool, then click a pin, wire or
+   grid point to choose the start. Connected nodes require the Wire tool. The green wire cursor
    rings an existing connection target. Hold **Ctrl** to draw off-grid; releasing it
    restores snapping, while pins and wires remain connection targets. Click corners
    and a destination pin. **Space**
    flips the current elbow and **Backspace** removes the last corner. **Enter**
    or a double-click finishes a free end. The wire tool stays ready for a new route;
-   **Esc** exits it or cancels an unfinished wire.
+   **Esc** cancels an unfinished wire while keeping the tool ready; press it again to exit.
    Finish on an existing wire segment to create a connected branch. Dragging a
    free-end handle onto a pin or segment also connects it; simply crossing a
    wire still leaves the routes separate. Redrawing onto the same net keeps your new
@@ -190,7 +198,8 @@ the same `VCC` net name, which can be changed before placement.
    Copying a sheet body includes its child subtree. For a same-project Cut,
    Paste Options requires **Reuse original unparented sheets** to be enabled
    explicitly; leaving it unchecked creates independent copies.
-5. Click a wire segment; only that segment turns blue, and **Delete** removes
+5. **Ctrl+A** (**Cmd+A** on macOS) selects all supported items on the current sheet,
+   respecting Selection filters. Click a wire segment; only that segment turns blue, and **Delete** removes
    it. Use **Undo**, then drag the segment perpendicular to its direction to
    adjust alignment, or hover it and press **G**, then click to finish. Corner
    and free-end handles reshape the adjoining legs; attached pins stay fixed.
@@ -240,6 +249,9 @@ PCB routing is under **Layout → Route**, and **Draw → Line / Rectangle** use
 the active layer. Copper shapes are conductive linework; technical-layer graphics
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
+The route preview walks around fixed copper, keeping its starting net through
+vertices and vias. An unconnected pad cannot acquire a named net by crossing it;
+blocked or incomplete searches keep the last legal preview and refuse that target.
 
 The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
 **Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
@@ -518,6 +530,14 @@ Saving retains drawing and layer identities without moving footprints or creatin
 a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.
 
+The interactive route tool supports straight segments only. `pcb.set_arc_tracks`
+replaces the board's complete list of exact circular records in the open project.
+Save the project separately to write those changes to disk. Boards containing
+arcs display an unsupported-geometry explanation instead of an incomplete PCB
+view; DRC, queries, clipboard and fabrication refuse them.
+See [circular copper records](circular-copper-records.md) before trying that
+storage command. Undo or remove the records to resume ordinary PCB editing.
+
 To route a track, activate a copper layer and press **X**. The crosshair follows
 the pointer, and the target marker shows nearby grid points and copper contacts.
 The preview keeps a lighter shade of the layer color while background preparation
@@ -655,6 +675,21 @@ unsaved, and GUI **Undo**/**Redo** use the same history. Inspect after each step
 to verify the result. If another edit changed the revision, inspect again before
 retrying. The live editor runs the same project commands as a headless session.
 
+To check existing part pins against native libraries already loaded in the session,
+call `execute` with:
+
+```json
+{"command":"library.available_revisions","params":{},"inspect":false}
+```
+
+Read `outdated_instances` for stable instance IDs and `instances` for exact pinned
+and latest addresses, source status and diagnostics. This is read-only: it does
+not refresh a library, change geometry or adopt a revision. Missing sources are
+unknown, and available does not imply compatible. Native parts compare the owning
+part rather than separately updating its drawing dependencies. See
+[query available revisions](native-library-sources.md#query-available-revisions)
+for the result contract; dedicated update review and adoption remain future work.
+
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and
@@ -765,10 +800,24 @@ Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
-With a configured board and a closed Board Outline, **Manufacture → Fabrication → Outputs**
-saves a fabrication ZIP without editing the design. Output names remain unique
-when layer names collide after sanitization; the [editor guide](editor-guide.md)
-describes the generated files and desktop save behavior.
+With a configured board, a closed Board Outline and a resolvable placement origin,
+**Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
+The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
+Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
+destination errors can prevent a successful save. In the browser, Outputs requests
+one download; check that your browser saved it.
+
+For pads exported on a layer, round pads retain C flashes.
+R/O flashes require individually quarter-turn library and placement rotations and a
+nondegenerate resolved axis rectangle. Rectangles also need an integral centered midpoint;
+obrounds need matching width/height parity. Other rectangles retain resolved regions;
+other obrounds retain approximate round-ended strokes or equal-sided C flashes.
+Rounded rectangles use regions with chorded corners only if a positive radius survives
+resolution. A collapsed tiny rectangle can emit a retraced path with no area. Mask uses
+outer-layer pads without process expansion; paste excludes through-hole pads.
+Output names remain unique when layer names collide after sanitization; the
+[editor guide](editor-guide.md) describes the eligibility, shape approximations,
+file contents and save behavior.
 
 ### Browse libraries
 
@@ -797,3 +846,9 @@ footprint…** to author a footprint-only part, or add the symbol independently 
 Browse. When both are present, complete the pin mapping before publishing.
 Schematic placement requires a symbol; the current placement command does not
 create board-owned symbol-less instances.
+
+For standalone vias, choose **Via** and click its ribbon **Via net** to search for
+a current board net and confirm **Use net** before placing, or keep **Automatic**.
+Selected-via Properties uses the same search form to change or clear
+that assignment; [via net assignments](via-net-assignments.md) explains how intent
+remains distinct from physical copper connections.

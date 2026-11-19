@@ -94,6 +94,10 @@ impl Preparation {
     pub(super) fn ready(&self) -> bool {
         self.ready.is_some() && self.wanted.is_some()
     }
+    /// Expose only the latest command's validation verdict, never a partial candidate.
+    fn validation(&self) -> Option<Result<(), String>> {
+        if self.failed { Some(Err(self.notice.clone().unwrap_or_else(|| "Route validation failed".into()))) } else { self.ready().then_some(Ok(())) }
+    }
     /// Current lifecycle information for the status bar, rather than a validity promise for DRC.
     pub(super) fn status(&self) -> Option<String> {
         if let Some(notice) = &self.notice {
@@ -106,7 +110,8 @@ impl Preparation {
         })
     }
     /// Poll captured work, canceling changed source/layer/size/view authority before publication.
-    /// A complete typed candidate is returned only for the current commit generation.
+    /// A complete typed candidate is returned only for the current commit generation;
+    /// engine refusals become display text only after the captured source is checked.
     fn poll(
         &mut self,
         session: &Session,
@@ -131,14 +136,15 @@ impl Preparation {
                 self.stale += 1;
                 self.cancel();
             } else {
-                match completion.report {
+                let retryable = completion.retryable();
+                match completion.report.and_then(|edit| edit.transpose().map_err(|error| error.to_string())) {
                     Ok(Some(edit)) => self.ready = Some(Ready { key: wanted.key.clone(), edit }),
                     Ok(None) => {}
                     Err(error) => {
                         let commit = wanted.commit;
                         self.ready = None;
                         self.failed = true;
-                        self.retryable_failure = completion.retryable;
+                        self.retryable_failure = retryable;
                         self.notice = Some(error.clone());
                         if commit {
                             self.wanted = None;
@@ -201,6 +207,22 @@ impl Preparation {
     }
 }
 impl PcbApp {
+    /// Consume completed read-only plans before a new pointer target can supersede them.
+    /// Final action adoption/publication stays after input so Escape and focus loss win.
+    pub(crate) fn poll_route_previews(&mut self) {
+        let blocked = !matches!(self.dialog, crate::Dialog::None) || self.files.busy() || self.project_action_pending() || self.parts.is_modal();
+        for view in self.views.all_mut() {
+            let source = view.input(&self.session);
+            let layer = view.board.active_layer.clone();
+            let hidden = layer.as_ref().is_some_and(|layer| view.board.hidden_layers.contains(layer));
+            let tracks = &mut view.board.tracks;
+            if blocked || hidden {
+                tracks.planning.cancel();
+            } else {
+                tracks.planning.poll_preview(&self.session, source, layer.as_deref(), (tracks.width_nm, tracks.via_diameter_nm, tracks.via_drill_nm));
+            }
+        }
+    }
     /// Route canvas commands through preparation after releasing the immutable painting borrow.
     pub(crate) fn prepare_canvas_copper(&mut self, edit: Command) {
         let tracks = &mut self.views.active.board.tracks;
@@ -221,8 +243,47 @@ impl PcbApp {
             let tracks = &mut view.board.tracks;
             if blocked {
                 tracks.preparation.cancel();
+                tracks.planning.cancel();
             }
             let sizes = (tracks.width_nm, tracks.via_diameter_nm, tracks.via_drill_nm);
+            if layer.as_ref().is_some_and(|layer| view.board.hidden_layers.contains(layer)) {
+                tracks.planning.cancel();
+                tracks.preparation.cancel();
+            }
+            let validation = tracks.planning.current_ready().then(|| tracks.preparation.validation()).flatten();
+            if let Some(result) = tracks.planning.poll(&self.session, source, layer.as_deref(), sizes, validation) {
+                match result {
+                    Ok((points, action)) => {
+                        if let Some(mut draft) = tracks.draft.take().filter(|draft| Some(draft.source) == source) {
+                            draft.points = points;
+                            match action {
+                                planning::Action::Vertex { finish: true } => {
+                                    if let Some(mut edit) = add(tracks, draft) {
+                                        if let Some(target) = target {
+                                            edit.params["board"] = json!(target.board);
+                                        }
+                                        if let Err(error) = tracks.preparation.request(edit, layer.clone(), sizes, true) {
+                                            self.message = Some(error.into());
+                                        }
+                                    }
+                                }
+                                planning::Action::Vertex { finish: false } => tracks.draft = Some(draft),
+                                planning::Action::Via(next) => {
+                                    let index = draft.points.len() - 1;
+                                    if index > 0 && !view.board.hidden_layers.contains(&next) && !draft.changes.iter().any(|(at, _)| *at == index) {
+                                        draft.changes.push((index, next.clone()));
+                                        draft.layer = next.clone();
+                                        view.board.active_layer = Some(next);
+                                    }
+                                    tracks.draft = Some(draft);
+                                }
+                            }
+                        }
+                    }
+                    Err(error) => self.message = Some(error),
+                }
+                ctx.request_repaint();
+            }
             let completion = tracks.preparation.poll(&self.session, source, target, layer.as_deref(), sizes);
             if let Some(completion) = completion {
                 let result = completion.and_then(|(input, edit)| {
@@ -249,7 +310,7 @@ impl PcbApp {
                 }
                 ctx.request_repaint();
             }
-            if tracks.preparation.busy() {
+            if tracks.preparation.busy() || tracks.planning.busy() {
                 ctx.request_repaint();
             }
         }

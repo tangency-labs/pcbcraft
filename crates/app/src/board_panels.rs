@@ -9,6 +9,7 @@ use properties::{copper_properties, footprint_transform};
 impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
     /// Browsing explicitly selects and centers a placement; layer and collapse changes are local.
+    /// Browser picks, layer color and the Board Setup draft remain available without derived copper connectivity.
     /// Dock slots keep Layers, Properties and Selection filters separate on either edge.
     pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> ([Rect; 3], Rect) {
         let settings_enabled = matches!(self.dialog, crate::Dialog::None) && !self.project_action_pending() && !self.files.busy();
@@ -17,6 +18,7 @@ impl PcbApp {
         };
         let view_id = self.views.active.id();
         let input = self.views.active.input(&self.session);
+        let inspection_labels = crate::inspection_selection::labels(&self.session, &self.views.active.inspection);
         let state = &mut self.views.active.board;
         let browser_selection = state.probe_footprints();
         let Some(target) = state.target.and_then(|target| project.board_view(target)) else {
@@ -37,6 +39,9 @@ impl PcbApp {
                     crate::editor_view::DocumentTarget::Board(target.target),
                     &self.views.active.schematic.selection,
                     &browser_selection,
+                    self.views.active.filters,
+                    &self.views.active.inspection,
+                    &state.hidden_layers,
                 );
             })
         } else {
@@ -85,15 +90,36 @@ impl PcbApp {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
         let net_presentation = state.copper_connectivity(target, input);
+        let net_presentation = match net_presentation {
+            Ok(value) => value,
+            Err(error) => {
+                ui.label(error);
+                if let Some(action) = pick {
+                    self.queue_view_action(ui.ctx(), view_id, crate::editor_windows::ViewAction::Browse(action));
+                }
+                if let Some(layer) = color_pick {
+                    self.begin_layer_color(view_id, layer);
+                    self.repaint_editors(ui.ctx());
+                }
+                if setup_open {
+                    self.begin_board_setup(view_id);
+                }
+                return ([browser, layers, Rect::NOTHING], Rect::NOTHING);
+            }
+        };
         let names_pending = net_presentation.names_pending;
         let unit = self.preferences.units;
         let revision = self.session.revision();
+        if target.vias().iter().any(|v| state.tracks.selected.contains(&v.id)) {
+            state.tracks.refresh_net_choices(target, revision);
+        }
         // The ratsnest for this revision, through the same per-input cache the canvas reads.
         let unrouted = state.ratsnest(target, input).map(|ratsnest| ratsnest.lines.len());
         let mut copper_edit: Option<(&'static str, serde_json::Value)> = None;
         let mut reference_action = None;
         let mut reference_pick = None;
         let mut net_rules = false;
+        let mut via_net_pick = None;
         let (properties, collapse) = self.views.active.panels[crate::workspace_panels::PROPERTIES].show(
             ui,
             host.with("properties"),
@@ -160,7 +186,28 @@ impl PcbApp {
                         if !nets.is_empty() {
                             property(ui, "Nets", &nets.into_iter().map(String::as_str).collect::<Vec<_>>().join(", "));
                         }
-                        copper_edit = copper_properties(ui, target, &state.tracks.selected, unit, view_id, revision);
+                        let action = copper_properties(
+                            ui,
+                            target,
+                            &state.tracks.selected,
+                            unit,
+                            view_id,
+                            revision,
+                            state.tracks.via_choices.as_ref().map(|(_, _, choices)| choices.as_slice()).unwrap_or_default(),
+                        );
+                        match action {
+                            Some(properties::CopperAction::Command(command, params)) => copper_edit = Some((command, params)),
+                            Some(properties::CopperAction::ChooseViaNet(ids)) => via_net_pick = Some((ids, state.tracks.selected.clone())),
+                            None => {}
+                        }
+                    }
+                    [] if !inspection_labels.is_empty() => {
+                        if let [label] = inspection_labels.as_slice() {
+                            ui.label(label);
+                        } else {
+                            ui.label(format!("{} pads selected", inspection_labels.len()));
+                        }
+                        ui.end_row();
                     }
                     [] => {
                         property(ui, "Board", target.name());
@@ -209,6 +256,11 @@ impl PcbApp {
         if let Some(footprint) = reference_pick {
             self.views.select_board_reference(footprint, &self.session, self.preferences.selection_follow);
             self.repaint_editors(ui.ctx());
+        }
+        if let Some((ids, selection)) = via_net_pick
+            && let Some(source) = input
+        {
+            self.begin_via_net_choice(source, crate::board_net_choice::Destination::Vias { ids, selection });
         }
         if let Some((command, mut params)) = copper_edit
             && (command != pcbcraft_engine::board::zones::SET_ZONE

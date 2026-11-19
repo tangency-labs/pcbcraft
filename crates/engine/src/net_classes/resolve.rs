@@ -197,11 +197,11 @@ impl Project {
         let classes: BTreeSet<_> = classes.iter().copied().collect();
         let definitions = classes
             .iter()
-            .map(|id| self.net_classes.get(*id).ok_or_else(|| CommandError::InvalidParams(format!("Unknown net class {id}."))))
+            .map(|id| self.net_classes.get(*id).ok_or_else(|| CommandError::NotFound(format!("Unknown net class {id}."))))
             .collect::<Result<Vec<_>, _>>()?;
         let authored = match board {
             Some(target) => {
-                self.board_view(target).ok_or_else(|| CommandError::InvalidParams("Unknown or foreign board target.".into()))?.authored_rules()
+                self.board_view(target).ok_or_else(|| CommandError::NotFound("Unknown or foreign board target.".into()))?.authored_rules()
             }
             None => None,
         };

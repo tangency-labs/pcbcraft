@@ -1,0 +1,80 @@
+pcbcraft-engine v0.1.0 (workspace)
+geo-index v0.4.0
+bytemuck v1.25.2
+float_next_after v1.0.0
+geo-traits v0.3.0
+geo-types v0.7.20
+num-traits v0.2.19
+libm v0.2.16
+autocfg v1.5.1
+thiserror v2.0.21
+thiserror-impl v2.0.21 (proc-macro)
+proc-macro2 v1.0.107
+unicode-ident v1.0.27
+quote v1.0.47
+proc-macro2 v1.0.107 (*)
+syn v3.0.9
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+unicode-ident v1.0.27
+num-traits v0.2.19 (*)
+thiserror v1.0.69
+thiserror-impl v1.0.69 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v2.0.119
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+unicode-ident v1.0.27
+tinyvec v1.13.3
+getrandom v0.3.4
+cfg-if v1.0.5
+libc v0.2.191
+pcbcraft-units v0.1.0 (workspace)
+serde v1.0.229
+serde_core v1.0.229
+serde_derive v1.0.229 (proc-macro)
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+syn v3.0.9 (*)
+serde v1.0.229 (*)
+serde_json v1.0.154
+itoa v1.0.18
+memchr v2.8.3
+serde_core v1.0.229
+zmij v1.0.23
+sha2 v0.10.9
+cfg-if v1.0.5
+cpufeatures v0.2.17
+digest v0.10.7
+block-buffer v0.10.4
+generic-array v0.14.7
+typenum v1.20.1
+version_check v0.9.5
+crypto-common v0.1.7
+generic-array v0.14.7 (*)
+typenum v1.20.1
+uuid v1.29.0
+serde_core v1.0.229
+zip v9.1.3
+crc32fast v1.5.4
+cfg-if v1.0.5
+flate2 v1.1.10
+zlib-rs v0.6.8
+getrandom v0.4.3
+cfg-if v1.0.5
+libc v0.2.191
+indexmap v2.14.2
+equivalent v1.0.3
+hashbrown v0.17.1
+memchr v2.8.3
+typed-path v0.13.0
+rstar v0.14.0
+heapless v0.9.3
+hash32 v0.3.1
+byteorder v1.5.0
+stable_deref_trait v1.2.1
+num-traits v0.2.19 (*)
+ordered-float v5.5.1
+num-traits v0.2.19 (*)
+smallvec v1.16.4

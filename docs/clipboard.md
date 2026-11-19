@@ -37,6 +37,12 @@ not selected become free endpoints at the same coordinates, while shared
 endpoints remain shared. Wire copies include the complete selected route.
 Pasting does not auto-heal copied geometry into existing wires. Net labels and
 native power-symbol names retain their ordinary named-net/contact semantics.
+Project-owned [part groups](part-groups.md) and memberships are excluded from flat
+and hierarchical fragments. Independent copies start ungrouped; existing source
+and destination memberships are unchanged. Cut removes memberships only for
+part instances it deletes, with Undo restoring them. Retained child-sheet
+relocation keeps the original part instances and their memberships. A native
+fragment containing part groups is refused rather than silently transferring intent.
 
 Cut removes the selected objects and leaves unselected incident wire routes
 behind with dangling endpoints. It does not delete an unselected wire just
@@ -212,8 +218,16 @@ Mixed Delete and Cut are one undo step and retain schematic components.
 
 Track/via lock flags survive Copy, Duplicate and Paste on the new object IDs.
 Existing source copper remains protected, and Cut/Delete refuse the whole
-selection if removing any locked object would be required. Lock-bearing board
-fragments use `pcbcraft-clipboard/3`; older readers refuse that extension.
+selection if removing a locked track or via would be required. Board fragments
+with locked copper use `pcbcraft-clipboard/3` unless they have explicit via
+targets, which require `pcbcraft-clipboard/4` and can also carry copper locks.
+Older readers do not support the newer envelopes. Via assignments are scoped to
+the source board; a foreign destination refuses the whole paste. See
+[via net assignments](via-net-assignments.md).
+
+Placed-footprint flags are separate storage metadata. Copy, Cut and Duplicate
+refuse a selection containing an active footprint lock, and Paste refuses
+board text bearing that flag. The flag does not protect a footprint from Delete.
 
 Pasting copied footprints opens **PCB Paste Options**, where each source circuit
 has an explicit destination schematic sheet and independent schematic X/Y anchor.

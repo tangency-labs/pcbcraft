@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use inspection::Finished;
 #[cfg(target_arch = "wasm32")]
 use pcbcraft_engine::persistence::Encoding;
 use pcbcraft_engine::{Project, Session};
@@ -20,10 +21,14 @@ pub(super) enum SaveFormat {
     Archive,
 }
 
+mod abandon;
 #[cfg(any(target_arch = "wasm32", test))]
 mod download;
+mod inspection;
 #[cfg(not(target_arch = "wasm32"))]
 mod native;
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod stand_in;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
@@ -55,6 +60,13 @@ pub(super) struct ProjectFiles {
     pub(super) recent: crate::recent_projects::RecentProjects,
     saved: Option<Saved>,
     job: Option<Job>,
+    /// How the last file operation ended, for editor inspection.
+    last: Option<Finished>,
+    /// File jobs finished so far. Jobs run one at a time, so the running one is `completed + 1`
+    /// and `last` is `completed`: inspection reports these as job IDs.
+    completed: u64,
+    /// Workers of abandoned opens that may still be running.
+    stalled: abandon::Stalled,
     /// In tests, saves wait here for the test to finish them instead of opening a native picker.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     stand_in: Option<StandIn>,
@@ -136,6 +148,10 @@ impl Upgrades {
 struct Job {
     receiver: Receiver<Result<Outcome, String>>,
     revision: u64,
+    /// `open` or `save`, for editor inspection.
+    operation: &'static str,
+    /// Where the job reads or writes, when known before it runs (a picker chooses it later).
+    destination: Option<String>,
     #[cfg(target_arch = "wasm32")]
     download: Option<web::Download>,
 }
@@ -186,6 +202,7 @@ impl ProjectFiles {
             return Err("A project file operation is already running".to_owned());
         }
         let (send, receiver) = mpsc::channel();
+        let destination = Some(path.display().to_string());
         let ctx = ctx.clone();
         std::thread::Builder::new()
             .name("pcbcraft-open-recent".to_owned())
@@ -195,7 +212,7 @@ impl ProjectFiles {
                 ctx.request_repaint();
             })
             .map_err(|error| format!("Could not start opening the project: {error}"))?;
-        self.job = Some(Job { receiver, revision });
+        self.job = Some(Job { receiver, revision, operation: "open", destination });
         Ok(())
     }
 
@@ -245,6 +262,8 @@ impl ProjectFiles {
         self.job = Some(Job {
             receiver: receive,
             revision,
+            operation: "open",
+            destination: None,
             #[cfg(target_arch = "wasm32")]
             download: None,
         });
@@ -256,13 +275,14 @@ impl ProjectFiles {
     pub(super) fn save(&mut self, session: &Session, encoding: Option<SaveFormat>, ctx: &egui::Context) -> Result<(), String> {
         let snapshot = session.snapshot().ok_or("no project open")?;
         let (send, receive) = mpsc::channel();
+        #[cfg(target_arch = "wasm32")]
+        let destination = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        let previous = self.previous(&snapshot);
+        #[cfg(not(target_arch = "wasm32"))]
+        let destination = previous.as_ref().filter(|_| encoding.is_none()).map(|(_, target)| target.path().display().to_string());
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let previous = self
-                .saved
-                .as_ref()
-                .filter(|saved| saved.snapshot.same_document(&snapshot))
-                .map(|saved| (Arc::clone(&saved.snapshot), saved.target.clone()));
             #[cfg(test)]
             let send = match &mut self.stand_in {
                 Some(stand_in) => {
@@ -300,10 +320,43 @@ impl ProjectFiles {
         self.job = Some(Job {
             receiver: receive,
             revision: session.revision(),
+            operation: "save",
+            destination,
             #[cfg(target_arch = "wasm32")]
             download: Some(download),
         });
         ctx.request_repaint();
+        Ok(())
+    }
+
+    /// The saved baseline and destination of the open project, when it has one.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn previous(&self, snapshot: &Arc<Project>) -> Option<(Arc<Project>, native::Target)> {
+        self.saved.as_ref().filter(|saved| saved.snapshot.same_document(snapshot)).map(|saved| (Arc::clone(&saved.snapshot), saved.target.clone()))
+    }
+
+    /// Save As to `path` without a picker (#409). The worker, destination checks and completion
+    /// are those of a picked Save As: the destination must not exist yet (an archive name gains
+    /// `.pc`), an Untitled project takes its name, and only a successful save is adopted.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn save_to(&mut self, session: &Session, format: SaveFormat, path: std::path::PathBuf, ctx: &egui::Context) -> Result<(), String> {
+        if self.busy() {
+            return Err("A project file operation is already running".to_owned());
+        }
+        let snapshot = session.snapshot().ok_or("no project open")?;
+        let previous = self.previous(&snapshot);
+        let path = native::with_extension(format, path)?;
+        let destination = Some(path.display().to_string());
+        let (send, receiver) = mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::Builder::new()
+            .name("pcbcraft-save-as".to_owned())
+            .spawn(move || {
+                let _ = send.send(native::save_new(snapshot, previous.as_ref(), format, path));
+                ctx.request_repaint();
+            })
+            .map_err(|error| format!("Could not start saving the project: {error}"))?;
+        self.job = Some(Job { receiver, revision: session.revision(), operation: "save", destination });
         Ok(())
     }
 
@@ -330,6 +383,7 @@ impl ProjectFiles {
     /// A save that named an Untitled project renames it in the session too, history included,
     /// without changing the revision; cancelled and failed saves leave the session as it was.
     pub(super) fn poll(&mut self, session: &mut Session, ctx: &egui::Context) -> Option<Update> {
+        self.release_stalled();
         let job = self.job.as_mut()?;
         #[cfg(target_arch = "wasm32")]
         if let Some(download) = &mut job.download {
@@ -344,13 +398,20 @@ impl ProjectFiles {
             }
             Err(TryRecvError::Disconnected) => Err("file operation ended unexpectedly".to_owned()),
         };
-        self.job = None;
-        match result {
-            Ok(Outcome::Cancelled) => None,
+        let Job { operation, destination, .. } = self.job.take()?;
+        let mut finished = Finished { operation, status: "succeeded", path: destination, error: None };
+        let update = match result {
+            Ok(Outcome::Cancelled) => {
+                finished.status = "cancelled";
+                None
+            }
             Ok(Outcome::Opened(saved)) if session.revision() == revision => {
                 let opened = saved.opened.as_ref().unwrap_or(&saved.snapshot);
                 #[cfg(not(target_arch = "wasm32"))]
-                self.recent.remember_project(Arc::clone(opened), saved.target.path().to_owned());
+                {
+                    self.recent.remember_project(Arc::clone(opened), saved.target.path().to_owned());
+                    finished.path = Some(saved.target.path().display().to_string());
+                }
                 session.open_snapshot(Arc::clone(opened));
                 self.saved = Some(saved);
                 Some(Update::Opened)
@@ -364,6 +425,7 @@ impl ProjectFiles {
                     session.adopt_saved_metadata(&original, &saved.snapshot);
                 }
                 self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
+                finished.path = Some(saved.target.path().display().to_string());
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));
                 let added_manifest = saved.target.added_manifest();
                 self.saved = Some(saved);
@@ -379,46 +441,14 @@ impl ProjectFiles {
             #[cfg(target_arch = "wasm32")]
             Ok(Outcome::Downloaded) => Some(Update::Message("Project download requested".to_owned())),
             Err(error) => Some(Update::Error(error)),
+        };
+        if let Some(Update::Error(error)) = &update {
+            finished.status = "failed";
+            finished.error = Some(error.clone());
         }
-    }
-}
-
-#[cfg(all(test, not(target_arch = "wasm32")))]
-impl ProjectFiles {
-    /// Send later saves to a stand-in the test finishes, instead of a worker with a native picker.
-    pub(super) fn use_stand_in(&mut self) {
-        self.stand_in = Some(StandIn::default());
-    }
-
-    /// Deliver the real loader's result through the ordinary completion path without an OS picker.
-    pub(super) fn open_path_for_test(&mut self, path: &std::path::Path, revision: u64) {
-        let (send, receiver) = mpsc::channel();
-        let _ = send.send(native::load(path).map(Outcome::Opened));
-        self.job = Some(Job { receiver, revision });
-    }
-
-    /// Whether a save is waiting for the test to finish it.
-    pub(super) fn stand_in_waiting(&self) -> bool {
-        self.stand_in.as_ref().is_some_and(|stand_in| stand_in.pending.is_some())
-    }
-
-    /// Finish the waiting save as the worker would: in place when it has a destination, otherwise
-    /// as though the person picked `path` as a new project folder.
-    pub(super) fn finish_stand_in(&mut self, path: std::path::PathBuf) {
-        let Some(StandInSave { snapshot, previous, format, send }) = self.stand_in.as_mut().and_then(|stand_in| stand_in.pending.take()) else {
-            return;
-        };
-        let result = match previous {
-            Some(previous) if format.is_none() => native::save(snapshot, Some(previous), None),
-            previous => native::save_new(snapshot, previous.as_ref(), format.unwrap_or_default(), path),
-        };
-        let _ = send.send(result);
-    }
-
-    /// End the waiting save as a dismissed picker (`None`) or a failure with that message.
-    pub(super) fn end_stand_in(&mut self, error: Option<&str>) {
-        let Some(StandInSave { send, .. }) = self.stand_in.as_mut().and_then(|stand_in| stand_in.pending.take()) else { return };
-        let _ = send.send(error.map_or(Ok(Outcome::Cancelled), |error| Err(error.to_owned())));
+        self.completed += 1;
+        self.last = Some(finished);
+        update
     }
 }
 

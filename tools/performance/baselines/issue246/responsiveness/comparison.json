@@ -1,0 +1,49 @@
+{
+  "fixture_sha256": {
+    "reference": "ecd7cd83034ff6aeab0deb2f8ba56208969202abcf661985f579366ffda04cc0",
+    "channels": "2bcba0154913f8e396b975f470040edc649342e4ed40bbe77af107c5ae2f0efa"
+  },
+  "measurements": {
+    "before-reference": {
+      "fresh_input_frames": 0,
+      "input_frames": 72,
+      "ui_p50_ms": 0.8220010000000001,
+      "ui_max_ms": 1.3877080000000002
+    },
+    "after-reference": {
+      "fresh_input_frames": 72,
+      "input_frames": 72,
+      "ui_p50_ms": 1.212649,
+      "ui_max_ms": 1.592845
+    },
+    "final-reference": {
+      "fresh_input_frames": 72,
+      "input_frames": 72,
+      "ui_p50_ms": 1.056764,
+      "ui_max_ms": 1.386606
+    },
+    "before-channels": {
+      "fresh_input_frames": 0,
+      "input_frames": 72,
+      "ui_p50_ms": 2.333123,
+      "ui_max_ms": 3.048493
+    },
+    "after-channels": {
+      "fresh_input_frames": 72,
+      "input_frames": 72,
+      "ui_p50_ms": 2.784093,
+      "ui_max_ms": 3.9957700000000003
+    },
+    "final-channels": {
+      "fresh_input_frames": 72,
+      "input_frames": 72,
+      "ui_p50_ms": 2.711747,
+      "ui_max_ms": 3.0476409999999996
+    }
+  },
+  "unconnected_terminal_regression": {
+    "before": "Reached with a three-probe direct path from an unconnected pad into a named pad; reproduced by an independently stated command-built test.",
+    "after": "Blocked in both directions, including previous-path reuse. A free target across a named track is reached by a detour retaining at least 200000 nm clearance. Real input tests reject the named-pad click before publication, including after a fixed vertex. Enter may finish only the previously fixed legal prefix.",
+    "scope": "Planner/editor clearance policy; existing low-level copper command policy and saved net registry are unchanged."
+  }
+}

@@ -253,18 +253,18 @@ impl BoardState {
         &mut self,
         board: pcbcraft_engine::board::view::BoardView<'_>,
         source: Option<ViewInput>,
-    ) -> Arc<crate::board_appearance::Connectivity> {
+    ) -> Result<Arc<crate::board_appearance::Connectivity>, String> {
         if let Some(cache) = &self.copper_connectivity_cache
             && Some(cache.source) == source
             && cache.target == board.target
         {
-            return cache.connectivity.clone();
+            return Ok(cache.connectivity.clone());
         }
-        let (copper, nets) = board.copper_with_nets();
+        let (copper, nets) = board.copper_with_nets()?;
         let connectivity = Arc::new(crate::board_appearance::Connectivity { copper, nets, names_pending: board.net_names_pending() });
         self.copper_connectivity_cache =
             source.map(|source| CopperConnectivityCache { source, target: board.target, connectivity: connectivity.clone() });
-        connectivity
+        Ok(connectivity)
     }
 
     /// Share revision-keyed accepted geometry between frames; navigation never invalidates it.
@@ -280,7 +280,7 @@ impl BoardState {
         {
             return Some(cached.clone());
         }
-        let result = board.ratsnest().map(std::sync::Arc::new);
+        let result = board.ratsnest().ok().map(std::sync::Arc::new);
         self.ratsnest_cache = source.zip(result.clone());
         result
     }
@@ -345,6 +345,8 @@ pub(super) struct EditorView {
     input_epoch: u64,
     pub(super) workspace: Workspace,
     pub(super) filters: crate::selection_filters::Filters,
+    pub(super) inspection: Vec<pcbcraft_engine::board::correspondence::Source>,
+    inspection_layers: std::collections::BTreeSet<String>,
     pub(super) filters_collapsed: bool,
     pub(super) filters_open: bool,
     pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; 3],
@@ -540,6 +542,8 @@ impl EditorView {
             input_epoch: 0,
             workspace,
             filters: crate::selection_filters::Filters::default(),
+            inspection: Vec::new(),
+            inspection_layers: Default::default(),
             filters_collapsed: false,
             filters_open: true,
             panels: crate::workspace_panels::defaults(),
@@ -605,6 +609,7 @@ impl EditorView {
         let library = self.library.take().is_some();
         if self.definition.take().is_some() || library {
             self.release_input();
+            self.inspection.clear();
         }
         if self.unavailable.is_some() {
             let filters = (self.filters, self.filters_collapsed, self.filters_open);
@@ -619,6 +624,7 @@ impl EditorView {
         }
         self.release_input();
         std::mem::swap(&mut self.camera, &mut self.parked_camera);
+        self.inspection.clear();
         self.workspace = workspace;
         self.binding = Binding::current(session, workspace, self.board.target, self.sheet);
     }
@@ -737,8 +743,10 @@ impl EditorView {
     /// cannot widen into a wire deletion; synchronization never mutates the session. Explicit
     /// sheet/board targets that no longer resolve become unavailable, closeable placeholders;
     /// undo restores their address and navigation. Only omitted targets use compatibility defaults.
+    /// Inspection expires on authored revisions/openings and is pruned when copper visibility changes.
     pub(super) fn sync(&mut self, session: &Session) -> bool {
         if self.auxiliary() {
+            self.inspection.clear();
             return false;
         }
         if let Some(state) = &self.unavailable {
@@ -749,6 +757,13 @@ impl EditorView {
             return false;
         }
         let root = session.snapshot();
+        if !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new)) {
+            self.inspection.clear();
+        }
+        if self.inspection_layers != self.board.hidden_layers {
+            self.inspection = self.inspection.iter().copied().filter(|target| crate::inspection_selection::valid(self, session, *target)).collect();
+            self.inspection_layers = self.board.hidden_layers.clone();
+        }
         if self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| !old.same_document(new)) {
             self.sheet = None;
         }

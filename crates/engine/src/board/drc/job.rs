@@ -1,6 +1,14 @@
 //! Resumable read-only checker work shared by native workers and browser frame budgets.
 use super::*;
-use crate::board::track::{Copper, IslandBuilder, lands_from_footprints};
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[allow(clippy::unwrap_used, reason = "opt-in diagnostic fails on invalid fixture setup; preserve the matched measurement source")]
+#[path = "release_board_checks.rs"]
+mod release_board_checks;
+use crate::board::{
+    pair_index::{PairStep, PairWalk},
+    track::{Copper, IslandBuilder, lands_from_footprints},
+};
 
 pub use super::super::work::{Progress as CheckProgress, Source as CheckSource};
 
@@ -15,12 +23,11 @@ pub struct CheckJob {
     members: Vec<Vec<usize>>,
     geometry: Option<BoardGeometry>,
     class_rules: Option<super::super::class_rules::Context>,
-    pairs: Vec<usize>,
-    bounds: Vec<[f64; 4]>,
+    clearance_walk: Option<PairWalk>,
     cursor: (usize, usize),
     work: usize,
     found: Findings,
-    courtyards: Vec<(String, bool, [i64; 4])>,
+    courtyards: Vec<super::courtyard::Courtyard>,
     report: Option<Report>,
 }
 
@@ -48,8 +55,7 @@ impl Session {
             members: Vec::new(),
             geometry: None,
             class_rules: None,
-            pairs: Vec::new(),
-            bounds: Vec::new(),
+            clearance_walk: None,
             cursor: (0, 1),
             work: 0,
             found: Findings::default(),
@@ -87,7 +93,7 @@ impl CheckJob {
             0 => self.source.snapshot.board.footprints.len(),
             1 => count.saturating_mul(count.saturating_sub(1)) / 2,
             2 => self.lands.len().saturating_mul(self.lands.len().saturating_sub(1)) / 2,
-            5 => self.pairs.len().saturating_mul(self.pairs.len().saturating_sub(1)) / 2,
+            5 => count.saturating_mul(count.saturating_sub(1)) / 2,
             7 => count,
             8 => self.courtyards.len().saturating_mul(self.courtyards.len().saturating_sub(1)) / 2,
             _ => 1,
@@ -109,20 +115,10 @@ impl CheckJob {
             return false;
         };
         let rules = self.source.effective.values;
-        let maximum = self.class_rules.as_ref().map_or(rules.clearance_nm, |context| context.max_clearance(rules.clearance_nm));
         match self.phase {
             0 => {
                 let footprints: Vec<_> = view.footprints_range(self.work, budget.min(32)).collect();
-                for f in &footprints {
-                    let points: Vec<_> =
-                        f.graphics.iter().filter(|g| g.purpose == GraphicPurpose::Courtyard).flat_map(|g| g.points.iter().copied()).collect();
-                    if let Some(p) = points.first() {
-                        let bounds = points
-                            .iter()
-                            .fold([p.x_nm, p.y_nm, p.x_nm, p.y_nm], |b, p| [b[0].min(p.x_nm), b[1].min(p.y_nm), b[2].max(p.x_nm), b[3].max(p.y_nm)]);
-                        self.courtyards.push((f.id.clone(), f.bottom, bounds));
-                    }
-                }
+                self.courtyards.extend(footprints.iter().filter_map(super::courtyard::Courtyard::capture));
                 self.lands.extend(lands_from_footprints(footprints.into_iter()));
                 self.work = self.work.saturating_add(budget.min(32));
                 if self.work < self.source.snapshot.board.footprints.len() {
@@ -159,9 +155,7 @@ impl CheckJob {
             3 => {
                 if let Some(g) = &self.geometry {
                     self.class_rules = capture_class_rules(view, g, &self.source.effective, &mut self.found);
-                    self.bounds = g.items.iter().map(|i| i.contour.bounds()).collect();
-                    self.pairs = (0..g.items.len()).collect();
-                    self.pairs.sort_by(|a, b| self.bounds[*a][0].total_cmp(&self.bounds[*b][0]));
+                    self.clearance_walk = Some(g.clearance_walk(rules.clearance_nm, self.class_rules.as_ref()));
                 }
             }
             4 => {
@@ -171,34 +165,19 @@ impl CheckJob {
                 }
             }
             5 => {
-                if let Some(g) = &self.geometry {
+                if let (Some(g), Some(walk)) = (&self.geometry, &mut self.clearance_walk) {
+                    let mut done = false;
                     for _ in 0..budget {
-                        let (p, n) = self.cursor;
-                        if p >= self.pairs.len() {
-                            break;
-                        }
-                        if n >= self.pairs.len() {
-                            self.cursor = (p + 1, p + 2);
-                            continue;
-                        }
-                        let (i, j) = (self.pairs[p], self.pairs[n]);
-                        self.cursor.1 += 1;
+                        let (i, j) = match walk.step() {
+                            PairStep::Pending => continue,
+                            PairStep::Pair(i, j) => (i, j),
+                            PairStep::Done => {
+                                done = true;
+                                break;
+                            }
+                        };
                         self.work += 1;
-                        if self.bounds[j][0] > self.bounds[i][2] + maximum as f64 {
-                            self.cursor = (p + 1, p + 2);
-                            continue;
-                        }
-                        if self.bounds[i][1] > self.bounds[j][3] + maximum as f64 || self.bounds[j][1] > self.bounds[i][3] + maximum as f64 {
-                            continue;
-                        }
-                        let (a, b) = (&g.items[i], &g.items[j]);
-                        if a.island == b.island || (a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets) {
-                            continue;
-                        }
-                        let (i, j) = (i.min(j), i.max(j));
-                        let clearance =
-                            self.class_rules.as_ref().map_or(rules.clearance_nm, |context| context.clearance(Some(i), j, rules.clearance_nm));
-                        if let Some(d) = g.evaluate(i, j, clearance)
+                        if let Some(d) = g.clearance_decision(i, j, rules.clearance_nm, self.class_rules.as_ref())
                             && d.clearance_violation
                         {
                             let (a, b) = (&g.items[i], &g.items[j]);
@@ -216,13 +195,14 @@ impl CheckJob {
                             self.found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
                         }
                     }
-                    if self.cursor.0 < self.pairs.len() {
+                    if !done {
                         return false;
                     }
                 }
+                self.clearance_walk = None;
             }
             6 => {
-                if let Some(r) = view.ratsnest_with_copper(&self.copper) {
+                if let Ok(r) = view.ratsnest_with_copper(&self.copper) {
                     for l in r.lines {
                         self.found.push(Violation {
                             kind: Kind::Unconnected,
@@ -264,16 +244,8 @@ impl CheckJob {
                     }
                     self.cursor.1 += 1;
                     self.work += 1;
-                    let (a, sa, ba) = &self.courtyards[i];
-                    let (b, sb, bb) = &self.courtyards[j];
-                    if sa == sb && ba[0] < bb[2] && bb[0] < ba[2] && ba[1] < bb[3] && bb[1] < ba[3] {
-                        self.found.push(Violation {
-                            kind: Kind::CourtyardOverlap,
-                            message: "Footprint courtyards overlap".into(),
-                            at: Point { x_nm: (ba[0].max(bb[0]) + ba[2].min(bb[2])) / 2, y_nm: (ba[1].max(bb[1]) + ba[3].min(bb[3])) / 2 },
-                            items: vec![a.clone(), b.clone()],
-                            nets: Vec::new(),
-                        });
+                    if let Some(violation) = self.courtyards[i].overlap(&self.courtyards[j]) {
+                        self.found.push(violation);
                     }
                 }
                 if self.cursor.0 < self.courtyards.len() {

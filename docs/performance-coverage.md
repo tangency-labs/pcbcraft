@@ -20,7 +20,7 @@ to collect matched evidence for a change.
 | Requirement | Implemented and exercised | Limit or follow-on owner |
 | --- | --- | --- |
 | Reproducible inputs | Original native-command/encoder artifacts, recipe/seed/revision, exact project/envelope hashes, versioned pointer/key trace | Production commands allocate UUIDs; reuse the saved bytes instead of regenerating comparison inputs |
-| Current supported limits | Exactly 4,096 tracks / 2,048 vias; 4,096 schematic symbols / 64 sheets; explicit 63-link hierarchy | Full board-limit run is a smoke sample, not a tail baseline |
+| Supported limits | Exactly 4,096 tracks / 2,048 vias (the board limits when measured); 4,096 schematic symbols / 64 sheets; explicit 63-link hierarchy | The recorded board-limit run is a smoke sample, not a tail baseline. A separate test saves, reloads and checks a board at the new 65,536-track / 16,384-via limits. |
 | Dense/crowded geometry | Existing dense diagonals/mixed pad widths, plus parallel narrow rails and attached branches; oracle-checked channel probe | High-pin-count BGA cases belong with #251–#253; radius/outline/offset traces with #259–#262 |
 | Cold versus steady | Fresh model decode and lazy sheet connectivity separated from repeated access, preparation, queries, validated command publication and warmed replay | Whole-project first/repeat projection is not labeled as a cache hit; process/module startup is outside timings |
 | Cancel/layer/reversal | Actual app assertions before each captured frame; cancellation preserves authored bytes; layer transition and inactive final tool required | Serialized screenshots pace inputs; this is not an uninterrupted OS event-stream benchmark |
@@ -29,7 +29,7 @@ to collect matched evidence for a change.
 | Memory/allocations | Raw Linux process RSS/VmHWM samples and separate Valgrind whole-process allocation totals | Isolated index/query allocations need instrumentation in #244; profiler timings are not baselines |
 | Comparisons | CPU and rendered comparators reject changed fixture, trace, environment, sample boundaries, renderer, viewport or window-state sequence | Keep native/browser and software/hardware series separate |
 | Jobs/queues | #243 adds shared bounded native/browser checker and copper jobs, separate `checks`/`routes` CPU diagnostics, replacement/cancellation counters and publication timings; regression tests cover stale source/view/request authority | Physical cancellation-to-visible latency and isolated allocation attribution remain unmeasured; later index metrics belong with #244 |
-| Later feature evidence | Reusable fixtures, raw distributions, query oracle, trace driver, resource collector and documented commands | ERC progress/cancel #47; walkaround/shove #245–#247; BGA and curves as above |
+| Later feature evidence | Reusable fixtures, raw distributions, query oracle, trace driver, resource collector and documented commands | ERC progress/cancel #47; the #246 engine solver has a separate `walkaround` CPU diagnostic, while its preview/commit traces and shove #247 remain; BGA and curves as above |
 
 GPU readback proves that pixels were produced after a checked app pass. Its transfer,
 software rendering and instrumentation costs prevent treating it as a substitute
@@ -37,6 +37,56 @@ for physical presentation. Actual input-to-visible-preview latency remains
 unmeasured. Presentation qualification under #237 is separate from completion of
 the reusable measurement infrastructure; closing the tooling work does not turn
 this unmeasured boundary into a pass.
+
+### Copper at the board limits
+
+The island check and the separate design-rule clearance pass index copper bounds in four
+projection directions, so long parallel diagonals need not all reach the exact distance checks.
+The incremental paths charge each visited branch or leaf against the traversal budget, after
+building the index. Copper edits that require synchronous connectivity validation still run it
+to completion. Overlap in all projections and large sets of actual clearance violations can
+still require quadratic work. Walkaround's probe budget applies to route search, not to
+obstacle preparation.
+
+To reproduce the native release diagnostic, run one process per case. Use `sparse` or
+`overlap` for the layout, `islands`, `sweep` or `job` for the phase, and 16384, 32768 or
+65536 for the track count:
+
+```sh
+cargo test --locked --release -p pcbcraft-engine --lib --no-run
+# Set TEST_BIN to the pcbcraft_engine test executable printed by the build above.
+PCB_CHECK_LAYOUT=overlap PCB_CHECK_PHASE=islands PCB_CHECK_TRACKS=65536 \
+  timeout 60s "$TEST_BIN" --exact board::drc::job::release_board_checks::release_board_checks --ignored --nocapture
+```
+
+The sparse recipe uses a grid; the overlap recipe uses isolated, minimum-width parallel
+diagonals with a point common to every XY bounding box. Both are fixed, track-only layouts.
+The independent clearance cases supply the known singleton islands in advance. The synchronous
+sweep measures decisions without formatting findings; the incremental job includes capped
+finding collection. Neither is an end-to-end DRC or editor latency measurement.
+
+In a Linux x86-64 release baseline (Intel Core i9-11900F, rustc 1.95.0) before adding the
+four-direction bounds, the measured whole-case times in seconds were:
+
+| Tracks | Islands sparse | Islands overlap | Sync sweep sparse | Sync sweep overlap | Incremental sweep sparse | Incremental sweep overlap |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,384 | 0.015 | 16.13 | 0.032 | 14.78 | 0.032 | 14.02 |
+| 32,768 | 0.032 | >60 | 0.064 | 59.42 | 0.064 | 56.21 |
+| 65,536 | 0.064 | >60 | 0.114 | >60 | 0.114 | >60 |
+
+`>60` is a timed-out case, not a measured finish. With the four-direction bounds
+(revision `6c0e1127`), all 18 cases completed on the same host and release profile:
+
+| Tracks | Islands sparse | Islands overlap | Sync sweep sparse | Sync sweep overlap | Incremental sweep sparse | Incremental sweep overlap |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 16,384 | 0.032 | 0.015 | 0.031 | 0.064 | 0.032 | 0.164 |
+| 32,768 | 0.064 | 0.032 | 0.064 | 0.114 | 0.064 | 0.264 |
+| 65,536 | 0.114 | 0.064 | 0.114 | 0.214 | 0.114 | 0.514 |
+
+Each cell is one process, including fixture setup. The corrected 65,536-track overlap run
+kept all tracks isolated, and both clearance paths counted all 917,399 expected findings.
+The corrected sparse phases took several to 29 ms longer inside the harness timer. These
+observations from two fixed layouts do not bound check times on other boards.
 
 ## Recorded platforms
 

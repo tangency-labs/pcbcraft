@@ -7,6 +7,8 @@ mod browser_capture;
 pub mod checker;
 mod fixture;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod pointer;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod project;
 #[cfg(not(target_arch = "wasm32"))]
 mod remote;
@@ -14,6 +16,7 @@ pub mod rendered;
 mod replay;
 mod report;
 pub mod routing;
+pub mod walkaround;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watchdog;
 pub use report::{Environment, Metric, Report};
@@ -194,13 +197,25 @@ fn load_artifact(artifact_json: &str) -> Result<Artifact> {
     {
         return Err("unsupported fixture schema, corrupt project or invalid trace length".into());
     }
-    if artifact.trace_id == replay::STANDARD_TRACE_ID
-        && serde_json::to_value(&artifact.trace).map_err(|e| e.to_string())?
-            != serde_json::to_value(replay::Step::standard()).map_err(|e| e.to_string())?
+    let expected = match artifact.trace_id.as_str() {
+        replay::STANDARD_TRACE_ID => Some(replay::Step::standard()),
+        replay::COMMIT_TRACE_ID => Some(replay::Step::commit()),
+        _ => None,
+    };
+    if let Some(expected) = expected
+        && serde_json::to_value(&artifact.trace).map_err(|e| e.to_string())? != serde_json::to_value(expected).map_err(|e| e.to_string())?
     {
         return Err("standard trace ID does not match its versioned steps".into());
     }
     Ok(artifact)
+}
+
+/// Derive a short commit/history trace without modifying or regenerating native project bytes.
+pub fn route_commit_artifact(artifact_json: &str) -> Result<String> {
+    let mut artifact = load_artifact(artifact_json)?;
+    artifact.trace_id = replay::COMMIT_TRACE_ID.into();
+    artifact.trace = replay::Step::commit();
+    serde_json::to_string_pretty(&artifact).map_err(|e| e.to_string())
 }
 
 /// Run cold-snapshot and warm-query workloads plus the production editor's CPU input/paint
@@ -453,6 +468,24 @@ mod tests {
         }
         for id in ["route.context_capture", "route.request_capture", "route.atomic_publish", "route.cancel_acknowledgement", "route.queue_replace"] {
             assert!(report["metrics"].as_array().unwrap().iter().any(|m| m["id"] == id));
+        }
+    }
+
+    /// Walkaround diagnostics time complete plans over real airwires, reproduce them exactly
+    /// and commit each through the shared command against the exhaustive pair reference.
+    #[test]
+    fn walkaround_diagnostic_reproduces_and_commits_its_plans() {
+        let artifact = generate("reference-v1", "test").unwrap();
+        let report = walkaround::run(&artifact, environment(), 2).unwrap();
+        assert_eq!(report["schema"], "pcbcraft-walkaround-performance/1");
+        let outcomes = report["outcomes"].as_array().unwrap();
+        assert!(outcomes.iter().any(|o| o["case"] == "airwire.1" && o["outcome"]["kind"] == "reached"), "{outcomes:?}");
+        // Airwire 0 starts on a legacy marker without conductive pad geometry. It cannot
+        // lend a net to an anonymous route; keep that blocked outcome in the measurements.
+        assert!(outcomes.iter().any(|o| o["case"] == "airwire.0" && o["outcome"]["kind"] == "blocked"));
+        for id in ["walkaround.prepare", "walkaround.plan.all", "walkaround.plan.channel"] {
+            let metric = report["metrics"].as_array().unwrap().iter().find(|m| m["id"] == id).unwrap();
+            assert_eq!(metric["samples_ms"].as_array().unwrap().len(), 2);
         }
     }
 

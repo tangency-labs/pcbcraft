@@ -1,0 +1,6 @@
+{
+  "base": "8b1afe729023abe67b04fa435dd397272f4d0f15",
+  "patched_ops": "cad4bd0db0b528a09c5feeb485271fc4151b512268df09db4a4ed24bc6f761f5",
+  "generator": "fccd4e565465a1a6c3d6ed673df590795da0354d1cb88e98b60c1bc64c400cdc",
+  "tests": "bdb450f7447e45f9860a02075f37d11eba729da5e9aa8abe8e41f3aac7ce7a45"
+}

@@ -413,7 +413,10 @@ following use resolved board coordinates through a separate geometry adapter.
 
 Distinguish unassigned footprints, assigned but unplaced footprints, unresolved
 mappings and targets removed since selection. Represent one-to-many matches or
-reject unsupported mappings explicitly. Net highlights use membership from a
+reject unsupported mappings explicitly. The [complete counterpart resolver](pin-pad-correspondence.md)
+now supplies these model/query results through the engine and read-only MCP;
+individual canvas selection and exact counterpart presentation remain #397/#398.
+Net highlights use membership from a
 specific revision and invalidate after connectivity changes; names or list
 positions cannot preserve identity through arbitrary net splits and merges.
 Reopening a project must invalidate stale runtime targets even when its saved
