@@ -209,11 +209,14 @@ pub fn preview(
 }
 
 /// Prepare a private candidate and its current-project evidence. The live route uses the
-/// captured published symbol and catalog status; headless callers supply a base revision and
-/// may have only the project's pinned evidence when that revision is absent from the catalog.
-/// Invalid edits and row, graph, or encoded report budget overruns return no partial report.
-/// A late byte-budget refusal can leave derived connectivity cached, but neither authored
-/// document nor its history changes.
+/// captured published symbol and its catalog status. Without a base revision, no placed copy
+/// is associated, and pinned project definitions do not stand in for a missing revision.
+/// With an explicit headless base revision, use the optional catalog to check for conflicts
+/// and compare bodies when available. If the catalog supplies neither a body nor a conflict,
+/// the project's pinned copies at that revision alone provide the terminal evidence.
+/// Check the expanded row budget before preparing the candidate. Invalid edits and row, graph,
+/// or encoded report budget overruns return no partial report. A late byte-budget refusal can
+/// leave derived connectivity cached, but neither document nor its history changes.
 fn preview_with_source(
     item: &Item,
     pins: &[PinRemap],
