@@ -360,7 +360,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
 
 /// Optional geometry may be omitted, but an explicit null is malformed rather than absent.
 /// This keeps old format tags from accepting newer fields by spelling their value as null.
-fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+pub(crate) fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
 }
 
