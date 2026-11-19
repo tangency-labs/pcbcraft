@@ -342,7 +342,9 @@ fn board_follow_prefers_current_match_then_project_sheet_order() {
     h.set_size(egui::vec2(1400., 900.));
     let (first, later, empty, first_symbol, later_symbol, footprint) = {
         let app = h.state_mut();
-        app.run("project.new", &json!({"create_board":true}));
+        app.start_new_project_in(Workspace::Board);
+        app.views.active.switch(Workspace::Schematic, &app.session);
+        assert!(!app.home);
         app.run(
             pcbcraft_engine::library::sources::LOAD,
             &json!({"source":"units","documents":{
