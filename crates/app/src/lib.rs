@@ -331,9 +331,13 @@ pub struct PcbApp {
     startup_open: Option<std::path::PathBuf>,
     /// Set once the command line's startup open has a running worker, cleared when a result
     /// comes back for it; a failed result then also reports once to the launching terminal.
+    /// A setup failure that never starts a worker prints once without setting it.
     /// Opens started in the window (picker or recents) never set it.
     #[cfg(not(target_arch = "wasm32"))]
     startup_open_pending: bool,
+    /// Startup open failures printed to the launching terminal, kept for tests.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    startup_reports: Vec<String>,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
     /// Selection inspector visibility belongs to this native host.
@@ -617,17 +621,27 @@ impl PcbApp {
     /// the file poll; the path is spent whether or not the worker starts. Mirrors a
     /// recent-project reopen: no picker or disk access runs on the editor thread, the
     /// ordinary completion path adopts or reports the result, and a worker that cannot start
-    /// reports in the status bar. A started worker marks the job so its failure also reaches
-    /// the launching terminal. Only the native launcher sets a startup path.
+    /// reports in the status bar and prints the same line once to the launching terminal.
+    /// A started worker marks the job so its failure also reaches the launching terminal.
+    /// Only the native launcher sets a startup path.
     #[cfg(not(target_arch = "wasm32"))]
     fn begin_startup_open(&mut self, ctx: &egui::Context) {
         let Some(path) = self.startup_open.take() else { return };
         self.file_notice = None;
         if let Some(error) = self.files.open_path(path, self.session.revision(), ctx).err() {
+            self.print_startup_failure(&error);
             self.message = Some(error);
         } else {
             self.startup_open_pending = true;
         }
+    }
+
+    /// Print one startup open failure line to the launching terminal, and keep it for tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn print_startup_failure(&mut self, error: &str) {
+        eprintln!("{error}");
+        #[cfg(test)]
+        self.startup_reports.push(error.to_owned());
     }
 
     /// Decide the launching terminal's part in one file poll result. While the worker has
@@ -641,7 +655,7 @@ impl PcbApp {
         if std::mem::take(&mut self.startup_open_pending)
             && let project_files::Update::Error(error) = update
         {
-            eprintln!("{error}");
+            self.print_startup_failure(error);
         }
     }
 

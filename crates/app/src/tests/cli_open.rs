@@ -45,6 +45,27 @@ fn a_failed_startup_open_keeps_home_usable() {
     assert!(!h.state().home);
 }
 
+/// A startup open whose worker cannot start has no later poll result to report: the setup
+/// failure prints the same line once to the launching terminal, reports in the status bar,
+/// and must not arm a report the poll can never deliver.
+#[test]
+fn a_startup_setup_failure_prints_once_to_the_terminal() {
+    let dir = tempfile::tempdir().unwrap();
+    let fault = "Could not start opening the project: injected";
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| {
+        let mut app = PcbApp::new(cc).with_startup_project(dir.path().join("gone"));
+        app.files.open_setup_fault = Some(fault.to_owned());
+        app
+    });
+    h.run();
+    let state = h.state();
+    assert!(state.home, "a setup failure keeps Home");
+    assert_eq!(state.message.as_deref(), Some(fault), "the setup failure reports in the status bar");
+    assert!(!state.startup_open_pending, "a setup failure must not wait for a poll result");
+    assert_eq!(state.startup_reports.len(), 1, "the setup failure prints once to the terminal");
+    assert_eq!(state.startup_reports[0], fault, "the printed line matches the status error");
+}
+
 /// The terminal-report arming must survive every frame whose file poll has no result yet:
 /// the worker cannot finish in the frame that starts it, and its result usually lands
 /// between frames, so no harness step can catch that window reliably. It is driven at the
@@ -67,6 +88,7 @@ fn the_terminal_report_survives_frames_without_a_file_result() {
     assert!(!app.startup_open_pending, "a message result consumes the arming");
     app.report_startup_open(Some(&project_files::Update::Error("Could not open".to_owned())));
     assert!(!app.startup_open_pending, "the report happens once; a later error finds the arming already spent");
+    assert_eq!(app.startup_reports.len(), 1, "the failed result prints once to the terminal");
     app.startup_open_pending = true;
     app.report_startup_open(Some(&project_files::Update::Opened));
     assert!(!app.startup_open_pending, "an opened result consumes the arming too");
