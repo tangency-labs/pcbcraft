@@ -36,6 +36,13 @@ pub const LIST: &str = "library.list_sources";
 pub const SEARCH: &str = "library.search";
 /// Inspect later loaded revisions without changing project pins or history.
 pub const AVAILABLE_REVISIONS: &str = "library.available_revisions";
+/// Review selected instances' non-geometric updates without editing the project.
+pub const PREVIEW_ADOPTION: &str = "library.preview_adoption";
+/// Advance selected instances' immutable pins in one revision-checked edit.
+pub const APPLY_ADOPTION: &str = "library.apply_adoption";
+
+const ADOPTION_INSTANCES: Param =
+    Param { name: "instances", summary: "Unique part instance IDs from available revisions", required: true, kind: ParamKind::PartIds };
 /// Read-only pad geometry and endpoint preview for one placed part instance.
 pub const PREVIEW_FOOTPRINT_REVISION: &str = "library.preview_footprint_revision";
 /// Resolve a part's exact dependencies and validate its typed values and complete package maps.
@@ -194,6 +201,22 @@ pub(crate) const COMMANDS: [Command; 11] = [
         title: "List available library revisions",
         summary: "Compare existing project instances with loaded native revisions. No adoption or network access; availability is not compatibility.",
         params: &[],
+    },
+    Command {
+        id: PREVIEW_ADOPTION,
+        title: "Preview library adoption",
+        summary: "Review name and default-value changes for selected instances; no project edit.",
+        params: &[ADOPTION_INSTANCES, crate::EXPECTED_REVISION],
+    },
+    Command {
+        id: APPLY_ADOPTION,
+        title: "Apply library adoption",
+        summary: "Adopt the selected text-only updates in one project transaction.",
+        params: &[
+            ADOPTION_INSTANCES,
+            crate::EXPECTED_REVISION,
+            Param { name: "preview", summary: "Confirmation from library.preview_adoption", required: true, kind: ParamKind::LibraryDigest },
+        ],
     },
     Command {
         id: PREVIEW_FOOTPRINT_REVISION,
@@ -1028,7 +1051,7 @@ impl Session {
         Arc::make_mut(&mut self.libraries).mark_unavailable(id);
     }
 
-    /// Execute validated library commands without editing the project or its history.
+    /// Execute validated library commands. Adoption alone can edit the project and history.
     /// Revision discovery treats the saved dependency closure as input, so inconsistent pins
     /// are InvalidParams even when the command has no parameter fields.
     pub(crate) fn library_command(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
@@ -1127,6 +1150,7 @@ impl Session {
                 let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
                 updates::inspect(project, &self.libraries, self.revision()).map_err(CommandError::InvalidParams)
             }
+            PREVIEW_ADOPTION | APPLY_ADOPTION => updates::adopt::run(self, params, id == APPLY_ADOPTION),
             PREVIEW_FOOTPRINT_REVISION => {
                 let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
                 updates::preview_footprint(project, &self.libraries, self.revision(), params)

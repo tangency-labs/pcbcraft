@@ -5,7 +5,7 @@ use crate::{
         Item as Draft, Kind as DraftKind,
         publishing::{new_library, prepare},
     },
-    library::sources::{AVAILABLE_REVISIONS, Documents, LOAD, REMOVE, symbol_digest},
+    library::sources::{APPLY_ADOPTION, AVAILABLE_REVISIONS, Documents, LOAD, PREVIEW_ADOPTION, REMOVE, symbol_digest},
     persistence::{decode_documents, encode_documents},
 };
 use std::sync::Arc;
@@ -89,6 +89,68 @@ fn available_revisions_lists_exactly_two_of_three_without_editing() {
     assert_eq!(session.inspect()["project"]["name"], "Temporary name");
     session.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// Keep a selected batch in one history step; its pins and unit drawings survive offline Save.
+#[test]
+fn adoption_updates_selected_symbol_text_in_one_undo_step() {
+    let (mut session, _, mut key) = fixture(2);
+    place(&mut session, &key);
+    place(&mut session, &key);
+    key.revision = 2;
+    place(&mut session, &key);
+    let before = session.snapshot().unwrap();
+    let original = encode_documents(before.clone()).unwrap();
+    let ids: Vec<_> = before.components().take(2).map(|component| component.id()).collect();
+    let revision = session.revision();
+    let params = json!({"instances":ids,"expected_revision":revision});
+    let preview = session.execute(PREVIEW_ADOPTION, &params).unwrap();
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(preview["applied"], false);
+    assert_eq!(preview["changes"].as_array().unwrap().len(), 2);
+    assert_eq!(preview["changes"][0]["fields"][0]["after"], "Later drawing");
+    let mut apply = params;
+    apply["preview"] = preview["preview"].clone();
+    let applied = session.execute(APPLY_ADOPTION, &apply).unwrap();
+    assert_eq!(applied["changes"], preview["changes"]);
+    assert_eq!(applied["applied"], true);
+    assert_eq!(session.revision(), revision + 1);
+    let after = session.snapshot().unwrap();
+    for (old, new) in before.components().zip(after.components()) {
+        assert_eq!(old.id(), new.id());
+        assert_eq!(old.value(), new.value());
+        assert_eq!(old.reference(), new.reference());
+        assert_eq!(new.definition.revision(), 2);
+    }
+    for (old, new) in before.symbols().iter().zip(after.symbols()) {
+        assert_eq!(old.position, new.position);
+        assert_eq!(new.definition.revision(), 2);
+    }
+    let saved = encode_documents(after).unwrap();
+    let offline = decode_documents(&saved).unwrap();
+    assert!(offline.components().all(|instance| instance.definition.revision() == 2));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
+    session.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// A mixed selection with an ineligible component cannot update even its first valid member.
+#[test]
+fn adoption_refuses_entire_batch_when_any_selected_root_cannot_advance() {
+    let (mut session, _, mut key) = fixture(2);
+    place(&mut session, &key);
+    key.revision = 2;
+    place(&mut session, &key);
+    let before = session.snapshot().unwrap();
+    let ids: Vec<_> = before.components().map(|component| component.id()).collect();
+    let revision = session.revision();
+    let mut params = json!({"instances":ids,"expected_revision":revision});
+    assert!(matches!(session.execute(PREVIEW_ADOPTION, &params), Err(CommandError::InvalidParams(_))));
+    params["preview"] = json!("0".repeat(64));
+    assert!(matches!(session.execute(APPLY_ADOPTION, &params), Err(CommandError::InvalidParams(_))));
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
 /// Missing, unavailable and older-only sources are unknown, not evidence of being current;

@@ -11,7 +11,7 @@ use pcbcraft_engine::{
         publishing::{new_library, prepare},
     },
     error_codes::ErrorCode,
-    library::sources::{AVAILABLE_REVISIONS, LOAD, PREVIEW_FOOTPRINT_REVISION, symbol_digest},
+    library::sources::{APPLY_ADOPTION, AVAILABLE_REVISIONS, LOAD, PREVIEW_ADOPTION, PREVIEW_FOOTPRINT_REVISION, symbol_digest},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -159,6 +159,58 @@ fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
     assert_eq!(live_error, headless_error);
     assert_eq!(editor.session.inspect(), before);
     assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+}
+
+/// Live and headless MCP share adoption, its readable result and the same normal Undo path.
+#[test]
+fn adoption_returns_the_same_preview_and_transaction_through_live_and_headless() {
+    let manifest = new_library("adopt-demo", "Adopt demo", "MIT OR Apache-2.0").unwrap();
+    let first = prepare(Arc::new(Item::new(Kind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
+    let mut next = first.item().as_ref().clone();
+    next.name = "Renamed symbol".into();
+    let second = prepare(Arc::new(next), &manifest, 1, Some(1), false).unwrap();
+    let mut documents = first.documents().clone();
+    documents.extend(second.documents().clone());
+    documents.insert("library.json".into(), manifest);
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({})).unwrap();
+    setup.execute(LOAD, &json!({"source":"adopt-demo","documents":documents})).unwrap();
+    let draft = first.item();
+    let symbol = setup.libraries().symbol(&draft.library, &draft.id, draft.revision).unwrap();
+    setup
+        .apply(
+            PLACE_SYMBOL,
+            &json!({"library":symbol.library,"definition":symbol.id,"definition_revision":symbol.revision(),
+        "definition_digest":symbol_digest(&symbol).unwrap(),"x_nm":0,"y_nm":0,"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let snapshot = setup.snapshot().unwrap();
+    let instance = snapshot.components().next().unwrap().id();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live = Session::default();
+    live.open_snapshot(snapshot);
+    let mut editor = OpenEditor { session: live, blocked: false };
+    let load = json!({"command":LOAD,"params":{"source":"adopt-demo","documents":documents},"inspect":false});
+    headless.call("engine.execute", load.clone()).unwrap();
+    call_editor(&mut editor, &json!({"method":"engine.execute","params":load})).unwrap();
+    let params = json!({"instances":[instance],"expected_revision":editor.session.revision()});
+    let request = json!({"command":PREVIEW_ADOPTION,"params":params,"inspect":false});
+    let preview = headless.call("engine.execute", request.clone()).unwrap();
+    assert_eq!(preview, call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap());
+    assert_eq!(preview["applied"], false);
+    let mut params = params;
+    params["preview"] = preview["preview"].clone();
+    let request = json!({"command":APPLY_ADOPTION,"params":params,"inspect":false});
+    let result = headless.call("engine.execute", request.clone()).unwrap();
+    assert_eq!(result, call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap());
+    assert_eq!(result["applied"], true);
+    assert_eq!(result["changes"][0]["to"]["revision"], 2);
+    for command in ["edit.undo", "edit.redo"] {
+        let request = json!({"command":command,"params":{}});
+        headless.call("engine.execute", request.clone()).unwrap();
+        call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+        assert_eq!(headless.call("project.inspect", json!({})).unwrap(), editor.session.inspect());
+    }
 }
 
 /// Exercise the ordinary live ownership adapter without opening an OS window.

@@ -175,8 +175,8 @@ An unresolvable latest part is `Unresolved` even when it equals or is older than
 the project pin, unless an immutable-address conflict takes precedence.
 A valid newer revision means available, **not compatible or adopted**. Geometry,
 pins, project revision, dirty state, source registrations and Undo/Redo are unchanged.
-The pad preview below is read-only. Compatibility decisions, pad map resolution
-and revision-checked adoption remain separate work.
+The pad preview below is read-only. Compatibility decisions for geometric
+changes and pad map resolution remain separate work.
 
 ## Preview footprint pad changes
 
@@ -218,6 +218,26 @@ try an exact string pad number in `pad`. If that pad also exceeds the limit,
 inspect its copper in the board editor; the query cannot split one pad's list.
 The query does not move copper or alter pins, saved bytes, project revision or
 Undo/Redo.
+
+## Adopt non-geometric revisions
+
+`library.preview_adoption` reviews the latest loaded symbol or generic-part root
+for the chosen `instances` (a nonempty list of distinct `component-N` IDs).
+Use the `expected_revision` from project inspection. The result lists the exact
+old and new pins, candidate digest and changed text per instance without making
+an edit. Pass the returned `preview` fingerprint with the same parameters to
+`library.apply_adoption`. It refuses a different change set and otherwise makes
+one revision-checked edit with one Undo step. Both return the change record to
+live and headless MCP even with `inspect: false`.
+
+For plain symbols, this slice allows a new name or default value while preserving
+all placed values, geometry and electrical behavior. Generic-part updates allow
+a new name with identical selected dependencies and requirements. Explicit
+manufacturer selections still pin the old generic part revision: use a separate
+review for those. Standalone footprint updates, changed symbols' drawings or pins,
+and changed package maps are not adopted by these commands. A conflict, unresolved
+candidate or ineligible selection refuses the entire batch; there is no fallback
+to a different revision.
 
 ## Edit and publish native items
 

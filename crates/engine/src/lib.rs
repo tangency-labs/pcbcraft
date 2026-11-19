@@ -3260,6 +3260,8 @@ impl Session {
             | netlist::EXPORT_NETLIST
             | netlist::COMPARE_NETLIST
             | library::sources::AVAILABLE_REVISIONS
+            | library::sources::PREVIEW_ADOPTION
+            | library::sources::APPLY_ADOPTION
             | library::sources::PREVIEW_FOOTPRINT_REVISION
             | no_connect::SET
             | no_connect::CHECK
@@ -3492,7 +3494,12 @@ impl Session {
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if id.starts_with("library.") {
-            return self.library_command(id, params);
+            let before = self.revision;
+            let result = self.library_command(id, params)?;
+            if self.revision != before {
+                self.report_committed(id, params);
+            }
+            return Ok(result);
         }
         if id == PREVIEW_ASSEMBLY_PROFILE {
             self.validate_project_command(id, params)?;
