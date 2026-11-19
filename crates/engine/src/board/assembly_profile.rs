@@ -423,7 +423,7 @@ impl<'a> BoardView<'a> {
     /// A preview shares this frame across old and proposed values and across all placements.
     fn profile_row(placement: &Footprint, profile: Option<&AssemblyProfile>, frame: Frame) -> Placed {
         let convention = profile.map_or_else(BottomSide::default, |p| p.content.bottom_side);
-        let row = frame.place(Point { x_nm: placement.x_nm, y_nm: placement.y_nm }, placement.rotation, placement.bottom, convention);
+        let row = frame.place(placement.reference_point(), placement.rotation, placement.bottom, convention);
         match profile.and_then(|p| p.correction_for(placement)) {
             Some(c) => c.apply(placement, row, frame, convention),
             None => row,

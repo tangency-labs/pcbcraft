@@ -382,6 +382,64 @@ fn gerber_x3_rejects_a_reference_reused_while_removal_is_pending() {
     assert_eq!(view(&s).gerber_part_layers().unwrap_err(), format!("Duplicate Gerber reference \"R1\" on placements {retained} and {other}."));
 }
 
+/// Base population affects all X3 assembly objects, not bare-board fabrication. Main flashes
+/// with no adopted assembly profile match the generic placement-row coordinates on both sides
+/// at 1 nm (Gerber 2026.05 §4.2.2).
+#[test]
+fn gerber_x3_omits_dnp_and_uses_generic_placement_rows() {
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let mut s = aperture_fixture_at(&[(PadShape::Circle, 800_000, 800_000, 0); 2], 30, true, p(0, 0), p(31_000_001, -21_000_003), None, None);
+    let bottom_symbol = s.project().unwrap().symbols[0].id();
+    add_assembly_resistor(&mut s, 10_000_000, p(7_000_000, 9_000_000), 270);
+    let optional = add_assembly_resistor(&mut s, 20_000_000, p(12_000_000, 16_000_000), 90);
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"point","x_nm":8_000_000,"y_nm":10_000_001}}),
+    )
+    .unwrap();
+    let bare_board = view(&s).fabrication().unwrap();
+    let all_fitted = view(&s).gerber_part_layers().unwrap();
+    assert!(all_fitted.files[0].contents.contains("%TO.P,R3,1*%"));
+    assert!(all_fitted.files[0].contents.matches("%TO.C,R3*%").count() > 1, "The fitted part has outlines as well as the main flash.");
+    let set_dnp = |s: &mut Session, symbol: &str, reference: &str, do_not_populate| {
+        use crate::schematic::fields::{Attributes, Metadata};
+        let metadata = Metadata { attributes: Attributes { do_not_populate, ..Attributes::default() }, ..Metadata::default() };
+        s.apply(
+            crate::SET_SYMBOL_FIELDS,
+            &json!({"symbol":symbol,"reference":reference,"value":"R","metadata":metadata,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+    };
+    set_dnp(&mut s, &optional, "R3", true);
+
+    let revision = s.revision();
+    let snapshot = s.snapshot().unwrap();
+    let board_view = view(&s);
+    let layers = board_view.gerber_part_layers().unwrap();
+    let [top, bottom] = layers.files.as_slice() else { panic!("Expected both sides with fitted parts") };
+    let expected = [(bottom, "R1", p(23_000_001, 31_000_004)), (top, "R2", p(-1_000_000, 1_000_001))];
+    for ((file, reference, at), id) in expected.into_iter().zip(board_view.footprint_ids()) {
+        let row = board_view.placement_row(&id, None).unwrap();
+        assert_eq!(row.at, at);
+        let mains: Vec<_> = file.contents.split("%TD*%\n").filter(|object| object.contains("%TO.C,") && object.ends_with("D03*\n")).collect();
+        let [main] = mains.as_slice() else { panic!("Expected one main flash per side") };
+        assert!(main.contains(&format!("%TO.C,{reference}*%\n")));
+        assert!(main.ends_with(&format!("X{}Y{}D03*\n", row.at.x_nm, row.at.y_nm)));
+        assert!(!file.contents.contains("%TO.C,R3*%"));
+        assert!(!file.contents.contains("%TO.P,R3,"));
+    }
+    assert_eq!(s.revision(), revision);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+
+    set_dnp(&mut s, &bottom_symbol, "R1", true);
+    assert_eq!(view(&s).gerber_part_layers().unwrap().files.as_slice(), std::slice::from_ref(top));
+    assert_eq!(view(&s).fabrication().unwrap(), bare_board);
+    set_dnp(&mut s, &bottom_symbol, "R1", false);
+    set_dnp(&mut s, &optional, "R3", false);
+    assert_eq!(view(&s).gerber_part_layers().unwrap(), all_fitted);
+}
+
 /// Test-only read-back of the emitted Gerber subset, independent of the writer's aperture key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ReadAperture {
