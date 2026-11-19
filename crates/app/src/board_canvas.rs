@@ -1417,7 +1417,7 @@ mod tests {
             }
             let mut projected = (Pos2::ZERO, 0.);
             let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 700.));
-            let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 show(
                     ui,
@@ -1439,6 +1439,8 @@ mod tests {
                 );
                 projected = hole_circle(&opening, &camera, rect);
             });
+            // This headless pass inspects shapes without a renderer to consume the font atlas updates.
+            output.textures_delta.clear();
             let (center, radius) = projected;
             let t = Tokens::get();
             let ink = if preview { t.icon_active_2 } else { t.board_ink };
