@@ -16,7 +16,7 @@ fn inspected_project_rows_follow_type_query_and_category_visibility() {
     let before = h.state().session.snapshot().unwrap();
     let ctx = h.ctx.clone();
     let view = h.state().views.active.id();
-    for (kind, query, count) in [(0, "", 3), (2, "", 1), (0, "  R1  ", 3), (1, "RESISTOR", 1), (2, "Generic", 0), (4, "", 0)] {
+    for (kind, query, count) in [(0, "", 4), (2, "", 1), (0, "  R1  ", 4), (1, "RESISTOR", 1), (2, "Generic", 0), (4, "", 0)] {
         h.state_mut()
             .run_window_command(
                 &ctx,
@@ -30,7 +30,7 @@ fn inspected_project_rows_follow_type_query_and_category_visibility() {
         let inspected = app.inspect_library_workspace(state);
         let rows = inspected["items"].as_array().unwrap();
         assert_eq!(rows.len(), count, "type={kind}, query={query}, rows={rows:?}");
-        assert!(rows.iter().all(|row| row["item"]["key"]["kind"] != "category"));
+        assert_eq!(rows.iter().filter(|row| row["item"]["key"]["kind"] == "category").count(), usize::from(kind == 0));
         if kind == 2 && count == 1 {
             assert_eq!(rows[0]["item"]["key"]["id"], "resistor-0603");
             h.get_by_label("Project Footprint parts-demo/resistor-0603 r1");
@@ -91,6 +91,25 @@ fn where_used_preview_is_read_only_and_does_not_show_stale_rows() {
     assert!(h.query_all_by_label("Instances: 1").next().is_none());
     click(&mut h, "Where used");
     h.get_by_label("Instances: 2");
+}
+
+/// A category is an ordinary All-items row in both source and pinned Project browsing.
+#[test]
+fn where_used_category_is_reachable_from_source_and_offline_project() {
+    let mut h = fixture(1800.);
+    place(h.state_mut());
+    let snapshot = h.state().session.snapshot().unwrap();
+    click(&mut h, "Native Parts Demo");
+    click(&mut h, "Category parts-demo/resistor r1");
+    click(&mut h, "Where used");
+    h.get_by_label("R1 · Schematic only");
+    h.state_mut().session.execute(sources::REMOVE, &json!({"source":"example-parts"})).unwrap();
+    h.run();
+    click(&mut h, "Project libraries");
+    click(&mut h, "Project Category parts-demo/resistor r1");
+    click(&mut h, "Where used");
+    h.get_by_label("R1 · Schematic only");
+    assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
 }
 
 /// Project selection has no source authority; explicit copies use pinned geometry when offline.

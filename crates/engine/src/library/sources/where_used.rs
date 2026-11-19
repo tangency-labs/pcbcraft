@@ -30,6 +30,9 @@ pub struct Instance {
     pub part: Option<Reference>,
     /// The exact queried footprint is the instance's desired package.
     pub assigned: bool,
+    /// The desired package is logical intent only because the component is excluded from the board.
+    /// A real retained placement, if any, is still reported separately in `board`.
+    pub assignment_excluded: bool,
     pub board: Option<BoardUse>,
 }
 
@@ -96,9 +99,13 @@ fn instances(project: &Project, key: &Key) -> Vec<Instance> {
                 let item = &part.resolved.definition;
                 matches(&item.library, &item.id, item.revision)
             }),
-            Kind::Category => {
-                selection.and_then(|part| part.resolved.category.as_ref()).is_some_and(|item| matches(&item.library, &item.id, item.revision))
-            }
+            Kind::Category => match selection {
+                Some(part) => part.resolved.category.as_ref().is_some_and(|item| matches(&item.library, &item.id, item.revision)),
+                None => component.definition.category.as_ref().is_some_and(|binding| {
+                    let item = &binding.definition;
+                    matches(&item.library, &item.id, item.revision)
+                }),
+            },
             Kind::ManufacturerPart => {
                 selection.and_then(|part| part.manufacturer.as_ref()).is_some_and(|item| matches(&item.library, &item.id, item.revision))
             }
@@ -106,7 +113,8 @@ fn instances(project: &Project, key: &Key) -> Vec<Instance> {
         if used {
             let mut row = instance(project, ordinal);
             row.assigned = assigned;
-            if assigned {
+            row.assignment_excluded = assigned && !project.component_is_board_eligible(ordinal);
+            if assigned && !row.assignment_excluded {
                 row.board =
                     board.map(|board| BoardUse { id: board.target.board, name: board.name().into(), footprint: None, pending_removal: false });
             }
@@ -148,6 +156,7 @@ fn instance(project: &Project, ordinal: u64) -> Instance {
         reference: reference.map(str::to_owned),
         part: component.and_then(|component| component.part.as_ref()).map(|part| part.resolved.definition.reference()),
         assigned: false,
+        assignment_excluded: false,
         board: None,
     }
 }

@@ -838,7 +838,7 @@ impl PcbApp {
             state.sync_preview();
         }
         let mut latest: BTreeMap<(Kind, &str), &Item> = BTreeMap::new();
-        for item in all.iter().filter(|i| i.key.kind != Kind::Category) {
+        for item in all {
             let key = (item.key.kind, item.key.id.as_str());
             if latest.get(&key).is_none_or(|old| old.key.revision < item.key.revision) {
                 latest.insert(key, item);

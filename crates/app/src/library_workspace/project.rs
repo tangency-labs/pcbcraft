@@ -66,6 +66,7 @@ impl PcbApp {
                         Some(board) if board.pending_removal => format!("{} (pending removal)", board.name),
                         Some(board) if board.footprint.is_some() => board.name.clone(),
                         Some(board) => format!("{} (assigned, not placed)", board.name),
+                        None if row.assignment_excluded => "Assigned, excluded from board".into(),
                         None if row.assigned => "Assigned, no board".into(),
                         None => "Schematic only".into(),
                     };
@@ -224,10 +225,7 @@ impl PcbApp {
         let project = self.session.project().map(|project| project.id());
         let open = !state.closed.contains("Project");
         let inventory = self.project_library_inventory();
-        let count = inventory
-            .as_ref()
-            .map(|inventory| inventory.entries().filter(|entry| entry.item.key.kind != Kind::Category).count().to_string())
-            .unwrap_or_default();
+        let count = inventory.as_ref().map(|inventory| inventory.entries().count().to_string()).unwrap_or_default();
         let (clicked, fold) = chrome::tree(
             ui,
             ui.make_persistent_id("project_libraries"),
@@ -260,17 +258,10 @@ impl PcbApp {
             );
             return;
         };
-        let libraries: BTreeSet<String> = inventory
-            .entries()
-            .filter(|entry| entry.item.key.kind != Kind::Category)
-            .map(|entry| project_group(&entry.item.key.library).to_owned())
-            .collect();
+        let libraries: BTreeSet<String> = inventory.entries().map(|entry| project_group(&entry.item.key.library).to_owned()).collect();
         for library in libraries {
             let name = self.project_collection_name(&inventory, &library, loaded);
-            let entries: Vec<_> = inventory
-                .entries()
-                .filter(|entry| project_group(&entry.item.key.library) == library && entry.item.key.kind != Kind::Category)
-                .collect();
+            let entries: Vec<_> = inventory.entries().filter(|entry| project_group(&entry.item.key.library) == library).collect();
             let id = format!("project/{library}");
             let open = state.opened.contains(&id);
             let (clicked, fold) = chrome::tree(
@@ -427,8 +418,7 @@ fn project_rows<'a>(state: &State, inventory: &'a Inventory) -> Vec<&'a Entry> {
         .entries()
         .filter(|entry| {
             let item = &entry.item;
-            item.key.kind != Kind::Category
-                && state.includes_project(&item.key)
+            state.includes_project(&item.key)
                 && (state.kind == 0 || state.kind == kind_index(item.key.kind))
                 && format!("{} {} {} {}", item.name, item.key.library, item.key.id, entry.used_by.iter().cloned().collect::<Vec<_>>().join(" "))
                     .to_lowercase()

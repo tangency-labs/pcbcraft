@@ -181,7 +181,10 @@ separate work.
 ## Find where a revision is used
 
 With a project open, select an exact item revision in Parts Library and click
-**Where used** in Preview. This lists actual instances with their reference
+**Where used** in Preview. Category rows are available in **All** for loaded
+sources and for categories pinned in the Project inventory. A standalone symbol
+uses its exact category binding; a selected native part uses its own category,
+not the symbol's default. The report lists actual instances with their reference
 designators and board names where applicable. Run the query again after a project
 or source change. The Project table's **Used by** column instead describes the
 saved dependency inventory; it can include unselected package options and
@@ -200,9 +203,12 @@ stable `part_instance` ID, display `reference`, optional generic `part` address,
 and optional `board` with its `id`, `name`, `footprint` placement ID (or null)
 and `pending_removal` flag. For footprint queries, `assigned` distinguishes a
 current exact package choice from a physical footprint still awaiting a
-reviewed replacement or removal. A retained placement keeps its former instance
-ID and reference; a boardless assignment has `board: null`. Unselected package
-options and history with no placement do not count as uses.
+reviewed replacement or removal. `assignment_excluded` marks a desired package
+for a component excluded from the board. It has `board: null` unless a real
+placement of that revision is still pending removal. A retained placement keeps
+its former instance ID and reference; a boardless assignment also has
+`board: null`. Unselected package options and history with no placement do not
+count as uses.
 
 The report also returns `project`, runtime `revision`, `catalog_generation` and
 the requested `item`. `revision_info` follows [the loaded-source comparison

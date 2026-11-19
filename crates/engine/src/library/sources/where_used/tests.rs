@@ -1,16 +1,16 @@
 use super::*;
 use crate::{
-    DELETE_SYMBOL, INITIALIZE_UPDATE_BASELINE, PLACE_ASSIGNED_FOOTPRINT,
+    APPLY_UPDATE, DELETE_SYMBOL, INITIALIZE_UPDATE_BASELINE, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL, PREVIEW_UPDATE, SET_SYMBOL_FIELDS,
     authoring::{
         Item, Kind as DraftKind,
         publishing::{new_library, prepare},
     },
     library::{
-        parts::PartDefinition,
-        sources::{LOAD, REMOVE, WHERE_USED, part_digest},
+        parts::{CategoryBinding, PartDefinition},
+        sources::{LOAD, REMOVE, WHERE_USED, part_digest, symbol_digest},
     },
     part_instances::PLACE_PART,
-    persistence::encode_documents,
+    persistence::{decode_documents, encode_documents},
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -20,6 +20,8 @@ fn fixture(create_board: bool) -> (Session, Key) {
     let manifest = new_library("where-used-demo", "Where-used fixture", "MIT OR Apache-2.0").unwrap();
     let mut drawing = Item::new(DraftKind::Symbol).unwrap();
     drawing.id = "drawing".into();
+    let category = |id: &str| Reference { library: "where-used-demo".into(), id: id.into(), revision: 1 };
+    drawing.category = Some(CategoryBinding { definition: category("symbol-default"), primary_value: None });
     let mut package = Item::new(DraftKind::Footprint).unwrap();
     package.id = "package".into();
     let drawing = prepare(Arc::new(drawing), &manifest, 0, None, false).unwrap();
@@ -31,19 +33,27 @@ fn fixture(create_board: bool) -> (Session, Key) {
     documents.extend(first.documents().clone());
     documents.extend(later.documents().clone());
     documents.insert("library.json".into(), manifest);
+    for id in ["symbol-default", "native-category"] {
+        documents.insert(
+            format!("categories/{id}.json"),
+            json!({"format":"pcbcraft-category/1","library":"where-used-demo","id":id,"revision":1,"name":id,
+                "license":"MIT OR Apache-2.0","fields":{"demo:label":{"name":"Label","value_type":{"type":"text"}}}})
+            .to_string(),
+        );
+    }
     let key = Key { library: first.item().library.clone(), kind: Kind::Footprint, id: first.item().id.clone(), revision: 1 };
     for id in ["alpha", "beta"] {
         let variants = |revision| {
             json!({"name":format!("Package {revision}"),"footprint":{"library":key.library,"id":key.id,"revision":revision},
             "mapping":{"1":["1"],"2":["2"]}})
         };
-        let part = PartDefinition::read(
-            &json!({"format":"pcbcraft-part/1","library":key.library,"id":id,"revision":1,
+        let mut record = json!({"format":"pcbcraft-part/1","library":key.library,"id":id,"revision":1,
             "name":id,"license":"MIT OR Apache-2.0","source":{"kind":"original","reference":"Where-used test","locator":"synthetic"},
-            "symbol":{"library":key.library,"id":drawing.item().id,"revision":1},"packages":{"first":variants(1),"later":variants(2)}})
-            .to_string(),
-        )
-        .unwrap();
+            "symbol":{"library":key.library,"id":drawing.item().id,"revision":1},"packages":{"first":variants(1),"later":variants(2)}});
+        if id == "alpha" {
+            record["category"] = json!({"definition": category("native-category")});
+        }
+        let part = PartDefinition::read(&record.to_string()).unwrap();
         documents.insert(format!("parts/{id}.json"), part.encode().unwrap());
     }
     let mut session = Session::default();
@@ -153,6 +163,70 @@ fn where_used_reports_the_retained_physical_placement() {
     assert!(retained.part.is_none());
     assert_eq!(retained.board.as_ref().unwrap().footprint, before.instances[0].board.as_ref().unwrap().footprint);
     assert!(retained.board.as_ref().unwrap().pending_removal);
+}
+
+/// A standalone symbol keeps its exact category after reopening offline. Native parts
+/// use their own category, including no category, rather than inheriting the drawing default.
+#[test]
+fn where_used_uses_offline_symbol_category_only_without_native_part() {
+    let (mut session, key) = fixture(false);
+    let definition = &session.project().unwrap().components().next().unwrap().definition;
+    let digest = symbol_digest(definition).unwrap();
+    session
+        .apply(
+            PLACE_SYMBOL,
+            &json!({"library":key.library,"definition":"drawing","definition_revision":1,
+            "definition_digest":digest,"x_nm":80_000_000,"y_nm":0,"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let id = session.project().unwrap().components().last().unwrap().id();
+    let bytes = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut offline = Session::default();
+    offline.open_snapshot(decode_documents(&bytes).unwrap());
+    let category = |id: &str, revision| Key { kind: Kind::Category, id: id.into(), revision, ..key.clone() };
+    let standalone = offline.library_where_used(&category("symbol-default", 1)).unwrap();
+    assert_eq!(standalone.instances.len(), 1);
+    assert_eq!(standalone.instances[0].part_instance, id);
+    assert!(standalone.instances[0].part.is_none());
+    assert_eq!(standalone.newest_revision, None);
+    assert!(offline.library_where_used(&category("symbol-default", 2)).unwrap().instances.is_empty());
+    let native = offline.library_where_used(&category("native-category", 1)).unwrap();
+    assert_eq!(native.instances.len(), 2);
+    assert!(native.instances.iter().all(|row| row.part.as_ref().is_some_and(|part| part.id == "alpha")));
+}
+
+/// Exclusion preserves authored package intent, but only a real retained placement
+/// belongs to the board until the reviewed removal is applied.
+#[test]
+fn where_used_distinguishes_excluded_assignment_from_retained_board_placement() {
+    let (mut session, key) = fixture(true);
+    let original = session.library_where_used(&key).unwrap();
+    let original_board = original.instances[0].board.as_ref().unwrap();
+    session.apply(INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
+    let project = session.project().unwrap();
+    let component = project.components().next().unwrap();
+    let symbol = project.symbols()[0].id();
+    let mut metadata = serde_json::to_value(&component.metadata).unwrap();
+    metadata["attributes"]["exclude_from_board"] = json!(true);
+    let fields = json!({"symbol":symbol,"reference":component.reference,"value":component.value,
+        "metadata":metadata,"expected_revision":session.revision()});
+    session.apply(SET_SYMBOL_FIELDS, &fields).unwrap();
+    let before = session.library_where_used(&key).unwrap();
+    let retained = &before.instances[0];
+    assert!(retained.assigned && retained.assignment_excluded);
+    let board = retained.board.as_ref().unwrap();
+    assert!(board.pending_removal);
+    assert_eq!(board.footprint, original_board.footprint);
+    assert_eq!(board.id, original_board.id);
+    let plan = session.execute(PREVIEW_UPDATE, &json!({"expected_revision":session.revision()})).unwrap();
+    let token = &plan["board_update_preview"]["plan_token"];
+    session.apply(APPLY_UPDATE, &json!({"plan_token":token,"expected_revision":session.revision()})).unwrap();
+    let after = session.library_where_used(&key).unwrap();
+    let excluded = &after.instances[0];
+    assert_eq!(excluded.part_instance, retained.part_instance);
+    assert!(excluded.assigned && excluded.assignment_excluded);
+    assert!(excluded.board.is_none());
+    assert!(after.instances[1].board.as_ref().unwrap().footprint.is_some());
 }
 
 /// An unknown but valid address returns no uses; malformed addresses and no project are errors.
