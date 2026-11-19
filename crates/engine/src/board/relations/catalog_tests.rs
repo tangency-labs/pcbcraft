@@ -44,6 +44,7 @@ fn a_cat_ref_native_correspondence_pad_changes_and_choice_binding() {
         let mut s = fixture(true);
         let f = pick(&mut s, 0, "pad.center", Some("1"));
         let id = add(&mut s, "horizontal", origin(), f.clone());
+        let authored = s.project().unwrap().board.relations.as_ref().unwrap().relations[0].value.unwrap();
         let mut d = pin(&s);
         let mut mapping = json!({"1":"1","2":"2"});
         if case != "same_pin" && case != "swap" {
@@ -119,7 +120,21 @@ fn a_cat_ref_native_correspondence_pad_changes_and_choice_binding() {
             apply(&mut s, &first);
         }
         let status = if !corresponds || case == "keep_lost" { "lost" } else { "reference" };
-        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], status);
+        let result = run(&mut s, LIST, json!({})).unwrap();
+        assert_eq!(result["relations"][0]["status"], status);
+        if matches!(case, "move" | "repick") {
+            let signed = result["relations"][0]["measure"]["signed_nm"].as_i64().unwrap();
+            assert_ne!(signed, authored);
+            let saved = bytes(&s);
+            let path = crate::persistence::test_board_path(&saved);
+            let document: Value = serde_json::from_slice(&saved[&path]).unwrap();
+            let row = &document["relations"]["relations"][0];
+            // Automatic correspondence updates the exact address, not the authored literal.
+            // Deliberate re-pick, in contrast, writes the newly measured magnitude and side.
+            let (value, side) = if case == "move" { (authored, 1) } else { (signed.abs(), signed.signum()) };
+            assert_eq!(row["value"], value);
+            assert_eq!(row["side"], side);
+        }
     }
 }
 
@@ -211,7 +226,7 @@ fn a_cat_ref_explicit_eco_pick_cannot_disappear_into_other_pick_loss() {
     let row = add(&mut s, "horizontal", a.clone(), b.clone());
     let before = run(&mut s, LIST, json!({})).unwrap();
     let mut da = pin(&s);
-    let mut db = board::definition::basic_components("resistor-0603").unwrap();
+    let mut db: FootprintDefinition = board::definition::basic_components("resistor-0603").unwrap().as_ref().clone();
     da.revision += 1;
     db.revision += 1;
     db.pads.iter_mut().find(|p| p.number == "1").unwrap().number = "3".into();
@@ -256,7 +271,7 @@ fn a_cat_ref_explicit_eco_choice_does_not_capture_another_rows_default_loss() {
     stage(&mut s, d, json!({"1":"1","2":"2"}));
     let prior = eco(&mut s, json!({}));
     let candidate = s.checked_eco_candidate().unwrap();
-    assert_ne!(catalog::correspondence(s.project().unwrap(), candidate, &reference).unwrap(), reference);
+    assert_ne!(catalog::correspondence(s.project().unwrap(), &catalog::Resolver::new(candidate), &reference).unwrap(), reference);
     assert_eq!(prior["relation_detail"]["losses"][0]["id"], lost);
     let reviewed = eco(&mut s, json!({"remap_choices":[{"relation":selected,"pick":1,"choice":{"kind":"correspond"}}]}));
     let detail = &reviewed["relation_detail"];

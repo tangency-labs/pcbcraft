@@ -60,6 +60,7 @@ impl RelationAdvisory {
         if relations.is_empty() {
             return None;
         }
+        let resolver = catalog::Resolver::new(project);
         Some(Self(
             relations
                 .iter()
@@ -69,7 +70,7 @@ impl RelationAdvisory {
                         State::Lost { since_revision } => {
                             Status::Lost { loss: Loss::LostReference { since_revision, last_resolved: row.last_resolved } }
                         }
-                        State::Ok => match catalog::live_measure(project, row) {
+                        State::Ok => match catalog::live_measure(&resolver, row) {
                             Some(measure) if row.suppressed => Status::Suppressed { measure: measure.for_report() },
                             Some(measure) => Status::Reference { measure: measure.for_report() },
                             None => Status::Lost { loss: Loss::UnresolvedReference },

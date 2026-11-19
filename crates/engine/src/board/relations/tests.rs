@@ -149,16 +149,20 @@ fn a_cat_ref_ordered_measurement_and_refusal() {
     let b = pick(&mut s, 1, "pad.edge", Some("1"));
     let a: Reference = serde_json::from_value(a).unwrap();
     let b: Reference = serde_json::from_value(b).unwrap();
-    let p = s.project().unwrap();
-    let Some(Measure::Projection { signed_nm: d, .. }) = catalog::measure(p, Kind::PointEdge, &[a.clone(), b.clone()]) else { panic!("point-edge") };
-    let Some(Measure::Projection { signed_nm: r, .. }) = catalog::measure(p, Kind::PointEdge, &[b.clone(), a.clone()]) else { panic!("edge-point") };
+    let resolver = catalog::Resolver::new(s.project().unwrap());
+    let Some(Measure::Projection { signed_nm: d, .. }) = catalog::measure(&resolver, Kind::PointEdge, &[a.clone(), b.clone()]) else {
+        panic!("point-edge")
+    };
+    let Some(Measure::Projection { signed_nm: r, .. }) = catalog::measure(&resolver, Kind::PointEdge, &[b.clone(), a.clone()]) else {
+        panic!("edge-point")
+    };
     assert_ne!(d, 0);
     assert_eq!(d, -r);
-    let Witness::Segment { a: edge_a, b: edge_b } = catalog::resolve(p, &b).unwrap() else { panic!("edge") };
-    let Witness::Point { at } = catalog::resolve(p, &a).unwrap() else { panic!("point") };
+    let Witness::Segment { a: edge_a, b: edge_b } = catalog::resolve(&resolver, &b).unwrap() else { panic!("edge") };
+    let Witness::Point { at } = catalog::resolve(&resolver, &a).unwrap() else { panic!("point") };
     assert_eq!(edge_a.x_nm, edge_b.x_nm);
     assert_eq!(d, edge_a.x_nm - at.x_nm);
-    let Some(Measure::Aligned { distance_nm, .. }) = catalog::measure(p, Kind::Aligned, &[Reference::BoardOrigin {}, a.clone()]) else {
+    let Some(Measure::Aligned { distance_nm, .. }) = catalog::measure(&resolver, Kind::Aligned, &[Reference::BoardOrigin {}, a.clone()]) else {
         panic!("aligned")
     };
     assert!((distance_nm - 3_000_000_f64.hypot(2_000_000.)).abs() < 1e-9);
@@ -166,9 +170,13 @@ fn a_cat_ref_ordered_measurement_and_refusal() {
     run(&mut s, crate::SET_FOOTPRINT_TRANSFORM, json!({"footprint":format!("footprint-{fp}"),"x_nm":at.x_nm,"y_nm":10_000_000,"rotation":0}))
         .unwrap();
     assert!(10_000_000 > edge_a.y_nm.max(edge_b.y_nm));
-    let p = s.project().unwrap();
-    assert!(matches!(catalog::measure(p, Kind::PointEdge, &[a.clone(), b.clone()]), Some(Measure::Projection {signed_nm,..}) if signed_nm == d));
-    assert!(matches!(catalog::measure(p, Kind::PointEdge, &[b.clone(), a.clone()]), Some(Measure::Projection {signed_nm,..}) if signed_nm == -d));
+    let resolver = catalog::Resolver::new(s.project().unwrap());
+    assert!(
+        matches!(catalog::measure(&resolver, Kind::PointEdge, &[a.clone(), b.clone()]), Some(Measure::Projection {signed_nm,..}) if signed_nm == d)
+    );
+    assert!(
+        matches!(catalog::measure(&resolver, Kind::PointEdge, &[b.clone(), a.clone()]), Some(Measure::Projection {signed_nm,..}) if signed_nm == -d)
+    );
     let same = pick(&mut s, 0, "pad.center", Some("1"));
     let error = unchanged(&mut s, |s| run(s, ADD, json!({"relation":{"kind":"horizontal","refs":[a,same]}})));
     assert_eq!(error.details()["reason"], "lost_reference");
@@ -177,14 +185,14 @@ fn a_cat_ref_ordered_measurement_and_refusal() {
         _ => panic!(),
     };
     let a: Reference = serde_json::from_value(pick(&mut s, 0, "pad.edge", Some("1"))).unwrap();
-    let p = s.project().unwrap();
-    assert!(catalog::measure(p, Kind::Gap, &[edge(&a, Side::Top), edge(&b, Side::Left)]).is_none());
+    let resolver = catalog::Resolver::new(s.project().unwrap());
+    assert!(catalog::measure(&resolver, Kind::Gap, &[edge(&a, Side::Top), edge(&b, Side::Left)]).is_none());
     let (left, right) = (edge(&a, Side::Right), edge(&b, Side::Left));
-    let Some(Measure::Projection { signed_nm: gap, .. }) = catalog::measure(p, Kind::Gap, &[left.clone(), right.clone()]) else {
+    let Some(Measure::Projection { signed_nm: gap, .. }) = catalog::measure(&resolver, Kind::Gap, &[left.clone(), right.clone()]) else {
         panic!("parallel gap")
     };
     assert!(gap > 0);
-    assert!(matches!(catalog::measure(p, Kind::Gap, &[right,left]), Some(Measure::Projection {signed_nm,..}) if signed_nm == -gap));
+    assert!(matches!(catalog::measure(&resolver, Kind::Gap, &[right,left]), Some(Measure::Projection {signed_nm,..}) if signed_nm == -gap));
 }
 
 /// F1 round-trips the original closed tags, adds no clipboard bytes, and downgrades only once
@@ -795,7 +803,7 @@ fn a_preview_edge_quarter_turn_repick_repairs_ordered_gap() {
     let replacement = edge(&mut s, original[1].id, "top");
     let incompatible = edge(&mut s, original[1].id, "right");
     let typed = |r: &Value| serde_json::from_value::<Reference>(r.clone()).unwrap();
-    assert!(catalog::measure(s.project().unwrap(), Kind::Gap, &[typed(&a), typed(&replacement)]).is_none());
+    assert!(catalog::measure(&catalog::Resolver::new(s.project().unwrap()), Kind::Gap, &[typed(&a), typed(&replacement)]).is_none());
     let row = add(&mut s, "gap", a.clone(), b.clone());
     let base = s.snapshot().unwrap();
     assert!(base.board.tracks.is_empty() && base.board.vias.is_empty());
@@ -811,9 +819,10 @@ fn a_preview_edge_quarter_turn_repick_repairs_ordered_gap() {
     assert_eq!(loss["disclosure"]["losses"].as_array().unwrap().len(), 1);
     assert_eq!(loss["disclosure"]["losses"][0]["id"], row);
     assert_eq!(loss["disclosure"]["remaps"], json!([]));
-    assert_eq!(catalog::correspondence(&base, &lost, &typed(&b)), Some(typed(&b)));
-    assert!(catalog::resolve(&lost, &typed(&a)).is_some());
-    assert!(catalog::measure(&lost, Kind::Gap, &[typed(&a), typed(&b)]).is_none());
+    let loss_resolver = catalog::Resolver::new(&lost);
+    assert_eq!(catalog::correspondence(&base, &loss_resolver, &typed(&b)), Some(typed(&b)));
+    assert!(catalog::resolve(&loss_resolver, &typed(&a)).is_some());
+    assert!(catalog::measure(&loss_resolver, Kind::Gap, &[typed(&a), typed(&b)]).is_none());
     let repreview = |s: &mut Session, id: &Value, pick: &Value| {
         run(
             s,
@@ -843,7 +852,7 @@ fn a_preview_edge_quarter_turn_repick_repairs_ordered_gap() {
     assert_eq!(remap["new"], replacement);
     assert_eq!(remap["before"], history[1]);
     let pair = [typed(&a), typed(&replacement)];
-    let measured = catalog::measure(&candidate, Kind::Gap, &pair).unwrap();
+    let measured = catalog::measure(&catalog::Resolver::new(&candidate), Kind::Gap, &pair).unwrap();
     assert!(matches!(measured, Measure::Projection { axis: catalog::Axis::X, signed_nm, .. } if signed_nm > 0));
     assert_eq!(remap["after"], json!(measured.witnesses()[1]));
     assert_eq!(lost.board.footprints(), candidate.board.footprints());
@@ -883,6 +892,100 @@ fn a_preview_edge_quarter_turn_repick_repairs_ordered_gap() {
     let events = observer.0.lock().unwrap();
     assert_eq!(events.len(), 1);
     assert!(Arc::ptr_eq(&events[0].project, &candidate));
+}
+
+/// A native transform may remeasure, but an explicit replacement pick must author the
+/// exact ordered final pair. Invalid authoring must not revoke the previous review.
+#[test]
+fn a_preview_edge_repick_authors_final_projection_and_align_predicate() {
+    let mut s = fixture(false);
+    let a = pick(&mut s, 0, "fp.origin", None);
+    let b = pick(&mut s, 1, "fp.origin", None);
+    let pad = pick(&mut s, 1, "pad.center", Some("1"));
+    let horizontal = add(&mut s, "horizontal", a.clone(), b.clone());
+    let align = add(&mut s, "align_h", a.clone(), b);
+    let base = s.snapshot().unwrap();
+    assert!(base.board.tracks.is_empty() && base.board.vias.is_empty());
+    let base_bytes = bytes(&s);
+    let f = base.board.footprints();
+    let Witness::Point { at } = catalog::resolve(&catalog::Resolver::new(&base), &serde_json::from_value(pad.clone()).unwrap()).unwrap() else {
+        panic!("pad centre must be a point")
+    };
+    let pad_dx = at.x_nm - f[1].x_nm;
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let native =
+        |signed_nm: i64| json!({"footprint":format!("footprint-{}",f[1].id),"x_nm":f[0].x_nm - pad_dx + signed_nm,"y_nm":8_000_000,"rotation":0});
+    let repick = |s: &mut Session, id: &Value, native: &Value| {
+        run(
+            s,
+            PREVIEW,
+            json!({"intent":{"command":crate::SET_FOOTPRINT_TRANSFORM,"params":native},
+            "remap_choices":[{"relation":id,"pick":1,"choice":{"kind":"repick","reference":pad}}]}),
+        )
+    };
+    for (id, kind, x, message) in [(&horizontal, "horizontal", 0, "Use Align for zero"), (&align, "align_h", -2_000_000, "Align requires a zero")] {
+        let native = native(x);
+        let prior = reviewed(&mut s, crate::SET_FOOTPRINT_TRANSFORM, native.clone());
+        assert_eq!(prior["disclosure"]["losses"], json!([]));
+        assert_eq!(prior["disclosure"]["remaps"], json!([]));
+        let candidate = s.checked_generic_candidate().unwrap().clone();
+        let mut lookup = Session::default();
+        lookup.open_snapshot(candidate.clone());
+        let draft = json!({"kind":kind,"refs":[a,pad]});
+        let add_error = unchanged(&mut lookup, |s| run(s, ADD, json!({"relation":draft})));
+        let edit_error = unchanged(&mut lookup, |s| run(s, EDIT, json!({"id":id,"edit":{"repick":draft}})));
+        let error = unchanged(&mut s, |s| repick(s, id, &native));
+        assert!(matches!(error, CommandError::InvalidParams(_)));
+        assert!(error.to_string().contains(message));
+        assert_eq!(error.to_string(), add_error.to_string());
+        assert_eq!(error.to_string(), edit_error.to_string());
+        assert!(Arc::ptr_eq(&candidate, s.checked_generic_candidate().unwrap()));
+        let mut prior_session = Session::default();
+        prior_session.open_snapshot(base.clone());
+        // The ordinary native transform is allowed even when that row now measures differently.
+        let control = reviewed(&mut prior_session, crate::SET_FOOTPRINT_TRANSFORM, native);
+        run(&mut prior_session, APPLY, decision(&control)).unwrap();
+        let plain = bytes(&prior_session);
+        let board: Value = serde_json::from_slice(&plain[&test_board_path(&plain)]).unwrap();
+        assert_eq!(board["relations"]["relations"][0]["value"], 10_000_000);
+        assert_eq!(board["relations"]["relations"][0]["side"], 1);
+        run(&mut s, CANCEL, json!({"token":prior["token"]})).unwrap();
+    }
+    let native = native(-2_000_000);
+    let reported = repick(&mut s, &horizontal, &native).unwrap()["relation_preview"].clone();
+    let candidate = s.checked_generic_candidate().unwrap().clone();
+    assert_eq!(reported["disclosure"]["losses"], json!([]));
+    assert_eq!(reported["disclosure"]["remaps"].as_array().unwrap().len(), 1);
+    assert_eq!(reported["disclosure"]["remaps"][0]["new"], pad);
+    for (key, value) in [("confirm_remaps", json!([])), ("accept_loss", json!([horizontal]))] {
+        let mut wrong = decision(&reported);
+        wrong[key] = value;
+        unchanged(&mut s, |s| run(s, APPLY, wrong));
+        assert!(Arc::ptr_eq(&candidate, s.checked_generic_candidate().unwrap()));
+    }
+    assert_eq!(bytes(&s), base_bytes);
+    assert!(observer.0.lock().unwrap().is_empty());
+    let expected = encode_documents(candidate.clone()).unwrap();
+    let (_, ops) = trace(|| run(&mut s, APPLY, decision(&reported)).unwrap());
+    assert_eq!(ops, [Op::Publish(RelationStage::Outer)]);
+    assert!(Arc::ptr_eq(&candidate, &s.snapshot().unwrap()));
+    assert_eq!(bytes(&s), expected);
+    let disk: Value = serde_json::from_slice(&expected[&test_board_path(&expected)]).unwrap();
+    let row = &disk["relations"]["relations"][0];
+    assert_eq!(row["refs"], json!([a, pad]));
+    assert_eq!(row["value"], 2_000_000);
+    assert_eq!(row["side"], -1);
+    let reopened = decode_documents(&expected).unwrap();
+    let mut native_poses = f.to_vec();
+    native_poses[1].x_nm = native["x_nm"].as_i64().unwrap();
+    native_poses[1].y_nm = native["y_nm"].as_i64().unwrap();
+    assert_eq!(reopened.board.footprints(), native_poses);
+    assert_eq!(reopened.board.tracks, base.board.tracks);
+    assert_eq!(reopened.board.vias, base.board.vias);
+    assert_eq!(encode_documents(reopened).unwrap(), expected);
+    assert_eq!(observer.0.lock().unwrap().len(), 1);
+    unchanged(&mut s, |s| run(s, APPLY, decision(&reported)));
 }
 
 /// Both engine checkers (and the query) see one typed advisory from the captured snapshot.
@@ -956,6 +1059,106 @@ fn a_drc_relation_advisory_matches_sync_resumable_and_captured_history() {
         assert!(steps < 10_000);
     }
     assert_eq!(&json!(captured.take_report().unwrap()), sync);
+}
+
+/// All live rows share the native projection of their exact source; outline removal must
+/// cache unavailability and latch display witnesses without using them as geometry.
+#[test]
+fn a_native_outline_datum_projects_once_per_exact_snapshot() {
+    use super::probes::trace_native_datum;
+
+    let mut s = fixture(false);
+    let check = json!({"clearance_nm":300_000});
+    let projections = |ops: &[Op]| ops.iter().filter(|op| **op == Op::NativeDatum).count();
+    let (_, ops) = trace_native_datum(|| run(&mut s, crate::CHECK_DESIGN, check.clone()).unwrap());
+    assert_eq!(projections(&ops), 0);
+    board::drc::tests::outline(&mut s);
+    let board = s.project().unwrap().board_target().unwrap().board;
+    run(&mut s, crate::SET_PLACEMENT_ORIGIN, json!({"board":board,"origin":{"kind":"outline_lower_left"}})).unwrap();
+    for i in 0..3 {
+        let r = pick(&mut s, i, "fp.origin", None);
+        add(&mut s, "horizontal", origin(), r);
+    }
+    let snapshot = s.snapshot().unwrap();
+    let saved = bytes(&s);
+    let poses = snapshot.board.footprints().to_vec();
+    let drawing = snapshot.board.drawings.as_ref().unwrap().items[0].id;
+    let check_sync = |s: &mut Session| trace_native_datum(|| run(s, crate::CHECK_DESIGN, check.clone()).unwrap()["design_check"].clone());
+    let (sync, ops) = check_sync(&mut s);
+    assert_eq!(projections(&ops), 1);
+    let (listed, ops) = trace_native_datum(|| run(&mut s, LIST, json!({})).unwrap());
+    assert_eq!(projections(&ops), 1);
+    assert_eq!(sync["relations"], listed["relations"]);
+    let rows = sync["relations"].as_array().unwrap();
+    assert_eq!(rows.len(), 3);
+    let before_x = rows[0]["measure"]["witnesses"][0]["at"]["x_nm"].as_i64().unwrap();
+    let finish = |mut job: board::drc::CheckJob| {
+        trace_native_datum(|| {
+            for _ in 0..10_000 {
+                if job.step(1) {
+                    return json!(job.take_report().unwrap());
+                }
+                assert!(job.take_report().is_none());
+            }
+            panic!("bounded small fixture did not complete");
+        })
+    };
+    let captured = s.design_check_job(&check).unwrap();
+    assert!(Arc::ptr_eq(&captured.source().snapshot, &snapshot));
+    assert_eq!(bytes(&s), saved);
+    let (_, ops) = trace_native_datum(|| {
+        run(&mut s, board::movement::MOVE_ITEMS, json!({"items":{"drawings":[drawing]},"dx_nm":1_000_000,"dy_nm":0})).unwrap();
+    });
+    // All candidate witnesses came from the moved outline, not the captured or saved one.
+    assert_eq!(projections(&ops), 1);
+    let (moved, ops) = check_sync(&mut s);
+    assert_eq!(projections(&ops), 1);
+    let moved_rows = moved["relations"].as_array().unwrap();
+    for (row, prior) in moved_rows.iter().zip(rows) {
+        assert_eq!(row["measure"]["witnesses"][0]["at"]["x_nm"], before_x + 1_000_000);
+        assert_eq!(row["measure"]["witnesses"][1], prior["measure"]["witnesses"][1]);
+    }
+    assert!(!captured.source().is_current(&s));
+    let (report, ops) = finish(captured);
+    assert_eq!(projections(&ops), 1);
+    assert_eq!(serde_json::to_vec(&report).unwrap(), serde_json::to_vec(&sync).unwrap());
+
+    let (loss, ops) = trace_native_datum(|| reviewed(&mut s, board::clipboard::DELETE, json!({"items":{"drawings":[drawing]}})));
+    assert_eq!(projections(&ops), 2, "one unavailable F′ projection and one live P projection");
+    let losses = loss["disclosure"]["losses"].as_array().unwrap();
+    assert_eq!(losses.len(), 3);
+    for (loss, row) in losses.iter().zip(moved_rows) {
+        assert_eq!(loss["id"], row["id"]);
+        assert_eq!(loss["last_resolved"], row["measure"]["witnesses"]);
+    }
+    let (_, ops) = trace_native_datum(|| run(&mut s, APPLY, decision(&loss)).unwrap());
+    assert_eq!(ops, [Op::Publish(RelationStage::Outer)]);
+    let (latched, ops) = check_sync(&mut s);
+    assert_eq!(projections(&ops), 0, "latched display needs no projection");
+    for row in latched["relations"].as_array().unwrap() {
+        assert_eq!(row["status"], "lost");
+        assert!(row.get("measure").is_none());
+    }
+    assert_eq!(s.project().unwrap().board.footprints(), poses);
+    let stored = bytes(&s);
+    assert_eq!(encode_documents(decode_documents(&stored).unwrap()).unwrap(), stored);
+
+    // A saved live row can be unresolved on inspection. Inject only the fixture's original
+    // live records into the now outline-free board to test this distinct read-only case.
+    let mut absent = s.project().unwrap().clone();
+    Arc::make_mut(&mut absent.board).relations = snapshot.board.relations.clone();
+    s.open_snapshot(Arc::new(absent));
+    let absent_bytes = bytes(&s);
+    let (sync, ops) = check_sync(&mut s);
+    assert_eq!(projections(&ops), 1);
+    let (job, ops) = finish(s.design_check_job(&check).unwrap());
+    assert_eq!(projections(&ops), 1);
+    assert_eq!(serde_json::to_vec(&job).unwrap(), serde_json::to_vec(&sync).unwrap());
+    for row in sync["relations"].as_array().unwrap() {
+        assert_eq!(row["reason"], "unresolved_reference");
+        assert!(row.get("last_resolved").is_none() && row.get("measure").is_none());
+    }
+    assert_eq!(bytes(&s), absent_bytes);
 }
 
 /// Disclose native participants, not merely the relation bodies. Alignment includes the

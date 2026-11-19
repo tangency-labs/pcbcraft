@@ -224,9 +224,11 @@ fn a_net_locality_layer_reorder_is_not_membership_change() {
     assert!(ops.iter().any(|op| matches!(op, Op::Marked { physical: true, electrical: false, .. })));
 }
 
+/// A long single island with only adjacent chain contacts, opposed by a disjoint grid
+/// of original copper removed through the production Delete Tracks command.
 #[test]
 fn a_net_locality_bulk_remote_tracks_use_vanished_broad_phase() {
-    use crate::board::track::Track;
+    use crate::board::{geometry::Contour, track::Track};
     use uuid::Uuid;
     let mut s = bridged_split(Bridge::Track);
     let a = fp(&s, 1);
@@ -237,16 +239,14 @@ fn a_net_locality_bulk_remote_tracks_use_vanished_broad_phase() {
     let mut p = s.project().unwrap().clone();
     let tracks = &mut Arc::make_mut(&mut p.board).tracks;
     let mut removed = Vec::new();
+    let mut end = at;
+    let mut chain = Vec::new();
     for i in 0..10_000 {
-        let y_nm = at.y_nm + i * 20_000;
-        tracks.push(Track {
-            id: Uuid::from_u128(1 + i as u128),
-            layer,
-            locked: false,
-            width_nm: 10_000,
-            start: Point { x_nm: at.x_nm, y_nm },
-            end: Point { x_nm: at.x_nm, y_nm: y_nm + 20_000 },
-        });
+        let start = end;
+        end.y_nm += 50_000; // Pitch exceeds the 10,000 nm copper diameter: skip-one pairs cannot touch.
+        let id = Uuid::from_u128(1 + i as u128);
+        chain.push(id);
+        tracks.push(Track { id, layer, locked: false, width_nm: 10_000, start, end });
         let id = Uuid::from_u128(10_001 + i as u128);
         let x_nm = -300_000_000 + (i % 100) * 50_000;
         let y_nm = -300_000_000 + (i / 100) * 50_000;
@@ -257,16 +257,30 @@ fn a_net_locality_bulk_remote_tracks_use_vanished_broad_phase() {
     let saved = crate::persistence::encode_documents(Arc::new(p)).unwrap();
     s.open_snapshot(crate::persistence::decode_documents(&saved).unwrap());
     assert_eq!(bytes(&s), saved);
-    assert_eq!(shorts(&s, 0).len(), 1);
-    let copper = view(&s).copper().unwrap();
-    assert_eq!(copper.pads[&(aid, "2".into())], copper.tracks[&Uuid::from_u128(10_000)]);
-    let before = view(&s).tracks().len();
+    let source = view(&s);
+    let indexed = |id| &source.tracks()[source.tracks().binary_search_by_key(&id, |track| track.id).unwrap()];
+    let contour = |track: &Track| Contour::capsule(track.start, track.end, track.width_nm as f64 / 2.);
+    // Native contour oracles on the round-tripped records. Monotone equal pitch makes
+    // skip-one the nearest nonadjacent pair; all farther apart have a larger gap.
+    for ids in chain.windows(3) {
+        let [a, b, c] = [contour(indexed(ids[0])), contour(indexed(ids[1])), contour(indexed(ids[2]))];
+        assert!(a.touches(&b) && b.touches(&c) && !a.touches(&c));
+    }
+    let old_short = shorts(&s, 0);
+    assert_eq!(old_short.len(), 1);
+    let copper = source.copper().unwrap();
+    let island = copper.pads[&(aid, "2".into())];
+    assert!(chain.iter().all(|id| copper.tracks[id] == island));
+    assert!(removed.iter().all(|id| copper.tracks[id] != island));
+    let before = source.tracks().len();
     let (r, ops) = trace(|| run(&mut s, crate::DELETE_TRACKS, json!({"tracks":removed})));
     r.unwrap();
     assert_eq!(view(&s).tracks().len(), before - 10_000);
     assert!(!ops.iter().any(|op| matches!(op, Op::Marked { .. })));
     assert!(ops.iter().any(|op| matches!(op, Op::VanishedCandidates{removed:10_000, queries, candidates:0} if *queries >= 10_000)), "{ops:?}");
-    assert_eq!(shorts(&s, 0).len(), 1);
+    let final_short = shorts(&s, 0);
+    assert_eq!(final_short.len(), 1);
+    assert_eq!(final_short[0].items, old_short[0].items);
 }
 
 /// Add native placements of one pinned synthetic 128-land definition. Only install the

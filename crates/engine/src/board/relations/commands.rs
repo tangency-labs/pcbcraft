@@ -318,7 +318,7 @@ fn id(value: &Value) -> Result<Uuid, CommandError> {
 /// Author a reference from live geometry only; the historical witness is engine-generated.
 fn picked(project: &crate::Project, id: Uuid, draft: Draft) -> Result<Relation, CommandError> {
     use transaction::{pick_literal, reason};
-    let measure = catalog::measure(project, draft.kind, &draft.refs)
+    let measure = catalog::measure(&catalog::Resolver::new(project), draft.kind, &draft.refs)
         .ok_or_else(|| reason("lost_reference", "Pick two distinct native bodies and compatible currently available features.", Value::Null))?;
     let (value, side) = pick_literal(draft.kind, measure)?;
     Ok(Relation {
@@ -431,7 +431,7 @@ impl Session {
                         catalog::features(project, f)
                     } else {
                         let r = Reference::BoardOrigin {};
-                        catalog::resolve(project, &r).map(|w| vec![(r, w)]).unwrap_or_default()
+                        catalog::resolve(&catalog::Resolver::new(project), &r).map(|w| vec![(r, w)]).unwrap_or_default()
                     };
                     let features: Vec<_> =
                         features.into_iter().map(|(reference, witness)| json!({"reference":reference,"witness":witness})).collect();

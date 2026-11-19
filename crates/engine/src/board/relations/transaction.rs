@@ -255,6 +255,8 @@ pub(crate) fn verify_final(
     report.affected = old != next;
     let mut affected = BTreeSet::new();
     let mut bodies = BTreeSet::new();
+    let prior_resolver = previous.map(catalog::Resolver::new);
+    let final_resolver = catalog::Resolver::new(candidate);
     for row in out.iter_mut().flat_map(|rows| &mut rows.relations) {
         let prior = by_id.remove(&row.id);
         if row.state != State::Ok {
@@ -264,10 +266,12 @@ pub(crate) fn verify_final(
         let mut proposal = Vec::new();
         let mut loses = false;
         let mut explicit_model = false;
+        let mut repick = false;
         if let Some((base, prior)) = previous.zip(prior).filter(|(_, prior)| prior.refs == row.refs && prior.state == State::Ok) {
             for (pick, old_ref) in prior.refs.iter().enumerate() {
-                let offered = catalog::correspondence(base, candidate, old_ref);
+                let offered = catalog::correspondence(base, &final_resolver, old_ref);
                 let choice = choices.remove(&(row.id, pick as u8));
+                repick |= matches!(choice, Some(RemapChoice::Repick { .. }));
                 explicit_model |= matches!(choice, Some(RemapChoice::Correspond | RemapChoice::Repick { .. }));
                 let proposed = match (offered, choice) {
                     (None, Some(RemapChoice::Correspond)) => {
@@ -280,7 +284,7 @@ pub(crate) fn verify_final(
                     }
                     (_, Some(RemapChoice::KeepLost)) => None,
                     (_, Some(RemapChoice::Repick { reference })) => {
-                        if reference == old_ref || catalog::resolve(candidate, reference).is_none() {
+                        if reference == old_ref || catalog::resolve(&final_resolver, reference).is_none() {
                             return Err(reason("lost_reference", "The replacement pick is not available.", Value::Null));
                         }
                         Some(reference.clone())
@@ -292,7 +296,7 @@ pub(crate) fn verify_final(
                     continue;
                 };
                 if &proposed != old_ref {
-                    let after = catalog::resolve(candidate, &proposed)
+                    let after = catalog::resolve(&final_resolver, &proposed)
                         .ok_or_else(|| reason("lost_reference", "The proposed reference is not available.", Value::Null))?;
                     proposal.push(Remap {
                         id: crate::fresh_id()?,
@@ -300,15 +304,20 @@ pub(crate) fn verify_final(
                         pick: pick as u8,
                         old: old_ref.clone(),
                         new: proposed.clone(),
-                        before: catalog::resolve(base, old_ref),
+                        before: prior_resolver.as_ref().and_then(|resolver| catalog::resolve(resolver, old_ref)),
                         after,
                     });
                 }
                 refs[pick] = proposed;
             }
         }
-        let measured = (!loses).then(|| catalog::measure(candidate, row.kind, &refs)).flatten();
+        let measured = (!loses).then(|| catalog::measure(&final_resolver, row.kind, &refs)).flatten();
         if let Some(measurement) = measured {
+            // Only an explicit re-pick authors the final ordered pair anew. Native motion
+            // and correspondence may change the live measure without changing its literal.
+            if repick {
+                (row.value, row.side) = pick_literal(row.kind, measurement)?;
+            }
             row.refs = refs;
             row.last_resolved = measurement.witnesses();
             if !proposal.is_empty() {
@@ -321,7 +330,10 @@ pub(crate) fn verify_final(
                     .filter_map(Reference::footprint)
                     .any(|(id, _)| catalog::footprint(&base.board, id) != catalog::footprint(&candidate.board, id))
             });
-            if prior != Some(&*row) || changed_body || previous.zip(prior).and_then(|(p, r)| catalog::live_measure(p, r)) != Some(measurement) {
+            if prior != Some(&*row)
+                || changed_body
+                || prior_resolver.as_ref().zip(prior).and_then(|(resolver, row)| catalog::live_measure(resolver, row)) != Some(measurement)
+            {
                 report.affected = true;
                 affected.extend(row.refs.iter().filter_map(|r| r.footprint().map(|(id, _)| id)));
             }
@@ -334,7 +346,7 @@ pub(crate) fn verify_final(
                 ));
             }
             row.state = State::Lost { since_revision: revision };
-            if let Some(old_witnesses) = previous.and_then(|p| catalog::live_measure(p, prior)).map(Measure::witnesses) {
+            if let Some(old_witnesses) = prior_resolver.as_ref().and_then(|resolver| catalog::live_measure(resolver, prior)).map(Measure::witnesses) {
                 row.last_resolved = old_witnesses;
             }
             report.affected = true;

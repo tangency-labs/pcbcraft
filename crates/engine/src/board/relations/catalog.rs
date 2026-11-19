@@ -8,6 +8,30 @@ use crate::board::{
 };
 use crate::{Project, schematic::PinNumber};
 use serde::Serialize;
+use std::cell::OnceCell;
+
+/// Operation-local resolver tied to one exact immutable snapshot. Cache even an unavailable
+/// native datum, and do not project it at all unless a pick needs it.
+pub(super) struct Resolver<'a> {
+    project: &'a Project,
+    datum: OnceCell<Option<Point>>,
+}
+
+impl<'a> Resolver<'a> {
+    pub(super) fn new(project: &'a Project) -> Self {
+        Self { project, datum: OnceCell::new() }
+    }
+
+    /// Resolve the native placement origin once, never from a saved relation witness.
+    fn datum(&self) -> Option<Point> {
+        *self.datum.get_or_init(|| {
+            #[cfg(test)]
+            super::probes::hit(super::probes::Op::NativeDatum);
+            let view = self.project.board_view(self.project.board_target()?)?;
+            view.placement_origin().ok().map(|origin| origin.at)
+        })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,12 +99,11 @@ fn segment(corners: [Point; 4], side: Side, radius: i64) -> Option<Witness> {
 }
 
 /// Resolve strictly on the live snapshot, without any saved witness or fallback search.
-pub(super) fn resolve(project: &Project, reference: &Reference) -> Option<Witness> {
+pub(super) fn resolve(resolver: &Resolver<'_>, reference: &Reference) -> Option<Witness> {
     let Some((id, key)) = reference.footprint() else {
-        let at = project.board_view(project.board_target()?)?.placement_origin().ok()?.at;
-        return Some(Witness::Point { at });
+        return resolver.datum().map(|at| Witness::Point { at });
     };
-    let board = &project.board;
+    let board = &resolver.project.board;
     let fp = footprint(board, id)?;
     if !key.matches(fp) {
         return None;
@@ -140,7 +163,8 @@ pub(super) fn features(project: &Project, fp: &Footprint) -> Vec<(Reference, Wit
     if let Some((rect, _)) = courtyard(&project.board, fp) {
         refs.extend(sides.map(|side| Reference::CourtyardEdge { fp: id, def: def.clone(), rect, side }));
     }
-    refs.into_iter().filter_map(|reference| Some((reference.clone(), resolve(project, &reference)?))).collect()
+    let resolver = Resolver::new(project);
+    refs.into_iter().filter_map(|reference| Some((reference.clone(), resolve(&resolver, &reference)?))).collect()
 }
 
 fn edge_axis(w: Witness) -> Option<Axis> {
@@ -164,11 +188,11 @@ impl Witness {
 
 /// Measure on native board axes, always second pick minus first; winding plays no role.
 /// Callers must go through this live-resolution entry; saved witnesses are not accepted.
-pub(super) fn measure(project: &Project, kind: Kind, refs: &[Reference; 2]) -> Option<Measure> {
+pub(super) fn measure(resolver: &Resolver<'_>, kind: Kind, refs: &[Reference; 2]) -> Option<Measure> {
     if !kind.accepts(refs) {
         return None;
     }
-    let witnesses = [resolve(project, &refs[0])?, resolve(project, &refs[1])?];
+    let witnesses = [resolve(resolver, &refs[0])?, resolve(resolver, &refs[1])?];
     let axis = match kind {
         Kind::Horizontal | Kind::AlignV => Axis::X,
         Kind::Vertical | Kind::AlignH => Axis::Y,
@@ -189,8 +213,8 @@ pub(super) fn measure(project: &Project, kind: Kind, refs: &[Reference; 2]) -> O
 }
 
 /// Read a live row without falling back to stored display geometry, including if suppressed.
-pub(super) fn live_measure(project: &Project, row: &Relation) -> Option<Measure> {
-    (row.state == State::Ok).then(|| measure(project, row.kind, &row.refs)).flatten()
+pub(super) fn live_measure(resolver: &Resolver<'_>, row: &Relation) -> Option<Measure> {
+    (row.state == State::Ok).then(|| measure(resolver, row.kind, &row.refs)).flatten()
 }
 
 impl Measure {
@@ -235,8 +259,9 @@ fn same_pad(previous: &Project, candidate: &Project, a: &Footprint, b: &Footprin
 
 /// On a pin revision transition only, propose the same offered feature on the same placement.
 /// An unchanged exact revision still permits native transforms, including bottom-side changes.
-pub(super) fn correspondence(previous: &Project, candidate: &Project, old: &Reference) -> Option<Reference> {
-    let Some((id, key)) = old.footprint() else { return resolve(candidate, old).map(|_| old.clone()) };
+pub(super) fn correspondence(previous: &Project, final_resolver: &Resolver<'_>, old: &Reference) -> Option<Reference> {
+    let Some((id, key)) = old.footprint() else { return resolve(final_resolver, old).map(|_| old.clone()) };
+    let candidate = final_resolver.project;
     let after = footprint(&candidate.board, id)?;
     let before = footprint(&previous.board, id)?;
     if !key.matches(before) || before.component != after.component {
@@ -252,7 +277,7 @@ pub(super) fn correspondence(previous: &Project, candidate: &Project, old: &Refe
         }
     }
     if key.matches(after) {
-        return resolve(candidate, old).map(|_| old.clone());
+        return resolve(final_resolver, old).map(|_| old.clone());
     }
     if old.pad().is_some_and(|number| !same_pad(previous, candidate, before, after, number)) {
         return None;
@@ -271,5 +296,5 @@ pub(super) fn correspondence(previous: &Project, candidate: &Project, old: &Refe
         }
         Reference::BoardOrigin {} => return None,
     }
-    resolve(candidate, &next).map(|_| next)
+    resolve(final_resolver, &next).map(|_| next)
 }
