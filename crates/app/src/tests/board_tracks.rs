@@ -1139,10 +1139,8 @@ fn copper_box_excludes_locked_without_hiding_inspection() {
     let via = vias(&h)[0].id;
     let revision = h.state().session.revision();
     let target = h.state().views.active.board.target.unwrap().board;
-    h.state_mut().run(
-        pcbcraft_engine::SET_COPPER_LOCKED,
-        &json!({"board":target,"tracks":[track],"vias":[via],"locked":true,"expected_revision":revision}),
-    );
+    h.state_mut()
+        .run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"tracks":[track],"vias":[via],"locked":true,"expected_revision":revision}));
     assert_eq!(h.state().message, None);
     h.run();
     let box_copper = |h: &mut Harness<'_, PcbApp>| {
