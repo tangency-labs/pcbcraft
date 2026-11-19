@@ -32,7 +32,8 @@ impl BoardView<'_> {
     /// terminals; a net the schematic has since changed has none and is reported. Reference
     /// and value follow the live component, as on the board itself. Role and terminal metadata
     /// require a live definition matching the accepted library, symbol, revision and terminal
-    /// table; without that match the role is unknown and terminal names and types are null.
+    /// table. A matching terminal uses its effective function; without that match the role is
+    /// unknown and terminal names and types are null.
     pub fn netlist(self) -> Result<Export, String> {
         let project = self.project();
         let accepted = match &project.board.baseline {
@@ -65,11 +66,14 @@ impl BoardView<'_> {
                     .definition
                     .pins()
                     .iter()
-                    .map(|pin| TerminalInfo {
-                        terminal: pin.number.clone(),
-                        name: pin.name.clone(),
-                        electrical_type: Some(pin.electrical_type),
-                        pads: pads(&pin.number),
+                    .map(|pin| {
+                        let (name, electrical_type) = part.effective_pin(pin);
+                        TerminalInfo {
+                            terminal: pin.number.clone(),
+                            name: name.map(str::to_owned),
+                            electrical_type: Some(electrical_type),
+                            pads: pads(&pin.number),
+                        }
                     })
                     .collect(),
                 None => state

@@ -109,6 +109,35 @@ fn chooses_typed_function_without_changing_connectivity() {
     assert!(ink(session.project().unwrap()).contains(&"ADC_IN".to_owned()));
 }
 
+/// Matching accepted terminals use the selected metadata without changing the accepted
+/// package, pad mapping, or connectivity. One Undo restores the prior export.
+#[test]
+fn board_netlist_uses_selected_function_without_changing_accepted_state() {
+    let mut session = fixture(true);
+    let package = crate::board::definition::basic_components("resistor-0402").unwrap();
+    session.apply(crate::ASSIGN_FOOTPRINT, &json!({"component":part_target(&session)["part"],"library":package.library,"definition":package.id,"definition_revision":package.revision,"mapping":{"1":"1","2":"2"},"expected_revision":session.revision()})).unwrap();
+    let preview = session.execute(crate::PREVIEW_UPDATE, &json!({"expected_revision":session.revision()})).unwrap();
+    session
+        .apply(crate::APPLY_UPDATE, &json!({"plan_token":preview["board_update_preview"]["plan_token"],"expected_revision":session.revision()}))
+        .unwrap();
+    let board_netlist = |session: &Session| {
+        let project = session.project().unwrap();
+        project.board_view(project.board_target().unwrap()).unwrap().netlist().unwrap().netlist
+    };
+    let before = board_netlist(&session);
+    let mut expected = before.clone();
+    let pin = expected.components[0].terminals.iter_mut().find(|pin| pin.terminal == "1").unwrap();
+    assert_eq!(pin.name.as_deref(), Some("GPIO"));
+    assert_eq!(pin.electrical_type, Some(ElectricalType::Bidirectional));
+    assert_eq!(pin.pads.as_deref(), Some(&["1".to_owned()][..]));
+    pin.name = Some("ADC_IN".into());
+    pin.electrical_type = Some(ElectricalType::Input);
+    session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
+    assert_eq!(board_netlist(&session), expected);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(board_netlist(&session), before);
+}
+
 /// Unknown, malformed or stale requests cannot publish any part of the transaction.
 #[test]
 fn refuses_unknown_terminal_function_and_stale_request() {
