@@ -24,7 +24,13 @@ pub(super) struct Filters {
     pub vias: bool,
     pub graphics: bool,
     pub zones: bool,
+    #[serde(skip_serializing_if = "include_locked_by_default")]
     pub include_locked: bool,
+}
+
+/// Avoid writing a new field into arrangements that use the original selection policy.
+fn include_locked_by_default(value: &bool) -> bool {
+    *value
 }
 
 impl Default for Filters {
@@ -84,11 +90,8 @@ impl Filters {
 
     /// Drop locked placements from a footprint selection without touching inspection.
     pub(super) fn retain_unlocked_footprints(self, board: BoardView<'_>, selected: &mut BTreeSet<String>) {
-        if !self.include_locked && !selected.is_empty() {
-            let locked: Vec<_> = board.footprints_for_ids(selected).filter(|footprint| footprint.locked).map(|footprint| footprint.id).collect();
-            for id in locked {
-                selected.remove(&id);
-            }
+        if !self.include_locked {
+            selected.retain(|id| board.footprint_locked(id) != Some(true));
         }
     }
 
@@ -98,7 +101,7 @@ impl Filters {
             return;
         }
         self.retain_unlocked_footprints(board, &mut state.selection);
-        if state.reference.selected.as_ref().and_then(|id| board.footprint(id)).is_some_and(|footprint| footprint.locked) {
+        if state.reference.selected.as_ref().and_then(|id| board.footprint_locked(id)) == Some(true) {
             state.reference = Default::default();
         }
         self.retain_unlocked_copper(board, &mut state.tracks.selected);
@@ -106,12 +109,9 @@ impl Filters {
 
     /// Drop locked tracks and vias from a mixed copper selection.
     pub(super) fn retain_unlocked_copper(self, board: BoardView<'_>, selected: &mut BTreeSet<uuid::Uuid>) {
-        if !self.include_locked && !selected.is_empty() {
-            let tracks = board.tracks().iter().filter(|track| track.locked).map(|track| track.id);
-            let vias = board.vias().iter().filter(|via| via.locked).map(|via| via.id);
-            for id in tracks.chain(vias) {
-                selected.remove(&id);
-            }
+        if !self.include_locked {
+            retain_unlocked_ids(selected, board.tracks(), |track| (track.id, track.locked));
+            retain_unlocked_ids(selected, board.vias(), |via| (via.id, via.locked));
         }
     }
 
@@ -145,6 +145,35 @@ impl Filters {
                 row("include_locked", "Locked objects", self.include_locked),
             ],
         }
+    }
+}
+
+/// Check selected IDs against one ID-sorted copper slice without walking the board.
+/// IDs absent from this slice may belong to the other copper kind, so leave them alone.
+fn retain_unlocked_ids<T>(selected: &mut BTreeSet<uuid::Uuid>, ordered: &[T], mut fields: impl FnMut(&T) -> (uuid::Uuid, bool)) {
+    selected.retain(|id| !ordered.binary_search_by_key(id, |item| fields(item).0).is_ok_and(|index| fields(&ordered[index]).1));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    /// A small edit selection uses logarithmic probes even when the board holds much more copper.
+    #[test]
+    fn pruning_selected_copper_only_probes_ids() {
+        let records: Vec<_> = (1..=4096).map(|id| (Uuid::from_u128(id), id == 4096)).collect();
+        let unlocked = Uuid::from_u128(1);
+        let locked = Uuid::from_u128(4096);
+        let absent = Uuid::from_u128(4097);
+        let mut selected = BTreeSet::from([unlocked, locked, absent]);
+        let mut probes = 0;
+        retain_unlocked_ids(&mut selected, &records, |item| {
+            probes += 1;
+            *item
+        });
+        assert_eq!(selected, BTreeSet::from([unlocked, absent]));
+        assert!(probes <= 3 * 15, "checked {probes} copper records");
     }
 }
 

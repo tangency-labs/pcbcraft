@@ -2312,6 +2312,17 @@ fn vias_filter_separately_from_tracks() {
     h.run();
     click_canvas_at(&mut h, on_via);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([via]));
+    h.hover_at(on_track);
+    h.run();
+    h.key_press(Key::U);
+    h.run();
+    assert_eq!(
+        h.state().views.active.board.tracks.selected,
+        std::collections::BTreeSet::from([via]),
+        "connected selection keeps only the enabled kind"
+    );
+    click_canvas_at(&mut h, on_track);
+    assert!(h.state().views.active.board.tracks.selected.is_empty(), "a track-only hit is ignored when tracks are disabled");
 }
 
 /// Saved filter settings from before the Vias row keep existing choices and enable vias.

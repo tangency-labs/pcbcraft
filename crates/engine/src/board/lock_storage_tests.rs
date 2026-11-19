@@ -118,6 +118,14 @@ fn footprint_lock_round_trips_without_changing_unlocked_encoding() {
         let loaded = decode_documents(&saved).unwrap();
         assert_eq!(encode_documents(loaded.clone()).unwrap(), saved);
         assert_placement_locks(&original, &loaded, locked_id);
+        let unlocked_board = original.boards().next().unwrap();
+        let locked_board = loaded.boards().next().unwrap();
+        for id in unlocked_board.footprint_ids() {
+            assert_eq!(unlocked_board.footprint_locked(&id), Some(false));
+            assert_eq!(locked_board.footprint_locked(&id), Some(id == format!("footprint-{locked_id}")));
+        }
+        assert_eq!(locked_board.footprint_locked("footprint-0"), None);
+        assert_eq!(locked_board.footprint_locked(&format!("footprint-0{locked_id}")), None);
         let archive = encode_packed(locked).unwrap();
         let reopened = decode_packed(&archive).unwrap().project;
         assert_placement_locks(&original, &reopened, locked_id);

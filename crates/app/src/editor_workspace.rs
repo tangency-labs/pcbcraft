@@ -549,7 +549,7 @@ impl EditorViews {
             return;
         }
         if !self.active.filters.include_locked
-            && self.active.board.target.and_then(|target| session.project()?.board_view(target)?.footprint(&footprint)).is_some_and(|f| f.locked)
+            && self.active.board.target.and_then(|target| session.project()?.board_view(target)?.footprint_locked(&footprint)) == Some(true)
         {
             return;
         }

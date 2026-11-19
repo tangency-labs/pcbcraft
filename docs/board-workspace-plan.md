@@ -317,6 +317,9 @@ Selection filters now occupy the lower-right card, with supported footprint and
 board-graphic categories and shared GUI/live-MCP handlers. Each PCB view can
 exclude locked footprints, tracks and vias without changing visibility or
 project inspection. Older local arrangements include locked objects by default.
+The default does not add a field to the arrangement. Older releases cannot
+restore an arrangement saved with **Locked objects** unchecked; check it and
+save the arrangement again before opening it in an older release.
 Flip view and the broader layout ribbon remain future work.
 
 A bounded transform slice now moves and rotates existing legacy and physical SMD

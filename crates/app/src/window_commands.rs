@@ -1817,15 +1817,13 @@ mod live {
                     }
                     let state = self.views.view(view).ok_or("The addressed view closed")?;
                     let board = state.board.target.and_then(|target| self.session.project()?.board_view(target));
-                    let placed: std::collections::BTreeSet<_> = board.into_iter().flat_map(|board| board.footprint_ids()).collect();
-                    if !wanted.is_subset(&placed) {
+                    if wanted.iter().any(|id| board.and_then(|board| board.footprint_locked(id)).is_none()) {
                         return Err("Some of those footprints aren't on this view's board. Inspect the project for current IDs.".to_owned());
                     }
                     if !wanted.is_empty() && !state.filters.footprints {
                         return Err("Footprint selection is disabled in this view".into());
                     }
-                    if !state.filters.include_locked && board.is_some_and(|board| board.footprints_for_ids(&wanted).any(|footprint| footprint.locked))
-                    {
+                    if !state.filters.include_locked && wanted.iter().any(|id| board.and_then(|board| board.footprint_locked(id)) == Some(true)) {
                         return Err("Locked footprint selection is disabled in this view".into());
                     }
                     let previous = self.views.active.id();

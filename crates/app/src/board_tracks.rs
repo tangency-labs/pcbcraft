@@ -458,15 +458,21 @@ impl Kinds {
 
 /// The topmost visible via or track under a screen point, among the allowed kinds.
 pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>, kinds: Kinds) -> Option<Uuid> {
-    let via = view.vias().iter().rev().filter(|via| kinds.via(via)).find(|via| hit_via(pointer, camera, rect, via)).map(|via| via.id);
-    via.or_else(|| {
+    if kinds.vias
+        && let Some(via) = view.vias().iter().rev().find(|via| kinds.via(via) && hit_via(pointer, camera, rect, via))
+    {
+        return Some(via.id);
+    }
+    if kinds.tracks {
         view.tracks()
             .iter()
             .rev()
             .filter(|track| kinds.track(track) && !hidden.contains(&track.layer.to_string()))
             .find(|track| hit(pointer, camera, rect, track))
             .map(|track| track.id)
-    })
+    } else {
+        None
+    }
 }
 
 /// Whether a press here would start a copper drag rather than a box selection.
@@ -774,11 +780,17 @@ pub(super) fn interact(
         state.committed = None;
     }
     let rect = response.rect;
-    let visible: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
+    let tracks = view.tracks();
     let vias = view.vias();
-    let vias_visible = view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
+    let vias_visible =
+        kinds.vias && view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
     let selectable = |id: &Uuid| {
-        visible.iter().any(|track| track.id == *id && kinds.track(track)) || (vias_visible && vias.iter().any(|via| via.id == *id && kinds.via(via)))
+        (kinds.tracks
+            && tracks.binary_search_by_key(id, |track| track.id).is_ok_and(|i| {
+                let track = &tracks[i];
+                kinds.track(track) && !hidden.contains(&track.layer.to_string())
+            }))
+            || (vias_visible && vias.binary_search_by_key(id, |via| via.id).is_ok_and(|i| kinds.via(&vias[i])))
     };
     state.selected.retain(selectable);
     let stale_route = state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active);
@@ -1046,7 +1058,7 @@ pub(super) fn interact(
             vias.iter()
                 .find(|via| state.selected.contains(&via.id))
                 .map(|via| via.at)
-                .or_else(|| visible.iter().find(|track| state.selected.contains(&track.id)).map(|track| track.start))
+                .or_else(|| tracks.iter().find(|track| state.selected.contains(&track.id)).map(|track| track.start))
                 .unwrap_or(Point { x_nm: 0, y_nm: 0 })
         });
         state.moving = Some(MoveDraft { source, anchor, offset: (0, 0), drag: false });
