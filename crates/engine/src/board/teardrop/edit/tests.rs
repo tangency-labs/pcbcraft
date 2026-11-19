@@ -94,6 +94,43 @@ fn ten_vias_report_two_clearance_blocks() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
 
+/// A malformed second report fails the batch even after the first addition was accepted.
+#[test]
+fn refuses_malformed_rule_reports_without_returning_a_partial_plan() {
+    let (session, intents, _) = fixture(2, false);
+    let [first, second] = intents.as_slice() else { panic!("fixture intents") };
+    let board = view(&session);
+    let edits = [Edit::Add(*second), Edit::Add(*first)];
+    let clearance = RuleBlock { rule: Rule::CopperClearance, other_object: first.track.to_string(), required_nm: 35_000, actual_nm: 34_999. };
+    let contact = RuleBlock { rule: Rule::ConflictingContact, required_nm: 0, actual_nm: 0., ..clearance.clone() };
+    let evaluate = |report: RuleBlock| {
+        plan(board, &[], &edits, |candidate, _, accepted| {
+            if candidate.intent == *second {
+                assert_eq!(accepted.len(), 1);
+                assert_eq!(accepted[0].intent, *first);
+                Ok::<_, ()>(Some(report.clone()))
+            } else {
+                Ok(None)
+            }
+        })
+    };
+    let edge_crossing = RuleBlock { rule: Rule::BoardEdgeClearance, other_object: "board-outline".into(), ..contact.clone() };
+    for valid in [clearance.clone(), contact.clone(), RuleBlock { actual_nm: -1., ..contact.clone() }, edge_crossing] {
+        let diff = evaluate(valid.clone()).unwrap();
+        assert_eq!(diff.rejected, vec![Rejected { intent: *second, reason: Refusal::Rule(valid) }]);
+    }
+    for invalid in [
+        RuleBlock { actual_nm: 35_000., ..clearance.clone() },
+        RuleBlock { actual_nm: f64::NAN, ..clearance.clone() },
+        RuleBlock { actual_nm: f64::NEG_INFINITY, ..contact.clone() },
+        RuleBlock { required_nm: -1, ..contact.clone() },
+        RuleBlock { other_object: " ".into(), ..contact.clone() },
+        RuleBlock { actual_nm: 1., ..contact },
+    ] {
+        assert_eq!(evaluate(invalid), Err(Error::InvalidRuleReport(second.id)));
+    }
+}
+
 /// A requested removal is included in the diff and absent from the evaluator's retained set.
 #[test]
 fn removes_without_requiring_geometry_and_reports_a_bad_new_site() {

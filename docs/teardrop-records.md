@@ -38,7 +38,11 @@ projected first. The planner then checks new sites in UUID order, so the rule
 evaluator sees retained intents and earlier accepted additions in a stable
 order. The diff records approved additions, requested removals, and rejected
 sites. A rule rejection includes the rule, obstacle, required distance and
-actual distance. If the evaluator cannot complete a check, no diff is returned.
+actual signed gap. If the evaluator cannot complete a check, or supplies an
+incomplete or contradictory report, no diff is returned. A copper clearance
+report requires a gap strictly below the required clearance; conflicting copper
+contact includes zero gap. Board-edge crossings may still be reported at zero
+clearance.
 
 The rule evaluator is supplied by the caller; the planner has no default allow
 path. The synthetic fixture measures spacing to two authored obstacle tracks,

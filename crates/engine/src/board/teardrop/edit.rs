@@ -33,7 +33,23 @@ pub struct RuleBlock {
     /// Board-local item reference, not an obstacle index from a prepared query.
     pub other_object: String,
     pub required_nm: i64,
+    /// Signed distance from the evaluated copper geometry; contact can have a negative gap.
     pub actual_nm: f64,
+}
+
+impl RuleBlock {
+    /// Reject incomplete reports and contradictions with the shared copper predicates.
+    fn is_valid(&self) -> bool {
+        !self.other_object.trim().is_empty()
+            && self.required_nm >= 0
+            && self.actual_nm.is_finite()
+            && match self.rule {
+                Rule::CopperClearance => self.actual_nm < self.required_nm as f64,
+                Rule::ConflictingContact => self.actual_nm <= 0.,
+                // The board-edge checker can report a crossing even at zero clearance.
+                Rule::BoardEdgeClearance => true,
+            }
+    }
 }
 
 /// Why a proposed site contributes no new copper.
@@ -76,14 +92,16 @@ pub enum Error<E> {
     DuplicateSite { via: Uuid, track: Uuid },
     MissingRemoval(Uuid),
     RuleEvaluation { id: Uuid, cause: E },
+    InvalidRuleReport(Uuid),
 }
 
 /// Plan changes in ascending intent UUID order, with removals projected before additions.
 /// The caller supplies a complete rule evaluator for the same board snapshot. It sees the
 /// candidate, retained intents (after removals), and earlier accepted additions, and must
 /// return an error if it cannot check the whole site. A site may be skipped for invalid
-/// geometry or a known rule block; evaluator errors abort the whole plan. This never mutates
-/// the board or records, publishes history, or authorizes applying the resulting diff.
+/// geometry or a known rule block; evaluator errors and malformed reports abort the whole
+/// plan. This never mutates the board or records, publishes history, or authorizes applying
+/// the resulting diff.
 pub fn plan<E>(
     board: BoardView<'_>,
     current: &[ViaTeardrop],
@@ -146,7 +164,8 @@ pub fn plan<E>(
             Ok(copper) => {
                 let candidate = Addition { intent, copper };
                 match check(&candidate, &retained, &result.added).map_err(|cause| Error::RuleEvaluation { id: intent.id, cause })? {
-                    Some(reason) => result.rejected.push(Rejected { intent, reason: Refusal::Rule(reason) }),
+                    Some(reason) if reason.is_valid() => result.rejected.push(Rejected { intent, reason: Refusal::Rule(reason) }),
+                    Some(_) => return Err(Error::InvalidRuleReport(intent.id)),
                     None => result.added.push(candidate),
                 }
             }
