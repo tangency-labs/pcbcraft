@@ -137,7 +137,7 @@ class FlatProjectNetlist(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "expected each logical terminal to appear once"):
                     READER(read)
 
-    def test_refuses_duplicate_component_and_junction_identities(self):
+    def test_refuses_duplicate_part_and_junction_identities(self):
         cases = (("components", "project.json", "duplicate component ID"),
                  ("junctions", "sheets/", "duplicate junction ID"))
         for field, prefix, message in cases:
