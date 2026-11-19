@@ -580,8 +580,16 @@ fn teardrop_preview_and_apply_share_the_native_board_budget() {
     for filler in &mut Arc::make_mut(&mut project.board).tracks[..locks] {
         filler.locked = true;
     }
+    let mut fits = project.clone();
+    let slack_tracks = 512;
+    assert!(slack_tracks <= locks);
+    for filler in &mut Arc::make_mut(&mut fits.board).tracks[..slack_tracks] {
+        filler.locked = false;
+    }
+    let fits = encode_documents(Arc::new(fits)).unwrap();
     let saved = encode_documents(Arc::new(project)).unwrap();
     assert!((32..32 + growth).contains(&(MAX_DOCUMENT_BYTES - saved[&path].len())));
+    assert_eq!(saved[&path].len() - fits[&path].len(), slack_tracks * growth);
     session.open_snapshot(decode_documents(&saved).unwrap());
     let target = view(&session).target;
     let snapshot = session.snapshot().unwrap();
@@ -595,9 +603,10 @@ fn teardrop_preview_and_apply_share_the_native_board_budget() {
         track,
         parameters: Parameters { length: Length::Percent(20), max_length_nm: None, width_pct: 90, max_width_nm: None },
     };
-    let params = |dry_run| json!({"board":target.board,"expected_revision":revision,"dry_run":dry_run,"edits":{"add":[intent],"remove":[]}});
-    let preview = session.execute(EDIT_TEARDROPS, &params(true));
-    let applied = session.execute(EDIT_TEARDROPS, &params(false));
+    let params =
+        |revision, dry_run| json!({"board":target.board,"expected_revision":revision,"dry_run":dry_run,"edits":{"add":[intent],"remove":[]}});
+    let preview = session.execute(EDIT_TEARDROPS, &params(revision, true));
+    let applied = session.execute(EDIT_TEARDROPS, &params(revision, false));
     assert!(
         matches!(&preview, Err(crate::CommandError::InvalidParams(reason)) if reason.contains("board document exceeds the 16 MiB limit")),
         "{preview:?}"
@@ -608,6 +617,24 @@ fn teardrop_preview_and_apply_share_the_native_board_budget() {
     assert_eq!((session.undo.len(), session.redo.len()), history);
     assert!(log.0.lock().unwrap().is_empty());
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+
+    // The geometry is the same; only saving enough bytes for the record changes the result.
+    session.open_snapshot(decode_documents(&fits).unwrap());
+    let revision = session.revision();
+    let undo = session.undo.len();
+    let mut preview = session.execute(EDIT_TEARDROPS, &params(revision, true)).unwrap()["teardrops"].clone();
+    assert_eq!(preview["added"], json!([intent]));
+    assert_eq!(session.revision(), revision);
+    assert_eq!(session.undo.len(), undo);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), fits);
+    let applied = session.execute(EDIT_TEARDROPS, &params(revision, false)).unwrap();
+    preview["dry_run"] = json!(false);
+    assert_eq!(applied["teardrops"], preview);
+    assert_eq!(session.undo.len(), undo + 1);
+    let edited = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert!(fits[&path].len() < edited[&path].len() && edited[&path].len() <= MAX_DOCUMENT_BYTES);
+    session.execute("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), fits);
 }
 
 /// Track `k` of `n` parallel minimum-width diagonals 20 um apart along both axes, so 14 um apart
