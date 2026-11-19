@@ -192,11 +192,20 @@ impl Session {
     pub fn published(&self) -> Option<Reference> {
         self.saved.as_ref().map(Record::reference)
     }
-    /// Replace one captured draft atomically. Stale clients and identity changes preserve history.
+    /// Replace one captured draft atomically. Stale clients, identity changes and implicit
+    /// transfer of device ratings across symbol references leave history intact.
     pub fn replace(&mut self, expected: u64, mut record: Record) -> Result<(), String> {
         self.check(expected)?;
         if self.record.kind() != record.kind() || self.record.reference() != record.reference() {
             return Err("Part document identity cannot change during editing.".into());
+        }
+        if let (Record::Part(old), Record::Part(new)) = (&self.record, &record)
+            && old.symbol != new.symbol
+        {
+            if same_symbol_lineage(old.symbol.as_ref(), new.symbol.as_ref()) {
+                require_supply_range_reentry(old)?;
+            }
+            require_supply_range_reentry(new)?;
         }
         record.select_rating_format();
         record.bounded()?;
@@ -385,13 +394,18 @@ impl Record {
     }
 }
 
+/// Match a symbol lineage by address, without treating its revisions' terminal IDs as related.
+fn same_symbol_lineage(old: Option<&Reference>, new: Option<&Reference>) -> bool {
+    old.zip(new).is_some_and(|(old, new)| old.library == new.library && old.id == new.id)
+}
+
 /// A terminal number can be reassigned in the next revision, even between two power inputs.
 /// Refuse the switch until the user explicitly removes the old ranges for re-entry.
 fn require_supply_range_reentry(part: &PartDefinition) -> Result<(), String> {
     if part.terminal_ratings.is_empty() {
         Ok(())
     } else {
-        Err("In Device supply ranges, remove the existing bounds before changing the symbol revision, then re-enter them on the correct inputs.".into())
+        Err("In Device supply ranges, remove the existing bounds before changing the symbol, then re-enter them on the correct inputs.".into())
     }
 }
 
@@ -464,8 +478,7 @@ impl Record {
         let mut candidate = self.clone();
         match (&mut candidate, field, reference) {
             (Self::Part(p), ReferenceField::Symbol, reference) => {
-                let same_symbol = p.symbol.as_ref().zip(reference.as_ref()).is_some_and(|(old, new)| old.library == new.library && old.id == new.id);
-                if same_symbol {
+                if same_symbol_lineage(p.symbol.as_ref(), reference.as_ref()) {
                     require_supply_range_reentry(p)?;
                 } else {
                     p.terminal_ratings.clear();

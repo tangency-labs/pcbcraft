@@ -229,6 +229,26 @@ fn supply_ranges_require_reentry_after_a_same_symbol_pin_swap() {
     ] {
         assert!(error.contains("re-enter"), "{error}");
     }
+
+    let mut draft = DraftSession::new(rated.clone(), false).unwrap();
+    let mut rename = rated.clone();
+    part_mut(&mut rename).name = "Edited before the attempted switch".into();
+    draft.replace(1, rename.clone()).unwrap();
+    draft.history(2, false).unwrap();
+    let before = draft.inspect();
+    let mut raw_switch = rated.clone();
+    part_mut(&mut raw_switch).symbol = Some(new.clone());
+    assert!(draft.replace(3, raw_switch.clone()).unwrap_err().contains("re-enter"));
+    for id in ["1", "2"] {
+        part_mut(&mut raw_switch).set_supply_range(id, "", "").unwrap();
+    }
+    assert!(draft.replace(3, raw_switch).unwrap_err().contains("re-enter"));
+    assert_eq!(draft.inspect(), before);
+    draft.history(3, true).unwrap();
+    assert_eq!(draft.record(), &rename);
+    draft.history(4, false).unwrap();
+    assert_eq!(draft.record(), &rated);
+
     assert_eq!(part_mut(&mut rated).symbol.as_ref(), Some(&old));
     assert_eq!(part_mut(&mut rated).terminal_ratings.len(), 2);
     for id in ["1", "2"] {
@@ -238,9 +258,16 @@ fn supply_ranges_require_reentry_after_a_same_symbol_pin_swap() {
     let mut picked = rated.select_reference(&ReferenceField::Symbol, Some(new), catalog).unwrap();
     assert_eq!(advanced, picked);
     assert!(part_mut(&mut picked).terminal_ratings.is_empty());
-    part_mut(&mut picked).set_supply_range("2", "4.5 V", "36 V").unwrap();
-    picked.validate(catalog).unwrap();
-    assert!(part_mut(&mut picked).supply_range("1").is_none());
+    draft.replace(5, rated).unwrap();
+    let unrated = draft.inspect();
+    let mut reentered = picked.clone();
+    part_mut(&mut reentered).set_supply_range("2", "4.5 V", "36 V").unwrap();
+    assert!(draft.replace(6, reentered.clone()).unwrap_err().contains("re-enter"));
+    assert_eq!(draft.inspect(), unrated);
+    draft.replace(6, picked).unwrap();
+    draft.replace(7, reentered.clone()).unwrap();
+    draft.record().validate(catalog).unwrap();
+    assert!(part_mut(&mut reentered).supply_range("1").is_none());
 }
 
 /// A complete Apply is one draft undo step, and removing the last range restores the unrated envelope.

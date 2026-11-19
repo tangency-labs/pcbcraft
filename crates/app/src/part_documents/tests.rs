@@ -131,13 +131,16 @@ fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
     documents.extend(prepared.documents().clone());
     app.session.install_library_source("test-drawings", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
 
+    let symbol = prepared.item();
+    let reference = Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision };
+    let revision = app.library_editors.parts[&id].session.revision();
+    app.choose_part_reference(id, revision, &ReferenceField::Symbol, Some(reference)).unwrap();
     let doc = &app.library_editors.parts[&id];
+    let revision = doc.session.revision();
     let mut record = doc.session.record().clone();
     let Record::Part(part) = &mut record else { panic!() };
-    let symbol = prepared.item();
-    part.symbol = Some(Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision });
     part.set_supply_range("1", "4.5 V", "36 V").unwrap();
-    app.replace_part_document(id, doc.session.revision(), record.clone()).unwrap();
+    app.replace_part_document(id, revision, record.clone()).unwrap();
     let doc = app.library_editors.parts.get_mut(&id).unwrap();
     let revision = doc.session.revision();
     doc.pending.insert("supply/1/min".into(), "unfinished".into());
