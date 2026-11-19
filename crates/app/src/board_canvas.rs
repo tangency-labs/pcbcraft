@@ -190,11 +190,7 @@ pub(super) fn show(
         .iter()
         .map(|footprint| {
             let (pads, graphics) = drawing(footprint, camera, rect, visible, &colors);
-            if pads.is_empty() && graphics.is_empty() {
-                egui::Rect::NOTHING
-            } else {
-                board::footprint_bounds(&pads, &graphics, camera.screen(footprint.position, rect))
-            }
+            visible_footprint_bounds(footprint, &pads, &graphics, camera, rect)
         })
         .collect();
     let hit = |pointer: egui::Pos2| {
@@ -606,14 +602,14 @@ pub(super) fn show(
         }
         let center = camera.screen(footprint.position, rect);
         let (mut pads, graphics) = drawing(&footprint, camera, rect, visible, &colors);
-        let bounds = board::footprint_bounds(&pads, &graphics, center);
+        let bounds = visible_footprint_bounds(&footprint, &pads, &graphics, camera, rect);
         let shift = reference_shift(&footprint, camera, rect);
         let label_visible = if footprint.physical_reference {
             graphics.iter().any(|graphic| graphic.reference && rect.intersects(graphic.bounds()))
         } else {
             rect.intersects(board::footprint_reference_bounds(&p, bounds, footprint.reference, shift))
         };
-        if (pads.is_empty() && graphics.is_empty()) || !(rect.intersects(bounds) || label_visible) {
+        if (pads.is_empty() && graphics.is_empty() && footprint.non_plated_holes.is_empty()) || !(rect.intersects(bounds) || label_visible) {
             continue;
         }
         let inspected = inspected_pads.get(&footprint.id);
@@ -660,6 +656,7 @@ pub(super) fn show(
             focus.is_some(),
             shift,
         );
+        paint_holes(&p, &footprint, camera, rect, state.selection.contains(&footprint.id));
         if selected || reference_enabled && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
             board::reference_outline(&p, reference_bounds, selected, reference_color);
         }
@@ -800,6 +797,9 @@ fn place_group(
             for graphic in &mut footprint.graphics {
                 graphic.points = graphic.points.iter().copied().map(transform).collect();
             }
+            for hole in &mut footprint.non_plated_holes {
+                hole.center = transform(hole.center);
+            }
             footprint.position = transform(footprint.position);
             footprint.rotation = placement.rotation;
             let (mut pads, graphics) = drawing(&footprint, camera, response.rect, visible, &colors);
@@ -820,6 +820,7 @@ fn place_group(
                 false,
                 reference_shift(&footprint, camera, response.rect),
             );
+            paint_holes(ui.painter(), &footprint, camera, response.rect, true);
         }
     }
     if response.clicked() && response.contains_pointer() {
@@ -961,12 +962,15 @@ fn move_reference(
     (true, None)
 }
 
-/// Transform resolved pad offsets only for painting; pad identities and authored snapshots stay intact.
+/// Transform resolved pads and openings only for painting; authored snapshots stay intact.
 fn preview(footprint: &mut FootprintView<'_>, draft: &Draft) {
     let transform = |point| preview_point(point, footprint.position, footprint.rotation, footprint.bottom, draft);
     for pad in &mut footprint.pads {
         pad.center = transform(pad.center);
         pad.copper = pad.copper.map(|points| points.map(transform));
+    }
+    for hole in &mut footprint.non_plated_holes {
+        hole.center = transform(hole.center);
     }
     for graphic in &mut footprint.graphics {
         graphic.points = graphic.points.iter().copied().map(transform).collect();
@@ -996,6 +1000,40 @@ fn repose(x: i64, y: i64, from: (u16, bool), to: (u16, bool)) -> (i64, i64) {
     let mirrored = from.1 != to.1;
     let degrees = if mirrored { (from.0 + to.0) % 360 } else { (to.0 + 360 - from.0) % 360 };
     rotate_board(if mirrored { -x } else { x }, y, degrees)
+}
+
+/// Project a finished opening with the same physical scale as its footprint lands.
+fn hole_circle(hole: &pcbcraft_engine::board::definition::CircularNpth, camera: &Camera, rect: Rect) -> (Pos2, f32) {
+    let center = camera.screen(hole.center, rect);
+    let edge = camera.screen(Point { x_nm: hole.center.x_nm + hole.diameter_nm, y_nm: hole.center.y_nm }, rect);
+    (center, (edge - center).length() / 2.)
+}
+
+/// Keep copper-layer visibility independent of the board's through openings.
+fn visible_footprint_bounds(
+    footprint: &FootprintView<'_>,
+    pads: &[board::PadDrawing],
+    graphics: &[board::GraphicDrawing],
+    camera: &Camera,
+    rect: Rect,
+) -> Rect {
+    let base = if pads.is_empty() && graphics.is_empty() {
+        Rect::NOTHING
+    } else {
+        board::footprint_bounds(pads, graphics, camera.screen(footprint.position, rect))
+    };
+    footprint.non_plated_holes.iter().fold(base, |bounds, hole| {
+        let (center, radius) = hole_circle(hole, camera, rect);
+        bounds.union(Rect::from_center_size(center, egui::Vec2::splat(radius * 2.)))
+    })
+}
+
+/// Paint openings last so any copper crossing the hole cannot hide the visible drill.
+fn paint_holes(painter: &egui::Painter, footprint: &FootprintView<'_>, camera: &Camera, rect: Rect, selected: bool) {
+    for hole in &footprint.non_plated_holes {
+        let (center, radius) = hole_circle(hole, camera, rect);
+        board::non_plated_hole(painter, center, radius, selected);
+    }
 }
 
 /// Project physical geometry without deriving dimensions or copper membership from UI state.

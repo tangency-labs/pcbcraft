@@ -116,6 +116,13 @@ pub fn routing_clearance(p: &Painter, [a, b]: [Pos2; 2], width: f32, clearance: 
     p.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
 }
 
+/// Paint the projected finished opening without a copper annulus or pad label.
+pub fn non_plated_hole(p: &Painter, center: Pos2, radius: f32, selected: bool) {
+    let t = Tokens::get();
+    let ink = if selected { t.icon_active_2 } else { t.board_ink };
+    p.circle(center, radius, t.board_canvas, egui::Stroke::new(1., ink));
+}
+
 /// Paint a through via: a round pad of `radius` with its drill hole, never smaller than a dot.
 /// Selection lightens through-hole copper without an accent ring. Net focus takes precedence
 /// over selection, matching pads; the placement preview retains its separate ghost color.

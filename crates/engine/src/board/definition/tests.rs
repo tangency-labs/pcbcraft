@@ -36,33 +36,201 @@ fn circular_npth_native_codec_is_lazy_and_closed() {
     assert!(legacy_value.get("non_plated_holes").is_none());
 
     definition.non_plated_holes.push(CircularNpth { center: Point { x_nm: MAX_OFFSET_NM, y_nm: -MAX_OFFSET_NM }, diameter_nm: MAX_OFFSET_NM });
-    assert!(write_saved(&definition).is_err());
+    assert_eq!(write_saved(&definition).unwrap_err(), "footprint format does not match its non-plated hole content");
     definition.format = FootprintDefinition::format_for(true).into();
     let bytes = write_saved(&definition).unwrap();
     assert_eq!(*read_saved(&bytes).unwrap(), definition);
     let value: Value = serde_json::from_slice(&bytes).unwrap();
-    for invalid in [
-        json!([]),
-        Value::Null,
-        json!(vec![value["non_plated_holes"][0].clone(); MAX_MECHANICAL_HOLES + 1]),
-        json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":0}]),
-        json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":MAX_OFFSET_NM + 1}]),
-        json!([{"center":{"x_nm":i64::MIN,"y_nm":0},"diameter_nm":1}]),
-        json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":1,"number":"1"}]),
+    let invalid_geometry = "invalid circular non-plated hole count, centre or finished diameter";
+    for (invalid, expected) in [
+        (json!([]), "expected 1–128 non-plated holes"),
+        (Value::Null, "expected a sequence"),
+        (json!(vec![value["non_plated_holes"][0].clone(); MAX_MECHANICAL_HOLES + 1]), "expected 1–128 non-plated holes"),
+        (json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":0}]), invalid_geometry),
+        (json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":MAX_OFFSET_NM + 1}]), invalid_geometry),
+        (json!([{"center":{"x_nm":i64::MIN,"y_nm":0},"diameter_nm":1}]), invalid_geometry),
+        (json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":1,"number":"1"}]), "unknown field `number`"),
     ] {
         let mut changed = value.clone();
         changed["non_plated_holes"] = invalid;
-        assert!(read_saved(&serde_json::to_vec(&changed).unwrap()).is_err());
+        let error = read_saved(&serde_json::to_vec(&changed).unwrap()).unwrap_err();
+        assert!(error.contains(expected), "unexpected error: {error}");
     }
     let mut downgraded = value.clone();
     downgraded["format"] = json!(LEGACY_FORMAT);
-    assert!(read_saved(&serde_json::to_vec(&downgraded).unwrap()).is_err());
     let mut empty = legacy_value;
     empty["format"] = json!(NPTH_FORMAT);
-    assert!(read_saved(&serde_json::to_vec(&empty).unwrap()).is_err());
+    for invalid in [downgraded, empty] {
+        assert_eq!(read_saved(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(), "footprint format does not match its non-plated hole content");
+    }
     definition.non_plated_holes.clear();
     definition.format = FootprintDefinition::format_for(false).into();
     assert_eq!(write_saved(&definition).unwrap(), legacy);
+}
+
+/// Author two physical holes next to two mapped electrical pads, then place the
+/// package using the same native authoring and board transactions as clients.
+#[test]
+fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
+    use crate::authoring::{Action, Item, Kind, Primitive};
+    use crate::board::{clipboard, geometry::Contour};
+    let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    let legacy = editor.snapshot().encode().unwrap();
+    let centers = [Point { x_nm: 3_000_000, y_nm: 5_000_000 }, Point { x_nm: -4_000_000, y_nm: 6_000_000 }];
+    for center in centers {
+        editor
+            .execute(
+                editor.revision(),
+                Action::Insert { primitive: Primitive::NonPlatedHole { hole: CircularNpth { center, diameter_nm: 3_200_000 } } },
+            )
+            .unwrap();
+    }
+    let before = editor.snapshot();
+    let draft = before.encode().unwrap();
+    assert_eq!(Item::decode(&draft).unwrap(), *before);
+    assert_eq!(serde_json::from_slice::<Value>(&legacy).unwrap()["format"], "pcbcraft-library-item/1");
+    let mut wrong_envelope = serde_json::from_slice::<Value>(&draft).unwrap();
+    assert_eq!(wrong_envelope["format"], "pcbcraft-library-item/3");
+    wrong_envelope["format"] = json!("pcbcraft-library-item/1");
+    assert_eq!(Item::decode(&serde_json::to_vec(&wrong_envelope).unwrap()).unwrap_err(), "Invalid or oversized native library item.");
+    let current = editor.revision();
+    let invalid = Action::Insert { primitive: Primitive::NonPlatedHole { hole: CircularNpth { center: centers[0], diameter_nm: 0 } } };
+    for (revision, expected) in [
+        (current - 1, "Library document changed; inspect it before editing."),
+        (current, "invalid circular non-plated hole count, centre or finished diameter"),
+    ] {
+        assert_eq!(editor.execute(revision, invalid.clone()).unwrap_err(), expected);
+        assert_eq!(editor.revision(), current);
+        assert!(Arc::ptr_eq(&editor.snapshot(), &before));
+    }
+    editor.execute(current, Action::Undo).unwrap();
+    assert_eq!(editor.snapshot().footprint().unwrap().non_plated_holes.len(), 1);
+    editor.execute(editor.revision(), Action::Redo).unwrap();
+    let definition = editor.snapshot().footprint().unwrap();
+    assert_eq!(definition.non_plated_holes.len(), 2);
+    assert_eq!(Item::edit_footprint(&definition).unwrap().footprint().unwrap().non_plated_holes, definition.non_plated_holes);
+
+    let mut s = session();
+    let manifest =
+        json!({"format":crate::library::LIBRARY_FORMAT,"id":definition.library,"name":"Synthetic mounting fixture","license":definition.license})
+            .to_string();
+    let native = editor.snapshot().export_native().unwrap().to_string();
+    s.execute("library.load_source", &json!({"source":"mounting-fixture","documents":{"library.json":manifest,"footprints/mounting.json":native}}))
+        .unwrap();
+    symbol(&mut s, "resistor");
+    let component = s.project().unwrap().components().next().unwrap().id();
+    s.apply(crate::ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let target = s.project().unwrap().board_target().unwrap();
+    let view = |p: &crate::Project| p.board_view(target).unwrap().footprints().next().unwrap().non_plated_holes;
+    assert_eq!(view(s.project().unwrap()), definition.non_plated_holes);
+    let original = s.snapshot().unwrap();
+    let id = original.board_view(target).unwrap().footprints().next().unwrap().id;
+    let project = s.inspect();
+    let inspected = &project["project"]["board"]["footprints"][0];
+    assert_eq!(inspected["pins"].as_array().unwrap().len(), 2);
+    for hole in inspected["non_plated_holes"].as_array().unwrap() {
+        assert_eq!(hole["span"], "through");
+        assert_eq!(hole["plating"], "non_plated");
+        assert_eq!(hole.get("net"), Some(&Value::Null));
+        assert!(hole.get("number").is_none());
+    }
+    let board = original.board_view(target).unwrap();
+    assert!(board.ratsnest().unwrap().lines.is_empty());
+    assert_eq!(board.footprints().next().unwrap().pads.len(), 2);
+    assert!(board.fabrication_outputs().unwrap_err().contains("does not yet support non-plated holes"));
+    let query = s.clearance_query(target, 0).unwrap();
+    let obstacles: Vec<_> = query.objects().iter().enumerate().filter(|(_, item)| item.mechanical).collect();
+    assert_eq!(obstacles.len(), 2);
+    for (index, item) in obstacles {
+        assert!(item.intended_nets.is_empty());
+        assert_eq!(item.layers.len(), 2);
+        let at = item.at;
+        // 1.6 mm finished radius and 0.1 mm probe radius give exact tangency.
+        let at = Point { x_nm: at.x_nm + 1_700_000, y_nm: at.y_nm };
+        let probe = Contour::capsule(at, at, 100_000.);
+        for &layer in &item.layers {
+            let results = query.probe(&probe, &[layer], None).unwrap();
+            assert!(results.decisions.iter().any(|d| d.second == index && d.touches && d.clearance_violation && !d.conflicting_nets));
+        }
+        let request = crate::board::route::Request {
+            head: item.at,
+            target: Point { x_nm: item.at.x_nm + 10_000_000, y_nm: item.at.y_nm },
+            layer: item.layers[0],
+            origin: None,
+            width_nm: 200_000,
+            posture: crate::board::route::Posture::default(),
+            flipped: false,
+            previous: Vec::new(),
+        };
+        let plan = s.plan_route(&query, &request, 128, &|| false).unwrap();
+        assert_eq!(plan.outcome, crate::board::route::Outcome::Blocked { last_legal: item.at });
+        assert_eq!(plan.blocker.as_deref(), Some(item.name.as_str()));
+    }
+
+    s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":id,"x_nm":0,"y_nm":0,"rotation":90,"side":"back","expected_revision":s.revision()}))
+        .unwrap();
+    let transformed = view(s.project().unwrap());
+    assert_eq!(transformed.iter().map(|h| h.center).collect::<Vec<_>>(), centers.map(|c| Point { x_nm: c.y_nm, y_nm: c.x_nm }));
+    let before_copy = s.snapshot().unwrap();
+    let result = s.execute(clipboard::COPY, &json!({"items":{"footprints":[id]},"expected_revision":s.revision()})).unwrap();
+    let text = result["clipboard"].as_str().unwrap();
+    let mut envelope: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(envelope["format"], "pcbcraft-clipboard/7");
+    let nested = envelope["circuits"][0]["text"].as_str().unwrap();
+    let mut nested_envelope: Value = serde_json::from_str(nested).unwrap();
+    assert_eq!(nested_envelope["format"], "pcbcraft-clipboard/6");
+    nested_envelope["format"] = json!("pcbcraft-clipboard/1");
+    assert!(matches!(crate::clipboard::Fragment::from_text(&nested_envelope.to_string()),
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+    envelope["format"] = json!("pcbcraft-clipboard/1");
+    assert!(matches!(clipboard::BoardFragment::from_text(&envelope.to_string()),
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+    let fragment = clipboard::BoardFragment::from_text(text).unwrap();
+    assert_eq!(fragment.to_text().unwrap(), text);
+    let sheet = s.project().unwrap().sheet_target().id();
+    let sources: std::collections::BTreeMap<_, _> = fragment
+        .circuits()
+        .iter()
+        .map(|c| (c.source_sheet, clipboard::SchematicDestination { sheet, at: Point { x_nm: 0, y_nm: 100_000_000 } }))
+        .collect();
+    s.apply(clipboard::PASTE, &json!({"text":text,"x_nm":30_000_000,"y_nm":10_000_000,"schematic_targets":sources,"expected_revision":s.revision()}))
+        .unwrap();
+    let after_copy = s.snapshot().unwrap();
+    let pasted = after_copy.board_view(target).unwrap().footprints().last().unwrap();
+    assert!(pasted.bottom);
+    assert_eq!(pasted.rotation, 90);
+    assert_eq!(
+        pasted.non_plated_holes,
+        transformed
+            .iter()
+            .map(|hole| CircularNpth { center: Point { x_nm: hole.center.x_nm + 30_000_000, y_nm: hole.center.y_nm + 10_000_000 }, ..*hole })
+            .collect::<Vec<_>>()
+    );
+    let bytes = encode_documents(after_copy.clone()).unwrap();
+    for reopened in [decode_documents(&bytes).unwrap(), decode_packed(&encode_packed(after_copy.clone()).unwrap()).unwrap().project] {
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), bytes);
+        assert_eq!(reopened.board_view(target).unwrap().footprints().last().unwrap().non_plated_holes, pasted.non_plated_holes);
+    }
+    s.apply("edit.undo", &json!({})).unwrap();
+    crate::assert_same_content(&before_copy, &s.snapshot().unwrap());
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
+
+    // Let the shared direct edit create a DRC case without relying on the interactive walker.
+    s.apply(crate::ADD_VIA, &json!({"at":transformed[0].center,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()}))
+        .unwrap();
+    use crate::board::drc;
+    let sync = s.project().unwrap().board_view(target).unwrap().check_design(drc::Rules::default());
+    assert!(sync.violations.iter().any(|v| v.kind == drc::Kind::Clearance && v.message == "Non-plated hole touches copper" && v.nets.is_empty()));
+    let mut job = s.design_check_job(&json!({})).unwrap();
+    for _ in 0..128 {
+        if job.step(16) {
+            break;
+        }
+    }
+    assert_eq!(job.take_report().unwrap(), sync);
 }
 
 /// Library defaults and board adjustments compose before clipping, while authoring preserves pads.

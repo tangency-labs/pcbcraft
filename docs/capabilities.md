@@ -26,6 +26,12 @@ guides, format references, design plans and verification records.
 
 ## Implementation notes
 
+[Footprint definitions can include circular non-plated through holes](footprint-library.md#definition-and-placement-contract),
+with editor controls, placement transforms, offline storage, and mechanical
+obstacles for routing and design checks. They have no copper or net. Boards
+containing them cannot yet produce fabrication outputs; a separate non-plated
+drill file remains future work.
+
 Setup edits can be reviewed through `pcb.preview_board_setup` before the shared
 Apply command: layer removals/renumbering, affected objects and consent/refusal
 are returned with a disposable session-local token. Preview does not dirty the

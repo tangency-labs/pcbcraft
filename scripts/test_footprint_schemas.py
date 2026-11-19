@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
 
 ROOT = Path(__file__).resolve().parent.parent
 CHECKER = ROOT / "scripts/check-footprint-schemas.py"
@@ -23,6 +24,20 @@ class FootprintSchemaTests(unittest.TestCase):
         cls.schema = json.loads((ROOT / "docs/schemas/footprint-v1.schema.json").read_text())
         cls.validator = Draft202012Validator(cls.schema)
         cls.definition = json.loads((ROOT / "libraries/basic-components/footprints/resistor-0402.json").read_text())
+
+    def test_circular_non_plated_holes_require_new_format_and_no_terminal(self):
+        """Accept only bounded mechanical records and leave the legacy schema closed."""
+        schema = json.loads((ROOT / "docs/schemas/footprint-v4.schema.json").read_text())
+        registry = Registry().with_resource(self.schema["$id"], Resource.from_contents(self.schema))
+        validator = Draft202012Validator(schema, registry=registry)
+        hole = {"center": {"x_nm": 0, "y_nm": 0}, "diameter_nm": 3200000}
+        value = dict(self.definition, format="pcbcraft-footprint/4", non_plated_holes=[hole, hole])
+        validator.validate(value)
+        validator.validate(dict(value, pads=[]))
+        self.assertFalse(self.validator.is_valid(value))
+        self.assertFalse(validator.is_valid(self.definition))
+        for invalid in ([], None, [dict(hole, number="1")], [dict(hole, diameter_nm=0)], [hole] * 129):
+            self.assertFalse(validator.is_valid(dict(value, non_plated_holes=invalid)))
 
     def test_reference_metadata_and_pad_identifiers_reject_control_characters(self):
         """Catch newline suffixes that Python's dollar anchor previously accepted."""
