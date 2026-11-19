@@ -787,9 +787,11 @@ mod checker_tests {
 #[cfg(test)]
 mod copper_tests {
     use super::*;
+    use pcbcraft_engine::board::setup::{LayerPurpose, Side};
     use std::net::{Ipv4Addr, TcpStream};
 
-    /// Existing commands provide a board and copper parameters without fixture file surgery.
+    /// Existing commands provide a board and front copper for top-side pads. The layer
+    /// catalog is sorted by ID, so its first copper layer can be the back.
     fn fixture() -> (PcbApp, egui::Context, Value) {
         let ctx = egui::Context::default();
         let mut app = PcbApp::default();
@@ -798,7 +800,7 @@ mod copper_tests {
         app.live_control = Some(LiveControl::start(&ctx).unwrap());
         let p = app.session.project().unwrap();
         let view = p.board_view(p.board_target().unwrap()).unwrap();
-        let layer = view.layers().into_iter().find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper).unwrap().id;
+        let layer = view.layers().into_iter().find(|l| l.purpose == LayerPurpose::Copper && l.side == Some(Side::Front)).unwrap().id;
         let body = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::ADD_TRACKS,"inspect":false,"params":{
             "board":view.target.board,"layer":layer,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":0},{"x_nm":1_000_000,"y_nm":0}],"expected_revision":app.session.revision()}}});
         (app, ctx, body)
