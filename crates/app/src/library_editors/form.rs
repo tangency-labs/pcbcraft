@@ -71,25 +71,36 @@ impl Draft {
             if self.value["pad"]["shape"] == "circle" {
                 hidden.push("height_nm");
             }
-            let mut kind = if self.value["pad"]["copper"] == "all_copper" { "through_hole" } else { "smd" }.to_owned();
+            let mut kind = if self.value["pad"].get("plated_slot").is_some() {
+                hidden.push("drill_nm");
+                "plated_slot"
+            } else if self.value["pad"]["copper"] == "all_copper" {
+                "through_hole"
+            } else {
+                "smd"
+            }
+            .to_owned();
             let before = kind.clone();
             properties::choice(
                 ui,
                 "Pad type",
                 egui::Id::unique("pad_type"),
                 &mut kind,
-                &[("smd", "SMD".into()), ("through_hole", "Through hole".into())],
+                &[("smd", "SMD".into()), ("through_hole", "Through hole".into()), ("plated_slot", "Plated slot".into())],
             );
             if kind != before {
                 self.value["pad"]["copper"] = json!(if kind == "smd" { "component_side" } else { "all_copper" });
-                self.value["pad"]["drill_nm"] = if kind == "smd" {
-                    Value::Null
-                } else {
-                    json!(
-                        self.value["pad"]["width_nm"].as_i64().unwrap_or(600_000).min(self.value["pad"]["height_nm"].as_i64().unwrap_or(600_000)) / 2
-                    )
-                };
-                self.numbers.remove(".pad.drill_nm");
+                let pad = &mut self.value["pad"];
+                let smaller_side = pad["width_nm"].as_i64().unwrap_or(600_000).min(pad["height_nm"].as_i64().unwrap_or(600_000));
+                pad["drill_nm"] = if kind == "through_hole" { json!(smaller_side / 2) } else { Value::Null };
+                if kind == "plated_slot" {
+                    pad["plated_slot"] = json!({"width_nm":(smaller_side / 4).max(1),"length_nm":(smaller_side / 2).max(1),"rotation_mdeg":0});
+                    hidden.push("drill_nm");
+                } else if let Some(fields) = pad.as_object_mut() {
+                    fields.remove("plated_slot");
+                    hidden.retain(|field| *field != "drill_nm");
+                }
+                self.numbers.retain(|path, _| path != ".pad.drill_nm" && !path.starts_with(".pad.plated_slot."));
             }
         }
         let old_shape = self.value["pad"]["shape"].clone();
@@ -152,6 +163,8 @@ fn label(path: &str) -> String {
             "default_value" => "Value".into(),
             "electrical_type" => "Electrical".into(),
             "length_nm" => "Length (mm)".into(),
+            "plated_slot" => "Slot".into(),
+            "rotation_mdeg" => "Rotation (m°)".into(),
             "stroke_nm" => "Stroke (mm)".into(),
             "name_height_nm" => "Name size (mm)".into(),
             "number_height_nm" => "Number size (mm)".into(),

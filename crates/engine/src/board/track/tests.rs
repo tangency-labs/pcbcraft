@@ -17,6 +17,7 @@ fn pad_contours_test_contact_with_round_track_ends() {
             corners,
             layers: Vec::new(),
             net: None,
+            plated_slot: None,
             center: Point { x_nm: 0, y_nm: 0 },
             shape,
             corner_radius_nm,

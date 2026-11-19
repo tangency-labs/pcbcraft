@@ -26,7 +26,9 @@ fn rejects_invalid_finished_sizes_and_angles() {
     assert!(max.resolve(point(MAX_PAD_CENTER_NM + 1, 0), 0, false).is_none());
     assert!(max.resolve(point(0, -MAX_PAD_CENTER_NM - 1), 0, false).is_none());
     for (width, length, rotation) in [(0, 1, 0), (2, 1, 0), (1, MAX_OFFSET_NM + 1, 0), (1, 1, FULL_TURN_MDEG)] {
-        assert!(PlatedSlot::new(width, length, rotation).is_err());
+        assert!(
+            matches!(PlatedSlot::new(width, length, rotation), Err(CommandError::InvalidParams(message)) if message.contains("plated slot needs"))
+        );
     }
 }
 

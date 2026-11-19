@@ -197,8 +197,27 @@ pub struct PadDrawing {
     pub color: Option<Color32>,
     pub contour: PadContour,
     pub drill_radius: Option<f32>,
+    /// Projected round cap centres and radius for an independent plated slot.
+    pub plated_slot: Option<([Pos2; 2], f32)>,
     pub through_hole: bool,
     pub net: Option<String>,
+}
+
+/// Tessellate a slot from the projected cap centres and physical radius. A degenerate
+/// spine is a circle, preserving the equal-width-and-length case.
+fn slot_polygon([a, b]: [Pos2; 2], radius: f32) -> Vec<Pos2> {
+    let axis = b - a;
+    let angle = axis.y.atan2(axis.x);
+    [a, b]
+        .into_iter()
+        .enumerate()
+        .flat_map(|(end, center)| {
+            (0..=16).map(move |i| {
+                let theta = angle + (0.5 + end as f32 + i as f32 / 16.) * std::f32::consts::PI;
+                center + vec2(theta.cos(), theta.sin()) * radius
+            })
+        })
+        .collect()
 }
 
 /// Physical land contour, with screen-projected radius independent of UI corner tokens.
@@ -444,9 +463,14 @@ pub fn footprint_in_bounds(
         let color = copper_emphasis(pad.color.unwrap_or(copper), (!copper_focused && (selected || highlighted)).then_some(true));
         if let Some(points) = pad.copper {
             p.add(egui::Shape::convex_polygon(pad_contour(pad), color, Stroke::NONE));
-            if let Some(radius) = pad.drill_radius {
+            let hole_edge = Stroke::new(0.7, t.board_ink.gamma_multiply(0.5));
+            if let Some((ends, radius)) = pad.plated_slot.filter(|(ends, _)| ends[0] != ends[1]) {
+                let opening = slot_polygon(ends, radius);
+                p.add(egui::Shape::convex_polygon(opening.clone(), t.board_canvas, Stroke::NONE));
+                context.add(egui::Shape::closed_line(opening, hole_edge));
+            } else if let Some(radius) = pad.plated_slot.map(|(_, radius)| radius).or(pad.drill_radius) {
                 p.circle_filled(pad.center, radius, t.board_canvas);
-                context.circle_stroke(pad.center, radius, Stroke::new(0.7, t.board_ink.gamma_multiply(0.5)));
+                context.circle_stroke(pad.center, radius, hole_edge);
             }
             let mut label_painter = p.clone();
             label_painter.multiply_opacity(f32::from(color.a()) / 255.0);
@@ -698,6 +722,28 @@ fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> 
 
 #[cfg(test)]
 mod net_label_tests;
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    /// The painter draws physical slot ends and sides, not a round marker at the pad centre.
+    #[test]
+    fn tilted_slot_polygon_follows_the_projected_spine() {
+        let ends = [Pos2::new(0., 0.), Pos2::new(30., 40.)];
+        let polygon = slot_polygon(ends, 5.);
+        let axis = (ends[1] - ends[0]).normalized();
+        let normal = vec2(-axis.y, axis.x);
+        let along = |v: egui::Vec2| (v.dot(axis), v.dot(normal));
+        let (left, across, right, other_side) = polygon.iter().fold((0_f32, 0_f32, 0_f32, 0_f32), |(l, t, r, b), vertex| {
+            let (x, y) = along(*vertex - ends[0]);
+            (l.min(x), t.min(y), r.max(x), b.max(y))
+        });
+        for (actual, expected) in [(left, -5.), (across, -5.), (right, 55.), (other_side, 5.)] {
+            assert!((actual - expected).abs() < 0.001);
+        }
+    }
+}
 
 /// Short diagonal strokes at the real polygon boundary distinguish zone intent from fill.
 /// Screen-space spacing stays stable while panning; viewport clipping never creates fake edges.

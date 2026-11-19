@@ -255,6 +255,13 @@ impl Footprint {
                 }
                 if let Some(definition)=project.board.definition_for(self).and_then(|definition|definition.pads.iter().find(|item|item.number==pad.as_str())) {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),definition.copper,self.bottom));
+                    if let Some(slot) = definition.plated_slot
+                        && let Some(resolved) = slot.resolve(point, self.rotation, self.bottom)
+                    {
+                        let (_, length_nm, _) = slot.dimensions();
+                        record["plated_slot"] = json!({"width_nm":resolved.width_nm(),"length_nm":length_nm,
+                            "rotation_mdeg":slot.placement_angle(self.rotation,self.bottom),"cap_centres":resolved.cap_centres()});
+                    }
                 }
                 Some(record)
             }).collect::<Vec<_>>()});

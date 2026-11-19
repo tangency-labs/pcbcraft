@@ -12,11 +12,29 @@ const MAX_PAD_CENTER_NM: i64 = MAX_CENTER_NM + 2 * MAX_OFFSET_NM;
 
 /// Finished size and orientation of a plated through-slot in footprint coordinates.
 /// The angle is independent of the land angle and uses counterclockwise millidegrees.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(try_from = "SlotFields")]
 pub struct PlatedSlot {
     width_nm: i64,
     length_nm: i64,
     rotation_mdeg: u32,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SlotFields {
+    width_nm: i64,
+    length_nm: i64,
+    rotation_mdeg: u32,
+}
+
+impl TryFrom<SlotFields> for PlatedSlot {
+    type Error = CommandError;
+
+    /// Decode native and command fields through the same dimension and angle validation.
+    fn try_from(fields: SlotFields) -> Result<Self, Self::Error> {
+        Self::new(fields.width_nm, fields.length_nm, fields.rotation_mdeg)
+    }
 }
 
 impl PlatedSlot {
@@ -37,6 +55,22 @@ impl PlatedSlot {
         (self.width_nm, self.length_nm, self.rotation_mdeg)
     }
 
+    /// Carry the independent slot axis through the same authoring transform as its land,
+    /// preserving the fractional-degree part rather than rounding it to the land's unit.
+    pub(crate) fn transformed(self, transform: crate::library_graphics::Transform) -> Self {
+        let whole = self.rotation_mdeg / 1_000;
+        let fraction = (self.rotation_mdeg % 1_000) as i32;
+        let sign = if transform.mirror_x != transform.mirror_y { -1 } else { 1 };
+        let angle = i32::from(transform.angle(whole as i16)) * 1_000 + sign * fraction;
+        Self { rotation_mdeg: angle.rem_euclid(FULL_TURN_MDEG as i32) as u32, ..self }
+    }
+
+    /// Report the native board-space angle with the same mirror-then-rotate convention as the hole.
+    pub(crate) fn placement_angle(self, footprint_rotation: u16, bottom: bool) -> u32 {
+        let angle = if bottom { FULL_TURN_MDEG + 2 * QUARTER_TURN_MDEG - self.rotation_mdeg } else { self.rotation_mdeg };
+        (angle + u32::from(footprint_rotation) * 1_000) % FULL_TURN_MDEG
+    }
+
     /// Resolve about the already-placed pad centre: mirror local X on the back, then apply
     /// the footprint rotation. Offsets round once to the board's integer nanometer grid;
     /// the cap radius retains half-nanometer precision. Out-of-range centres are refused.
@@ -44,21 +78,18 @@ impl PlatedSlot {
         if !(-MAX_PAD_CENTER_NM..=MAX_PAD_CENTER_NM).contains(&center.x_nm) || !(-MAX_PAD_CENTER_NM..=MAX_PAD_CENTER_NM).contains(&center.y_nm) {
             return None;
         }
-        let angle = if bottom { FULL_TURN_MDEG + 2 * QUARTER_TURN_MDEG - self.rotation_mdeg } else { self.rotation_mdeg };
-        let angle = (angle + u32::from(footprint_rotation) * 1_000) % FULL_TURN_MDEG;
-        let half_spine = (self.length_nm - self.width_nm) as f64 / 2.;
-        let (x, y) = match angle {
-            0 => (half_spine, 0.),
-            QUARTER_TURN_MDEG => (0., -half_spine),
-            180_000 => (-half_spine, 0.),
-            270_000 => (0., half_spine),
-            _ => {
-                let (sin, cos) = (f64::from(angle) / 1_000.).to_radians().sin_cos();
-                (half_spine * cos, -half_spine * sin)
-            }
+        let angle = self.placement_angle(footprint_rotation, bottom);
+        let spine = self.length_nm - self.width_nm;
+        let lower = -spine / 2;
+        let upper = lower + spine;
+        let offsets = if angle.is_multiple_of(QUARTER_TURN_MDEG) {
+            [lower, upper].map(|x| super::rotate(x, 0, (angle / 1_000) as u16))
+        } else {
+            let half = spine as f64 / 2.;
+            let (sin, cos) = (f64::from(angle) / 1_000.).to_radians().sin_cos();
+            [-half, half].map(|x| ((x * cos).round() as i64, (-x * sin).round() as i64))
         };
-        let (dx, dy) = (x.round() as i64, y.round() as i64);
-        let cap_centres = [Point { x_nm: center.x_nm - dx, y_nm: center.y_nm - dy }, Point { x_nm: center.x_nm + dx, y_nm: center.y_nm + dy }];
+        let cap_centres = offsets.map(|(dx, dy)| Point { x_nm: center.x_nm + dx, y_nm: center.y_nm + dy });
         Some(ResolvedPlatedSlot { cap_centres, width_nm: self.width_nm })
     }
 }
@@ -74,6 +105,11 @@ impl ResolvedPlatedSlot {
     /// Centres of the two round caps, not the extreme ends of the finished hole.
     pub fn cap_centres(self) -> [Point; 2] {
         self.cap_centres
+    }
+
+    /// Move disposable preview geometry with its pad; the isometry must preserve width.
+    pub fn map_cap_centres(self, map: impl FnMut(Point) -> Point) -> Self {
+        Self { cap_centres: self.cap_centres.map(map), ..self }
     }
 
     /// Diameter of both round caps and the perpendicular width of the straight section.
@@ -96,5 +132,7 @@ impl ResolvedPlatedSlot {
     }
 }
 
+#[cfg(test)]
+mod fixture;
 #[cfg(test)]
 mod tests;

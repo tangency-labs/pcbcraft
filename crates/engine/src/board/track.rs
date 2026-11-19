@@ -210,13 +210,15 @@ pub(super) struct Land {
     pub(super) corners: [Point; 4],
     pub(super) layers: Vec<Uuid>,
     pub(super) net: Option<String>,
-    center: Point,
+    pub(super) plated_slot: Option<super::slot::ResolvedPlatedSlot>,
+    pub(super) center: Point,
     shape: PadShape,
     corner_radius_nm: i64,
 }
 
 impl Land {
-    /// Derive the copper contour from resolved corners and pad shape in board nanometers.
+    /// Derive the outer copper contour, which also bounds a pad's contained plated hole.
+    /// Routing clearance treats the entire land as occupied, including the enclosed opening.
     pub(super) fn contour(&self) -> PadContour {
         PadContour::pad(self.center, self.corners, self.shape, self.corner_radius_nm)
     }
@@ -325,6 +327,7 @@ pub(super) fn lands_from_footprints<'a>(footprints: impl Iterator<Item = super::
                     corners,
                     layers,
                     net: pad.net,
+                    plated_slot: pad.plated_slot,
                     center: pad.center,
                     shape: pad.shape,
                     corner_radius_nm: pad.corner_radius_nm,

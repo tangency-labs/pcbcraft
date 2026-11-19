@@ -804,6 +804,7 @@ fn place_group(
             for pad in &mut footprint.pads {
                 pad.center = transform(pad.center);
                 pad.copper = pad.copper.map(|p| p.map(transform));
+                pad.plated_slot = pad.plated_slot.map(|slot| slot.map_cap_centres(transform));
             }
             for graphic in &mut footprint.graphics {
                 graphic.points = graphic.points.iter().copied().map(transform).collect();
@@ -985,6 +986,7 @@ fn preview(footprint: &mut FootprintView<'_>, draft: &Draft) {
     for pad in &mut footprint.pads {
         pad.center = transform(pad.center);
         pad.copper = pad.copper.map(|points| points.map(transform));
+        pad.plated_slot = pad.plated_slot.map(|slot| slot.map_cap_centres(transform));
     }
     for hole in &mut footprint.non_plated_holes {
         hole.center = transform(hole.center);
@@ -1101,6 +1103,11 @@ fn drawing(
                     (camera.screen(Point { x_nm: pad.center.x_nm + diameter, y_nm: pad.center.y_nm }, rect) - camera.screen(pad.center, rect))
                         .length()
                         / 2.
+                }),
+                plated_slot: pad.plated_slot.map(|slot| {
+                    let screen = |point| camera.screen(point, rect);
+                    let diameter_end = Point { x_nm: pad.center.x_nm + slot.width_nm(), y_nm: pad.center.y_nm };
+                    (slot.cap_centres().map(screen), (screen(diameter_end) - screen(pad.center)).length() / 2.)
                 }),
                 through_hole: pad.through_hole,
                 net: pad.net.clone(),

@@ -278,11 +278,11 @@ fragment per source sheet. It includes wiring internal to selected components,
 connected named-net boundaries and related excluded native power annotations;
 it does not flatten sheets or carry unrelated components. Source and destination
 projects need no shared library installation. The same 8 MiB bound applies.
-When a copied package carries circular non-plated holes, the board envelope
-uses `pcbcraft-clipboard/7`; a schematic envelope carrying those definitions
-uses `pcbcraft-clipboard/6`. Other fragments do not change versions for this
-feature. Paste preserves the holes as footprint geometry, not as terminals or
-copper items.
+The board envelope uses `pcbcraft-clipboard/7` for circular non-plated holes alone or `pcbcraft-clipboard/8` when any plated slot is carried.
+The corresponding schematic envelopes use `pcbcraft-clipboard/6` or schematic
+format 7. Slot envelopes can carry both kinds of hole. Fragments without either feature retain their earlier formats.
+Paste preserves both kinds of holes as footprint geometry, not as new terminals
+or independent copper items.
 
 Ordinary PCB paste duplicates logical and physical objects together. It takes
 `text`, `x_nm`, `y_nm`, `board`, `expected_revision`, and a `schematic_targets`

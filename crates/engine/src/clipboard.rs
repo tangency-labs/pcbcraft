@@ -22,6 +22,15 @@ pub const MAX_BYTES: usize = 8 << 20;
 const FORMAT: &str = "pcbcraft-clipboard/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-clipboard/2";
 const NPTH_FORMAT: &str = "pcbcraft-clipboard/6";
+const SLOT_FORMAT: &str = "pcbcraft-clipboard/7";
+
+/// Capability of the copied footprint definitions, ordered by the envelope they require.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum HoleContent {
+    Legacy,
+    Npth,
+    Slot,
+}
 mod hierarchy;
 mod preview;
 pub(crate) use hierarchy::hierarchy_objects;
@@ -222,7 +231,7 @@ impl Fragment {
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft design fragment."))?;
-        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | NPTH_FORMAT)
+        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | NPTH_FORMAT | SLOT_FORMAT)
             || envelope.kind != "schematic"
             || !crate::wire::valid_point(&envelope.anchor)
         {
@@ -230,7 +239,8 @@ impl Fragment {
         }
         let documents = envelope.documents.into_iter().map(|(path, text)| (path, text.into_bytes())).collect();
         let project = crate::persistence::decode_documents(&documents).map_err(invalid)?;
-        let hierarchical = envelope.format == HIERARCHY_FORMAT || (envelope.format == NPTH_FORMAT && envelope.root_sheet.is_some());
+        let hierarchical =
+            envelope.format == HIERARCHY_FORMAT || (matches!(envelope.format.as_str(), NPTH_FORMAT | SLOT_FORMAT) && envelope.root_sheet.is_some());
         let project = if hierarchical {
             let root =
                 envelope.root_sheet.filter(|id| !id.is_nil()).ok_or_else(|| invalid("hierarchy clipboard needs an explicit root sheet UUID"))?;
@@ -246,8 +256,8 @@ impl Fragment {
             project
         };
         let fragment = Self { project, anchor: envelope.anchor, cut_sheets: envelope.cut_sheets };
-        if (envelope.format == NPTH_FORMAT) != fragment.has_npth() {
-            return Err(invalid("clipboard format does not match its pinned non-plated holes"));
+        if envelope.format != fragment.native_format(hierarchical) {
+            return Err(invalid("clipboard format does not match its pinned footprint holes"));
         }
         fragment.validate_scope(hierarchical)?;
         Ok(fragment)
@@ -255,14 +265,29 @@ impl Fragment {
 
     /// Include assigned footprints and the exact closure of selected native parts, even
     /// when a hole belongs to an unselected package variant retained for offline paste.
-    pub(crate) fn has_npth(&self) -> bool {
-        self.project.schematic_packages.definitions.values().any(|footprint| !footprint.non_plated_holes.is_empty())
-            || self
-                .project
-                .components
-                .values()
-                .filter_map(|part| part.part.as_ref())
-                .any(|part| part.resolved.footprints.values().any(|footprint| !footprint.non_plated_holes.is_empty()))
+    pub(crate) fn hole_content(&self) -> HoleContent {
+        let assigned = self.project.schematic_packages.definitions.values();
+        let variants = self.project.components.values().filter_map(|part| part.part.as_ref()).flat_map(|part| part.resolved.footprints.values());
+        let mut content = HoleContent::Legacy;
+        for footprint in assigned.chain(variants) {
+            if footprint.has_plated_slots() {
+                return HoleContent::Slot;
+            }
+            if !footprint.non_plated_holes.is_empty() {
+                content = HoleContent::Npth;
+            }
+        }
+        content
+    }
+
+    /// Use the lowest schematic envelope able to express both hierarchy and all copied holes.
+    fn native_format(&self, hierarchical: bool) -> &'static str {
+        match self.hole_content() {
+            HoleContent::Slot => SLOT_FORMAT,
+            HoleContent::Npth => NPTH_FORMAT,
+            HoleContent::Legacy if hierarchical => HIERARCHY_FORMAT,
+            HoleContent::Legacy => FORMAT,
+        }
     }
 
     /// Serialize just the fragment; no paths, credentials, unused definitions or source files travel.
@@ -273,14 +298,7 @@ impl Fragment {
             .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)).map_err(invalid))
             .collect::<Result<_, _>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.has_npth() {
-                NPTH_FORMAT
-            } else if self.has_hierarchy() {
-                HIERARCHY_FORMAT
-            } else {
-                FORMAT
-            }
-            .into(),
+            format: self.native_format(self.has_hierarchy()).into(),
             kind: "schematic".into(),
             anchor: self.anchor,
             documents,
