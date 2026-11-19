@@ -5,13 +5,13 @@ use crate::{
     live::{Editor, call_editor},
 };
 use pcbcraft_engine::{
-    PLACE_SYMBOL, Session,
+    ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL, Session,
     authoring::{
-        Item, Kind,
+        Item, Kind, Primitive,
         publishing::{new_library, prepare},
     },
     error_codes::ErrorCode,
-    library::sources::{AVAILABLE_REVISIONS, LOAD, symbol_digest},
+    library::sources::{AVAILABLE_REVISIONS, LOAD, PREVIEW_FOOTPRINT_REVISION, symbol_digest},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -80,6 +80,72 @@ fn available_revisions_has_identical_live_and_headless_results() {
     editor.blocked = true;
     assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap_err().message().contains("dialog"));
     assert_eq!(editor.session.inspect(), before);
+}
+
+/// The catalog exposes the preview, and live and headless clients receive the same geometry
+/// rather than a revision-only response when they suppress ordinary project inspection.
+#[test]
+fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
+    let mut server = server();
+    let described = body(&call(&mut server, "describe_command", json!({"command":PREVIEW_FOOTPRINT_REVISION})));
+    assert_eq!(described["id"], PREVIEW_FOOTPRINT_REVISION);
+    assert_eq!(described["params"]["required"], json!(["board", "part_instance"]));
+
+    let manifest = new_library("pad-query", "Pad query", "MIT OR Apache-2.0").unwrap();
+    let symbol = prepare(Arc::new(Item::new(Kind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
+    let first = prepare(Arc::new(Item::new(Kind::Footprint).unwrap()), &manifest, 0, None, false).unwrap();
+    let mut next = first.item().as_ref().clone();
+    let Primitive::Pad { pad } = next.objects.get_mut(&2).unwrap() else { panic!("expected authored pad 2") };
+    pad.center.x_nm += 200_000;
+    let second = prepare(Arc::new(next), &manifest, 1, Some(1), false).unwrap();
+    let mut documents = symbol.documents().clone();
+    documents.extend(first.documents().clone());
+    documents.extend(second.documents().clone());
+    documents.insert("library.json".into(), manifest);
+    let load = json!({"command":LOAD,"params":{"source":"test","documents":documents},"inspect":false});
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.execute(LOAD, &load["params"]).unwrap();
+    let draft = symbol.item();
+    let symbol = setup.libraries().symbol(&draft.library, &draft.id, draft.revision).unwrap();
+    setup
+        .apply(
+            PLACE_SYMBOL,
+            &json!({"library":symbol.library,"definition":symbol.id,"definition_revision":1,
+        "definition_digest":symbol_digest(&symbol).unwrap(),"x_nm":0,"y_nm":0,"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let part = setup.project().unwrap().components().next().unwrap().id();
+    let footprint = first.item().footprint().unwrap();
+    setup
+        .apply(
+            ASSIGN_FOOTPRINT,
+            &json!({"component":part,"library":footprint.library,"definition":footprint.id,
+        "definition_revision":1,"mapping":{"1":"1","2":"2"},"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    setup.apply(PLACE_ASSIGNED_FOOTPRINT, &json!({"component":part,"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    headless.call("engine.execute", load.clone()).unwrap();
+    let mut editor = OpenEditor { session: Session::default(), blocked: false };
+    editor.session.open_snapshot(snapshot.clone());
+    call_editor(&mut editor, &json!({"method":"engine.execute","params":load})).unwrap();
+    let before = editor.session.inspect();
+    let query =
+        json!({"command":PREVIEW_FOOTPRINT_REVISION,"params":{"board":snapshot.board_target().unwrap().board,"part_instance":part},"inspect":false});
+    let headless_report = headless.call("engine.execute", query.clone()).unwrap();
+    let live_report = call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(headless_report, live_report);
+    assert_eq!(live_report["delta"]["pads"][0]["center_shift_nm"], 200_000.0);
+    let mut unknown = query.clone();
+    unknown["params"]["part_instance"] = json!("component-9999");
+    let headless_error = headless.call("engine.execute", unknown.clone()).unwrap_err();
+    let live_error = call_editor(&mut editor, &json!({"method":"engine.execute","params":unknown})).unwrap_err();
+    assert_eq!(headless_error.code(), ErrorCode::NotFound.as_str());
+    assert_eq!(live_error, headless_error);
+    assert_eq!(editor.session.inspect(), before);
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
 }
 
 /// Exercise the ordinary live ownership adapter without opening an OS window.
