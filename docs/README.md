@@ -50,7 +50,7 @@ supported versions and deferred work before extending a format or consumer.
 | --- | --- |
 | Native files and compatibility | [Project storage](native-project-storage.md) · [Optional single-board foundation](single-board-storage.md) · [Single-use sheet occurrences](sheet-occurrence-storage.md) |
 | Persistent net records | [Sparse net registry](net-registry-storage.md) |
-| Netlist export | [JSON netlist format](netlist-format.md) · [Schema](schemas/netlist-v1.schema.json) |
+| Netlist export | [JSON netlist format](netlist-format.md) · [Schema, format 1](schemas/netlist-v1.schema.json) · [Schema, format 2 (board)](schemas/netlist-v2.schema.json) |
 | Object identities | [Identity inventory](object-identity.md) |
 | Pin/pad correspondence | [Complete counterparts and unavailable states](pin-pad-correspondence.md) |
 | Dimensional net classes | [Catalog and resolver](net-classes.md) · [Assignments and topology reconciliation](net-class-assignments.md) · [Routing and checking consumers](net-class-consumers.md) |

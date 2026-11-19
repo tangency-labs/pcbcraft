@@ -237,14 +237,22 @@ requires a bounded nonempty `display_name` on each accepted net. This freezes
 generated reference/pin text and project-wide occurrence qualification separately
 from authored `names` and historical `terminals`; it does not add logical registry
 memberships. Capturing nets through initialization or reviewed Update PCB selects
-format 4. Empty-net baselines retain the earlier version selected by their other
+at least format 4. Empty-net baselines retain the earlier version selected by their other
 data. Formats 1–3 reject display metadata, and format 4 rejects missing names,
 control characters and names over 65,536 UTF-8 bytes, within the existing 16 MiB
 baseline budget. Existing baselines are not enriched by inspection or Save.
 A review may explicitly adopt readable-name metadata from an older accepted
 snapshot; ordinary subsequent no-op updates retain the accepted capture.
 
-When a part is deleted, format-3 history retains its last visible reference,
+Accepted baseline format `pcbcraft-board-baseline/5` adds `origin` only to
+unnamed one-terminal nets (`schematic` or `pad_only`). Those nets have the same
+membership shape but only the former can correspond to a schematic net ID. New
+captures use format 5 only when at least one net needs this distinction. Formats
+1–4 remain readable without changing their bytes on open or no-op Save; the
+origin of their unnamed singletons is unknown. The enclosing board and project
+formats do not change.
+
+When a part is deleted, formats 3 and later retain its last visible reference,
 canonical value and matching typed quantity as display metadata in the same
 undoable deletion. Accepted package and connectivity state remain unchanged
 until reviewed removal. Board Properties and the project browser format that

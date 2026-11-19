@@ -2334,6 +2334,20 @@ const CATALOG: &[Command] = &[
         params: &[BOARD],
     },
     Command {
+        id: netlist::EXPORT_BOARD_NETLIST,
+        title: "Export Board Netlist",
+        summary: "Generate the board's accepted components, packages, terminal pads and nets as versioned JSON. Unapplied connectivity changes are reported as findings; reference and value follow the live component. Edits nothing; execute returns the file's name and text and any findings.",
+        params: &[
+            BOARD,
+            Param {
+                name: "dry_run",
+                required: false,
+                summary: "True returns the file name and findings without the file text",
+                kind: ParamKind::Flag,
+            },
+        ],
+    },
+    Command {
         id: SET_COPPER_LOCKED,
         title: "Set Copper Lock",
         summary: "Lock or unlock selected tracks and vias atomically. Locked copper stays selectable; edits to geometry, sizes or deletion fail as a whole. Copies preserve locks.",
@@ -3144,6 +3158,7 @@ impl Session {
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE
             | EXPORT_FABRICATION
+            | netlist::EXPORT_BOARD_NETLIST
             | ADD_TRACKS
             | ADD_VIA
             | MOVE_TRACKS
@@ -3317,6 +3332,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"netlist":self.netlist_report(params)?}));
         }
+        if id == netlist::EXPORT_BOARD_NETLIST {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"netlist":self.board_netlist_report(params)?}));
+        }
         if id == nets::INSPECT_CLASSES {
             self.validate_project_command(id, params)?;
             return self.inspect_net_class_target(params);
@@ -3470,6 +3489,7 @@ impl Session {
                 | board::class_rules::ROUTE_RULES
                 | board::route::PLAN_ROUTE
                 | EXPORT_FABRICATION
+                | netlist::EXPORT_BOARD_NETLIST
                 | ADD_TRACKS
                 | ADD_VIA
                 | MOVE_TRACKS
@@ -3768,6 +3788,13 @@ impl Session {
             }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
+            }
+            netlist::EXPORT_BOARD_NETLIST => {
+                if params["dry_run"].as_bool() == Some(true) {
+                    self.board_netlist_report(params)?;
+                } else {
+                    self.export_board_netlist(params)?;
+                }
             }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_NET | SET_VIA_SIZE | DELETE_TRACKS => {
