@@ -52,12 +52,20 @@ struct Preview<'a> {
 fn targets(project: &Project, scope: Option<SheetTarget>) -> Vec<Target<'_>> {
     let occurrences: BTreeMap<_, _> =
         project.occurrence_instances().sheet_occurrences.into_iter().map(|occurrence| (occurrence.definition, occurrence.id)).collect();
+    #[cfg(test)]
+    tests::count_work(|work| work.occurrences += occurrences.len());
     let mut seen = BTreeSet::new();
     let mut targets = Vec::new();
     for sheet in project.sheets.iter().filter(|sheet| scope.is_none_or(|scope| scope.sheet == sheet.sheet_id)) {
         let mut units: Vec<_> = sheet.symbols.iter().collect();
-        units.sort_unstable_by_key(|unit| (unit.position.y_nm, unit.position.x_nm, unit.ordinal));
+        units.sort_unstable_by_key(|unit| {
+            #[cfg(test)]
+            tests::count_work(|work| work.sort_keys += 1);
+            (unit.position.y_nm, unit.position.x_nm, unit.ordinal)
+        });
         for unit in units {
+            #[cfg(test)]
+            tests::count_work(|work| work.units += 1);
             if seen.insert(unit.component)
                 && let Some(part) = project.components.get(&unit.component)
             {
@@ -71,7 +79,11 @@ fn targets(project: &Project, scope: Option<SheetTarget>) -> Vec<Target<'_>> {
 /// Find the first free canonical designator in the engine's allowed number range. Valid symbol
 /// prefixes comprise uppercase letters only, so two distinct prefixes cannot generate the same reference.
 fn first_free_reference(prefix: &str, start: usize, occupied: &BTreeMap<&str, Vec<&PartInstance>>) -> Option<String> {
-    (start..=MAX_REFERENCE_NUMBER).map(|number| format!("{prefix}{number}")).find(|reference| !occupied.contains_key(reference.as_str()))
+    (start..=MAX_REFERENCE_NUMBER).map(|number| format!("{prefix}{number}")).find(|reference| {
+        #[cfg(test)]
+        tests::count_work(|work| work.probes += 1);
+        !occupied.contains_key(reference.as_str())
+    })
 }
 
 /// Preserve every existing designator except an unlocked exact `prefix?` placeholder. All parts
@@ -80,6 +92,8 @@ fn first_free_reference(prefix: &str, start: usize, occupied: &BTreeMap<&str, Ve
 fn plan<'a>(targets: &[Target<'a>], parts: impl Iterator<Item = &'a PartInstance>) -> Preview<'a> {
     let mut occupied: BTreeMap<_, Vec<_>> = BTreeMap::new();
     for part in parts {
+        #[cfg(test)]
+        tests::count_work(|work| work.references += 1);
         occupied.entry(part.reference()).or_default().push(part);
     }
     let scoped: BTreeSet<_> = targets.iter().map(|target| target.part.ordinal).collect();
@@ -90,6 +104,8 @@ fn plan<'a>(targets: &[Target<'a>], parts: impl Iterator<Item = &'a PartInstance
         .collect();
     let mut rows = Vec::with_capacity(targets.len());
     for target in targets {
+        #[cfg(test)]
+        tests::count_work(|work| work.rows += 1);
         let part = target.part;
         let current = part.reference();
         let prefix = part.definition.reference_prefix();

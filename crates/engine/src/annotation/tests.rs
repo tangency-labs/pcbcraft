@@ -41,7 +41,7 @@ fn annotation_preview_fills_gaps_without_editing() {
     let kept = place(&mut session, PLACE_RESISTOR, json!({"sheet":second.id(),"x_nm":6_000_000,"y_nm":-4_000_000}));
     let locked = place(&mut session, PLACE_SYMBOL, json!({"sheet":second.id(),"definition":"capacitor","x_nm":0,"y_nm":0}));
     reference(&mut session, &pending, "R?", false, second.id());
-    reference(&mut session, &kept, "R5", false, second.id());
+    reference(&mut session, &kept, "R2", false, second.id());
     reference(&mut session, &locked, "C?", true, second.id());
     let saved = encode_packed(session.snapshot().unwrap()).unwrap();
     session.open_snapshot(crate::persistence::decode_packed(&saved).unwrap().project);
@@ -54,6 +54,8 @@ fn annotation_preview_fills_gaps_without_editing() {
     let revision = session.revision();
     let occurrence = baseline.sheet_occurrence(second).unwrap().id;
     let part_instance = baseline.all_symbols().find(|unit| unit.id() == pending).unwrap().component_id();
+    let keeper = baseline.all_symbols().find(|unit| unit.id() == kept).unwrap();
+    assert_eq!(baseline.component(keeper).unwrap().reference_number, 3);
     let scoped = session.execute(PREVIEW, &json!({"sheet":second.id(),"expected_revision":revision})).unwrap();
     assert_eq!(scoped["revision"], revision);
     let preview = &scoped["annotation_preview"];
@@ -61,14 +63,15 @@ fn annotation_preview_fills_gaps_without_editing() {
     let rows = preview["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 3);
     assert_eq!(rows[0]["symbol"], kept);
-    assert_eq!(rows[0]["current"], "R5");
-    assert_eq!(rows[0]["proposed"], "R5");
+    assert_eq!(rows[0]["current"], "R2");
+    assert_eq!(rows[0]["proposed"], "R2");
     assert_eq!(rows[1]["symbol"], locked);
     assert_eq!(rows[1]["locked"], true);
     assert_eq!(rows[1]["proposed"], "C?");
+    // The keeper's displayed R2 reserves the gap, not its internal placement number 3.
     assert_eq!(
         rows[2],
-        json!({"part_instance":part_instance,"symbol":pending,"sheet":second.id(),"occurrence":occurrence,"at":{"x_nm":2_000_000,"y_nm":2_000_000},"locked":false,"current":"R?","proposed":"R2"})
+        json!({"part_instance":part_instance,"symbol":pending,"sheet":second.id(),"occurrence":occurrence,"at":{"x_nm":2_000_000,"y_nm":2_000_000},"locked":false,"current":"R?","proposed":"R3"})
     );
     let all = session.execute(PREVIEW, &json!({})).unwrap();
     assert_eq!(all["annotation_preview"]["rows"].as_array().unwrap().len(), 4);
@@ -153,6 +156,71 @@ fn annotation_preview_refuses_invalid_scope_or_revision() {
     assert!(matches!(session.execute(PREVIEW, &json!({"sheet":Uuid::nil()})), Err(CommandError::NotFound(_))));
     assert!(matches!(session.execute(PREVIEW, &json!({"expected_revision":0,"sheet":"wrong"})), Err(CommandError::StaleRevision { .. })));
     assert_eq!(session.inspect(), before);
+}
+
+/// Counts the shared command's work without a wall-clock requirement or non-test overhead.
+#[derive(Clone, Copy, Default)]
+pub(super) struct Work {
+    pub(super) occurrences: usize,
+    pub(super) sort_keys: usize,
+    pub(super) units: usize,
+    pub(super) probes: usize,
+    pub(super) references: usize,
+    pub(super) rows: usize,
+}
+
+thread_local! {
+    static WORK: std::cell::Cell<Option<Work>> = const { std::cell::Cell::new(None) };
+}
+
+/// Record work only while this thread is running the large-design regression.
+pub(super) fn count_work(update: impl FnOnce(&mut Work)) {
+    WORK.with(|counter| {
+        if let Some(mut work) = counter.get() {
+            update(&mut work);
+            counter.set(Some(work));
+        }
+    });
+}
+
+/// Exercise the same command as the live editor, but count operations rather than fixture time.
+/// Even a one-row review indexes all 2,000 references once; it must not sort off-sheet units.
+#[test]
+fn annotation_preview_2000_parts_bounds_shared_command_work() {
+    const PARTS: usize = 2_000;
+    const SPACING: i64 = crate::schematic::GRID_NM * 6;
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let first = session.project().unwrap().sheet_target().id();
+    let sheet = second_sheet(&mut session);
+    for i in 0..PARTS - 1 {
+        let grid = (i * 997) % PARTS;
+        place(&mut session, PLACE_RESISTOR, json!({"sheet":first,"x_nm":(grid % 50) as i64 * SPACING,"y_nm":(grid / 50) as i64 * SPACING}));
+    }
+    let placeholder = place(&mut session, PLACE_RESISTOR, json!({"sheet":sheet.id(),"x_nm":0,"y_nm":0}));
+    reference(&mut session, &placeholder, "R?", false, sheet.id());
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    for (params, count) in [(json!({"sheet":sheet.id()}), 1), (json!({}), PARTS)] {
+        WORK.set(Some(Work::default()));
+        let result = session.execute(PREVIEW, &params);
+        let work = WORK.take().unwrap();
+        let result = result.unwrap();
+        let rows = result["annotation_preview"]["rows"].as_array().unwrap();
+        assert_eq!(result["annotation_preview"]["errors"], json!([]));
+        assert_eq!(rows.len(), count);
+        let pending = rows.iter().find(|row| row["symbol"] == placeholder).unwrap();
+        assert_eq!(pending["proposed"], "R2000");
+        assert_eq!((work.occurrences, work.references, work.units, work.rows), (2, PARTS, count, count));
+        assert_eq!(work.probes, PARTS, "one gap search across the occupied prefix");
+        if count == 1 {
+            assert!(work.sort_keys <= 2, "do not sort off-sheet units for a scoped preview");
+        } else {
+            assert!(work.sort_keys <= 4 * PARTS * PARTS.ilog2() as usize, "sort key evaluations: {}", work.sort_keys);
+        }
+        assert_eq!(session.revision(), revision);
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    }
 }
 
 /// The last allowed reference number may be proposed; the following one may not.
