@@ -260,6 +260,31 @@ impl Sources {
         self.job.is_some()
     }
 
+    /// Shared desktop and live-editor exclusion. Adoption reads the catalog before editing
+    /// the project, so even an ordinary refresh (not an install) must finish first.
+    pub(super) fn command_refusal(&self, command: &str) -> Option<&'static str> {
+        if self.busy() && matches!(command, sources::AVAILABLE_REVISIONS | sources::PREVIEW_ADOPTION | sources::APPLY_ADOPTION) {
+            return Some("Finish the current library folder operation before reviewing or adopting revisions");
+        }
+        if (self.mutating() || self.installing())
+            && (command.starts_with("library.") || command.starts_with("app.library_") || command.starts_with("app.part_"))
+        {
+            return Some("Finish the current library folder operation before changing its sources or editors");
+        }
+        None
+    }
+
+    /// Hold an ordinary refresh open deterministically, without starting a filesystem worker.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) fn hold_refresh_for_test(&mut self, source: &str, generation: u64) -> impl FnOnce() + use<> {
+        assert!(self.job.is_none());
+        let (send, receive) = mpsc::channel();
+        let source = source.to_owned();
+        let previous_status = self.statuses.insert(source.clone(), "Loading…".into());
+        self.job = Some(Job { source, previous_status, receive, generation, installing: false });
+        move || send.send(Ok(None)).unwrap()
+    }
+
     /// Folder deletion owns separate mutation authority; an immutable publication can coexist
     /// with definition edits while still excluding competing source writes.
     pub(crate) fn mutating(&self) -> bool {

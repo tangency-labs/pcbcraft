@@ -1,14 +1,22 @@
 //! The Parts Library review uses the same transactions and results as MCP.
 use crate::PcbApp;
 use pcbcraft_chrome::controls;
-use pcbcraft_engine::library::sources::{APPLY_ADOPTION, AVAILABLE_REVISIONS, PREVIEW_ADOPTION};
+use pcbcraft_engine::{
+    Project,
+    library::sources::{APPLY_ADOPTION, AVAILABLE_REVISIONS, PREVIEW_ADOPTION},
+};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Weak},
+};
 
 /// A pane-local list and its current review. A new list never retains an old confirmation.
 #[derive(Clone, Debug)]
 pub(super) struct Review {
-    project: uuid::Uuid,
+    baseline: Weak<Project>,
+    revision: u64,
+    generation: u64,
     list: Value,
     selected: BTreeSet<String>,
     preview: Option<Value>,
@@ -17,17 +25,35 @@ pub(super) struct Review {
 
 /// Open a fresh list from the live project. This is a query, not an authored edit.
 fn discover(app: &mut PcbApp) -> Result<Review, String> {
-    let project = app.session.project().ok_or("No project is open.")?.id();
+    let project = app.session.snapshot().ok_or("No project is open.")?;
     let list = app.session.execute(AVAILABLE_REVISIONS, &Value::Null).map_err(|error| error.to_string())?;
-    Ok(Review { project, list, selected: BTreeSet::new(), preview: None, result: None })
+    Ok(Review {
+        baseline: Arc::downgrade(&project),
+        revision: app.session.revision(),
+        generation: app.session.libraries().generation(),
+        list,
+        selected: BTreeSet::new(),
+        preview: None,
+        result: None,
+    })
 }
 
 /// Display the selectable instances, exact review and confirmation inside the library pane.
 /// Returns true when review owns the remaining pane instead of the browser.
 pub(super) fn panel(ui: &mut egui::Ui, app: &mut PcbApp, state: &mut Option<Review>) -> bool {
-    let project = app.session.project().map(|project| project.id());
-    if state.as_ref().is_some_and(|review| Some(review.project) != project) {
+    let project = app.session.snapshot();
+    if state.as_ref().is_some_and(|review| {
+        review.revision != app.session.revision()
+            || review.generation != app.session.libraries().generation()
+            || !project.as_ref().is_some_and(|project| review.baseline.ptr_eq(&Arc::downgrade(project)))
+    }) {
         *state = None;
+    }
+    if let Some(reason) = app.library_sources.command_refusal(AVAILABLE_REVISIONS) {
+        if project.is_some() {
+            ui.label(reason);
+        }
+        return state.is_some();
     }
     if state.is_none() {
         if controls::enabled_button(ui, project.is_some(), "Review library updates").clicked() {
@@ -72,6 +98,11 @@ impl Review {
         if let Some(result) = &self.result {
             ui.heading("Library revisions adopted");
             show_changes(ui, result);
+            if controls::enabled_button(ui, app.session.available("edit.undo"), "Undo adoption").clicked() {
+                // Only shown while this edit is still the current project revision.
+                app.run("edit.undo", &Value::Null);
+                app.repaint_editors(ui.ctx());
+            }
             return;
         }
         ui.heading("Available library revisions");
@@ -124,6 +155,10 @@ impl Review {
             // Keep the canonical engine history and refresh every project pane as for manual edits.
             match app.session.execute(APPLY_ADOPTION, &params) {
                 Ok(result) => {
+                    if let Some(project) = app.session.snapshot() {
+                        self.baseline = Arc::downgrade(&project);
+                    }
+                    self.revision = app.session.revision();
                     self.result = Some(result);
                     app.file_notice = None;
                     app.message = None;

@@ -224,8 +224,11 @@ Undo/Redo.
 With a project open, choose **Review library updates** in Parts Library. Select
 instances, choose **Preview selected updates**, and read the exact before and
 after fields. **Apply reviewed updates** uses the same command and Undo history
-as the schematic editor. Reload available revisions to pick up a source or
-project change before starting a new review.
+as the schematic editor. **Undo adoption** reverses the change directly from
+its result. A project or source change clears the current review or result;
+open the review again to see the current state. A pending library folder
+operation temporarily prevents review and adoption in the desktop and live
+MCP editor.
 
 `library.preview_adoption` reviews the latest loaded symbol or generic-part root
 for the chosen `instances` (a nonempty list of distinct `component-N` IDs).

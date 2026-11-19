@@ -26,9 +26,8 @@ fn fixture(width: f32) -> Harness<'static, PcbApp> {
     h
 }
 
-/// The desktop panel reviews selected instances before committing one undoable project edit.
-#[test]
-fn review_library_updates_through_the_desktop_panel() {
+/// Open the actual desktop pane and complete a preview for one placed revision.
+fn adoption_fixture() -> Harness<'static, PcbApp> {
     use pcbcraft_engine::authoring::{
         Item as Draft, Kind as DraftKind,
         publishing::{new_library, prepare},
@@ -62,10 +61,69 @@ fn review_library_updates_through_the_desktop_panel() {
     click(&mut h, &label);
     click(&mut h, "Preview selected updates");
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    h
+}
+
+/// The desktop panel commits one edit and exposes the real project Undo action.
+#[test]
+fn review_library_updates_through_the_desktop_panel() {
+    let mut h = adoption_fixture();
+    let before = h.state().session.snapshot().unwrap();
     click(&mut h, "Apply reviewed updates");
     h.get_by_label("Library revisions adopted");
     assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 2);
-    h.state_mut().run("edit.undo", &Value::Null);
+    click(&mut h, "Undo adoption");
+    h.get_by_label("Review library updates");
+    assert!(h.query_by_label("Library revisions adopted").is_none());
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// A pending refresh hides GUI Apply and rejects an otherwise valid live Apply without edits.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pending_refresh_interlocks_desktop_and_live_adoption() {
+    let mut h = adoption_fixture();
+    let before = h.state().session.snapshot().unwrap();
+    let instance = before.components().next().unwrap().id();
+    let session = &mut h.state_mut().session;
+    let revision = session.revision();
+    let preview = session.execute(sources::PREVIEW_ADOPTION, &json!({"instances":[instance],"expected_revision":revision})).unwrap();
+    let generation = session.libraries().generation();
+    let finish = h.state_mut().library_sources.hold_refresh_for_test("review-demo", generation);
+    h.run();
+    h.get_by_label("Finish the current library folder operation before reviewing or adopting revisions");
+    assert!(h.query_by_label("Apply reviewed updates").is_none());
+    let ctx = h.ctx.clone();
+    let mut editor = crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx };
+    let request = json!({"method":"engine.execute","params":{"command":sources::APPLY_ADOPTION,
+        "params":{"instances":[instance],"expected_revision":revision,"preview":preview["preview"]},"inspect":false}});
+    let error = pcbcraft_mcp::live::call_editor(&mut editor, &request).unwrap_err();
+    assert!(error.message().contains("current library folder operation"));
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    finish();
+    h.run();
+    // The generation did not change on cancellation; obtain fresh confirmation then apply.
+    click(&mut h, "Preview selected updates");
+    click(&mut h, "Apply reviewed updates");
+    h.get_by_label("Library revisions adopted");
+}
+
+/// An Undo through live control invalidates the originating pane's now-historical result.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn external_undo_clears_the_desktop_adoption_result() {
+    let mut h = adoption_fixture();
+    click(&mut h, "Apply reviewed updates");
+    h.get_by_label("Library revisions adopted");
+    let ctx = h.ctx.clone();
+    let mut editor = crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx };
+    let request = json!({"method":"engine.execute","params":{"command":"edit.undo","params":{},"inspect":false}});
+    pcbcraft_mcp::live::call_editor(&mut editor, &request).unwrap();
+    h.run();
+    assert!(h.query_by_label("Library revisions adopted").is_none());
+    assert!(h.query_by_label("Undo adoption").is_none());
+    h.get_by_label("Review library updates");
     assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 1);
 }
 
