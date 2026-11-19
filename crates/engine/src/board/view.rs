@@ -205,7 +205,7 @@ impl Project {
         match id {
             None => Ok(default),
             Some(id) if id == default.board.to_string() => Ok(default),
-            Some(_) => Err(crate::CommandError::InvalidParams("unknown board ID".to_owned())),
+            Some(_) => Err(crate::CommandError::NotFound("unknown board ID".to_owned())),
         }
     }
 }

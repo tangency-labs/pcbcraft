@@ -289,14 +289,14 @@ impl Edit {
     /// Bound pair scans independently of the number of successful splits and merges.
     fn compare(&mut self) -> Result<(), CommandError> {
         self.budget =
-            self.budget.checked_sub(1).ok_or_else(|| CommandError::Unavailable("wire healing exceeds this edit's comparison budget".into()))?;
+            self.budget.checked_sub(1).ok_or_else(|| CommandError::CapExceeded("wire healing exceeds this edit's comparison budget".into()))?;
         Ok(())
     }
 
     /// Allocate monotonically within the native format's exact integer range.
     pub fn id(&mut self) -> Result<u64, CommandError> {
         if self.next > MAX_OBJECT_ID {
-            return Err(CommandError::Unavailable("project has exhausted its object IDs".into()));
+            return Err(CommandError::CapExceeded("project has exhausted its object IDs".into()));
         }
         let id = self.next;
         self.next += 1;
@@ -322,7 +322,7 @@ impl Edit {
         }
         match anchor {
             Anchor::Existing(end) => {
-                self.project.endpoint_position(end).map(|_| end).ok_or_else(|| CommandError::InvalidParams("wire endpoint does not exist".into()))
+                self.project.endpoint_position(end).map(|_| end).ok_or_else(|| CommandError::NotFound("wire endpoint does not exist".into()))
             }
             Anchor::Free(point) => {
                 let end = self.free(point)?;
@@ -365,7 +365,7 @@ impl Edit {
     /// over older branch-free alternatives during local normalization.
     fn push_wire(&mut self, endpoints: [WireEndpoint; 2], path: &[Point]) -> Result<(), CommandError> {
         if self.project.wires.len() >= MAX_WIRES {
-            return Err(CommandError::Unavailable("the schematic wire limit has been reached".into()));
+            return Err(CommandError::CapExceeded("the schematic wire limit has been reached".into()));
         }
         let ordinal = self.id()?;
         let bends = super::interior(path)?;
@@ -379,8 +379,7 @@ impl Edit {
     /// preference on both pieces. Endpoints reuse their identities; a new interior junction
     /// and second wire are allocated atomically.
     pub fn split(&mut self, id: u64, at: Point) -> Result<WireEndpoint, CommandError> {
-        let index =
-            self.project.wires.iter().position(|w| w.ordinal == id).ok_or_else(|| CommandError::InvalidParams("wire does not exist".into()))?;
+        let index = self.project.wires.iter().position(|w| w.ordinal == id).ok_or_else(|| CommandError::NotFound("wire does not exist".into()))?;
         let wire = self.project.wires[index].clone();
         let path = self.project.wire_path(&wire);
         let (left, right) = match locate(&path, at)? {
@@ -390,7 +389,7 @@ impl Edit {
             OnPath::Leg(k) => (path[..=k].iter().copied().chain([at]).collect(), [at].into_iter().chain(path[k + 1..].iter().copied()).collect()),
         };
         if self.project.wires.len() >= MAX_WIRES {
-            return Err(CommandError::Unavailable("the schematic wire limit has been reached".into()));
+            return Err(CommandError::CapExceeded("the schematic wire limit has been reached".into()));
         }
         let node = self.free(at)?;
         let ordinal = self.id()?;
@@ -559,7 +558,7 @@ impl Edit {
                 self.budget = self
                     .budget
                     .checked_sub(1)
-                    .ok_or_else(|| CommandError::Unavailable("wire healing exceeds this edit's comparison budget".into()))?;
+                    .ok_or_else(|| CommandError::CapExceeded("wire healing exceeds this edit's comparison budget".into()))?;
                 let (a, b) = (edges[0], edges[1]);
                 let mut pa = self.project.wire_path(a);
                 if a.endpoints[0] == node {
@@ -605,7 +604,7 @@ impl Edit {
             self.project.prune_junctions();
             self.touched.insert(a);
         }
-        Err(CommandError::Unavailable("too many redundant junctions to heal in one edit".into()))
+        Err(CommandError::CapExceeded("too many redundant junctions to heal in one edit".into()))
     }
 
     /// Shorten one U-shaped return touched directly or through an incident wire by sliding
@@ -733,7 +732,7 @@ impl Edit {
             self.deduplicate()?;
             self.touched.extend([a, b]);
         }
-        Err(CommandError::Unavailable("too many overlapping runs or return bends in one edit".into()))
+        Err(CommandError::CapExceeded("too many overlapping runs or return bends in one edit".into()))
     }
 }
 
@@ -747,7 +746,7 @@ impl Project {
         }
         let mut edit = Edit::new(self, revision);
         for id in &items.wires {
-            let wire = self.wires.iter().find(|w| w.id() == *id).ok_or_else(|| CommandError::InvalidParams("selected wire does not exist".into()))?;
+            let wire = self.wires.iter().find(|w| w.id() == *id).ok_or_else(|| CommandError::NotFound("selected wire does not exist".into()))?;
             edit.touched.insert(wire.ordinal);
         }
         let ends: BTreeSet<_> = self
@@ -807,7 +806,7 @@ impl Project {
         if matches!(target, Anchor::Free(_)) {
             return Err(CommandError::InvalidParams("attachment requires a pin, endpoint or wire segment".into()));
         }
-        let point = target.position(self).ok_or_else(|| CommandError::InvalidParams("attachment target does not exist".into()))?;
+        let point = target.position(self).ok_or_else(|| CommandError::NotFound("attachment target does not exist".into()))?;
         let attachments = self.wire_attachment_policy();
         if let Some(source) = self.endpoint_position(WireEndpoint::Junction(junction)) {
             attachments.check(source)?;
@@ -852,7 +851,7 @@ impl Project {
     ) -> Result<Project, CommandError> {
         let index = super::parse_id(symbol, "symbol-")
             .and_then(|id| self.symbol_index(id))
-            .ok_or_else(|| CommandError::InvalidParams("symbol does not exist".into()))?;
+            .ok_or_else(|| CommandError::NotFound("symbol does not exist".into()))?;
         if !valid_point(&to) {
             return Err(CommandError::InvalidParams("symbol exceeds schematic bounds".into()));
         }

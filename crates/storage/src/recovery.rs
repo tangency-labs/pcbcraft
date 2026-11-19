@@ -218,10 +218,17 @@ fn read_frame(reader: &mut impl Read) -> Result<Option<Vec<u8>>, String> {
 /// in `before` and `after` are left out.
 fn encode_record(edit: &CommittedEdit, before: &Documents, before_sha256: &str, after: &Documents, after_sha256: &str) -> Result<Vec<u8>, String> {
     let changed: Vec<(&String, &Vec<u8>)> = after.iter().filter(|(path, bytes)| before.get(*path) != Some(*bytes)).collect();
+    let mut params = edit.params.clone();
+    // Setup review authority is session-local and already spent. Recovery replays the documents, not this capability.
+    if edit.command == pcbcraft_engine::SET_BOARD_SETUP
+        && let Some(params) = params.as_object_mut()
+    {
+        params.remove("plan_token");
+    }
     let record = Record {
         command: edit.command.clone(),
         version: COMMAND_VERSION,
-        params: edit.params.clone(),
+        params,
         revision: edit.revision,
         before_sha256: before_sha256.to_owned(),
         after_sha256: after_sha256.to_owned(),

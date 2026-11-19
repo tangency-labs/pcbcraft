@@ -1,0 +1,19 @@
+{
+  "description": "Published failure codes, in publication order. Codes are only appended: never renamed, removed, reordered or reused.",
+  "codes": [
+    "unknown_command",
+    "invalid_params",
+    "unavailable",
+    "stale_revision",
+    "not_found",
+    "cap_exceeded",
+    "needs_live_editor",
+    "denied",
+    "cancelled",
+    "busy",
+    "no_reply",
+    "connection_failed",
+    "invalid_request",
+    "version_mismatch"
+  ]
+}

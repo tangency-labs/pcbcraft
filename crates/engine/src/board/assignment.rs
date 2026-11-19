@@ -267,7 +267,7 @@ fn component_id(params: &Value, project: &Project) -> Result<u64, CommandError> 
     text.strip_prefix("component-")
         .and_then(|id| id.parse::<u64>().ok())
         .filter(|id| text == format!("component-{id}") && project.components.contains_key(id))
-        .ok_or_else(|| CommandError::InvalidParams("unknown component ID".into()))
+        .ok_or_else(|| CommandError::NotFound("unknown component ID".into()))
 }
 
 impl Session {
@@ -416,7 +416,7 @@ impl Session {
             let id = first_id
                 .checked_add(index as u64)
                 .filter(|id| *id <= crate::MAX_OBJECT_ID)
-                .ok_or_else(|| CommandError::Unavailable("project has exhausted its object IDs".into()))?;
+                .ok_or_else(|| CommandError::CapExceeded("project has exhausted its object IDs".into()))?;
             Arc::make_mut(&mut next.board)
                 .append(assignment.footprint(id, Point { x_nm: 0, y_nm: 0 }))
                 .map_err(|error| CommandError::InvalidParams(error.into()))?;

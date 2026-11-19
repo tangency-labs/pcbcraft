@@ -480,20 +480,19 @@ impl PcbApp {
             .is_some_and(|view| crate::board_tracks::can_route(view, board.active_layer.as_deref(), &board.hidden_layers))
     }
 
-    /// Generate the focused board's Gerber and drill files as one archive and save it off the
-    /// editor loop. A missing setup or outline, or an export already running, is reported in the
-    /// status bar. A targeted attempt clears the previous file notice; nothing in the project changes.
+    /// Capture the focused board's complete ZIP on the editor loop. The native worker saves it
+    /// at the chosen path; the browser path requests one download.
+    /// Missing setup or outline and a busy export slot are reported without editing the project.
     pub(super) fn export_fabrication(&mut self, ctx: &egui::Context) {
         let Some(target) = self.views.active.board.target else { return };
         self.file_notice = None;
         let result = self
             .session
-            .export_fabrication(&serde_json::json!({"board": target.board}))
+            .export_fabrication_archive(&serde_json::json!({"board": target.board}))
             .map_err(|error| error.to_string())
-            .and_then(|outputs| pcbcraft_engine::board::fabrication::zip(&outputs))
-            .and_then(|bytes| {
-                let name = crate::board_outputs::archive_name(self.session.project().map_or("board", |project| project.name.as_str()));
-                self.fabrication_exports.start(ctx, name, bytes)
+            .and_then(|archive| {
+                let name = pcbcraft_engine::board::fabrication::archive_name(self.session.project().map_or("board", |project| project.name.as_str()));
+                self.fabrication_exports.start(ctx, name, archive)
             });
         self.message = result.err();
     }

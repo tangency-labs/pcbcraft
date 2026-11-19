@@ -5,10 +5,10 @@ use std::sync::{Arc, Mutex, mpsc};
 
 /// Execute one accepted input exactly once, then poll its completion with a bounded deadline.
 fn input(remote: &mut Remote, id: &str, params: Value) -> Result<(), String> {
-    let accepted = remote.call("engine.execute", json!({"command":id,"params":params}))?;
+    let accepted = remote.call("engine.execute", json!({"command":id,"params":params})).map_err(|failure| failure.to_string())?;
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
-        let status = remote.call("engine.execute", json!({"command":"ui.inspect","params":{}}))?;
+        let status = remote.call("engine.execute", json!({"command":"ui.inspect","params":{}})).map_err(|failure| failure.to_string())?;
         let operation = &status["operation"];
         if operation["ticket"] == accepted["ticket"] {
             match operation["state"].as_str() {

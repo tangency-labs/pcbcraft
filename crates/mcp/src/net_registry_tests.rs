@@ -27,7 +27,7 @@ fn net_class_commands_share_live_and_headless_revision_and_query_behavior() {
     let revision = editor.session.revision();
     let edit = json!({"command":classes::UPDATE,"inspect":false,"params":{"class":id,"name":"Supply","rules":{"clearance_nm":700_000},"expected_revision":revision}});
     editor.blocked = true;
-    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":edit})).unwrap_err().contains("dialog"));
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":edit})).unwrap_err().message().contains("dialog"));
     assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
     editor.blocked = false;
     let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":edit})).unwrap();
@@ -112,7 +112,7 @@ impl Editor for OpenEditor {
         json!({})
     }
     /// No document command may fall through to a window handler.
-    fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), String> {
+    fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), crate::Failure> {
         Err("not a window command".into())
     }
 }
@@ -189,7 +189,7 @@ fn promotion_is_discoverable_and_shared_by_headless_and_live_clients() {
     let revision = inspect["revision"].clone();
     let params = json!({"command":nets::PROMOTE,"params":{"anchor":{"symbol":"symbol-2","terminal":"2"},"expected_revision":revision}});
     editor.blocked = true;
-    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap_err().contains("dialog"));
+    assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap_err().message().contains("dialog"));
     assert!(Arc::ptr_eq(&before, &editor.session.snapshot().unwrap()));
     editor.blocked = false;
     let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap();

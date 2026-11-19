@@ -221,7 +221,7 @@ impl Session {
             return Ok(());
         };
         let package =
-            selection.resolved.definition.packages.get(package_id).ok_or_else(|| CommandError::InvalidParams("Unknown package variant.".into()))?;
+            selection.resolved.definition.packages.get(package_id).ok_or_else(|| CommandError::NotFound("Unknown package variant.".into()))?;
         let footprint = selection
             .resolved
             .footprints
@@ -248,15 +248,14 @@ impl Session {
             .and_then(|id| schematic::wiring::parse_id(id, "component-"))
             .ok_or_else(|| CommandError::InvalidParams("Invalid part instance ID.".into()))?;
         let project = self.open_project()?;
-        let part = project.components.get(&id).ok_or_else(|| CommandError::InvalidParams("Unknown part instance.".into()))?;
+        let part = project.components.get(&id).ok_or_else(|| CommandError::NotFound("Unknown part instance.".into()))?;
         let previous = part.part.clone().ok_or_else(|| CommandError::InvalidParams("This instance has no reusable part definition.".into()))?;
         let selection = edited(self, params, previous.clone())?;
         if selection == previous {
             return Ok(());
         }
         let mut candidate = project.clone();
-        let part =
-            Arc::make_mut(&mut candidate.components).get_mut(&id).ok_or_else(|| CommandError::InvalidParams("Unknown part instance.".into()))?;
+        let part = Arc::make_mut(&mut candidate.components).get_mut(&id).ok_or_else(|| CommandError::NotFound("Unknown part instance.".into()))?;
         if let Some(value) = selection.primary_value() {
             part.value = value;
         }

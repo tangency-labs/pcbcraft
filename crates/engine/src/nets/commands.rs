@@ -32,7 +32,7 @@ impl Session {
         self.check_revision(params)?;
         let original = self.open_project()?;
         let (graph, anchor) = target(original, params)?;
-        let index = graph.network(&anchor).ok_or_else(|| CommandError::InvalidParams("Unknown net anchor.".into()))?;
+        let index = graph.network(&anchor).ok_or_else(|| CommandError::NotFound("Unknown net anchor.".into()))?;
         let (project, _) = promoted(original, &graph, &anchor, index)?;
         if project.net_registry == original.net_registry {
             return Ok(());
@@ -49,7 +49,7 @@ impl Session {
             .as_str()
             .and_then(|id| Uuid::parse_str(id).ok())
             .ok_or_else(|| CommandError::InvalidParams("Expected an ambiguous net UUID.".into()))?;
-        let source = original.net_registry.record(id).ok_or_else(|| CommandError::InvalidParams("Unknown persistent net UUID.".into()))?;
+        let source = original.net_registry.record(id).ok_or_else(|| CommandError::NotFound("Unknown persistent net UUID.".into()))?;
         let State::Ambiguous { branches, .. } = &source.state else {
             return Err(CommandError::InvalidParams("Net identity is not ambiguous.".into()));
         };

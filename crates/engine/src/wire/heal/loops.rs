@@ -34,7 +34,7 @@ pub(super) fn erase_path_loops(path: &mut Vec<Point>, budget: &mut usize) -> Res
         'scan: for later in 2..path.len().saturating_sub(1) {
             for earlier in 0..later - 1 {
                 *budget =
-                    budget.checked_sub(1).ok_or_else(|| CommandError::Unavailable("wire healing exceeds this edit's comparison budget".into()))?;
+                    budget.checked_sub(1).ok_or_else(|| CommandError::CapExceeded("wire healing exceeds this edit's comparison budget".into()))?;
                 if let Some(at) = intersection(path[earlier], path[earlier + 1], path[later], path[later + 1]) {
                     found = Some((earlier, later, at));
                     break 'scan;

@@ -48,7 +48,7 @@ impl Session {
         };
         if command == REMOVE {
             if catalog.get(id).is_none() {
-                return Err(CommandError::InvalidParams("Unknown net class.".into()));
+                return Err(CommandError::NotFound("Unknown net class.".into()));
             }
             let referenced = registry.records.iter().any(|record| record.class_bindings.iter().any(|binding| binding.class == id));
             if let Some(value) = params.get("rebind") {
@@ -79,11 +79,11 @@ impl Session {
             let revision = if command == CREATE {
                 1
             } else {
-                let previous = catalog.get(id).ok_or_else(|| CommandError::InvalidParams("Unknown net class.".into()))?;
+                let previous = catalog.get(id).ok_or_else(|| CommandError::NotFound("Unknown net class.".into()))?;
                 if previous.name == name && previous.rules == rules {
                     return Ok(());
                 }
-                previous.revision.checked_add(1).ok_or_else(|| CommandError::Unavailable("Class revision exhausted.".into()))?
+                previous.revision.checked_add(1).ok_or_else(|| CommandError::CapExceeded("Class revision exhausted.".into()))?
             };
             catalog.definitions.retain(|class| class.id != id);
             catalog.definitions.push(Definition { id, revision, name, rules });

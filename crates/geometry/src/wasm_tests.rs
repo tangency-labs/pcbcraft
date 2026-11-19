@@ -1,4 +1,4 @@
-//! The crate on `wasm32`, which has no kernel: run by CI with
+//! The crate on `wasm32` without the `wasm-kernel` feature, which has no kernel: run by CI with
 //! `cargo test -p pcbcraft-geometry --target wasm32-wasip1 --lib`.
 
 use super::*;
