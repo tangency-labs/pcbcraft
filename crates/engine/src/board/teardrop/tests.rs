@@ -176,7 +176,9 @@ mod regeneration {
         let layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
         let corners = [point(-5_000_000, -5_000_000), point(25_000_000, -5_000_000), point(25_000_000, 45_000_000), point(-5_000_000, 45_000_000)];
         let board = intent.board.board;
-        session.apply(ADD_DRAWING, &json!({"board":board,"layer":layer,"points":corners,"closed":true,"expected_revision":session.revision()})).unwrap();
+        session
+            .apply(ADD_DRAWING, &json!({"board":board,"layer":layer,"points":corners,"closed":true,"expected_revision":session.revision()}))
+            .unwrap();
         let rules = Values { clearance_nm: 35_000, ..Values::default() };
         session.apply(SET_RULES, &json!({"board":board,"rules":rules,"expected_revision":session.revision()})).unwrap();
         let report = session
@@ -198,9 +200,7 @@ mod regeneration {
         let original_via = view(&session).vias()[0].at;
         let revision = session.revision();
         let (dx, dy) = (400_000, 200_000);
-        session
-            .apply(MOVE_TRACKS, &json!({"tracks":[intent.track],"vias":[intent.via],"dx_nm":dx,"dy_nm":dy,"expected_revision":revision}))
-            .unwrap();
+        session.apply(MOVE_TRACKS, &json!({"tracks":[intent.track],"vias":[intent.via],"dx_nm":dx,"dy_nm":dy,"expected_revision":revision})).unwrap();
         assert_eq!(session.revision(), revision + 1);
         assert_eq!(view(&session).vias()[0].at, point(original_via.x_nm + dx, original_via.y_nm + dy));
         assert_eq!(view(&session).teardrops(), &[Record::from(intent)]);
@@ -242,8 +242,11 @@ mod regeneration {
         let (mut session, intent) = checked_site();
         let layer = intent.derive(view(&session)).unwrap().layer;
         let add_obstacle = |session: &mut Session, y_nm| {
-            session.apply(ADD_TRACKS, &json!({"layer":layer,"width_nm":100_000,
-                "points":[point(260_000,y_nm),point(260_000,y_nm - 50_000)],"expected_revision":session.revision()}))
+            session.apply(
+                ADD_TRACKS,
+                &json!({"layer":layer,"width_nm":100_000,
+                "points":[point(260_000,y_nm),point(260_000,y_nm - 50_000)],"expected_revision":session.revision()}),
+            )
         };
         add_obstacle(&mut session, 19_770_000).unwrap();
         let obstacle = view(&session).tracks().iter().find(|track| track.start == point(260_000, 19_770_000)).unwrap().id;
