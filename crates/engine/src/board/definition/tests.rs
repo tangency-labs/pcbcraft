@@ -73,7 +73,7 @@ fn circular_npth_native_codec_is_lazy_and_closed() {
 #[test]
 fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
     use crate::authoring::{Action, Item, Kind, Primitive};
-    use crate::board::{clipboard, geometry::Contour};
+    use crate::board::{clearance::ObstacleId, clipboard, geometry::Contour};
     let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
     let legacy = editor.snapshot().encode().unwrap();
     let centers = [Point { x_nm: 3_000_000, y_nm: 5_000_000 }, Point { x_nm: -4_000_000, y_nm: 6_000_000 }];
@@ -153,6 +153,15 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
         for &layer in &item.layers {
             let results = query.probe(&probe, &[layer], None).unwrap();
             assert!(results.decisions.iter().any(|d| d.second == index && d.touches && d.clearance_violation && !d.conflicting_nets));
+            let overlay = query.overlay().probe(&probe, &[layer], None).unwrap();
+            assert!(
+                overlay
+                    .decisions
+                    .iter()
+                    .any(|d| { d.obstacle == ObstacleId::Source(index) && d.touches && d.clearance_violation && !d.conflicting_nets })
+            );
+            let err = query.probe(&probe, &[layer], Some(query.objects().len())).unwrap_err();
+            assert_eq!(err.code(), crate::error_codes::ErrorCode::NotFound);
         }
         let request = crate::board::route::Request {
             head: item.at,
@@ -222,15 +231,17 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
     s.apply(crate::ADD_VIA, &json!({"at":transformed[0].center,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()}))
         .unwrap();
     use crate::board::drc;
-    let sync = s.project().unwrap().board_view(target).unwrap().check_design(drc::Rules::default());
-    assert!(sync.violations.iter().any(|v| v.kind == drc::Kind::Clearance && v.message == "Non-plated hole touches copper" && v.nets.is_empty()));
-    let mut job = s.design_check_job(&json!({})).unwrap();
+    let params = json!({"board":target.board});
+    let sync = s.check_design(&params).unwrap();
+    let mut job = s.design_check_job(&params).unwrap();
     for _ in 0..128 {
         if job.step(16) {
             break;
         }
     }
-    assert_eq!(job.take_report().unwrap(), sync);
+    let report = job.take_report().unwrap();
+    assert!(report.violations.iter().any(|v| v.kind == drc::Kind::Clearance && v.message == "Non-plated hole touches copper" && v.nets.is_empty()));
+    assert_eq!(json!(report), sync);
 }
 
 /// Library defaults and board adjustments compose before clipping, while authoring preserves pads.
