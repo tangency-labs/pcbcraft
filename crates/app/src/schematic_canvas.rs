@@ -479,7 +479,7 @@ pub(crate) fn show(
     {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
         let center = screen(position);
-        if visible.contains(center) {
+        if let Some(graphics) = visible_symbol_graphics(project, symbol, center, visible) {
             let color = if selected.symbols.contains(&symbol.id()) {
                 tokens.accent
             } else if highlighted.symbols.contains(&symbol.id()) {
@@ -489,7 +489,7 @@ pub(crate) fn show(
             };
             paint_symbol(
                 &painter,
-                project.symbol_graphics(symbol),
+                graphics,
                 center,
                 unit_step,
                 symbol.turns(),
@@ -1508,6 +1508,11 @@ fn paint_symbol(
             }
         }
     }
+}
+
+/// Project current pin labels only when this placement passes the canvas's normal culling.
+pub(super) fn visible_symbol_graphics(project: &Project, symbol: &SymbolPlacement, center: Pos2, visible: Rect) -> Option<Vec<Shape>> {
+    visible.contains(center).then(|| project.symbol_graphics(symbol))
 }
 
 /// A part's correspondence preview uses the native symbol painter and the exact selected unit.

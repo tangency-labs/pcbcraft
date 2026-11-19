@@ -2936,7 +2936,13 @@ impl Project {
 
     /// Find the stable symbol ID in the ID-ordered placement records.
     fn symbol_index(&self, id: u64) -> Option<usize> {
-        self.symbols.binary_search_by_key(&id, |symbol| symbol.ordinal).ok()
+        self.symbols
+            .binary_search_by_key(&id, |symbol| {
+                #[cfg(test)]
+                pin_functions::PLACEMENT_COMPARISONS.set(pin_functions::PLACEMENT_COMPARISONS.get() + 1);
+                symbol.ordinal
+            })
+            .ok()
     }
 }
 

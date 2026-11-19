@@ -125,8 +125,9 @@ fn pin_function_edit_and_drawing_do_bounded_work_in_a_large_project() {
         let mut placed = symbol.clone();
         placed.ordinal = extra.ordinal + 1;
         placed.component = extra.ordinal;
-        placed.position.x_nm = (i % 64) as i64 * 25_400_000;
-        placed.position.y_nm = (i / 64) as i64 * 25_400_000;
+        placed.position.x_nm = (i % 64) as i64 * 10 * crate::schematic::GRID_NM;
+        placed.position.y_nm = (i / 64) as i64 * 10 * crate::schematic::GRID_NM;
+        assert!(placed.position.x_nm.abs().max(placed.position.y_nm.abs()) <= crate::schematic::MAX_CENTER_NM);
         Arc::make_mut(&mut project.units).insert((extra.ordinal, placed.unit_id().to_owned()), placed.ordinal);
         Arc::make_mut(&mut project.components).insert(extra.ordinal, extra);
         Arc::make_mut(&mut Arc::make_mut(&mut project.sheets)[0].symbols).push(placed);
@@ -150,7 +151,9 @@ fn pin_function_edit_and_drawing_do_bounded_work_in_a_large_project() {
     assert!(Arc::ptr_eq(&selected.components, &before.components));
     assert!(Arc::ptr_eq(&selected.sheets, &before.sheets));
     assert!(Arc::ptr_eq(&selected.net_registry, &before.net_registry));
+    PLACEMENT_COMPARISONS.set(0);
     let symbol = selected.symbol(&symbol_id).unwrap();
+    assert!((1..=14).contains(&PLACEMENT_COMPARISONS.get()));
     let graphics = selected.symbol_graphics(symbol);
     assert_eq!(OWNER_LOOKUPS.replace(0), 1);
     assert_eq!(graphics.len(), symbol.unit_definition().graphics().len());

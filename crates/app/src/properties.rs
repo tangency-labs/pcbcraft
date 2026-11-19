@@ -429,8 +429,7 @@ impl PcbApp {
                         ui.label(shell::dim("Apply or cancel pending placement and field changes before selecting a pin function."));
                     }
                     if let Some(project) = project.as_deref()
-                        && let Some(symbol) = project.symbol(&edit.symbol)
-                        && let Some(part) = project.component(symbol)
+                        && let Some(part) = pin_function_owner(project, &edit.symbol)
                     {
                         pin_function = terminal_functions(ui, &edit, project, part, can_choose);
                     }
@@ -524,6 +523,19 @@ impl PcbApp {
     }
 }
 
+/// Resolve a modal's addressed placement and logical part using the sheet and part indexes.
+fn pin_function_owner<'a>(project: &'a pcbcraft_engine::Project, symbol: &str) -> Option<&'a pcbcraft_engine::schematic::PartInstance> {
+    #[cfg(test)]
+    PIN_MODAL_LOOKUPS.set(PIN_MODAL_LOOKUPS.get() + 1);
+    project.component(project.symbol(symbol)?)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Count actual modal owner queries without mixing independent test frames.
+    static PIN_MODAL_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Render effective pin functions in the placed unit's pin list. A selection is a separate
 /// immediate edit rather than an uncommitted field on the placement draft.
 fn terminal_functions(
@@ -569,6 +581,8 @@ fn terminal_functions(
 mod coordinate_tests;
 #[cfg(test)]
 mod field_tests;
+#[cfg(test)]
+mod pin_function_projection_tests;
 
 #[cfg(test)]
 mod tests {

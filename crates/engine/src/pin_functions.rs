@@ -204,6 +204,8 @@ thread_local! {
     static OWNER_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// A modern selection must not enter the general whole-project preparation path.
     pub(crate) static FULL_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Count comparisons for the same addressed placement lookup the property form uses.
+    pub(crate) static PLACEMENT_COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
