@@ -63,7 +63,8 @@ enum Aperture {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ApertureFunction {
     SmdPad,
-    ComponentPad,
+    /// A plated through-hole part land, emitted as `ComponentPad` (Ucamco Gerber 2026.05 §5.6.10).
+    ThroughHolePad,
     ViaPad,
     Conductor,
     Material,
@@ -77,7 +78,7 @@ impl ApertureFunction {
     fn set(self, text: &mut String) {
         let value = match self {
             Self::SmdPad => "SMDPad,CuDef",
-            Self::ComponentPad => "ComponentPad",
+            Self::ThroughHolePad => "ComponentPad",
             Self::ViaPad => "ViaPad",
             Self::Conductor => "Conductor",
             Self::Material => "Material",
@@ -384,9 +385,9 @@ impl BoardView<'_> {
             let Some(layer) = copper.iter().find(|layer| layer.id == *layer_id) else { continue };
             let mut gerber = Gerber::new(frame);
             for (pad, cardinal) in pads.iter().filter(|(pad, _)| on(pad, layer.id)) {
-                // Plated component lands keep their function on inner copper. The pad-derived
+                // Plated through-hole lands keep their function on inner copper. The pad-derived
                 // mask opening does not shrink the mounting-side copper land (CuDef).
-                let function = if pad.through_hole { ApertureFunction::ComponentPad } else { ApertureFunction::SmdPad };
+                let function = if pad.through_hole { ApertureFunction::ThroughHolePad } else { ApertureFunction::SmdPad };
                 gerber.pad(pad, *cardinal, function);
             }
             let mut tracks: Vec<_> = self.tracks().iter().filter(|track| track.layer == layer.id).collect();
