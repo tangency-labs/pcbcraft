@@ -283,6 +283,14 @@ impl ClearanceQuery {
         self.probe_membership(contour, layers, nets, intended_from)
     }
 
+    /// Test an interactive through via's outer land on every copper layer. This only rejects
+    /// mechanical clearance violations; an explicit edit can still place objects for DRC.
+    pub(super) fn through_via_clears_mechanical(&self, at: Point, diameter_nm: i64) -> Result<bool, CommandError> {
+        let contour = Contour::capsule(at, at, diameter_nm as f64 / 2.0);
+        let result = self.probe(&contour, &self.copper_layers, None)?;
+        Ok(!result.decisions.iter().any(|d| d.clearance_violation && self.geometry.items[d.second].mechanical))
+    }
+
     /// Evaluate a route leg with the complete connected route's intended memberships. The
     /// optional replaced source retains the public single-contour probe's exclusion behavior;
     /// a new route passes none so every existing contact is checked.

@@ -309,9 +309,13 @@ other fields or project state.
 - The board format agrees with the fields present. Retained legacy forms and
   no-op save bytes retain their existing compatibility behavior.
 
-Editable authoring documents use `pcbcraft-library-item/1`, with stable
-primitive IDs, draft state and revision allocation. A draft may have no pads.
-Export validates a complete published definition against the footprint contract.
+Editable authoring documents retain `pcbcraft-library-item/1` when there are no
+non-plated holes and use `pcbcraft-library-item/3` when a hole is present. Both
+keep stable primitive IDs, draft state and revision allocation. Drafts may have
+no pads; a footprint with at least one non-plated hole can also be exported with
+zero pads. Export validates the published definition against the footprint contract.
+Native board placement still uses an assigned schematic component and a pad mapping.
+A standalone board-owned footprint without a schematic component cannot be placed.
 The published schema therefore applies after export. Reopening the draft retains
 the default reference offset and subsequent exports retain its new revision.
 

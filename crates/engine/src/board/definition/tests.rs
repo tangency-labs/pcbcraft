@@ -178,6 +178,29 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
         assert_eq!(plan.blocker.as_deref(), Some(item.name.as_str()));
     }
 
+    // A thin route may end here, but a wide via at its fixed head reaches the opening.
+    let layer = query.objects().iter().find(|item| item.mechanical).unwrap().layers[0];
+    let at = Point { x_nm: centers[0].x_nm + 2_100_000, y_nm: centers[0].y_nm };
+    let context = s.route_planning(target).unwrap();
+    assert_eq!(context.try_through_via_clears_mechanical(&s, at, 1_200_000).unwrap(), None);
+    let request = crate::board::route::Request {
+        head: at,
+        target: at,
+        layer,
+        origin: None,
+        width_nm: 200_000,
+        posture: crate::board::route::Posture::default(),
+        flipped: false,
+        previous: Vec::new(),
+    };
+    let mut job = s.prepare_route_plan(&context, request, 128).unwrap();
+    assert!((0..256).any(|_| job.step(32)), "synthetic fixed-head planning finishes");
+    let plan = job.take_result().unwrap().unwrap();
+    assert_eq!(plan.outcome, crate::board::route::Outcome::Reached);
+    assert_eq!(plan.points, vec![at]);
+    assert_eq!(context.try_through_via_clears_mechanical(&s, at, 300_000).unwrap(), Some(true));
+    assert_eq!(context.try_through_via_clears_mechanical(&s, at, 1_200_000).unwrap(), Some(false));
+
     s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":id,"x_nm":0,"y_nm":0,"rotation":90,"side":"back","expected_revision":s.revision()}))
         .unwrap();
     let transformed = view(s.project().unwrap());

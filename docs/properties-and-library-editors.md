@@ -147,9 +147,12 @@ text, E/double-click opens expanded properties and Escape cancels a gesture.
 Ctrl/Cmd+A/C/V/D select all, copy, paste and duplicate in the focused canvas.
 Schema validation checks geometry, unique numbers and valid drills/annuli; it does
 not perform manufacturing DRC. Drafts can temporarily have no terminals or pads
-and still save/reopen; native definition export requires at least one.
+and still save/reopen. Native export requires a terminal for a symbol, or a pad
+or circular non-plated hole for a footprint.
 
-The editable `pcbcraft-library-item/1` JSON envelope records definition identity,
+The editable JSON envelope uses `pcbcraft-library-item/1` for single-unit symbols
+and footprints without non-plated holes, `pcbcraft-library-item/2` for multi-unit
+symbols, and `pcbcraft-library-item/3` for footprints with non-plated holes. It records definition identity,
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
 Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
@@ -222,7 +225,7 @@ close cancellation and continued definition editing after the original host clos
 Multi-unit symbols use the unit selector above symbol properties. **Add unit** creates
 an empty drawing under a new stable unit ID; selecting a unit retains the other
 drawings and their primitive IDs. Shared terminal names and electrical types
-remain part-wide. Multi-unit editor documents use `pcbcraft-library-item/2`,
-while existing single-unit documents retain version 1. See the
+remain part-wide. Existing single-unit documents retain version 1 of the editable
+envelope. See the
 [symbol contract](symbol-schema.md#multiple-schematic-units) for placement and
 physical mapping behavior.

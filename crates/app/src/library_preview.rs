@@ -92,8 +92,22 @@ pub(super) fn interactive_footprint(ui: &mut egui::Ui, definition: &FootprintDef
     paint_footprint(&ui.painter_at(response.rect), rect, definition, camera.zoom, camera.pan);
 }
 
-/// Draw the pinned native pad and technical geometry without creating a board placement.
-fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &FootprintDefinition, zoom: f32, pan: egui::Vec2) {
+/// Shared footprint preview projection, including the fitted finished-hole radii.
+#[derive(Clone, Copy)]
+struct FootprintProjection {
+    origin: egui::Pos2,
+    scale: f32,
+}
+
+impl FootprintProjection {
+    /// Project a local footprint point for both paint and selection highlights.
+    fn at(self, point: pcbcraft_engine::schematic::Point) -> egui::Pos2 {
+        self.origin + egui::vec2(point.x_nm as f32, point.y_nm as f32) * self.scale
+    }
+}
+
+/// Fit all physical features while retaining the existing margins on pads and artwork.
+fn footprint_projection(rect: egui::Rect, definition: &FootprintDefinition, zoom: f32, pan: egui::Vec2) -> FootprintProjection {
     let mut extent = definition
         .pads
         .iter()
@@ -105,8 +119,17 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
             extent = extent.max(p.x_nm.abs().max(p.y_nm.abs()) as f32 + artwork.graphic.stroke_nm as f32);
         }
     }
-    let scale = rect.width().min(rect.height()) / (2.0 * extent) * zoom;
-    let at = |point: pcbcraft_engine::schematic::Point| rect.center() + pan + egui::vec2(point.x_nm as f32, point.y_nm as f32) * scale;
+    for hole in &definition.non_plated_holes {
+        extent = extent.max(hole.center.x_nm.abs().max(hole.center.y_nm.abs()) as f32 + hole.diameter_nm as f32 / 2.0);
+    }
+    FootprintProjection { origin: rect.center() + pan, scale: rect.width().min(rect.height()) / (2.0 * extent) * zoom }
+}
+
+/// Draw the pinned physical geometry and return the projection for any selection overlay.
+fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &FootprintDefinition, zoom: f32, pan: egui::Vec2) -> FootprintProjection {
+    let projection = footprint_projection(rect, definition, zoom, pan);
+    let scale = projection.scale;
+    let at = |point| projection.at(point);
     let corners = |center: pcbcraft_engine::schematic::Point, width: i64, height: i64, rotation: u16| {
         let angle = (rotation as f32).to_radians();
         [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)].map(|(x, y)| {
@@ -169,7 +192,11 @@ fn paint_footprint(painter: &egui::Painter, rect: egui::Rect, definition: &Footp
             });
         }
     }
-    board::footprint(painter, &pads, &graphics, "", rect.center() + pan, board::copper_color(Some(true)), false, false, false, egui::Vec2::ZERO);
+    board::footprint(painter, &pads, &graphics, "", projection.origin, board::copper_color(Some(true)), false, false, false, egui::Vec2::ZERO);
+    for hole in &definition.non_plated_holes {
+        board::non_plated_hole(painter, at(hole.center), hole.diameter_nm as f32 * scale / 2.0, false);
+    }
+    projection
 }
 
 /// Library canvases share the picker's navigation while retaining their native palettes.
@@ -260,26 +287,37 @@ pub(super) fn part_symbol(ui: &mut egui::Ui, definition: &pcbcraft_engine::schem
 /// The selected table row identifies one physical pad without creating a board assignment.
 pub(super) fn part_footprint(ui: &mut egui::Ui, definition: &FootprintDefinition, pad: Option<&str>, camera: &mut Camera) {
     workspace_geometry(ui, "Footprint preview", true, camera, None, |painter, rect, camera| {
-        paint_footprint(painter, rect, definition, camera.zoom, camera.pan);
+        let projection = paint_footprint(painter, rect, definition, camera.zoom, camera.pan);
         if let Some(pad) = pad.and_then(|number| definition.pads.iter().find(|pad| pad.number == number)) {
-            let mut extent = definition
-                .pads
-                .iter()
-                .map(|p| (p.center, p.width_nm, p.height_nm))
-                .chain(definition.graphics.iter().map(|g| (g.center, g.width_nm, g.height_nm)))
-                .fold(1_000_000.0_f32, |extent, (p, w, h)| extent.max(p.x_nm.abs().max(p.y_nm.abs()) as f32 + w.max(h) as f32));
-            for artwork in &definition.artwork {
-                for p in artwork.graphic.paths().iter().flatten() {
-                    extent = extent.max(p.x_nm.abs().max(p.y_nm.abs()) as f32 + artwork.graphic.stroke_nm as f32);
-                }
-            }
-            let scale = rect.width().min(rect.height()) / (2. * extent) * camera.zoom;
-            let at = rect.center() + camera.pan + egui::vec2(pad.center.x_nm as f32, pad.center.y_nm as f32) * scale;
             painter.circle_stroke(
-                at,
-                (pad.width_nm.max(pad.height_nm) as f32 * scale * 0.6).max(5.),
+                projection.at(pad.center),
+                (pad.width_nm.max(pad.height_nm) as f32 * projection.scale * 0.6).max(5.),
                 egui::Stroke::new(2., pcbcraft_chrome::Tokens::get().accent),
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hole-only definition fits its finished edge, not just its center.
+    #[test]
+    fn offset_non_plated_opening_drives_preview_fit() {
+        use pcbcraft_engine::authoring::{Item, Kind};
+        use pcbcraft_engine::board::definition::CircularNpth;
+        use pcbcraft_engine::schematic::Point;
+
+        let mut definition = Item::new(Kind::Footprint).unwrap().footprint().unwrap();
+        definition.pads.clear();
+        definition.graphics.clear();
+        definition.artwork.clear();
+        let center = Point { x_nm: 8_000_000, y_nm: 0 };
+        definition.non_plated_holes.push(CircularNpth { center, diameter_nm: 4_000_000 });
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200., 200.));
+        let projection = footprint_projection(rect, &definition, 1., egui::Vec2::ZERO);
+        let edge = projection.at(center).x + 2_000_000. * projection.scale;
+        assert!((edge - rect.right()).abs() < 0.01);
+    }
 }

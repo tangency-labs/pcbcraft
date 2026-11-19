@@ -393,9 +393,27 @@ pub fn footprint(
     copper_focused: bool,
     reference_shift: egui::Vec2,
 ) {
+    let bounds = footprint_bounds(pads, graphics, center);
+    footprint_in_bounds(p, pads, graphics, reference, center, copper, selected, highlighted, copper_focused, reference_shift, bounds);
+}
+
+/// Paint the selection frame and editor reference from the caller's shared visible hit bounds.
+#[allow(clippy::too_many_arguments)]
+pub fn footprint_in_bounds(
+    p: &Painter,
+    pads: &[PadDrawing],
+    graphics: &[GraphicDrawing],
+    reference: &str,
+    center: Pos2,
+    copper: Color32,
+    selected: bool,
+    highlighted: bool,
+    copper_focused: bool,
+    reference_shift: egui::Vec2,
+    bounds: Rect,
+) {
     let t = Tokens::get();
     let ink = copper_emphasis(pads.first().and_then(|pad| pad.color).unwrap_or(copper), (selected || highlighted).then_some(true));
-    let bounds = footprint_bounds(pads, graphics, center);
     let context = context_painter(p, copper_focused);
     for graphic in graphics {
         let width = match graphic.style {
