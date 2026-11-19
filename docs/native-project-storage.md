@@ -1422,9 +1422,11 @@ The output directory must not already exist. The generator uses the production
 encoder; regression tests compare document boundaries, library-copy lifetimes,
 archive round trips and the compatibility boundary. The separate
 [frozen archive corpus](../crates/storage/tests/fixtures/native-open/README.md)
-checks that normal native Open still reads previously saved bytes. When a release
-adds a format, append fixtures saved by that release rather than regenerating the
-existing corpus. See [release notes](../CHANGELOG.md).
+checks that normal native Open still reads previously saved bytes and preserves
+logical connectivity and object counts. The two previous split archive forms
+are also checked after explicit conversion. When a release adds a format,
+append fixtures saved by that release rather than regenerating the existing
+corpus. See [release notes](../CHANGELOG.md).
 
 ## Design references
 
