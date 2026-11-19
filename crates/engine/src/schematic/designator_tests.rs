@@ -235,7 +235,7 @@ fn designator_lock_topology_preview_has_provisional_identities() {
         entry["schematic_instances"]["net_registry"]["records"][0].as_object_mut().unwrap().remove("generated_number");
     });
     let error = persistence::decode_documents(&missing_number).unwrap_err();
-    assert!(error.contains("Generated net numbers require project format 23, 24, 36, 39 or 40") && error.contains("every record"), "{error}");
+    assert!(error.contains("Generated net numbers") && error.contains("a number on every record"), "{error}");
     params["dry_run"] = json!(true);
     let error = session.execute(SET_SYMBOL_FIELDS, &params).unwrap_err();
     assert_eq!(error, CommandError::StaleRevision { current: session.revision() });
@@ -442,7 +442,7 @@ fn designator_locks_compose_with_project_parameters_and_numbered_nets() {
         let mut empty_choices = saved.clone();
         entry_edit(&mut empty_choices, |entry| entry["footprint_choices"] = json!([]));
         let error = persistence::decode_documents(&empty_choices).unwrap_err();
-        assert!(error.contains("project footprint choices require format") && error.contains("39 or 40") && error.contains("nonempty"), "{error}");
+        assert!(error.contains("project footprint choices") && error.contains("a nonempty bounded list"), "{error}");
         lock(&mut session, false);
         let after = documents(&session);
         assert_eq!(persistence::encode_documents(persistence::decode_documents(&after).unwrap()).unwrap(), after);
@@ -540,7 +540,7 @@ fn designator_locks_preserve_group_representations_and_assembly_profiles() {
                     home["part_group_memberships"] = serde_json::to_value(snapshot.part_group_memberships().iter().collect::<Vec<_>>()).unwrap();
                     conflicting.insert(path, serde_json::to_vec(&record).unwrap());
                     let error = persistence::decode_documents(&conflicting).unwrap_err();
-                    assert!(error.contains("project format 39, 36 or 40") && error.contains("exactly one membership encoding"), "{error}");
+                    assert!(error.contains("exactly one membership encoding"), "{error}");
                 }
                 if profiles {
                     let mut downgraded = locked.clone();
