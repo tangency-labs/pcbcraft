@@ -115,7 +115,7 @@ downward, before any rotation. The schematic grid is 1.27 mm (1,270,000 nm).
 | `name` | Shown in the parts browser, 1 to 64 characters. |
 | `reference_prefix` | 1 to 4 capital letters that start automatic references, such as `R`. |
 | `default_value` | The value a newly placed symbol shows, 1 to 64 characters. |
-| `terminals` | 1 to 128 logical connections, each with a stable `id` (the pin number: 1 to 8 letters, digits, `+`, `-` or `_`, unique in the symbol), an optional `name` up to 32 characters and an `electrical_type`: `passive`, `input`, `output`, `bidirectional`, `power_in`, `power_out`, `tri_state`, `open_collector`, `open_emitter`, `no_connect` or `unspecified`. Wires and footprints refer to a pin by its `id`. |
+| `terminals` | 1 to 1,024 logical connections, each with a stable `id` (the pin number: 1 to 8 letters, digits, `+`, `-` or `_`, unique in the symbol), an optional `name` up to 32 characters and an `electrical_type`: `passive`, `input`, `output`, `bidirectional`, `power_in`, `power_out`, `tri_state`, `open_collector`, `open_emitter`, `no_connect` or `unspecified`. Wires and footprints refer to a pin by its `id`. |
 | `units` | Drawn sections of the symbol. Each has an `id`, a `drawing` and `pins` that place each terminal. |
 
 Drawing strokes are `line` (`from_nm`, `to_nm`), `polyline` (`points_nm`, 2 to
@@ -150,7 +150,7 @@ the file and the reason; the rest of the library still loads.
 
 The native parser and placement commands support:
 
-- **1 to 128 logical terminals**, each appearing in at least one unit. The
+- **1 to 1,024 logical terminals**, each appearing in at least one unit. The
   legacy two-pad footprint only maps symbols with exactly pins `"1"` and `"2"`.
   [Physical footprints](footprint-library.md) validate complete terminal and pad coverage
   with exclusive pad ownership. Multiple pads may map to one terminal, and other
@@ -158,7 +158,7 @@ The native parser and placement commands support:
   the starter NPN uses three SOT-23 pads.
 - **1 to 32 units in format 4**, including shared supply-terminal appearances.
   Each unit is placed once per part, and units on different sheets retain one
-  reference, Value and physical package. Formats 1–3 retain one unit. See the
+  reference, Value and physical package. Formats 1–3 retain one unit and therefore hold at most 441 terminals. See the
   [multi-unit contract](symbol-schema.md#multiple-schematic-units).
 - **Pins** on the 1.27 mm grid, at most 12.7 mm from the center on each axis,
   each at its own position. Symbol centers stay 12.7 mm inside the sheet edge so
