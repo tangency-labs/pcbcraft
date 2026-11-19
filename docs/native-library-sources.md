@@ -221,6 +221,12 @@ Undo/Redo.
 
 ## Adopt non-geometric revisions
 
+With a project open, choose **Review library updates** in Parts Library. Select
+instances, choose **Preview selected updates**, and read the exact before and
+after fields. **Apply reviewed updates** uses the same command and Undo history
+as the schematic editor. Reload available revisions to pick up a source or
+project change before starting a new review.
+
 `library.preview_adoption` reviews the latest loaded symbol or generic-part root
 for the chosen `instances` (a nonempty list of distinct `component-N` IDs).
 Use the `expected_revision` from project inspection. The result lists the exact

@@ -16,6 +16,7 @@ fn symbols(last: u32) -> (Documents, Key) {
     let first = prepare(Arc::new(Draft::new(DraftKind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
     let mut draft = first.item().as_ref().clone();
     draft.name = "Later drawing".into();
+    draft.default_value = "New library default".into();
     let later = prepare(Arc::new(draft), &manifest, 1, Some(1), false).unwrap();
     let mut documents = first.documents().clone();
     // Publication reserves headroom for future edits. Source reading has no such authoring
@@ -109,6 +110,7 @@ fn adoption_updates_selected_symbol_text_in_one_undo_step() {
     assert_eq!(preview["applied"], false);
     assert_eq!(preview["changes"].as_array().unwrap().len(), 2);
     assert_eq!(preview["changes"][0]["fields"][0]["after"], "Later drawing");
+    assert_eq!(preview["changes"][0]["fields"][1]["after"], "New library default");
     let mut apply = params;
     apply["preview"] = preview["preview"].clone();
     let applied = session.execute(APPLY_ADOPTION, &apply).unwrap();
@@ -266,6 +268,49 @@ fn pinned_part_fixture() -> (Session, Documents, Key, PartDefinition) {
         )
         .unwrap();
     (session, documents, key, part)
+}
+
+/// A text-only generic update preserves its exact symbol dependency and instance values.
+#[test]
+fn adoption_advances_generic_part_name_with_the_exact_same_dependencies() {
+    let (mut session, mut documents, _, mut part) = pinned_part_fixture();
+    part.name = "New generic title".into();
+    part.revision = 2;
+    documents.insert("parts/owned-r2.json".into(), part.encode().unwrap());
+    session.execute(LOAD, &json!({"source":"demo","documents":documents})).unwrap();
+    let before = session.snapshot().unwrap();
+    let old = before.components().next().unwrap();
+    let mut params = json!({"instances":[old.id()],"expected_revision":session.revision()});
+    let preview = session.execute(PREVIEW_ADOPTION, &params).unwrap();
+    assert_eq!(preview["changes"][0]["fields"][0]["after"], part.name);
+    params["preview"] = preview["preview"].clone();
+    session.execute(APPLY_ADOPTION, &params).unwrap();
+    let after = session.snapshot().unwrap();
+    let new = after.components().next().unwrap();
+    assert!(Arc::ptr_eq(&old.definition, &new.definition));
+    assert_eq!(old.value(), new.value());
+    assert_eq!(new.part.as_ref().unwrap().resolved.definition.revision, 2);
+}
+
+/// A harmless-looking revision changing only a rendered line is outside non-geometric adoption.
+#[test]
+fn adoption_refuses_changed_symbol_drawing_geometry() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let manifest = new_library("shape-demo", "Shape demo", "MIT OR Apache-2.0").unwrap();
+    let raw = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/symbols/resistor.json"));
+    let mut later: Value = serde_json::from_str(raw).unwrap();
+    later["revision"] = json!(3);
+    later["units"][0]["drawing"][0]["to_nm"][0] = json!(-3_000_000);
+    let docs =
+        Documents::from([("library.json".into(), manifest), ("symbols/r2.json".into(), raw.into()), ("symbols/r3.json".into(), later.to_string())]);
+    session.execute(LOAD, &json!({"source":"shape-demo","documents":docs})).unwrap();
+    place(&mut session, &Key { library: "shape-demo".into(), kind: Kind::Symbol, id: "resistor".into(), revision: 2 });
+    let before = session.snapshot().unwrap();
+    let instance = before.components().next().unwrap().id();
+    let response = session.execute(PREVIEW_ADOPTION, &json!({"instances":[instance],"expected_revision":session.revision()}));
+    assert!(response.unwrap_err().to_string().contains("changes symbol structure"));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
 /// A replacement can resolve normally in the catalog but conflict with a saved dependency.

@@ -87,7 +87,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 11] = [
+pub(crate) const COMMANDS: [Command; 13] = [
     Command {
         id: PREVIEW_PIN_REMAP,
         title: "Preview symbol pin remap",

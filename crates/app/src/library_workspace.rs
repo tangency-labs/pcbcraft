@@ -1,4 +1,5 @@
-//! Library browsing owns per-pane presentation; source changes never transact project data.
+//! Library browsing owns per-pane presentation; reviewed adoption uses shared project history.
+mod adoption;
 pub(super) mod project;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests;
@@ -21,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(super) struct State {
     pub(crate) part_document: Option<u64>,
     pub(crate) part_order: Vec<u64>,
+    adoption: Option<adoption::Review>,
     source: Option<String>,
     project: Option<uuid::Uuid>,
     project_library: Option<String>,
@@ -589,6 +591,12 @@ impl PcbApp {
     pub(super) fn library_workspace_pane(&mut self, ui: &mut egui::Ui, view: ViewId) {
         ui.painter().rect_filled(ui.max_rect(), 0, pcbcraft_chrome::Tokens::get().canvas);
         let Some(mut state) = self.views.view_mut(view).and_then(|v| v.library.take()) else { return };
+        if adoption::panel(ui, self, &mut state.adoption) {
+            if let Some(target) = self.views.view_mut(view) {
+                target.library = Some(state);
+            }
+            return;
+        }
         if state.project.is_some() && state.project != self.session.project().map(|project| project.id()) {
             state.project = self.session.project().map(|project| project.id());
             state.project_library = None;

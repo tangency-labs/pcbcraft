@@ -780,12 +780,14 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     assert_eq!(
         command_ids,
         [
+            "library.apply_adoption",
             "library.available_revisions",
             "library.list_sources",
             "library.load_source",
             "library.parse_quantity",
             "library.prepare_part_publication",
             "library.prepare_publication",
+            "library.preview_adoption",
             "library.preview_footprint_revision",
             "library.preview_pin_remap",
             "library.remove_source",

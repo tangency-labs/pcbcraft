@@ -26,6 +26,49 @@ fn fixture(width: f32) -> Harness<'static, PcbApp> {
     h
 }
 
+/// The desktop panel reviews selected instances before committing one undoable project edit.
+#[test]
+fn review_library_updates_through_the_desktop_panel() {
+    use pcbcraft_engine::authoring::{
+        Item as Draft, Kind as DraftKind,
+        publishing::{new_library, prepare},
+    };
+    let mut h = fixture(1800.);
+    let manifest = new_library("review-demo", "Review demo", "MIT OR Apache-2.0").unwrap();
+    let first = prepare(Arc::new(Draft::new(DraftKind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
+    let mut next = first.item().as_ref().clone();
+    next.name = "GUI renamed symbol".into();
+    let later = prepare(Arc::new(next), &manifest, 1, Some(1), false).unwrap();
+    let mut documents = first.documents().clone();
+    documents.extend(later.documents().clone());
+    documents.insert("library.json".into(), manifest);
+    let app = h.state_mut();
+    app.session.install_library_source("review-demo", Arc::new(sources::NativeSource::load(&documents).unwrap())).unwrap();
+    let item = first.item();
+    let symbol = app.session.libraries().symbol(&item.library, &item.id, item.revision).unwrap();
+    app.session
+        .apply(
+            pcbcraft_engine::PLACE_SYMBOL,
+            &json!({"library":symbol.library,"definition":symbol.id,
+        "definition_revision":symbol.revision(),"definition_digest":sources::symbol_digest(&symbol).unwrap(),
+        "x_nm":0,"y_nm":0,"expected_revision":app.session.revision()}),
+        )
+        .unwrap();
+    let before = app.session.snapshot().unwrap();
+    let instance = before.components().next().unwrap();
+    let label = format!("{} ({})", instance.reference(), instance.id());
+    h.run();
+    click(&mut h, "Review library updates");
+    click(&mut h, &label);
+    click(&mut h, "Preview selected updates");
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    click(&mut h, "Apply reviewed updates");
+    h.get_by_label("Library revisions adopted");
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 2);
+    h.state_mut().run("edit.undo", &Value::Null);
+    assert_eq!(h.state().session.project().unwrap().components().next().unwrap().definition.revision(), 1);
+}
+
 /// Expansion and selection are independent; nested and flat views address identical records.
 #[test]
 fn browse_select_expand_and_flat_view_preserve_project_state() {
