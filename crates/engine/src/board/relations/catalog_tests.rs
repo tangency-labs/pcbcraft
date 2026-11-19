@@ -154,7 +154,7 @@ fn a_cat_ref_native_correspondence_pad_changes_and_choice_binding() {
 #[test]
 fn a_cat_ref_checked_eco_same_address_repick_requires_binding_consent() {
     let mut s = fixture(false);
-    run(&mut s, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2})).unwrap();
+    run(&mut s, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true})).unwrap();
     run(&mut s, update::INITIALIZE_BASELINE, json!({})).unwrap();
     let f = pick(&mut s, 0, "pad.center", Some("1"));
     let stable = pick(&mut s, 1, "pad.center", Some("1"));
