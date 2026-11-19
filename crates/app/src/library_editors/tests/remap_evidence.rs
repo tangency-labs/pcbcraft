@@ -1,5 +1,6 @@
 use super::*;
-use pcbcraft_engine::{self as engine, authoring::remap::PinRemap, library::sources};
+use pcbcraft_engine::{self as engine, authoring::remap::PinRemap, error_codes::ErrorCode, library::sources};
+use pcbcraft_mcp::Failure;
 
 /// Synthetic project edits retain the production command's runtime revision check.
 fn edit(app: &mut PcbApp, command: &str, mut params: Value) -> Value {
@@ -47,7 +48,7 @@ fn fixture(wired: bool, associated: bool) -> (PcbApp, u64) {
 }
 
 /// Use the actual live adapter, including its modal refusal, command check and inspection reply.
-fn live(app: &mut PcbApp, document: u64, revision: u64, phase: &str, input: Value) -> Result<Value, String> {
+fn live(app: &mut PcbApp, document: u64, revision: u64, phase: &str, input: Value) -> Result<Value, Failure> {
     let mut params = json!({"document":document.to_string(),"expected_revision":revision.to_string(),"phase":phase});
     params[if phase == "preview" { "pins" } else { "token" }] = input;
     pcbcraft_mcp::live::call_editor(
@@ -232,7 +233,8 @@ fn pin_remap_last_host_close_cancel_retires_authority() {
         assert!(!h.state().close_allowed);
         for phase in ["apply", "cancel"] {
             let reason = live(h.state_mut(), id, 0, phase, token.clone()).unwrap_err();
-            assert!(reason.contains(if phase == "apply" { "Preview the pin remap" } else { "No pin remap review" }), "{reason}");
+            assert_eq!(reason.code(), ErrorCode::Unavailable.as_str());
+            assert!(reason.message().contains(if phase == "apply" { "Preview the pin remap" } else { "No pin remap review" }), "{reason}");
         }
         h.state_mut().begin_library_pin_remap(other).unwrap();
         h.run();
@@ -242,7 +244,9 @@ fn pin_remap_last_host_close_cancel_retires_authority() {
         h.get_by_label("Pin 1").type_text("7");
         h.run();
         let form = format!("{:?}", h.state().dialog);
-        assert!(live(h.state_mut(), id, 0, "apply", token).unwrap_err().contains("Preview the pin remap"));
+        let refusal = live(h.state_mut(), id, 0, "apply", token).unwrap_err();
+        assert_eq!(refusal.code(), ErrorCode::Unavailable.as_str());
+        assert!(refusal.message().contains("Preview the pin remap"));
         assert_eq!(format!("{:?}", h.state().dialog), form);
         assert_eq!(
             h.state()
@@ -341,7 +345,8 @@ fn pin_remap_live_reply_preflight_matches_actual_inspection_bytes() {
     ));
     live(&mut app, id, 0, "cancel", review["token"].clone()).unwrap();
     let reason = live(&mut app, id, 0, "preview", pins).unwrap_err();
-    assert!(reason.contains("review cannot be captured") && reason.contains("reply byte limit"), "{reason}");
+    assert_eq!(reason.code(), ErrorCode::Unavailable.as_str());
+    assert!(reason.message().contains("review cannot be captured") && reason.message().contains("reply byte limit"), "{reason}");
     assert!(matches!(app.dialog, Dialog::None));
     assert!(app.library_editors.pin_remap.is_none());
     assert_eq!(app.library_editors.next_remap, counter);
@@ -366,7 +371,8 @@ fn pin_remap_live_dispatch_shapes_acknowledgement_and_modal_refusal() {
             &json!({"method":"engine.execute","params":{"command":"app.library_pin_remap","params":request}}),
         )
         .unwrap_err();
-        assert!(error.contains("pins") && error.contains(reason), "{error}");
+        assert_eq!(error.code(), ErrorCode::InvalidParams.as_str());
+        assert!(error.message().contains("pins") && error.message().contains(reason), "{error}");
         assert_eq!(app.library_editors.inspect(), editors);
         assert_eq!(app.session.inspect(), before);
     }
@@ -377,7 +383,8 @@ fn pin_remap_live_dispatch_shapes_acknowledgement_and_modal_refusal() {
         )
         .unwrap_err();
         let reason = if item.is_object() { "missing field `format`" } else { "`item` Pin remap item must be an object." };
-        assert!(error.contains(reason), "{error}");
+        assert_eq!(error.code(), ErrorCode::InvalidParams.as_str());
+        assert!(error.message().contains(reason), "{error}");
         assert_eq!(app.session.inspect(), before);
     }
     let acknowledgement = pcbcraft_mcp::live::call_editor(
@@ -395,7 +402,8 @@ fn pin_remap_live_dispatch_shapes_acknowledgement_and_modal_refusal() {
     let project_revision = app.session.revision();
     let error = pcbcraft_mcp::live::call_editor(&mut crate::live_control::LiveEditor { app:&mut app, ctx:&ctx },
         &json!({"method":"engine.execute","params":{"command":"project.rename","params":{"name":"Not committed","expected_revision":project_revision}}})).unwrap_err();
-    assert!(error.contains("Finish the current dialog") && error.contains("project.rename"), "{error}");
+    assert_eq!(error.code(), ErrorCode::Unavailable.as_str());
+    assert!(error.message().contains("Finish the current dialog") && error.message().contains("project.rename"), "{error}");
     live(&mut app, id, 0, "cancel", inspected["library_editors"]["pin_remap"]["token"].clone()).unwrap();
     assert_eq!(app.library_editors.inspect(), editors);
     assert_eq!(app.session.inspect(), before);
@@ -448,7 +456,9 @@ fn pin_remap_bulk_discard_releases_retained_review() {
     assert!(matches!(h.state().dialog, Dialog::SaveChanges(crate::unsaved::Then::Close)));
     crate::tests::click(&mut h, "Cancel");
     assert!(matches!(h.state().dialog, Dialog::None));
-    assert_eq!(live(h.state_mut(), id, 0, "apply", json!(token.to_string())).unwrap_err(), "Preview the pin remap before applying it.");
+    let refusal = live(h.state_mut(), id, 0, "apply", json!(token.to_string())).unwrap_err();
+    assert_eq!(refusal.code(), ErrorCode::Unavailable.as_str());
+    assert_eq!(refusal.message(), "Preview the pin remap before applying it.");
     assert_eq!(h.state().session.inspect(), before);
     assert_eq!(engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }

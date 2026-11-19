@@ -1,6 +1,6 @@
 use super::*;
 use egui_kittest::kittest::NodeT;
-use pcbcraft_engine::authoring::remap::PinRemap;
+use pcbcraft_engine::{authoring::remap::PinRemap, error_codes::ErrorCode};
 
 /// Open an original two-pin document through the same native command as the editor menu.
 fn fixture() -> (PcbApp, u64) {
@@ -151,7 +151,8 @@ fn pin_remap_live_maximum_token_and_refusals_preserve_authority() {
         &mut crate::live_control::LiveEditor { app: &mut app, ctx: &ctx },
         &json!({"method":"engine.execute","params":{"command":"app.library_pin_remap","params":{"document":id.to_string(),"expected_revision":"1","phase":"preview","pins":swap()}}}),
     ).unwrap_err();
-    assert_eq!(refusal, "Pin remap review ID limit reached.");
+    assert_eq!(refusal.code(), ErrorCode::Unavailable.as_str());
+    assert_eq!(refusal.message(), "Pin remap review ID limit reached.");
     assert!(matches!(app.dialog, Dialog::None));
     assert!(app.library_editors.pin_remap.is_none());
     assert_eq!(std::sync::Arc::strong_count(&captured_project), owners);
@@ -196,8 +197,9 @@ fn pin_remap_refuses_stale_project_or_definition_reviews() {
             &mut crate::live_control::LiveEditor { app: &mut app, ctx: &Context::default() },
             &json!({"method":"engine.execute","params":{"command":"app.library_pin_remap","params":{"document":id.to_string(),"expected_revision":"0","phase":"apply","token":token}}}),
         ).unwrap_err();
+        assert_eq!(error.code(), ErrorCode::Unavailable.as_str());
         assert_eq!(
-            error,
+            error.message(),
             if case < 2 {
                 "Project changed; preview current nets again before applying."
             } else {
@@ -387,7 +389,8 @@ fn pin_remap_pending_property_fields_refuse_preview_and_apply() {
         &mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &Context::default() },
         &json!({"method":"engine.execute","params":{"command":"app.library_pin_remap","params":{"document":id.to_string(),"expected_revision":"0","phase":"apply","token":response["library_editors"]["pin_remap"]["token"]}}}),
     ).unwrap_err();
-    assert_eq!(error, "Apply or reset all pending property fields before remapping.");
+    assert_eq!(error.code(), ErrorCode::Unavailable.as_str());
+    assert_eq!(error.message(), "Apply or reset all pending property fields before remapping.");
     assert_eq!(h.state().library_editors.inspect(), state);
     assert_eq!(h.state().library_editors.documents[&id].session.inspect(), before);
 }
@@ -432,7 +435,8 @@ fn pin_remap_form_previews_before_enabling_apply_and_cancels_cleanly() {
             &mut crate::live_control::LiveEditor { app: h.state_mut(), ctx: &Context::default() },
             &json!({"method":"engine.execute","params":{"command":"app.library_pin_remap","params":{"document":id.to_string(),"expected_revision":"0","phase":"apply","token":token}}}),
         ).unwrap_err();
-        assert_eq!(reason, "Preview the pin remap before applying it.");
+        assert_eq!(reason.code(), ErrorCode::Unavailable.as_str());
+        assert_eq!(reason.message(), "Preview the pin remap before applying it.");
         h.get_by_label("Pin 1").click();
         h.run();
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
