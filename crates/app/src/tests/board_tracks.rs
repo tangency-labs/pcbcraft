@@ -1138,7 +1138,12 @@ fn copper_box_excludes_locked_without_hiding_inspection() {
     );
     let via = vias(&h)[0].id;
     let revision = h.state().session.revision();
-    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"tracks":[track],"vias":[via],"locked":true,"expected_revision":revision}));
+    let target = h.state().views.active.board.target.unwrap().board;
+    h.state_mut().run(
+        pcbcraft_engine::SET_COPPER_LOCKED,
+        &json!({"board":target,"tracks":[track],"vias":[via],"locked":true,"expected_revision":revision}),
+    );
+    assert_eq!(h.state().message, None);
     h.run();
     let box_copper = |h: &mut Harness<'_, PcbApp>| {
         let from = at(h, Point { x_nm: 1_524_000, y_nm: -2_540_000 });
@@ -1163,9 +1168,15 @@ fn copper_box_excludes_locked_without_hiding_inspection() {
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
     box_copper(&mut h);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    let locked_at = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, locked_at);
+    assert!(h.state().views.active.board.tracks.selected.is_empty());
+    h.state_mut().select_all_board();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
     assert_eq!(h.state().session.inspect(), inspection);
     let revision = h.state().session.revision();
-    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"tracks":[unlocked],"locked":true,"expected_revision":revision}));
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"tracks":[unlocked],"locked":true,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
     assert!(h.state().views.active.board.tracks.selected.is_empty(), "newly locked copper leaves the filtered view's selection");
 }
 

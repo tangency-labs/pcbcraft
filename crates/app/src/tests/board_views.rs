@@ -1545,7 +1545,9 @@ fn footprint_box_excludes_locked_without_hiding_inspection() {
         h.state_mut().run_window_command(&ctx, "view.set_selection_filters", &json!({"view":view.0,"include_locked":false})).unwrap();
         let result = h.state_mut().run_window_command(&ctx, "view.select_footprints", &json!({"view":view.0,"footprints":["footprint-3"]}));
         assert!(result.unwrap_err().contains("Locked footprint selection"));
-        assert_eq!(crate::window_commands::inspect_editor(h.state())["views"][0]["selection_filters"]["include_locked"], false);
+        let editor = crate::window_commands::inspect_editor(h.state());
+        let addressed = editor["views"].as_array().unwrap().iter().find(|state| state["id"] == json!(view.0)).unwrap();
+        assert_eq!(addressed["selection_filters"]["include_locked"], false);
     }
     #[cfg(target_arch = "wasm32")]
     h.state_mut().set_selection_filters(view, &json!({"include_locked":false})).unwrap();
