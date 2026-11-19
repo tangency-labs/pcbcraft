@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     APPLY_FOOTPRINT_REVISION, INITIALIZE_UPDATE_BASELINE,
+    board::update::{Baseline, DISPLAY_FORMAT, QUANTITY_FORMAT},
     edits::{CommittedEdit, EditObserver},
     error_codes::ErrorCode,
     persistence::decode_documents,
@@ -104,15 +105,13 @@ fn footprint_revision_adding_pad_nine_requires_mapping_and_preserves_copper() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), adopted_bytes);
 }
 
-/// Removing the last extra land retires only the physical singleton and retains the accepted source.
-#[test]
-fn footprint_revision_removing_extra_land_retires_singleton_without_recapturing() {
-    let (mut session, mut documents, target) = package_fixture(|_| {}, false, true);
+/// Link two board-eligible parts on terminal 1, leaving terminal 2 free for pad-only nets.
+fn connect_another_part(session: &mut Session) -> (String, String) {
     let project = session.snapshot().unwrap();
     let symbol = project.all_symbols().next().unwrap();
     let first = symbol.id();
     edit(
-        &mut session,
+        session,
         PLACE_SYMBOL,
         json!({"library":symbol.definition.library,"definition":symbol.definition.id,"definition_revision":1,
         "definition_digest":symbol_digest(&symbol.definition).unwrap(),"x_nm":0,"y_nm":10_160_000}),
@@ -122,23 +121,17 @@ fn footprint_revision_removing_extra_land_retires_singleton_without_recapturing(
     let package = project.package_assignments().values().next().unwrap();
     // Baseline initialization requires packages for all eligible parts, even unplaced ones.
     edit(
-        &mut session,
+        session,
         ASSIGN_FOOTPRINT,
         json!({"component":second_part,"library":package.library,"definition":package.definition,
         "definition_revision":package.definition_revision,"mapping":{"1":"1","2":"2"}}),
     );
-    let link = |terminal| json!({"from":{"symbol":first,"terminal":terminal},"to":{"symbol":second,"terminal":terminal}});
-    edit(&mut session, crate::CONNECT_PINS, link("1"));
-    edit(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
-    let original = session.snapshot().unwrap();
-    assert_eq!(original.board.baseline.as_ref().unwrap().nets.len(), 1);
-    let mut params = reviewed(&mut session, &target);
-    params["mapping"] = json!({"1":"1","2":["2","9"]});
-    session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
-    let added = session.snapshot().unwrap();
-    assert_eq!(added.boards().next().unwrap().ratsnest().unwrap().lines.len(), 1);
-    // This pending logical connection must not enter the accepted baseline while applying a package.
-    edit(&mut session, crate::CONNECT_PINS, link("2"));
+    edit(session, crate::CONNECT_PINS, json!({"from":{"symbol":first,"terminal":"1"},"to":{"symbol":second,"terminal":"1"}}));
+    (first, second)
+}
+
+/// Load revision 3 with the original two pads and prepare a fresh review of pad 9's removal.
+fn review_extra_land_removal(session: &mut Session, mut documents: Documents, target: Value) -> Value {
     let (path, mut next) = documents
         .iter()
         .find_map(|(path, text)| {
@@ -149,13 +142,32 @@ fn footprint_revision_removing_extra_land_retires_singleton_without_recapturing(
     next["revision"] = json!(3);
     documents.insert(path.replace(".json", "-r3.json"), next.to_string());
     session.execute(REMOVE, &json!({"source":"test"})).unwrap();
-    load(&mut session, &documents);
+    load(session, &documents);
     let report = session.execute(PREVIEW_FOOTPRINT_REVISION, &target).unwrap();
     assert!(report["delta"]["pads"].as_array().unwrap().iter().any(|pad| pad["number"] == "9" && pad["changes"] == json!(["removed"])));
     let mut params = target;
     params["acceptance"] = report["acceptance"].clone();
     params["expected_revision"] = report["revision"].clone();
     params["mapping"] = json!({"1":"1","2":"2"});
+    params
+}
+
+/// Removing the last extra land retires only the physical singleton and retains the accepted source.
+#[test]
+fn footprint_revision_removing_extra_land_retires_singleton_without_recapturing() {
+    let (mut session, documents, target) = package_fixture(|_| {}, false, true);
+    let (first, second) = connect_another_part(&mut session);
+    edit(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    let original = session.snapshot().unwrap();
+    assert_eq!(original.board.baseline.as_ref().unwrap().nets.len(), 1);
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
+    let added = session.snapshot().unwrap();
+    assert_eq!(added.boards().next().unwrap().ratsnest().unwrap().lines.len(), 1);
+    // This pending logical connection must not enter the accepted baseline while applying a package.
+    edit(&mut session, crate::CONNECT_PINS, json!({"from":{"symbol":first,"terminal":"2"},"to":{"symbol":second,"terminal":"2"}}));
+    let params = review_extra_land_removal(&mut session, documents, target);
     session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
     let after = session.snapshot().unwrap();
     let baseline = after.board.baseline.as_ref().unwrap();
@@ -166,6 +178,71 @@ fn footprint_revision_removing_extra_land_retires_singleton_without_recapturing(
     assert!(after.boards().next().unwrap().ratsnest().unwrap().lines.is_empty());
     let bytes = encode_documents(after).unwrap();
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
+}
+
+/// Reopen a valid fixture using the current persistence code, without adding a format reader.
+fn reopen_with_baseline(session: &mut Session, update: impl FnOnce(&mut Baseline)) {
+    let mut project = session.snapshot().unwrap();
+    let board = Arc::make_mut(&mut Arc::make_mut(&mut project).board);
+    let baseline = Arc::make_mut(board.baseline.as_mut().unwrap());
+    update(baseline);
+    baseline.validate().unwrap();
+    let documents = encode_documents(project).unwrap();
+    session.open_snapshot(decode_documents(&documents).unwrap());
+}
+
+/// Check the specific refusal, not just an unrelated validation error or a rejected preview.
+fn assert_apply_refused_without_edit(session: &mut Session, params: &Value, message: &str) {
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let error = session.apply(APPLY_FOOTPRINT_REVISION, params).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidParams);
+    assert_eq!(error.to_string(), message);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+}
+
+/// Adding a pad-only net must not synthesize display metadata for an existing accepted net.
+#[test]
+fn footprint_revision_refuses_to_infer_missing_accepted_net_display() {
+    let (mut session, _, target) = package_fixture(|_| {}, false, true);
+    connect_another_part(&mut session);
+    edit(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    reopen_with_baseline(&mut session, |baseline| {
+        assert_eq!(baseline.nets.len(), 1);
+        let net = &mut baseline.nets[0];
+        assert_eq!(net.terminals.len(), 2);
+        assert!(net.display_name.take().is_some());
+        baseline.format = QUANTITY_FORMAT.into();
+    });
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    assert_apply_refused_without_edit(
+        &mut session,
+        &params,
+        "Cannot add an accepted connection without explicit net display names and singleton origins.",
+    );
+}
+
+/// Removing the final extra pad must not retire an accepted singleton of unknown origin.
+#[test]
+fn footprint_revision_refuses_to_remove_singleton_of_unknown_origin() {
+    let (mut session, documents, target) = package_fixture(|_| {}, false, true);
+    edit(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
+    reopen_with_baseline(&mut session, |baseline| {
+        assert_eq!(baseline.nets.len(), 1);
+        let net = &mut baseline.nets[0];
+        assert_eq!(net.terminals.len(), 1);
+        assert_eq!(net.terminals[0].terminal, "2");
+        assert!(net.names.is_empty());
+        assert_eq!(net.origin.take(), Some(crate::board::update::NetOrigin::PadOnly));
+        baseline.format = DISPLAY_FORMAT.into();
+    });
+    let params = review_extra_land_removal(&mut session, documents, target);
+    assert_apply_refused_without_edit(&mut session, &params, "Cannot remove an accepted connection without explicit net origin.");
 }
 
 /// A populated board is not traversed by admission or publication. Encoding yields in record
