@@ -61,6 +61,8 @@ struct Remap {
     new: Reference,
     before: Option<Witness>,
     after: Witness,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binding_change: Option<catalog::PadBindingChange>,
 }
 
 #[derive(Debug, Serialize)]
@@ -226,8 +228,9 @@ pub(super) fn pick_literal(kind: Kind, measure: Measure) -> Result<(Option<i64>,
     }
 }
 
-/// Stage new losses and exact correspondence after native reconciliation. Output geometry is
-/// always the command's native geometry. Historical witnesses can only flow to lost display.
+/// Stage losses and exact remaps after native reconciliation. A same-address re-pick
+/// requires changed pad binding and its own disclosed remap. Output geometry stays native;
+/// historical witnesses can only flow to lost display.
 pub(crate) fn verify_final(
     previous: Option<&Project>,
     candidate: &mut Project,
@@ -273,6 +276,7 @@ pub(crate) fn verify_final(
                 let choice = choices.remove(&(row.id, pick as u8));
                 repick |= matches!(choice, Some(RemapChoice::Repick { .. }));
                 explicit_model |= matches!(choice, Some(RemapChoice::Correspond | RemapChoice::Repick { .. }));
+                let mut binding_change = None;
                 let proposed = match (offered, choice) {
                     (None, Some(RemapChoice::Correspond)) => {
                         return Err(CommandError::InvalidParams("that correspondence is no longer offered".into()));
@@ -284,8 +288,11 @@ pub(crate) fn verify_final(
                     }
                     (_, Some(RemapChoice::KeepLost)) => None,
                     (_, Some(RemapChoice::Repick { reference })) => {
-                        if reference == old_ref || catalog::resolve(&final_resolver, reference).is_none() {
-                            return Err(reason("lost_reference", "The replacement pick is not available.", Value::Null));
+                        if reference == old_ref {
+                            binding_change = catalog::same_address_pad_binding_change(base, &final_resolver, old_ref);
+                            if binding_change.is_none() {
+                                return Err(CommandError::InvalidParams("re-picking the same reference requires a changed pad binding".into()));
+                            }
                         }
                         Some(reference.clone())
                     }
@@ -295,9 +302,15 @@ pub(crate) fn verify_final(
                     loses = true;
                     continue;
                 };
-                if &proposed != old_ref {
-                    let after = catalog::resolve(&final_resolver, &proposed)
-                        .ok_or_else(|| reason("lost_reference", "The proposed reference is not available.", Value::Null))?;
+                if &proposed != old_ref || binding_change.is_some() {
+                    let after = catalog::resolve(&final_resolver, &proposed).ok_or_else(|| {
+                        let message = if matches!(choice, Some(RemapChoice::Repick { .. })) {
+                            "The replacement pick is not available."
+                        } else {
+                            "The proposed reference is not available."
+                        };
+                        reason("lost_reference", message, Value::Null)
+                    })?;
                     proposal.push(Remap {
                         id: crate::fresh_id()?,
                         relation: row.id,
@@ -306,6 +319,7 @@ pub(crate) fn verify_final(
                         new: proposed.clone(),
                         before: prior_resolver.as_ref().and_then(|resolver| catalog::resolve(resolver, old_ref)),
                         after,
+                        binding_change,
                     });
                 }
                 refs[pick] = proposed;

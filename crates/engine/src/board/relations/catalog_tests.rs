@@ -1,12 +1,22 @@
-use super::{commands::*, tests::*, *};
+use super::{
+    commands::*,
+    probes::{Op, trace},
+    tests::*,
+    *,
+};
 use crate::{
     Session,
     board::{
         self, clipboard,
         definition::{Artwork, CopperBinding, FootprintDefinition, GraphicPurpose, GraphicRect, PadShape},
+        track::{
+            ADD_VIA,
+            tests::{copper_layers, route, view},
+        },
         update,
     },
     library_graphics::{Fill, Geometry, Graphic},
+    persistence::{decode_documents, encode_documents},
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -99,6 +109,7 @@ fn a_cat_ref_native_correspondence_pad_changes_and_choice_binding() {
             let explicit = eco(&mut s, preview(json!({"kind":"correspond"})));
             assert_ne!(explicit["intent_digest"], first["intent_digest"]);
             assert_eq!(explicit["relation_detail"]["remaps"][0]["new"], detail["remaps"][0]["new"]);
+            assert!(explicit["relation_detail"]["remaps"][0].get("binding_change").is_none());
             let latest = eco(&mut s, preview(choice));
             assert_ne!(latest["intent_digest"], explicit["intent_digest"]);
             unchanged(&mut s, |s| {
@@ -136,6 +147,124 @@ fn a_cat_ref_native_correspondence_pad_changes_and_choice_binding() {
             assert_eq!(row["side"], side);
         }
     }
+}
+
+/// A real terminal-map ECO changes the meaning of an offered land, not its address
+/// or geometry. Only a deliberate, separately confirmed re-pick adopts it.
+#[test]
+fn a_cat_ref_checked_eco_same_address_repick_requires_binding_consent() {
+    let mut s = fixture(false);
+    run(&mut s, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2})).unwrap();
+    run(&mut s, update::INITIALIZE_BASELINE, json!({})).unwrap();
+    let f = pick(&mut s, 0, "pad.center", Some("1"));
+    let stable = pick(&mut s, 1, "pad.center", Some("1"));
+    let row = add(&mut s, "horizontal", origin(), f.clone());
+    let stable_row = add(&mut s, "horizontal", origin(), stable.clone());
+    let at = view(&s).footprints().next().unwrap().pads.iter().find(|p| p.number == "1").unwrap().center;
+    let layer = copper_layers(&s)[0];
+    // A single-ended stub on the changed land is safe under either terminal mapping.
+    route(&mut s, layer, &[at, Point { x_nm: at.x_nm, y_nm: at.y_nm + 2_000_000 }]).unwrap();
+    run(&mut s, ADD_VIA, json!({"at":{"x_nm":-30_000_000,"y_nm":-30_000_000}})).unwrap();
+    let initial_rows = run(&mut s, LIST, json!({})).unwrap();
+    let find_row = |result: &Value| result["relations"].as_array().unwrap().iter().position(|r| r["id"] == row).unwrap();
+    let measurement = initial_rows["relations"][find_row(&initial_rows)]["measure"].clone();
+    let placed = &s.project().unwrap().board.footprints()[0];
+    let (library, definition, revision) = placed.key().unwrap();
+    let component = format!("component-{}", placed.component);
+    run(
+        &mut s,
+        crate::ASSIGN_FOOTPRINT,
+        json!({"component":component,"library":library,"definition":definition,"definition_revision":revision,"mapping":{"1":"2","2":"1"}}),
+    )
+    .unwrap();
+    let base = s.snapshot().unwrap();
+    let before = bytes(&s);
+    let cursors = (s.revision(), s.undo.len());
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let prior = eco(&mut s, json!({}));
+    let lost_candidate = s.checked_eco_candidate().unwrap().clone();
+    assert_eq!(prior["relation_detail"]["losses"], json!([{"id":row,"refs":[origin(),f],"last_resolved":measurement["witnesses"]}]));
+    assert_eq!(prior["relation_detail"]["remaps"], json!([]));
+    let mut lookup = Session::default();
+    lookup.open_snapshot(lost_candidate.clone());
+    let offered = pick(&mut lookup, 0, "pad.center", Some("1"));
+    assert_eq!(offered, f);
+    let preview = |relation: &Value, choice: Value| json!({"remap_choices":[{"relation":relation,"pick":1,"choice":choice}]});
+    let repick = |reference: Value| json!({"kind":"repick","reference":reference});
+    let mut absent = offered.clone();
+    absent["pad"] = json!("99");
+    for (args, error_text) in [
+        (preview(&row, json!({"kind":"correspond"})), "that correspondence is no longer offered"),
+        (preview(&stable_row, repick(stable)), "re-picking the same reference requires a changed pad binding"),
+        (preview(&row, repick(absent)), "The replacement pick is not available."),
+    ] {
+        let error = unchanged(&mut s, |s| run(s, update::PREVIEW_UPDATE, args));
+        assert!(error.to_string().contains(error_text), "{error}");
+        assert_eq!(s.board_update_report().unwrap(), prior);
+        assert!(Arc::ptr_eq(s.checked_eco_candidate().unwrap(), &lost_candidate));
+    }
+    let review = eco(&mut s, preview(&row, repick(offered)));
+    assert_ne!(review["intent_digest"], prior["intent_digest"]);
+    assert_ne!(review["plan_token"], prior["plan_token"]);
+    assert_eq!(review["relation_detail"]["losses"], json!([]));
+    let remaps = review["relation_detail"]["remaps"].as_array().unwrap();
+    assert_eq!(remaps.len(), 1);
+    let remap_id = &remaps[0]["id"];
+    assert_eq!(
+        remaps[0],
+        json!({"id":remap_id,"relation":row,"pick":1,"old":f,"new":f,
+            "before":measurement["witnesses"][1],"after":measurement["witnesses"][1],
+            "binding_change":{"old":{"terminal":"1","explicitly_unconnected":false},"new":{"terminal":"2","explicitly_unconnected":false}}
+        })
+    );
+    let candidate = s.checked_eco_candidate().unwrap().clone();
+    let token = &review["plan_token"];
+    for args in [
+        json!({"plan_token":prior["plan_token"],"accept_loss":[row],"confirm_remaps":[]}),
+        json!({"plan_token":token,"accept_loss":[]}),
+        json!({"plan_token":token,"confirm_remaps":[remap_id]}),
+        json!({"plan_token":token,"accept_loss":[],"confirm_remaps":[]}),
+        json!({"plan_token":token,"accept_loss":[],"confirm_remaps":[row]}),
+        json!({"plan_token":token,"accept_loss":[row],"confirm_remaps":[remap_id]}),
+    ] {
+        unchanged(&mut s, |s| run(s, update::APPLY_UPDATE, args));
+        assert_eq!(s.board_update_report().unwrap(), review);
+        assert!(Arc::ptr_eq(s.checked_eco_candidate().unwrap(), &candidate));
+    }
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &base));
+    assert_eq!((s.revision(), s.undo.len()), cursors);
+    assert_eq!(bytes(&s), before);
+    assert!(observer.0.lock().unwrap().is_empty());
+    let decisions = json!({"plan_token":token,"accept_loss":[],"confirm_remaps":[remap_id]});
+    let expected = encode_documents(candidate.clone()).unwrap();
+    let (_, ops) = trace(|| run(&mut s, update::APPLY_UPDATE, decisions.clone()).unwrap());
+    assert_eq!(ops, [Op::Publish(transaction::RelationStage::Outer)]);
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &candidate));
+    assert_eq!((s.revision(), s.undo.len()), (cursors.0 + 1, cursors.1 + 1));
+    assert_eq!(bytes(&s), expected);
+    assert_eq!(transaction::certify(candidate.clone()).unwrap(), review["candidate_digest"].as_str().unwrap());
+    unchanged(&mut s, |s| run(s, update::APPLY_UPDATE, decisions));
+    let events = observer.0.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(Arc::ptr_eq(&candidate, &events[0].project));
+
+    let reopened = decode_documents(&expected).unwrap();
+    let poses = |p: &crate::Project| p.board.footprints().iter().map(|f| (f.id, f.x_nm, f.y_nm, f.rotation, f.bottom)).collect::<Vec<_>>();
+    assert_eq!(poses(&reopened), poses(&base));
+    assert_eq!(reopened.board.tracks, base.board.tracks);
+    assert_eq!(reopened.board.vias, base.board.vias);
+    let pin = crate::schematic::PinNumber::new("1").unwrap();
+    assert_eq!(base.board.footprints()[0].component_pin(pin).unwrap().1, "1");
+    assert_eq!(reopened.board.footprints()[0].component_pin(pin).unwrap().1, "2");
+    assert_eq!(reopened.board.footprints()[0].key(), base.board.footprints()[0].key());
+    lookup.open_snapshot(reopened);
+    let rows = run(&mut lookup, LIST, json!({})).unwrap();
+    let reopened_row = &rows["relations"][find_row(&rows)];
+    assert_eq!(reopened_row["status"], "reference");
+    assert_eq!(reopened_row["refs"], json!([origin(), f]));
+    assert_eq!(reopened_row["measure"], measurement);
+    assert_eq!(bytes(&lookup), expected);
 }
 
 #[test]

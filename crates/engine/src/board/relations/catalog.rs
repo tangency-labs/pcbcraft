@@ -236,13 +236,53 @@ impl Measure {
     }
 }
 
-/// Compare physical pad semantics and terminal mapping independently of position and rotation.
-/// An explicit re-pick (not correspondence) is required to adopt a changed land meaning.
-fn same_pad(previous: &Project, candidate: &Project, a: &Footprint, b: &Footprint, number: &str) -> bool {
-    let Some(pin) = PinNumber::new(number) else { return false };
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct PadBinding<T> {
+    terminal: Option<T>,
+    explicitly_unconnected: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PadBindingChange {
+    old: PadBinding<String>,
+    new: PadBinding<String>,
+}
+
+/// Use the native pad-to-terminal mapping, retaining the distinction between an
+/// explicitly unconnected land and one without a resolved terminal.
+fn pad_binding(fp: &Footprint, pin: PinNumber) -> PadBinding<&str> {
+    PadBinding {
+        terminal: fp.component_pin(pin).map(|(_, terminal)| terminal),
+        explicitly_unconnected: fp.unconnected_pads.iter().any(|p| p == pin.as_str()),
+    }
+}
+
+/// A repeated address can mean something different on the same placement and
+/// exact definition. Disclose only that binding delta; the caller still checks
+/// that the feature and its ordered pair are available on the final candidate.
+pub(super) fn same_address_pad_binding_change(previous: &Project, final_resolver: &Resolver<'_>, reference: &Reference) -> Option<PadBindingChange> {
+    let (id, key) = reference.footprint()?;
+    let pin = PinNumber::new(reference.pad()?)?;
+    let before = footprint(&previous.board, id)?;
+    let after = footprint(&final_resolver.project.board, id)?;
+    if before.component != after.component || !key.matches(before) || !key.matches(after) {
+        return None;
+    }
+    let old = pad_binding(before, pin);
+    let new = pad_binding(after, pin);
+    let own = |binding: PadBinding<&str>| PadBinding {
+        terminal: binding.terminal.map(str::to_owned),
+        explicitly_unconnected: binding.explicitly_unconnected,
+    };
+    (old != new).then(|| PadBindingChange { old: own(old), new: own(new) })
+}
+
+/// Compare physical land semantics across definition revisions, independently of
+/// position and rotation. The caller separately checks terminal binding.
+fn same_land(previous: &Project, candidate: &Project, a: &Footprint, b: &Footprint, number: &str) -> bool {
     let old = pad(&previous.board, a, number);
     let new = pad(&candidate.board, b, number);
-    let physical = match (old, new) {
+    match (old, new) {
         (Some(p), Some(q)) => {
             let layers = |project: &Project, copper: CopperBinding, bottom| CopperLayers::resolve(project.board.setup.as_ref(), copper, bottom);
             (p.shape, p.width_nm, p.height_nm, p.corner_radius_nm, p.copper, p.drill_nm)
@@ -251,10 +291,7 @@ fn same_pad(previous: &Project, candidate: &Project, a: &Footprint, b: &Footprin
         }
         (None, None) => a.library.is_none() && b.library.is_none(),
         _ => false,
-    };
-    physical
-        && a.component_pin(pin) == b.component_pin(pin)
-        && a.unconnected_pads.iter().any(|p| p == number) == b.unconnected_pads.iter().any(|p| p == number)
+    }
 }
 
 /// On a pin revision transition only, propose the same offered feature on the same placement.
@@ -270,16 +307,14 @@ pub(super) fn correspondence(previous: &Project, final_resolver: &Resolver<'_>, 
     // Even with an unchanged definition, a package-map change can repurpose a land.
     if let Some(number) = old.pad() {
         let pin = PinNumber::new(number)?;
-        if before.component_pin(pin) != after.component_pin(pin)
-            || before.unconnected_pads.iter().any(|p| p == number) != after.unconnected_pads.iter().any(|p| p == number)
-        {
+        if pad_binding(before, pin) != pad_binding(after, pin) {
             return None;
         }
     }
     if key.matches(after) {
         return resolve(final_resolver, old).map(|_| old.clone());
     }
-    if old.pad().is_some_and(|number| !same_pad(previous, candidate, before, after, number)) {
+    if old.pad().is_some_and(|number| !same_land(previous, candidate, before, after, number)) {
         return None;
     }
     let mut next = old.clone();
