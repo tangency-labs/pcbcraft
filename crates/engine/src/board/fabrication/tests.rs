@@ -822,30 +822,44 @@ fn tiny_rounded_pad_flashes_its_clamped_point_core() {
 
 /// A maximum radius on a rotated 0.6 × 0.4 mm pad clamps below 200,000 nm when its corners
 /// snap. It still flashes circular corners, within 1 nm of the authored and model radii.
-/// 13° and 30° also shorten the short side slightly when their corners snap.
+/// Includes one- and two-stage projections; the latter can cross the authored tolerance
+/// before diameter rounding but meet it after rounding.
 #[test]
 fn rotated_maximum_radius_pads_keep_circular_corners() {
-    for (local, placed, bottom) in [(45, 0, false), (0, 45, false), (45, 0, true), (13, 0, false), (30, 0, false)] {
+    for (local, placed, bottom, offset, first_diameter) in [
+        (45, 0, false, (0, 0), 399_999),
+        (0, 45, false, (0, 0), 399_999),
+        (45, 0, true, (0, 0), 399_999),
+        (13, 0, false, (0, 0), 400_000),
+        (30, 0, false, (0, 0), 400_000),
+        (18, 32, false, (3, 11), 399_998),
+    ] {
         let pads = [(PadShape::RoundedRectangle, 600_000, 400_000, local, 200_000); 2];
-        let s = aperture_fixture_with_radii(&pads, placed, bottom, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, false);
+        let offset = Point { x_nm: offset.0, y_nm: offset.1 };
+        let s = aperture_fixture_with_radii(&pads, placed, bottom, offset, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, false);
         let fabrication = view(&s).fabrication().unwrap();
         let pads = view(&s).footprints().next().unwrap().pads;
         let contours: Vec<_> = pads.iter().map(|pad| Contour::pad(pad.center, pad.copper.unwrap(), pad.shape, pad.corner_radius_nm)).collect();
-        assert!(contours.iter().all(|contour| contour.radius < 200_000.), "fixture must clamp the radius");
+        // The second pad's different local center can cause different placement rounding.
+        assert!(contours[0].radius < 200_000., "the first pad must clamp the radius");
+        if (local, placed) == (18, 32) {
+            assert!(contours[0].radius < 199_999., "the model radius must miss the authored tolerance before diameter rounding");
+        }
         let expected_angle = if bottom { f64::from(placed) - f64::from(local) } else { f64::from(placed) + f64::from(local) };
         let (sin, cos) = expected_angle.to_radians().sin_cos();
         for output in surface_files(bottom) {
             let read = read_gerber(&fabrication.files, output);
             assert!(read.regions.is_empty() && read.strokes.is_empty() && read.flashes.is_empty(), "{} at {local}/{placed}", output.0);
             assert_eq!(read.rounded_flashes.len(), pads.len());
+            assert_eq!(read.rounded[&read.rounded_flashes[0].1].circles[0].0, first_diameter);
             for ((&(at, code), pad), contour) in read.rounded_flashes.iter().zip(&pads).zip(&contours) {
                 assert_eq!(at, Point { x_nm: pad.center.x_nm, y_nm: -pad.center.y_nm });
                 let aperture = &read.rounded[&code];
                 assert!(aperture.outline.is_empty(), "the short sides meet, leaving a line core");
                 assert_eq!(aperture.circles.len(), 2);
                 let diameter = aperture.circles[0].0;
-                assert!((diameter as f64 / 2. - 200_000.).abs() <= 1., "authored radius within 1 nm");
-                assert!((diameter as f64 / 2. - contour.radius).abs() <= 1., "model radius within 1 nm");
+                assert!(diameter.abs_diff(2 * pad.corner_radius_nm) <= 2, "authored radius within 1 nm");
+                assert!((diameter as f64 / 2. - contour.radius).abs() <= 0.25, "diameter rounded to the nearest 1 nm");
                 let [(_, start), (_, end)] = [aperture.circles[0], aperture.circles[1]];
                 assert!(aperture.circles.iter().all(|&(d, _)| d == diameter));
                 assert_eq!(aperture.strips, [(diameter, start, end)]);

@@ -35,8 +35,8 @@ const DEFAULT_SILK_NM: i64 = 120_000;
 const OUTLINE_NM: i64 = 100_000;
 /// Segments per corner for rounded pads that cannot use a macro.
 const CORNER_SEGMENTS: usize = 6;
-/// Most a rounded-pad macro radius may fall below the authored radius, in nanometers.
-const ROUNDED_RADIUS_TOLERANCE_NM: f64 = 1.;
+/// Allow 1 nm of radius error when comparing the emitted and authored diameters.
+const ROUNDED_DIAMETER_TOLERANCE_NM: u64 = 2;
 
 /// One generated file: a portable name and its text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -147,18 +147,17 @@ impl Gerber {
     /// the engine's land contour. Other R lands remain regions, even if tiny corners collapse.
     /// Other O lands retain the approximate round-ended stroke (a circle for equal sides).
     /// Rounded rectangles flash their rounded land core when the macro can represent it and
-    /// its radius stays within [`ROUNDED_RADIUS_TOLERANCE_NM`] of the authored radius; otherwise
-    /// keep the resolved region.
+    /// its emitted radius is within 1 nm of the authored radius; otherwise keep the resolved region.
     fn pad(&mut self, pad: &PadView, cardinal: bool) {
         let Some(corners) = pad.copper else { return };
         if pad.shape == PadShape::RoundedRectangle {
             let contour = Contour::pad(pad.center, corners, pad.shape, pad.corner_radius_nm);
-            // Snapping rotated corners can shorten a side by about 1 nm, slightly clamping a
-            // maximum radius. Use the nearest grid diameter of the model's radius instead.
+            // Snapping rotated corners can shorten a side and clamp a maximum radius. Compare
+            // the emitted grid diameter, not the unrounded projection, to the authored diameter.
             let diameter = (2. * contour.radius).round() as i64;
             if pad.corner_radius_nm > 0
                 && diameter > 0
-                && pad.corner_radius_nm as f64 - contour.radius <= ROUNDED_RADIUS_TOLERANCE_NM
+                && diameter.abs_diff(2 * pad.corner_radius_nm) <= ROUNDED_DIAMETER_TOLERANCE_NM
                 && let Some(core) = RoundedCore::from_board(contour.core, pad.center)
             {
                 self.flash(pad.center, Aperture::Rounded { diameter, core });
@@ -235,7 +234,7 @@ impl Gerber {
 }
 
 /// Fill the inner polygon and add a strip along each edge and a circle at each vertex.
-/// Their union is the core expanded by the authored radius, without chord approximations.
+/// Their union is the core expanded by half the emitted diameter, without chord approximations.
 /// Ucamco Gerber 2026.05 §§4.5.1.3, 4.5.1.4 and 4.5.1.6 define these primitives. Their
 /// rotation is about the macro origin, not each primitive's center: use zero because
 /// the core already includes pad rotation, placement mirroring/rotation and the Y flip.
