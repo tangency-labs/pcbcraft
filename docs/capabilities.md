@@ -26,6 +26,10 @@ guides, format references, design plans and verification records.
 
 ## Implementation notes
 
+The engine can produce a [single-sheet vector PDF](schematic-pdf.md) with
+searchable text at the saved paper size. There is no export action in the UI
+or MCP yet.
+
 Setup edits can be reviewed through `pcb.preview_board_setup` before the shared
 Apply command: layer removals/renumbering, affected objects and consent/refusal
 are returned with a disposable session-local token. Preview does not dirty the

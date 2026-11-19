@@ -33,6 +33,23 @@ fn font() -> Option<&'static Font> {
     .as_ref()
 }
 
+/// Borrowed outline and advance in the regular face's Y-up font units.
+pub(crate) struct StrokeGlyph {
+    pub cap_height: f64,
+    pub advance: f64,
+    pub paths: &'static [Vec<[f64; 2]>],
+}
+
+/// Borrow the regular face's glyph. Unknown characters draw a question mark; a caller can
+/// still map the encoded glyph back to the original Unicode scalar.
+pub(crate) fn stroke_glyph(c: char) -> Option<StrokeGlyph> {
+    let font = font()?;
+    let mut utf8 = [0; 4];
+    let key: &str = c.encode_utf8(&mut utf8);
+    let glyph = font.glyphs.get(key).or_else(|| font.glyphs.get("?"))?;
+    Some(StrokeGlyph { cap_height: font.cap_height, advance: glyph.advance, paths: &glyph.paths })
+}
+
 /// Lay out smooth proportional strokes at nominal capital height. Round glyphs retain their
 /// optical overshoot and descenders; ink spacing is at least one sixth of text height. Missing
 /// characters use the font's question mark, preserving a visible indication rather than omission.
