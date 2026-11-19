@@ -35,6 +35,8 @@ const DEFAULT_SILK_NM: i64 = 120_000;
 const OUTLINE_NM: i64 = 100_000;
 /// Segments per corner for rounded pads that cannot use a macro.
 const CORNER_SEGMENTS: usize = 6;
+/// Most a rounded-pad macro radius may fall below the authored radius, in nanometers.
+const ROUNDED_RADIUS_TOLERANCE_NM: f64 = 1.;
 
 /// One generated file: a portable name and its text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -144,17 +146,22 @@ impl Gerber {
     /// rectangle. R also needs an integral midpoint; O needs integral capsule endpoints to match
     /// the engine's land contour. Other R lands remain regions, even if tiny corners collapse.
     /// Other O lands retain the approximate round-ended stroke (a circle for equal sides).
-    /// Rounded rectangles flash their rounded land core when its authored radius survives
-    /// projection and the core is representable by a macro; otherwise keep the resolved region.
+    /// Rounded rectangles flash their rounded land core when the macro can represent it and
+    /// its radius stays within [`ROUNDED_RADIUS_TOLERANCE_NM`] of the authored radius; otherwise
+    /// keep the resolved region.
     fn pad(&mut self, pad: &PadView, cardinal: bool) {
         let Some(corners) = pad.copper else { return };
         if pad.shape == PadShape::RoundedRectangle {
             let contour = Contour::pad(pad.center, corners, pad.shape, pad.corner_radius_nm);
+            // Snapping rotated corners can shorten a side by about 1 nm, slightly clamping a
+            // maximum radius. Use the nearest grid diameter of the model's radius instead.
+            let diameter = (2. * contour.radius).round() as i64;
             if pad.corner_radius_nm > 0
-                && contour.radius == pad.corner_radius_nm as f64
+                && diameter > 0
+                && pad.corner_radius_nm as f64 - contour.radius <= ROUNDED_RADIUS_TOLERANCE_NM
                 && let Some(core) = RoundedCore::from_board(contour.core, pad.center)
             {
-                self.flash(pad.center, Aperture::Rounded { diameter: 2 * pad.corner_radius_nm, core });
+                self.flash(pad.center, Aperture::Rounded { diameter, core });
                 return;
             }
         }

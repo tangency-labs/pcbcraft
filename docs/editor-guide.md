@@ -840,8 +840,9 @@ approximate round-ended stroke (a C flash when both resolved sides are equal). O
 rectangles remain regions, including net-cardinal poses reached through non-cardinal
 intermediate rotations. Very small collapsed rectangular pads can emit a retraced path
 with zero area. Rounded rectangles flash a Gerber aperture macro with circular
-corners when the authored radius survives nanometre projection and the inner
-shape is a convex quadrilateral, a line or a point. The macro uses the placed pad's
+corners when the inner shape is a convex quadrilateral, a line or a point and the
+radius stays within 1 nm of the authored radius after nanometre projection. A maximum
+radius on a rotated pad uses the nearest whole-nanometre diameter. The macro uses the placed pad's
 geometry, including rotation and side. Other rounded rectangles retain resolved
 polygon regions. This changes only the generated pad artwork, not saved pad
 geometry, track or Board Outline output.

@@ -17,8 +17,28 @@ fn aperture_fixture_with_pads(pads: &[(PadShape, i64, i64, u16)], rotation: u16,
 }
 
 /// Author the same command-built fixture with explicit local/placement centers and copper binding.
+/// Rounded rectangles use a quarter of their short side as the corner radius.
 fn aperture_fixture_at(
     pads: &[(PadShape, i64, i64, u16)],
+    rotation: u16,
+    bottom: bool,
+    offset: Point,
+    position: Point,
+    through_hole: bool,
+) -> Session {
+    let pads: Vec<_> = pads
+        .iter()
+        .map(|&(shape, width, height, pad_rotation)| {
+            let radius = if shape == PadShape::RoundedRectangle { (width.min(height) / 4).max(1) } else { 0 };
+            (shape, width, height, pad_rotation, radius)
+        })
+        .collect();
+    aperture_fixture_with_radii(&pads, rotation, bottom, offset, position, through_hole)
+}
+
+/// Author command-built lands with an explicit corner radius per pad.
+fn aperture_fixture_with_radii(
+    pads: &[(PadShape, i64, i64, u16, i64)],
     rotation: u16,
     bottom: bool,
     offset: Point,
@@ -29,7 +49,7 @@ fn aperture_fixture_at(
     let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
     editor.execute(editor.revision(), Action::Delete { objects: vec![2, 3] }).unwrap();
     let Primitive::Pad { pad: template } = editor.snapshot().objects[&1].clone() else { panic!("pad") };
-    for (index, &(shape, width, height, pad_rotation)) in pads.iter().enumerate() {
+    for (index, &(shape, width, height, pad_rotation, corner_radius_nm)) in pads.iter().enumerate() {
         let mut pad = template.clone();
         pad.number = (index + 1).to_string();
         pad.center = Point { x_nm: index as i64 * 2_000_000 + offset.x_nm, y_nm: offset.y_nm };
@@ -38,7 +58,7 @@ fn aperture_fixture_at(
             pad.drill_nm = Some(width.min(height) / 2);
         }
         pad.shape = shape;
-        pad.corner_radius_nm = if shape == PadShape::RoundedRectangle { (width.min(height) / 4).max(1) } else { 0 };
+        pad.corner_radius_nm = corner_radius_nm;
         pad.width_nm = width;
         pad.height_nm = height;
         pad.rotation = pad_rotation;
@@ -779,21 +799,64 @@ fn aperture_eligibility_is_per_pad_within_one_footprint() {
     );
 }
 
-/// A legal 1 nm radius clamps to zero after the corners of a rotated 2×2 nm pad snap.
+/// A legal 1 nm radius clamps to about 0.707 nm after the corners of a rotated 2×2 nm pad
+/// snap to a diamond. Its point core flashes as the nearest whole-nanometre disk.
 #[test]
-fn tiny_rounded_pad_can_emit_four_unchorded_corners() {
+fn tiny_rounded_pad_flashes_its_clamped_point_core() {
     let s = aperture_fixture(PadShape::RoundedRectangle, 2, 2, 45, 0, false);
     let pads = view(&s).footprints().next().unwrap().pads;
     assert_eq!(pads.len(), 2);
     assert!(pads.iter().all(|pad| pad.corner_radius_nm == 1));
+    let contour = Contour::pad(pads[0].center, pads[0].copper.unwrap(), pads[0].shape, pads[0].corner_radius_nm);
+    assert!((contour.radius - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-9);
     let outputs = view(&s).fabrication_outputs().unwrap();
     let read = read_gerber(&outputs, TOP_COPPER);
-    assert!(read.apertures.is_empty() && read.flashes.is_empty() && read.strokes.is_empty());
-    assert!(read.rounded.is_empty() && read.rounded_flashes.is_empty());
-    assert_eq!(read.regions.len(), 2);
-    for (polygon, x_nm) in read.regions.iter().zip([30_000_001, 32_000_001]) {
-        let expected = [(-1, 0), (0, 1), (1, 0), (0, -1), (-1, 0)].map(|(dx, dy)| Point { x_nm: x_nm + dx, y_nm: 25_000_003 + dy });
-        assert_eq!(polygon.as_slice(), expected.as_slice());
+    assert!(read.apertures.is_empty() && read.flashes.is_empty() && read.strokes.is_empty() && read.regions.is_empty());
+    assert_eq!(read.rounded.len(), 1);
+    let at: Vec<_> = read.rounded_flashes.iter().map(|&(at, _)| at).collect();
+    assert_eq!(at, [30_000_001, 32_000_001].map(|x_nm| Point { x_nm, y_nm: 25_000_003 }));
+    let aperture = &read.rounded[&read.rounded_flashes[0].1];
+    assert_eq!(aperture.circles, [(1, Point { x_nm: 0, y_nm: 0 })]);
+    assert!(aperture.strips.is_empty() && aperture.outline.is_empty());
+}
+
+/// A maximum radius on a rotated 0.6 × 0.4 mm pad clamps below 200,000 nm when its corners
+/// snap. It still flashes circular corners, within 1 nm of the authored and model radii.
+/// 13° and 30° also shorten the short side slightly when their corners snap.
+#[test]
+fn rotated_maximum_radius_pads_keep_circular_corners() {
+    for (local, placed, bottom) in [(45, 0, false), (0, 45, false), (45, 0, true), (13, 0, false), (30, 0, false)] {
+        let pads = [(PadShape::RoundedRectangle, 600_000, 400_000, local, 200_000); 2];
+        let s = aperture_fixture_with_radii(&pads, placed, bottom, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, false);
+        let fabrication = view(&s).fabrication().unwrap();
+        let pads = view(&s).footprints().next().unwrap().pads;
+        let contours: Vec<_> = pads.iter().map(|pad| Contour::pad(pad.center, pad.copper.unwrap(), pad.shape, pad.corner_radius_nm)).collect();
+        assert!(contours.iter().all(|contour| contour.radius < 200_000.), "fixture must clamp the radius");
+        let expected_angle = if bottom { f64::from(placed) - f64::from(local) } else { f64::from(placed) + f64::from(local) };
+        let (sin, cos) = expected_angle.to_radians().sin_cos();
+        for output in surface_files(bottom) {
+            let read = read_gerber(&fabrication.files, output);
+            assert!(read.regions.is_empty() && read.strokes.is_empty() && read.flashes.is_empty(), "{} at {local}/{placed}", output.0);
+            assert_eq!(read.rounded_flashes.len(), pads.len());
+            for ((&(at, code), pad), contour) in read.rounded_flashes.iter().zip(&pads).zip(&contours) {
+                assert_eq!(at, Point { x_nm: pad.center.x_nm, y_nm: -pad.center.y_nm });
+                let aperture = &read.rounded[&code];
+                assert!(aperture.outline.is_empty(), "the short sides meet, leaving a line core");
+                assert_eq!(aperture.circles.len(), 2);
+                let diameter = aperture.circles[0].0;
+                assert!((diameter as f64 / 2. - 200_000.).abs() <= 1., "authored radius within 1 nm");
+                assert!((diameter as f64 / 2. - contour.radius).abs() <= 1., "model radius within 1 nm");
+                let [(_, start), (_, end)] = [aperture.circles[0], aperture.circles[1]];
+                assert!(aperture.circles.iter().all(|&(d, _)| d == diameter));
+                assert_eq!(aperture.strips, [(diameter, start, end)]);
+                // The core runs along the long axis, 100,000 nm each side of the center.
+                let (x, y) = (100_000. * cos, 100_000. * sin);
+                for (point, sign) in [(start, -1.), (end, 1.)] {
+                    let near = |s: f64| (point.x_nm as f64 - s * x).abs() <= 2. && (point.y_nm as f64 - s * y).abs() <= 2.;
+                    assert!(near(sign) || near(-sign), "{point:?} at {local}/{placed}");
+                }
+            }
+        }
     }
 }
 
