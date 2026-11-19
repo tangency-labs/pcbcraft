@@ -127,7 +127,7 @@ impl PcbApp {
         let source = self.views.active.input(&self.session)?;
         let id = self.views.active.schematic.selection.single_symbol()?;
         let project = self.views.active.snapshot(&self.session)?;
-        let symbol = project.symbols().iter().find(|symbol| symbol.id() == id)?;
+        let symbol = project.symbol(id)?;
         let component = project.component(symbol)?;
         let reference = component.reference().to_owned();
         let value = component.display_value().into_owned();
@@ -396,9 +396,6 @@ impl PcbApp {
         let title = format!("{} · Symbol properties", edit.original.0);
         let footprint = self.package_label(&edit.component);
         let project = self.views.active.snapshot(&self.session);
-        let part = project
-            .as_deref()
-            .and_then(|project| project.symbols().iter().find(|symbol| symbol.id() == edit.symbol).and_then(|symbol| project.component(symbol)));
         let action = pcbcraft_chrome::catalog::property_form(ctx, "edit_fields", &title, 760.0, "OK", |ui| {
             ui.label(shell::dim(&edit.definition.name));
             chrome::tabs(ui, &mut edit.tab, &[(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")]);
@@ -431,8 +428,11 @@ impl PcbApp {
                     if !can_choose {
                         ui.label(shell::dim("Apply or cancel pending placement and field changes before selecting a pin function."));
                     }
-                    if let Some(part) = part {
-                        pin_function = terminal_functions(ui, &edit, part, can_choose);
+                    if let Some(project) = project.as_deref()
+                        && let Some(symbol) = project.symbol(&edit.symbol)
+                        && let Some(part) = project.component(symbol)
+                    {
+                        pin_function = terminal_functions(ui, &edit, project, part, can_choose);
                     }
                 }
                 Tab::Library => {
@@ -526,7 +526,13 @@ impl PcbApp {
 
 /// Render effective pin functions in the placed unit's pin list. A selection is a separate
 /// immediate edit rather than an uncommitted field on the placement draft.
-fn terminal_functions(ui: &mut Ui, edit: &Edit, part: &pcbcraft_engine::schematic::PartInstance, enabled: bool) -> Option<(String, Option<String>)> {
+fn terminal_functions(
+    ui: &mut Ui,
+    edit: &Edit,
+    project: &pcbcraft_engine::Project,
+    part: &pcbcraft_engine::schematic::PartInstance,
+    enabled: bool,
+) -> Option<(String, Option<String>)> {
     let mut selected = None;
     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
         egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
@@ -536,11 +542,11 @@ fn terminal_functions(ui: &mut Ui, edit: &Edit, part: &pcbcraft_engine::schemati
             ui.end_row();
             for pin in edit.definition.unit(&edit.unit).into_iter().flat_map(|unit| unit.pins()) {
                 ui.label(&pin.number);
-                let (name, kind) = part.effective_pin(pin);
+                let (name, kind) = project.effective_pin(part, pin);
                 if pin.alternates.is_empty() {
                     ui.label(name.unwrap_or("—"));
                 } else {
-                    let mut current = part.pin_function(&pin.number).unwrap_or_default().to_owned();
+                    let mut current = project.pin_function(part, &pin.number).unwrap_or_default().to_owned();
                     let mut options = vec![("", format!("{} (Primary)", pin.name.as_deref().unwrap_or("—")))];
                     options.extend(pin.alternates.iter().map(|alternate| (alternate.name.as_str(), alternate.name.clone())));
                     let prior = current.clone();

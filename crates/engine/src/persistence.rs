@@ -891,7 +891,6 @@ fn validate_with_hierarchy(
                 metadata,
                 part: None,
                 no_connects: BTreeMap::new(),
-                pin_functions: BTreeMap::new(),
             },
         );
     }
@@ -1065,6 +1064,7 @@ fn validate_with_hierarchy(
         sheet_index: 0,
         name,
         components: Arc::new(components),
+        pin_functions: Arc::default(),
         units: Arc::new(units),
         schematic_packages: Arc::default(),
         board: Arc::new(layout),

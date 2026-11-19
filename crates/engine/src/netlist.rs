@@ -501,7 +501,7 @@ impl Project {
                         .pins()
                         .iter()
                         .map(|pin| {
-                            let (name, electrical_type) = part.effective_pin(pin);
+                            let (name, electrical_type) = self.effective_pin(part, pin);
                             TerminalInfo {
                                 terminal: pin.number.clone(),
                                 name: name.map(str::to_owned),

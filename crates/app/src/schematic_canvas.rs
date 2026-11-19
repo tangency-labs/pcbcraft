@@ -487,10 +487,9 @@ pub(crate) fn show(
             } else {
                 tokens.text
             };
-            let part = (symbol.definition.format() == pcbcraft_engine::library::SYMBOL_FORMAT_V5).then(|| project.component(symbol)).flatten();
             paint_symbol(
                 &painter,
-                symbol.graphics(part),
+                project.symbol_graphics(symbol),
                 center,
                 unit_step,
                 symbol.turns(),
@@ -1275,7 +1274,7 @@ fn paint_unit_template(
 ) {
     paint_symbol(
         painter,
-        symbol.graphics(None),
+        symbol.unit_definition().graphics(),
         center,
         step,
         symbol.turns(),

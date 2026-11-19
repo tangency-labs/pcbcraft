@@ -355,7 +355,7 @@ impl Project {
                 let (x, y) = crate::schematic::place(p.x_nm, p.y_nm, turns, mirrored);
                 add(Point { x_nm: at.x_nm + x, y_nm: at.y_nm + y });
             };
-            for shape in symbol.graphics(self.component(symbol)) {
+            for shape in self.symbol_graphics(symbol) {
                 match &shape {
                     Shape::Graphic(graphic) => graphic.paths().iter().flatten().for_each(&mut local),
                     Shape::Line(a, b) | Shape::Rect(a, b) => [a, b].into_iter().for_each(&mut local),

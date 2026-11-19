@@ -528,9 +528,11 @@ The header selects version 48 only while a selection exists. It composes with
 ordinary or compact part-group memberships and optional assembly profiles,
 without changing any board, sheet or instance document header. Projects without
 choices keep their previous entry-point encoding. A legacy installation layout
-adopts current folder and occurrence metadata on the first selection, with Undo
-restoring the previous state. Single-document diagnostic export refuses choices
-rather than omitting them.
+adopts current folder and occurrence metadata on the first selection. Undo
+restores the previous layout and part contents; any allocation watermark adopted
+on that first edit is retained, so pre-watermark projects need not return to
+byte-identical encoding. Single-document diagnostic export refuses choices rather
+than omitting them.
 
 ### Intentional no-connect records
 

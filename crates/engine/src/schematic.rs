@@ -357,8 +357,6 @@ pub struct PartInstance {
     pub part: Option<crate::part_instances::Selection>,
     /// Sparse authored terminal intent; captured pin types expose later incompatible edits.
     pub no_connects: std::collections::BTreeMap<String, ElectricalType>,
-    /// Sparse user selections keyed by the stable number shared by all unit appearances.
-    pub(crate) pin_functions: std::collections::BTreeMap<String, String>,
 }
 
 impl PartInstance {
@@ -386,30 +384,12 @@ impl PartInstance {
             .map_or(std::borrow::Cow::Borrowed(&self.value), Into::into)
     }
 
-    /// Return the explicit selection; no selection uses the primary function.
-    pub fn pin_function(&self, terminal: &str) -> Option<&str> {
-        self.pin_functions.get(terminal).map(String::as_str)
-    }
-
-    /// The effective name and electrical type for a pin from this part's pinned definition.
-    /// Pins without a selection retain the primary function.
-    pub fn effective_pin<'a>(&'a self, pin: &'a PinDefinition) -> (Option<&'a str>, ElectricalType) {
-        (!pin.alternates.is_empty())
-            .then(|| self.pin_function(&pin.number))
-            .flatten()
-            .and_then(|name| pin.alternate(name))
-            .map_or((pin.name.as_deref(), pin.electrical_type), |function| (Some(function.name.as_str()), function.electrical_type))
-    }
-
     /// Publish component-owned fields independently of schematic placement geometry.
     pub(crate) fn inspect(&self) -> Value {
         let mut value = json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
             "reference": self.reference, "value": self.value, "metadata": self.metadata});
         if let Some(part) = &self.part {
             value["part"] = part.inspect();
-        }
-        if !self.pin_functions.is_empty() {
-            value["pin_functions"] = json!(self.pin_functions);
         }
         if !self.no_connects.is_empty() {
             value["no_connects"] = json!(crate::no_connect::write_intents(&self.no_connects));
@@ -500,13 +480,9 @@ impl SymbolPlacement {
     }
 
     /// Draw this unit with the owning part's effective names; previews have no selections.
-    pub fn graphics(&self, part: Option<&PartInstance>) -> Vec<Shape> {
+    pub(crate) fn graphics(&self, choices: Option<&std::collections::BTreeMap<String, String>>) -> Vec<Shape> {
         let unit = self.unit_definition();
-        if let Some(part) = part.filter(|part| !part.pin_functions.is_empty()) {
-            unit.graphics_with(|pin| part.effective_pin(pin).0)
-        } else {
-            unit.graphics()
-        }
+        if choices.is_some() { unit.graphics_with(|pin| crate::pin_functions::effective(choices, pin).0) } else { unit.graphics() }
     }
 
     /// Quarter turns counterclockwise, 0 to 3, applied after the optional horizontal mirror.
@@ -552,14 +528,13 @@ impl SymbolPlacement {
 
     /// Report the component and symbol IDs, the reference and value shown, the rotation, and the
     /// numbered pin coordinates with their electrical types and any names, such as an LED's polarity.
-    pub(crate) fn inspect(&self, reference: &str, value: &str, part: Option<&PartInstance>) -> Value {
+    pub(crate) fn inspect(&self, reference: &str, value: &str, choices: Option<&std::collections::BTreeMap<String, String>>) -> Value {
         let pins = self
             .pins()
             .into_iter()
             .zip(self.unit_definition().pins())
             .map(|(position, definition)| {
-                let (name, electrical_type) =
-                    part.map_or((definition.name.as_deref(), definition.electrical_type), |part| part.effective_pin(definition));
+                let (name, electrical_type) = crate::pin_functions::effective(choices, definition);
                 let mut pin = json!({
                     "number": definition.number,
                     "electrical_type": electrical_type.as_str(),
@@ -571,7 +546,7 @@ impl SymbolPlacement {
                 }
                 if !definition.alternates.is_empty() {
                     pin["alternates"] = json!(definition.alternates);
-                    pin["function"] = json!(part.and_then(|part| part.pin_function(&definition.number)));
+                    pin["function"] = json!(choices.and_then(|choices| choices.get(&definition.number)));
                 }
                 pin
             })

@@ -829,6 +829,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         sheets: Arc::new(hierarchy_sheets.clone()),
         sheet_index: 0,
         components: Arc::default(),
+        pin_functions: Arc::default(),
         units: Arc::default(),
         schematic_packages: Arc::default(),
         board: Arc::default(),
@@ -1434,8 +1435,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         .collect::<Result<Vec<_>, String>>()?;
     project_data.sheets = Arc::new(sheets);
     for (id, records) in pin_functions {
-        let part = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing alternate pin function owner.")?;
-        part.pin_functions = crate::pin_functions::read_choices(records, part)?;
+        let part = project_data.components.get(&id).ok_or("Missing alternate pin function owner.")?;
+        let choices = crate::pin_functions::read_choices(records, part)?;
+        Arc::make_mut(&mut project_data.pin_functions).replace(id, choices)?;
     }
     for (id, intents) in no_connects {
         let part = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing no-connect part.")?;
@@ -1857,7 +1859,7 @@ impl DocumentsEncoder {
                                 metadata: (!c.metadata.is_empty()).then(|| c.metadata.clone()),
                                 part: c.part.as_ref().map(|part| part.record()),
                                 no_connects: crate::no_connect::write_intents(&c.no_connects),
-                                pin_functions: crate::pin_functions::write_choices(&c.pin_functions),
+                                pin_functions: self.project.pin_functions.owner(c.ordinal).and_then(crate::pin_functions::write_choices),
                             },
                         )?;
                         if let Some(part) = &c.part {

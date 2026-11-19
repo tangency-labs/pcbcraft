@@ -54,8 +54,8 @@ fn params(session: &Session, function: Value) -> Value {
 /// Extract the rendered schematic labels, ignoring non-text shapes.
 fn ink(project: &Project) -> Vec<String> {
     let placed = &project.symbols()[0];
-    placed
-        .graphics(project.component(placed))
+    project
+        .symbol_graphics(placed)
         .into_iter()
         .filter_map(|shape| match shape {
             Shape::Graphic(crate::library_graphics::Graphic { geometry: crate::library_graphics::Geometry::Text { text, .. }, .. }) => Some(text),
@@ -107,6 +107,67 @@ fn chooses_typed_function_without_changing_connectivity() {
     assert!(!restored.check_no_connects(session.revision()).findings.iter().any(|finding| finding.rule == "no_connect_incompatible_terminal"));
     session.apply("edit.redo", &Value::Null).unwrap();
     assert!(ink(session.project().unwrap()).contains(&"ADC_IN".to_owned()));
+}
+
+/// At the placement limit, set/clear and preview perform only indexed sparse lookups;
+/// drawing one addressed unit does not consult any of its unrelated placements.
+#[test]
+fn pin_function_edit_and_drawing_do_bounded_work_in_a_large_project() {
+    let mut session = fixture(false);
+    let mut project = session.project().unwrap().clone();
+    let part = project.components().next().unwrap().clone();
+    let symbol = project.symbols()[0].clone();
+    for i in 1..crate::schematic::MAX_SYMBOLS {
+        let mut extra = part.clone();
+        extra.ordinal = 2 * i as u64 + 1;
+        extra.reference_number = i + 1;
+        extra.reference = format!("{}{}", extra.definition.reference_prefix, i + 1);
+        let mut placed = symbol.clone();
+        placed.ordinal = extra.ordinal + 1;
+        placed.component = extra.ordinal;
+        placed.position.x_nm = (i % 64) as i64 * 25_400_000;
+        placed.position.y_nm = (i / 64) as i64 * 25_400_000;
+        Arc::make_mut(&mut project.units).insert((extra.ordinal, placed.unit_id().to_owned()), placed.ordinal);
+        Arc::make_mut(&mut project.components).insert(extra.ordinal, extra);
+        Arc::make_mut(&mut Arc::make_mut(&mut project.sheets)[0].symbols).push(placed);
+    }
+    session.change(project).unwrap();
+    let before = session.snapshot().unwrap();
+    assert_eq!(before.components.len(), crate::schematic::MAX_SYMBOLS);
+    let target = before.symbols().last().unwrap();
+    let symbol_id = target.id();
+    let target = json!({"part":target.component_id(),"terminal":"1"});
+    let choice = |session: &Session, function: Value, dry_run| json!({"target":target,"function":function,"dry_run":dry_run,"expected_revision":session.revision()});
+    OWNER_LOOKUPS.set(0);
+    FULL_PREPARATIONS.set(0);
+    session.execute(SET, &choice(&session, json!("ADC_IN"), true)).unwrap();
+    assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+    assert_eq!(OWNER_LOOKUPS.replace(0), 1);
+    session.apply(SET, &choice(&session, json!("ADC_IN"), false)).unwrap();
+    assert!(OWNER_LOOKUPS.replace(0) <= 3);
+    let selected = session.snapshot().unwrap();
+    assert_eq!(selected.pin_function_count(), 1);
+    assert!(Arc::ptr_eq(&selected.components, &before.components));
+    assert!(Arc::ptr_eq(&selected.sheets, &before.sheets));
+    assert!(Arc::ptr_eq(&selected.net_registry, &before.net_registry));
+    let symbol = selected.symbol(&symbol_id).unwrap();
+    let graphics = selected.symbol_graphics(symbol);
+    assert_eq!(OWNER_LOOKUPS.replace(0), 1);
+    assert_eq!(graphics.len(), symbol.unit_definition().graphics().len());
+    assert!(graphics.iter().any(|shape| matches!(shape, Shape::Graphic(crate::library_graphics::Graphic { geometry: crate::library_graphics::Geometry::Text { text, .. }, .. }) if text == "ADC_IN")));
+    session.execute(SET, &choice(&session, Value::Null, true)).unwrap();
+    assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &selected));
+    assert_eq!(OWNER_LOOKUPS.replace(0), 1);
+    session.apply(SET, &choice(&session, Value::Null, false)).unwrap();
+    assert!(OWNER_LOOKUPS.get() <= 3);
+    assert_eq!(FULL_PREPARATIONS.get(), 0);
+    let cleared = session.snapshot().unwrap();
+    assert_eq!(cleared.pin_function_count(), 0);
+    assert!(Arc::ptr_eq(&cleared.components, &before.components));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &selected));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
 }
 
 /// Matching accepted terminals use the selected metadata without changing the accepted
@@ -225,6 +286,66 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
         let clear = params(&session, Value::Null);
         session.apply(SET, &clear).unwrap();
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
+/// Open true flat, pre-occurrence bytes before selecting; verify exact old identity and bounded
+/// selection storage in both homes, with retained allocation metadata on pre-watermark Undo.
+#[test]
+fn first_pin_function_selection_adopts_legacy_storage_without_moving_identities() {
+    for (board, had_watermark) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut session = fixture(board);
+        let mut legacy = Project::clone(&crate::persistence::diagnostic_snapshot(session.snapshot().unwrap()));
+        legacy.layout = None;
+        if !had_watermark {
+            legacy.numeric_id_high_water = None;
+            if board {
+                Arc::make_mut(&mut legacy.board).ownership = crate::board::identity::Ownership::Legacy;
+            }
+        }
+        let old = encode_documents(Arc::new(legacy)).unwrap();
+        let before = decode_documents(&old).unwrap();
+        assert!(before.layout.is_none());
+        assert!(!before.has_sheet_occurrences());
+        assert_eq!(before.numeric_id_high_water.is_some(), had_watermark);
+        assert_eq!(encode_documents(before.clone()).unwrap(), old);
+        session.open_snapshot(before.clone());
+        let mut dry_run = params(&session, json!("ADC_IN"));
+        dry_run["dry_run"] = json!(true);
+        assert_eq!(session.execute(SET, &dry_run).unwrap()["pin_function_change"]["after"]["name"], "ADC_IN");
+        assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+        session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
+        let selected = session.snapshot().unwrap();
+        let docs = encode_documents(selected.clone()).unwrap();
+        let reopened = decode_documents(&docs).unwrap();
+        assert_eq!(reopened.id(), before.id());
+        assert_eq!(reopened.sheet_target(), before.sheet_target());
+        assert_eq!(reopened.board_target(), before.board_target());
+        assert_eq!(reopened.symbols(), before.symbols());
+        assert_eq!(reopened.components, before.components);
+        assert_eq!(reopened.netlist().unwrap().netlist.nets, before.netlist().unwrap().netlist.nets);
+        assert_eq!(reopened.footprint_assignments(), before.footprint_assignments());
+        assert_eq!(reopened.pin_function_count(), 1);
+        assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
+        assert!(docs.len() <= old.len() + usize::from(board));
+        let entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/48");
+        let records = &entry["components"][0]["pin_functions"];
+        assert_eq!(records, &json!([{"terminal":"1","function":"ADC_IN"}]));
+        assert!(serde_json::to_vec(records).unwrap().len() <= 64);
+        assert!(docs[ENTRY_POINT].len() <= old[ENTRY_POINT].len() + 2048);
+        assert_eq!(encode_documents(reopened).unwrap(), docs);
+        session.apply("edit.undo", &Value::Null).unwrap();
+        let restored = session.snapshot().unwrap();
+        assert!(!restored.has_sheet_occurrences());
+        assert_eq!(restored.pin_function_count(), 0);
+        assert_eq!(restored.numeric_id_high_water, selected.numeric_id_high_water);
+        let expected = Project::with_allocation_watermark(before, selected.numeric_id_high_water);
+        let undo = encode_documents(restored).unwrap();
+        assert_eq!(undo, encode_documents(expected).unwrap());
+        if had_watermark {
+            assert_eq!(undo, old);
+        }
     }
 }
 
