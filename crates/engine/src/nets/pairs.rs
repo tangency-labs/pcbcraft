@@ -125,6 +125,39 @@ fn valid_text(text: &str) -> bool {
     !text.is_empty() && text.trim() == text && text.chars().count() <= MAX_PAIR_NAME_CHARS && !text.chars().any(char::is_control)
 }
 
+/// Validate one stored pair at a time, keeping the canonical order and member claims
+/// across batches. The caller supplies the identities of the unmodified net rows.
+#[derive(Default)]
+pub(super) struct PairValidation {
+    members: BTreeSet<Uuid>,
+    previous: Option<Uuid>,
+}
+
+impl PairValidation {
+    /// Reject one malformed or conflicting relationship without traversing other rows.
+    pub(super) fn row(&mut self, pair: &Pair, contains_net: impl Fn(Uuid) -> bool) -> Result<(), String> {
+        if pair.id.is_nil() || self.previous.is_some_and(|id| id >= pair.id) || contains_net(pair.id) {
+            return Err("Pairs require unique non-nil UUIDs in canonical order, distinct from net identities.".into());
+        }
+        if pair.positive == pair.negative || !contains_net(pair.positive) || !contains_net(pair.negative) {
+            return Err("Pair members must be distinct persistent nets in the owning registry.".into());
+        }
+        if !self.members.insert(pair.positive) || !self.members.insert(pair.negative) {
+            return Err("A net may belong to at most one differential pair.".into());
+        }
+        if !valid_text(&pair.name) {
+            return Err("Pair names must be trimmed, nonempty, control-free and at most 200 characters.".into());
+        }
+        if let PairState::NeedsReview { reason } = &pair.state
+            && !valid_text(reason)
+        {
+            return Err("Pair review reasons must be trimmed, nonempty, control-free and at most 200 characters.".into());
+        }
+        self.previous = Some(pair.id);
+        Ok(())
+    }
+}
+
 impl Registry {
     /// Reserve both net and pair identities against UUID collisions, independently of capacity.
     pub(super) fn reserved_ids(&self) -> BTreeSet<Uuid> {
@@ -146,27 +179,9 @@ impl Registry {
             return Err("Differential pair count exceeds its limit.".into());
         }
         let nets: BTreeSet<_> = self.records.iter().map(|record| record.id).collect();
-        let mut members = BTreeSet::new();
-        let mut previous = None;
+        let mut validation = PairValidation::default();
         for pair in self.pairs.iter() {
-            if pair.id.is_nil() || previous.is_some_and(|id| id >= pair.id) || nets.contains(&pair.id) {
-                return Err("Pairs require unique non-nil UUIDs in canonical order, distinct from net identities.".into());
-            }
-            if pair.positive == pair.negative || !nets.contains(&pair.positive) || !nets.contains(&pair.negative) {
-                return Err("Pair members must be distinct persistent nets in the owning registry.".into());
-            }
-            if !members.insert(pair.positive) || !members.insert(pair.negative) {
-                return Err("A net may belong to at most one differential pair.".into());
-            }
-            if !valid_text(&pair.name) {
-                return Err("Pair names must be trimmed, nonempty, control-free and at most 200 characters.".into());
-            }
-            if let PairState::NeedsReview { reason } = &pair.state
-                && !valid_text(reason)
-            {
-                return Err("Pair review reasons must be trimmed, nonempty, control-free and at most 200 characters.".into());
-            }
-            previous = Some(pair.id);
+            validation.row(pair, |id| nets.contains(&id))?;
         }
         Ok(())
     }

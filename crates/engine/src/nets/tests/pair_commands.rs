@@ -275,6 +275,8 @@ fn large_board_pair_registry_sizing_respects_the_poll_budget() {
     let params = json!({"pair":pair,"name":"Quoted \"Data\" λ","positive":p,"negative":n,"expected_revision":revision});
     let mut job = session.prepare_pair_edit(CREATE_PAIR, &params).unwrap();
     assert!(!job.step(ROWS_PER_POLL));
+    assert_eq!(job.drafted_pair_rows(), Some(0));
+    assert!(!job.step(ROWS_PER_POLL));
     assert_eq!(job.measured_registry_rows(), Some(0));
     for poll in 1..=RETIRED / ROWS_PER_POLL {
         assert!(!job.step(ROWS_PER_POLL));
@@ -296,6 +298,62 @@ fn large_board_pair_registry_sizing_respects_the_poll_budget() {
     let pair_rows = encoded.split_once("\"pairs\": [\n").unwrap().1.split_once("    ]\n").unwrap().0;
     assert_eq!(framed, pair_rows.len());
     round_trip(&session);
+}
+
+/// Candidate construction copies and validates only its allotted pair rows, including when
+/// an insertion shifts the entire array. Cancellation never replaces the original list.
+#[test]
+fn large_pair_draft_respects_the_poll_budget() {
+    const PAIRS: usize = 384;
+    const ROWS_PER_POLL: usize = 11;
+    let (mut session, [p, n, _]) = pair_fixture(false);
+    let mut project = Project::clone(session.project().unwrap());
+    let capture = crate::board::update::capture_source(&project).unwrap();
+    let registry = Arc::make_mut(&mut project.net_registry);
+    let records = Arc::make_mut(&mut registry.records);
+    let template = records[0].clone();
+    let last = records.iter().filter_map(|record| record.generated_number).max().unwrap();
+    records.extend((1..=PAIRS * 2).map(|index| Record {
+        id: Uuid::from_u128(index as u128),
+        generated_number: Some(last + index as u32),
+        state: State::Retired { snapshot: capture.clone(), reason: Retirement::Removed, successors: Vec::new() },
+        ..template.clone()
+    }));
+    records.sort_by_key(|record| record.id);
+    registry.pairs = Arc::new(
+        (0..PAIRS)
+            .map(|index| {
+                Arc::new(Pair {
+                    id: Uuid::from_u128((PAIRS * 2 + index + 2) as u128),
+                    name: format!("Retained pair {index}"),
+                    positive: Uuid::from_u128((2 * index + 1) as u128),
+                    negative: Uuid::from_u128((2 * index + 2) as u128),
+                    state: PairState::default(),
+                })
+            })
+            .collect(),
+    );
+    session.open_snapshot(decode_documents(&encode_documents(Arc::new(project)).unwrap()).unwrap());
+    let snapshot = session.snapshot().unwrap();
+    let revision = session.revision();
+    let pair = Uuid::from_u128((PAIRS * 2 + 1) as u128);
+    let params = json!({"pair":pair,"name":"First by UUID","positive":p,"negative":n,"expected_revision":revision});
+    let mut job = session.prepare_pair_edit(CREATE_PAIR, &params).unwrap();
+    assert!(!job.step(ROWS_PER_POLL));
+    assert_eq!(job.drafted_pair_rows(), Some(0));
+    for poll in 1..=PAIRS / ROWS_PER_POLL {
+        assert!(!job.step(ROWS_PER_POLL));
+        assert_eq!(job.drafted_pair_rows(), Some(poll * ROWS_PER_POLL));
+    }
+    drop(job);
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    session.apply(CREATE_PAIR, &params).unwrap();
+    let created = session.snapshot().unwrap();
+    assert_eq!(created.differential_pairs()[0].id, pair);
+    assert!(created.differential_pairs()[1..].iter().zip(snapshot.differential_pairs()).all(|(new, old)| Arc::ptr_eq(new, old)));
+    apply(&mut session, REMOVE_PAIR, json!({"pair":pair}));
+    assert_eq!(session.snapshot().unwrap().differential_pairs(), snapshot.differential_pairs());
 }
 
 /// An explicitly recorded review reason survives member swaps and naming edits.

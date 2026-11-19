@@ -4385,6 +4385,11 @@ impl Session {
     /// authority, and record exactly one undo entry. Callers validate their own changed fields.
     fn publish_change(&mut self, project: Project, highest: u64) {
         let project = self.retain_allocation_watermark(Arc::new(project));
+        self.publish_validated_snapshot(project, highest);
+    }
+
+    /// Adopt a validated snapshot whose allocation watermark has already been retained.
+    fn publish_validated_snapshot(&mut self, project: Arc<Project>, highest: u64) {
         self.update_plan = None;
         self.setup_preview = None;
         self.undo.push(self.project.replace(project));

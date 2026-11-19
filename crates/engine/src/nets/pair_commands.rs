@@ -1,6 +1,6 @@
 //! Authored relationship edits leave net identity and connectivity untouched.
 
-use super::{MAX_PAIRS, MAX_REGISTRY_BYTES, Pair, Registry};
+use super::{MAX_PAIRS, MAX_REGISTRY_BYTES, Pair, Registry, pairs::PairValidation};
 use crate::{
     CommandError, Project, Session,
     persistence::{PairDocumentBudget, PairDocumentProbe, document_row_framing_bytes},
@@ -82,14 +82,19 @@ impl Edit {
     }
 }
 
-/// Build just the authored pair change; this never publishes any part of the candidate.
-fn pair_edit(project: &Project, command: &str, params: &Value) -> Result<Edit, CommandError> {
+/// Open snapshots hold canonical net records, shared unchanged by a pair-only draft.
+fn contains_net(registry: &Registry, id: Uuid) -> bool {
+    registry.records.binary_search_by_key(&id, |record| record.id).is_ok()
+}
+
+/// Resolve the one record that changes without copying or validating the pair collection.
+fn pair_edit(project: &Project, command: &str, params: &Value) -> Result<(Edit, Option<PairDraft>), CommandError> {
     let pair_id = id(params, "pair")?;
     let registry = &project.net_registry;
     let index = registry.pairs.binary_search_by_key(&pair_id, |pair| pair.id);
     let before = index.ok().map(|index| registry.pairs[index].clone());
     if command == CREATE_PAIR {
-        if index.is_ok() || pair_id.is_nil() || registry.record(pair_id).is_some() {
+        if index.is_ok() || pair_id.is_nil() || contains_net(registry, pair_id) {
             return Err(CommandError::InvalidParams("Choose an unused, non-nil pair UUID distinct from net identities.".into()));
         }
         if registry.pairs.len() >= MAX_PAIRS {
@@ -110,25 +115,48 @@ fn pair_edit(project: &Project, command: &str, params: &Value) -> Result<Edit, C
             state: before.as_ref().map_or_else(Default::default, |pair| pair.state.clone()),
         }))
     };
-    let replacement = if before == after {
-        None
-    } else {
-        let mut registry = (**registry).clone();
-        let pairs = Arc::make_mut(&mut registry.pairs);
-        match (index, &after) {
-            (Ok(index), Some(pair)) => pairs[index] = pair.clone(),
-            (Err(index), Some(pair)) => pairs.insert(index, pair.clone()),
-            (Ok(index), None) => {
-                pairs.remove(index);
-            }
-            (Err(_), None) => return Err(CommandError::NotFound("Unknown differential pair.".into())),
+    let draft = (before != after).then(|| PairDraft {
+        index: index.unwrap_or_else(|index| index),
+        replace_existing: index.is_ok(),
+        validation: PairValidation::default(),
+        pairs: Vec::with_capacity(registry.pairs.len() + usize::from(before.is_none())),
+    });
+    Ok((Edit { replacement: None, before, after }, draft))
+}
+
+/// Build and validate the candidate pair array one row at a time. The net rows remain
+/// immutable and canonical, so exact UUID checks don't scan the net collection.
+struct PairDraft {
+    index: usize,
+    replace_existing: bool,
+    validation: PairValidation,
+    pairs: Vec<Arc<Pair>>,
+}
+
+impl PairDraft {
+    /// Insert, replace or omit the changed row while preserving every other shared record.
+    fn step(&mut self, original: &Project, edit: &mut Edit, rows: usize) -> Result<bool, CommandError> {
+        let registry = &original.net_registry;
+        let total = registry.pairs.len() - usize::from(self.replace_existing) + usize::from(edit.after.is_some());
+        for _ in 0..rows.min(total - self.pairs.len()) {
+            let row = self.pairs.len();
+            let pair = match (row.cmp(&self.index), self.replace_existing, &edit.after) {
+                (std::cmp::Ordering::Equal, _, Some(pair)) => pair,
+                (std::cmp::Ordering::Equal | std::cmp::Ordering::Greater, true, None) => &registry.pairs[row + 1],
+                (std::cmp::Ordering::Greater, false, Some(_)) => &registry.pairs[row - 1],
+                _ => &registry.pairs[row],
+            };
+            self.validation.row(pair, |id| contains_net(registry, id)).map_err(CommandError::InvalidParams)?;
+            self.pairs.push(pair.clone());
         }
-        registry.validate_pairs().map_err(CommandError::InvalidParams)?;
-        let mut candidate = project.clone();
-        candidate.net_registry = Arc::new(registry);
-        Some(Arc::new(candidate))
-    };
-    Ok(Edit { replacement, before, after })
+        if self.pairs.len() != total {
+            return Ok(false);
+        }
+        let mut candidate = original.clone();
+        candidate.net_registry = Arc::new(Registry { records: registry.records.clone(), pairs: Arc::new(std::mem::take(&mut self.pairs)) });
+        edit.replacement = Some(Arc::new(candidate));
+        Ok(true)
+    }
 }
 
 /// Measure a single compact JSON value without allocating its output.
@@ -198,6 +226,7 @@ pub struct PairEditJob {
     command: &'static str,
     params: Value,
     cached: Option<PairDocumentBudget>,
+    draft: Option<(Edit, PairDraft)>,
     registry_size: Option<(Edit, RegistrySizeProbe)>,
     probe: Option<(Edit, Box<PairDocumentProbe>)>,
     result: Option<Result<PreparedPairEdit, CommandError>>,
@@ -221,6 +250,12 @@ impl PairEditJob {
             self.result = Some(result);
         }
         self.done
+    }
+
+    /// Expose candidate construction progress to deterministic work-budget tests.
+    #[cfg(test)]
+    pub(super) fn drafted_pair_rows(&self) -> Option<usize> {
+        self.draft.as_ref().map(|(_, draft)| draft.pairs.len())
     }
 
     /// Expose per-poll registry sizing progress to deterministic work-budget tests.
@@ -267,11 +302,19 @@ impl PairEditJob {
                 return Ok(None);
             }
             (edit, cached)
-        } else {
-            let edit = pair_edit(&self.source.project, self.command, &self.params)?;
-            if let Some(candidate) = &edit.replacement {
+        } else if let Some((mut edit, mut draft)) = self.draft.take() {
+            if draft.step(&self.source.project, &mut edit, records)? {
+                let candidate = edit.replacement.as_ref().ok_or_else(|| CommandError::Unavailable("Pair preparation lost its candidate.".into()))?;
                 let size = RegistrySizeProbe::new(&candidate.net_registry);
                 self.registry_size = Some((edit, size));
+            } else {
+                self.draft = Some((edit, draft));
+            }
+            return Ok(None);
+        } else {
+            let (edit, draft) = pair_edit(&self.source.project, self.command, &self.params)?;
+            if let Some(draft) = draft {
+                self.draft = Some((edit, draft));
                 return Ok(None);
             }
             (edit, None)
@@ -307,7 +350,7 @@ impl Session {
             let (snapshot, budget) = entry.as_ref()?;
             snapshot.ptr_eq(&key).then_some(*budget)
         });
-        Ok(PairEditJob { source, command, params: params.clone(), cached, registry_size: None, probe: None, result: None, done: false })
+        Ok(PairEditJob { source, command, params: params.clone(), cached, draft: None, registry_size: None, probe: None, result: None, done: false })
     }
 
     /// Recheck one prepared edit and either return its read-only preview or publish one change.
@@ -350,7 +393,9 @@ impl Session {
         if prepared.params["dry_run"].as_bool() != Some(true)
             && let Some(candidate) = &prepared.edit.replacement
         {
-            self.publish_change(Project::clone(candidate), self.revision());
+            // The source check compared the exact Arc. A pair-only edit changes neither the
+            // numeric identities nor their watermark, so there is nothing to recalculate.
+            self.publish_validated_snapshot(candidate.clone(), self.revision());
         }
         self.remember_pair_budget(prepared.budget);
     }
