@@ -200,6 +200,9 @@ fn where_used_uses_offline_symbol_category_only_without_native_part() {
 #[test]
 fn where_used_distinguishes_excluded_assignment_from_retained_board_placement() {
     let (mut session, key) = fixture(true);
+    // Board baseline initialization requires every eligible component to have a package.
+    let unassigned = session.project().unwrap().symbols().last().unwrap().id();
+    session.apply(DELETE_SYMBOL, &json!({"symbol":unassigned,"expected_revision":session.revision()})).unwrap();
     let original = session.library_where_used(&key).unwrap();
     let original_board = original.instances[0].board.as_ref().unwrap();
     session.apply(INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
