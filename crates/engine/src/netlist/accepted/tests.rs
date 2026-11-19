@@ -217,7 +217,7 @@ fn board_export_is_byte_identical_and_edits_nothing() {
     assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
     assert_eq!(session.revision(), revision);
     let unknown = session.execute(EXPORT_BOARD_NETLIST, &json!({"board":Uuid::nil().to_string()}));
-    assert!(matches!(unknown, Err(CommandError::InvalidParams(ref message)) if message == "unknown board ID"), "{unknown:?}");
+    assert!(matches!(unknown, Err(CommandError::NotFound(ref message)) if message == "unknown board ID"), "{unknown:?}");
 
     let text = &first.contents;
     validate_v2(&serde_json::from_str(text).unwrap());
