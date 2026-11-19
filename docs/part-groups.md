@@ -69,7 +69,10 @@ numbers.
 A nonempty catalog selects `pcbcraft-project/24` for expanded memberships, or
 `pcbcraft-project/39` for the compact representation described below. Pinned assembly output profiles select project/36 instead, which accepts either
 representation with the same instance headers. [Differential pairs](net-registry-storage.md#differential-pair-records)
-select project/45 and board-owned instances/8 with either representation. The catalog
+select project/45 and board-owned instances/8 with either representation.
+[Authored electrical intent](native-project-storage.md#authored-electrical-intent)
+selects project/49 and, for net intent, board-owned instances/10, also with either
+representation. The catalog
 is stored in `project.json` directly after any net-class catalog, with groups
 sorted by UUID and one per line. Readers accept the groups in any order and sort
 them by UUID, as for net classes:
@@ -118,7 +121,8 @@ and 1,048,576 memberships. If the expanded representation exceeds the existing
 16 MiB document or 48 MiB total-document bound, the disposable encoder restarts
 once with `pcbcraft-project/39` and, when board-owned, `pcbcraft-instances/7`.
 With pinned assembly profiles, project/36 stays unchanged; with differential
-pairs, both project/45 and instances/8 stay unchanged while the membership
+pairs, both project/45 and instances/8 stay unchanged, and with authored
+electrical intent, project/49 and instances/10 stay unchanged, while the membership
 field switches to the compact representation.
 This is a representation choice inside encoding, not a refused edit or a Save
 precondition. The model capacity and file-size limits do not change.

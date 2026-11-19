@@ -1,4 +1,5 @@
 use super::{INSPECT, SET};
+use crate::persistence::{Documents, ENTRY_POINT, decode_documents, decode_packed, encode_documents, encode_packed};
 use crate::{
     CommandError, Session, net_classes, net_labels,
     nets::{AnchorKind, NetAddress, State},
@@ -111,7 +112,9 @@ fn authored_electrical_intent_refuses_invalid_or_stale_edits_without_mutation() 
     let good = request(&session, &target, &valid);
     let mut stale = good.clone();
     stale["expected_revision"] = json!(revision - 1);
-    assert!(matches!(session.apply(SET, &stale), Err(CommandError::Unavailable(_))));
+    stale["target"] = Value::Null;
+    assert_eq!(session.apply(SET, &stale), Err(CommandError::StaleRevision { current: revision }));
+    assert_eq!(session.execute(SET, &stale), Err(CommandError::StaleRevision { current: revision }));
     let mut wrong_version = good.clone();
     wrong_version["version"] = json!(2);
     assert!(matches!(session.apply(SET, &wrong_version), Err(CommandError::InvalidParams(_))));
@@ -205,4 +208,272 @@ fn authored_electrical_intent_reference_survives_first_board_adoption() {
     assert!(matches!(session.apply(SET, &stale_scope), Err(CommandError::InvalidParams(_))));
     session.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(inspect(&mut session, &target)["working_voltage"], requested["working_voltage"]);
+}
+
+/// Read a production-encoded split document without manufacturing a fixture by hand.
+fn document(docs: &Documents, path: &str) -> Value {
+    serde_json::from_slice(&docs[path]).unwrap()
+}
+
+/// Mutate exactly one encoded document to exercise refusal of mismatched or invalid payloads.
+fn altered(docs: &Documents, path: &str, change: impl FnOnce(&mut Value)) -> Documents {
+    let mut value = document(docs, path);
+    change(&mut value);
+    let mut result = docs.clone();
+    result.insert(path.into(), serde_json::to_vec(&value).unwrap());
+    result
+}
+
+/// Check the named compatibility failure, not merely that decoding failed.
+fn refused(docs: &Documents, reason: &str) {
+    let error = decode_documents(docs).unwrap_err();
+    assert!(error.contains(reason), "expected {reason:?}, got {error:?}");
+}
+
+/// Both storage homes preserve exact values, use lazy headers independently, and refuse older
+/// header combinations instead of treating new authored fields as unset. Clearing net-only
+/// values restores exact pre-edit native bytes; Undo restores exact intent bytes.
+#[test]
+fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
+    for board in [false, true] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":board})).unwrap();
+        let (source, _) = named_net(&mut session, "TEST_SOURCE", 0);
+        let (reference, _) = named_net(&mut session, "TEST_REFERENCE", 25_400_000);
+        apply(&mut session, net_classes::CREATE, json!({"name":"Supply class","rules":{}}));
+        let class = session.project().unwrap().net_classes().definitions[0].id;
+        let class_target = json!({"kind":"net_class","project":source.project,"class":class});
+        let net_target = json!({"kind":"net","address":source});
+        let path = session.project().unwrap().instances_document_path().unwrap_or_else(|| ENTRY_POINT.into());
+        let old = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&old).unwrap()).unwrap(), old);
+        assert_eq!(document(&old, ENTRY_POINT)["format"], "pcbcraft-project/23");
+        refused(&altered(&old, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/49")), "may not be empty");
+        let values = json!({"maximum_continuous_current":{"value":"0","unit":"A"},"working_voltage":{
+            "magnitude":{"value":"0","unit":"V"},"basis":"dc","reference":{"kind":"net","address":reference}
+        }});
+        let args = request(&session, &net_target, &values);
+        session.apply(SET, &args).unwrap();
+        let net_only = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(document(&net_only, ENTRY_POINT)["format"], "pcbcraft-project/49");
+        assert_eq!(document(&net_only, ENTRY_POINT)["net_classes"]["format"], "pcbcraft-net-classes/1");
+        let old_header = altered(&net_only, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/23"));
+        refused(&old_header, if board { "unsupported instances format" } else { "requires project format 49" });
+        if board {
+            assert_eq!(document(&net_only, &path)["format"], "pcbcraft-instances/10");
+            refused(&altered(&net_only, &path, |v| v["format"] = json!("pcbcraft-instances/4")), "unsupported instances format");
+            refused(&altered(&old, &path, |v| v["format"] = json!("pcbcraft-instances/10")), "unsupported instances format");
+        }
+        assert_eq!(encode_documents(decode_documents(&net_only).unwrap()).unwrap(), net_only);
+        let clear = request(&session, &net_target, &json!({}));
+        session.apply(SET, &clear).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), old);
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), net_only);
+
+        let class_values = json!({"allowed_temperature_rise":{"value":"12.5","unit":"K"},"isolation_group":"Test primary",
+            "working_voltage":values["working_voltage"]});
+        let args = request(&session, &class_target, &class_values);
+        session.apply(SET, &args).unwrap();
+        let both = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(document(&both, ENTRY_POINT)["net_classes"]["format"], "pcbcraft-net-classes/4");
+        for old_catalog in ["pcbcraft-net-classes/1", "pcbcraft-net-classes/2"] {
+            refused(&altered(&both, ENTRY_POINT, |v| v["net_classes"]["format"] = json!(old_catalog)), "Unsupported net-class format");
+        }
+        refused(
+            &altered(&both, ENTRY_POINT, |v| {
+                v["net_classes"]["definitions"][0]["authored_intent"]["voltage"]["reference"]["net"] = json!(Uuid::nil());
+            }),
+            "distinct reference",
+        );
+        for (replacement, reason) in [(json!({}), "nonempty"), (Value::Null, "invalid type"), (json!({"current_amperes":"-1"}), "canonical")] {
+            let malformed = altered(&both, &path, |v| {
+                let home = if board { v } else { &mut v["schematic_instances"] };
+                let net = home["net_registry"]["records"].as_array_mut().unwrap().iter_mut().find(|v| v["id"] == json!(source.net)).unwrap();
+                net["authored_intent"] = replacement;
+            });
+            refused(&malformed, reason);
+        }
+        let archive = decode_packed(&encode_packed(session.snapshot().unwrap()).unwrap()).unwrap();
+        assert_eq!(archive.documents, both);
+        assert_eq!(encode_documents(decode_documents(&archive.documents).unwrap()).unwrap(), both);
+        session.open_snapshot(decode_documents(&archive.documents).unwrap());
+        assert_eq!(inspect(&mut session, &net_target)["maximum_continuous_current"], values["maximum_continuous_current"]);
+        assert_eq!(inspect(&mut session, &class_target)["working_voltage"], class_values["working_voltage"]);
+        let clear = request(&session, &net_target, &json!({}));
+        session.apply(SET, &clear).unwrap();
+        let class_only = encode_documents(session.snapshot().unwrap()).unwrap();
+        if board {
+            assert_eq!(class_only[&path], old[&path]);
+        }
+        assert_eq!(document(&class_only, ENTRY_POINT)["format"], "pcbcraft-project/49");
+        assert_eq!(encode_documents(decode_documents(&class_only).unwrap()).unwrap(), class_only);
+        let clear = request(&session, &class_target, &json!({}));
+        session.apply(SET, &clear).unwrap();
+        let cleared = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(document(&cleared, ENTRY_POINT)["format"], "pcbcraft-project/23");
+        assert_eq!(document(&cleared, ENTRY_POINT)["net_classes"]["format"], "pcbcraft-net-classes/1");
+    }
+}
+
+/// An existing unnumbered net registry does not acquire numbering as a side effect of intent.
+/// Clearing the last value returns it to the exact legacy encoding, not a numbered upgrade.
+#[test]
+fn authored_electrical_intent_on_legacy_net_does_not_adopt_numbers() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":false})).unwrap();
+    let (net, _) = named_net(&mut session, "TEST_LEGACY", 0);
+    let modern = encode_documents(session.snapshot().unwrap()).unwrap();
+    let legacy = altered(&modern, ENTRY_POINT, |v| {
+        v["format"] = json!("pcbcraft-project/17");
+        v["schematic_instances"]["net_registry"]["records"][0].as_object_mut().unwrap().remove("generated_number");
+    });
+    session.open_snapshot(decode_documents(&legacy).unwrap());
+    let canonical = encode_documents(session.snapshot().unwrap()).unwrap();
+    let target = json!({"kind":"net","address":net});
+    let auth = request(&session, &target, &json!({"maximum_continuous_current":{"value":"0","unit":"A"}}));
+    session.apply(SET, &auth).unwrap();
+    assert!(!session.project().unwrap().net_registry.has_generated_numbers());
+    let encoded = encode_documents(session.snapshot().unwrap()).unwrap();
+    session.open_snapshot(decode_documents(&encoded).unwrap());
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), encoded);
+    let clear = request(&session, &target, &json!({}));
+    session.apply(SET, &clear).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), canonical);
+}
+
+/// The intent envelope composes with profiles, assigned dimensional classes, parameters and
+/// both membership representations in both instance homes without changing their payloads.
+#[test]
+fn authored_electrical_intent_composes_with_profiles_and_memberships() {
+    for board in [false, true] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":board})).unwrap();
+        let (net, _) = named_net(&mut session, "TEST_SUPPLY", 0);
+        apply(&mut session, crate::PLACE_RESISTOR, json!({"x_nm":50_800_000,"y_nm":0}));
+        let part = session.project().unwrap().part_instance_addresses().next().unwrap();
+        apply(&mut session, crate::part_groups::CREATE, json!({"name":"Test group"}));
+        let group = session.project().unwrap().part_groups().groups[0].id;
+        apply(&mut session, crate::part_groups::SET_GROUPS, json!({"part_instance":part,"groups":[group]}));
+        apply(&mut session, crate::parameters::SET, json!({"scope":"project","name":"Revision","value":"B"}));
+        apply(&mut session, crate::no_connect::SET, json!({"target":{"part":part,"terminal":"2"},"marked":true}));
+        apply(&mut session, net_classes::CREATE, json!({"name":"Power","rules":{"clearance_nm":500000}}));
+        let class = session.project().unwrap().net_classes().definitions[0].id;
+        apply(
+            &mut session,
+            crate::nets::SET_CLASSES,
+            json!({"target":{"kind":"persistent","project":net.project,"scope":net.scope,"net":net.net},"classes":[class]}),
+        );
+        if board {
+            apply(
+                &mut session,
+                crate::SET_ASSEMBLY_PROFILE,
+                json!({"content":{"revision":1,"name":"Test profile","provenance":{"kind":"authored"},"bottom_side":"viewed_from_top"}}),
+            );
+        }
+        let target = json!({"kind":"net","address":net});
+        let intent = json!({"isolation_group":"Test group"});
+        let expanded = session.snapshot().unwrap();
+        let path = expanded.instances_document_path();
+        for compact in [false, true] {
+            let mut before = (*expanded).clone();
+            // Use the existing encoding policy switch; the membership data came from commands.
+            before.prefer_compact_part_groups = compact;
+            session.open_snapshot(Arc::new(before));
+            let old = encode_documents(session.snapshot().unwrap()).unwrap();
+            let old_format = if board {
+                "pcbcraft-project/36"
+            } else if compact {
+                "pcbcraft-project/39"
+            } else {
+                "pcbcraft-project/24"
+            };
+            assert_eq!(document(&old, ENTRY_POINT)["format"], old_format);
+            let args = request(&session, &target, &intent);
+            session.apply(SET, &args).unwrap();
+            let changed = encode_documents(session.snapshot().unwrap()).unwrap();
+            let project = document(&changed, ENTRY_POINT);
+            let old_project = document(&old, ENTRY_POINT);
+            let membership = if compact { "compact_part_group_memberships" } else { "part_group_memberships" };
+            assert_eq!(project["format"], "pcbcraft-project/49");
+            for field in ["assembly_profiles", "parameters", "components", "net_classes", "part_groups"] {
+                assert_eq!(project[field], old_project[field]);
+            }
+            if let Some(path) = &path {
+                let instances = document(&changed, path);
+                assert_eq!(instances["format"], "pcbcraft-instances/10");
+                assert_eq!(instances[membership], document(&old, path)[membership]);
+            } else {
+                assert_eq!(project["schematic_instances"][membership], old_project["schematic_instances"][membership]);
+            }
+            session.open_snapshot(decode_documents(&changed).unwrap());
+            assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), changed);
+            let clear = request(&session, &target, &json!({}));
+            session.apply(SET, &clear).unwrap();
+            assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), old);
+        }
+    }
+}
+
+/// Intent composes with stored differential pairs. Net intent moves the pair envelope to
+/// project/49 and instances/10 without changing the pair list; class-only intent keeps
+/// instances/8; clearing the last value restores the exact pair-envelope bytes.
+#[test]
+fn authored_electrical_intent_composes_with_differential_pairs() {
+    for board in [false, true] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":board})).unwrap();
+        let (positive, _) = named_net(&mut session, "TEST_P", 0);
+        let (negative, _) = named_net(&mut session, "TEST_N", 25_400_000);
+        let pair = crate::nets::Pair {
+            id: Uuid::from_u128(9000),
+            positive: positive.net,
+            negative: negative.net,
+            name: "TEST".into(),
+            state: crate::nets::PairState::Active {},
+        };
+        let mut project = session.project().unwrap().clone();
+        Arc::make_mut(&mut project.net_registry).pairs = Arc::new(vec![Arc::new(pair)]);
+        session.change(project).unwrap();
+        let path = session.project().unwrap().instances_document_path();
+        let home = path.clone().unwrap_or_else(|| ENTRY_POINT.into());
+        let pairs = |docs: &Documents| {
+            let value = document(docs, &home);
+            if path.is_some() { value["net_registry"]["pairs"].clone() } else { value["schematic_instances"]["net_registry"]["pairs"].clone() }
+        };
+        let old = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(document(&old, ENTRY_POINT)["format"], "pcbcraft-project/45");
+        assert!(pairs(&old).as_array().is_some_and(|items| items.len() == 1));
+
+        let target = json!({"kind":"net","address":positive});
+        let args = request(&session, &target, &json!({"isolation_group":"Test pair"}));
+        session.apply(SET, &args).unwrap();
+        let changed = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(document(&changed, ENTRY_POINT)["format"], "pcbcraft-project/49");
+        assert_eq!(pairs(&changed), pairs(&old));
+        if let Some(path) = &path {
+            assert_eq!(document(&changed, path)["format"], "pcbcraft-instances/10");
+            refused(&altered(&changed, path, |v| v["format"] = json!("pcbcraft-instances/8")), "unsupported instances format");
+        }
+        let pair_header = altered(&changed, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/45"));
+        refused(&pair_header, if board { "unsupported instances format" } else { "requires project format 49" });
+        assert_eq!(encode_documents(decode_documents(&changed).unwrap()).unwrap(), changed);
+        let clear = request(&session, &target, &json!({}));
+        session.apply(SET, &clear).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), old);
+
+        apply(&mut session, net_classes::CREATE, json!({"name":"Pair class","rules":{}}));
+        let class = session.project().unwrap().net_classes().definitions[0].id;
+        let class_target = json!({"kind":"net_class","project":positive.project,"class":class});
+        let args = request(&session, &class_target, &json!({"isolation_group":"Test pair"}));
+        session.apply(SET, &args).unwrap();
+        let class_only = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(document(&class_only, ENTRY_POINT)["format"], "pcbcraft-project/49");
+        assert_eq!(pairs(&class_only), pairs(&old));
+        if let Some(path) = &path {
+            assert_eq!(class_only[path], old[path]);
+            assert_eq!(document(&class_only, path)["format"], "pcbcraft-instances/8");
+        }
+        assert_eq!(encode_documents(decode_documents(&class_only).unwrap()).unwrap(), class_only);
+    }
 }

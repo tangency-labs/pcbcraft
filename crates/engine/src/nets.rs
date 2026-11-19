@@ -7,8 +7,7 @@ pub(crate) use classes::target_schema as class_target_schema;
 pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, NetAddress, SET_CLASSES};
 pub mod display;
 mod graph;
-#[cfg(test)]
-pub(crate) mod intent;
+pub mod intent;
 mod numbering;
 mod pairs;
 pub use pairs::{MAX_PAIR_NAME_CHARS, MAX_PAIRS, Pair, PairState};
@@ -103,9 +102,8 @@ pub struct Record {
     /// Dimensional class intent and originating assigning nets, without saved endpoint membership.
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "classes::stored_bindings")]
     pub class_bindings: Vec<ClassBinding>,
-    /// Prototype payload, kept with the existing identity through history and continuation.
-    #[cfg(test)]
-    #[serde(skip)]
+    /// Electrical values authored specifically on this identity, not inferred from classes.
+    #[serde(default, skip_serializing_if = "intent::IntentV1::is_empty", deserialize_with = "intent::stored")]
     pub(crate) authored_intent: intent::IntentV1,
 }
 
@@ -133,6 +131,11 @@ fn pair_list_empty(pairs: &std::sync::Arc<Vec<std::sync::Arc<Pair>>>) -> bool {
 }
 
 impl Registry {
+    /// Select the intent-aware envelope only for records with actual authored values.
+    pub(crate) fn has_authored_intent(&self) -> bool {
+        self.records.iter().any(|record| !record.authored_intent.is_empty())
+    }
+
     /// Numbered identities select the newer native envelope; old unnumbered files stay exact.
     pub(crate) fn has_generated_numbers(&self) -> bool {
         self.records.iter().any(|record| record.generated_number.is_some())

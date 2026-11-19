@@ -185,6 +185,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES
+                        | pcbcraft_engine::nets::intent::INSPECT
                         | pcbcraft_engine::board::class_rules::ROUTE_RULES
                         | pcbcraft_engine::board::route::PLAN_ROUTE
                         | pcbcraft_engine::net_classes::INSPECT

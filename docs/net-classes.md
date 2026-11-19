@@ -10,7 +10,9 @@ and inspects them from schematic and PCB views.
 
 ## Authored definitions
 
-The catalog has `format: "pcbcraft-net-classes/1"` and a `definitions` array.
+The dimensional catalog has `format: "pcbcraft-net-classes/1"` and a `definitions` array.
+A catalog carrying [authored electrical intent](electrical-intent.md) uses
+`pcbcraft-net-classes/4`; that optional intent remains separate from `rules`.
 Each definition has a non-nil UUID `id`, positive `revision`, editable `name` and
 sparse `rules` object. A class ID also identifies its dimensional rule set;
 individual contributions are qualified by that ID, definition revision and

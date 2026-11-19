@@ -284,6 +284,50 @@ fn class_assignments_share_live_headless_targets_queries_and_rejection() {
     );
 }
 
+/// Headless and live dispatch discover the same authored commands. Readback survives
+/// `inspect: false`; wrong API pins and stale writes return coded failures without mutation.
+#[test]
+fn authored_electrical_intent_uses_the_shared_mcp_session() {
+    use pcbcraft_engine::{command_api::COMMAND_API_VERSION, error_codes::ErrorCode, net_classes, nets::intent};
+    let mut setup = circuit(2);
+    apply(&mut setup, net_classes::CREATE, json!({"name":"Supply","rules":{}}));
+    let project = setup.snapshot().unwrap();
+    let target = json!({"kind":"net_class","project":project.id(),"class":project.net_classes().definitions[0].id});
+    let mut headless = Headless::with_project(project.clone());
+    let mut session = Session::default();
+    session.open_snapshot(project);
+    let mut live = OpenEditor { session, blocked: false };
+    for id in [intent::SET, intent::INSPECT] {
+        let catalogs = [headless.call("engine.commands", json!({})).unwrap(), call_editor(&mut live, &json!({"method":"engine.commands"})).unwrap()];
+        assert!(catalogs.iter().all(|catalog| catalog.as_array().unwrap().iter().any(|command| command["id"] == id)));
+    }
+    let current = json!({"value":"0","unit":"A"});
+    let edit = json!({"command":intent::SET,"version":COMMAND_API_VERSION,"inspect":false,"params":{"version":1,
+        "expected_revision":live.session.revision(),"target":target,"intent":{"maximum_continuous_current":current}}});
+    let initial = live.session.snapshot().unwrap();
+    let mut wrong_pin = edit.clone();
+    wrong_pin["version"] = json!(COMMAND_API_VERSION + 1);
+    let rejected = call_editor(&mut live, &json!({"method":"engine.execute","params":wrong_pin})).unwrap_err();
+    assert_eq!(rejected.code(), ErrorCode::VersionMismatch.as_str());
+    assert_eq!(headless.call("engine.execute", wrong_pin).unwrap_err(), rejected);
+    assert!(Arc::ptr_eq(&initial, &live.session.snapshot().unwrap()));
+    let edited = call_editor(&mut live, &json!({"method":"engine.execute","params":edit})).unwrap();
+    assert_eq!(headless.call("engine.execute", edit.clone()).unwrap(), edited);
+    let snapshot = live.session.snapshot().unwrap();
+    let refusal = call_editor(&mut live, &json!({"method":"engine.execute","params":edit})).unwrap_err();
+    assert_eq!(refusal.code(), ErrorCode::StaleRevision.as_str());
+    assert_eq!(refusal.details()["current_revision"], edited["revision"]);
+    assert_eq!(headless.call("engine.execute", edit).unwrap_err(), refusal);
+    assert!(Arc::ptr_eq(&snapshot, &live.session.snapshot().unwrap()));
+    let query = json!({"command":intent::INSPECT,"version":COMMAND_API_VERSION,"inspect":false,"params":{"version":1,"target":target}});
+    let read = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(headless.call("engine.execute", query.clone()).unwrap(), read);
+    assert_eq!(read["intent"]["maximum_continuous_current"], current);
+    call_editor(&mut live, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
+    let undone = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(undone["intent"]["maximum_continuous_current"], Value::Null);
+}
+
 /// Read-only discovery supplies typed derived anchors before any persistent ID exists. Both
 /// hosts then promote and bind in one transaction, without a separate promotion history step.
 #[test]

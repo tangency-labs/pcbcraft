@@ -54,6 +54,7 @@ const PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/24";
 const ASSEMBLY_PROFILE_PROJECT_FORMAT: &str = "pcbcraft-project/36";
 const COMPACT_PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/39";
 const PAIR_PROJECT_FORMAT: &str = "pcbcraft-project/45";
+const ELECTRICAL_INTENT_PROJECT_FORMAT: &str = "pcbcraft-project/49";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
@@ -62,6 +63,7 @@ const GENERATED_NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/4";
 const PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/5";
 const COMPACT_PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/7";
 const PAIR_INSTANCES_FORMAT: &str = "pcbcraft-instances/8";
+const ELECTRICAL_INTENT_INSTANCES_FORMAT: &str = "pcbcraft-instances/10";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -200,9 +202,10 @@ impl ProjectDocument {
                 | ASSEMBLY_PROFILE_PROJECT_FORMAT
                 | PART_GROUP_PROJECT_FORMAT
                 | PAIR_PROJECT_FORMAT
+                | ELECTRICAL_INTENT_PROJECT_FORMAT
         ) || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
-            return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45"));
+            return Err(format!("{ENTRY_POINT}: layout_root requires a supported board-folder project format"));
         }
         if foldered && self.boards.is_none() {
             return Err(format!("{ENTRY_POINT}: board-folder formats require a board registry"));
@@ -284,6 +287,7 @@ pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | ELECTRICAL_INTENT_PROJECT_FORMAT
     ) {
         return Ok(None);
     }
@@ -409,6 +413,9 @@ pub fn is_document_path(path: &str) -> bool {
 /// Project/36 requires pinned assembly profiles and allows either group membership encoding.
 /// Project/45 requires differential pairs and board-owned instances/8; assembly profiles and
 /// either group membership encoding remain optional under those headers.
+/// Project/49 requires authored electrical intent in an instance registry or class catalog.
+/// It retains both group membership encodings and supports optional differential pairs and
+/// assembly profiles; board-owned net intent uses instances/10, which also carries pairs.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
 /// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
@@ -423,8 +430,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
-    if (!pair_format && profile_format != project.assembly_profiles.is_some()) || project.assembly_profiles.as_ref().is_some_and(|c| c.is_empty()) {
-        return Err("project.json: assembly profiles require project format 36 or 45 and a nonempty identity catalog.".into());
+    let intent_format = project.format == ELECTRICAL_INTENT_PROJECT_FORMAT;
+    if (!pair_format && !intent_format && profile_format != project.assembly_profiles.is_some())
+        || project.assembly_profiles.as_ref().is_some_and(|c| c.is_empty())
+    {
+        return Err("project.json: assembly profiles require project format 36, 45 or 49 and a nonempty identity catalog.".into());
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
@@ -440,6 +450,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | ELECTRICAL_INTENT_PROJECT_FORMAT
     );
     let net_format = project.format == NET_PROJECT_FORMAT;
     let binding_format = project.format == BINDING_PROJECT_FORMAT;
@@ -447,7 +458,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Project/24 is a superset of project/23: it requires a nonempty part-group catalog,
     // and every record project/23 accepts is optional, including generated net numbers.
     let part_group_format = project.format == PART_GROUP_PROJECT_FORMAT;
-    let optional_part_groups = profile_format || pair_format;
+    let optional_part_groups = profile_format || pair_format || intent_format;
     let supports_part_groups = part_group_format || optional_part_groups;
     let superset_format = generated_net_format || supports_part_groups;
     let class_format = matches!(project.format.as_str(), CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
@@ -461,6 +472,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | ELECTRICAL_INTENT_PROJECT_FORMAT
     );
     if !parameter_format && !superset_format && class_format != project.net_classes.is_some() {
         return Err("Net-class catalog requires project format 20, 21, 22, 23, 24, 36, 39 or 45; any catalog must be nonempty.".into());
@@ -476,7 +488,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     crate::parameters::check(&project_parameters, crate::parameters::Scope::Project).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
     if !optional_part_groups && part_group_format != project.part_groups.is_some() {
-        return Err("Part-group catalog requires project format 24, 36, 39 or 45. Formats 24 and 39 require a nonempty catalog.".into());
+        return Err("Part-group catalog requires project format 24, 36, 39, 45 or 49. Formats 24 and 39 require a nonempty catalog.".into());
     }
     let mut part_groups = project.part_groups.take();
     if let Some(catalog) = &mut part_groups {
@@ -510,6 +522,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | ELECTRICAL_INTENT_PROJECT_FORMAT
     );
     let foldered = project.layout_root.is_some();
     if !part_format
@@ -554,12 +567,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | ELECTRICAL_INTENT_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45".into());
+        return Err("schematic_instances requires a project format that supports occurrence records".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()))
@@ -595,11 +609,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | ELECTRICAL_INTENT_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
-        return Err(format!(
-            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45"
-        ));
+        return Err(format!("{ENTRY_POINT}: numeric ID watermark does not match the project format"));
     }
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
@@ -618,14 +631,18 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 let optional_bindings =
                     (parameter_format || superset_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
                 let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
-                if pair_format {
-                    // Instances/8 keeps its header for either membership encoding.
+                let net_intent = instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_authored_intent);
+                let pairs = instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs);
+                if pair_format || intent_format {
+                    // Instances/8 and /10 keep their headers for either membership encoding.
                     compact_part_groups = instance.compact_part_group_memberships.is_some();
                 } else if profile_format {
                     // Project/36 allows both encodings; the instance header determines which was saved.
                     compact_part_groups = instance.format == COMPACT_PART_GROUP_INSTANCES_FORMAT;
                 }
-                let expected = if pair_format {
+                let expected = if intent_format && net_intent {
+                    ELECTRICAL_INTENT_INSTANCES_FORMAT
+                } else if pair_format || (intent_format && pairs) {
                     PAIR_INSTANCES_FORMAT
                 } else if compact_part_groups {
                     COMPACT_PART_GROUP_INSTANCES_FORMAT
@@ -677,11 +694,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("Net class assignments require project format 21 and instances format 3 when board-owned, or a later project format with a net-class catalog; the new envelope requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
-    if pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
+    let has_pairs = stored_registry.is_some_and(crate::nets::Registry::has_pairs);
+    if (pair_format && !has_pairs) || (!pair_format && !intent_format && has_pairs) {
         return Err(
-            "Differential pairs require project format 45 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list."
+            "Differential pairs require project format 45 or 49 and instances format 8 or 10 when board-owned; the pair envelope requires a nonempty pair list."
                 .into(),
         );
+    }
+    let net_intent = stored_registry.is_some_and(crate::nets::Registry::has_authored_intent);
+    let class_intent = net_classes.as_ref().is_some_and(crate::net_classes::Catalog::has_authored_intent);
+    if intent_format != (net_intent || class_intent) {
+        return Err("Authored electrical intent requires project format 49 and may not be empty in that format.".into());
     }
     let has_numbers = stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers);
     if (!supports_part_groups && generated_net_format != has_numbers)
@@ -1470,6 +1493,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if let Some(records) = instance_records {
         project_data.install_sheet_instances(records)?;
     }
+    if class_intent {
+        for class in &project_data.net_classes.definitions {
+            class
+                .authored_intent
+                .validate_reference(None, |id| project_data.net_registry.records.binary_search_by_key(&id, |record| record.id).is_ok())?;
+        }
+    }
     let mut zones = board.zones.unwrap_or_default();
     zones.sort_by_key(|zone| zone.id);
     Arc::make_mut(&mut project_data.board).zones = zones;
@@ -1749,7 +1779,13 @@ impl DocumentsEncoder {
                     if has_profiles && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Assembly profiles require adopted storage/occurrence metadata.".into());
                     }
-                    let format = if has_profiles && !has_pairs { ASSEMBLY_PROFILE_PROJECT_FORMAT } else { format };
+                    let format = if p.net_registry.has_authored_intent() || p.net_classes.has_authored_intent() {
+                        ELECTRICAL_INTENT_PROJECT_FORMAT
+                    } else if has_profiles && !has_pairs {
+                        ASSEMBLY_PROFILE_PROJECT_FORMAT
+                    } else {
+                        format
+                    };
                     if has_metadata && p.numeric_id_high_water.is_none() {
                         return Err("component metadata requires an adopted numeric ID watermark".into());
                     }
@@ -1776,7 +1812,8 @@ impl DocumentsEncoder {
                     }
                     if has_classes {
                         // At most 256 bounded definitions, each on its own line for Git diffs.
-                        self.bytes.extend_from_slice(b"  \"net_classes\": {\n    \"format\": \"pcbcraft-net-classes/1\",\n    \"definitions\": [\n");
+                        write!(self.bytes, "  \"net_classes\": {{\n    \"format\": {},\n    \"definitions\": [\n", json(&p.net_classes.format)?)
+                            .map_err(|error| error.to_string())?;
                         for (index, class) in p.net_classes.definitions.iter().enumerate() {
                             let comma = if index + 1 == p.net_classes.definitions.len() { "" } else { "," };
                             writeln!(self.bytes, "      {}{comma}", json(class)?).map_err(|e| e.to_string())?;
@@ -2121,7 +2158,9 @@ impl DocumentsEncoder {
             if self.project.board_target().is_some() {
                 self.finish_document(ENTRY_POINT.to_owned())?;
                 let board = self.project.board_target().ok_or("missing registered board")?.board;
-                let format = if self.project.net_registry.has_pairs() {
+                let format = if self.project.net_registry.has_authored_intent() {
+                    ELECTRICAL_INTENT_INSTANCES_FORMAT
+                } else if self.project.net_registry.has_pairs() {
                     PAIR_INSTANCES_FORMAT
                 } else if self.use_compact_memberships {
                     COMPACT_PART_GROUP_INSTANCES_FORMAT

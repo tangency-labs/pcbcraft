@@ -75,13 +75,16 @@ ambiguous; the stored relationship keeps that exact UUID and does not follow
 successors or set a review state automatically.
 
 A nonempty pair list selects project/45 and, for a board-owned registry,
-instances/8. These headers require pairs; earlier headers refuse them. An empty
+instances/8. These headers require pairs; earlier headers refuse them.
+[Authored electrical intent](native-project-storage.md#authored-electrical-intent)
+instead selects project/49, and net intent selects instances/10; both carry
+pairs optionally. An empty
 or null `pairs` field is invalid, not an alias for omission. Project/45 allows
 both fully numbered and fully unnumbered registries, but not a mixture. Existing
 class catalogs and bindings, parameters, no-connect intent, part groups and
 assembly profiles keep their existing validation rules. Either expanded or
 compact memberships can follow the registry; the field name selects which
-encoding instances/8 contains. Removing the last pair restores the envelope
+encoding instances/8 or instances/10 contains. Removing the last pair restores the envelope
 required by the remaining records. No sheet, board or `.pc` container version
 changes.
 

@@ -100,6 +100,8 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         .find(|layer| layer.purpose == board::setup::LayerPurpose::Outline)
         .unwrap()
         .id;
+    editor.apply(net_classes::CREATE, &json!({"name":"Review class","rules":{},"expected_revision":editor.revision()})).unwrap();
+    let class = editor.project().unwrap().net_classes().definitions[0].id;
     editor.apply(ADD_DRAWING, &json!({"layer":edge,"points":[{"x_nm":-20_000_000,"y_nm":-20_000_000},{"x_nm":20_000_000,"y_nm":-20_000_000},{"x_nm":20_000_000,"y_nm":20_000_000},{"x_nm":-20_000_000,"y_nm":20_000_000}],"closed":true,"expected_revision":editor.revision()})).unwrap();
     let project = editor.snapshot().unwrap();
     let board = project.board_target().unwrap().board;
@@ -164,6 +166,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             board::class_rules::ROUTE_RULES => json!({"at":{"x_nm":0,"y_nm":0},"layer":layer}),
             board::route::PLAN_ROUTE => json!({"from":{"x_nm":0,"y_nm":0},"to":{"x_nm":1_000_000,"y_nm":0},"layer":layer}),
             net_classes::RESOLVE => json!({"classes":[]}),
+            nets::intent::INSPECT => json!({"version":1,"target":{"kind":"net_class","project":project.id(),"class":class}}),
             sources::SEARCH => json!({"query":"resistor"}),
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
             sources::PARSE_QUANTITY => json!({"quantity":"resistance","value":"100 mΩ"}),
