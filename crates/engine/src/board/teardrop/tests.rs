@@ -113,6 +113,23 @@ fn identity_and_attachment_are_checked() {
     }
 }
 
+/// A matching intent and view label cannot redirect the backing board's copper.
+#[test]
+fn retagged_view_cannot_redirect_copper() {
+    use super::super::track::tests::view;
+    let center = point(0, 20_000_000);
+    let (session, intent) = fixture(center, center, point(1_000_000, 20_000_000), 100_000);
+    let board = view(&session);
+    assert_eq!(intent.derive(board).unwrap().board, board.target);
+    let foreign_project = Uuid::from_u128(board.target.project.as_u128() ^ 1);
+    let foreign_board = Uuid::from_u128(board.target.board.as_u128() ^ 1);
+    for target in [BoardTarget { project: foreign_project, ..board.target }, BoardTarget { board: foreign_board, ..board.target }] {
+        let mut retagged = board;
+        retagged.target = target;
+        assert_eq!(ViaTeardrop { board: target, ..intent }.derive(retagged), Err(Error::WrongBoard));
+    }
+}
+
 /// Off-center entries, non-tapers, and rounded vertices outside the board are refused.
 #[test]
 fn unsupported_or_unrepresentable_shapes_are_refused() {

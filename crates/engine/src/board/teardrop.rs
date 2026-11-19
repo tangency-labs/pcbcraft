@@ -89,8 +89,9 @@ pub enum Error {
 }
 
 impl ViaTeardrop {
-    /// Resolve both source objects on the addressed immutable board. This only constructs
-    /// an outline; it does not check clearance, fit to other objects, or change state.
+    /// Resolve both source objects on the addressed immutable board. The view and its
+    /// backing project must both identify that board. This only constructs an outline;
+    /// it does not check clearance, fit to other objects, or change state.
     pub fn derive(self, board: BoardView<'_>) -> Result<StraightCopper, Error> {
         self.parameters.validate()?;
         if self.id.is_nil() || self.track.is_nil() || self.via.is_nil() || self.id == self.track || self.id == self.via || self.track == self.via {
@@ -99,6 +100,7 @@ impl ViaTeardrop {
         if self.board != board.target {
             return Err(Error::WrongBoard);
         }
+        let board = board.project().board_view(self.board).ok_or(Error::WrongBoard)?;
         let tracks = board.tracks();
         let vias = board.vias();
         let track = &tracks[tracks.binary_search_by_key(&self.track, |track| track.id).map_err(|_| Error::MissingTrack)?];
