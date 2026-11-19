@@ -191,6 +191,7 @@ fn category_defined_voltage_field_id_keeps_its_existing_meaning() {
             ("library.json".into(), new_library(LIBRARY, "Synthetic legacy category", LICENSE).unwrap()),
             ("categories/capacitor.json".into(), category.encode().unwrap()),
         ]);
+        load_rating_source(&mut session, &documents);
         let mut draft = Draft::new_part(Reference { library: "basic-components".into(), id: "capacitor".into(), revision: 3 }).unwrap();
         let Draft::Part(part) = &mut draft else { panic!("expected generic draft") };
         part.id = "legacy-cap".into();
