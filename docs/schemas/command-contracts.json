@@ -1,6 +1,7 @@
 {
   "command_api_version": 1,
   "commands": {
+    "annotate.apply": {"params":{"additionalProperties":false,"properties":{"token":{"type":"string"}},"required":["token"],"type":"object"}},
     "annotate.preview": {"params":{"additionalProperties":false,"properties":{"expected_revision":{"minimum":0,"type":"integer"},"sheet":{"format":"uuid","type":"string"}},"required":[],"type":"object"}},
     "edit.redo": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
     "edit.undo": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},

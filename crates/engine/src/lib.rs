@@ -1584,6 +1584,12 @@ const CATALOG: &[Command] = &[
         params: &[SYMBOL, EXPECTED_REVISION],
     },
     Command {
+        id: annotation::APPLY,
+        title: "Apply schematic annotation",
+        summary: "Apply the latest reviewed annotation in one undo step. Refuses a stale or replaced token.",
+        params: &[Param { required: true, name: "token", summary: "Token returned by annotate.preview in this session", kind: ParamKind::Text }],
+    },
+    Command {
         id: annotation::PREVIEW,
         title: "Preview schematic annotation",
         summary: "Review reference designators without editing. Propose the lowest free references for unlocked placeholders and report duplicates.",
@@ -2620,6 +2626,11 @@ pub enum CommandError {
     StaleRevision {
         current: u64,
     },
+    /// Annotation was reviewed at an older revision; include parts with changed designators, locks or placements.
+    StaleAnnotation {
+        current: u64,
+        part_instances: Vec<String>,
+    },
     /// An id names nothing in the project; some lookups report an id not of the expected form
     /// this way too.
     NotFound(String),
@@ -2645,7 +2656,7 @@ impl CommandError {
             Self::Unknown(_) => ErrorCode::UnknownCommand,
             Self::InvalidParams(_) => ErrorCode::InvalidParams,
             Self::Unavailable(_) => ErrorCode::Unavailable,
-            Self::StaleRevision { .. } => ErrorCode::StaleRevision,
+            Self::StaleRevision { .. } | Self::StaleAnnotation { .. } => ErrorCode::StaleRevision,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::CapExceeded(_) => ErrorCode::CapExceeded,
             Self::VersionMismatch { .. } => ErrorCode::VersionMismatch,
@@ -2660,6 +2671,7 @@ impl CommandError {
             Self::StaleRevision { current } => json!({"current_revision": current}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
             Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
+            Self::StaleAnnotation { current, part_instances } => json!({"current_revision":current,"part_instances":part_instances}),
             _ => json!({}),
         }
     }
@@ -2677,6 +2689,16 @@ impl std::fmt::Display for CommandError {
                 "`{command}` was requested with command API version {stated}, but this session runs version {current}; refresh the command catalog"
             ),
             Self::OutOfScope { command } => write!(f, "`{command}` cannot run in a read-only session"),
+            Self::StaleAnnotation { current, part_instances } => {
+                write!(f, "annotation preview is stale at revision {current}; preview again")?;
+                if !part_instances.is_empty() {
+                    write!(f, "; changed part instances: {}", part_instances[..part_instances.len().min(8)].join(", "))?;
+                    if part_instances.len() > 8 {
+                        write!(f, " and {} more", part_instances.len() - 8)?;
+                    }
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -2975,6 +2997,8 @@ pub struct Session {
     update_plan: Option<board::update::CachedPlan>,
     /// One runtime-only setup review, never retained by authored history snapshots.
     setup_preview: Option<board::setup::preview::CachedPreview>,
+    /// One runtime-only annotation review, retained across edits to diagnose stale proposals.
+    annotation_preview: Option<annotation::ReviewedPreview>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
     defer_net_reconciliation: bool,
     /// Told about each new history root and committed edit; never part of the project.
@@ -2996,6 +3020,7 @@ impl Default for Session {
             history_root_revision: 0,
             update_plan: None,
             setup_preview: None,
+            annotation_preview: None,
             defer_net_reconciliation: false,
             observer: None,
         }
@@ -3034,6 +3059,7 @@ impl Session {
         self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
         self.setup_preview = None;
+        self.annotation_preview = None;
         let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
@@ -3205,6 +3231,7 @@ impl Session {
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
             | annotation::PREVIEW
+            | annotation::APPLY
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
@@ -3653,6 +3680,7 @@ impl Session {
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
                 | annotation::PREVIEW
+                | annotation::APPLY
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
@@ -3699,33 +3727,36 @@ impl Session {
     fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         self.validate_project_command(id, params)?;
         match id {
-            "project.new" => self.change(Project {
-                name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
-                id: fresh_id()?,
-                numeric_id_high_water: Some(0),
-                sheets: Arc::new(vec![sheets::SchematicSheet {
-                    occurrence_id: Some(fresh_id()?),
-                    page: Some(sheets::page::Page::new_sheet()),
-                    ..sheets::SchematicSheet::empty(fresh_id()?, "Main".into())
-                }]),
-                sheet_index: 0,
-                components: Arc::default(),
-                units: Arc::default(),
-                schematic_packages: Arc::default(),
-                board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
-                named_graph: Arc::default(),
-                board_graphics: Arc::default(),
-                upgraded_from: None,
-                layout: Some(persistence::layout::Layout::default()),
-                circuit_use: Some(fresh_id()?),
-                net_registry: Arc::default(),
-                net_classes: Arc::default(),
-                parameters: Arc::default(),
-                assembly_profiles: Arc::default(),
-                part_groups: Arc::default(),
-                part_group_memberships: Arc::default(),
-                prefer_compact_part_groups: false,
-            })?,
+            "project.new" => {
+                self.change(Project {
+                    name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
+                    id: fresh_id()?,
+                    numeric_id_high_water: Some(0),
+                    sheets: Arc::new(vec![sheets::SchematicSheet {
+                        occurrence_id: Some(fresh_id()?),
+                        page: Some(sheets::page::Page::new_sheet()),
+                        ..sheets::SchematicSheet::empty(fresh_id()?, "Main".into())
+                    }]),
+                    sheet_index: 0,
+                    components: Arc::default(),
+                    units: Arc::default(),
+                    schematic_packages: Arc::default(),
+                    board: Arc::new(Board::for_new_project(params["create_board"].as_bool().unwrap_or(false))?),
+                    named_graph: Arc::default(),
+                    board_graphics: Arc::default(),
+                    upgraded_from: None,
+                    layout: Some(persistence::layout::Layout::default()),
+                    circuit_use: Some(fresh_id()?),
+                    net_registry: Arc::default(),
+                    net_classes: Arc::default(),
+                    parameters: Arc::default(),
+                    assembly_profiles: Arc::default(),
+                    part_groups: Arc::default(),
+                    part_group_memberships: Arc::default(),
+                    prefer_compact_part_groups: false,
+                })?;
+                self.annotation_preview = None;
+            }
             "project.rename" => {
                 let name = name_param(params)?;
                 let mut project = self.open_project()?.clone();
@@ -3850,6 +3881,7 @@ impl Session {
             annotation::PREVIEW => {
                 self.preview_annotation(params)?;
             }
+            annotation::APPLY => self.apply_annotation(params)?,
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,

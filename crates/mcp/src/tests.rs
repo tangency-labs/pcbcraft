@@ -153,7 +153,8 @@ fn designator_lock_preview_and_apply_share_mcp_dispatch() {
     assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
-/// Annotation previews stay identical across headless and live dispatch with inspection omitted.
+/// Annotation previews stay identical with inspection omitted; their distinct session-local
+/// tokens authorize only the originating session and apply one edit on either dispatcher.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn annotation_preview_survives_suppressed_inspection_in_live_and_headless_mcp() {
@@ -204,6 +205,14 @@ fn annotation_preview_survives_suppressed_inspection_in_live_and_headless_mcp() 
     assert!(report.get("project").is_none());
     assert_eq!(editor.0.inspect(), before);
     assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
+    let apply = |token: &Value| json!({"command":pcbcraft_engine::annotation::APPLY,"params":{"token":token},"inspect":false});
+    let foreign = headless.call("engine.execute", apply(&live["token"])).unwrap_err();
+    assert_eq!(foreign.code(), "unavailable");
+    assert!(foreign.message().contains("unknown or replaced"));
+    let result = call_editor(&mut editor, &json!({"method":"engine.execute","params":apply(&live["token"])})).unwrap();
+    assert_eq!(result, json!({"revision":before["revision"].as_u64().unwrap() + 1}));
+    assert_eq!(headless.call("engine.execute", apply(&report["token"])).unwrap(), json!({"revision":revision.as_u64().unwrap() + 1}));
+    assert_eq!(headless.call("project.inspect", json!({})).unwrap()["project"], editor.0.inspect()["project"]);
 }
 
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.

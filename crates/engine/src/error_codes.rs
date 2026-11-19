@@ -17,7 +17,7 @@ pub enum ErrorCode {
     InvalidParams,
     /// The command exists but cannot run in the current state.
     Unavailable,
-    /// `expected_revision` is not the current revision.
+    /// A revision-qualified request or review token does not match the current revision.
     StaleRevision,
     /// An id names nothing in the current project. Some commands report an id that is not of
     /// the expected form the same way, others as [`ErrorCode::InvalidParams`].

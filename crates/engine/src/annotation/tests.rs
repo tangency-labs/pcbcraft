@@ -174,7 +174,10 @@ fn annotation_preview_resolves_every_accepted_sheet_uuid_spelling() {
     assert_eq!(rows[0]["symbol"], pending);
     for spelling in [id.to_string().to_uppercase(), id.braced().to_string(), id.urn().to_string(), id.simple().to_string().to_uppercase()] {
         assert_ne!(spelling, id.to_string());
-        assert_eq!(session.execute(PREVIEW, &json!({"sheet":spelling})).unwrap(), canonical, "{spelling}");
+        let reply = session.execute(PREVIEW, &json!({"sheet":spelling})).unwrap();
+        assert_eq!(reply["annotation_preview"], canonical["annotation_preview"], "{spelling}");
+        assert_eq!(reply["revision"], canonical["revision"], "{spelling}");
+        assert!(reply["token"].is_string(), "{spelling}");
     }
 }
 

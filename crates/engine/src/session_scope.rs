@@ -51,8 +51,8 @@ impl Session {
 
 /// These commands return data or manage only ephemeral review state. In particular, Copy
 /// returns data without setting a system clipboard, and export/publication preparation does
-/// not write files. Annotation preview caches no proposal. Loading/removing library sources
-/// and Cut are not reads.
+/// not write files. Annotation preview keeps only a session-local Apply token, and Apply is
+/// not a read. Loading/removing library sources and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,

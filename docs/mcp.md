@@ -414,7 +414,7 @@ a malformed reply from another editor may omit the facts it describes.
 | `unknown_command` | No command has the requested id. |
 | `invalid_params` | The parameters are a non-null scalar or array, name a parameter the command does not describe, leave out a required one, have the wrong type or range, or fail the command's own checks. |
 | `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
-| `stale_revision` | `expected_revision` is not the current revision. `details.current_revision` gives the current one; inspect it and retry. |
+| `stale_revision` | The request was prepared against an earlier revision. `details.current_revision` gives the current one. For annotation, `details.part_instances` names affected parts; preview again instead of retrying a stale token. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
 | `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs. |
 | `needs_live_editor` | A window or `ui.` command, or `inspect_editor`, in a session without an open editor. |
@@ -629,9 +629,11 @@ at `pcbcraft-cli mcp`. Pass
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to omit inspection and return the revision for ordinary edits.
 Commands that return their own data, such as exports, clipboard queries and
-[schematic annotation preview](annotation.md), retain that data. In particular,
-`schematic.set_symbol_fields` with `dry_run: true` still returns the full preview,
-including the changed native documents. Use `inspect_project` to read
+[schematic annotation preview](annotation.md), retain that data.
+`schematic.set_symbol_fields` with `dry_run: true` still returns the full
+preview, including the changed native documents. Use `annotate.preview` as the
+read-only dry run, then `annotate.apply` with its separate session-local token
+(not the numeric revision) to commit the reviewed renames. Use `inspect_project` to read
 the project, or `cross_probe` to look up a linked terminal or pad. The additive
 read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
 unavailable states at a captured revision; see [pin/pad correspondence](pin-pad-correspondence.md)
