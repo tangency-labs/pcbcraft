@@ -935,13 +935,20 @@ impl PcbApp {
         self.assistant.show(ctx, workspace, &self.session, can_edit, has_document);
         self.serve_chat(ctx);
         if let Some(request) = self.assistant.take_settings_request() {
-            self.dialog = match request {
-                assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
-                assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
-            };
+            self.open_assistant_settings(request);
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.request_repaint();
         }
+    }
+
+    /// Retire the remap form's capture before either Assistant settings dialog displaces it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_assistant_settings(&mut self, request: assistant::SettingsRequest) {
+        self.dismiss_library_pin_remap();
+        self.dialog = match request {
+            assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
+            assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
+        };
     }
 
     /// Route the Assistant toggle and report whether its chat owns the canvas keys.

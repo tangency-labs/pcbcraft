@@ -154,7 +154,7 @@ struct ReportScrollGeneration(u64);
 
 /// Review tokens restart with the app, but eframe restores scroll state. Allocate a fresh
 /// generation on first use in each context; the cached active generation is not saved.
-fn report_table_salt(ctx: &Context, token: u64) -> (&'static str, u64, u64) {
+fn report_table_salt(ctx: &Context, token: u64, page: usize) -> (&'static str, u64, u64, usize) {
     let key = egui::Id::unique("pin_remap_scroll_generation");
     let generation = ctx.data_mut(|data| {
         if let Some(current) = data.get_temp::<u64>(key) {
@@ -165,13 +165,13 @@ fn report_table_salt(ctx: &Context, token: u64) -> (&'static str, u64, u64) {
         data.insert_temp(key, next);
         next
     });
-    ("pin_remap_report", generation, token)
+    ("pin_remap_report", generation, token, page)
 }
 
-/// Paint the captured page without recomputing nets. Only the same review keeps its scroll position.
+/// Paint the captured page without recomputing nets; scroll belongs to this review and page.
 fn report_table(ui: &mut Ui, report: &Value, page: usize, token: u64) {
     let rows = report_rows(report, page);
-    ui.push_id(report_table_salt(ui.ctx(), token), |ui| {
+    ui.push_id(report_table_salt(ui.ctx(), token, page), |ui| {
         pcbcraft_chrome::library_workspace::table(
             ui,
             &[
@@ -463,21 +463,25 @@ impl PcbApp {
 mod tests {
     use super::*;
 
-    /// A fresh capture starts at the top, including when the app restores a scrolled capture's memory and reuses its token.
+    /// Each report page keeps its own offset within a capture; a new capture starts at the top
+    /// even if a restarted context restores an old offset and reuses its token.
     #[test]
-    fn pin_remap_report_starts_at_top_for_new_review() {
+    fn pin_remap_report_scroll_is_scoped_to_review_and_page() {
         let pins: Vec<_> =
-            (1..=40).map(|object| json!({"unit":"main","object":object.to_string(),"before":"1","after":"2","name":"Test pin"})).collect();
-        let report = json!({"changes":pins});
-        let draw = |ui: &mut Ui, (token, offset, id): &mut (u64, f32, egui::Id)| {
-            report_table(ui, &report, 0, *token);
+            (1..=2).map(|object| json!({"unit":"main","object":object.to_string(),"before":"1","after":"2","name":"Test pin"})).collect();
+        let instances: Vec<_> = (1..=40).map(|instance| json!({"reference":format!("R{instance}"),"pinned_revision":"1","pins":pins})).collect();
+        let report = json!({"instances":instances});
+        assert_eq!(report_rows(&report, 0).len(), 40);
+        assert_eq!(report_rows(&report, 1).len(), 40);
+        let draw = |ui: &mut Ui, (token, offset, id, page): &mut (u64, f32, egui::Id, usize)| {
+            report_table(ui, &report, *page, *token);
             // UiBuilder and ScrollArea both hash their supplied salts before passing them to egui.
-            let scope = ui.make_persistent_id(egui::IdSalt::new(report_table_salt(ui.ctx(), *token)));
+            let scope = ui.make_persistent_id(egui::IdSalt::new(report_table_salt(ui.ctx(), *token, *page)));
             *id = scope.with(egui::IdSalt::new("library_table_vertical"));
             *offset = egui::scroll_area::State::load(ui.ctx(), *id).expect("report scroll state").clamped_offset().y;
         };
         let builder = || egui_kittest::Harness::builder().with_size(egui::vec2(760.0, 260.0));
-        let initial = (1, 0.0, egui::Id::NULL);
+        let initial = (1, 0.0, egui::Id::NULL, 0);
         let mut h = builder().with_context_setup(pcbcraft_chrome::install).build_ui_state(draw, initial);
         h.run();
         assert_eq!(h.state().1, 0.0);
@@ -496,6 +500,14 @@ mod tests {
         h.run();
         assert!(h.state().1 > 0.0, "same review should retain its offset");
         let old_scroll_id = h.state().2;
+        h.state_mut().3 = 1;
+        h.run();
+        assert_ne!(h.state().2, old_scroll_id);
+        assert_eq!(h.state().1, 0.0, "the equal-length second page must start at the top");
+        h.state_mut().3 = 0;
+        h.run();
+        assert_eq!(h.state().2, old_scroll_id);
+        assert!(h.state().1 > 0.0, "returning to the first page restores its scroll position");
         let saved = h.ctx.data(|data| serde_json::to_vec(data).unwrap());
         h.state_mut().0 = 2;
         h.run();

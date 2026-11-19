@@ -208,6 +208,12 @@ pub fn preview(
     preview_with_source(item, pins, source_revision, project, catalog, None)
 }
 
+/// Prepare a private candidate and its current-project evidence. The live route uses the
+/// captured published symbol and catalog status; headless callers supply a base revision and
+/// may have only the project's pinned evidence when that revision is absent from the catalog.
+/// Invalid edits and row, graph, or encoded report budget overruns return no partial report.
+/// A late byte-budget refusal can leave derived connectivity cached, but neither authored
+/// document nor its history changes.
 fn preview_with_source(
     item: &Item,
     pins: &[PinRemap],
@@ -247,12 +253,19 @@ fn preview_with_source(
             )
         };
         let mut graph = None;
+        // Project components own these Arcs for the whole preview. Key by allocation, not
+        // published address: distinct pinned bodies at the same address can disagree.
+        let mut pinned_matches = BTreeMap::new();
         for part in project.components().filter(|part| part.definition.library == item.library && part.definition.id == item.id) {
             let mut instance = json!({"part_instance":part.id(),"reference":part.reference(),"pinned_revision":part.definition.revision().to_string(),
                 "part":part.part.as_ref().map(|selection| json!({"definition":selection.resolved.definition.reference(),"package":selection.package})),"pins":[]});
             bytes.charge(&instance, !instances.is_empty())?;
             let same_revision = source_revision == Some(part.definition.revision());
-            let conflict = same_revision && (conflicted || base.as_ref().is_some_and(|base| !matches(&part.definition, base)));
+            let conflict = same_revision
+                && (conflicted
+                    || base.as_ref().is_some_and(|base| {
+                        !*pinned_matches.entry(std::sync::Arc::as_ptr(&part.definition)).or_insert_with(|| matches(&part.definition, base))
+                    }));
             let associated = same_revision && !conflict;
             let mut rows = Vec::new();
             for change in &changes {

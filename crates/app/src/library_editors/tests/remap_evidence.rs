@@ -71,6 +71,8 @@ fn live(app: &mut PcbApp, document: u64, revision: u64, phase: &str, input: Valu
     )
 }
 
+/// A different body at the same address conflicts whether or not its replacement source is
+/// loaded. Matching pinned evidence, in contrast, remains available offline.
 #[test]
 fn pin_remap_live_checks_the_opened_body_even_when_the_catalog_agrees_with_another_project_pin() {
     let (mut app, id) = fixture(true, true);
@@ -137,6 +139,35 @@ fn pin_remap_live_catalog_quarantine_requires_refresh_without_revoking_cancel() 
     assert_eq!(editor.revision(), 0);
     assert!(!editor.can_undo());
     assert!(Arc::ptr_eq(&editor.snapshot(), &draft));
+}
+
+/// Both Assistant settings requests replace the remap form and must retire its live token.
+#[test]
+fn pin_remap_assistant_settings_retires_the_captured_review() {
+    for add in [false, true] {
+        let (mut app, id) = fixture(false, true);
+        let project = app.session.snapshot().unwrap();
+        let project_revision = app.session.revision();
+        let draft = app.library_editors.documents[&id].session.snapshot();
+        let reply = live(&mut app, id, 0, "preview", json!([{"unit":"main","object":"1","number":"7"}])).unwrap();
+        let token = reply["library_editors"]["pin_remap"]["token"].clone();
+        assert!(token.is_string());
+        assert_eq!(crate::window_commands::inspect_editor(&app)["library_editors"]["pin_remap"]["token"], token);
+        app.open_assistant_settings(if add {
+            crate::assistant::SettingsRequest::Add(Box::default())
+        } else {
+            crate::assistant::SettingsRequest::Settings
+        });
+        assert!(if add { matches!(app.dialog, Dialog::Agent { .. }) } else { matches!(app.dialog, Dialog::Preferences(_)) });
+        assert!(crate::window_commands::inspect_editor(&app)["library_editors"]["pin_remap"].is_null());
+        assert!(live(&mut app, id, 0, "apply", token.clone()).is_err());
+        assert!(live(&mut app, id, 0, "cancel", token).is_err());
+        assert_eq!(app.session.revision(), project_revision);
+        assert!(Arc::ptr_eq(&project, &app.session.snapshot().unwrap()));
+        let editor = &app.library_editors.documents[&id].session;
+        assert_eq!(editor.revision(), 0);
+        assert!(Arc::ptr_eq(&draft, &editor.snapshot()));
+    }
 }
 
 /// After one draft swap, a second review distinguishes its IN pin from pinned number 2's OUT
@@ -247,6 +278,7 @@ fn pin_remap_qualified_report_refuses_before_live_capture() {
         let ids: Vec<_> = projection.symbols().iter().take((400 - count).min(count)).map(|symbol| symbol.id()).collect();
         let copied = edit(&mut app, engine::clipboard::COPY, json!({"sheet":sheet.id(),"items":{"symbols":ids,"wires":[]}}));
         edit(&mut app, engine::clipboard::PASTE, json!({"sheet":sheet.id(),"text":copied["clipboard"],"x_nm":0,"y_nm":0}));
+        assert_eq!(app.session.project().unwrap().for_sheet(sheet).unwrap().symbols().len(), count + ids.len(), "fixture paste at {count} copies");
     }
     let project = app.session.snapshot().unwrap();
     assert_eq!(project.components().count() * 2, 804);
