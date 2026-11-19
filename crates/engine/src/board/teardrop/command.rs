@@ -204,9 +204,8 @@ impl Session {
         })?;
         let removed: Vec<_> = diff.removed.iter().copied().map(Record::from).collect();
         let added: Vec<_> = diff.added.iter().map(|addition| Record::from(addition.intent)).collect();
-        let changed = !added.is_empty() || !removed.is_empty();
         let report = report(target, &diff, &added, &removed, dry_run);
-        if changed && !dry_run {
+        if !added.is_empty() || !removed.is_empty() {
             let mut next = project.clone();
             let mut records: BTreeMap<_, _> = board.teardrops().iter().map(|&record| (record.id, record)).collect();
             for record in removed {
@@ -214,7 +213,11 @@ impl Session {
             }
             records.extend(added.into_iter().map(|record| (record.id, record)));
             Arc::make_mut(&mut next.board).teardrops = records.into_values().collect();
-            self.change(next)?;
+            if dry_run {
+                self.prepare_change(next)?;
+            } else {
+                self.change(next)?;
+            }
         }
         Ok(json!({"revision":self.revision(),"teardrops":report}))
     }

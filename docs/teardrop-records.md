@@ -58,8 +58,9 @@ intents with the rule, obstacle and distances or a geometry reason. For edge
 clearance it reports the nearest outline drawing UUID; for crossing it reports
 the nearest crossing drawing. For copper outside the outline it references the
 nearest closed drawing, not an open path. Distance ties pick the lowest drawing
-UUID. Reports for approved additions include derived vertices. A `dry_run: true` previews
-this diff without changing the revision or undo history; applying the batch
-rechecks it and records the accepted additions and removals in one undo step.
+UUID. Reports for approved additions include derived vertices. A `dry_run: true`
+validates the candidate, including the native board size limit, without changing
+revision or undo history. Applying the batch rechecks it and records the
+accepted additions and removals in one undo step.
 A fully rejected batch without removals does not take an undo step. Native save
 and reopen preserve the accepted intents, not the session's undo history.
