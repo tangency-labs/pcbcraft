@@ -136,7 +136,7 @@ fn supply_ranges_reopen_offline_without_raising_outer_formats() {
             let bounds = record["terminal_ratings"][TERMINAL].take();
             record["terminal_ratings"] = json!({"2":bounds});
             malformed.insert(path, serde_json::to_vec(&record).unwrap());
-            let error = decode_documents(&malformed).err().expect("must reject a rated passive terminal");
+            let error = decode_documents(&malformed).expect_err("must reject a rated passive terminal");
             assert!(error.contains("Terminal 2") && error.contains("power_in"), "{error}");
         }
     }

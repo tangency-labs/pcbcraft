@@ -220,7 +220,8 @@ fn supply_ranges(
     error: &mut Option<String>,
 ) {
     use pcbcraft_engine::schematic::ElectricalType::PowerIn;
-    let power_input = |id: &str| symbol.is_some_and(|symbol| symbol.pin_index(id).is_some_and(|index| symbol.pins()[index].electrical_type == PowerIn));
+    let power_input =
+        |id: &str| symbol.is_some_and(|symbol| symbol.pin_index(id).is_some_and(|index| symbol.pins()[index].electrical_type == PowerIn));
     let mut unavailable = Vec::new();
     for (key, text) in pending.iter() {
         if let Some((terminal, bound)) = key.strip_prefix("supply/").and_then(|rest| rest.rsplit_once('/'))

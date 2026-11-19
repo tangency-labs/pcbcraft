@@ -114,14 +114,14 @@ fn invalid_mapping_and_pending_input_never_replace_published_records() {
 fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
     use egui_kittest::{Harness, kittest::Queryable};
     use pcbcraft_engine::{
-        authoring::{Item, Primitive, publishing},
+        authoring::{Item, Kind as ItemKind, Primitive, publishing},
         library::sources::{self, Documents, NativeSource},
         schematic::ElectricalType,
     };
 
     let (mut app, _temp, id) = fixture();
     let manifest = publishing::new_library("test-drawings", "Synthetic drawings", "MIT OR Apache-2.0").unwrap();
-    let mut item = Item::new(Kind::Symbol).unwrap();
+    let mut item = Item::new(ItemKind::Symbol).unwrap();
     item.library = "test-drawings".into();
     item.id = "synthetic-supply".into();
     let Some(Primitive::Pin { electrical_type, .. }) = item.objects.get_mut(&1) else { panic!("fixture needs a pin") };
@@ -145,9 +145,7 @@ fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
     let revision = doc.session.revision();
     doc.pending.insert("supply/1/min".into(), "unfinished".into());
     doc.pending.insert("test:field".into(), "other edit".into());
-    let mut h = Harness::builder()
-        .with_size(egui::vec2(1000., 900.))
-        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    let mut h = Harness::builder().with_size(egui::vec2(1000., 900.)).build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
     h.run();
     assert!(h.query_by_label("Discard unavailable supply edits").is_none());
     h.state_mut().session.execute(sources::REMOVE, &json!({"source":"test-drawings"})).unwrap();
