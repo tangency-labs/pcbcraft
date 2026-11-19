@@ -45,14 +45,17 @@ def compare(before, after):
     for key in ["hardware", "os", "runtime", "compiler", "profile", "power"]:
         if before["environment"][key] != after["environment"][key]:
             raise ValueError(f"comparison mismatch: environment.{key}")
-    if old.keys() != new.keys():
+    # The BGA subcase is rebuilt from each checkout, not read from the hashed artifact.
+    regenerated = {name for name in old.keys() | new.keys() if name.startswith("bga.")}
+    comparable = old.keys() - regenerated
+    if comparable != new.keys() - regenerated:
         raise ValueError("measurement boundaries differ; use a matched harness on both revisions")
+    if not comparable:
+        raise ValueError("reports have no comparable fixed-artifact metrics")
     lines = [f"CPU comparison: {before['environment']['revision']} → {after['environment']['revision']}",
              f"{after['target']}; {after['iterations']} samples per boundary; artifact {after['artifact_sha256']}",
              "", "| Boundary | Before p95 ms | After p95 ms | Change | After p99 ms | Max ms |", "| --- | ---: | ---: | ---: | ---: | ---: |"]
-    # The BGA subcase is rebuilt from each checkout, not read from the hashed artifact.
-    regenerated = {name for name in new if name.startswith("bga.")}
-    for name in sorted(new.keys() - regenerated):
+    for name in sorted(comparable):
         a, b = old[name]["p95_ms"], new[name]["p95_ms"]
         delta = f"{(b/a-1)*100:+.1f}%" if a else "n/a (zero baseline)"
         lines.append(f"| {name} | {a:.6f} | {b:.6f} | {delta} | {new[name]['p99_ms']:.6f} | {new[name]['max_ms']:.6f} |")

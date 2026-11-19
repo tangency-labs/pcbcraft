@@ -212,6 +212,38 @@ impl Footprint {
             _ => None,
         }
     }
+    /// Index exact pad tokens once for a full-footprint traversal. Unconnected pads have no
+    /// terminal; legacy two-pad markers retain their stored permutation.
+    fn terminals_by_pad(&self) -> BTreeMap<&str, &str> {
+        let Some(mapping) = &self.mapping else {
+            return if self.pin_1_pad == 1 { BTreeMap::from([("1", "1"), ("2", "2")]) } else { BTreeMap::from([("1", "2"), ("2", "1")]) };
+        };
+        let mut terminals = BTreeMap::new();
+        for (pin, numbers) in mapping {
+            for number in numbers.pads() {
+                terminals.entry(number.as_str()).or_insert(pin.as_str());
+            }
+        }
+        terminals
+    }
+
+    /// Project each pinned pad directly in definition order. A missing physical definition
+    /// yields no pads; only legacy placements synthesize the two marker centers.
+    fn projected_pads<'a>(
+        &'a self,
+        definition: Option<&'a definition::FootprintDefinition>,
+    ) -> impl Iterator<Item = (PinNumber, Point, Option<&'a definition::RectPad>)> + 'a {
+        let physical = definition
+            .into_iter()
+            .flat_map(|definition| &definition.pads)
+            .filter_map(|pad| Some((PinNumber::new(&pad.number)?, self.point(pad.center), Some(pad))));
+        let legacy = [("1", -HALF_PAD_PITCH_NM), ("2", HALF_PAD_PITCH_NM)]
+            .into_iter()
+            .filter(move |_| self.library.is_none())
+            .filter_map(|(number, x_nm)| Some((PinNumber::new(number)?, self.point(Point { x_nm, y_nm: 0 }), None)));
+        physical.chain(legacy)
+    }
+
     /// Transform a local point around the footprint origin: mirror X for a bottom-side placement,
     /// then rotate. Quarter turns are exact; other whole-degree rotations round local offsets to
     /// the nearest nanometer without accumulation.
@@ -237,21 +269,24 @@ impl Footprint {
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
     /// Always include the storage-only `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
+        let definition = project.board.definition_for(self);
+        let pins = self.terminals_by_pad();
+        let terminals = project.first_component_terminals(self.component);
+        let unconnected: BTreeSet<_> = self.unconnected_pads.iter().map(String::as_str).collect();
         let mut value = json!({"id":format!("footprint-{}",self.id),"board":project.board_target().map(|target|target.board),
             "component":format!("component-{}",self.component),"definition":self.definition,"definition_revision":self.definition_revision,
             "x_nm":self.x_nm,"y_nm":self.y_nm,"rotation":self.rotation,"side":if self.bottom {"back"} else {"front"},"locked":self.locked,
-            "pins":project.board.pad_numbers(self).into_iter().filter_map(|pad| {
-                let point=self.pad_position(pad,&project.board)?;
-                let pin=self.component_pin(pad).map(|(_, pin)| pin);
+            "pins":self.projected_pads(definition).map(|(pad, point, physical)| {
+                let terminal = pins.get(pad.as_str()).and_then(|pin| terminals.get(*pin)).copied();
                 let mut record=json!({"pad":Pad{board:project.board_target().map(|target|target.board),footprint:self.id,number:pad}.inspect(),
-                    "terminal":pin.and_then(|pin|project.component_terminal(self.component,pin)).map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
-                if self.unconnected_pads.iter().any(|number| number == pad.as_str()) {
+                    "terminal":terminal.map(Terminal::inspect),"x_nm":point.x_nm,"y_nm":point.y_nm});
+                if unconnected.contains(pad.as_str()) {
                     record["unconnected"] = json!(true);
                 }
-                if let Some(definition)=project.board.definition_for(self).and_then(|definition|definition.pads.iter().find(|item|item.number==pad.as_str())) {
-                    record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),definition.copper,self.bottom));
+                if let Some(physical) = physical {
+                    record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),physical.copper,self.bottom));
                 }
-                Some(record)
+                record
             }).collect::<Vec<_>>()});
         if let Some(library) = &self.library {
             value["library"] = json!(library);
@@ -266,7 +301,7 @@ impl Footprint {
         if let Some(text) = &self.reference_text {
             value["reference_text"] = json!(text);
         }
-        if let Some(definition) = project.board.definition_for(self) {
+        if let Some(definition) = definition {
             let name = project
                 .components
                 .get(&self.component)

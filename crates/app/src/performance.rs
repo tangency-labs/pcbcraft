@@ -326,10 +326,13 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         drop(query);
         drop(session);
         drop(project);
-        if artifact.recipe == "bga-v1" {
+        replay::run(&artifact, &mut samples)?;
+    }
+    // Keep checkout-specific diagnostics from perturbing the fixed-artifact samples.
+    if artifact.recipe == "bga-v1" {
+        for _ in 0..iterations {
             bga::measure(&mut samples)?;
         }
-        replay::run(&artifact, &mut samples)?;
     }
     Ok(Report {
         schema: "pcbcraft-performance-report/1".into(),

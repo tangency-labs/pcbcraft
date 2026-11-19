@@ -387,6 +387,31 @@ impl ParamKind {
         }
     }
 
+    /// Report oversized footprint inputs before syntax validation or parsing copies their data.
+    /// The caller supplies the parameter name; other kinds have no footprint capacity check.
+    fn footprint_size_error(self, value: &Value) -> Option<String> {
+        use board::{MAX_COMMAND_PADS_PER_TERMINAL, definition::MAX_PADS};
+        use library::MAX_TERMINALS;
+        match self {
+            Self::FootprintMapping => {
+                let mapping = value.as_object()?;
+                if mapping.len() > MAX_TERMINALS {
+                    return Some(format!("must contain at most {MAX_TERMINALS} terminal entries, not {}", mapping.len()));
+                }
+                let (terminal, count) = mapping.iter().find_map(|(terminal, pads)| {
+                    let count = pads.as_array()?.len();
+                    (count > MAX_COMMAND_PADS_PER_TERMINAL).then_some((terminal, count))
+                })?;
+                Some(format!("terminal {terminal:?} must map to at most {MAX_COMMAND_PADS_PER_TERMINAL} pads, not {count}"))
+            }
+            Self::UnconnectedPads => {
+                let count = value.as_array()?.len();
+                (count > MAX_PADS).then(|| format!("must contain at most {MAX_PADS} pads, not {count}"))
+            }
+            _ => None,
+        }
+    }
+
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
@@ -690,13 +715,6 @@ impl ParamKind {
                 if value.as_str().is_some_and(|id| id == FOOTPRINT_DEFINITION || board::definition::BASIC_COMPONENT_IDS.contains(&id)) =>
             {
                 Ok(())
-            }
-            Self::FootprintMapping
-                if value.as_object().is_some_and(|mapping| {
-                    mapping.values().any(|pads| pads.as_array().is_some_and(|pads| pads.len() > board::MAX_COMMAND_PADS_PER_TERMINAL))
-                }) =>
-            {
-                Err("must map each terminal to at most 128 pads")
             }
             Self::FootprintMapping if board::parse_mapping(value).is_some() => Ok(()),
             Self::BoardRotation if value.as_u64().is_some_and(|degrees| degrees < 360) => Ok(()),
@@ -2761,6 +2779,22 @@ impl Project {
         self.component_terminals(component, pin).next()
     }
 
+    /// Index one placed appearance per logical terminal, taking the first in the same stable
+    /// unit-ID order as `component_terminal`, without scanning a unit for every footprint pad.
+    fn first_component_terminals(&self, component: u64) -> BTreeMap<String, Terminal> {
+        let mut terminals = BTreeMap::new();
+        if let Some(part) = self.components.get(&component) {
+            for ((_, unit), symbol) in self.units.range((component, String::new())..).take_while(|((owner, _), _)| *owner == component) {
+                if let Some(definition) = part.definition.unit(unit) {
+                    for terminal in Terminal::for_symbol(*symbol, definition) {
+                        terminals.entry(terminal.number().to_owned()).or_insert(terminal);
+                    }
+                }
+            }
+        }
+        terminals
+    }
+
     /// Every placed appearance in stable unit-ID order. The part/unit index avoids scanning
     /// unrelated placements for each pin during board capture and cross-probing.
     pub(crate) fn component_terminals<'a>(&'a self, component: u64, pin: &'a str) -> impl Iterator<Item = Terminal> + 'a {
@@ -4378,6 +4412,9 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
             continue;
         }
         let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
+        if let Some(message) = param.kind.footprint_size_error(value) {
+            return Err(CommandError::InvalidParams(format!("`{}` {message}", param.name)));
+        }
         param.kind.validate(value).map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
     }
     Ok(())

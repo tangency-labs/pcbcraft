@@ -32,7 +32,7 @@ where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
 {
-    bounded_map(deserializer, 128)
+    bounded_map(deserializer, 128, "A native record map")
 }
 
 /// [`unique_map`] for a package's terminal-to-pad map, which holds one entry per symbol terminal.
@@ -41,16 +41,16 @@ where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
 {
-    bounded_map(deserializer, crate::library::MAX_TERMINALS)
+    bounded_map(deserializer, crate::library::MAX_TERMINALS, "A package's `mapping`")
 }
 
 /// Read at most `limit` distinct identities; a repeated key or one more entry fails the record.
-fn bounded_map<'de, D, T>(deserializer: D, limit: usize) -> Result<BTreeMap<String, T>, D::Error>
+fn bounded_map<'de, D, T>(deserializer: D, limit: usize, field: &'static str) -> Result<BTreeMap<String, T>, D::Error>
 where
     D: serde::Deserializer<'de>,
     T: Deserialize<'de>,
 {
-    struct Visitor<T>(usize, std::marker::PhantomData<T>);
+    struct Visitor<T>(usize, &'static str, std::marker::PhantomData<T>);
     impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Visitor<T> {
         type Value = BTreeMap<String, T>;
         /// Describe identity-keyed native maps in malformed-input diagnostics.
@@ -65,12 +65,12 @@ where
                     return Err(serde::de::Error::custom("A map has duplicate native record identities."));
                 }
                 if result.len() >= self.0 {
-                    return Err(serde::de::Error::custom(format!("A native record map holds at most {} identities.", self.0)));
+                    return Err(serde::de::Error::custom(format!("{} holds at most {} identities; read {}.", self.1, self.0, result.len() + 1)));
                 }
                 result.insert(key, map.next_value()?);
             }
             Ok(result)
         }
     }
-    deserializer.deserialize_map(Visitor(limit, std::marker::PhantomData))
+    deserializer.deserialize_map(Visitor(limit, field, std::marker::PhantomData))
 }

@@ -16,21 +16,21 @@ pub struct Package {
 }
 impl Package {
     /// Check syntax and exclusive pad ownership even before its symbol/footprint is available.
-    /// The terminal and pad limits are those of symbols and footprints; errors name the limit.
+    /// The terminal and pad limits are those of symbols and footprints; size errors name the field, limit and observed count.
     pub fn validate(&self) -> Result<(), String> {
         crate::library::check_text("package name", &self.name, 64)?;
         self.footprint.validate()?;
         if self.mapping.len() > MAX_TERMINALS {
-            return Err(format!("A package maps at most {MAX_TERMINALS} terminals, not {}.", self.mapping.len()));
+            return Err(format!("A package's `mapping` holds at most {MAX_TERMINALS} terminal entries, not {}.", self.mapping.len()));
         }
         if self.unconnected_pads.len() > MAX_PADS {
-            return Err(format!("A package has at most {MAX_PADS} unconnected pads, not {}.", self.unconnected_pads.len()));
+            return Err(format!("A package's `unconnected_pads` holds at most {MAX_PADS} pads, not {}.", self.unconnected_pads.len()));
         }
         let mut pads = BTreeSet::new();
         for (terminal, numbers) in &self.mapping {
             crate::library::check_pin_number(terminal)?;
             if numbers.is_empty() || numbers.len() > MAX_PADS {
-                return Err(format!("Terminal {terminal} requires 1–{MAX_PADS} pads."));
+                return Err(format!("A package's `mapping` for terminal {terminal} requires 1–{MAX_PADS} pads, not {}.", numbers.len()));
             }
             for pad in numbers {
                 crate::library::check_pin_number(pad)?;

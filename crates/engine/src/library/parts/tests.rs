@@ -150,7 +150,7 @@ fn package_unconnected_pad_vector_stops_at_the_footprint_limit() {
     package.unconnected_pads = (1..=1024).map(|n| format!("P{n}")).collect();
     assert_eq!(package.validate(), Ok(()));
     package.unconnected_pads.push("P1025".into());
-    assert_eq!(package.validate(), Err("A package has at most 1024 unconnected pads, not 1025.".into()));
+    assert_eq!(package.validate(), Err("A package's `unconnected_pads` holds at most 1024 pads, not 1025.".into()));
 }
 
 /// One native package terminal can own the entire footprint, independently of command-array limits.
@@ -161,7 +161,7 @@ fn package_terminal_pad_vector_stops_at_the_footprint_limit() {
     package.unconnected_pads.clear();
     assert_eq!(package.validate(), Ok(()));
     package.mapping.get_mut("1").unwrap().push("P1025".into());
-    assert_eq!(package.validate(), Err("Terminal 1 requires 1–1024 pads.".into()));
+    assert_eq!(package.validate(), Err("A package's `mapping` for terminal 1 requires 1–1024 pads, not 1025.".into()));
 }
 
 /// The native package pad budget includes both mapped and explicitly unconnected identities.

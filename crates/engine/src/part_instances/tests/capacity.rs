@@ -128,6 +128,28 @@ fn ball_grid_array_at_the_pad_and_terminal_limits_places_saves_and_reopens() {
     assert_eq!(project.default_footprint_mapping(&id, &definition).unwrap(), mapping);
     let baseline = project.board.baseline.as_ref().unwrap();
     assert_eq!(baseline.components.values().map(|component| component.terminals.len()).sum::<usize>(), MAX_TERMINALS);
+    let board = project.board_view(project.board_target().unwrap()).unwrap();
+    let view = board.footprints().next().unwrap();
+    let inspect = project.board.footprints()[0].inspect(&project);
+    let pins = inspect["pins"].as_array().unwrap();
+    let accepted_nets = baseline.terminal_net_index();
+    assert_eq!(view.pads.len(), MAX_PADS);
+    assert_eq!(pins.len(), MAX_PADS);
+    for ((physical, projected), pin) in definition.pads.iter().zip(&view.pads).zip(pins) {
+        let number = physical.number.as_str();
+        assert_eq!(projected.number, number);
+        assert_eq!(projected.center, physical.center);
+        assert_eq!(projected.shape, physical.shape);
+        assert!(projected.copper.is_some());
+        assert_eq!(
+            pin["terminal"],
+            project.component_terminal(project.board.footprints()[0].component, number).map(crate::Terminal::inspect).unwrap()
+        );
+        assert_eq!(pin["x_nm"], physical.center.x_nm);
+        assert_eq!(pin["y_nm"], physical.center.y_nm);
+        let net = accepted_nets.get(&(project.board.footprints()[0].component, number)).and_then(|index| baseline.net_name(*index));
+        assert_eq!(projected.net, net);
+    }
 
     let documents = encode_documents(project.clone()).unwrap();
     let reopened = decode_documents(&documents).unwrap();
@@ -154,7 +176,11 @@ fn ball_grid_array_at_the_pad_and_terminal_limits_places_saves_and_reopens() {
     let problems = refused(symbol(MAX_TERMINALS + 1), footprint(MAX_PADS, 0), part(MAX_TERMINALS));
     assert!(problems.contains("a symbol has 1 to 1024 terminals, not 1025"), "{problems}");
     let problems = refused(symbol(MAX_TERMINALS), footprint(MAX_PADS, 0), part(MAX_TERMINALS + 1));
-    assert!(problems.contains("holds at most 1024 identities"), "{problems}");
+    assert!(problems.contains("`mapping` holds at most 1024 identities; read 1025"), "{problems}");
+    let mut excessive = part(1);
+    excessive["packages"]["bga"]["mapping"] = json!({"A1":balls(MAX_PADS + 1)});
+    let error = crate::library::parts::PartDefinition::read(&excessive.to_string()).unwrap_err();
+    assert!(error.contains("`mapping` for terminal A1 requires 1–1024 pads, not 1025"), "{error}");
 }
 
 /// A legal native 1,024-pad terminal works both at default placement and when selected later.
@@ -421,7 +447,6 @@ fn command_pad_arrays_keep_the_released_per_terminal_limit() {
     let revision = session.revision();
     let history = (session.undo.len(), session.redo.len());
     let excessive = json!({"A1":balls(129)});
-    assert_eq!(crate::ParamKind::FootprintMapping.validate(&excessive), Err("must map each terminal to at most 128 pads"));
     assert!(crate::board::parse_mapping(&excessive).is_none());
     assignment["mapping"] = excessive.clone();
     assignment["expected_revision"] = json!(revision);
@@ -430,7 +455,7 @@ fn command_pad_arrays_keep_the_released_per_terminal_limit() {
     for (command, params) in [(crate::board::assignment::ASSIGN_FOOTPRINT, assignment), (crate::PLACE_FOOTPRINT, placement)] {
         let error = session.apply(command, &params).unwrap_err();
         assert!(
-            matches!(&error, crate::CommandError::InvalidParams(message) if message == "`mapping` must map each terminal to at most 128 pads"),
+            matches!(&error, crate::CommandError::InvalidParams(message) if message == "`mapping` terminal \"A1\" must map to at most 128 pads, not 129"),
             "{error:?}"
         );
         assert_eq!(session.revision(), revision);
@@ -447,13 +472,19 @@ fn raised_limits_accept_the_last_good_value_and_refuse_the_next() {
     let entries = |count: usize| balls(count).into_iter().map(|ball| (ball.clone(), json!(ball))).collect::<serde_json::Map<_, _>>();
     let mapping = crate::ParamKind::FootprintMapping;
     assert!(mapping.validate(&Json::Object(entries(MAX_TERMINALS))).is_ok());
-    assert_eq!(
-        mapping.validate(&Json::Object(entries(MAX_TERMINALS + 1))),
-        Err("must map terminal IDs to pad IDs of 1 to 8 letters, digits, +, - or _")
-    );
     let pads = crate::ParamKind::UnconnectedPads;
     assert!(pads.validate(&json!(balls(MAX_PADS))).is_ok());
-    assert_eq!(pads.validate(&json!(balls(MAX_PADS + 1))), Err("must be distinct bounded pad identities"));
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    let mut params = json!({"component":"component-1","library":"grid","definition":"bga-1024","definition_revision":1,
+        "mapping":entries(MAX_TERMINALS + 1),"expected_revision":session.revision()});
+    let command = crate::board::assignment::ASSIGN_FOOTPRINT;
+    assert!(matches!(session.apply(command, &params), Err(crate::CommandError::InvalidParams(message))
+        if message == "`mapping` must contain at most 1024 terminal entries, not 1025"));
+    params["mapping"] = json!({"A1":"A1"});
+    params["unconnected_pads"] = json!(balls(MAX_PADS + 1));
+    assert!(matches!(session.apply(command, &params), Err(crate::CommandError::InvalidParams(message))
+        if message == "`unconnected_pads` must contain at most 1024 pads, not 1025"));
     assert!(crate::library::parts::PadIds::Many(balls(MAX_PADS)).valid());
     assert!(!crate::library::parts::PadIds::Many(balls(MAX_PADS + 1)).valid());
 

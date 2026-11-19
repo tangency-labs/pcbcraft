@@ -52,10 +52,18 @@ class ComparisonTests(unittest.TestCase):
         before["metrics"].append(dict(before["metrics"][0], id="bga.library_load"))
         after = copy.deepcopy(before)
         after["metrics"][1].update(samples_ms=[10, 20, 50], p50_ms=20, p95_ms=50, p99_ms=50, max_ms=50)
+        after["metrics"].append(dict(after["metrics"][0], id="bga.place_part"))
         result = comparison.compare(before, after)
         self.assertIn("Excluded bga.* boundaries", result)
         self.assertNotIn("| bga.library_load |", result)
+        self.assertNotIn("| bga.place_part |", result)
         self.assertIn("| replay.move.ui |", result)
+        after["metrics"][0]["id"] = "replay.other.ui"
+        with self.assertRaisesRegex(ValueError, "measurement boundaries differ"):
+            comparison.compare(before, after)
+        del before["metrics"][0], after["metrics"][0]
+        with self.assertRaisesRegex(ValueError, "no comparable fixed-artifact metrics"):
+            comparison.compare(before, after)
 
     def test_rejects_regenerated_artifacts_or_environment_changes(self):
         for key in ["artifact_sha256", "target", "iterations", "warmup_frames"]:
