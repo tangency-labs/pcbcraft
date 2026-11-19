@@ -358,8 +358,11 @@ fn gerber_x3_requires_setup_and_a_resolvable_origin() {
 
 /// Pending removals still flash while unique, even across sides; a reused live reference
 /// would link that retained placement to the wrong part, so fail the entire export (§§5.6.15–16).
+/// Validate references even if the live placement is marked do not populate.
 #[test]
 fn gerber_x3_rejects_a_reference_reused_while_removal_is_pending() {
+    use crate::schematic::fields::{Attributes, Metadata};
+
     let mut s = routed_fixture();
     let project = s.project().unwrap();
     let [first, second, ..] = &project.symbols[..] else { panic!("Expected at least two symbols") };
@@ -378,8 +381,16 @@ fn gerber_x3_rejects_a_reference_reused_while_removal_is_pending() {
     assert!(view(&s).footprint(&retained).unwrap().pending_removal);
     let layers = view(&s).gerber_part_layers().unwrap();
     assert!(layers.files[1].contents.contains("%TO.C,R1*%"));
-    s.apply(crate::SET_SYMBOL_FIELDS, &json!({"symbol":second,"reference":"R1","value":"R","expected_revision":s.revision()})).unwrap();
-    assert_eq!(view(&s).gerber_part_layers().unwrap_err(), format!("Duplicate Gerber reference \"R1\" on placements {retained} and {other}."));
+    let expected = format!("Duplicate Gerber reference \"R1\" on placements {retained} and {other}.");
+    for do_not_populate in [false, true] {
+        let metadata = Metadata { attributes: Attributes { do_not_populate, ..Attributes::default() }, ..Metadata::default() };
+        s.apply(
+            crate::SET_SYMBOL_FIELDS,
+            &json!({"symbol":second,"reference":"R1","value":"R","metadata":metadata,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        assert_eq!(view(&s).gerber_part_layers().unwrap_err(), expected);
+    }
 }
 
 /// Base population affects all X3 assembly objects, not bare-board fabrication. Main flashes
