@@ -72,8 +72,9 @@ consumers, PCB rendering/editing and fabrication explicitly refuse boards
 containing arcs rather than returning incomplete straight-only results.
 [Straight via teardrop intents](teardrop-records.md) use a shared
 revision-checked add/remove command with dry-run, per-site rule reports, one
-undo step and native save/reopen. Shared track and via edits regenerate or
-remove these intents in the same undo step. PCB rendering, routing queries,
+undo step and native save/reopen. Shared native track and via edits regenerate or
+remove these intents in the same undo step; browser copper edits refuse active
+intents. PCB rendering, routing queries,
 connectivity, board DRC and fabrication still refuse boards with active intents.
 [Walkaround route planning](route-planning.md) (`pcb.plan_route`) uses the same query
 on arc-free boards to plan single-layer H/V/45° routes round existing copper with

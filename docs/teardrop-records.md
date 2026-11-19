@@ -35,7 +35,9 @@ Clearance-based resizing, curved edges and other attachment types are not implem
 ## Editing tracks and vias
 
 The shared track and via edit commands regenerate straight-via teardrops
-against the proposed board before committing. To move a centered via and keep
+against the proposed board before committing in the native engine. Browser
+copper edits refuse boards with active intents before preparing an edit;
+regeneration is not yet available in the browser. To move a centered via and keep
 its taper, move the attached track and via together with `pcb.move_tracks`.
 Deleting either source or breaking the centered attachment removes the intent;
 an attachment whose requested taper no longer fits also loses its intent.

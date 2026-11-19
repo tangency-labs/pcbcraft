@@ -252,8 +252,9 @@ ribbon's planned entries and the editor guide have a stated destination.
   never name suffixes.
 - **Circular tracks and teardrops:** native [circular track records](circular-copper-records.md)
   and [straight via teardrop intents](teardrop-records.md) are available through
-  shared commands. Track and via edits regenerate straight-via teardrops in
-  the same transaction. Rendering, manufacturing output and board DRC for
+  shared commands. Native track and via edits regenerate straight-via teardrops
+  in the same transaction. Browser copper edits refuse active teardrops.
+  Rendering, manufacturing output and board DRC for
   these records remain separate work.
 - **Blind, buried and micro vias** need layer spans checked against the stackup
   and drill pairs in the Excellon output.

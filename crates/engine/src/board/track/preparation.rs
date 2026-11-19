@@ -90,13 +90,23 @@ pub struct CopperEditJob {
     check_route_vias: bool,
 }
 
+/// A cooperative browser job runs on the editor thread. Refuse active intents before
+/// allocating work, rather than doing the final teardrop verification there in one step.
+fn check_teardrop_preparation(has_teardrops: bool, cooperative: bool) -> Result<(), CommandError> {
+    if has_teardrops && cooperative {
+        return Err(CommandError::Unavailable("copper edits with active teardrops are not supported in the browser".into()));
+    }
+    Ok(())
+}
+
 impl Session {
-    /// Capture a straight board's preparation context without projecting pads. Teardrops are
-    /// checked against the complete candidate before publication, not against the old base.
+    /// Capture a straight board's preparation context without projecting pads. Native jobs
+    /// can check teardrops before publication; browser jobs refuse active intents up front.
     pub fn copper_preparation(&self, target: BoardTarget) -> Result<CopperPreparation, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
         view.require_no_arcs().map_err(CommandError::Unavailable)?;
+        check_teardrop_preparation(!view.teardrops().is_empty(), cfg!(target_arch = "wasm32"))?;
         let effective = view.effective_rules();
         Ok(CopperPreparation {
             source: Source {
@@ -426,6 +436,20 @@ mod tests {
     use super::*;
     use crate::board::track::tests::{copper_layers, routed_fixture, view};
     use crate::persistence::encode_documents;
+
+    /// Cooperative preparation only refuses boards that would need teardrop regeneration.
+    #[test]
+    fn cooperative_preparation_refuses_active_teardrops() {
+        for (has_teardrops, cooperative, refused) in [(false, false, false), (true, false, false), (false, true, false), (true, true, true)] {
+            let result = check_teardrop_preparation(has_teardrops, cooperative);
+            if refused {
+                assert!(matches!(result, Err(CommandError::Unavailable(message)) if message ==
+                    "copper edits with active teardrops are not supported in the browser"));
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
 
     /// A small off-board segment isolates publication and cancellation from pad geometry.
     fn params(s: &Session) -> Value {
