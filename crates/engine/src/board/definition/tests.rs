@@ -83,10 +83,20 @@ fn place_mounting_fixture(item: &crate::authoring::Item, connected: bool) -> Ses
     let component = s.project().unwrap().components().next().unwrap().id();
     if connected {
         s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":12_700_000,"y_nm":0,"expected_revision":s.revision()})).unwrap();
-        let second = s.project().unwrap().symbols().last().unwrap().id();
+        let second = s.project().unwrap().symbols().last().unwrap();
+        let second_component = format!("component-{}", second.component);
+        let second = second.id();
         s.apply(
             crate::CONNECT_PINS,
             &json!({"from":{"symbol":first,"terminal":"1"},"to":{"symbol":second,"terminal":"1"},"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        // The reviewed baseline requires assignments even for components left unplaced.
+        let package = basic_components("resistor-0402").unwrap();
+        s.apply(
+            crate::ASSIGN_FOOTPRINT,
+            &json!({"component":second_component,"library":package.library,"definition":package.id,
+                "definition_revision":package.revision,"mapping":{"1":"1","2":"2"},"expected_revision":s.revision()}),
         )
         .unwrap();
     }
