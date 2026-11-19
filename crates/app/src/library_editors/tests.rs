@@ -1077,6 +1077,7 @@ fn normalized_clipboard_events_drive_library_copy_and_paste() {
 /// exactly one event per physical chord, cancellable without authored changes, and
 /// the commit is a single undoable edit. Events come from the real
 /// `egui_winit::State` translation (vendored seams), not from injected egui events.
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn native_paste_translation_reaches_the_internal_library_paste() {
     use winit::event::ElementState;
