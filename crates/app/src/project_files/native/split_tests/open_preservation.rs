@@ -2,9 +2,18 @@
 
 use super::{fs, load};
 use std::{
-    path::Path,
+    collections::BTreeMap,
+    path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
+
+const FOLDER_LOCK: &str = ".previous.pcbcraft-lock";
+
+#[derive(Debug, PartialEq, Eq)]
+enum Entry {
+    Directory,
+    File { bytes: Vec<u8>, modified: SystemTime },
+}
 
 const ARCHIVES: &[(&str, &[u8])] = &[
     ("two-resistors-v2.pc.zip", include_bytes!("../../../../../storage/tests/fixtures/native-open/two-resistors-v2.pc.zip")),
@@ -32,17 +41,45 @@ const OLD_FOLDER: &[(&str, &[u8])] = &[
 ];
 
 /// Give the fixture an old mtime so even an immediate byte-for-byte rewrite is detectable.
-fn stage(path: &Path, bytes: &[u8]) -> SystemTime {
+fn stage(path: &Path, bytes: &[u8]) {
     fs::write(path, bytes).unwrap();
     let stamp = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
     fs::File::options().write(true).open(path).unwrap().set_times(fs::FileTimes::new().set_modified(stamp)).unwrap();
-    fs::metadata(path).unwrap().modified().unwrap()
 }
 
-/// Check the payload and timestamp after each reader, not just after both.
-fn assert_unchanged(path: &Path, bytes: &[u8], modified: SystemTime) {
-    assert!(fs::read(path).unwrap().as_slice() == bytes, "{}: saved bytes changed", path.display());
-    assert_eq!(fs::metadata(path).unwrap().modified().unwrap(), modified, "{}: modification time changed", path.display());
+/// Capture all entries, bytes and file mtimes below the fixture root. Folder tests may exclude
+/// only the exact sibling lock path; the same name anywhere inside the project is included.
+fn saved_tree(root: &Path, excluded: Option<&Path>) -> BTreeMap<PathBuf, Entry> {
+    let mut entries = BTreeMap::new();
+    let mut pending = vec![root.to_owned()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if Some(path.as_path()) == excluded {
+                continue;
+            }
+            let kind = entry.file_type().unwrap();
+            let value = if kind.is_dir() {
+                pending.push(path.clone());
+                Entry::Directory
+            } else {
+                assert!(kind.is_file(), "unexpected nonregular entry: {}", path.display());
+                Entry::File { bytes: fs::read(&path).unwrap(), modified: entry.metadata().unwrap().modified().unwrap() }
+            };
+            entries.insert(path.strip_prefix(root).unwrap().to_owned(), value);
+        }
+    }
+    entries
+}
+
+/// The sidecar persists, but an independent handle must acquire the exclusive lock without waiting.
+fn assert_lock_released(path: &Path) {
+    assert!(fs::symlink_metadata(path).unwrap().is_file(), "expected a regular lock file: {}", path.display());
+    let lock = fs::File::options().read(true).write(true).open(path).unwrap();
+    let acquired = lock.try_lock();
+    assert!(acquired.is_ok(), "expected exclusive lock to be available at {}: {acquired:?}", path.display());
+    lock.unlock().unwrap();
 }
 
 /// Normal desktop and headless native loaders can prepare archives in memory without
@@ -52,49 +89,37 @@ fn frozen_archive_open_and_close_preserve_saved_bytes() -> Result<(), String> {
     for &(file, bytes) in ARCHIVES {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join(file);
-        let modified = stage(&path, bytes);
+        stage(&path, bytes);
+        let before = saved_tree(root.path(), None);
         drop(load(&path).map_err(|error| format!("desktop open {file}: {error}"))?);
-        assert_unchanged(&path, bytes, modified);
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1, "desktop open left a sidecar for {file}");
+        assert_eq!(saved_tree(root.path(), None), before, "desktop Open changed {file} or left a sidecar");
         drop(pcbcraft_storage::open(&path).map_err(|error| format!("headless open {file}: {error}"))?);
-        assert_unchanged(&path, bytes, modified);
-        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 1, "headless open left a sidecar for {file}");
+        assert_eq!(saved_tree(root.path(), None), before, "headless Open changed {file} or left a sidecar");
     }
     Ok(())
 }
 
-/// Opening a settled previous folder leaves its original documents and entry-point name
-/// alone. The persistent sibling lock is normal folder coordination, not a saved upgrade.
+/// Preserve the entire settled folder and its parent entries, except for the documented
+/// sibling lock file. Verify that each native loader releases the advisory lock.
 #[test]
 fn previous_folder_open_and_close_preserve_saved_documents() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().join("previous");
-    let mut originals = Vec::new();
     for &(file, bytes) in OLD_FOLDER {
         let path = root.join(file);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
-        let modified = stage(&path, bytes);
-        originals.push((path, bytes, modified));
+        stage(&path, bytes);
     }
     let entry = root.join("project.pc");
-    let lock = temp.path().join(".previous.pcbcraft-lock");
+    let lock = temp.path().join(FOLDER_LOCK);
     assert!(!lock.exists());
+    let before = saved_tree(temp.path(), Some(&lock));
+
     drop(load(&entry).unwrap());
-    for (path, bytes, modified) in &originals {
-        assert_unchanged(path, bytes, *modified);
-    }
-    assert!(!root.join("project.json").exists());
-    assert!(!root.join(".pcbcraft-save").exists());
-    assert_eq!(fs::metadata(&lock).unwrap().len(), 0);
-    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
-    let lock_stamp = fs::metadata(&lock).unwrap().modified().unwrap();
+    assert_eq!(saved_tree(temp.path(), Some(&lock)), before, "desktop Open changed the saved folder or left another sidecar");
+    assert_lock_released(&lock);
 
     drop(pcbcraft_storage::open(&entry).unwrap());
-    for (path, bytes, modified) in &originals {
-        assert_unchanged(path, bytes, *modified);
-    }
-    assert!(!root.join("project.json").exists());
-    assert!(!root.join(".pcbcraft-save").exists());
-    assert_unchanged(&lock, b"", lock_stamp);
-    assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 2);
+    assert_eq!(saved_tree(temp.path(), Some(&lock)), before, "headless Open changed the saved folder or left another sidecar");
+    assert_lock_released(&lock);
 }
