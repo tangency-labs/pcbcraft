@@ -291,7 +291,7 @@ pub(crate) fn verify_final(
                         if reference == old_ref {
                             binding_change = catalog::same_address_pad_binding_change(base, &final_resolver, old_ref);
                             if binding_change.is_none() {
-                                return Err(CommandError::InvalidParams("re-picking the same reference requires a changed pad binding".into()));
+                                return Err(reason("lost_reference", "re-picking the same reference requires a changed pad binding", Value::Null));
                             }
                         }
                         Some(reference.clone())
