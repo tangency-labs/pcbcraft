@@ -822,9 +822,10 @@ R/O flashes require individually quarter-turn library and placement rotations an
 nondegenerate resolved axis rectangle. Rectangles also need an integral centered midpoint;
 obrounds need matching width/height parity. Other rectangles retain resolved regions;
 other obrounds retain approximate round-ended strokes or equal-sided C flashes.
-Rounded rectangles use regions with chorded corners only if a positive radius survives
-resolution. A collapsed tiny rectangle can emit a retraced path with no area. Mask uses
-outer-layer pads without process expansion; paste excludes through-hole pads.
+Rounded rectangles can flash with circular corners, including at non-quarter-turn angles.
+Other rounded rectangles retain polygon regions. A collapsed tiny rectangle can emit a
+retraced path with no area. Mask uses outer-layer pads without process expansion; paste
+excludes through-hole pads.
 Output names remain unique when layer names collide after sanitization; the
 [editor guide](editor-guide.md) describes the eligibility, shape approximations,
 file contents and save behavior.
