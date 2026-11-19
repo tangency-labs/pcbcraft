@@ -70,8 +70,9 @@ impl AlignMode {
     }
 }
 
-/// Refuse an unknown or locked placement before editing or removing the supplied placements.
-/// Report each lock using its stable ID and, when available, its live or last accepted reference.
+/// Refuse an unknown or locked placement before preparing a direct edit or removing the supplied
+/// placements. Report every selected lock using its stable ID and, when available, its live or
+/// last accepted reference.
 pub(crate) fn require_unlocked_placements<'a>(
     project: &Project,
     placements: impl IntoIterator<Item = Option<&'a Footprint>>,
@@ -279,62 +280,71 @@ impl Session {
     pub(crate) fn align_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        let mode = params["mode"].as_str().and_then(AlignMode::parse).ok_or_else(|| CommandError::InvalidParams("unknown alignment mode".into()))?;
-        let ids: Vec<u64> = params["footprints"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
-            .collect::<Option<_>>()
-            .ok_or_else(|| CommandError::InvalidParams("footprints must be footprint IDs".into()))?;
-        let pitch_nm = params["pitch_nm"].as_i64();
-        if pitch_nm.is_some() && !mode.distributes() {
-            return Err(CommandError::InvalidParams("pitch_nm requires distribute_x or distribute_y".into()));
+        if let Some((mut next, moved)) = alignment_candidate(project, params)? {
+            super::track::carry_copper(project, &mut next, &moved)?;
+            self.change(next)?;
         }
-        let needed = if pitch_nm.is_some() { 2 } else { mode.minimum() };
-        if ids.len() < needed || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len() {
-            return Err(CommandError::InvalidParams(format!("{} needs at least {needed} different footprints", mode.name())));
-        }
-        let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
-        let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-        require_unlocked_placements(project, ids.iter().map(|&id| project.board.placement(id)))?;
-        let deltas = if let Some(pitch_nm) = pitch_nm {
-            pitch_distribution(&project.board, &ids, mode, pitch_nm)?
-        } else {
-            let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
-            let mut found: std::collections::BTreeMap<String, [i64; 4]> =
-                view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect();
-            let boxes = ids
-                .iter()
-                .map(|id| found.remove(&format!("footprint-{id}")))
-                .collect::<Option<Vec<_>>>()
-                .ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
-            alignment(mode, &boxes)?
-        };
-        if deltas.iter().all(|delta| *delta == (0, 0)) {
-            return Ok(());
-        }
-        let mut next = project.clone();
-        let board = Arc::make_mut(&mut next.board);
-        let mut moved_ids = std::collections::BTreeSet::new();
-        for (id, (dx, dy)) in ids.iter().zip(deltas) {
-            if (dx, dy) == (0, 0) {
-                continue;
-            }
-            moved_ids.insert(format!("footprint-{id}"));
-            let index = board.footprints.binary_search_by_key(id, |f| f.id).map_err(|_| CommandError::NotFound("unknown footprint ID".into()))?;
-            let footprint = &mut board.footprints[index];
-            let moved = Point { x_nm: footprint.x_nm.saturating_add(dx), y_nm: footprint.y_nm.saturating_add(dy) };
-            (footprint.x_nm, footprint.y_nm) = (moved.x_nm, moved.y_nm);
-            if !footprint.valid() {
-                return Err(CommandError::InvalidParams("the alignment would move a footprint outside the coordinate range".into()));
-            }
-        }
-        super::track::carry_copper(project, &mut next, &moved_ids)?;
-        self.change(next)?;
         Ok(())
     }
+}
 
+/// Plan and apply only the requested footprint translations to a private candidate.
+/// The caller must validate carried copper and contacts before adopting it.
+pub(super) fn alignment_candidate(project: &Project, params: &Value) -> Result<Option<(Project, std::collections::BTreeSet<String>)>, CommandError> {
+    let mode = params["mode"].as_str().and_then(AlignMode::parse).ok_or_else(|| CommandError::InvalidParams("unknown alignment mode".into()))?;
+    let ids: Vec<u64> = params["footprints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
+        .collect::<Option<_>>()
+        .ok_or_else(|| CommandError::InvalidParams("footprints must be footprint IDs".into()))?;
+    let pitch_nm = params["pitch_nm"].as_i64();
+    if pitch_nm.is_some() && !mode.distributes() {
+        return Err(CommandError::InvalidParams("pitch_nm requires distribute_x or distribute_y".into()));
+    }
+    let needed = if pitch_nm.is_some() { 2 } else { mode.minimum() };
+    if ids.len() < needed || ids.iter().collect::<std::collections::BTreeSet<_>>().len() != ids.len() {
+        return Err(CommandError::InvalidParams(format!("{} needs at least {needed} different footprints", mode.name())));
+    }
+    let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
+    let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
+    require_unlocked_placements(project, ids.iter().map(|&id| project.board.placement(id)))?;
+    let deltas = if let Some(pitch_nm) = pitch_nm {
+        pitch_distribution(&project.board, &ids, mode, pitch_nm)?
+    } else {
+        let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
+        let mut found: std::collections::BTreeMap<String, [i64; 4]> = view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect();
+        let boxes = ids
+            .iter()
+            .map(|id| found.remove(&format!("footprint-{id}")))
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
+        alignment(mode, &boxes)?
+    };
+    if deltas.iter().all(|delta| *delta == (0, 0)) {
+        return Ok(None);
+    }
+    let mut next = project.clone();
+    let board = Arc::make_mut(&mut next.board);
+    let mut moved_ids = std::collections::BTreeSet::new();
+    for (id, (dx, dy)) in ids.iter().zip(deltas) {
+        if (dx, dy) == (0, 0) {
+            continue;
+        }
+        moved_ids.insert(format!("footprint-{id}"));
+        let index = board.footprints.binary_search_by_key(id, |f| f.id).map_err(|_| CommandError::NotFound("unknown footprint ID".into()))?;
+        let footprint = &mut board.footprints[index];
+        let moved = Point { x_nm: footprint.x_nm.saturating_add(dx), y_nm: footprint.y_nm.saturating_add(dy) };
+        (footprint.x_nm, footprint.y_nm) = (moved.x_nm, moved.y_nm);
+        if !footprint.valid() {
+            return Err(CommandError::InvalidParams("the alignment would move a footprint outside the coordinate range".into()));
+        }
+    }
+    Ok(Some((next, moved_ids)))
+}
+
+impl Session {
     /// Validate revision, identity and transform before replacing a board snapshot. An optional
     /// `side` (front or back) places the footprint on that side; omitted keeps its side. Track
     /// ends on its pads follow them (see `track::carry_copper`). Refuse a changed transform if

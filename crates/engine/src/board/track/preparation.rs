@@ -1,5 +1,6 @@
 //! Resumable preparation of existing copper commands against one immutable board snapshot.
 use super::*;
+use crate::board::transform::{ALIGN_FOOTPRINTS, alignment_candidate};
 use crate::board::{
     view::BoardTarget,
     work::{Progress, Source},
@@ -12,6 +13,16 @@ pub fn is_copper_edit(command: &str) -> bool {
         command,
         super::super::via_nets::SET_VIA_NET | ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS
     )
+}
+
+/// Pitch changes pad locations as well as copper. Keep other alignment modes on their existing path.
+fn is_pitch_edit(command: &str, params: &Value) -> bool {
+    command == ALIGN_FOOTPRINTS && params.get("pitch_nm").is_some()
+}
+
+/// Whether to capture an immutable copper-edit job for these command parameters.
+pub fn can_prepare_copper_edit(command: &str, params: &Value) -> bool {
+    is_copper_edit(command) || is_pitch_edit(command, params)
 }
 
 #[derive(Default)]
@@ -76,6 +87,7 @@ pub struct CopperEditJob {
     phase: u8,
     candidate: Option<Arc<Project>>,
     added: BTreeSet<Uuid>,
+    moved_footprints: BTreeSet<String>,
     lands: Option<Arc<Vec<Land>>>,
     builder: Option<IslandBuilder>,
     work: usize,
@@ -128,7 +140,7 @@ impl Session {
     fn admit_copper_edit(&self, command: &str, params: &Value) -> Result<(&'static str, BoardTarget), CommandError> {
         self.authorize_command(command)?;
         self.refuse_stale(command, params)?;
-        if !is_copper_edit(command) {
+        if !can_prepare_copper_edit(command, params) {
             return Err(CommandError::InvalidParams("command does not prepare copper".into()));
         }
         self.validate_project_command(command, params)?;
@@ -147,6 +159,7 @@ impl Session {
             phase: 0,
             candidate: None,
             added: BTreeSet::new(),
+            moved_footprints: BTreeSet::new(),
             lands: None,
             builder: None,
             work: 0,
@@ -226,6 +239,17 @@ impl CopperEditJob {
     /// Shared native/browser phases use exactly the synchronous command's geometry and short policy.
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
         match self.phase {
+            0 if is_pitch_edit(self.command, &self.params) => {
+                let before = &self.context.source.snapshot;
+                if let Some((mut candidate, moved)) = alignment_candidate(before, &self.params)? {
+                    self.added = install_carried_tracks(before, &mut candidate, &moved)?;
+                    self.moved_footprints = moved;
+                    self.candidate = Some(Arc::new(candidate));
+                } else {
+                    self.finish_pitch();
+                    return Ok(true);
+                }
+            }
             0 => {
                 let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
                 self.added = added;
@@ -241,6 +265,14 @@ impl CopperEditJob {
                     }));
                     return Ok(true);
                 }
+            }
+            1 if !self.moved_footprints.is_empty() => {
+                // The native live worker projects the new placements once, not the stationary source.
+                let candidate = self.candidate.as_ref().ok_or_else(|| CommandError::Unavailable("missing pitch candidate".into()))?;
+                let view = candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
+                let projected = lands(view);
+                self.builder = Some(IslandBuilder::new(&projected, view.tracks(), view.vias()));
+                self.lands = Some(Arc::new(projected));
             }
             1 => {
                 let source = &self.context.source;
@@ -270,6 +302,15 @@ impl CopperEditJob {
                     self.work = self.work.saturating_add(budget);
                     return Ok(false);
                 }
+                if !self.moved_footprints.is_empty() {
+                    let Some(builder) = &mut self.builder else {
+                        return Err(CommandError::Unavailable("missing pitch contacts".into()));
+                    };
+                    builder.begin_pad_contacts();
+                    self.phase = 3;
+                    self.work = 0;
+                    return Ok(false);
+                }
                 if let (Some(builder), Some(lands), Some(candidate)) = (self.builder.take(), &self.lands, &self.candidate) {
                     let (copper, members) = builder.finish(lands, &candidate.board.tracks, &candidate.board.vias);
                     if let Some((a, b)) =
@@ -285,6 +326,24 @@ impl CopperEditJob {
                         self.class_islands = Some((copper, members));
                     }
                 }
+            }
+            3 if !self.moved_footprints.is_empty() => {
+                let (Some(builder), Some(lands), Some(candidate)) = (&mut self.builder, &self.lands, &self.candidate) else {
+                    return Err(CommandError::Unavailable("missing pitch contacts".into()));
+                };
+                if !builder.step_pads(lands.len(), budget) {
+                    self.work = self.work.saturating_add(budget);
+                    return Ok(false);
+                }
+                if let Some(builder) = self.builder.take() {
+                    let (tracks, vias) = (&candidate.board.tracks, &candidate.board.vias);
+                    let (_, members) = builder.finish(lands, tracks, vias);
+                    if let Some((a, b)) = short_from_members(candidate, lands, tracks, vias, &members, &self.added, &self.moved_footprints) {
+                        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
+                    }
+                }
+                self.finish_pitch();
+                return Ok(true);
             }
             3 => {
                 if let Some(lands) = &self.lands
@@ -358,6 +417,18 @@ impl CopperEditJob {
         self.phase += 1;
         self.work = 0;
         Ok(self.phase == 4)
+    }
+
+    /// Make a fully checked candidate (or a no-op) available to the history transaction.
+    fn finish_pitch(&mut self) {
+        self.result = Some(Ok(PreparedCopperEdit {
+            source: self.context.source.clone(),
+            candidate: self.candidate.take(),
+            command: self.command,
+            params: self.params.clone(),
+            class_rules: None,
+        }));
+        self.phase = 4;
     }
 }
 

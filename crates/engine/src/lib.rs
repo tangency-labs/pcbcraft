@@ -3591,7 +3591,7 @@ impl Session {
         }
         let before = self.revision;
         let revision = self.apply_command(id, params)?;
-        if revision != before && !board::track::preparation::is_copper_edit(id) {
+        if revision != before && !board::track::preparation::can_prepare_copper_edit(id, params) {
             self.report_committed(id, params);
         }
         Ok(revision)
@@ -3992,6 +3992,7 @@ impl Session {
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             board::zones::ADD_ZONE | board::zones::SET_ZONE | board::zones::DELETE_ZONES => self.edit_zone(id, params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
+            ALIGN_FOOTPRINTS if board::track::preparation::can_prepare_copper_edit(id, params) => self.edit_tracks(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
             board::class_rules::ROUTE_RULES => {

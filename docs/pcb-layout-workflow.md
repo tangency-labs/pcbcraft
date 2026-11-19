@@ -69,7 +69,9 @@ shrink. A locked footprint anywhere in the selection refuses the whole request
 and is named, even if it would be the fixed anchor. An out-of-range destination,
 a new short or a move that would change locked copper also refuses the request.
 A successful move and its attached track changes are one undo step; repeating
-an accepted pitch that already matches creates no history.
+an accepted pitch that already matches creates no history. In a live editor the
+copper checks are prepared before the edit is applied. If the board changes
+in the meantime, retry with the current revision.
 
 Omit `pitch_nm` for the existing equal-gap distribution: it requires at least
 three footprints, uses physical bounds and preserves the outer footprints and

@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 
 /// The command API compatibility version. Raise it only by an explicit decision that a published
 /// change breaks existing callers; it never falls.
-pub const COMMAND_API_VERSION: u32 = 1;
+pub const COMMAND_API_VERSION: u32 = 2;
 
 /// The optional protocol features this build offers, so a client can check before relying on
 /// one. Features are only ever appended.

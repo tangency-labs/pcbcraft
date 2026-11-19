@@ -478,9 +478,14 @@ impl IslandBuilder {
                 }
             }
         }
-        builder.node = 0;
-        builder.nearby = Nearby::Lookup;
+        builder.begin_pad_contacts();
         builder
+    }
+
+    /// Begin direct pad contacts on the existing roots and index after the track/via pass.
+    fn begin_pad_contacts(&mut self) {
+        self.node = 0;
+        self.nearby = Nearby::Lookup;
     }
 
     /// Evaluate at most `budget` work units of direct pad pairs, without rechecking track/via
@@ -729,8 +734,17 @@ pub(super) fn carried_ends(view: BoardView<'_>, moved: &BTreeSet<String>) -> BTr
 /// carried track would collapse or leave the coordinate range, or when the moved pads or the
 /// carried tracks would join two nets.
 pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSet<String>) -> Result<(), CommandError> {
-    let Some(target) = before.board_target() else { return Ok(()) };
-    let (Some(old), Some(new)) = (before.board_view(target), next.board_view(target)) else { return Ok(()) };
+    let added = install_carried_tracks(before, next, moved)?;
+    if let Some((a, b)) = short_for_copper_edit(next, &added, moved) {
+        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
+    }
+    Ok(())
+}
+
+/// Update attached track ends in a private placement candidate before validating its contacts.
+fn install_carried_tracks(before: &Project, next: &mut Project, moved: &BTreeSet<String>) -> Result<BTreeSet<Uuid>, CommandError> {
+    let Some(target) = before.board_target() else { return Ok(BTreeSet::new()) };
+    let (Some(old), Some(new)) = (before.board_view(target), next.board_view(target)) else { return Ok(BTreeSet::new()) };
     let carried = carry(old, new, moved);
     for track in &carried {
         track.validate().map_err(|_| CommandError::InvalidParams("this move would collapse or overextend an attached track".into()))?;
@@ -744,10 +758,7 @@ pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSe
             }
         }
     }
-    if let Some((a, b)) = short_for_copper_edit(next, &added, moved) {
-        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
-    }
-    Ok(())
+    Ok(added)
 }
 
 /// Parse a JSON value into a typed parameter, reporting serde's message as invalid input.

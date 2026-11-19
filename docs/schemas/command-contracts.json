@@ -1,5 +1,5 @@
 {
-  "command_api_version": 1,
+  "command_api_version": 2,
   "commands": {
     "annotate.preview": {"params":{"additionalProperties":false,"properties":{"expected_revision":{"minimum":0,"type":"integer"},"sheet":{"format":"uuid","type":"string"}},"required":[],"type":"object"}},
     "edit.redo": {"params":{"additionalProperties":false,"properties":{},"required":[],"type":"object"}},
