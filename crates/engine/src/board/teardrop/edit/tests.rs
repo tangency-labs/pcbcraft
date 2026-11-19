@@ -99,7 +99,7 @@ fn ten_vias_report_two_clearance_blocks() {
 #[test]
 fn command_adds_eight_reports_two_and_round_trips_intent() {
     use crate::{
-        ADD_DRAWING, SET_RULES,
+        ADD_DRAWING, CommandError, SET_RULES,
         board::{
             rules::Values,
             setup::LayerPurpose,
@@ -147,14 +147,22 @@ fn command_adds_eight_reports_two_and_round_trips_intent() {
     }
     assert_eq!(view(&session).teardrops(), expected.as_slice());
     let applied_revision = session.revision();
-    assert!(session.execute(EDIT_TEARDROPS, &params).is_err(), "stale edit must be refused");
-    assert_eq!(session.revision(), applied_revision);
+    assert!(matches!(session.execute(EDIT_TEARDROPS, &params), Err(CommandError::StaleRevision { current }) if current == applied_revision));
+    let blocked_only = json!({"board":target.board,"expected_revision":applied_revision,"edits":{"add":[Record::from(intents[1])],"remove":[]}});
     let current = session.snapshot().unwrap();
-    let saved = encode_documents(current.clone()).unwrap();
-    let board_json: serde_json::Value = serde_json::from_slice(saved.get("board.json").unwrap()).unwrap();
+    assert_eq!(session.execute(EDIT_TEARDROPS, &blocked_only).unwrap()["teardrops"]["rejected"], json!([diff["rejected"][0]]));
+    assert!(std::sync::Arc::ptr_eq(&current, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), applied_revision);
+    let path = current.board_document_path().unwrap();
+    let saved = encode_documents(current).unwrap();
+    let mut board_json: serde_json::Value = serde_json::from_slice(saved.get(&path).unwrap()).unwrap();
     assert_eq!(board_json["format"], "pcbcraft-board/37");
     assert_eq!(board_json["teardrops"], json!(expected));
-    assert!(view(&session).require_linear_copper().is_err());
+    let mut wrong_version = saved.clone();
+    board_json["format"] = json!("pcbcraft-board/19");
+    wrong_version.insert(path, serde_json::to_vec(&board_json).unwrap());
+    assert!(matches!(decode_documents(&wrong_version), Err(error) if error.contains("teardrops require board format 37")));
+    assert_eq!(view(&session).require_linear_copper().unwrap_err(), crate::board::teardrop::UNSUPPORTED);
     session.execute("edit.undo", &serde_json::Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_docs);
     session.execute("edit.redo", &serde_json::Value::Null).unwrap();
