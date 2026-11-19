@@ -514,6 +514,24 @@ older readers reject sheet/7 rather than silently dropping the provenance. The
 diagnostic legacy single-file encoding refuses live generated legs because its
 wire vocabulary has no provenance field.
 
+### Alternate pin function records
+
+`pcbcraft-project/48` extends the modern folder or packed project entry point.
+A part instance with explicit selections stores a nonempty `pin_functions` list
+in `project.json`, ordered by terminal number. Each `{ "terminal": "1", "function": "ADC_IN" }`
+selects an exact name from that terminal's pinned [symbol definition](symbol-schema.md#alternate-pin-functions).
+All appearances of the same part terminal share the selection. Omission uses the
+primary function. Empty, null, duplicate or unresolved records are refused; at
+most 4,096 selections may be stored per project.
+
+The header selects version 48 only while a selection exists. It composes with
+ordinary or compact part-group memberships and optional assembly profiles,
+without changing any board, sheet or instance document header. Projects without
+choices keep their previous entry-point encoding. A legacy installation layout
+adopts current folder and occurrence metadata on the first selection, with Undo
+restoring the previous state. Single-document diagnostic export refuses choices
+rather than omitting them.
+
 ### Intentional no-connect records
 
 Project/19 extends the existing occurrence and optional net-registry homes with

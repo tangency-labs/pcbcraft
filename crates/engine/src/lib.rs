@@ -31,6 +31,7 @@ pub mod part_authoring;
 pub mod part_groups;
 pub mod part_instances;
 pub mod persistence;
+pub mod pin_functions;
 pub mod schematic;
 pub mod selection;
 mod session_scope;
@@ -84,6 +85,8 @@ pub const UNTITLED: &str = "Untitled";
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
     PartTerminal,
+    LogicalPartTerminal,
+    PinFunction,
     Flag,
     /// A terminal, named label or hierarchical port, excluding junction/geometry anchors.
     NetTarget,
@@ -214,6 +217,10 @@ impl ParamKind {
     fn schema(self) -> Value {
         match self {
             Self::Flag => json!({"type":"boolean"}),
+            Self::LogicalPartTerminal => {
+                json!({"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false})
+            }
+            Self::PinFunction => json!({"type":["string","null"],"minLength":1,"maxLength":pin_functions::MAX_NAME}),
             Self::PartTerminal => {
                 json!({"oneOf":[{"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false},{"type":"object","properties":{"junction":{"type":"string","pattern":"^junction-[1-9][0-9]*$"}},"required":["junction"],"additionalProperties":false}]})
             }
@@ -677,6 +684,10 @@ impl ParamKind {
             Self::SheetTemplate if value.is_null() || serde_json::from_value::<sheets::template::TemplateRef>(value.clone()).is_ok() => Ok(()),
             Self::ParameterScope if matches!(value.as_str(), Some("project" | "sheet")) => Ok(()),
             Self::ParameterName if value.as_str().is_some_and(parameters::valid_name) => Ok(()),
+            Self::LogicalPartTerminal if no_connect::Target::parse(value).is_some() => Ok(()),
+            Self::LogicalPartTerminal => Err("must be a logical {part, terminal} address"),
+            Self::PinFunction if value.is_null() || value.as_str().is_some_and(pin_functions::valid_name) => Ok(()),
+            Self::PinFunction => Err("must be a trimmed pin function name or null"),
             Self::ParameterValue if value.is_null() || value.as_str().is_some_and(|v| v.len() <= parameters::MAX_VALUE_LEN) => Ok(()),
             Self::ParameterText if value.as_str().is_some_and(|v| v.len() <= parameters::MAX_TEXT_LEN) => Ok(()),
             Self::BoardId | Self::SheetId | Self::NetId if value.as_str().is_some_and(|id| uuid::Uuid::parse_str(id).is_ok()) => Ok(()),
@@ -949,6 +960,22 @@ const CLIPBOARD_OBJECTS: Param = Param {
     summary: "Selected root sheet symbols and hierarchical labels; sheet symbols include their complete child subtree",
 };
 const CATALOG: &[Command] = &[
+    Command {
+        id: pin_functions::SET,
+        title: "Set Pin Function",
+        summary: "Select or clear one alternate on a placed part terminal. Reports the before and after name and electrical type. Wiring is unchanged. Undoable.",
+        params: &[
+            EXPECTED_REVISION,
+            Param { name: "target", kind: ParamKind::LogicalPartTerminal, required: true, summary: "Logical {part, terminal} address" },
+            Param {
+                name: "function",
+                kind: ParamKind::PinFunction,
+                required: true,
+                summary: "Exact alternate name; null restores the primary function",
+            },
+            Param { name: "dry_run", kind: ParamKind::Flag, required: false, summary: "Report without changing the project or history" },
+        ],
+    },
     Command {
         id: no_connect::SET,
         title: "Set No Connect",
@@ -2831,7 +2858,7 @@ impl Project {
     pub fn inspect_schematic(&self) -> Value {
         json!({
             "symbols": self.symbols.iter().map(|symbol| {
-                let mut value = symbol.inspect(&self.reference(symbol), self.value(symbol));
+                let mut value = symbol.inspect(&self.reference(symbol), self.value(symbol), self.component(symbol));
                 value["available_units"] = json!(self.available_units(&symbol.component_id()).iter().map(|unit| unit.unit_id()).collect::<Vec<_>>());
                 value
             }).collect::<Vec<_>>(),
@@ -3123,6 +3150,7 @@ impl Session {
             | "project.rename"
             | netlist::EXPORT_NETLIST
             | library::sources::AVAILABLE_REVISIONS
+            | pin_functions::SET
             | no_connect::SET
             | no_connect::CHECK
             | net_classes::CREATE
@@ -3386,6 +3414,15 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.parameter_query(id, params);
         }
+        if id == pin_functions::SET {
+            self.validate_project_command(id, params)?;
+            let before = self.revision;
+            let report = self.set_pin_function(params)?;
+            if self.revision != before {
+                self.report_committed(id, params);
+            }
+            return Ok(json!({"revision":self.revision,"pin_function_change":report}));
+        }
         self.apply(id, params)?;
         if id == no_connect::CHECK {
             return self.no_connect_report();
@@ -3557,6 +3594,7 @@ impl Session {
                 | sheets::DELETE_SHEET
                 | "project.rename"
                 | netlist::EXPORT_NETLIST
+                | pin_functions::SET
                 | no_connect::SET
                 | no_connect::CHECK
                 | net_classes::CREATE
@@ -3668,6 +3706,9 @@ impl Session {
             }
             board::identity::CREATE_BOARD => self.create_board(params)?,
             no_connect::SET => self.set_no_connect(params)?,
+            pin_functions::SET => {
+                self.set_pin_function(params)?;
+            }
             no_connect::CHECK => {
                 self.open_project()?;
             }
@@ -3909,6 +3950,7 @@ impl Session {
                 metadata: defaults.metadata,
                 part: None,
                 no_connects: BTreeMap::new(),
+                pin_functions: BTreeMap::new(),
             }
         };
         let component_id = component.ordinal;

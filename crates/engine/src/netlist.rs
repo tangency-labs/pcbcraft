@@ -500,11 +500,14 @@ impl Project {
                         .definition
                         .pins()
                         .iter()
-                        .map(|pin| TerminalInfo {
-                            terminal: pin.number.clone(),
-                            name: pin.name.clone(),
-                            electrical_type: Some(pin.electrical_type),
-                            pads: None,
+                        .map(|pin| {
+                            let (name, electrical_type) = part.effective_pin(pin);
+                            TerminalInfo {
+                                terminal: pin.number.clone(),
+                                name: name.map(str::to_owned),
+                                electrical_type: Some(electrical_type),
+                                pads: None,
+                            }
                         })
                         .collect(),
                     package: None,

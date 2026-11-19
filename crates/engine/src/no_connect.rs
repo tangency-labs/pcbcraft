@@ -221,7 +221,7 @@ impl Project {
                 if pin.is_none() || positions.is_empty() {
                     issues.push("no_connect_missing_target");
                 }
-                if pin.is_some_and(|pin| pin.electrical_type != expected) {
+                if pin.is_some_and(|pin| part.effective_pin(pin).1 != expected) {
                     issues.push("no_connect_incompatible_terminal");
                 }
                 if connected(part.ordinal, token) {
@@ -237,7 +237,7 @@ impl Project {
             }
             for pin in part.definition.pins() {
                 if !part.no_connects.contains_key(&pin.number)
-                    && pin.electrical_type != ElectricalType::NoConnect
+                    && part.effective_pin(pin).1 != ElectricalType::NoConnect
                     && self.component_terminal(part.ordinal, &pin.number).is_some()
                     && !connected(part.ordinal, &pin.number)
                 {
@@ -284,8 +284,8 @@ impl Session {
                     .pins()
                     .iter()
                     .find(|pin| pin.number == target.terminal)
-                    .ok_or_else(|| CommandError::NotFound("Unknown terminal.".into()))?
-                    .electrical_type,
+                    .map(|pin| part.effective_pin(pin).1)
+                    .ok_or_else(|| CommandError::NotFound("Unknown terminal.".into()))?,
             )
         } else {
             None

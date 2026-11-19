@@ -197,6 +197,28 @@ that library revision and use the same engine authoring transactions as the GUI.
 Headless project sessions do not yet host these editor documents. Bulk tables, arbitrary pad shapes, mask/paste, 3D, browser/remote publishing
 and reviewed updates to placed components remain follow-up scope under #78/#79.
 
+## Alternate pin functions
+
+Select a pin in the symbol editor, add a pin lead if it has none, then open
+**Alternate pin functions** in the pin properties. Add or remove rows, set a
+name and electrical type for each, then apply the primitive edit. Other drawings
+of the terminal share that definition. Live MCP can use the same
+`app.library_edit` `replace` action with the `alternates` list on the pin primitive.
+Publishing a definition does not update already pinned instances.
+
+For a placed symbol, open **More properties → Pin functions** and use the name
+menu beside a terminal with alternates. Choosing a function applies immediately
+and changes the effective name and type across that part's placed units.
+**Primary** restores the definition's default. Undo reverses one choice; closing
+the properties form does not undo it. The choice doesn't move any wires or
+change terminal numbers or the pin-to-pad mapping.
+
+MCP uses `part_instances.set_pin_function` with `target: {part, terminal}`,
+`function` (exact name or `null` for the primary) and `expected_revision`.
+`dry_run: true` returns the same before/after function report without editing.
+A stale revision or unknown selection is refused; selecting the current function
+is a no-op.
+
 ## Review pin renumbering
 
 In a Symbol Editor, **Library → Remap pins…** opens a private number table.

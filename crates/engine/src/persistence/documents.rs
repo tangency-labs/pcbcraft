@@ -54,6 +54,7 @@ const PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/24";
 const ASSEMBLY_PROFILE_PROJECT_FORMAT: &str = "pcbcraft-project/36";
 const COMPACT_PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/39";
 const PAIR_PROJECT_FORMAT: &str = "pcbcraft-project/45";
+const PIN_FUNCTION_PROJECT_FORMAT: &str = "pcbcraft-project/48";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
 const NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/2";
@@ -200,6 +201,7 @@ impl ProjectDocument {
                 | ASSEMBLY_PROFILE_PROJECT_FORMAT
                 | PART_GROUP_PROJECT_FORMAT
                 | PAIR_PROJECT_FORMAT
+                | PIN_FUNCTION_PROJECT_FORMAT
         ) || (self.format == PART_PROJECT_FORMAT && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
             return Err(format!("{ENTRY_POINT}: layout_root requires project format 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45"));
@@ -284,6 +286,7 @@ pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | PIN_FUNCTION_PROJECT_FORMAT
     ) {
         return Ok(None);
     }
@@ -423,8 +426,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
-    if (!pair_format && profile_format != project.assembly_profiles.is_some()) || project.assembly_profiles.as_ref().is_some_and(|c| c.is_empty()) {
-        return Err("project.json: assembly profiles require project format 36 or 45 and a nonempty identity catalog.".into());
+    let pin_function_format = project.format == PIN_FUNCTION_PROJECT_FORMAT;
+    if (!pair_format && !pin_function_format && profile_format != project.assembly_profiles.is_some())
+        || project.assembly_profiles.as_ref().is_some_and(|c| c.is_empty())
+    {
+        return Err("project.json: assembly profiles require project format 36, 45 or 48 and a nonempty identity catalog.".into());
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
@@ -440,6 +446,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | PIN_FUNCTION_PROJECT_FORMAT
     );
     let net_format = project.format == NET_PROJECT_FORMAT;
     let binding_format = project.format == BINDING_PROJECT_FORMAT;
@@ -447,7 +454,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Project/24 is a superset of project/23: it requires a nonempty part-group catalog,
     // and every record project/23 accepts is optional, including generated net numbers.
     let part_group_format = project.format == PART_GROUP_PROJECT_FORMAT;
-    let optional_part_groups = profile_format || pair_format;
+    let optional_part_groups = profile_format || pair_format || pin_function_format;
     let supports_part_groups = part_group_format || optional_part_groups;
     let superset_format = generated_net_format || supports_part_groups;
     let class_format = matches!(project.format.as_str(), CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
@@ -461,6 +468,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | PIN_FUNCTION_PROJECT_FORMAT
     );
     if !parameter_format && !superset_format && class_format != project.net_classes.is_some() {
         return Err("Net-class catalog requires project format 20, 21, 22, 23, 24, 36, 39 or 45; any catalog must be nonempty.".into());
@@ -497,6 +505,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if !no_connect_format && project.components.iter().any(|part| part.no_connects.is_some()) {
         return Err("No-connect intent requires project format 19.".into());
     }
+    if pin_function_format != project.components.iter().any(|part| part.pin_functions.is_some()) {
+        return Err("Alternate pin functions require project format 48 and at least one selection.".into());
+    }
     let part_format = matches!(
         project.format.as_str(),
         PART_PROJECT_FORMAT
@@ -510,6 +521,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | PIN_FUNCTION_PROJECT_FORMAT
     );
     let foldered = project.layout_root.is_some();
     if !part_format
@@ -554,6 +566,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | PIN_FUNCTION_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
@@ -595,6 +608,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
+            | PIN_FUNCTION_PROJECT_FORMAT
     ) != project.numeric_id_high_water.is_some()
     {
         return Err(format!(
@@ -618,14 +632,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 let optional_bindings =
                     (parameter_format || superset_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
                 let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
-                if pair_format {
+                let with_pairs = pair_format || (pin_function_format && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
+                if with_pairs {
                     // Instances/8 keeps its header for either membership encoding.
                     compact_part_groups = instance.compact_part_group_memberships.is_some();
-                } else if profile_format {
-                    // Project/36 allows both encodings; the instance header determines which was saved.
+                } else if optional_part_groups {
                     compact_part_groups = instance.format == COMPACT_PART_GROUP_INSTANCES_FORMAT;
                 }
-                let expected = if pair_format {
+                let expected = if with_pairs {
                     PAIR_INSTANCES_FORMAT
                 } else if compact_part_groups {
                     COMPACT_PART_GROUP_INSTANCES_FORMAT
@@ -677,7 +691,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("Net class assignments require project format 21 and instances format 3 when board-owned, or a later project format with a net-class catalog; the new envelope requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
-    if pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
+    if !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
         return Err(
             "Differential pairs require project format 45 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list."
                 .into(),
@@ -1324,8 +1338,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut reader = crate::part_instances::storage::Reader::default();
     let mut selections = BTreeMap::new();
     let mut no_connects = BTreeMap::new();
+    let mut pin_functions = BTreeMap::new();
+    let mut function_count = 0;
     let mut marker_count = layouts.iter().map(|(_, _, _, _, _, ends)| ends.len()).sum::<usize>();
     for component in &mut project.components {
+        if let Some(records) = component.pin_functions.take() {
+            function_count += records.len();
+            if records.is_empty() || function_count > crate::pin_functions::MAX_CHOICES {
+                return Err("Invalid alternate pin function record count.".into());
+            }
+            pin_functions.insert(component.id, records);
+        }
         if let Some(records) = component.no_connects.take() {
             let intents = crate::no_connect::read_intents(records)?;
             marker_count += intents.len();
@@ -1410,6 +1433,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
     project_data.sheets = Arc::new(sheets);
+    for (id, records) in pin_functions {
+        let part = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing alternate pin function owner.")?;
+        part.pin_functions = crate::pin_functions::read_choices(records, part)?;
+    }
     for (id, intents) in no_connects {
         let part = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing no-connect part.")?;
         part.no_connects = intents;
@@ -1749,7 +1776,20 @@ impl DocumentsEncoder {
                     if has_profiles && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Assembly profiles require adopted storage/occurrence metadata.".into());
                     }
-                    let format = if has_profiles && !has_pairs { ASSEMBLY_PROFILE_PROJECT_FORMAT } else { format };
+                    let pin_function_count = p.pin_function_count();
+                    if pin_function_count > crate::pin_functions::MAX_CHOICES {
+                        return Err("Alternate pin function selection limit reached.".into());
+                    }
+                    if pin_function_count != 0 && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
+                        return Err("Alternate pin functions require adopted storage/occurrence metadata.".into());
+                    }
+                    let format = if pin_function_count != 0 {
+                        PIN_FUNCTION_PROJECT_FORMAT
+                    } else if has_profiles && !has_pairs {
+                        ASSEMBLY_PROFILE_PROJECT_FORMAT
+                    } else {
+                        format
+                    };
                     if has_metadata && p.numeric_id_high_water.is_none() {
                         return Err("component metadata requires an adopted numeric ID watermark".into());
                     }
@@ -1817,6 +1857,7 @@ impl DocumentsEncoder {
                                 metadata: (!c.metadata.is_empty()).then(|| c.metadata.clone()),
                                 part: c.part.as_ref().map(|part| part.record()),
                                 no_connects: crate::no_connect::write_intents(&c.no_connects),
+                                pin_functions: crate::pin_functions::write_choices(&c.pin_functions),
                             },
                         )?;
                         if let Some(part) = &c.part {

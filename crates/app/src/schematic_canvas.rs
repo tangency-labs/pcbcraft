@@ -215,7 +215,7 @@ pub(crate) fn paint_preview_transformed(
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
     paint_symbol(
         painter,
-        definition.default_unit(),
+        definition.default_unit().graphics(),
         center,
         step,
         0,
@@ -487,9 +487,10 @@ pub(crate) fn show(
             } else {
                 tokens.text
             };
+            let part = (symbol.definition.format() == pcbcraft_engine::library::SYMBOL_FORMAT_V5).then(|| project.component(symbol)).flatten();
             paint_symbol(
                 &painter,
-                symbol.unit_definition(),
+                symbol.graphics(part),
                 center,
                 unit_step,
                 symbol.turns(),
@@ -1274,7 +1275,7 @@ fn paint_unit_template(
 ) {
     paint_symbol(
         painter,
-        symbol.unit_definition(),
+        symbol.graphics(None),
         center,
         step,
         symbol.turns(),
@@ -1455,7 +1456,7 @@ fn body(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, mirrored
 #[allow(clippy::too_many_arguments)]
 fn paint_symbol(
     painter: &Painter,
-    definition: &pcbcraft_engine::schematic::SymbolUnit,
+    graphics: Vec<Shape>,
     center: Pos2,
     step: f32,
     turns: u8,
@@ -1469,7 +1470,7 @@ fn paint_symbol(
         let (x, y) = turn(x, y, turns, mirrored);
         pos2(center.x + x * step, center.y + y * step)
     };
-    for shape in &definition.graphics() {
+    for shape in &graphics {
         match shape {
             Shape::Graphic(graphic) => {
                 if matches!(graphic.geometry, pcbcraft_engine::library_graphics::Geometry::Text { .. }) {
@@ -1525,7 +1526,7 @@ pub(crate) fn paint_part_preview(
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
     let t = pcbcraft_chrome::Tokens::get();
-    paint_symbol(painter, unit, center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.canvas_ink), t.canvas);
+    paint_symbol(painter, unit.graphics(), center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.canvas_ink), t.canvas);
     if let Some(pin) = terminal.and_then(|terminal| unit.pins().iter().find(|pin| pin.number == terminal)) {
         let at = center + egui::vec2(pin.offset.x_nm as f32, pin.offset.y_nm as f32) * (step / pcbcraft_engine::schematic::GRID_NM as f32);
         painter.circle_stroke(at, 6., Stroke::new(2., pcbcraft_chrome::Tokens::get().accent));

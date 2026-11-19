@@ -186,6 +186,7 @@ impl Fragment {
                     return Err(invalid("Resolve missing no-connect terminals or copy all placed units of this part."));
                 }
                 part.no_connects.retain(|token, _| terminals.contains(&(id, token.clone())));
+                part.pin_functions.retain(|token, _| terminals.contains(&(id, token.clone())));
             }
         }
         fragment.board = Arc::new(crate::board::Board::for_new_project(false)?);
@@ -576,7 +577,10 @@ impl Session {
             reuse_sheets: params["reuse_sheets"].as_bool().unwrap_or(false),
         };
         let at = Point { x_nm: params["x_nm"].as_i64().unwrap_or_default(), y_nm: params["y_nm"].as_i64().unwrap_or_default() };
-        let (next, _) = fragment.placed(self.open_project()?, at, self.next_object_id()?, &options)?;
+        let (mut next, _) = fragment.placed(self.open_project()?, at, self.next_object_id()?, &options)?;
+        if (!next.has_sheet_occurrences() || next.layout.is_none()) && fragment.project.pin_function_count() != 0 {
+            next = next.with_pin_function_storage().map_err(invalid)?;
+        }
         let next = validate_candidate(next)?;
         self.change(next)?;
         Ok(())

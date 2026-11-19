@@ -218,6 +218,8 @@ struct ComponentRecord<'a> {
     part: Option<crate::part_instances::Record>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     no_connects: Option<Vec<crate::no_connect::Intent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pin_functions: Option<Vec<crate::pin_functions::Choice>>,
 }
 
 /// A schematic unit stores only its identity, owner and geometry.
@@ -399,6 +401,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
             metadata: None,
             part: None,
             no_connects: None,
+            pin_functions: None,
         });
         used.insert((definition.id.clone(), definition.revision()), definition);
     }
@@ -505,6 +508,9 @@ impl Encoder {
         }
         if !project.part_groups.groups.is_empty() {
             return Err("Part groups require split documents or a packed archive.".into());
+        }
+        if project.pin_function_count() != 0 {
+            return Err("Alternate pin functions require split documents or a packed archive.".into());
         }
         if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
@@ -638,6 +644,7 @@ impl Encoder {
                     metadata: None,
                     part: None,
                     no_connects: None,
+                    pin_functions: None,
                 };
                 let more = self.project.components.last_key_value().is_some_and(|(&last, _)| last != id);
                 write_record(&mut self.bytes, &record, more)?;
@@ -842,6 +849,9 @@ fn validate_with_hierarchy(
     let mut shown = BTreeSet::new();
     let mut components = BTreeMap::new();
     for record in records {
+        if record.pin_functions.is_some() {
+            return Err("Alternate pin functions require native project format 48.".into());
+        }
         if record.no_connects.is_some() {
             return Err("No-connect intent requires the split marker format.".into());
         }
@@ -881,6 +891,7 @@ fn validate_with_hierarchy(
                 metadata,
                 part: None,
                 no_connects: BTreeMap::new(),
+                pin_functions: BTreeMap::new(),
             },
         );
     }

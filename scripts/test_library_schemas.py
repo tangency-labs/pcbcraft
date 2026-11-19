@@ -105,6 +105,22 @@ class LibrarySchemaTests(unittest.TestCase):
             changed["units"] = [symbol["units"][0]] * count
             self.assertFalse(self.checks[checker.FORMATS["pcbcraft-symbol/4"]].is_valid(changed))
 
+    def test_alternate_pin_functions_are_versioned_and_bounded(self):
+        symbol = checker.read_json(ROOT / "examples/native-parts/symbols/dual-amplifier.json")
+        symbol["format"] = "pcbcraft-symbol/5"
+        validator = self.checks["urn:pcbcraft:schema:symbol"]
+        terminal = symbol["terminals"][0]
+        self.assertFalse(validator.is_valid(symbol))
+        terminal["alternates"] = [{"name": "ADC_IN", "electrical_type": "input"}]
+        validator.validate(symbol)
+        for invalid in ([], None, [{"name": "ADC_IN", "electrical_type": "unknown"}],
+                        [{"name": str(i), "electrical_type": "input"} for i in range(17)]):
+            broken = copy.deepcopy(symbol)
+            broken["terminals"][0]["alternates"] = invalid
+            self.assertFalse(validator.is_valid(broken))
+        symbol["format"] = "pcbcraft-symbol/4"
+        self.assertFalse(validator.is_valid(symbol))
+
     def test_units_are_canonical_and_bound_to_the_declared_quantity(self):
         validator = self.checks[checker.FORMATS["pcbcraft-category/1"]]
         for unit in ["mOhm", "Ω", "V", "ohms"]:

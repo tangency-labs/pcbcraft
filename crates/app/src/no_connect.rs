@@ -162,7 +162,7 @@ pub(super) fn paint(ui: &mut Ui, painter: &Painter, project: &Project, camera: &
                 continue;
             }
             let connected = project.connectivity().net_index_for(terminal).is_some();
-            let incompatible = symbol.unit_definition().pins().get(index).is_some_and(|pin| pin.electrical_type != *expected);
+            let incompatible = symbol.unit_definition().pins().get(index).is_some_and(|pin| part.effective_pin(pin).1 != *expected);
             cross(
                 painter,
                 center,
