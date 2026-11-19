@@ -20,7 +20,8 @@ fn fixture(wired: bool, associated: bool) -> (PcbApp, u64) {
     let mut app = PcbApp::default();
     app.session.execute("project.new", &json!({})).unwrap();
     app.session.execute(sources::LOAD, &json!({"source":"remap-live","documents":documents})).unwrap();
-    let digest = sources::symbol_digest(&app.session.libraries().symbol(&item.library, &item.id, item.revision).unwrap()).unwrap();
+    let symbol = app.session.libraries().symbol(&item.library, &item.id, item.revision).unwrap();
+    let digest = sources::symbol_digest(&symbol).unwrap();
     for y in [0, 40_640_000] {
         edit(
             &mut app,
@@ -42,9 +43,22 @@ fn fixture(wired: bool, associated: bool) -> (PcbApp, u64) {
     }
     let id = app.library_editors.open(item.as_ref().clone(), true).unwrap();
     if associated {
-        app.library_editors.documents.get_mut(&id).unwrap().session.bind_published();
+        app.library_editors.documents.get_mut(&id).unwrap().session.bind_published(Some(symbol));
     }
     (app, id)
+}
+
+/// Different native body at the fixture's exact address and manifest attribution.
+fn replacement(app: &PcbApp, id: u64) -> sources::Documents {
+    let mut item = (*app.library_editors.documents[&id].session.snapshot()).clone();
+    item.name = "Replacement body".into();
+    let manifest = engine::authoring::publishing::new_library("remap-live", "Remap live", &item.license).unwrap();
+    let prepared = engine::authoring::publishing::prepare(Arc::new(item), &manifest, 0, None, false).unwrap();
+    let original = app.library_editors.documents[&id].session.published().unwrap();
+    assert_eq!((&prepared.item().id, prepared.item().revision), (&original.id, original.revision));
+    let mut documents = prepared.documents().clone();
+    documents.insert("library.json".into(), manifest);
+    documents
 }
 
 /// Use the actual live adapter, including its modal refusal, command check and inspection reply.
@@ -55,6 +69,74 @@ fn live(app: &mut PcbApp, document: u64, revision: u64, phase: &str, input: Valu
         &mut crate::live_control::LiveEditor { app, ctx: &Context::default() },
         &json!({"method":"engine.execute","params":{"command":"app.library_pin_remap","params":params}}),
     )
+}
+
+#[test]
+fn pin_remap_live_checks_the_opened_body_even_when_the_catalog_agrees_with_another_project_pin() {
+    let (mut app, id) = fixture(true, true);
+    let other = replacement(&app, id);
+    let pins = json!([{"unit":"main","object":"1","number":"7"}]);
+    app.session.execute(sources::REMOVE, &json!({"source":"remap-live"})).unwrap();
+    let preview = live(&mut app, id, 0, "preview", pins.clone()).unwrap();
+    let review = &preview["library_editors"]["pin_remap"];
+    let row = &review["report"]["instances"][0]["pins"][0];
+    assert_eq!(row["status"], "current");
+    assert_eq!(row["current_nets"], json!(["INPUT"]));
+    live(&mut app, id, 0, "cancel", review["token"].clone()).unwrap();
+
+    app.session.execute("project.new", &json!({})).unwrap();
+    app.session.execute(sources::LOAD, &json!({"source":"remap-live","documents":other})).unwrap();
+    let item = app.library_editors.documents[&id].session.snapshot();
+    let loaded = app.session.libraries().symbol(&item.library, &item.id, item.revision).unwrap();
+    assert_eq!(loaded.name, "Replacement body");
+    let digest = sources::symbol_digest(&loaded).unwrap();
+    edit(
+        &mut app,
+        engine::PLACE_SYMBOL,
+        json!({"library":item.library,"definition":item.id,"definition_revision":item.revision,"definition_digest":digest,"x_nm":0,"y_nm":0}),
+    );
+    for offline in [false, true] {
+        if offline {
+            app.session.execute(sources::REMOVE, &json!({"source":"remap-live"})).unwrap();
+        }
+        let preview = live(&mut app, id, 0, "preview", pins.clone()).unwrap();
+        let review = &preview["library_editors"]["pin_remap"];
+        let row = &review["report"]["instances"][0]["pins"][0];
+        assert_eq!(row["status"], "conflicting_definition");
+        assert_eq!(row["current_nets"], json!([]));
+        assert!(row["current_name"].is_null() && row["current_pads"].is_null());
+        live(&mut app, id, 0, "cancel", review["token"].clone()).unwrap();
+    }
+}
+
+#[test]
+fn pin_remap_live_catalog_quarantine_requires_refresh_without_revoking_cancel() {
+    let (mut app, id) = fixture(true, true);
+    let other = replacement(&app, id);
+    let pins = json!([{"unit":"main","object":"1","number":"7"}]);
+    let project = app.session.snapshot().unwrap();
+    let project_revision = app.session.revision();
+    let draft = app.library_editors.documents[&id].session.snapshot();
+    let before = live(&mut app, id, 0, "preview", pins.clone()).unwrap();
+    let review = &before["library_editors"]["pin_remap"];
+    assert_eq!(review["report"]["instances"][0]["pins"][0]["status"], "current");
+    let token = review["token"].clone();
+    app.session.execute(sources::LOAD, &json!({"source":"remap-live","documents":other})).unwrap();
+    let key = sources::Key { library: draft.library.clone(), kind: sources::Kind::Symbol, id: draft.id.clone(), revision: draft.revision };
+    assert!(app.session.libraries().conflicting(&key));
+    let error = live(&mut app, id, 0, "apply", token.clone()).unwrap_err();
+    assert!(error.to_string().contains("catalog evidence changed"), "{error}");
+    live(&mut app, id, 0, "cancel", token).unwrap();
+    let refreshed = live(&mut app, id, 0, "preview", pins).unwrap();
+    let review = &refreshed["library_editors"]["pin_remap"];
+    assert_eq!(review["report"]["instances"][0]["pins"][0]["status"], "conflicting_definition");
+    live(&mut app, id, 0, "cancel", review["token"].clone()).unwrap();
+    assert_eq!(app.session.revision(), project_revision);
+    assert!(Arc::ptr_eq(&app.session.snapshot().unwrap(), &project));
+    let editor = &app.library_editors.documents[&id].session;
+    assert_eq!(editor.revision(), 0);
+    assert!(!editor.can_undo());
+    assert!(Arc::ptr_eq(&editor.snapshot(), &draft));
 }
 
 /// After one draft swap, a second review distinguishes its IN pin from pinned number 2's OUT
@@ -201,10 +283,12 @@ fn pin_remap_last_host_close_cancel_retires_authority() {
     for library_unsaved in [false, true] {
         let (mut app, mut id) = fixture(false, true);
         if library_unsaved {
-            let item = app.library_editors.documents[&id].session.snapshot();
+            let session = &app.library_editors.documents[&id].session;
+            let item = session.snapshot();
+            let symbol = session.published_symbol().cloned();
             app.library_editors.close(id, true).unwrap();
             id = app.library_editors.open(item.as_ref().clone(), false).unwrap();
-            app.library_editors.documents.get_mut(&id).unwrap().session.bind_published();
+            app.library_editors.documents.get_mut(&id).unwrap().session.bind_published(symbol);
         }
         let other = app.library_editors.open(Item::new(Kind::Symbol).unwrap(), true).unwrap();
         let project = app.session.snapshot().unwrap();

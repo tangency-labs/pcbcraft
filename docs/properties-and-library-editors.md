@@ -262,8 +262,11 @@ Live `app.library_pin_remap` requires `document`, `expected_revision` and `phase
 `preview` requires `pins` and forbids `token`; `apply` and `cancel` require `token`
 and forbid replacement `pins`. Obtain the captured token from
 `inspect_editor.library_editors.pin_remap`. A token binds the exact review to both
-the authoring revision and current project snapshot/runtime revision. GUI and
-live commands use these same preview/apply/cancel handlers. A live preview refuses
+the authoring revision, current project snapshot/runtime revision, and the
+published symbol's relevant catalog evidence. Matching project pins can still
+supply offline evidence, but a different published body or a quarantined
+revision cannot. If that evidence changes, Apply requires a fresh preview;
+Cancel still works. GUI and live commands use these same preview/apply/cancel handlers. A live preview refuses
 while any pin remap form is open, preserving typed numbers and the captured
 review, even for the same document. Apply or cancel that form before starting
 another live preview; the form's own **Preview current nets** can refresh its

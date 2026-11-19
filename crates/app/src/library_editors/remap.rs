@@ -16,6 +16,7 @@ pub(super) struct Review {
     revision: u64,
     project: Option<Arc<pcbcraft_engine::Project>>,
     project_revision: u64,
+    source: Option<remap::LiveSource>,
     pins: Vec<PinRemap>,
     report: Value,
 }
@@ -306,15 +307,10 @@ impl PcbApp {
             return Err("Library document changed or has pending fields; inspect before reviewing.".into());
         }
         let project = self.session.snapshot();
-        let report = remap::preview(
-            &doc.session.snapshot(),
-            &pins,
-            doc.session.published().map(|address| address.revision),
-            project.as_deref(),
-            Some(self.session.libraries()),
-        )?;
+        let source = remap::LiveSource::capture(&doc.session, self.session.libraries());
+        let report = remap::preview_live(&doc.session.snapshot(), &pins, project.as_deref(), source.as_ref())?;
         let token = self.library_editors.next_remap.checked_add(1).ok_or("Pin remap review ID limit reached.")?;
-        let review = Review { token, document, revision, project, project_revision: self.session.revision(), pins, report };
+        let review = Review { token, document, revision, project, project_revision: self.session.revision(), source, pins, report };
         #[cfg(not(target_arch = "wasm32"))]
         {
             let inspection = crate::window_commands::inspect_editor_with_remap(self, Some(review.inspect()), true);
@@ -346,6 +342,9 @@ impl PcbApp {
         let doc = self.library_editors.documents.get(&document).ok_or("Unknown library document ID.")?;
         if doc.pending_any() {
             return Err("Apply or reset all pending property fields before remapping.".into());
+        }
+        if review.source != remap::LiveSource::capture(&doc.session, self.session.libraries()) {
+            return Err("Published symbol or catalog evidence changed; preview current nets again before applying.".into());
         }
         let pins = review.pins.clone();
         self.library_editors.edit(document, revision, Action::RemapPins { pins })?;

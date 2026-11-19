@@ -43,7 +43,7 @@ fn fixture() -> (crate::Session, Session) {
     let graph = project.project().unwrap().electrical_connectivity();
     assert_ne!(graph.net_index_for(symbols[0].terminals()[0]), graph.net_index_for(symbols[0].terminals()[1]), "fixture nets must remain separate");
     let mut editor = Session::new(item.as_ref().clone(), true).unwrap();
-    editor.bind_published();
+    editor.bind_published(Some(loaded));
     (project, editor)
 }
 

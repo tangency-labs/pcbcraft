@@ -785,12 +785,19 @@ impl PcbApp {
         }
         let inventory = project.map(|_| self.project_library_inventory()).transpose()?;
         let pinned = inventory.as_ref().and_then(|inventory| inventory.item(key));
+        let mut published_symbol = None;
         let item = match key.kind {
             sources::Kind::Symbol => {
                 let definition =
                     if project.is_some() { pinned.and_then(|item| item.symbol()) } else { catalog.symbol(&key.library, &key.id, key.revision) }
                         .ok_or("Selected symbol is unavailable.")?;
-                if copy { Item::from_symbol(&definition)? } else { Item::edit_symbol(&definition)? }
+                if copy {
+                    Item::from_symbol(&definition)?
+                } else {
+                    let item = Item::edit_symbol(&definition)?;
+                    published_symbol = Some(definition);
+                    item
+                }
             }
             sources::Kind::Footprint => {
                 let definition =
@@ -803,7 +810,7 @@ impl PcbApp {
         let id = self.library_editors.open(item, !copy)?;
         self.library_editors.suggest_destination(id, preferred);
         if !copy {
-            self.library_editors.documents.get_mut(&id).ok_or("Missing library document.")?.session.bind_published();
+            self.library_editors.documents.get_mut(&id).ok_or("Missing library document.")?.session.bind_published(published_symbol);
         }
         self.place_library_document(ctx, id, pcbcraft_chrome::workspace::Placement::Here)
     }

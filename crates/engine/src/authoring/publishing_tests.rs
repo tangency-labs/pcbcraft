@@ -185,8 +185,9 @@ fn symbol_publication_does_not_silently_relicense() {
 fn publish_copy_rebinds_history_only_after_confirmation() {
     let mut item = Item::new(Kind::Symbol).unwrap();
     item.library = "original".into();
+    let symbol = item.symbol().unwrap();
     let mut session = Session::new(item, true).unwrap();
-    session.bind_published();
+    session.bind_published(Some(symbol));
     session.execute(0, Action::Delete { objects: vec![3] }).unwrap();
     let original = session.snapshot();
     let manifest = new_library("destination", "Destination", &original.license).unwrap();
@@ -198,6 +199,10 @@ fn publish_copy_rebinds_history_only_after_confirmation() {
     session.confirm_publication(&prepared);
     assert!(!session.dirty());
     assert_eq!(session.snapshot().library, "destination");
+    let mut documents = prepared.documents().clone();
+    documents.insert("library.json".into(), manifest.clone());
+    let native = crate::library::sources::NativeSource::load(&documents).unwrap();
+    assert_eq!(session.published_symbol().cloned(), native.items().iter().find_map(|item| item.symbol()));
     assert_eq!(session.snapshot().objects, original.objects);
     assert!(session.execute(1, Action::Undo).is_err());
     session.execute(2, Action::Undo).unwrap();

@@ -113,6 +113,19 @@ fn pin_remap_wire_refuses_duplicate_unit_names() {
     assert_eq!(refused["result"]["isError"], true);
     assert_eq!(refused["result"]["content"][0]["text"], "Duplicate unit name in the pin remap item.");
     assert_eq!(refused["result"]["structuredContent"]["error"]["code"], "invalid_params");
+
+    for field in ["objects", "other_units"] {
+        let prefix = format!("\"{field}\":{{");
+        let repeated = wire.replacen(&prefix, &format!("\"{field}\":{{}},{prefix}"), 1);
+        assert_ne!(repeated, wire);
+        assert_eq!(serde_json::from_str::<Value>(&repeated).unwrap(), request);
+        let refused = reply(&mut server, &repeated);
+        assert_eq!(refused["id"], 1);
+        assert!(refused.get("error").is_none(), "{refused}");
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(refused["result"]["content"][0]["text"], "Duplicate member in the pin remap item.");
+        assert_eq!(refused["result"]["structuredContent"]["error"]["code"], "invalid_params");
+    }
 }
 
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.

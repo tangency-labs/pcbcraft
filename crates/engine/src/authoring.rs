@@ -780,6 +780,7 @@ pub struct Session {
     next_content_revision: u32,
     published: Option<publishing::Address>,
     publication_saved: Option<Arc<Item>>,
+    published_symbol: Option<Arc<SymbolDefinition>>,
 }
 
 impl Session {
@@ -799,6 +800,7 @@ impl Session {
             next_content_revision,
             published: None,
             publication_saved: None,
+            published_symbol: None,
         })
     }
     /// Retain immutable data for rendering or an in-flight save.

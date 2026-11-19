@@ -168,7 +168,33 @@ struct Evidence<'a> {
     status: &'static str,
 }
 
-/// Prepare a validated library edit and explain current nets without predicting a project update.
+/// Exact live publication and the catalog state consulted for that address. Unrelated catalog
+/// replacements do not affect a review; a changed body, availability, or quarantine does.
+#[derive(Debug, PartialEq, Eq)]
+pub struct LiveSource {
+    published: std::sync::Arc<crate::schematic::SymbolDefinition>,
+    loaded: Option<std::sync::Arc<crate::schematic::SymbolDefinition>>,
+    conflicted: bool,
+}
+
+impl LiveSource {
+    /// Capture the editor's immutable publication, never a reconstruction of the draft.
+    pub fn capture(session: &Session, catalog: &crate::library::sources::Catalog) -> Option<Self> {
+        use crate::library::sources::{Key, Kind};
+        let published = session.published_symbol()?.clone();
+        let key = Key { library: published.library.clone(), kind: Kind::Symbol, id: published.id.clone(), revision: published.revision() };
+        let loaded = catalog.symbol(&key.library, &key.id, key.revision);
+        Some(Self { published, loaded, conflicted: catalog.conflicting(&key) })
+    }
+}
+
+/// Explain current nets using the immutable publication actually opened by the live editor.
+pub fn preview_live(item: &Item, pins: &[PinRemap], project: Option<&Project>, source: Option<&LiveSource>) -> Result<Value, String> {
+    let source = source.filter(|source| source.published.library == item.library && source.published.id == item.id);
+    preview_with_source(item, pins, source.map(|source| source.published.revision()), project, None, source)
+}
+
+/// Prepare a validated headless edit and explain current nets without predicting a project update.
 /// Only an explicitly supplied published revision associates the draft with placed copies. Other
 /// pinned revisions and missing terminals are reported, never inferred from geometry or labels.
 /// Native part/package mappings are current read-only evidence, not a proposed replacement map.
@@ -178,6 +204,17 @@ pub fn preview(
     source_revision: Option<u32>,
     project: Option<&Project>,
     catalog: Option<&crate::library::sources::Catalog>,
+) -> Result<Value, String> {
+    preview_with_source(item, pins, source_revision, project, catalog, None)
+}
+
+fn preview_with_source(
+    item: &Item,
+    pins: &[PinRemap],
+    source_revision: Option<u32>,
+    project: Option<&Project>,
+    catalog: Option<&crate::library::sources::Catalog>,
+    live: Option<&LiveSource>,
 ) -> Result<Value, String> {
     let parts = project
         .map_or(0, |project| project.components().filter(|part| part.definition.library == item.library && part.definition.id == item.id).count());
@@ -197,15 +234,25 @@ pub fn preview(
         // known conflict; a quarantined base or known unequal revision body is.
         let key = source_revision.map(|revision| Key { library: item.library.clone(), kind: SourceKind::Symbol, id: item.id.clone(), revision });
         let source = catalog.zip(key.as_ref());
-        let conflicted = source.is_some_and(|(catalog, key)| catalog.conflicting(key));
-        let base = source.and_then(|(catalog, key)| catalog.symbol(&key.library, &key.id, key.revision));
+        let matches = |pinned: &std::sync::Arc<crate::schematic::SymbolDefinition>, selected: &std::sync::Arc<crate::schematic::SymbolDefinition>| {
+            std::sync::Arc::ptr_eq(pinned, selected) || matches_pinned(pinned, selected)
+        };
+        let (conflicted, base) = if let Some(live) = live {
+            let catalog_mismatch = live.loaded.as_ref().is_some_and(|loaded| !matches(&live.published, loaded));
+            (live.conflicted || catalog_mismatch, Some(live.published.clone()))
+        } else {
+            (
+                source.is_some_and(|(catalog, key)| catalog.conflicting(key)),
+                source.and_then(|(catalog, key)| catalog.symbol(&key.library, &key.id, key.revision)),
+            )
+        };
         let mut graph = None;
         for part in project.components().filter(|part| part.definition.library == item.library && part.definition.id == item.id) {
             let mut instance = json!({"part_instance":part.id(),"reference":part.reference(),"pinned_revision":part.definition.revision().to_string(),
                 "part":part.part.as_ref().map(|selection| json!({"definition":selection.resolved.definition.reference(),"package":selection.package})),"pins":[]});
             bytes.charge(&instance, !instances.is_empty())?;
             let same_revision = source_revision == Some(part.definition.revision());
-            let conflict = same_revision && (conflicted || base.as_ref().is_some_and(|base| !matches_pinned(&part.definition, base)));
+            let conflict = same_revision && (conflicted || base.as_ref().is_some_and(|base| !matches(&part.definition, base)));
             let associated = same_revision && !conflict;
             let mut rows = Vec::new();
             for change in &changes {
