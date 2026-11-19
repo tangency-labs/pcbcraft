@@ -13,9 +13,11 @@ tool, Ctrl+A selected all objects, Ctrl+D armed a paste preview that R rotated,
 E opened the selected object's properties, M started a move, the pending-fields
 refusal message appeared, Delete removed the selected object, Ctrl+Z restored
 it, Ctrl+S opened the publish dialog, Ctrl+Q opened the unsaved-items prompt,
-and Ctrl+, opened Preferences in all three workspaces. The raw-key clipboard
-path (Ctrl+Shift+C/X/V) was exercised live; plain Ctrl+C/X/V are covered through
-the real `egui_winit` translation boundary —
+and Ctrl+, opened Preferences in all three workspaces. The earlier raw-key copy
+and paste paths (Ctrl+Shift+C/V) were exercised live. The library Ctrl+Shift+X
+fallback has automated coverage in
+`normalized_clipboard_events_drive_library_copy_and_paste`, rather than a recorded
+live library session. Plain Ctrl+C/X/V use the real `egui_winit` translation boundary —
 `native_paste_translation_reaches_the_internal_library_paste` feeds the events
 the vendored translator emits for empty and image-only clipboards into the
 harness, and `clipboard_translation_tests` inside `vendor/egui-winit` checks

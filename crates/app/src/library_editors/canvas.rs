@@ -388,6 +388,8 @@ impl Document {
         }
     }
     /// Cut stores the selection on the internal clipboard and removes it as one undoable edit.
+    /// Pending fields refuse before changing the clipboard; an empty selection is a no-op.
+    /// Deletion failures leave the copied selection available and are reported through `self.error`.
     fn cut(&mut self, ctx: &egui::Context) {
         if self.pending() {
             self.error = Some("Apply or reset the property fields before cutting.".into());
@@ -744,7 +746,14 @@ impl Document {
                 // in the same batch cancels the chord, and a focus-loss batch must not
                 // arm a preview the reset at the top of this canvas just cleared.
                 let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
-                let cut = ui.input(|i| i.focused && i.events.iter().any(|event| matches!(event, egui::Event::Cut)));
+                let cut = ui.input(|i| {
+                    i.focused
+                        && i.events.iter().any(|event| match event {
+                            egui::Event::Cut => true,
+                            egui::Event::Key { key: egui::Key::X, pressed: true, modifiers, .. } => modifiers.command,
+                            _ => false,
+                        })
+                });
                 let pasted = ui.input(|i| {
                     i.focused
                         && i.events.iter().fold(false, |armed, event| match event {
@@ -757,7 +766,7 @@ impl Document {
                 if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
                     self.copy(ui.ctx());
                 }
-                if cut || (command && ui.input(|i| i.focused && i.key_pressed(egui::Key::X))) {
+                if cut {
                     self.cut(ui.ctx());
                 }
                 if pasted {
