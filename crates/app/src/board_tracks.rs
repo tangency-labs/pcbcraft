@@ -456,6 +456,18 @@ impl Kinds {
     }
 }
 
+/// Check a selected ID in one ID-sorted kind. Disabled kinds need no record probes;
+/// only a matched record needs its visibility or lock state checked.
+fn selected_copper_is_selectable<T>(
+    id: &Uuid,
+    ordered: &[T],
+    enabled: bool,
+    id_of: impl FnMut(&T) -> Uuid,
+    allowed: impl FnOnce(&T) -> bool,
+) -> bool {
+    enabled && ordered.binary_search_by_key(id, id_of).is_ok_and(|i| allowed(&ordered[i]))
+}
+
 /// The topmost visible via or track under a screen point, among the allowed kinds.
 pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>, kinds: Kinds) -> Option<Uuid> {
     if kinds.vias
@@ -785,12 +797,13 @@ pub(super) fn interact(
     let vias_visible =
         kinds.vias && view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
     let selectable = |id: &Uuid| {
-        (kinds.tracks
-            && tracks.binary_search_by_key(id, |track| track.id).is_ok_and(|i| {
-                let track = &tracks[i];
-                kinds.track(track) && !hidden.contains(&track.layer.to_string())
-            }))
-            || (vias_visible && vias.binary_search_by_key(id, |via| via.id).is_ok_and(|i| kinds.via(&vias[i])))
+        selected_copper_is_selectable(
+            id,
+            tracks,
+            kinds.tracks,
+            |track| track.id,
+            |track| kinds.track(track) && !hidden.contains(&track.layer.to_string()),
+        ) || selected_copper_is_selectable(id, vias, vias_visible, |via| via.id, |via| kinds.via(via))
     };
     state.selected.retain(selectable);
     let stale_route = state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active);
@@ -1340,6 +1353,44 @@ pub(super) fn paint_draft(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    /// The frame keeper must not probe a disabled kind or scan an enabled kind's sorted slice.
+    #[test]
+    fn frame_selection_probes_only_enabled_copper_by_id() {
+        let copper: Vec<_> = (1..=4096).map(Uuid::from_u128).collect();
+        let probes = Cell::new(0);
+        let permissions = Cell::new(0);
+        let keep = |id, enabled| {
+            probes.set(0);
+            permissions.set(0);
+            selected_copper_is_selectable(
+                &id,
+                copper.as_slice(),
+                enabled,
+                |item| {
+                    probes.set(probes.get() + 1);
+                    *item
+                },
+                |item| {
+                    permissions.set(permissions.get() + 1);
+                    *item != Uuid::from_u128(4095)
+                },
+            )
+        };
+
+        assert!(!keep(Uuid::from_u128(4096), false));
+        assert_eq!((probes.get(), permissions.get()), (0, 0), "a disabled kind must not be traversed");
+        assert!(keep(Uuid::from_u128(4096), true));
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 1);
+        assert!(!keep(Uuid::from_u128(4095), true), "an existing item can be disallowed");
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 1);
+        assert!(!keep(Uuid::from_u128(4097), true), "an ID can belong to the other kind");
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 0);
+    }
 
     /// The target stays latched in the release band and changes only beyond it or on a new layer.
     #[test]
