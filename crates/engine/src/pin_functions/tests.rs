@@ -292,6 +292,40 @@ fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
     }
 }
 
+/// A primary-only version-5 placement can be copied in the current layout, but cannot
+/// add an unencodable pin to an open marker-free flat split project.
+#[test]
+fn pin_function_symbol_placement_requires_current_project_storage() {
+    let mut session = fixture(false);
+    let placed = &session.project().unwrap().symbols()[0];
+    let definition = placed.definition.clone();
+    let symbol = placed.id();
+    session
+        .execute(crate::clipboard::COPY, &json!({"items":{"symbols":[symbol],"wires":[],"net_labels":[]},"expected_revision":session.revision()}))
+        .unwrap();
+
+    // Open the same sort of flat split project the native decoder still accepts.
+    let mut blank = Session::default();
+    blank.apply("project.new", &json!({"create_board":false})).unwrap();
+    let mut flat = Project::clone(&crate::persistence::diagnostic_snapshot(blank.snapshot().unwrap()));
+    flat.layout = None;
+    let documents = encode_documents(Arc::new(flat)).unwrap();
+    session.open_snapshot(decode_documents(&documents).unwrap());
+    let before = session.snapshot().unwrap();
+    assert!(before.layout.is_none());
+    assert!(!before.has_sheet_occurrences());
+    let revision = session.revision();
+    let digest = library::sources::symbol_digest(&definition).unwrap();
+    let request = json!({"library":definition.library,"definition":definition.id,"definition_revision":definition.revision(),
+        "definition_digest":digest,"x_nm":0,"y_nm":0,"expected_revision":revision});
+    assert!(matches!(session.apply(crate::PLACE_SYMBOL, &request), Err(CommandError::InvalidParams(message))
+        if message == "Version-5 symbols require current project storage."));
+    let after = session.snapshot().unwrap();
+    assert!(Arc::ptr_eq(&before, &after));
+    assert_eq!(session.revision(), revision);
+    assert_eq!(encode_documents(after).unwrap(), documents);
+}
+
 /// Preview and apply both refuse missing current storage without modifying the project.
 #[test]
 fn pin_function_selection_requires_current_project_storage() {

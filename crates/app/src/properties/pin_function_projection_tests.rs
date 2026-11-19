@@ -100,7 +100,7 @@ fn pin_functions_modal_and_canvas_project_one_visible_owner_in_large_sheet() {
     h.step();
     assert!((1..=4).contains(&PIN_MODAL_LOOKUPS.get()), "one indexed owner query per modal render, including any egui layout passes");
     h.get_by_label("input");
-    h.get_by_role_and_label(egui::Role::ComboBox, "Pin function for terminal 1");
+    assert_eq!(h.get_by_role_and_label(egui::Role::ComboBox, "Pin function for terminal 1").value().as_deref(), Some("ADC_IN"));
 
     let project = h.state().session.project().unwrap();
     let target = project.symbol(&id).unwrap().position;

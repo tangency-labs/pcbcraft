@@ -526,9 +526,10 @@ most 4,096 selections may be stored per project.
 
 Projects that pin version-5 symbols use project format 48, with or without an
 explicit selection. This format composes with part-group memberships and assembly
-profiles without changing board, sheet, or instance document headers. Pin-function
-edits use the current folder and occurrence layout; they do not migrate projects.
-Single-document diagnostic export refuses choices rather than omitting them.
+profiles without changing board, sheet, or instance document headers. Placing a
+version-5 symbol and changing pin functions require current storage; neither edit
+migrates projects. Single-document diagnostic export refuses choices rather than
+omitting them.
 
 ### Intentional no-connect records
 
