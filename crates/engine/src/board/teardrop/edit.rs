@@ -22,7 +22,12 @@ pub enum Edit {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rule {
     CopperClearance,
+    /// Copper stays inside the outline without crossing, but is too close to an edge.
     BoardEdgeClearance,
+    /// An outline edge enters the copper interior, even at zero measured gap.
+    BoardEdgeCrossing,
+    /// Copper lies outside the closed outline, regardless of its gap to the edge.
+    OutsideBoardOutline,
     ConflictingContact,
 }
 
@@ -45,9 +50,9 @@ impl RuleBlock {
             && self.actual_nm.is_finite()
             && match self.rule {
                 Rule::CopperClearance => self.actual_nm < self.required_nm as f64,
-                Rule::ConflictingContact => self.actual_nm <= 0.,
-                // The board-edge checker can report a crossing even at zero clearance.
-                Rule::BoardEdgeClearance => true,
+                Rule::ConflictingContact | Rule::BoardEdgeCrossing => self.actual_nm <= 0.,
+                Rule::BoardEdgeClearance => self.actual_nm >= 0. && self.actual_nm < self.required_nm as f64,
+                Rule::OutsideBoardOutline => true,
             }
     }
 }

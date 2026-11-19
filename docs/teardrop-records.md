@@ -41,8 +41,10 @@ sites. A rule rejection includes the rule, obstacle, required distance and
 actual signed gap. If the evaluator cannot complete a check, or supplies an
 incomplete or contradictory report, no diff is returned. A copper clearance
 report requires a gap strictly below the required clearance; conflicting copper
-contact includes zero gap. Board-edge crossings may still be reported at zero
-clearance.
+contact includes zero gap. Edge spacing requires a nonnegative gap strictly
+below the required clearance. An edge entering the copper interior is a
+separate crossing report, valid at zero gap and zero required clearance; copper
+outside the closed outline is a separate report regardless of edge distance.
 
 The rule evaluator is supplied by the caller; the planner has no default allow
 path. The synthetic fixture measures spacing to two authored obstacle tracks,

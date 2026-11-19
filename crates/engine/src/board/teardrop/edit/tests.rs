@@ -114,13 +114,22 @@ fn refuses_malformed_rule_reports_without_returning_a_partial_plan() {
             }
         })
     };
-    let edge_crossing = RuleBlock { rule: Rule::BoardEdgeClearance, other_object: "board-outline".into(), ..contact.clone() };
-    for valid in [clearance.clone(), contact.clone(), RuleBlock { actual_nm: -1., ..contact.clone() }, edge_crossing] {
+    let edge_spacing = RuleBlock { rule: Rule::BoardEdgeClearance, other_object: "board-outline".into(), ..clearance.clone() };
+    let edge_crossing = RuleBlock { rule: Rule::BoardEdgeCrossing, required_nm: 0, actual_nm: 0., ..edge_spacing.clone() };
+    let outside = RuleBlock { rule: Rule::OutsideBoardOutline, actual_nm: 40_000., ..edge_spacing.clone() };
+    for valid in
+        [clearance.clone(), contact.clone(), RuleBlock { actual_nm: -1., ..contact.clone() }, edge_spacing.clone(), edge_crossing.clone(), outside]
+    {
         let diff = evaluate(valid.clone()).unwrap();
         assert_eq!(diff.rejected, vec![Rejected { intent: *second, reason: Refusal::Rule(valid) }]);
     }
     for invalid in [
         RuleBlock { actual_nm: 35_000., ..clearance.clone() },
+        RuleBlock { actual_nm: 35_000., ..edge_spacing.clone() },
+        RuleBlock { actual_nm: 40_000., ..edge_spacing.clone() },
+        RuleBlock { actual_nm: 0., required_nm: 0, ..edge_spacing.clone() },
+        RuleBlock { actual_nm: -1., ..edge_spacing },
+        RuleBlock { actual_nm: 1., ..edge_crossing },
         RuleBlock { actual_nm: f64::NAN, ..clearance.clone() },
         RuleBlock { actual_nm: f64::NEG_INFINITY, ..contact.clone() },
         RuleBlock { required_nm: -1, ..contact.clone() },
