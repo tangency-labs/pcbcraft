@@ -116,6 +116,52 @@ fn unroute_tee_preserves_shared_trunk() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);
 }
 
+/// Tiny budgets make monotonic progress without exposing a partial edit. Dropping an apply
+/// midway is inert; changing batch size leaves the preview and real display delta identical.
+#[test]
+fn unroute_preparation_yields_and_preserves_report() {
+    let Tee { mut session, mut args, arm, orphan, .. } = tee();
+    let revision = session.revision();
+    let before = session.snapshot().unwrap();
+    let mut abandoned = session.prepare_copper_edit(UNROUTE_CONNECTION, &args).unwrap();
+    let initial = abandoned.progress();
+    assert!(!abandoned.step(0));
+    assert_eq!(abandoned.progress(), initial);
+    for completed in 1..=16 {
+        assert!(!abandoned.step(1), "unroute finished before visiting the contacts");
+        assert_eq!(abandoned.progress().completed, completed);
+        assert!(abandoned.take_result().unwrap().is_none());
+    }
+    drop(abandoned);
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+
+    args["dry_run"] = json!(true);
+    let oracle = session.execute(UNROUTE_CONNECTION, &args).unwrap();
+    assert_eq!(oracle["removed"], json!({"tracks":[arm],"vias":[orphan]}));
+    assert_eq!(oracle["unrouted"], json!([{"from":args["to"],"to":args["from"]}]));
+    for budget in [1, 7] {
+        let mut job = session.prepare_copper_edit(UNROUTE_CONNECTION, &args).unwrap();
+        let mut pending = 0;
+        loop {
+            let previous = job.progress().completed;
+            if job.step(budget) {
+                break;
+            }
+            assert_eq!(job.progress().completed, previous + budget);
+            pending += 1;
+            assert!(pending < 10_000, "tiny requests must not starve the planner");
+            assert!(job.take_result().unwrap().is_none());
+        }
+        assert!(pending > 1);
+        let prepared = job.take_result().unwrap().unwrap();
+        let (unchanged, report) = session.commit_copper_edit_with_report(prepared).unwrap();
+        assert_eq!(unchanged, revision);
+        assert_eq!(report, Some(oracle.clone()));
+        assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    }
+}
+
 /// Overlapping end caps let the shortest walk skip the pad-side segment. Remove both UUIDs,
 /// preserve the trunk, and report the left-to-middle edge even though `to` is the right pad.
 #[test]

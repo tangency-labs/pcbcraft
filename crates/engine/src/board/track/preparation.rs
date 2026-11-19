@@ -87,6 +87,7 @@ pub struct CopperEditJob {
     added: BTreeSet<Uuid>,
     lands: Option<Arc<Vec<Land>>>,
     builder: Option<IslandBuilder>,
+    unroute: Option<unroute::Planner>,
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
@@ -158,6 +159,7 @@ impl Session {
             added: BTreeSet::new(),
             lands: None,
             builder: None,
+            unroute: None,
             work: 0,
             result: None,
             class_islands: None,
@@ -196,12 +198,41 @@ impl Session {
     }
 }
 impl CopperEditJob {
+    /// Keep the unroute continuation private until the shared deletion checks finish.
+    fn advance_unroute(&mut self, budget: usize) -> Result<bool, CommandError> {
+        let source = &self.context.source;
+        let planner = self.unroute.get_or_insert_with(|| unroute::Planner::new(source.snapshot.clone(), source.target(), self.params.clone()));
+        let prepared = planner.step(budget);
+        self.work = planner.completed();
+        let Some(prepared) = prepared else { return Ok(false) };
+        self.unroute = None;
+        let (candidate, report) = prepared?;
+        self.phase = 4;
+        self.result = Some(Ok(PreparedCopperEdit {
+            source: source.clone(),
+            candidate: candidate.map(Arc::new),
+            command: self.command,
+            params: self.params.clone(),
+            class_rules: None,
+            report: Some(report),
+        }));
+        Ok(true)
+    }
+
     /// Captured source authority; the host also owns and validates its input generation.
     pub fn source(&self) -> &Source {
         &self.context.source
     }
     /// Report work progress without treating partial validation as a valid candidate.
     pub fn progress(&self) -> Progress {
+        if self.command == unroute::UNROUTE_CONNECTION {
+            let done = self.phase == 4;
+            return Progress {
+                stage: if done { "Prepared" } else { "Planning connection unroute" },
+                completed: self.work,
+                total: self.work.saturating_add(usize::from(!done)),
+            };
+        }
         let total = self.lands.as_ref().map_or(1, |lands| {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
             n.saturating_mul(n.saturating_sub(1)) / 2
@@ -243,22 +274,11 @@ impl CopperEditJob {
     }
     /// Shared native/browser phases use exactly the synchronous command's geometry and short policy.
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
+        if self.command == unroute::UNROUTE_CONNECTION {
+            return self.advance_unroute(budget);
+        }
         match self.phase {
             0 => {
-                if self.command == unroute::UNROUTE_CONNECTION {
-                    let source = &self.context.source;
-                    let (candidate, report) = unroute::prepare(&source.snapshot, source.target(), &self.params)?;
-                    self.phase = 4;
-                    self.result = Some(Ok(PreparedCopperEdit {
-                        source: source.clone(),
-                        candidate: candidate.map(Arc::new),
-                        command: self.command,
-                        params: self.params.clone(),
-                        class_rules: None,
-                        report: Some(report),
-                    }));
-                    return Ok(true);
-                }
                 let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
                 self.added = added;
                 self.candidate = candidate.map(Arc::new);

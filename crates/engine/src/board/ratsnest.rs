@@ -9,8 +9,14 @@ use super::{
     Pad,
     update::SourceCapture,
     view::{BoardTarget, BoardView},
+    work::yield_unit,
 };
 use crate::schematic::Point;
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    task::{Context, Poll, Waker},
+};
 
 /// A logical terminal qualified by its project and physical board, including retained removals.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -86,6 +92,15 @@ impl BoardView<'_> {
 
     /// Reuse completed copper connectivity when checking the same immutable snapshot.
     pub(super) fn ratsnest_with_copper(self, copper: &super::track::Copper) -> Result<Ratsnest, String> {
+        let mut work = std::pin::pin!(self.build_ratsnest::<false>(copper));
+        match work.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(result) => result,
+            Poll::Pending => unreachable!("synchronous ratsnest has no suspension points"),
+        }
+    }
+
+    /// Share display ordering and membership, yielding during published unroute preparation.
+    pub(super) async fn build_ratsnest<const COOPERATIVE: bool>(self, copper: &super::track::Copper) -> Result<Ratsnest, String> {
         self.require_linear_copper()?;
         let board = &self.project().board;
         let baseline = board
@@ -102,9 +117,16 @@ impl BoardView<'_> {
             terminal_count: 0,
         };
         for (net, state) in baseline.nets.iter().enumerate() {
+            if COOPERATIVE {
+                yield_unit().await;
+            }
             let mut endpoints = Vec::with_capacity(state.terminals.len());
+            let mut ordered = BTreeMap::new();
             result.terminal_count += state.terminals.len();
             for key in &state.terminals {
+                if COOPERATIVE {
+                    yield_unit().await;
+                }
                 let terminal = TerminalAddress { board: self.target, component: key.component, terminal: key.terminal.clone() };
                 let resolution = (|| {
                     let footprint =
@@ -123,33 +145,58 @@ impl BoardView<'_> {
                         .collect::<Result<Vec<_>, _>>()
                 })();
                 match resolution {
+                    Ok(resolved) if COOPERATIVE => {
+                        for endpoint in resolved {
+                            yield_unit().await;
+                            let Point { x_nm, y_nm } = endpoint.position;
+                            // The ordinal preserves the synchronous stable sort's tie order.
+                            ordered.insert((x_nm, y_nm, endpoint.terminal.component, endpoint.terminal.terminal.clone(), ordered.len()), endpoint);
+                        }
+                    }
                     Ok(resolved) => endpoints.extend(resolved),
                     Err(reason) => result.missing.push(MissingEndpoint { terminal, reason }),
                 }
             }
-            endpoints.sort_by(|a, b| {
-                (a.position.x_nm, a.position.y_nm, a.terminal.component, &a.terminal.terminal).cmp(&(
-                    b.position.x_nm,
-                    b.position.y_nm,
-                    b.terminal.component,
-                    &b.terminal.terminal,
-                ))
-            });
+            if COOPERATIVE {
+                for endpoint in ordered.into_values() {
+                    yield_unit().await;
+                    endpoints.push(endpoint);
+                }
+            } else {
+                endpoints.sort_by(|a, b| {
+                    (a.position.x_nm, a.position.y_nm, a.terminal.component, &a.terminal.terminal).cmp(&(
+                        b.position.x_nm,
+                        b.position.y_nm,
+                        b.terminal.component,
+                        &b.terminal.terminal,
+                    ))
+                });
+            }
             // Untracked terminals get their own island past every copper island index.
-            let mut islands: Vec<usize> = endpoints
-                .iter()
-                .enumerate()
-                .map(|(index, endpoint)| {
-                    copper.pads.get(&(endpoint.footprint.clone(), endpoint.pad.number.as_str().to_owned())).copied().unwrap_or(usize::MAX - index)
-                })
-                .collect();
+            let mut islands = Vec::with_capacity(endpoints.len());
+            for (index, endpoint) in endpoints.iter().enumerate() {
+                if COOPERATIVE {
+                    yield_unit().await;
+                }
+                islands.push(
+                    copper.pads.get(&(endpoint.footprint.clone(), endpoint.pad.number.as_str().to_owned())).copied().unwrap_or(usize::MAX - index),
+                );
+            }
             for (index, pair) in endpoints.windows(2).enumerate() {
+                if COOPERATIVE {
+                    yield_unit().await;
+                }
                 let (a, b) = (islands[index], islands[index + 1]);
                 if a != b {
                     result.lines.push(Airwire { net, from: pair[0].clone(), to: pair[1].clone() });
-                    for island in &mut islands {
-                        if *island == b {
-                            *island = a;
+                    for batch in islands.chunks_mut(32) {
+                        if COOPERATIVE {
+                            yield_unit().await;
+                        }
+                        for island in batch {
+                            if *island == b {
+                                *island = a;
+                            }
                         }
                     }
                 }

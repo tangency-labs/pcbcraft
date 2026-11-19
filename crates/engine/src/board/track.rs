@@ -537,13 +537,7 @@ impl IslandBuilder {
     /// Test one routed pair in node order (`i > j`), with any via first. Pad-only pairs
     /// are checked separately by callers that need direct land overlap.
     fn routed_contact(&self, i: usize, j: usize) -> bool {
-        let layers = match (self.layers.get(i), self.layers.get(j)) {
-            (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
-            (None, Some(b)) => !b.is_empty(),
-            _ => true,
-        };
-        let (a, b) = (self.bounds[i], self.bounds[j]);
-        layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j])
+        routed_contact(&self.layers, &self.bounds, &self.contours, i, j)
     }
 
     /// Canonicalize completed roots to the existing pad/track/via identity maps.
@@ -570,6 +564,17 @@ impl IslandBuilder {
         }
         (copper, members)
     }
+}
+
+/// Test a routed pair in descending node order. Via nodes follow all explicitly layered nodes.
+fn routed_contact(layers: &[Vec<Uuid>], bounds: &[[f64; 4]], contours: &[PadContour], i: usize, j: usize) -> bool {
+    let shares_layer = match (layers.get(i), layers.get(j)) {
+        (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
+        (None, Some(b)) => !b.is_empty(),
+        _ => true,
+    };
+    let (a, b) = (bounds[i], bounds[j]);
+    shares_layer && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && contours[i].touches(&contours[j])
 }
 
 /// Sweep overlapping pad bounds and visit each pair whose copper touches on a shared layer.
