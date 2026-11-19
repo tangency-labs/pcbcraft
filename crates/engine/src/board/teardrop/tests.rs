@@ -160,3 +160,102 @@ fn unsupported_or_unrepresentable_shapes_are_refused() {
         assert_eq!(intent.derive(view(&session)), Err(error));
     }
 }
+
+mod regeneration {
+    use super::*;
+    use crate::{
+        ADD_DRAWING, CommandError, DELETE_TRACKS, MOVE_TRACKS, SET_RULES,
+        board::{rules::Values, setup::LayerPurpose, track::tests::view},
+    };
+    use serde_json::Value;
+
+    /// Create a closed outline and a checked, authored teardrop through the shared commands.
+    fn checked_site() -> (Session, ViaTeardrop) {
+        let center = point(0, 20_000_000);
+        let (mut session, intent) = fixture(center, center, point(600_000, center.y_nm), 100_000);
+        let layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+        let corners = [point(-5_000_000, -5_000_000), point(25_000_000, -5_000_000), point(25_000_000, 45_000_000), point(-5_000_000, 45_000_000)];
+        let board = intent.board.board;
+        session.apply(ADD_DRAWING, &json!({"board":board,"layer":layer,"points":corners,"closed":true,"expected_revision":session.revision()})).unwrap();
+        let rules = Values { clearance_nm: 35_000, ..Values::default() };
+        session.apply(SET_RULES, &json!({"board":board,"rules":rules,"expected_revision":session.revision()})).unwrap();
+        let report = session
+            .execute(
+                EDIT_TEARDROPS,
+                &json!({"board":intent.board.board,"expected_revision":session.revision(),"edits":{"add":[Record::from(intent)],"remove":[]}}),
+            )
+            .unwrap();
+        assert_eq!(report["teardrops"]["added"], json!([Record::from(intent)]));
+        (session, intent)
+    }
+
+    /// Moving both source objects regenerates the polygon under the same ID and history entry.
+    #[test]
+    fn moved_via_teardrop_follows_and_undo_restores_both() {
+        let (mut session, intent) = checked_site();
+        let before = encode_documents(session.snapshot().unwrap()).unwrap();
+        let original = intent.derive(view(&session)).unwrap();
+        let original_via = view(&session).vias()[0].at;
+        let revision = session.revision();
+        let (dx, dy) = (400_000, 200_000);
+        session
+            .apply(MOVE_TRACKS, &json!({"tracks":[intent.track],"vias":[intent.via],"dx_nm":dx,"dy_nm":dy,"expected_revision":revision}))
+            .unwrap();
+        assert_eq!(session.revision(), revision + 1);
+        assert_eq!(view(&session).vias()[0].at, point(original_via.x_nm + dx, original_via.y_nm + dy));
+        assert_eq!(view(&session).teardrops(), &[Record::from(intent)]);
+        let moved = intent.derive(view(&session)).unwrap();
+        assert_eq!(moved.vertices, original.vertices.map(|p| point(p.x_nm + dx, p.y_nm + dy)));
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+        assert_eq!(intent.derive(view(&session)), Ok(original));
+        session.apply("edit.redo", &Value::Null).unwrap();
+        assert_eq!(intent.derive(view(&session)), Ok(moved));
+    }
+
+    /// A lone via move or deletion of either source drops the now-detached intent; Undo restores it.
+    #[test]
+    fn detached_or_deleted_via_teardrop_is_removed_atomically() {
+        let (mut session, intent) = checked_site();
+        let before = encode_documents(session.snapshot().unwrap()).unwrap();
+        let original = intent.derive(view(&session)).unwrap();
+        for (id, mut params, why) in [
+            (MOVE_TRACKS, json!({"vias":[intent.via],"dx_nm":0,"dy_nm":1}), Error::NotCentered),
+            (DELETE_TRACKS, json!({"vias":[intent.via]}), Error::MissingVia),
+            (DELETE_TRACKS, json!({"tracks":[intent.track]}), Error::MissingTrack),
+        ] {
+            params["expected_revision"] = json!(session.revision());
+            session.apply(id, &params).unwrap();
+            assert!(view(&session).teardrops().is_empty());
+            assert_eq!(intent.derive(view(&session)), Err(why));
+            session.apply("edit.undo", &Value::Null).unwrap();
+            assert_eq!(view(&session).teardrops(), &[Record::from(intent)]);
+            assert_eq!(intent.derive(view(&session)), Ok(original));
+            assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+        }
+    }
+
+    /// A new obstacle can hit the taper's clearance without hitting the underlying via or
+    /// track. The rule block leaves both the authored snapshot and its history untouched.
+    #[test]
+    fn candidate_clearance_block_does_not_publish_or_take_undo() {
+        let (mut session, intent) = checked_site();
+        let layer = intent.derive(view(&session)).unwrap().layer;
+        let add_obstacle = |session: &mut Session, y_nm| {
+            session.apply(ADD_TRACKS, &json!({"layer":layer,"width_nm":100_000,
+                "points":[point(260_000,y_nm),point(260_000,y_nm - 50_000)],"expected_revision":session.revision()}))
+        };
+        add_obstacle(&mut session, 19_770_000).unwrap();
+        let obstacle = view(&session).tracks().iter().find(|track| track.start == point(260_000, 19_770_000)).unwrap().id;
+        let before = session.snapshot().unwrap();
+        let revision = session.revision();
+        let blocked = session.apply(MOVE_TRACKS, &json!({"tracks":[obstacle],"dx_nm":0,"dy_nm":10_000,"expected_revision":revision}));
+        assert!(matches!(blocked, Err(CommandError::InvalidParams(message)) if message.contains("CopperClearance")
+            && message.contains(&intent.id.to_string()) && message.contains(&obstacle.to_string())));
+        assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(session.revision(), revision);
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(view(&session).tracks().len(), 1);
+        assert_eq!(view(&session).teardrops(), &[Record::from(intent)]);
+    }
+}

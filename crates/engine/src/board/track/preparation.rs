@@ -85,11 +85,12 @@ pub struct CopperEditJob {
 }
 
 impl Session {
-    /// Capture a board's immutable preparation context without projecting pads or copying project files.
+    /// Capture a straight board's preparation context without projecting pads. Teardrops are
+    /// checked against the complete candidate before publication, not against the old base.
     pub fn copper_preparation(&self, target: BoardTarget) -> Result<CopperPreparation, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
-        view.require_linear_copper().map_err(CommandError::Unavailable)?;
+        view.require_no_arcs().map_err(CommandError::Unavailable)?;
         let effective = view.effective_rules();
         Ok(CopperPreparation {
             source: Source {
@@ -164,14 +165,14 @@ impl Session {
     }
     /// Consume an engine-validated candidate in one shared history transaction. Another session,
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
-    /// A committed candidate is reported to the edit observer as its prepared command.
+    /// Teardrop regeneration can still refuse the transaction; report only a published edit to the observer.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
         self.authorize_command(prepared.command)?;
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
         }
         if let Some(candidate) = prepared.candidate {
-            self.change((*candidate).clone())?;
+            self.publish_change((*candidate).clone(), true)?;
             self.report_committed(prepared.command, &prepared.params);
         }
         Ok(self.revision())

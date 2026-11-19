@@ -3510,6 +3510,7 @@ impl Session {
         }
         if id.starts_with("pcb.")
             && id != board::teardrop::EDIT_TEARDROPS
+            && !board::track::preparation::is_copper_edit(id)
             && let Some(project) = self.project().filter(|p| !p.board.teardrops.is_empty())
         {
             project.resolve_board(params.get("board").and_then(Value::as_str))?;
@@ -4285,10 +4286,10 @@ impl Session {
         }
     }
 
-    /// Prepare an edit without publishing it. Locked copper, unsupported circular geometry,
-    /// metadata, nets and zone ownership are checked here so previews share Apply's preparation.
+    /// Prepare an edit without publishing it. Check locked copper, geometry support, metadata,
+    /// nets and zone ownership. Only prepared track/via edits may regenerate existing intents.
     /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
-    fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
+    fn prepare_change(&self, mut project: Project, prepared_copper: bool) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
@@ -4298,7 +4299,12 @@ impl Session {
             if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
                 return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
             }
-            if !previous.board.teardrops.is_empty() && previous.board.teardrops == project.board.teardrops && previous.board != project.board {
+            if !prepared_copper
+                && !previous.board.teardrops.is_empty()
+                && !Arc::ptr_eq(&previous.board, &project.board)
+                && previous.board.teardrops == project.board.teardrops
+                && previous.board != project.board
+            {
                 return Err(CommandError::Unavailable(board::teardrop::UNSUPPORTED.into()));
             }
         }
@@ -4365,8 +4371,10 @@ impl Session {
         if !self.defer_net_reconciliation {
             project.reconcile_nets(self.project.as_deref())?;
         }
-        // A copper-bearing board must still fit the native board file after a physical edit.
-        // Do this before replacing the snapshot, changing history or notifying observers.
+        if prepared_copper && !project.board.teardrops.is_empty() {
+            self.regenerate_teardrops(&mut project)?;
+        }
+        // Check the final candidate after pruning, before changing history or notifying observers.
         if (!project.board.tracks.is_empty() || !project.board.vias.is_empty())
             && self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
         {
@@ -4378,10 +4386,15 @@ impl Session {
         Ok((project, highest))
     }
 
-    /// Prepare and publish an edit, retaining the allocation watermark and bounded undo history.
-    /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
+    /// Publish an ordinary command without enabling the prepared copper regeneration path.
     fn change(&mut self, project: Project) -> Result<(), CommandError> {
-        let (project, highest) = self.prepare_change(project)?;
+        self.publish_change(project, false)
+    }
+
+    /// Prepare and publish one edit, including any regeneration for a prepared copper candidate.
+    /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
+    fn publish_change(&mut self, project: Project, prepared_copper: bool) -> Result<(), CommandError> {
+        let (project, highest) = self.prepare_change(project, prepared_copper)?;
         let project = self.retain_allocation_watermark(Arc::new(project));
         self.update_plan = None;
         self.setup_preview = None;

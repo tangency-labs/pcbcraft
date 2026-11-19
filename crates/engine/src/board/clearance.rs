@@ -152,6 +152,24 @@ impl Session {
         self.clearance_query_impl(target, &serde_json::json!({}), true)
     }
 
+    /// Build an uncached base query against an unpublished candidate for transaction-time
+    /// teardrop checks. This authority stays inside preparation and is not returned to clients.
+    pub(super) fn teardrop_candidate_query(&self, project: Arc<crate::Project>, target: BoardTarget) -> Result<ClearanceQuery, CommandError> {
+        let view = project.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
+        view.require_no_arcs().map_err(CommandError::Unavailable)?;
+        let effective = view.effective_rules();
+        let geometry = Arc::new(BoardGeometry::new(view));
+        let source = super::work::Source {
+            snapshot: project,
+            session: self.clearance_identity.clone(),
+            target,
+            opening: self.history_root_revision(),
+            revision: self.revision(),
+            effective,
+        };
+        ClearanceQuery::from_geometry(&source, geometry)
+    }
+
     /// Share immutable geometry and policy; only the teardrop command supplies its own polygons.
     fn clearance_query_impl(
         &self,

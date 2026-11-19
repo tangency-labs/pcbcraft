@@ -30,9 +30,22 @@ other copper or need a curved track representation.
 The native board stores only intent in [format 37](native-project-storage.md#straight-via-teardrop-intents).
 PCB rendering, routing, connectivity, board DRC, and fabrication do not consume
 these polygons yet and refuse boards with active intents rather than omitting them.
-Other board edits are blocked while intents exist; remove the intents before
-editing their sources. Automatic regeneration, clearance-based resizing, curved
-edges and other attachment types are not implemented.
+Clearance-based resizing, curved edges and other attachment types are not implemented.
+
+## Editing tracks and vias
+
+The shared track and via edit commands regenerate straight-via teardrops
+against the proposed board before committing. To move a centered via and keep
+its taper, move the attached track and via together with `pcb.move_tracks`.
+Deleting either source or breaking the centered attachment removes the intent;
+an attachment whose requested taper no longer fits also loses its intent.
+Undo restores the copper edit and any removed intents in one step.
+
+Regeneration checks the surviving polygons against the new copper and board
+outline using the same rules as an addition. If a surviving taper fails those
+rules, the edit is refused with the intent, obstacle and rule; no partial edit
+is published. Other board edits that cannot account for active teardrops
+still require removing the intents first.
 
 ## Add and remove preview
 

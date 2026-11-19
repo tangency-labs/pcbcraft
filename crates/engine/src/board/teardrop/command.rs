@@ -1,10 +1,10 @@
 //! One revision-checked transaction for a batch of straight-via intent changes.
 use super::{
-    Record, ViaTeardrop,
+    Error as ShapeError, Record, ViaTeardrop,
     edit::{self, Addition, Edit, Rule, RuleBlock},
 };
 use crate::{
-    CommandError, Session,
+    CommandError, Project, Session,
     board::{
         clearance::{ClearanceQuery, ObstacleId, Overlay},
         drc::{self, Outline},
@@ -173,6 +173,47 @@ fn contour(addition: &Addition) -> Contour {
 }
 
 impl Session {
+    /// Rebuild straight-via outlines on the candidate, not the published board. Prune sites
+    /// whose attachments no longer form a taper. A rule block or unavailable check refuses
+    /// the whole transaction; only a complete pass can replace the candidate's intent list.
+    pub(crate) fn regenerate_teardrops(&self, project: &mut Project) -> Result<(), CommandError> {
+        let target = project.board_target().ok_or_else(|| CommandError::Unavailable("teardrops require a physical board".into()))?;
+        let board = project.board_view(target).ok_or_else(|| CommandError::NotFound("board is unavailable".into()))?;
+        let mut retained = Vec::new();
+        for &record in board.teardrops() {
+            let intent = record.on(target);
+            match intent.derive(board) {
+                Ok(copper) => retained.push(Addition { intent, copper }),
+                Err(
+                    ShapeError::MissingTrack
+                    | ShapeError::MissingVia
+                    | ShapeError::NotCentered
+                    | ShapeError::TrackTooShort
+                    | ShapeError::NoTaper
+                    | ShapeError::WidthLimit
+                    | ShapeError::UnrepresentableContour,
+                ) => (),
+                Err(error) => return Err(CommandError::InvalidParams(format!("invalid teardrop {}: {error:?}", record.id))),
+            }
+        }
+        if !retained.is_empty() {
+            let query = self.teardrop_candidate_query(Arc::new(project.clone()), target)?;
+            let mut evaluator = Evaluator::new(&query, board);
+            for addition in &retained {
+                if let Some(block) = evaluator.check(board, addition, &[])? {
+                    return Err(CommandError::InvalidParams(format!(
+                        "teardrop {} blocked by {:?} at {} (gap {} nm; required {} nm)",
+                        addition.intent.id, block.rule, block.other_object, block.actual_nm, block.required_nm
+                    )));
+                }
+            }
+        }
+        if retained.len() != board.teardrops().len() {
+            Arc::make_mut(&mut project.board).teardrops = retained.into_iter().map(|addition| Record::from(addition.intent)).collect();
+        }
+        Ok(())
+    }
+
     /// Preview or publish the entire checked batch; a stale revision or evaluation error edits nothing.
     pub(crate) fn edit_teardrops(&mut self, params: &Value) -> Result<Value, CommandError> {
         self.validate_project_command(EDIT_TEARDROPS, params)?;
@@ -214,7 +255,7 @@ impl Session {
             records.extend(added.into_iter().map(|record| (record.id, record)));
             Arc::make_mut(&mut next.board).teardrops = records.into_values().collect();
             if dry_run {
-                self.prepare_change(next)?;
+                self.prepare_change(next, false)?;
             } else {
                 self.change(next)?;
             }
