@@ -126,12 +126,9 @@ impl Download {
         result: Sender<Result<Outcome, String>>,
     ) -> Result<Self, String> {
         let name = super::download_file_name(&snapshot.name);
-        let source = if download::needs_layout(&snapshot) {
-            DownloadSource::Encode(download::Encoder::new(snapshot, original)?)
-        } else if let Some(bytes) = unchanged {
-            DownloadSource::Unchanged(bytes)
-        } else if let Some(documents) = original.as_ref().and_then(|source| source.unchanged(&snapshot)) {
-            DownloadSource::Documents(documents)
+        let reusable = original.as_ref().filter(|_| !download::needs_layout(&snapshot)).and_then(|source| source.unchanged(&snapshot));
+        let source = if let Some(documents) = reusable {
+            unchanged.map_or(DownloadSource::Documents(documents), DownloadSource::Unchanged)
         } else {
             DownloadSource::Encode(download::Encoder::new(snapshot, original)?)
         };

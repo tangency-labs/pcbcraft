@@ -231,15 +231,21 @@ fn stack_format_carries_the_placement_origin() {
         Err(error) => assert!(error.contains("require board format 23"), "{error}"),
     }
 
-    let format = |s: &Session| {
+    let saved_board = |s: &Session| {
         let documents = encode_documents(s.snapshot().unwrap()).unwrap();
-        serde_json::from_slice::<Value>(&documents[&test_board_path(&documents)]).unwrap()["format"].clone()
+        serde_json::from_slice::<Value>(&documents[&test_board_path(&documents)]).unwrap()
     };
     set(&mut s, Value::Null).unwrap();
-    assert_eq!(format(&s), "pcbcraft-board/23");
+    let stack_only = saved_board(&s);
+    assert_eq!(stack_only["format"], "pcbcraft-board/41");
+    assert!(stack_only.get("placement_origin").is_none());
+    assert_eq!(stack_only["setup"]["stackup"], saved["setup"]["stackup"]);
     set(&mut s, json!({"kind":"board_zero"})).unwrap();
     s.apply(crate::SET_BOARD_SETUP, &json!({"setup":plain,"expected_revision":s.revision()})).unwrap();
-    assert_eq!(format(&s), "pcbcraft-board/21");
+    let origin_only = saved_board(&s);
+    assert_eq!(origin_only["format"], "pcbcraft-board/41");
+    assert_eq!(origin_only["placement_origin"]["anchor"], json!({"kind":"board_zero"}));
+    assert_eq!(origin_only["setup"]["stackup"], plain["stackup"]);
 }
 
 /// The last in-range coordinates are accepted on both sides and one step beyond is refused.

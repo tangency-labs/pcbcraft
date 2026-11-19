@@ -334,10 +334,9 @@ These setup snapshots carry no required electrical/fabrication constraints or pr
 paths and do not establish a live link to their source file. Every export creates a
 new snapshot identity. Broader fabrication/process profiles remain planned.
 
-Import stages a draft for review. Profiles without named groups retain target
-groups and drop only members whose copper is removed. Profiles with named groups
-replace the target groups in the draft. The Profiles page shows the staged groups
-and notes any replacement or pruning before Apply. Layer IDs are rebased to the
+Import stages a draft for review. The profile's group list replaces the target
+list in the draft; a profile without groups clears it. The Profiles page notes
+when the draft replaces the existing groups. Layer IDs are rebased to the
 target's surviving physical stack and unambiguous technical roles. Extra target technical layers survive,
 preserving their drawing ownership; copper-count changes use the ordinary
 authored-stratum/removal checks. Existing immutable material pins cannot be replaced

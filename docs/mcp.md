@@ -11,8 +11,9 @@ with affected object IDs, consent/refusal and a session-local token, even with
 `pcb.inspect_layer_groups` returns derived outer/inner/plane/signal and user groups
 with layer IDs and names, including with `inspect: false`. It is read-only. User
 memberships are edited in the complete setup candidate, not a separate mutation.
-Omit `stackup.layer_groups` in a setup edit to retain existing groups, or use
-`[]` to clear them. Mixed copper belongs to plane and signal. Preview reports
+Include the existing `stackup.layer_groups` list in the complete setup candidate
+to keep it. Omission and `[]` both clear it. Mixed copper belongs to plane and
+signal. Preview reports
 members of removed copper by proposed group UUID, even for newly added groups.
 See [layer groups](board-materials.md#layer-groups).
 

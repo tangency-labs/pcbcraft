@@ -73,3 +73,37 @@ fn edited_download_keeps_unaffected_bytes_and_new_geometry() {
     assert!(changed[0].starts_with("sheets/"));
     assert_eq!(encode_documents(decode_documents(&downloaded).unwrap()).unwrap(), encode_documents(current).unwrap());
 }
+
+/// Neither the unchanged download fast paths nor post-edit byte reuse may keep a legacy header.
+#[test]
+fn legacy_board_download_rewrites_only_the_board_and_edited_sheet() {
+    let saved = migrate_bundled_libraries(decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap()).unwrap();
+    let saved = Arc::new(saved.with_board_folders(".").unwrap().with_sheet_occurrences().unwrap());
+    let mut original = encode_documents(saved.clone()).unwrap();
+    let board_path = saved.board_document_path().unwrap();
+    assert!(has_current_board_header(&original[&board_path]));
+    let mut board: serde_json::Value = serde_json::from_slice(&original[&board_path]).unwrap();
+    board["format"] = json!("pcbcraft-board/1");
+    original.insert(board_path.clone(), serde_json::to_vec(&board).unwrap());
+    original.get_mut("project.json").unwrap().extend_from_slice(b"\n \t");
+    let saved = decode_documents(&original).unwrap();
+    let original = Arc::new(original);
+    let mut session = Session::default();
+    session.open_snapshot(saved.clone());
+    for edited in [false, true] {
+        if edited {
+            session.apply(MOVE_SYMBOL, &json!({"symbol":"symbol-2","x_nm":1270000,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+        }
+        let current = session.snapshot().unwrap();
+        assert!(!needs_layout(&current));
+        let baseline = Original::for_project(saved.clone(), original.clone(), &current).unwrap();
+        assert!(baseline.unchanged(&saved).is_none());
+        let downloaded = encode(current.clone(), Some(baseline));
+        assert!(has_current_board_header(&downloaded[&board_path]));
+        assert_eq!(downloaded["project.json"], original["project.json"]);
+        let changed: Vec<_> = original.keys().filter(|path| **path != board_path && original[*path] != downloaded[*path]).collect();
+        assert_eq!(changed.len(), usize::from(edited));
+        assert!(changed.iter().all(|path| path.starts_with("sheets/")));
+        assert_eq!(encode_documents(decode_documents(&downloaded).unwrap()).unwrap(), encode_documents(current).unwrap());
+    }
+}

@@ -718,7 +718,12 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     let loaded = load(&root).unwrap();
     let converted = working_documents(&loaded.snapshot, Some(&loaded.snapshot), loaded.target.documents.as_deref()).unwrap();
     let packed = encode_packed_documents(converted).unwrap();
-    assert_eq!(decode_packed(&packed).unwrap().documents, custom);
+    let reopened = decode_packed(&packed).unwrap();
+    let board_path = reopened.project.board_document_path().unwrap();
+    assert!(has_current_board_header(&reopened.documents[&board_path]));
+    assert!(!has_current_board_header(&custom[&board_path]));
+    refresh_expected_board(&mut custom);
+    assert_eq!(reopened.documents, custom);
 }
 
 /// Canonical comparison for tests which start from a dated, checked-in project fixture.

@@ -477,11 +477,7 @@ impl PcbApp {
             };
             let result = edit.candidate.value(edit.unit).and_then(|setup| {
                 let silkscreen = edit.silk_style()?;
-                let mut value = serde_json::to_value(&setup).map_err(|e| e.to_string())?;
-                if command == pcbcraft_engine::SET_BOARD_SETUP && setup.stackup().layer_groups.is_empty() {
-                    // A complete form explicitly clears groups; legacy omission preserves them.
-                    value["stackup"]["layer_groups"] = json!([]);
-                }
+                let value = serde_json::to_value(&setup).map_err(|e| e.to_string())?;
                 Ok(json!({"setup":value,"silkscreen":silkscreen}))
             });
             match result {

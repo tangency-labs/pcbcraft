@@ -104,8 +104,7 @@ impl BoardSetup {
     /// Existing material pins cannot be rewritten; ambiguity/name collisions fail through ordinary
     /// setup validation. Copper-count changes use the ordinary authored-stratum/removal checks.
     /// The profile's declared finished board thickness, tolerance and minimum replace the board's.
-    /// Profiles without authored groups retain target groups, pruned to the surviving copper;
-    /// profiles with authored groups replace them and rebase their member IDs.
+    /// The profile replaces the target group's list with its own (even if empty) and rebases member IDs.
     pub fn with_profile(&self, profile: &SetupProfile) -> Result<Self, CommandError> {
         profile.validate().map_err(CommandError::InvalidParams)?;
         let incoming = &profile.setup;
