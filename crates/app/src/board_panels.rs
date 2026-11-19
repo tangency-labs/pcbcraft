@@ -9,6 +9,7 @@ use properties::{copper_properties, footprint_transform};
 impl PcbApp {
     /// Render the focused board's contextual panels inside the host's header-free area, with shared edge anchors.
     /// Browsing explicitly selects and centers a placement; layer and collapse changes are local.
+    /// Browser picks, layer color and the Board Setup draft remain available without derived copper connectivity.
     /// Dock slots keep Layers, Properties and Selection filters separate on either edge.
     pub(super) fn board_panels(&mut self, ui: &mut Ui, area: Rect) -> ([Rect; 3], Rect) {
         let settings_enabled = matches!(self.dialog, crate::Dialog::None) && !self.project_action_pending() && !self.files.busy();
@@ -89,6 +90,23 @@ impl PcbApp {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
         let net_presentation = state.copper_connectivity(target, input);
+        let net_presentation = match net_presentation {
+            Ok(value) => value,
+            Err(error) => {
+                ui.label(error);
+                if let Some(action) = pick {
+                    self.queue_view_action(ui.ctx(), view_id, crate::editor_windows::ViewAction::Browse(action));
+                }
+                if let Some(layer) = color_pick {
+                    self.begin_layer_color(view_id, layer);
+                    self.repaint_editors(ui.ctx());
+                }
+                if setup_open {
+                    self.begin_board_setup(view_id);
+                }
+                return ([browser, layers, Rect::NOTHING], Rect::NOTHING);
+            }
+        };
         let names_pending = net_presentation.names_pending;
         let unit = self.preferences.units;
         let revision = self.session.revision();

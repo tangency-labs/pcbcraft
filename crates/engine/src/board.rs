@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod arc;
 pub mod assembly_profile;
 pub mod assignment;
 pub mod class_rules;
@@ -314,6 +315,8 @@ pub(crate) struct Board {
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.
     pub(crate) vias: Vec<track::Via>,
+    /// Exact circular tracks; unsupported conductive consumers must refuse this board.
+    pub(crate) arcs: Vec<arc::ArcTrack>,
     pub(crate) definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,
     footprints: Vec<Footprint>,
     by_component: BTreeMap<u64, usize>,

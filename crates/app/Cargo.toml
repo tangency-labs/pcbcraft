@@ -58,8 +58,10 @@ pcbcraft-storage = { workspace = true }
 
 [dev-dependencies]
 winit = { version = "=0.30.13", default-features = false, features = ["wayland", "rwh_06"] }
-egui-winit = "=0.37.0"
 egui_kittest = { workspace = true, features = ["eframe"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+egui-winit = "=0.37.0"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 js-sys = "0.3"

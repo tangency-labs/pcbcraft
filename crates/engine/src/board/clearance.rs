@@ -143,6 +143,7 @@ impl Session {
     pub fn clearance_query_with_rules(&self, target: BoardTarget, overrides: &serde_json::Value) -> Result<ClearanceQuery, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
+        view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let rules = view.resolve_rules(overrides)?;
         let geometry = self.clearance_cache.try_lock().ok().and_then(|cache| {
             cache.as_ref().filter(|c| c.target == target && Weak::ptr_eq(&c.snapshot, &Arc::downgrade(&snapshot))).map(|c| c.geometry.clone())

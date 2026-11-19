@@ -47,20 +47,25 @@ Board inspection includes `net_assignment` when authored, `assignment_mode`,
 `net_state`, resolved `net` and `connected_to_pad`. The latter describes physical
 pad contact; an assignment alone never makes it true. A conflicting island has
 no single resolved display net, while DRC retains its complete conflicting intent.
+On a board with circular copper records, geometry is unsupported: authored
+assignment and registry state remain inspectable, but `net` and `connected_to_pad`
+are null with a `geometry_error`. Neither a false disconnection nor a partial
+straight-only membership is reported.
 
 **pcbcraft-board/24** stores optional `net_assignment` objects on vias, containing
 `project`, `scope` and `net`. The address is omitted in Automatic mode; explicit
 null and nil identities are rejected. This version requires at least one
 assignment and accepts optional assembly profile adoptions and extended stack
-fields. Earlier headers, including assembly-profile board/22 and stack board/23,
+fields. Circular copper records select board/26 while retaining those assignments
+and optional fields. Earlier headers, including assembly-profile board/22 and stack board/23,
 reject via intent. No derived island membership or duplicate netlist is saved.
 Clearing the last assignment restores the format required by remaining authored
 data. Explicit via intent selects board/24 unless a higher format is required.
 [Thermal and insulation material reports](board-materials.md#thermal-and-insulation-reports)
-select board/25; an active footprint lock selects board/34 with or without reports.
-Both higher formats preserve explicit via intent. The native codecs preserve
-current canonical bytes on a no-op round trip; accepted noncanonical input may
-be normalized, and opening an older project can require migration.
+require at least board/25, circular copper records at least board/26, and an active
+footprint lock at least board/34. The higher formats preserve explicit via intent.
+The native codecs preserve current canonical bytes on a no-op round trip; accepted
+noncanonical input may be normalized, and opening an older project can require migration.
 
 **pcbcraft-clipboard/4** carries explicit targets. Copy, duplication and relocation
 within the same board preserve those addresses. Foreign destinations or foreign

@@ -49,7 +49,7 @@ fn explicit_via_isolated_intent_persistence_and_history() {
     assert_eq!(inspect[0]["net_state"], "active");
     assert_eq!(inspect[0]["connected_to_pad"], false);
     assert!(inspect[0]["net"].is_string());
-    assert!(view(&s).copper_nets().contains_key(&id));
+    assert!(view(&s).copper_nets().unwrap().contains_key(&id));
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let reopened = decode_documents(&saved).unwrap();
     assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
@@ -93,7 +93,7 @@ fn automatic_clear_noop_and_rejected_requests_are_atomic() {
     assert!(s.apply(SET_VIA_NET, &json!({"vias":[id],"automatic":true,"expected_revision":revision-1})).is_err());
     run(&mut s, SET_VIA_NET, json!({"vias":[id],"automatic":true})).unwrap();
     assert!(view(&s).vias()[0].net_assignment.is_none());
-    assert!(!view(&s).copper_nets().contains_key(&id));
+    assert!(!view(&s).copper_nets().unwrap().contains_key(&id));
 }
 
 /// Two differently assigned via-only islands must refuse joins even without any pad in either.
@@ -121,7 +121,7 @@ fn via_only_shorts_and_reassignment_are_refused_without_publication() {
     let mut invalid = snapshot.as_ref().clone();
     Arc::make_mut(&mut invalid.board).vias.iter_mut().find(|v| v.id == b).unwrap().at.x_nm = -29_600_000;
     s.open_snapshot(Arc::new(invalid));
-    assert!(!view(&s).copper_nets().contains_key(&a));
+    assert!(!view(&s).copper_nets().unwrap().contains_key(&a));
     let report = view(&s).check_design(Rules::default());
     let short = report.violations.iter().find(|v| v.kind == Kind::Short).unwrap();
     assert!(short.items.contains(&a.to_string()) && short.items.contains(&b.to_string()));
@@ -137,7 +137,7 @@ fn automatic_pad_and_track_inheritance_and_explicit_conflict() {
     let pad = view(&s).footprints().flat_map(|f| f.pads).find(|p| p.net.is_some()).unwrap();
     run(&mut s, crate::ADD_VIA, json!({"at":pad.center})).unwrap();
     let id = view(&s).vias()[0].id;
-    assert_eq!(view(&s).copper_nets().get(&id), pad.net.as_ref());
+    assert_eq!(view(&s).copper_nets().unwrap().get(&id), pad.net.as_ref());
     let current = view(&s).net_class_target_for_copper(&id.to_string()).unwrap().unwrap();
     let target = targets(&s)
         .into_iter()
@@ -291,10 +291,10 @@ fn rename_retirement_and_unresolved_native_targets_never_retarget() {
     run(&mut s, crate::net_labels::SET, json!({"id":format!("net-label-{label}"),"name":"GROUND","style":"global","x_nm":-50_000_000,"y_nm":0}))
         .unwrap();
     assert_eq!(view(&s).vias()[0].net_assignment, Some(address));
-    assert_eq!(view(&s).copper_nets()[&id], "GROUND");
+    assert_eq!(view(&s).copper_nets().unwrap()[&id], "GROUND");
     run(&mut s, crate::net_labels::DELETE, json!({"id":format!("net-label-{label}")})).unwrap();
     assert_eq!(view(&s).inspect_vias()[0]["net_state"], "retired");
-    assert!(!view(&s).copper_nets().contains_key(&id));
+    assert!(!view(&s).copper_nets().unwrap().contains_key(&id));
     let report = view(&s).check_design(Rules::default());
     assert!(report.violations.iter().any(|v| v.kind == Kind::ViaNetUnresolved && v.items.contains(&id.to_string())));
     let mut job = s.design_check_job(&json!({})).unwrap();
@@ -401,12 +401,12 @@ fn assignment_never_changes_physical_island_groups() {
     board.footprints[1].y_nm = first.y_nm;
     s.open_snapshot(Arc::new(project));
     let id = via(&mut s, None, -30_000_000);
-    let copper = view(&s).copper();
-    assert_eq!(view(&s).copper_with_nets().0, copper);
+    let copper = view(&s).copper().unwrap();
+    assert_eq!(view(&s).copper_with_nets().unwrap().0, copper);
     let target = targets(&s).remove(0);
     run(&mut s, SET_VIA_NET, json!({"vias":[id],"target":target})).unwrap();
-    assert_eq!(view(&s).copper(), copper);
-    assert_eq!(view(&s).copper_with_nets().0, copper);
+    assert_eq!(view(&s).copper().unwrap(), copper);
+    assert_eq!(view(&s).copper_with_nets().unwrap().0, copper);
 }
 
 /// Tracks and routing-inserted/standalone automatic vias inherit a via-only island's explicit seed.
@@ -415,12 +415,12 @@ fn route_and_automatic_vias_inherit_assigned_island_without_pads() {
     let mut s = routed_fixture();
     let target = targets(&s).remove(0);
     let seed = via(&mut s, Some(&target), -30_000_000);
-    let net = view(&s).copper_nets()[&seed].clone();
+    let net = view(&s).copper_nets().unwrap()[&seed].clone();
     let layers = copper_layers(&s);
     run(&mut s,crate::ADD_TRACKS,json!({"layer":layers[0],"points":[{"x_nm":-30_000_000,"y_nm":-30_000_000},{"x_nm":-32_000_000,"y_nm":-30_000_000},{"x_nm":-34_000_000,"y_nm":-30_000_000}],"layer_changes":[{"at":1,"layer":layers[1]}]})).unwrap();
     run(&mut s, crate::ADD_VIA, json!({"at":{"x_nm":-34_000_000,"y_nm":-30_000_000}})).unwrap();
     let view = view(&s);
-    let nets = view.copper_nets();
+    let nets = view.copper_nets().unwrap();
     assert_eq!(view.vias().len(), 3);
     assert!(view.vias().iter().filter(|v| v.id != seed).all(|v| v.net_assignment.is_none()));
     assert!(view.vias().iter().all(|v| nets[&v.id] == net));
