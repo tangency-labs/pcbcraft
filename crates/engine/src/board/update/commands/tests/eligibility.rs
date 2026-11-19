@@ -97,6 +97,51 @@ fn board_update_refuses_locked_removal_atomically() {
     assert!(board.baseline.as_ref().unwrap().components.is_empty());
 }
 
+/// The removal guard looks up only proposed removals, even on a large populated board.
+#[test]
+fn board_update_lock_checks_only_proposed_removals() {
+    use crate::board::update::REMOVAL_PLACEMENT_LOOKUPS;
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    for index in 0..256 {
+        let (x_nm, y_nm) = (index % 16 * 5_000_000, index / 16 * 5_000_000);
+        edit(&mut session, PLACE_RESISTOR, json!({"x_nm":x_nm,"y_nm":y_nm}));
+        let id = session.project().unwrap().symbols().last().unwrap().component;
+        assign(&mut session, id, "resistor-0402");
+        edit(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":format!("component-{id}"),"x_nm":x_nm,"y_nm":y_nm}));
+    }
+    edit(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    let mut project = session.project().unwrap().clone();
+    let footprints = &mut Arc::make_mut(&mut project.board).footprints;
+    assert_eq!(footprints.len(), 256);
+    footprints[0].locked = true;
+    let (retained, removed) = (footprints[0].component, footprints[255].component);
+    session.open_snapshot(Arc::new(project));
+
+    // Replacing a retained package is a non-noop, but should do no removal lookups.
+    assign(&mut session, retained, "resistor-0603");
+    let report = plan(&mut session);
+    assert_eq!(session.cached_board_update().unwrap().changes.components, [ComponentChange::Package { component: retained }]);
+    REMOVAL_PLACEMENT_LOOKUPS.set(0);
+    edit(&mut session, APPLY_UPDATE, json!({"plan_token":report["plan_token"]}));
+    assert_eq!(REMOVAL_PLACEMENT_LOOKUPS.get(), 0);
+    let retained_footprint = &session.project().unwrap().board.footprints()[0];
+    assert!(retained_footprint.locked);
+    assert_eq!(retained_footprint.definition, "resistor-0603");
+
+    flag(&mut session, removed, "exclude_from_board", true);
+    let report = plan(&mut session);
+    assert_eq!(session.cached_board_update().unwrap().changes.components, [ComponentChange::Removed { component: removed }]);
+    REMOVAL_PLACEMENT_LOOKUPS.set(0);
+    edit(&mut session, APPLY_UPDATE, json!({"plan_token":report["plan_token"]}));
+    assert_eq!(REMOVAL_PLACEMENT_LOOKUPS.get(), 1);
+    let board = &session.project().unwrap().board;
+    assert_eq!(board.footprints().len(), 255);
+    assert!(board.footprints()[0].locked);
+    assert!(!board.by_component.contains_key(&removed));
+}
+
 /// Excluded choices remain useful authored intent without becoming physical
 /// pending packages. Reviewed removal retains their assets and later unexclude
 /// accepts that choice as an unplaced addition, with exact save/Undo behavior.
