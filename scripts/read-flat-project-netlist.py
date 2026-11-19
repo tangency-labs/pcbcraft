@@ -1,0 +1,105 @@
+#!/usr/bin/env python3
+"""Read connectivity from a trusted, unpacked project/6 with one flat sheet/1."""
+
+import argparse
+from collections import defaultdict
+import json
+from pathlib import Path
+import re
+
+
+def read_netlist(read_document):
+    """Project the saved parts, pins and wire membership, without engine code."""
+    project = read_document("project.json")
+    if project["format"] != "pcbcraft-project/6" or len(project["sheets"]) != 1:
+        raise ValueError("expected project/6 with exactly one sheet")
+    sheet_ref = project["sheets"][0]
+    sheet_id = sheet_ref["id"]
+    sheet_path = f"sheets/{sheet_id}.json"
+    if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", sheet_id) or sheet_ref["file"] != sheet_path:
+        raise ValueError("invalid sheet reference")
+    sheet = read_document(sheet_path)
+    if sheet["format"] != "pcbcraft-sheet/1" or sheet["id"] != sheet_id:
+        raise ValueError("expected the referenced sheet/1")
+
+    parts, pins_by_part = {}, {}
+    for component in project["components"]:
+        library, definition = component["library"], component["definition"]
+        revision = component["definition_revision"]
+        if not all(re.fullmatch(r"[a-zA-Z0-9_-]+", segment) for segment in (library, definition)) or type(revision) is not int or revision < 1:
+            raise ValueError("invalid pinned symbol address")
+        symbol = read_document(f"library/symbols/{library}/{definition}.r{revision}.json")
+        if (symbol["format"], symbol["library"], symbol["id"], symbol["revision"]) != (
+            "pcbcraft-symbol/1", library, definition, revision
+        ) or len(symbol["units"]) != 1 or symbol.get("behavior") is not None:
+            raise ValueError("expected a pinned, ordinary single-unit symbol/1")
+        unit, = symbol["units"]
+        terminals = [[pin["id"], pin.get("name"), pin["electrical_type"]] for pin in symbol["terminals"]]
+        pin_ids = [pin["terminal"] for pin in unit["pins"]]
+        terminal_ids = {pin[0] for pin in terminals}
+        pins = set(pin_ids)
+        if len(terminal_ids) != len(terminals) or len(pins) != len(pin_ids) or pins != terminal_ids:
+            raise ValueError("expected each logical terminal to appear once in the definition and unit")
+        part = component["id"]
+        if part in parts:
+            raise ValueError("duplicate component ID")
+        parts[part] = [part, component["reference"], component["value"], sorted(terminals, key=lambda pin: pin[0])]
+        pins_by_part[part] = (unit["id"], pins)
+
+    owners = {symbol["id"]: symbol["component"] for symbol in sheet["symbols"]}
+    if len(owners) != len(sheet["symbols"]) or sorted(owners.values()) != sorted(parts):
+        raise ValueError("expected exactly one placement per part")
+    if any(symbol["unit"] != pins_by_part[symbol["component"]][0] for symbol in sheet["symbols"]):
+        raise ValueError("placement names an unknown unit")
+    placed_pins = {(part, pin) for part, (_, pins) in pins_by_part.items() for pin in pins}
+    junctions = {junction["id"] for junction in sheet["junctions"]}
+    if len(junctions) != len(sheet["junctions"]):
+        raise ValueError("duplicate junction ID")
+    edges = defaultdict(set)
+    for wire in sheet["wires"]:
+        a, b = (endpoint(wire[end], owners, placed_pins, junctions) for end in ("from", "to"))
+        edges[a].add(b)
+        edges[b].add(a)
+
+    unseen, nets, connected = set(edges), [], set()
+    while unseen:
+        pending = [unseen.pop()]
+        terminals = []
+        while pending:
+            node = pending.pop()
+            if node[0] == "pin":
+                terminals.append(node[1:])
+            adjacent = edges[node] & unseen
+            unseen.difference_update(adjacent)
+            pending.extend(adjacent)
+        if terminals:
+            nets.append(sorted(terminals))
+            connected.update(terminals)
+    return {"parts": [parts[part] for part in sorted(parts)], "nets": sorted(nets), "unconnected": sorted(placed_pins - connected)}
+
+
+def endpoint(record, owners, placed_pins, junctions):
+    """Translate an explicit saved endpoint; coordinates and bends do not join wires."""
+    if record.keys() == {"symbol", "pin"} and record["symbol"] in owners:
+        terminal = owners[record["symbol"]], record["pin"]
+        if terminal in placed_pins:
+            return ("pin", *terminal)
+    if record.keys() == {"junction"} and record["junction"] in junctions:
+        return ("junction", record["junction"])
+    raise ValueError(f"unsupported or unresolved wire endpoint: {record!r}")
+
+
+def main():
+    """Print the documented projection or report why the example cannot read the input."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("folder", type=Path, help="trusted project directory, not a .pc archive")
+    args = parser.parse_args()
+    try:
+        result = read_netlist(lambda path: json.loads((args.folder / path).read_text(encoding="utf-8")))
+    except (OSError, ValueError, TypeError, KeyError) as error:
+        parser.exit(1, f"{parser.prog}: {error}\n")
+    print(json.dumps(result, ensure_ascii=True, indent=2))
+
+
+if __name__ == "__main__":
+    main()

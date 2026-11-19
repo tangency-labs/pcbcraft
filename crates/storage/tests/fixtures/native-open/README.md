@@ -22,5 +22,11 @@ new forms the writer emits. Record the release revision, manifest and document
 versions, hashes and expected content. Standalone JSON and container 1 remain
 outside normal Open and are tested separately as diagnostic inputs.
 
+`dual-led-editing-demo-connectivity.json` is the expected logical projection of
+`dual-led-editing-demo-v3.pc`, not a saved project. It records the terminal
+membership from `examples/README.md` at the editing demo's source revision
+above, alongside saved part and pin fields, for the [independent reader comparison].
+
+[independent reader comparison]: ../../../../../docs/reading-native-projects.md#worked-example-one-flat-sheet
 [native Open compatibility boundary]: ../../../../../docs/native-project-storage.md#compatibility-and-fixtures
 [Open test]: ../../native_open_corpus.rs
