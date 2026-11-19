@@ -538,6 +538,9 @@ pub(super) fn show(
         state.highlight_net =
             response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
     }
+    if route.consumed {
+        crate::board_tracks::prepare_preview(&response, camera, project, &mut state.tracks, state.active_layer.as_deref());
+    }
     let focus = connectivity.as_deref().and_then(|data| CopperFocus::new(data, state.tracks.route_contact(), state.highlight_net.as_deref()));
     let context = board::context_painter(&p, focus.is_some());
     crate::board_drawing::paint(&context, rect, camera, project, &state.zones, state.tracks.width_nm, &state.hidden_layers, appearance);

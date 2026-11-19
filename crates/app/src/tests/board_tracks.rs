@@ -118,19 +118,28 @@ fn an_unconnected_pad_route_cannot_join_a_named_terminal() {
             assert_eq!(h.state().message, None);
         }
         click_route(&mut h, named);
-        assert!(h.state().message.as_deref().is_some_and(|message| message.contains("blocked")));
-        assert_eq!(h.state().session.revision(), revision);
+        h.run_steps(200);
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().session.revision(), revision, "a clamped click fixes a vertex without auto-joining or auto-finishing");
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         h.key_press(Key::Enter);
-        h.run_steps(30);
-        // Enter may finish the already fixed, legal prefix, never the rejected connection.
-        let board = h.state().session.project().unwrap().boards().next().unwrap();
-        assert!(board.copper_nets().expect("arc-free test board has a copper net map").is_empty());
-        assert_eq!(h.state().session.revision(), revision + u64::from(vertex));
-        if vertex {
-            h.state_mut().run("edit.undo", &json!({}));
-            h.run();
+        h.run_steps(200);
+        assert_eq!(h.state().message, None);
+        assert!(
+            h.state().session.project().unwrap().boards().next().unwrap().copper_nets().expect("arc-free test board has a copper net map").is_empty()
+        );
+        assert_eq!(h.state().session.revision(), revision + 1);
+        let target = h.state().views.active.board.target.unwrap();
+        let query = h.state().session.clearance_query_with_rules(target, &json!({})).unwrap();
+        let named_pad = query.objects().iter().find(|o| o.at == named && !o.intended_nets.is_empty()).unwrap();
+        for track in tracks(&h) {
+            let id = track.id.to_string();
+            let object = query.objects().iter().find(|o| o.name == id).unwrap();
+            assert!(object.intended_nets.is_empty(), "unknown pad route adopted the named net");
+            assert!(object.contour.gap(&named_pad.contour) >= 200_000., "clamped endpoint broke foreign-pad clearance");
         }
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         h.key_press(Key::Escape);
         h.run();
@@ -146,6 +155,11 @@ pub(super) fn routable<'a>() -> Harness<'a, PcbApp> {
 
 /// Select a physical package with enough pad spacing for the fixture's authored class rules.
 fn routable_with<'a>(definition: &str) -> Harness<'a, PcbApp> {
+    routable_spaced(definition, 10_160_000)
+}
+
+/// Resolve the same command-created board at a chosen footprint pitch for routing channels.
+fn routable_spaced<'a>(definition: &str, pitch_nm: i64) -> Harness<'a, PcbApp> {
     let mut h = harness();
     h.set_size(egui::vec2(1400., 900.));
     h.state_mut().run("project.new", &json!({"create_board":true}));
@@ -156,7 +170,10 @@ fn routable_with<'a>(definition: &str) -> Harness<'a, PcbApp> {
         let symbol = h.state().session.project().unwrap().symbols().last().unwrap().id();
         symbols.push(symbol.clone());
         let revision = h.state().session.revision();
-        h.state_mut().run(PLACE_FOOTPRINT, &json!({"symbol":symbol,"definition":definition,"mapping":{"1":"2","2":"1"},"x_nm":index*10_160_000,"y_nm":0,"expected_revision":revision}));
+        h.state_mut().run(
+            PLACE_FOOTPRINT,
+            &json!({"symbol":symbol,"definition":definition,"mapping":{"1":"2","2":"1"},"x_nm":index*pitch_nm,"y_nm":0,"expected_revision":revision}),
+        );
     }
     let revision = h.state().session.revision();
     h.state_mut().run(
@@ -2777,4 +2794,715 @@ fn review408_via_at_fixed_head_validates_adopted_geometry() {
             assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         }
     }
+}
+
+/// The real menu switches to shove, hides displaced originals and publishes incoming and
+/// displaced copper in one edit. Cancel restores the authored view without touching history.
+#[test]
+fn shove_menu_preview_cancel_and_atomic_publication() {
+    for cancel in [true, false] {
+        let mut h = routable();
+        let layer = h.state().views.active.board.active_layer.clone().unwrap();
+        let a = Point { x_nm: 0, y_nm: -7_620_000 };
+        let b = Point { x_nm: 10_160_000, y_nm: -7_620_000 };
+        let start = Point { x_nm: 2_540_000, y_nm: -5_080_000 };
+        let end = Point { x_nm: 7_620_000, y_nm: -7_620_000 };
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"width_nm":250_000,"points":[a,b],"expected_revision":revision}));
+        h.run();
+        let original = tracks(&h)[0].clone();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, start);
+        click(&mut h, "Shove tracks");
+        if !cancel {
+            right_click_route(&mut h, start);
+            click(&mut h, "Merge same-net copper");
+        }
+        click_route(&mut h, start);
+        h.hover_at(at(&h, end));
+        h.run_steps(200);
+        assert_eq!(h.state().message, None);
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        let base = pcbcraft_chrome::Tokens::get().board_front;
+        assert!(!track_has_color(&h, [a, b], base), "the displaced original was still painted");
+        assert!(preview_ends_at(&h, base, at(&h, end)), "missing incoming shove preview");
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+            assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+            assert!(track_has_color(&h, [a, b], base));
+        } else {
+            click_route(&mut h, end);
+            h.key_press(Key::Enter);
+            h.run_steps(100);
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert!(tracks(&h).len() > 2);
+            assert_ne!(tracks(&h).iter().find(|t| t.id == original.id), Some(&original));
+            let board = h.state().session.project().unwrap().boards().next().unwrap();
+            assert!(
+                !board
+                    .check_design(board.effective_rules().values)
+                    .violations
+                    .iter()
+                    .any(|v| matches!(v.kind, pcbcraft_engine::board::drc::Kind::Clearance | pcbcraft_engine::board::drc::Kind::Short))
+            );
+            let after = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+            assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+            h.state_mut().run("edit.redo", &json!({}));
+            h.run();
+            assert_eq!(after, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        }
+    }
+}
+
+/// A first click outside copper but inside a corner's clearance cannot become an inescapable
+/// draft. Keep X armed so the next clear click starts an ordinary route without Escape/relaunch.
+#[test]
+fn rejected_clearance_pickup_keeps_the_route_tool_usable() {
+    for shove in [false, true] {
+        let mut h = routable();
+        let layer = layer_named(&h, "Top");
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS,&json!({"layer":layer,"width_nm":500_000,
+            "points":[Point{x_nm:4_000_000,y_nm:-7_620_000},Point{x_nm:4_000_000,y_nm:-2_540_000},Point{x_nm:10_160_000,y_nm:-2_540_000}],"expected_revision":revision}));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        h.key_press(Key::X);
+        h.run();
+        let bad = Point { x_nm: 3_500_000, y_nm: -2_540_000 };
+        if shove {
+            right_click_route(&mut h, bad);
+            click(&mut h, "Shove tracks");
+        }
+        h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+        click_route(&mut h, bad);
+        h.run_steps(100);
+        assert!(!h.state().views.active.board.tracks.routing(), "invalid start stayed active, shove={shove}");
+        assert!(h.state().views.active.board.tracks.tool);
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        click_route(&mut h, Point { x_nm: 1_270_000, y_nm: -5_080_000 });
+        click_route(&mut h, Point { x_nm: 2_540_000, y_nm: -5_080_000 });
+        h.key_press(Key::Enter);
+        h.run_steps(100);
+        assert_eq!(h.state().session.revision(), revision + 1, "a clear route could not be placed, shove={shove}; {:?}", h.state().message);
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// Shared-net parallel rails must retain spacing in the actual displayed displacement, even
+/// though they are already electrically joined by a branch and ordinary DRC exempts that net.
+#[test]
+fn shoved_connected_rails_keep_spacing_in_the_editor() {
+    use pcbcraft_engine::board::geometry::Contour;
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        let mut h = routable();
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        let layer = layer_named(&h, "Top");
+        let mut rail_ids = Vec::new();
+        for (points, width) in [
+            (vec![Point { x_nm: 0, y_nm: 5_000_000 }, Point { x_nm: 20_000_000, y_nm: 5_000_000 }], 500_000),
+            (vec![Point { x_nm: 0, y_nm: 5_800_000 }, Point { x_nm: 20_000_000, y_nm: 5_800_000 }], 250_000),
+            (vec![Point { x_nm: 17_000_000, y_nm: 5_000_000 }, Point { x_nm: 17_000_000, y_nm: 8_000_000 }], 250_000),
+        ] {
+            let old: BTreeSet<_> = tracks(&h).iter().map(|t| t.id).collect();
+            let rev = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"points":points,"width_nm":width,"expected_revision":rev}));
+            rail_ids.push(tracks(&h).iter().find(|t| !old.contains(&t.id)).unwrap().id);
+        }
+        let pad =
+            h.state().session.project().unwrap().boards().next().unwrap().footprints().flat_map(|f| f.pads).find(|p| p.net.is_some()).unwrap().center;
+        let rev = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS,&json!({"layer":layer,"points":[pad,Point {y_nm:5_000_000,..pad},Point{x_nm:0,y_nm:5_000_000}],"width_nm":250_000,"expected_revision":rev}));
+        h.run();
+        h.query_all_by_label("Fit board").next().unwrap().click();
+        h.run();
+        assert_eq!(h.state().message, None);
+        let original = tracks(&h);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        let start = Point { x_nm: 6_858_000, y_nm: 7_366_000 };
+        let target = Point { x_nm: 14_224_000, y_nm: 4_572_000 };
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, start);
+        click(&mut h, "Shove tracks");
+        h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+        click_route(&mut h, start);
+        h.hover_at(at(&h, target));
+        h.run_steps(200);
+        let displayed = h.state().views.active.board.tracks.replacements().to_vec();
+        let paths = |id| {
+            let original = original.iter().find(|t| t.id == id).unwrap();
+            let points = displayed.iter().find(|r| r.track == id).map_or_else(|| vec![original.start, original.end], |r| r.points.clone());
+            points.windows(2).map(|p| Contour::segment(p[0], p[1], original.width_nm).unwrap()).collect::<Vec<_>>()
+        };
+        let (a, b) = (paths(rail_ids[0]), paths(rail_ids[1]));
+        let gap = a.iter().flat_map(|a| b.iter().map(move |b| a.gap(b))).fold(f64::INFINITY, f64::min);
+        assert!(gap >= 200_000., "{theme:?} preview collapsed same-net rail clearance to {gap}");
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        click_route(&mut h, target);
+        h.key_press_modifiers(Modifiers::CTRL, Key::Enter);
+        h.run_steps(100);
+        assert!(h.state().session.revision() <= revision + 1);
+        if h.state().session.revision() == revision + 1 {
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap(), "a refused route left a partial shove behind");
+    }
+}
+
+/// Routing from an unconnected pad pushes a connected pair of rails ahead instead of
+/// sending the new route behind the footprint. Publication retains the pad's separate island.
+#[test]
+fn shove_from_an_unconnected_pad_pushes_both_rails_forward() {
+    let mut h = routable_with("resistor-0805");
+    let target = h.state().session.project().unwrap().board_target().unwrap();
+    let footprint = h.state().session.project().unwrap().board_view(target).unwrap().footprints().min_by_key(|f| f.position.x_nm).unwrap();
+    let revision = h.state().session.revision();
+    let (id, position) = (footprint.id.clone(), footprint.position);
+    h.state_mut().run(
+        pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":id,"x_nm":position.x_nm,"y_nm":position.y_nm,"rotation":180,"expected_revision":revision}),
+    );
+    h.run();
+    let footprint = h.state().session.project().unwrap().board_view(target).unwrap().footprints().min_by_key(|f| f.position.x_nm).unwrap();
+    let start = footprint.pads.iter().find(|p| p.net.is_none()).unwrap().center;
+    let named = footprint.pads.iter().find(|p| p.net.is_some()).unwrap().center;
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let p = |x, y| Point { x_nm: named.x_nm + x, y_nm: named.y_nm + y };
+    for (points, width) in [
+        (vec![named, p(0, 5_000_000)], 500_000),
+        (vec![p(0, 5_000_000), p(20_000_000, 5_000_000)], 500_000),
+        (vec![p(975_000, 5_800_000), p(20_975_000, 5_800_000)], 250_000),
+        (vec![p(17_975_000, 5_000_000), p(17_975_000, 8_000_000)], 250_000),
+    ] {
+        let revision = h.state().session.revision();
+        h.state_mut().run(pcbcraft_engine::ADD_TRACKS, &json!({"layer":layer,"points":points,"width_nm":width,"expected_revision":revision}));
+        assert_eq!(h.state().message, None);
+    }
+    h.run();
+    h.query_all_by_label("Fit board").next().unwrap().click();
+    h.run();
+    let originals = tracks(&h);
+    let rails: Vec<_> = originals.iter().filter(|t| t.start.y_nm == t.end.y_nm).cloned().collect();
+    assert_eq!(rails.len(), 2);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let end = p(4_000_000, 6_500_000);
+    {
+        use pcbcraft_engine::board::route::{DEFAULT_BUDGET, Mode, Outcome, Posture, Request};
+        let request = Request {
+            mode: Mode::Shove,
+            merge_same_net: false,
+            fixed: Vec::new(),
+            head: start,
+            target: end,
+            origin: None,
+            layer: Uuid::parse_str(&layer).unwrap(),
+            width_nm: 250_000,
+            posture: Posture::Diagonal,
+            flipped: false,
+            previous: Vec::new(),
+        };
+        let query = h.state().session.clearance_query_with_rules(target, &json!({})).unwrap();
+        let plan = h.state().session.plan_route(&query, &request, DEFAULT_BUDGET, &|| false).unwrap();
+        assert_eq!(plan.outcome, Outcome::Reached, "direct plan: {plan:?}");
+        assert_eq!(plan.replacements.len(), 2, "direct plan: {plan:?}");
+    }
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    click_route(&mut h, start);
+    h.hover_at(at(&h, end));
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(
+        h.state().views.active.board.tracks.displacement_preview(),
+        2,
+        "start {start:?} end {end:?}, startscreen {:?} endscreen {:?}; {:?}",
+        at(&h, start),
+        at(&h, end),
+        h.state().views.active.board.tracks
+    );
+    click_route(&mut h, end);
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    for rail in rails {
+        let changed = tracks(&h).into_iter().find(|t| t.id == rail.id).unwrap();
+        assert!(changed.start.y_nm >= rail.start.y_nm && changed.end.y_nm >= rail.start.y_nm, "rail moved behind the approach");
+        assert_ne!(changed, rail);
+    }
+    let board = h.state().session.project().unwrap().board_view(target).unwrap();
+    assert!(
+        !board
+            .check_design(board.effective_rules().values)
+            .violations
+            .iter()
+            .any(|v| matches!(v.kind, pcbcraft_engine::board::drc::Kind::Clearance | pcbcraft_engine::board::drc::Kind::Short))
+    );
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// A native-command rail scene with fixed pad contacts, a branch, locked rail and fixed via.
+fn parallel_rail_board<'a>() -> (Harness<'a, PcbApp>, Track) {
+    let mut h = routable_spaced("resistor-0805", 20_000_000);
+    let target = h.state().session.project().unwrap().board_target().unwrap();
+    let poses: Vec<_> = h.state().session.project().unwrap().board_view(target).unwrap().footprints().map(|f| (f.id.clone(), f.position)).collect();
+    for (id, at) in poses {
+        let rev = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::SET_FOOTPRINT_TRANSFORM,
+            &json!({"footprint":id,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":180,"expected_revision":rev}),
+        );
+    }
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    for (points, width) in [
+        (vec![p(-975_000, 0), p(-975_000, 5_000_000), p(19_025_000, 5_000_000), p(19_025_000, 0)], 500_000),
+        (vec![p(0, 5_800_000), p(20_000_000, 5_800_000)], 250_000),
+        (vec![p(17_000_000, 5_000_000), p(17_000_000, 8_000_000)], 250_000),
+        (vec![p(4_000_000, -4_000_000), p(16_000_000, -4_000_000)], 500_000),
+    ] {
+        let rev = h.state().session.revision();
+        h.state_mut()
+            .run(pcbcraft_engine::ADD_TRACKS, &json!({"board":target.board,"layer":layer,"points":points,"width_nm":width,"expected_revision":rev}));
+        assert_eq!(h.state().message, None);
+    }
+    let locked = tracks(&h).into_iter().find(|t| t.start.y_nm == -4_000_000).unwrap();
+    let rev = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target.board,"tracks":[locked.id],"locked":true,"expected_revision":rev}));
+    let rev = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"board":target.board,"at":p(12_000_000,-4_000_000),"via_diameter_nm":1_000_000,"via_drill_nm":500_000,"expected_revision":rev}),
+    );
+    h.run();
+    h.query_all_by_label("Fit board").next().unwrap().click();
+    h.run();
+    (h, locked)
+}
+
+/// Moving past the upper rail retains both displaced paths and commits the same candidate;
+/// the nearby locked rail/via stay fixed and the original board returns with one Undo.
+#[test]
+fn shove_preview_stays_displaced_at_the_top_of_the_channel() {
+    let (mut h, locked) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let rev = h.state().session.revision();
+    let start = p(8_128_000, 9_398_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    click_route(&mut h, start);
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    for y in [1_016_000, -1_524_000, -2_159_000] {
+        h.hover_at(at(&h, p(8_128_000, y)));
+        h.run_steps(300);
+        assert_eq!(
+            h.state().views.active.board.tracks.displacement_preview(),
+            2,
+            "y={y}: {:?}",
+            h.state().views.active.board.tracks.preparation_status()
+        );
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+    let stopped = p(8_128_000, -2_159_000);
+    let beyond = p(8_128_000, -2_667_000);
+    h.hover_at(at(&h, beyond));
+    h.run_steps(300);
+    assert_eq!(h.state().views.active.board.tracks.displacement_preview(), 2, "retain the last valid shove instead of walking around");
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    let retained = if preview_ends_at(&h, ink, at(&h, beyond)) { beyond } else { stopped };
+    let forbidden = p(8_128_000, -3_683_000);
+    h.hover_at(at(&h, forbidden));
+    h.run_steps(300);
+    assert_eq!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route blocked"));
+    assert_eq!(h.state().views.active.board.tracks.displacement_preview(), 2);
+    assert!(preview_ends_at(&h, ink, at(&h, retained)));
+    assert!(!preview_ends_at(&h, ink, at(&h, forbidden)));
+    click_route(&mut h, forbidden);
+    h.run_steps(300);
+    assert_eq!(h.state().session.revision(), rev, "a blocked preview cannot commit");
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    h.hover_at(at(&h, stopped));
+    h.run_steps(300);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, p(8_128_000, -2_159_000));
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), rev + 1);
+    let kept = tracks(&h).into_iter().find(|t| t.id == locked.id).unwrap();
+    assert_eq!((kept.start, kept.end), (locked.start, locked.end));
+    assert!(kept.locked);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// A rightward cursor sweep can retry the return approach without trapping the second rail.
+/// Preview and commit share the same two replacements and Undo restores the original board.
+#[test]
+fn lateral_shove_preview_preserves_the_branch_return_corridor() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let start = p(2_159_000, 6_604_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    click_route(&mut h, start);
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    for x in [11_176_000, 12_192_000, 13_208_000, 13_970_000] {
+        let target = p(x, -1_016_000);
+        h.hover_at(at(&h, target));
+        h.run_steps(300);
+        assert_eq!(h.state().views.active.board.tracks.displacement_preview(), 2);
+        assert!(preview_ends_at(&h, ink, at(&h, target)), "cursor {target:?}");
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, p(13_970_000, -1_016_000));
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// The return bend stays short during a lateral sweep, and the exact displayed replacements
+/// prepare and publish together without changing the branch contacts or Undo boundary.
+#[test]
+fn shove_return_preview_does_not_form_a_long_hairpin() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let lower = tracks(&h).iter().find(|t| t.start == p(0, 5_800_000) && t.end == p(20_000_000, 5_800_000)).unwrap().id;
+    h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let start = p(3_556_000, 7_366_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    click_route(&mut h, start);
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    for x in [12_954_000, 13_208_000, 13_462_000] {
+        let target = p(x, 254_000);
+        h.hover_at(at(&h, target));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, target)));
+        let replacements = h.state().views.active.board.tracks.replacements();
+        assert_eq!(replacements.len(), 2);
+        let path = &replacements.iter().find(|r| r.track == lower).unwrap().points;
+        let retreat: i64 = path.windows(2).map(|p| (p[0].x_nm - p[1].x_nm).max(0)).sum();
+        assert!(retreat <= 250_000, "preview backtracks {retreat} nm: {path:?}");
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, p(13_462_000, 254_000));
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// A clearance-limited preview fixes its visible legal endpoint even with the cursor inside
+/// clearance. Publication uses that adjusted endpoint and Undo restores the original board.
+#[test]
+fn walkaround_preview_and_placement_use_the_visible_boundary() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    h.state_mut().views.active.camera.center_on(p(3_048_000, 3_556_000));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let old_ids: BTreeSet<_> = tracks(&h).iter().map(|t| t.id).collect();
+    let revision = h.state().session.revision();
+    let head = p(6_096_000, 6_858_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, head);
+    click(&mut h, "Walk around obstacles");
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    click_route(&mut h, head);
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    for y in [1_016_000, 2_032_000, 3_048_000, 4_064_000] {
+        let target = p(-1_524_000, y);
+        h.hover_at(at(&h, target));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, p(-1_550_002, y))), "boundary at y={y}");
+        assert!(!preview_ends_at(&h, ink, at(&h, target)));
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    let pressed = at(&h, p(-1_524_000, 4_064_000));
+    let released = at(&h, p(-1_524_000, 3_810_000));
+    h.event(egui::Event::PointerButton { pos: pressed, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.hover_at(released);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: released, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    let outside = h.get_by_label("PCB canvas").rect().right_top() + egui::vec2(20., 20.);
+    h.event(egui::Event::PointerMoved(outside));
+    h.run();
+    assert_eq!(h.state().session.revision(), revision);
+    h.key_press(Key::Enter);
+    for step in 0..200 {
+        h.hover_at(outside + egui::vec2(step as f32 * 0.1, 0.));
+        h.step();
+    }
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let added: Vec<_> = tracks(&h).into_iter().filter(|t| !old_ids.contains(&t.id)).collect();
+    assert!(added.iter().any(|t| t.end == p(-1_550_002, 3_810_000)), "placed endpoint must match visible clearance boundary: {added:?}");
+    assert!(!added.iter().any(|t| t.end == p(-1_524_000, 3_810_000)), "blocked raw cursor cannot become copper");
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Walkaround follows both pointer axes for legal pad-gap targets and keeps a blocked target
+/// separate from the visible fallback, without placing it or changing copper membership.
+#[test]
+fn walkaround_preview_follows_both_axes_in_the_pad_gap() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    h.state_mut().views.active.camera.center_on(p(4_000_000, 2_500_000));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let start = p(2_286_000, 6_350_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Walk around obstacles");
+    click_route(&mut h, start);
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    let base = pcbcraft_chrome::Tokens::get().board_front;
+    for y in [-508_000, -254_000, 254_000] {
+        for x in [-127_000, 0, 127_000] {
+            let target = p(x, y);
+            h.hover_at(at(&h, target));
+            h.run_steps(300);
+            assert!(preview_ends_at(&h, base, at(&h, target)), "cursor {target:?}: {:?}", h.state().views.active.board.tracks.preparation_status());
+            assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        }
+    }
+    let blocked = p(254_000, -254_000);
+    h.hover_at(at(&h, blocked));
+    h.run_steps(300);
+    assert!(!preview_ends_at(&h, base, at(&h, blocked)));
+    assert_eq!(h.state().session.revision(), revision);
+    let end = p(0, -254_000);
+    h.hover_at(at(&h, end));
+    h.run_steps(300);
+    assert!(preview_ends_at(&h, base, at(&h, end)));
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, end);
+    h.key_press(Key::Enter);
+    h.run_steps(200);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Routing treats a press/move/release as placement even when it exceeds the ordinary click
+/// tolerance. Subsequent pointer motion cannot replace that released target before validation.
+#[test]
+fn route_placement_does_not_require_a_stationary_click() {
+    let mut h = routable();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let start = p(0, -5_080_000);
+    let pressed = p(2_540_000, -5_080_000);
+    let released = p(5_080_000, -5_080_000);
+    h.key_press(Key::X);
+    h.run();
+    click_route(&mut h, start);
+    let from = at(&h, pressed);
+    let to = at(&h, released);
+    h.hover_at(from);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.hover_at(to);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    let outside = h.get_by_label("PCB canvas").rect().right_top() + egui::vec2(20., 20.);
+    h.event(egui::Event::PointerMoved(outside));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    h.key_press(Key::Enter);
+    for step in 0..100 {
+        h.hover_at(outside + egui::vec2(step as f32 * 0.2, 0.));
+        h.step();
+    }
+    h.run_steps(100);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    let copper = tracks(&h);
+    assert_eq!(copper.len(), 1, "exactly the released vertex should be fixed");
+    assert_eq!((copper[0].start, copper[0].end), (start, released));
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Moving around a pad and continuing from a fixed top bend both retain a placeable
+/// clearance guide. A corner click publishes that guide through the ordinary transaction.
+#[test]
+fn walkaround_pad_bend_and_inside_corner_remain_placeable() {
+    for fixed in [false, true] {
+        let (mut h, _) = parallel_rail_board();
+        let p = |x, y| Point { x_nm: x, y_nm: y };
+        h.state_mut().views.active.camera.center_on(p(0, 2_540_000));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let old_ids: BTreeSet<_> = tracks(&h).iter().map(|t| t.id).collect();
+        let revision = h.state().session.revision();
+        let origin = p(-1_016_000, 6_096_000);
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, origin);
+        click(&mut h, "Walk around obstacles");
+        h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+        click_route(&mut h, origin);
+        let ink = pcbcraft_chrome::Tokens::get().board_front;
+        let above = p(-660_000, -900_000);
+        h.hover_at(at(&h, above));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, p(-660_000, -1_050_002))));
+        if fixed {
+            click_route(&mut h, above);
+            h.run_steps(300);
+        }
+        for target in [p(-254_000, 1_016_000), p(-300_000, 1_100_000), p(-200_000, 1_270_000)] {
+            h.hover_at(at(&h, target));
+            h.run_steps(300);
+            assert!(
+                preview_ends_at(&h, ink, at(&h, target)),
+                "fixed{fixed}, target{target:?}: {:?}",
+                h.state().views.active.board.tracks.preparation_status()
+            );
+            assert_eq!(h.state().session.revision(), revision);
+        }
+        let raw_corner = p(-508_000, 5_334_000);
+        let expected = p(-399_998, 4_424_998);
+        h.hover_at(at(&h, raw_corner));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, expected)), "fixed{fixed}: {:?}", h.state().views.active.board.tracks.preparation_status());
+        click_route(&mut h, raw_corner);
+        h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+        h.key_press(Key::Enter);
+        h.run_steps(300);
+        assert_eq!(h.state().message, None);
+        assert_eq!(h.state().session.revision(), revision + 1, "fixed{fixed}: {:?}", h.state().views.active.board.tracks.preparation_status());
+        let added: Vec<_> = tracks(&h).into_iter().filter(|t| !old_ids.contains(&t.id)).collect();
+        assert!(added.iter().any(|t| t.end == expected), "fixed{fixed}: {added:?}");
+        assert!(!added.iter().any(|t| t.end == raw_corner));
+        let target = h.state().session.project().unwrap().board_target().unwrap();
+        let board = h.state().session.project().unwrap().board_view(target).unwrap();
+        assert!(!board.check_design(board.effective_rules().values).violations.iter().any(|v| matches!(
+            v.kind,
+            pcbcraft_engine::board::drc::Kind::Clearance | pcbcraft_engine::board::drc::Kind::Short
+        )
+            && v.items.iter().any(|id| added.iter().any(|t| t.id.to_string() == *id))));
+        h.state_mut().run("edit.undo", &json!({}));
+        h.run();
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// Explicit Shove selection and a clicked U-shaped prefix must still displace the rails
+/// as the cursor advances from below them into the gap near the upper rail.
+#[test]
+fn shove_from_a_bent_prefix_advances_through_both_rails() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    for i in 0..12 {
+        let x = -12_000_000 + i * 500_000;
+        let revision = h.state().session.revision();
+        h.state_mut().run(
+            pcbcraft_engine::ADD_TRACKS,
+            &json!({"layer":layer,"width_nm":250_000,
+            "points":[p(x,9_000_000),p(x,14_000_000)],"expected_revision":revision}),
+        );
+        assert_eq!(h.state().message, None);
+    }
+    h.state_mut().views.active.camera.center_on(p(3_048_000, 4_826_000));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let prefix = [p(-3_556_000, 3_810_000), p(-3_556_000, 6_096_000), p(254_000, 9_906_000), p(4_318_000, 9_906_000)];
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, prefix[0]);
+    click(&mut h, "Shove tracks");
+    for point in prefix {
+        click_route(&mut h, point);
+        h.run_steps(200);
+        assert_eq!(h.state().message, None);
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::CTRL));
+    let ink = pcbcraft_chrome::Tokens::get().board_front;
+    for y in [6_858_000, 6_604_000, 6_350_000, 6_096_000, 5_842_000, 5_588_000, 5_334_000, 5_080_000] {
+        let target = p(7_874_000, y);
+        h.hover_at(at(&h, target));
+        h.run_steps(300);
+        assert!(preview_ends_at(&h, ink, at(&h, target)), "y{y}: {:?}", h.state().views.active.board.tracks.preparation_status());
+        if y <= 5_334_000 {
+            assert_eq!(
+                h.state().views.active.board.tracks.displacement_preview(),
+                2,
+                "y{y}: {:?}",
+                h.state().views.active.board.tracks.preparation_status()
+            );
+        }
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    click_route(&mut h, p(7_874_000, 5_080_000));
+    h.key_press(Key::Enter);
+    h.run_steps(300);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
 }

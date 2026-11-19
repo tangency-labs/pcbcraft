@@ -15,7 +15,9 @@ use pcbcraft_engine::{
     CommandError,
     board::{
         class_rules::Applied,
+        route::Mode,
         setup::{LayerPurpose, Side},
+        track::replacements::Replacement,
         track::{DEFAULT_VIA_DIAMETER_NM, DEFAULT_VIA_DRILL_NM, DEFAULT_WIDTH_NM, MAX_PATH_POINTS, Track, Via},
         view::{BoardTarget, BoardView, CopperLayers},
     },
@@ -40,6 +42,9 @@ const PICK_PX: f32 = 4.;
 #[derive(Clone, Debug)]
 struct Draft {
     source: ViewInput,
+    mode: Mode,
+    merge_same_net: bool,
+    replacements: Vec<Replacement>,
     /// Existing copper that stays emphasized until the draft ends.
     contact: Option<RouteContact>,
     /// The layer the first segment runs on.
@@ -106,6 +111,9 @@ struct SegmentDrag {
 pub(super) struct State {
     preparation: preparation::Preparation,
     planning: planning::Planning,
+    mode: Mode,
+    merge_same_net: bool,
+    preview_target: Option<(Point, bool)>,
     snap: Option<(String, Point, RouteContact)>,
     snap_source: Option<ViewInput>,
     retry_route: Option<Draft>,
@@ -154,6 +162,9 @@ impl Default for State {
         Self {
             preparation: Default::default(),
             planning: Default::default(),
+            mode: Mode::default(),
+            merge_same_net: false,
+            preview_target: None,
             snap: None,
             snap_source: None,
             retry_route: None,
@@ -229,6 +240,45 @@ impl State {
         }
     }
 
+    /// Change this view's routing policy before fixing vertices. Existing plans and prepared
+    /// candidates are revoked together; a fixed prefix cannot silently change policy.
+    pub(super) fn select_mode(&mut self, mode: Mode) -> bool {
+        if self.draft.as_ref().is_some_and(|draft| draft.points.len() > 1) {
+            return false;
+        }
+        self.mode = mode;
+        self.planning.cancel();
+        self.preparation.cancel();
+        if let Some(draft) = &mut self.draft {
+            draft.mode = mode;
+            draft.replacements.clear();
+        }
+        true
+    }
+    /// Revoke speculative work when the upcoming gesture's same-net policy changes.
+    pub(super) fn select_same_net_merge(&mut self, merge: bool) -> bool {
+        if self.draft.as_ref().is_some_and(|draft| draft.points.len() > 1) {
+            return false;
+        }
+        self.merge_same_net = merge;
+        self.planning.cancel();
+        self.preparation.cancel();
+        if let Some(draft) = &mut self.draft {
+            draft.merge_same_net = merge;
+            draft.replacements.clear();
+        }
+        true
+    }
+    /// Source-addressed paths currently replacing live copper in this view's preview. The
+    /// retained final candidate uses its captured draft after planning ownership is released.
+    pub(super) fn replacements(&self) -> &[Replacement] {
+        self.draft.as_ref().or(self.retry_route.as_ref()).map_or(&[], |draft| self.planning.replacements(draft, self.width_nm))
+    }
+    /// Expose only complete displayed displacement geometry to opt-in replay assertions.
+    #[cfg(any(test, feature = "performance-harness"))]
+    pub(super) fn displacement_preview(&self) -> usize {
+        self.replacements().len()
+    }
     /// Retain an explicit ribbon width across pickups until board/default-rule replacement.
     pub(super) fn select_width(&mut self, width: i64) {
         self.width_nm = width;
@@ -360,6 +410,22 @@ impl State {
             return true;
         }
         !std::mem::take(&mut self.selected).is_empty()
+    }
+    /// Reject a rule-invalid first click without disarming routing. A valid fixed prefix stays
+    /// owned by its gesture even when the current head/target becomes obstructed. Revoking the
+    /// planning and preparation generations prevents a late completion from adopting the click.
+    fn release_blocked_pickup(&mut self) -> bool {
+        if !self.draft.as_ref().is_some_and(|draft| draft.points.len() == 1) || !self.planning.start_blocked() {
+            return false;
+        }
+        self.draft = None;
+        self.snap = None;
+        self.preview_target = None;
+        self.planning.cancel();
+        self.preparation.cancel();
+        self.retry_route = None;
+        self.committed = None;
+        true
     }
     /// Whether a route is in progress, so layer keys should place a via instead.
     pub(super) fn routing(&self) -> bool {
@@ -683,6 +749,10 @@ fn add(state: &mut State, draft: Draft) -> Option<Command> {
         vias: draft.changes.iter().map(|(at, _)| draft.points[*at]).collect(),
     });
     let mut params = json!({"layer":draft.start,"width_nm":state.width_nm,"points":draft.points,"expected_revision":draft.source.revision});
+    if draft.mode == Mode::Shove {
+        params["replacements"] = json!(draft.replacements);
+        params["merge_same_net"] = json!(draft.merge_same_net);
+    }
     if !draft.changes.is_empty() {
         params["layer_changes"] = json!(draft.changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect::<Vec<_>>());
         params["via_diameter_nm"] = json!(state.via_diameter_nm);
@@ -698,10 +768,13 @@ enum RouteAction {
     Via,
     Posture,
     Cancel,
+    Walkaround,
+    Shove,
+    ToggleMerge,
 }
 
 /// Present the route's existing commands. Escape cancels the same step as the canvas shortcut.
-fn route_menu(ui: &mut Ui, draft: Option<&Draft>, via: bool) -> Option<RouteAction> {
+fn route_menu(ui: &mut Ui, draft: Option<&Draft>, via: bool, mode: Mode, merge_same_net: bool) -> Option<RouteAction> {
     let keys = egui::Modifiers { ctrl: ui.input(|input| input.modifiers.ctrl), ..egui::Modifiers::NONE };
     if ui.input_mut(|input| input.consume_key(keys, egui::Key::Escape)) {
         ui.close();
@@ -719,6 +792,17 @@ fn route_menu(ui: &mut Ui, draft: Option<&Draft>, via: bool) -> Option<RouteActi
     }
     if MenuItem::new("Flip track posture").tool_icon(ToolIcon::Track).shortcut("/").show(ui) {
         return Some(RouteAction::Posture);
+    }
+    menu::separator(ui);
+    let can_change = draft.is_none_or(|draft| draft.points.len() == 1);
+    if MenuItem::new("Walk around obstacles").choice(mode == Mode::Walkaround).enabled(can_change).show(ui) {
+        return Some(RouteAction::Walkaround);
+    }
+    if MenuItem::new("Shove tracks").choice(mode == Mode::Shove).enabled(can_change).show(ui) {
+        return Some(RouteAction::Shove);
+    }
+    if mode == Mode::Shove && MenuItem::new("Merge same-net copper").toggle(merge_same_net).enabled(can_change).show(ui) {
+        return Some(RouteAction::ToggleMerge);
     }
     menu::separator(ui);
     MenuItem::new("Cancel").icon(MenuIcon::Close).shortcut("Esc").show(ui).then_some(RouteAction::Cancel)
@@ -783,6 +867,9 @@ pub(super) fn interact(
     // a Delete pressed while another gesture owned input from deleting on a later frame.
     let KeyRequests { delete, posture, backspace, finish, via, via_side, move_copper, select_connected, drag_segment } = state.take_key_requests();
     if state.preparation.committing() || state.planning.committing() {
+        if finish || response.double_clicked() {
+            state.planning.finish_pending_vertex();
+        }
         if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
             state.escape();
         }
@@ -855,8 +942,18 @@ pub(super) fn interact(
         let Some(layer) = active else { return out };
         let menu_open = response.context_menu_opened();
         let anchor = menu_anchor(response);
-        let action = menu::context(response, |ui| route_menu(ui, state.draft.as_ref(), paired_layer(view, layer, hidden).is_some()))
-            .and_then(|menu| menu.inner);
+        let action = menu::context(response, |ui| {
+            route_menu(ui, state.draft.as_ref(), paired_layer(view, layer, hidden).is_some(), state.mode, state.merge_same_net)
+        })
+        .and_then(|menu| menu.inner);
+        if matches!(action, Some(RouteAction::Walkaround | RouteAction::Shove)) {
+            state.select_mode(if action == Some(RouteAction::Shove) { Mode::Shove } else { Mode::Walkaround });
+            return out;
+        }
+        if action == Some(RouteAction::ToggleMerge) {
+            state.select_same_net_merge(!state.merge_same_net);
+            return out;
+        }
         if action == Some(RouteAction::Cancel) {
             state.escape();
             return out;
@@ -864,15 +961,28 @@ pub(super) fn interact(
         if action.is_none() && (menu_open || response.secondary_clicked()) {
             return out;
         }
+        // Routing owns this gesture, so a release that exceeded the generic click tolerance
+        // still fixes a vertex. Other canvas tools retain their ordinary drag behavior.
+        let place = response.clicked() || response.drag_stopped_by(PointerButton::Primary);
+        let released = (place && action.is_none())
+            .then(|| {
+                ui.input(|input| {
+                    input.events.iter().rev().find_map(|event| match event {
+                        egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers } => Some((*pos, *modifiers)),
+                        _ => None,
+                    })
+                })
+            })
+            .flatten();
         let pointer = if action == Some(RouteAction::Via) {
             anchor
-        } else if response.clicked() {
-            response.interact_pointer_pos()
+        } else if place {
+            released.map(|(pos, _)| pos).or_else(|| response.interact_pointer_pos())
         } else {
             response.hover_pos()
         };
         let pointer = pointer.filter(|point| rect.contains(*point));
-        let snap_to_grid = !ui.input(|input| input.modifiers.ctrl);
+        let snap_to_grid = !released.map_or_else(|| ui.input(|input| input.modifiers.ctrl), |(_, modifiers)| modifiers.ctrl);
         if posture || action == Some(RouteAction::Posture) {
             state.diagonal_first = !state.diagonal_first;
         }
@@ -881,6 +991,7 @@ pub(super) fn interact(
         {
             state.planning.cancel();
             state.preparation.cancel();
+            draft.replacements.clear();
             // Undo the most recent step: a via at the last vertex first, then the vertex itself.
             if draft.changes.last().is_some_and(|(at, _)| *at + 1 == draft.points.len()) {
                 draft.changes.pop();
@@ -901,7 +1012,8 @@ pub(super) fn interact(
         {
             let layer = draft.layer.clone();
             let candidate = route_target(pointer, camera, rect, view, &layer, snap_to_grid, false);
-            let (at, _) = state.snap_target(candidate, pointer, camera, rect, &layer);
+            let (at, contact) = state.snap_target(candidate, pointer, camera, rect, &layer);
+            state.preview_target = Some((at, contact.is_some()));
             let Some(draft) = &mut state.draft else { return out };
             if let Some(policy) = &draft.via_rules {
                 match policy.via_sizes(state.via_diameter_override, state.via_drill_override) {
@@ -933,7 +1045,7 @@ pub(super) fn interact(
             return out;
         }
         let Some(pointer) = pointer else { return out };
-        if action.is_some() || !response.clicked() {
+        if action.is_some() || !place {
             return out;
         }
         let (at, contact) = route_target(pointer, camera, rect, view, layer, snap_to_grid, state.draft.is_none());
@@ -947,6 +1059,9 @@ pub(super) fn interact(
                     Ok((clearance_nm, via_rules)) => {
                         state.draft = Some(Draft {
                             source,
+                            mode: state.mode,
+                            merge_same_net: state.merge_same_net,
+                            replacements: Vec::new(),
                             contact,
                             start: layer.to_owned(),
                             layer: layer.to_owned(),
@@ -968,6 +1083,9 @@ pub(super) fn interact(
                     (state.width_nm, state.via_diameter_nm, state.via_drill_nm),
                     Some(planning::Action::Vertex { finish: contact.is_some() || response.double_clicked() }),
                 );
+                if response.double_clicked() {
+                    state.planning.finish_pending_vertex();
+                }
                 state.draft = Some(draft);
             }
         }
@@ -1145,7 +1263,18 @@ pub(super) fn paint(
     let mut reshaped: Vec<(Uuid, Point, Point)> =
         state.segment.as_ref().map_or_else(|| state.committed_ends.clone(), |drag| dragged_ends(view, drag.track, drag.offset));
     reshaped.extend(carried.iter().map(|track| (track.id, track.start, track.end)));
+    let replacements = state.replacements();
+    let replacements: std::collections::BTreeMap<_, _> = replacements.iter().map(|r| (r.track, r)).collect();
     for track in tracks {
+        if let Some(replacement) = replacements.get(&track.id) {
+            for leg in replacement.points.windows(2) {
+                let ends = [camera.screen(leg[0], rect), camera.screen(leg[1], rect)];
+                let width = width_px(camera, rect, track.width_nm);
+                labels.cover_track(ends, width);
+                pcbcraft_chrome::board::track(&painter, ends, width, layer_color(view, appearance, &track.layer.to_string()), false, true);
+            }
+            continue;
+        }
         let selected = state.selected.contains(&track.id);
         let (start, end) = reshaped
             .iter()
@@ -1209,6 +1338,73 @@ pub(super) fn paint(
     labels
 }
 
+/// Resolve requests before copper painting, keeping displaced originals and replacement
+/// paths in the same frame. Cold work stays in the bounded snapshot queue.
+pub(super) fn prepare_preview(response: &Response, camera: &Camera, view: BoardView<'_>, state: &mut State, active: Option<&str>) {
+    state.preview_target = None;
+    let rect = response.rect;
+    let Some(draft) = &state.draft else {
+        return;
+    };
+    if let Some(pointer) = menu_anchor(response).or_else(|| response.hover_pos()).filter(|p| rect.contains(*p)) {
+        let layer = draft.layer.clone();
+        let snap_to_grid = !response.ctx.input(|input| input.modifiers.ctrl);
+        let candidate = route_target(pointer, camera, rect, view, &layer, snap_to_grid, false);
+        let (at, contact) = state.snap_target(candidate, pointer, camera, rect, &layer);
+        state.preview_target = Some((at, contact.is_some()));
+        if let Some(draft) = &state.draft {
+            state.planning.request(draft, view.target, at, state.diagonal_first, (state.width_nm, state.via_diameter_nm, state.via_drill_nm), None);
+        }
+    } else if !state.planning.committing() {
+        return;
+    }
+    if let Some(draft) = &state.draft {
+        let Some(path) = state.planning.current_path() else {
+            if !state.preparation.committing() {
+                state.preparation.cancel();
+            }
+            return;
+        };
+        let mut changes = draft.changes.clone();
+        if let Some(next) = state.planning.via_layer()
+            && path.len() > 1
+        {
+            let at = path.len() - 1;
+            if !changes.iter().any(|(existing, _)| *existing == at) {
+                changes.push((at, next.to_owned()));
+            }
+        }
+        // Queue the exact geometry already resolved for painting; do not project every pad
+        // a second time merely to prepare the same pointer request.
+        if state.planning.current_ready() && (2..=MAX_PATH_POINTS).contains(&path.len()) && Some(draft.layer.as_str()) == active {
+            let mut params = json!({"board":view.target.board,"layer":draft.start,"width_nm":state.width_nm,"points":path,"expected_revision":draft.source.revision});
+            if draft.mode == Mode::Shove {
+                params["replacements"] = json!(state.planning.replacements(draft, state.width_nm));
+                params["merge_same_net"] = json!(draft.merge_same_net);
+            }
+            if !changes.is_empty() {
+                params["layer_changes"] = json!(changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect::<Vec<_>>());
+                params["via_diameter_nm"] = json!(state.via_diameter_nm);
+                params["via_drill_nm"] = json!(state.via_drill_nm);
+            }
+            if state
+                .preparation
+                .request(
+                    Command::new(draft.source, pcbcraft_engine::ADD_TRACKS, params),
+                    active.map(str::to_owned),
+                    (state.width_nm, state.via_diameter_nm, state.via_drill_nm),
+                    false,
+                )
+                .is_ok()
+            {
+                state.planning.mark_preparation_requested();
+            }
+        } else if !state.preparation.committing() {
+            state.preparation.cancel();
+        }
+    }
+}
+
 /// Preview routing or standalone via placement while the tool owns the hovered canvas. Routing
 /// replaces the system pointer with a live crosshair and marks the target used by the route leg.
 /// While the menu is open the preview stays at its opening point and the system pointer returns.
@@ -1244,47 +1440,23 @@ pub(super) fn paint_draft(
     }
     let Some(layer) = state.draft.as_ref().map(|draft| draft.layer.as_str()).or(active.filter(|_| state.tool)) else { return };
     let layer = layer.to_owned();
-    let snap_to_grid = !painter.ctx().input(|input| input.modifiers.ctrl);
-    let (at, contact) = route_target(pointer, camera, rect, view, &layer, snap_to_grid, state.draft.is_none());
-    let (at, contact) = state.snap_target((at, contact), pointer, camera, rect, &layer);
+    let (at, contacted) = state.preview_target.filter(|_| state.draft.is_some()).unwrap_or_else(|| {
+        let snap_to_grid = !painter.ctx().input(|input| input.modifiers.ctrl);
+        let candidate = route_target(pointer, camera, rect, view, &layer, snap_to_grid, state.draft.is_none());
+        let (at, contact) = state.snap_target(candidate, pointer, camera, rect, &layer);
+        (at, contact.is_some())
+    });
     if let Some(draft) = &state.draft {
-        state.planning.request(draft, view.target, at, state.diagonal_first, (state.width_nm, state.via_diameter_nm, state.via_drill_nm), None);
-        let changes_at = |points: usize| {
-            let mut changes = draft.changes.clone();
-            if let Some(next) = state.planning.via_layer()
-                && points > 1
-            {
-                let at = points - 1;
-                if !changes.iter().any(|(existing, _)| *existing == at) {
-                    changes.push((at, next.to_owned()));
-                }
-            }
-            changes
-        };
-        // Validate exactly what the click adopts. A one-point reached plan can retain an
-        // older, longer display preview whose endpoint must never determine the via location.
-        if let Some(path) = state.planning.current_path()
-            && (2..=MAX_PATH_POINTS).contains(&path.len())
-            && Some(draft.layer.as_str()) == active
-        {
-            let changes = changes_at(path.len());
-            let mut params = json!({"board":view.target.board,"layer":draft.start,"width_nm":state.width_nm,"points":path,"expected_revision":draft.source.revision});
-            if !changes.is_empty() {
-                params["layer_changes"] = json!(changes.iter().map(|(at, layer)| json!({"at":at,"layer":layer})).collect::<Vec<_>>());
-                params["via_diameter_nm"] = json!(state.via_diameter_nm);
-                params["via_drill_nm"] = json!(state.via_drill_nm);
-            }
-            let _ = state.preparation.request(
-                Command::new(draft.source, pcbcraft_engine::ADD_TRACKS, params),
-                active.map(str::to_owned),
-                (state.width_nm, state.via_diameter_nm, state.via_drill_nm),
-                false,
-            );
-        } else if !state.preparation.committing() {
-            state.preparation.cancel();
-        }
         let path = state.planning.preview(draft, state.width_nm);
-        let changes = changes_at(path.len());
+        let mut changes = draft.changes.clone();
+        if let Some(next) = state.planning.via_layer()
+            && path.len() > 1
+        {
+            let at = path.len() - 1;
+            if !changes.iter().any(|(existing, _)| *existing == at) {
+                changes.push((at, next.to_owned()));
+            }
+        }
         let layers = segment_layers(&draft.start, &changes, path.len());
         let path: Vec<_> = path.into_iter().map(|point| camera.screen(point, rect)).collect();
         let width = width_px(camera, rect, state.width_nm);
@@ -1305,7 +1477,7 @@ pub(super) fn paint_draft(
     }
     if menu_anchor.is_none() {
         painter.ctx().set_cursor_icon(egui::CursorIcon::None);
-        pcbcraft_chrome::cursor::track(painter, pointer, camera.screen(at, rect), contact.is_some());
+        pcbcraft_chrome::cursor::track(painter, pointer, camera.screen(at, rect), contacted);
     }
 }
 

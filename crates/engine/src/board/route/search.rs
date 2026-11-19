@@ -18,15 +18,41 @@ pub(super) async fn yield_unit() {
 }
 
 /// Retain the walk's own stack and local geometry across budget boundaries without replay.
+pub(super) async fn walk(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
+    let mut walker = walkaround::Walker::new(query, request, budget, progress)?;
+    match walker.run_target(request).await {
+        Ok(mut plan) => {
+            if request.mode == Mode::Walkaround
+                && !plan.start_blocked
+                && plan.points.len() >= 2
+                && let Outcome::Blocked { last_legal } = plan.outcome
+            {
+                // The whole prefix was exact-confirmed, even if no nearby-goal refinement
+                // succeeded. Its displayed endpoint is still a valid vertex to fix.
+                plan.adjusted_target = Some(last_legal);
+            }
+            Ok(plan)
+        }
+        Err(walkaround::Stop::Exhausted) => Ok(Plan {
+            adjusted_target: None,
+            start_blocked: false,
+            replacements: Vec::new(),
+            shove: None,
+            points: vec![request.head],
+            outcome: Outcome::Incomplete,
+            blocker: None,
+            probes: walker.probes(),
+        }),
+        Err(walkaround::Stop::Failed(error)) => Err(error),
+    }
+}
+
+/// Select a solver only after validating the captured inputs; both remain read-only.
 async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
     super::validate(query, request, budget)?;
-    let mut walker = walkaround::Walker::new(query, request, budget, progress)?;
-    match walker.run(request).await {
-        Ok(plan) => Ok(plan),
-        Err(walkaround::Stop::Exhausted) => {
-            Ok(Plan { points: vec![request.head], outcome: Outcome::Incomplete, blocker: None, probes: walker.probes() })
-        }
-        Err(walkaround::Stop::Failed(error)) => Err(error),
+    match request.mode {
+        Mode::Walkaround => walk(query, request, budget, progress).await,
+        Mode::Shove => shove::run(query, request, budget, progress).await,
     }
 }
 
@@ -38,7 +64,16 @@ pub(super) fn complete(query: &ClearanceQuery, request: &Request, budget: usize,
     let mut cx = Context::from_waker(Waker::noop());
     loop {
         if cancel() {
-            return Ok(Plan { points: vec![request.head], outcome: Outcome::Canceled, blocker: None, probes: progress.load(Ordering::Relaxed) });
+            return Ok(Plan {
+                adjusted_target: None,
+                start_blocked: false,
+                replacements: Vec::new(),
+                shove: None,
+                points: vec![request.head],
+                outcome: Outcome::Canceled,
+                blocker: None,
+                probes: progress.load(Ordering::Relaxed),
+            });
         }
         if let Poll::Ready(plan) = future.as_mut().poll(&mut cx) {
             return plan;

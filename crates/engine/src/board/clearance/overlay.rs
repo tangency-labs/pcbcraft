@@ -58,6 +58,7 @@ pub struct Overlay<'a> {
     query: &'a ClearanceQuery,
     changed: BTreeMap<usize, Option<Object>>,
     added: BTreeMap<Uuid, Object>,
+    added_from: BTreeMap<Uuid, Option<usize>>,
     identity: Arc<()>,
     generation: u64,
 }
@@ -65,11 +66,55 @@ pub struct Overlay<'a> {
 impl ClearanceQuery {
     /// Start an empty disposable overlay sharing this captured board's index and authority.
     pub fn overlay(&self) -> Overlay<'_> {
-        Overlay { query: self, changed: BTreeMap::new(), added: BTreeMap::new(), identity: Arc::new(()), generation: 0 }
+        Overlay { query: self, changed: BTreeMap::new(), added: BTreeMap::new(), added_from: BTreeMap::new(), identity: Arc::new(()), generation: 0 }
     }
 }
 
 impl Overlay<'_> {
+    /// Materialize a read-only routing projection with replaced originals excluded. Intended
+    /// membership and source islands are inherited; the final edit still proves connectivity.
+    /// Connected gesture pieces share only a guide hull; replacement paths keep separate hulls
+    /// so concave displaced copper cannot falsely enclose another track’s fixed anchor.
+    pub(crate) fn routing_query(&self, gesture_source: Option<usize>) -> Result<ClearanceQuery, CommandError> {
+        let mut items: Vec<_> = self
+            .query
+            .objects()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, item)| match self.changed.get(&i) {
+                Some(item) => item.clone(),
+                None => Some(item.clone()),
+            })
+            .collect();
+        // Private routing fragments retain the original copper address so a displacement
+        // can exempt actual source contacts without exempting the whole connected island.
+        let mut groups: BTreeMap<Option<usize>, Vec<usize>> = BTreeMap::new();
+        let base = items.len();
+        items.extend(self.added.iter().enumerate().map(|(offset, (id, object))| {
+            let owner = self.added_from.get(id).copied().flatten();
+            if owner == gesture_source {
+                groups.entry(owner).or_default().push(base + offset);
+            }
+            let mut object = object.clone();
+            object.name = self
+                .added_from
+                .get(id)
+                .copied()
+                .flatten()
+                .and_then(|i| self.query.objects().get(i))
+                .map_or_else(|| format!("overlay-added-{id}"), |source| source.name.clone());
+            object
+        }));
+        let mut query = self.query.with_objects(items)?;
+        for group in groups.into_values().filter(|g| g.len() > 1) {
+            let group: Arc<[usize]> = group.into();
+            for index in group.iter() {
+                query.route_hulls.insert(*index, group.clone());
+            }
+        }
+        Ok(query)
+    }
+
     /// Advance only after input validation, before mutation; exhaustion cannot wrap authority.
     fn advance(&mut self) -> Result<(), CommandError> {
         self.generation = self.generation.checked_add(1).ok_or_else(|| CommandError::Unavailable("overlay generation exhausted".into()))?;
@@ -121,15 +166,18 @@ impl Overlay<'_> {
         if self.added.contains_key(&id) {
             return Err(CommandError::InvalidParams("duplicate overlay object identity".into()));
         }
-        let nets = match intended_from {
-            Some(source) => self.source(source)?.intended_nets.clone(),
-            None => Vec::new(),
+        let (nets, island) = match intended_from {
+            Some(source) => {
+                let object = self.source(source)?;
+                (object.intended_nets.clone(), object.island)
+            }
+            None => (Vec::new(), usize::MAX),
         };
         self.room(false)?;
         self.advance()?;
         let at = contour.core[0];
-        self.added
-            .insert(id, Object { name: id.to_string(), contour, layers, intended_nets: nets, at, island: usize::MAX, net: None, mechanical: false });
+        self.added.insert(id, Object { name: id.to_string(), contour, layers, intended_nets: nets, at, island, net: None, mechanical: false });
+        self.added_from.insert(id, intended_from);
         Ok(())
     }
 
@@ -140,6 +188,7 @@ impl Overlay<'_> {
         }
         self.advance()?;
         self.added.remove(&id);
+        self.added_from.remove(&id);
         Ok(())
     }
 

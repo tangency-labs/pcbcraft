@@ -4,6 +4,11 @@
 //! while following a hull joins it. Every kept leg is confirmed by the exact clearance probe and
 //! the board-outline predicates that DRC uses; where no way round exists the head stops at the
 //! last legal point. A final pass replaces runs of corners with elbows where they are clear.
+mod alternatives;
+mod approach;
+mod portals;
+mod tidy;
+
 use super::{
     Outcome, Plan, Request,
     hull::Hull,
@@ -88,6 +93,10 @@ pub(super) struct Walker<'a> {
     own_islands: BTreeSet<usize>,
     /// Resolved membership of the original contact (empty for unassigned/free copper).
     route_nets: Vec<usize>,
+    /// Displacement permits the original segment's direct contacts, not every member of its net.
+    displacement_contacts: Option<BTreeSet<String>>,
+    /// Source-line half-plane selected by the incoming push, not the cheapest walk direction.
+    displacement_side: Option<(Point, Point, i128)>,
     /// Complete net membership during final connected-path validation only. Search probes
     /// must not inherit contacts from speculative detours, retries or discarded previous plans.
     path_membership: Option<Vec<usize>>,
@@ -133,16 +142,40 @@ impl<'a> Walker<'a> {
             intended_from: contacts.iter().copied().find(|i| !objects[*i].intended_nets.is_empty()),
             own_islands: contacts.iter().map(|i| objects[*i].island).collect(),
             route_nets,
+            displacement_contacts: None,
+            displacement_side: None,
             path_membership: None,
             outline: view.outline_edges(),
             budget,
-            probes: 0,
+            probes: progress.load(std::sync::atomic::Ordering::Relaxed),
             progress,
             clear: BTreeSet::new(),
             prefer_side: None,
         };
         walker.prefer_side = walker.side(&request.previous);
         Ok(walker)
+    }
+
+    /// Displaced fragments retain their original intent/island even while their source is
+    /// excluded from the speculative obstacle projection. Final topology is validated separately.
+    pub(super) fn inherit(&mut self, object: &crate::board::clearance::Object, contacts: Option<BTreeSet<String>>) {
+        self.route_nets = object.intended_nets.clone();
+        self.displacement_contacts = contacts;
+        self.own_islands = [object.island].into_iter().collect();
+        self.intended_from = None;
+    }
+
+    /// Restrict displacement to the side ahead of the incoming gesture. A parallel approach
+    /// pushes away from its final position; a collinear approach imposes no arbitrary side.
+    pub(super) fn push_forward(&mut self, start: Point, end: Point, from: Point, toward: Point) {
+        let cross = |x: i128, y: i128| (end.x_nm as i128 - start.x_nm as i128) * y - (end.y_nm as i128 - start.y_nm as i128) * x;
+        let motion = cross(toward.x_nm as i128 - from.x_nm as i128, toward.y_nm as i128 - from.y_nm as i128);
+        let side = if motion != 0 {
+            motion.signum()
+        } else {
+            -cross(toward.x_nm as i128 - start.x_nm as i128, toward.y_nm as i128 - start.y_nm as i128).signum()
+        };
+        self.displacement_side = (side != 0).then_some((start, end, side));
     }
 
     /// Probes charged so far; never more than the budget.
@@ -154,7 +187,9 @@ impl<'a> Walker<'a> {
     pub(super) async fn run(&mut self, request: &Request) -> Result<Plan, Stop> {
         let head = self.check(self.head, self.head).await?;
         if !head.legal {
-            return Ok(self.plan(vec![self.head], Outcome::Blocked { last_legal: self.head }, head.blockers.first().map(|b| b.0)));
+            let mut plan = self.plan(vec![self.head], Outcome::Blocked { last_legal: self.head }, head.blockers.first().map(|b| b.0));
+            plan.start_blocked = true;
+            return Ok(plan);
         }
         if self.head == self.target {
             return Ok(self.plan(vec![self.head], Outcome::Reached, None));
@@ -171,11 +206,86 @@ impl<'a> Walker<'a> {
         Ok(self.plan(walked.points, outcome, walked.blocker))
     }
 
+    /// Resolve an exact target, retry legal concave pockets from their other end, or approach
+    /// an obstructed walkaround cursor's clearance boundary. All searches retain the original
+    /// pickup intent and global budget; a nearby boundary stays explicitly blocked.
+    pub(super) async fn run_target(&mut self, request: &Request) -> Result<Plan, Stop> {
+        let first = match self.run(request).await {
+            Ok(plan) if plan.outcome == Outcome::Reached || plan.start_blocked => return Ok(plan),
+            Err(Stop::Failed(error)) => return Err(Stop::Failed(error)),
+            result => result,
+        };
+        if self.probes >= self.budget {
+            return first;
+        }
+        let goal = self.check(request.target, request.target).await?;
+        if !goal.legal {
+            if request.mode == super::Mode::Walkaround
+                && let Some(plan) = self.approach_target(request, &goal).await?
+            {
+                return Ok(plan);
+            }
+            return first.map(|mut plan| {
+                plan.probes = self.probes;
+                plan
+            });
+        }
+        let first = match first {
+            Ok(plan) => plan,
+            Err(Stop::Exhausted) if request.mode == super::Mode::Walkaround => self.plan(vec![request.head], Outcome::Incomplete, None),
+            Err(stop) => return Err(stop),
+        };
+        self.finish_target(request, first).await
+    }
+
+    /// Refine an exact legal goal without discarding a certified fallback on a local
+    /// search limit. All attempts share the captured intent and global probe budget.
+    async fn finish_target(&mut self, request: &Request, first: Plan) -> Result<Plan, Stop> {
+        let mut fallback = match self.reverse_target(request, first.clone()).await {
+            Ok(plan) if plan.outcome == Outcome::Reached => return Ok(plan),
+            Ok(plan) => plan,
+            Err(Stop::Exhausted) if request.mode == super::Mode::Walkaround && self.probes < self.budget => first,
+            Err(stop) => return Err(stop),
+        };
+        if request.mode == super::Mode::Walkaround
+            && let Some(plan) = self.portal_target(request).await?
+        {
+            return Ok(plan);
+        }
+        fallback.probes = self.probes;
+        Ok(fallback)
+    }
+
+    /// Approach an already-legal goal from its other end, retaining the original contact
+    /// authority and only adopting a completely reached, exact-confirmed reverse path.
+    async fn reverse_target(&mut self, request: &Request, mut first: Plan) -> Result<Plan, Stop> {
+        let mut reverse_request = request.clone();
+        reverse_request.head = request.target;
+        reverse_request.target = request.head;
+        reverse_request.origin = Some(request.origin.unwrap_or((request.head, request.layer)));
+        reverse_request.flipped = !request.flipped;
+        reverse_request.previous.reverse();
+        let mut reverse = Self::new(self.query, &reverse_request, self.budget, self.progress.clone()).map_err(Stop::Failed)?;
+        let result = reverse.run(&reverse_request).await;
+        self.probes = reverse.probes();
+        match result {
+            Ok(mut plan) if plan.outcome == Outcome::Reached => {
+                plan.points.reverse();
+                Ok(self.plan(plan.points, Outcome::Reached, None))
+            }
+            Ok(_) => {
+                first.probes = self.probes;
+                Ok(first)
+            }
+            Err(stop) => Err(stop),
+        }
+    }
+
     /// Assemble a result, naming the blocking copper by its query address.
     fn plan(&self, points: Vec<Point>, outcome: Outcome, blocker: Option<usize>) -> Plan {
         let blocker =
             blocker.filter(|_| matches!(outcome, Outcome::Blocked { .. })).and_then(|i| self.query.objects().get(i)).map(|o| o.name.clone());
-        Plan { points, outcome, blocker, probes: self.probes }
+        Plan { adjusted_target: None, start_blocked: false, replacements: Vec::new(), shove: None, points, outcome, blocker, probes: self.probes }
     }
 
     /// Whether the previous result still applies unchanged: same ends, posture legs only, and
@@ -210,24 +320,34 @@ impl<'a> Walker<'a> {
         let contour = Contour::capsule(a, b, self.half);
         let results = match &self.path_membership {
             Some(nets) => self.query.probe_membership(&contour, &self.layers, nets, None),
-            None => self.query.probe(&contour, &self.layers, self.intended_from),
+            None => self.query.probe_membership(&contour, &self.layers, &self.route_nets, self.intended_from),
         }
         .map_err(Stop::Failed)?;
         let objects = self.query.objects();
-        let mut legal = true;
+        let mut legal = self.displacement_side.is_none_or(|(start, end, side)| {
+            [a, b].iter().all(|p| {
+                side * ((end.x_nm as i128 - start.x_nm as i128) * (p.y_nm as i128 - start.y_nm as i128)
+                    - (end.y_nm as i128 - start.y_nm as i128) * (p.x_nm as i128 - start.x_nm as i128))
+                    >= 0
+            })
+        });
         let mut blockers = Vec::new();
         for decision in &results.decisions {
             let object = &objects[decision.second];
             // Only the starting contact's resolved net grants a clearance exemption. A probe combines
             // contacted nets for short/class checks; that union cannot assign this route a
             // foreign net merely by crossing it, including during previous-path confirmation.
-            let same_net = self.route_nets.len() == 1 && object.intended_nets == self.route_nets;
+            let same_net = self.displacement_contacts.is_none() && self.route_nets.len() == 1 && object.intended_nets == self.route_nets;
             let clearance_violation =
                 if object.mechanical { decision.clearance_violation } else { !same_net && decision.gap_nm < decision.clearance_nm as f64 };
             if !clearance_violation && !decision.conflicting_nets {
                 continue;
             }
-            if !object.mechanical && !decision.conflicting_nets && self.own_islands.contains(&object.island) {
+            let permitted_contact = self
+                .displacement_contacts
+                .as_ref()
+                .map_or_else(|| self.own_islands.contains(&object.island), |contacts| contacts.contains(&object.name));
+            if !object.mechanical && !decision.conflicting_nets && permitted_contact {
                 continue;
             }
             legal = false;
@@ -272,7 +392,21 @@ impl<'a> Walker<'a> {
     /// The hull of source copper `index` for this route, grown by its pair requirement.
     fn hull(&self, index: usize, clearance_nm: i64) -> Option<Hull> {
         let object = self.query.objects().get(index)?;
-        Hull::grown(&object.contour.core, object.contour.radius + self.half + clearance_nm as f64 + MARGIN_NM, self.posture)
+        let mut hull = Hull::grown(&object.contour.core, object.contour.radius + self.half + clearance_nm as f64 + MARGIN_NM, self.posture)?;
+        if self.displacement_side.is_some()
+            && let Some(group) = self.query.route_hulls.get(&index)
+        {
+            for sibling in group.iter().copied().filter(|i| *i != index) {
+                let other = &self.query.objects()[sibling];
+                if other.layers.iter().any(|l| self.layers.contains(l))
+                    && let Some(grown) =
+                        Hull::grown(&other.contour.core, other.contour.radius + self.half + clearance_nm as f64 + MARGIN_NM, self.posture)
+                {
+                    hull.merge(&grown);
+                }
+            }
+        }
+        Some(hull)
     }
 
     /// Walk from `from` toward `to`, going round blocking hulls, then shorten and re-confirm.
@@ -418,7 +552,14 @@ impl<'a> Walker<'a> {
                 }
             }
             let objects = self.query.objects();
-            let nets = contacts.iter().flat_map(|i| objects[*i].intended_nets.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();
+            let nets = self
+                .route_nets
+                .iter()
+                .copied()
+                .chain(contacts.iter().flat_map(|i| objects[*i].intended_nets.iter().copied()))
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
             self.path_membership = Some(nets);
             self.clear.clear();
             let mut trimmed = None;
