@@ -1554,25 +1554,9 @@ pub(crate) struct PairDocumentBudget {
     pub(crate) pair_rows: usize,
 }
 
-/// Count only the bounded relationship rows, with the same streaming framing as Save.
-pub(crate) fn pair_row_bytes(pairs: &[Arc<crate::nets::Pair>]) -> Result<usize, crate::CommandError> {
-    #[derive(Default)]
-    struct Counter(usize);
-    impl Write for Counter {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.0 += bytes.len();
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut bytes = Counter::default();
-    let mut first = true;
-    for pair in pairs {
-        record(&mut bytes, &mut first, pair).map_err(crate::CommandError::InvalidParams)?;
-    }
-    Ok(bytes.0)
+/// Additional bytes around a compact JSON row in the native folder writer.
+pub(crate) fn document_row_framing_bytes(first: bool) -> usize {
+    RECORD_INDENT.len() + RECORD_END.len() + if first { 0 } else { RECORD_SEPARATOR.len() }
 }
 
 /// Reuse the ordinary folder writer and its compact-membership fallback incrementally.
@@ -2618,15 +2602,19 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
     Ok(())
 }
 
+const RECORD_INDENT: &[u8] = b"    ";
+const RECORD_END: &[u8] = b"\n";
+const RECORD_SEPARATOR: &[u8] = b"\n    ,\n";
+
 /// Keep commas on their own lines so adding a record never rewrites the previous record.
 fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
     if !*first {
-        bytes.write_all(b"\n    ,\n").map_err(|error| error.to_string())?;
+        bytes.write_all(RECORD_SEPARATOR).map_err(|error| error.to_string())?;
     }
     *first = false;
-    bytes.write_all(b"    ").map_err(|error| error.to_string())?;
+    bytes.write_all(RECORD_INDENT).map_err(|error| error.to_string())?;
     serde_json::to_writer(&mut *bytes, value).map_err(|e| e.to_string())?;
-    bytes.write_all(b"\n").map_err(|error| error.to_string())
+    bytes.write_all(RECORD_END).map_err(|error| error.to_string())
 }
 
 /// Serialize a small header field without introducing unstable object ordering.

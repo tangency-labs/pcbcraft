@@ -18,7 +18,7 @@ use crate::{
 mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
-pub(crate) use documents::{PairDocumentBudget, PairDocumentProbe, check_board_document_size, pair_row_bytes};
+pub(crate) use documents::{PairDocumentBudget, PairDocumentProbe, check_board_document_size, document_row_framing_bytes};
 pub mod layout;
 mod part_group_storage;
 pub use documents::{

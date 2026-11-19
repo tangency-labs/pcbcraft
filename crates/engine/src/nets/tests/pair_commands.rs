@@ -246,6 +246,58 @@ fn pair_commands_cold_preparation_is_batched_and_snapshot_bound() {
     assert!(session.project().unwrap().differential_pairs().is_empty());
 }
 
+/// A large board registry cannot be serialized in one editor job step. A canceled sizing
+/// attempt leaves the original snapshot and history intact, while a fresh attempt still commits.
+#[test]
+fn large_board_pair_registry_sizing_respects_the_poll_budget() {
+    const RETIRED: usize = 512;
+    const ROWS_PER_POLL: usize = 7;
+    let (mut session, [p, n, _]) = pair_fixture(true);
+    let mut project = (*session.snapshot().unwrap()).clone();
+    let capture = crate::board::update::capture_source(&project).unwrap();
+    let records = Arc::make_mut(&mut Arc::make_mut(&mut project.net_registry).records);
+    let template = records[0].clone();
+    let final_number = records.iter().filter_map(|r| r.generated_number).max().unwrap();
+    records.extend((1..=RETIRED).map(|id| Record {
+        id: Uuid::from_u128(id as u128),
+        generated_number: Some(final_number + id as u32),
+        state: State::Retired { snapshot: capture.clone(), reason: Retirement::Removed, successors: Vec::new() },
+        ..template.clone()
+    }));
+    records.sort_by_key(|r| r.id);
+    session.open_snapshot(decode_documents(&encode_documents(Arc::new(project)).unwrap()).unwrap());
+    let snapshot = session.snapshot().unwrap();
+    let revision = session.revision();
+    let undo = session.undo.len();
+    let size = PairEditJob::final_registry_sizes(&snapshot.net_registry).unwrap();
+    assert_eq!(size, (serde_json::to_vec(&snapshot.net_registry).unwrap().len(), 0));
+    let pair = new_pair_id().unwrap();
+    let params = json!({"pair":pair,"name":"Quoted \"Data\" λ","positive":p,"negative":n,"expected_revision":revision});
+    let mut job = session.prepare_pair_edit(CREATE_PAIR, &params).unwrap();
+    assert!(!job.step(ROWS_PER_POLL));
+    assert_eq!(job.measured_registry_rows(), Some(0));
+    for poll in 1..=RETIRED / ROWS_PER_POLL {
+        assert!(!job.step(ROWS_PER_POLL));
+        assert_eq!(job.measured_registry_rows(), Some(poll * ROWS_PER_POLL));
+        assert!(job.take_result().unwrap().is_none());
+    }
+    drop(job);
+    assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    assert_eq!((session.revision(), session.undo.len()), (revision, undo));
+    session.apply(CREATE_PAIR, &params).unwrap();
+    assert_eq!((session.revision(), session.undo.len()), (revision + 1, undo + 1));
+    let current = session.snapshot().unwrap();
+    assert_eq!(current.differential_pairs()[0].id, pair);
+    let (compact, framed) = PairEditJob::final_registry_sizes(&current.net_registry).unwrap();
+    assert_eq!(compact, serde_json::to_vec(&current.net_registry).unwrap().len());
+    let home = current.instances_document_path().unwrap();
+    let docs = bytes(&session);
+    let encoded = std::str::from_utf8(&docs[&home]).unwrap();
+    let pair_rows = encoded.split_once("\"pairs\": [\n").unwrap().1.split_once("    ]\n").unwrap().0;
+    assert_eq!(framed, pair_rows.len());
+    round_trip(&session);
+}
+
 /// An explicitly recorded review reason survives member swaps and naming edits.
 #[test]
 fn pair_update_preserves_retained_review_state() {

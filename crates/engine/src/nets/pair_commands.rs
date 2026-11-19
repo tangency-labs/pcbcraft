@@ -1,12 +1,13 @@
 //! Authored relationship edits leave net identity and connectivity untouched.
 
-use super::{MAX_PAIRS, Pair};
+use super::{MAX_PAIRS, MAX_REGISTRY_BYTES, Pair, Registry};
 use crate::{
     CommandError, Project, Session,
-    persistence::{PairDocumentBudget, PairDocumentProbe, pair_row_bytes},
+    persistence::{PairDocumentBudget, PairDocumentProbe, document_row_framing_bytes},
 };
+use serde::Serialize;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{io, sync::Arc};
 use uuid::Uuid;
 
 /// Create a relationship with two explicitly ordered persistent members.
@@ -123,12 +124,71 @@ fn pair_edit(project: &Project, command: &str, params: &Value) -> Result<Edit, C
             (Err(_), None) => return Err(CommandError::NotFound("Unknown differential pair.".into())),
         }
         registry.validate_pairs().map_err(CommandError::InvalidParams)?;
-        registry.validate_byte_limit()?;
         let mut candidate = project.clone();
         candidate.net_registry = Arc::new(registry);
         Some(Arc::new(candidate))
     };
     Ok(Edit { replacement, before, after })
+}
+
+/// Measure a single compact JSON value without allocating its output.
+#[derive(Default)]
+struct ByteCounter(usize);
+
+impl io::Write for ByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Measure the registry's compact capacity and the native size of the pair rows in the same
+/// pass. Both envelopes use the same Serde representation for each individual row.
+struct RegistrySizeProbe {
+    row: usize,
+    registry_bytes: usize,
+    pair_rows: usize,
+}
+
+impl RegistrySizeProbe {
+    /// Count the fixed compact registry envelope; the optional pair array is omitted when empty.
+    fn new(registry: &Registry) -> Self {
+        let registry_bytes = b"{\"records\":[]}".len() + if registry.has_pairs() { b",\"pairs\":[]".len() } else { 0 };
+        Self { row: 0, registry_bytes, pair_rows: 0 }
+    }
+
+    /// The actual compact payload size of one net or pair in either storage representation.
+    fn row_bytes(row: &impl Serialize) -> Result<usize, CommandError> {
+        let mut count = ByteCounter::default();
+        serde_json::to_writer(&mut count, row).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
+        Ok(count.0)
+    }
+
+    /// Advance by at most `rows` authored records, checking the same independent registry cap.
+    /// Return the exact framed native pair-row byte count when every row has been measured.
+    fn step(&mut self, registry: &Registry, rows: usize) -> Result<Option<usize>, CommandError> {
+        let net_count = registry.records.len();
+        let total = net_count + registry.pairs.len();
+        for _ in 0..rows.min(total - self.row) {
+            if self.row < net_count {
+                self.registry_bytes += Self::row_bytes(&registry.records[self.row])? + usize::from(self.row != 0);
+            } else {
+                let pair_index = self.row - net_count;
+                let size = Self::row_bytes(&registry.pairs[pair_index])?;
+                self.registry_bytes += size + usize::from(pair_index != 0);
+                self.pair_rows += size + document_row_framing_bytes(pair_index == 0);
+            }
+            if self.registry_bytes > MAX_REGISTRY_BYTES {
+                return Err(CommandError::CapExceeded("Net registry exceeds its byte limit.".into()));
+            }
+            self.row += 1;
+        }
+        Ok((self.row == total).then_some(self.pair_rows))
+    }
 }
 
 /// Prepare a pair change on a captured snapshot, including exact cold-path native byte limits.
@@ -138,6 +198,7 @@ pub struct PairEditJob {
     command: &'static str,
     params: Value,
     cached: Option<PairDocumentBudget>,
+    registry_size: Option<(Edit, RegistrySizeProbe)>,
     probe: Option<(Edit, Box<PairDocumentProbe>)>,
     result: Option<Result<PreparedPairEdit, CommandError>>,
     done: bool,
@@ -162,6 +223,20 @@ impl PairEditJob {
         self.done
     }
 
+    /// Expose per-poll registry sizing progress to deterministic work-budget tests.
+    #[cfg(test)]
+    pub(super) fn measured_registry_rows(&self) -> Option<usize> {
+        self.registry_size.as_ref().map(|(_, probe)| probe.row)
+    }
+
+    /// Compare the incremental counters with persisted envelopes in the regression tests.
+    #[cfg(test)]
+    pub(super) fn final_registry_sizes(registry: &Registry) -> Result<(usize, usize), CommandError> {
+        let mut size = RegistrySizeProbe::new(registry);
+        size.step(registry, registry.records.len() + registry.pairs.len())?;
+        Ok((size.registry_bytes, size.pair_rows))
+    }
+
     /// Take the terminal candidate or typed refusal once; a pending job produces no output.
     ///
     /// # Errors
@@ -170,7 +245,7 @@ impl PairEditJob {
         self.result.take().transpose()
     }
 
-    /// Reuse proved same-envelope headroom or advance the exact writer, including compact fallback.
+    /// Meter registry byte checks before reusing exact headroom or advancing the native writer.
     fn advance(&mut self, records: usize) -> Result<Option<PreparedPairEdit>, CommandError> {
         let (edit, budget) = if let Some((edit, mut probe)) = self.probe.take() {
             let Some(budget) = probe.step(records)? else {
@@ -178,22 +253,28 @@ impl PairEditJob {
                 return Ok(None);
             };
             (edit, Some(budget))
+        } else if let Some((edit, mut size)) = self.registry_size.take() {
+            let candidate = edit.replacement.as_ref().ok_or_else(|| CommandError::Unavailable("Pair size check lost its candidate.".into()))?;
+            let Some(row_bytes) = size.step(&candidate.net_registry, records)? else {
+                self.registry_size = Some((edit, size));
+                return Ok(None);
+            };
+            let has_pairs = candidate.net_registry.has_pairs();
+            let cached = self.cached.filter(|budget| budget.has_pairs == has_pairs && row_bytes <= budget.pair_rows);
+            if cached.is_none() {
+                let probe = Box::new(PairDocumentProbe::new(candidate.clone(), row_bytes));
+                self.probe = Some((edit, probe));
+                return Ok(None);
+            }
+            (edit, cached)
         } else {
             let edit = pair_edit(&self.source.project, self.command, &self.params)?;
-            let budget = if let Some(candidate) = &edit.replacement {
-                let row_bytes = pair_row_bytes(candidate.differential_pairs())?;
-                let has_pairs = candidate.net_registry.has_pairs();
-                let cached = self.cached.filter(|budget| budget.has_pairs == has_pairs && row_bytes <= budget.pair_rows);
-                if cached.is_none() {
-                    let probe = Box::new(PairDocumentProbe::new(candidate.clone(), row_bytes));
-                    self.probe = Some((edit, probe));
-                    return Ok(None);
-                }
-                cached
-            } else {
-                None
-            };
-            (edit, budget)
+            if let Some(candidate) = &edit.replacement {
+                let size = RegistrySizeProbe::new(&candidate.net_registry);
+                self.registry_size = Some((edit, size));
+                return Ok(None);
+            }
+            (edit, None)
         };
         Ok(Some(PreparedPairEdit { source: self.source.clone(), command: self.command, params: std::mem::take(&mut self.params), edit, budget }))
     }
@@ -226,7 +307,7 @@ impl Session {
             let (snapshot, budget) = entry.as_ref()?;
             snapshot.ptr_eq(&key).then_some(*budget)
         });
-        Ok(PairEditJob { source, command, params: params.clone(), cached, probe: None, result: None, done: false })
+        Ok(PairEditJob { source, command, params: params.clone(), cached, registry_size: None, probe: None, result: None, done: false })
     }
 
     /// Recheck one prepared edit and either return its read-only preview or publish one change.
