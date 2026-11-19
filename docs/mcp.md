@@ -485,9 +485,19 @@ Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the o
 plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
 resolvable placement origin.
 File names are deterministic and unique after portable-name sanitization,
-including case-insensitive collisions with fixed-purpose output names. One
-`execute` request generates the file contents once; `apply` still validates
-exportability without changing the project or revision.
+including case-insensitive collisions with fixed-purpose output names. `apply`
+validates board and file generation, not ZIP construction; `execute` also returns
+`fabrication.manifest` for the same captured files. Neither operation writes files
+or changes the project or revision; `execute` does not build or return a ZIP.
+
+The manifest matches the `manifest.json` embedded in the fabrication ZIP for the
+same capture: `generator_version` and ordered `files` records with `name`,
+`size_bytes` and lowercase hexadecimal `sha256` of the uncompressed UTF-8 bytes.
+It lists only the generated files, not itself. Clients that used
+`fabrication.manifest.archive` must adapt: the outer ZIP name, size and digest are
+no longer reported. Member records are independent of the ZIP filename. They
+support byte checks, not source identity, configuration or check freshness. See
+[desktop/browser publication limits](editor-guide.md).
 
 `project.export_netlist` generates the project's netlist without editing it;
 `execute` returns `netlist.files`, one `<project name>-netlist.json` (the project name made portable as for the
