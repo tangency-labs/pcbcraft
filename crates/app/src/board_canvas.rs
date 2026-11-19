@@ -156,6 +156,9 @@ pub(super) fn show(
 ) -> Interaction {
     if let Err(error) = project.require_linear_copper() {
         state.tracks.take_key_requests();
+        // A Delete pressed while the ruler owns input must not act once linear copper returns.
+        state.zones.delete_requested = false;
+        state.drawing.delete_requested = false;
         ui.label(error);
         ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
         return Interaction::default();
