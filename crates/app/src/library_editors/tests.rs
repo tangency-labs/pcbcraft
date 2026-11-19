@@ -994,3 +994,265 @@ fn multiunit_symbol_editor_selects_and_adds_units_through_shared_actions() {
         assert!(h.state().session.project().is_none());
     }
 }
+
+/// Normalized Copy/Paste events reach the same internal clipboard operations as the raw-key
+/// path: canvas targeting still gates them, one event performs one operation and pending
+/// property fields still refuse paste.
+#[test]
+fn normalized_clipboard_events_drive_library_copy_and_paste() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        let mut app = PcbApp::default();
+        app.new_library_item(kind);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+        let first = *h.state().library_editors.documents[&id].session.snapshot().objects.keys().next().unwrap();
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = [first].into_iter().collect();
+        let revision = h.state().library_editors.documents[&id].session.revision();
+        // Away from the canvas the events keep their targeting gate.
+        h.hover_at(egui::pos2(10.0, 10.0));
+        h.event(egui::Event::Copy);
+        h.event(egui::Event::Paste(String::new()));
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select),
+            "{kind:?} events away from the canvas must not arm paste"
+        );
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+        h.event(egui::Event::Copy);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+        h.event(egui::Event::Paste(String::new()));
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+            "{kind:?} normalized Paste must arm the preview"
+        );
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), revision, "{kind:?} copy/paste must not change authored state");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+        // Raw-key presses still work when an extra modifier bypasses native translation.
+        h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::C);
+        h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::V);
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+            "{kind:?} raw-key path must still arm the preview"
+        );
+        // Same-frame input resolves in event order: an Escape after a paste
+        // cancels it, while a paste after the frame's Escape still arms.
+        h.event(egui::Event::Paste(String::new()));
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select),
+            "{kind:?} Escape later in the frame must cancel the paste"
+        );
+        h.key_press(egui::Key::Escape);
+        h.event(egui::Event::Paste(String::new()));
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+            "{kind:?} a paste after the frame's Escape must still arm"
+        );
+        // The raw shifted chord follows the same ordering.
+        h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::V);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select),
+            "{kind:?} raw-key paste before a same-frame Escape must cancel"
+        );
+        h.key_press(egui::Key::Escape);
+        h.run();
+    }
+    // Pending property fields still refuse a normalized Paste.
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Symbol);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let id = h.state().library_editors.active.unwrap();
+    crate::tests::click(&mut h, "Pin 1 · 1");
+    h.get_by_label("Length (mm)").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("Length (mm)").type_text("9.9");
+    h.run();
+    assert!(h.state().library_editors.documents[&id].pending(), "field input must leave the draft pending");
+    // Reselecting the same pin releases the field without touching the draft or selection.
+    crate::tests::click(&mut h, "Pin 1 · 1");
+    let area = h.get_by_label("Library canvas").rect();
+    h.hover_at(area.center());
+    h.run();
+    h.event(egui::Event::Paste(String::new()));
+    h.run();
+    let doc = &h.state().library_editors.documents[&id];
+    assert!(doc.pending(), "unapplied fields must survive focus changes");
+    assert!(matches!(doc.tool, canvas::Tool::Select));
+    assert!(doc.error.is_some(), "pending property fields must refuse a normalized Paste");
+}
+
+/// Native keyboard→clipboard translation drives the library paste op for every OS
+/// clipboard state: `egui-winit` emits `Paste("")` on an empty or unsupported read
+/// and `PasteImage` on an image-only read. Both arm the same internal preview —
+/// exactly one event per physical chord, cancellable without authored changes, and
+/// the commit is a single undoable edit. Events come from the real
+/// `egui_winit::State` translation (vendored seams), not from injected egui events.
+#[test]
+fn native_paste_translation_reaches_the_internal_library_paste() {
+    use winit::event::ElementState;
+    use winit::keyboard::{Key as WinitKey, KeyCode, PhysicalKey};
+
+    struct NoDisplay;
+    impl winit::raw_window_handle::HasDisplayHandle for NoDisplay {
+        fn display_handle(&self) -> Result<winit::raw_window_handle::DisplayHandle<'_>, winit::raw_window_handle::HandleError> {
+            Err(winit::raw_window_handle::HandleError::NotSupported)
+        }
+    }
+
+    /// Drive the real egui-winit translation for one Cmd/Ctrl+key chord with a
+    /// seeded OS clipboard payload (None/None = empty read).
+    fn native_chord(code: KeyCode, ch: &str, text: Option<String>, image: Option<egui::ColorImage>) -> Vec<egui::Event> {
+        let mut state = egui_winit::State::new(egui::Context::default(), egui::ViewportId::ROOT, &NoDisplay, None, None, None);
+        state.set_modifiers_for_testing(egui::Modifiers { ctrl: true, command: true, ..Default::default() });
+        state.set_test_clipboard(text, image);
+        state.translate_keyboard_input_for_testing(PhysicalKey::Code(code), &WinitKey::Character(ch.into()), None, ElementState::Pressed);
+        state.egui_input().events.clone()
+    }
+
+    let image_only = egui::ColorImage::new([1, 1], vec![egui::Color32::RED]);
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (label, text, image) in [("empty", None, None), ("image-only", None, Some(image_only.clone()))] {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let first = *h.state().library_editors.documents[&id].session.snapshot().objects.keys().next().unwrap();
+            h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = [first].into_iter().collect();
+            let revision = h.state().library_editors.documents[&id].session.revision();
+            let count = h.state().library_editors.documents[&id].session.snapshot().objects.len();
+
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            // Copy through the same native boundary: chord C → Event::Copy.
+            for event in native_chord(KeyCode::KeyC, "c", None, None) {
+                h.event(event);
+            }
+            h.run();
+            // Ordinary Cmd/Ctrl+V: exactly one translated event per physical chord.
+            let events = native_chord(KeyCode::KeyV, "v", text.clone(), image.clone());
+            assert_eq!(events.len(), 1, "{kind:?}/{label}: one chord must produce one event");
+            for event in events {
+                h.event(event);
+            }
+            h.run();
+            assert!(
+                matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+                "{kind:?}/{label}: native paste chord must arm the internal preview"
+            );
+            assert_eq!(
+                h.state().library_editors.documents[&id].session.revision(),
+                revision,
+                "{kind:?}/{label}: the preview leaves authored state untouched"
+            );
+            // Cancellation keeps authored state.
+            h.key_press(egui::Key::Escape);
+            h.run();
+            assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+            assert_eq!(h.state().library_editors.documents[&id].session.revision(), revision);
+            // A second chord re-arms, placement commits exactly one undoable edit.
+            for event in native_chord(KeyCode::KeyV, "v", text.clone(), image.clone()) {
+                h.event(event);
+            }
+            h.run();
+            h.get_by_label("Library canvas").click();
+            h.run();
+            let doc = &h.state().library_editors.documents[&id];
+            assert!(matches!(doc.tool, canvas::Tool::Select), "{kind:?}/{label}: placement ends the tool");
+            assert_eq!(doc.session.snapshot().objects.len(), count + 1, "{kind:?}/{label}: placement adds the copied objects");
+            assert_eq!(doc.session.revision(), revision + 1);
+            crate::tests::click(&mut h, "Undo Library Edit");
+            assert_eq!(
+                h.state().library_editors.documents[&id].session.snapshot().objects.len(),
+                count,
+                "{kind:?}/{label}: one undo restores the pre-paste document"
+            );
+        }
+    }
+}
+
+/// A clipboard chord on the focused host arms only its bound document: a library
+/// document detached into another window's view is left untouched — the `active`
+/// ownership gate holds across split/detached view arrangements.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_paste_chord_only_arms_the_focused_library_view() {
+    use winit::event::ElementState;
+    use winit::keyboard::{Key as WinitKey, KeyCode, PhysicalKey};
+
+    struct NoDisplay;
+    impl winit::raw_window_handle::HasDisplayHandle for NoDisplay {
+        fn display_handle(&self) -> Result<winit::raw_window_handle::DisplayHandle<'_>, winit::raw_window_handle::HandleError> {
+            Err(winit::raw_window_handle::HandleError::NotSupported)
+        }
+    }
+
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Symbol);
+    let doc_a = app.library_editors.active.unwrap();
+    let main_view = app.views.active.id();
+    app.new_library_item(Kind::Footprint);
+    let doc_b = app.library_editors.active.unwrap();
+    // Detach doc B into another window's view, then refocus the main host on A.
+    let host = app.views.open_window(main_view).unwrap();
+    let child = app.views.hosts[&host].focused;
+    app.bind_library_view(child);
+    app.bind_editor_host(app.views.main);
+    app.run_window_command(&Context::default(), "app.library_focus", &json!({ "document": doc_a })).unwrap();
+
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    assert_eq!(h.state().library_editors.active, Some(doc_a));
+
+    let first = *h.state().library_editors.documents[&doc_a].session.snapshot().objects.keys().next().unwrap();
+    h.state_mut().library_editors.documents.get_mut(&doc_a).unwrap().selection = [first].into_iter().collect();
+    // Two "Library canvas" nodes exist once a second host is open: hover the one
+    // inside the active view's pane — only that canvas receives `active: true`.
+    let active_view = h.state().views.active.id();
+    let pane = h.state().views.hosts[&h.state().views.host].rects.iter().find(|(view, _)| *view == active_view).map(|(_, rect)| *rect).unwrap();
+    // The detached window renders as an overlay layer above the main host: hover a
+    // canvas spot it does not cover — the uncovered-point gate is what the test checks.
+    let spot = (0..10)
+        .map(|i| egui::pos2(pane.min.x + pane.width() * (i as f32 + 0.5) / 10.0, pane.center().y))
+        .find(|p| h.ctx.layer_id_at(*p).is_none_or(|layer| layer.order == egui::Order::Background))
+        .expect("a canvas spot uncovered by the detached window must exist");
+    h.hover_at(spot);
+    h.run();
+
+    let mut state = egui_winit::State::new(egui::Context::default(), egui::ViewportId::ROOT, &NoDisplay, None, None, None);
+    state.set_modifiers_for_testing(egui::Modifiers { ctrl: true, command: true, ..Default::default() });
+    state.set_test_clipboard(None, None);
+    state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyC), &WinitKey::Character("c".into()), None, ElementState::Pressed);
+    for event in state.egui_input().events.clone() {
+        h.event(event);
+    }
+    state.translate_keyboard_input_for_testing(PhysicalKey::Code(KeyCode::KeyV), &WinitKey::Character("v".into()), None, ElementState::Pressed);
+    for event in state.egui_input().events.clone() {
+        h.event(event);
+    }
+    h.run();
+
+    assert!(
+        matches!(h.state().library_editors.documents[&doc_a].tool, canvas::Tool::Paste { .. }),
+        "the focused document must arm its paste preview"
+    );
+    assert!(
+        matches!(h.state().library_editors.documents[&doc_b].tool, canvas::Tool::Select),
+        "the document bound to the detached view must not consume the chord"
+    );
+}

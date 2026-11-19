@@ -723,10 +723,27 @@ impl Document {
                 if command && ui.input(|i| i.key_pressed(egui::Key::A)) {
                     let _ = self.select_many(item.objects.keys().copied().collect());
                 }
-                if command && ui.input(|i| i.key_pressed(egui::Key::C)) {
+                // Command-only C/V arrive as normalized clipboard events on desktop; a raw
+                // key press only appears when another modifier bypasses that translation.
+                // egui-winit emits Paste("") when the OS clipboard read is empty and
+                // PasteImage when it holds only an image — both mean "paste intent" here.
+                // Paste resolves in event order and only while focused: a later Escape
+                // in the same batch cancels the chord, and a focus-loss batch must not
+                // arm a preview the reset at the top of this canvas just cleared.
+                let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
+                let pasted = ui.input(|i| {
+                    i.focused
+                        && i.events.iter().fold(false, |armed, event| match event {
+                            egui::Event::Paste(_) | egui::Event::PasteImage(_) => true,
+                            egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => false,
+                            egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command => true,
+                            _ => armed,
+                        })
+                });
+                if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
                     self.copy(ui.ctx());
                 }
-                if command && ui.input(|i| i.key_pressed(egui::Key::V)) {
+                if pasted {
                     self.paste(ui.ctx());
                 }
                 if command && ui.input(|i| i.key_pressed(egui::Key::D)) {

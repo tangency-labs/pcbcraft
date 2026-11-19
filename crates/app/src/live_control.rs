@@ -15,7 +15,7 @@ use craft_control::loopback::{AcceptedPeer, Listener, Token};
 use pcbcraft_engine::{Session, error_codes::ErrorCode};
 use pcbcraft_mcp::{
     Failure,
-    live::{Editor, TOKEN_ENV, call_editor},
+    live::{Editor, TOKEN_ENV, call_editor, check_deferred_version, normalize_request, success_reply},
 };
 use serde_json::{Value, json};
 
@@ -68,10 +68,14 @@ impl Request {
     /// `code` and `details`. A peer that has already given up is ignored.
     pub(super) fn answer(self, result: Result<Value, Failure>) {
         let _ = self.reply.try_send(match result {
-            Ok(result) => json!({"result": result}),
-            Err(failure) => json!({"error": failure.message(), "code": failure.code(), "details": failure.details()}),
+            Ok(result) => success_reply(&self.body, result),
+            Err(failure) => failed_reply(&failure),
         });
     }
+}
+
+fn failed_reply(failure: &Failure) -> Value {
+    json!({"error": failure.message(), "code": failure.code(), "details": failure.details()})
 }
 
 impl std::fmt::Debug for LiveControl {
@@ -234,6 +238,10 @@ impl PcbApp {
             request.answer(Err(Failure::new(ErrorCode::Unavailable, reason)));
             return;
         }
+        if let Err(failure) = check_deferred_version(pcbcraft_engine::CHECK_DESIGN, &request.body()["params"]) {
+            request.answer(Err(failure));
+            return;
+        }
         let params = &request.body()["params"]["params"];
         let job = self.session.apply(pcbcraft_engine::CHECK_DESIGN, params).and_then(|_| self.session.design_check_job(params));
         match job {
@@ -303,6 +311,10 @@ impl PcbApp {
         let command = request.body()["params"]["command"].as_str().unwrap_or_default();
         if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(command) {
             request.answer(Err(Failure::new(ErrorCode::Unavailable, reason)));
+            return;
+        }
+        if let Err(failure) = check_deferred_version(command, &request.body()["params"]) {
+            request.answer(Err(failure));
             return;
         }
         match self.session.prepare_copper_edit(command, &request.body()["params"]["params"]) {
@@ -595,10 +607,14 @@ fn serve_peer(
     let Ok(mut peer) = peer.configure(IO_TIMEOUT) else {
         return;
     };
-    let Ok(body) = peer.authenticate(token) else {
+    let Ok(mut body) = peer.authenticate(token) else {
         return;
     };
     if stop.load(Ordering::Acquire) {
+        return;
+    }
+    if let Err(failure) = normalize_request(&mut body) {
+        let _ = peer.send(&failed_reply(&failure));
         return;
     }
     let (reply, response) = mpsc::sync_channel(1);
@@ -645,6 +661,24 @@ mod tests {
         let timeout = IO_TIMEOUT / 2;
         let _client = Connection::connect(endpoint.port, &endpoint.token, request.clone(), timeout)?;
         assert_eq!(endpoint.requests.recv_timeout(timeout).unwrap().body, request);
+        Ok(())
+    }
+
+    /// A valid wire pin enters the ordinary policy path; a missing one never reaches the queue.
+    #[test]
+    fn guarded_execution_is_normalized_before_editor_dispatch() -> io::Result<()> {
+        let endpoint = LiveControl::start(&egui::Context::default())?;
+        let timeout = IO_TIMEOUT / 2;
+        let body = json!({"method":"engine.execute_versioned", "params":{"command":"project.new", "version":1}});
+        let _client = Connection::connect(endpoint.port, &endpoint.token, body.clone(), timeout)?;
+        let request = endpoint.requests.recv_timeout(timeout).unwrap();
+        assert_eq!(request.body()["method"], "engine.execute");
+        assert_eq!(request.body()["params"], body["params"]);
+        let missing = json!({"method":"engine.execute_versioned", "params":{"command":"project.new"}});
+        let mut client = Connection::connect(endpoint.port, &endpoint.token, missing, timeout)?;
+        let response = client.receive(4096)?.unwrap();
+        assert_eq!(response["code"], "invalid_request");
+        assert_eq!(endpoint.requests.try_recv().unwrap_err(), mpsc::TryRecvError::Empty);
         Ok(())
     }
 
@@ -783,6 +817,30 @@ mod copper_tests {
             connected,
         )
     }
+    /// Both deferred command paths refuse a mismatched pin without queuing work or editing.
+    #[test]
+    fn version_pins_reach_deferred_checks_and_copper_preparation() {
+        use pcbcraft_engine::command_api::COMMAND_API_VERSION;
+        let (mut app, ctx, mut copper) = fixture();
+        let version = COMMAND_API_VERSION + 1;
+        let revision = app.session.revision();
+        copper["params"]["version"] = json!(version);
+        let check = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::CHECK_DESIGN,"version":version}});
+        let (r, check_reply, _) = request(&app, check);
+        app.start_remote_check(&ctx, r, false);
+        let (r, copper_reply, _) = request(&app, copper);
+        app.start_remote_copper(&ctx, r, false);
+        for reply in [check_reply, copper_reply] {
+            let refusal = reply.try_recv().unwrap();
+            assert_eq!(refusal["code"], "version_mismatch");
+            assert_eq!(refusal["details"]["current_version"], COMMAND_API_VERSION);
+            assert!(refusal.get("warnings").is_none());
+        }
+        assert!(!app.remote_check.queue.busy());
+        assert!(!app.remote_copper.queue.busy());
+        assert_eq!(app.session.revision(), revision);
+    }
+
     /// Deferred GUI/MCP commands have identical engine authority and response shape. Full slots,
     /// concurrent edits, expired/disconnected clients and modal ownership cannot publish copper.
     #[test]

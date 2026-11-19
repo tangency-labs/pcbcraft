@@ -2542,6 +2542,12 @@ pub enum CommandError {
     NotFound(String),
     /// The edit would exceed a fixed limit.
     CapExceeded(String),
+    /// The call states a command API version other than this build's.
+    VersionMismatch {
+        command: String,
+        stated: u64,
+        current: u32,
+    },
 }
 
 impl CommandError {
@@ -2555,6 +2561,7 @@ impl CommandError {
             Self::StaleRevision { .. } => ErrorCode::StaleRevision,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::CapExceeded(_) => ErrorCode::CapExceeded,
+            Self::VersionMismatch { .. } => ErrorCode::VersionMismatch,
         }
     }
 
@@ -2563,6 +2570,7 @@ impl CommandError {
     pub fn details(&self) -> Value {
         match self {
             Self::StaleRevision { current } => json!({"current_revision": current}),
+            Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
             _ => json!({}),
         }
     }
@@ -2575,6 +2583,10 @@ impl std::fmt::Display for CommandError {
             Self::Unknown(id) => write!(f, "unknown command `{id}`"),
             Self::InvalidParams(m) | Self::Unavailable(m) | Self::NotFound(m) | Self::CapExceeded(m) => f.write_str(m),
             Self::StaleRevision { current } => write!(f, "project changed, inspect the current revision ({current}) and retry"),
+            Self::VersionMismatch { command, stated, current } => write!(
+                f,
+                "`{command}` was requested with command API version {stated}, but this session runs version {current}; refresh the command catalog"
+            ),
         }
     }
 }

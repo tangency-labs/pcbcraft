@@ -1,5 +1,6 @@
 use std::io::Cursor;
 
+mod command_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod library_updates;
 
@@ -999,8 +1000,8 @@ fn live_replies_keep_their_codes() {
     let failure = Failure::from_reply(&coded, "project changed");
     assert_eq!((failure.code(), failure.message()), ("stale_revision", "project changed"));
     assert_eq!(failure.details(), &json!({"current_revision": 4}));
-    let newer = Failure::from_reply(&json!({"error": "x", "code": "version_mismatch"}), "x");
-    assert_eq!(newer.code(), "version_mismatch");
+    let newer = Failure::from_reply(&json!({"error": "x", "code": "future_code"}), "x");
+    assert_eq!(newer.code(), "future_code");
     for details in [Value::Null, json!([1]), json!(7), json!("revision"), json!(true)] {
         let failure = Failure::from_reply(&json!({"code": "stale_revision", "details": details}), "project changed");
         assert_eq!(failure.code(), "stale_revision");
