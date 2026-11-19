@@ -563,7 +563,7 @@ fn terminal_functions(
                     options.extend(pin.alternates.iter().map(|alternate| (alternate.name.as_str(), alternate.name.clone())));
                     let prior = current.clone();
                     ui.add_enabled_ui(enabled, |ui| {
-                        chrome::choice(ui, "", egui::Id::new(("pin_function", &pin.number)), &mut current, &options);
+                        chrome::choice(ui, "", egui::IdSalt::new(("pin_function", &pin.number)), &mut current, &options);
                     });
                     if current != prior {
                         selected = Some((pin.number.clone(), (!current.is_empty()).then_some(current)));

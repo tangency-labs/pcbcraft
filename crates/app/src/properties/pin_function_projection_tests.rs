@@ -26,13 +26,14 @@ fn large_project() -> Arc<pcbcraft_engine::Project> {
     let manifest = publishing::new_library("large-fixture", "Synthetic fixture", "MIT OR Apache-2.0").unwrap();
     let published = publishing::prepare_copy(editor.snapshot(), &manifest).unwrap();
     let item = published.item();
-    let symbol = item.symbol().unwrap();
-    let digest = pcbcraft_engine::library::sources::symbol_digest(&symbol).unwrap();
     let mut library = published.documents().clone();
     library.insert("library.json".into(), manifest);
     let mut session = Session::default();
     session.apply("project.new", &json!({"create_board":false})).unwrap();
     session.execute("library.load_source", &json!({"source":"fixture","documents":library})).unwrap();
+    // The loaded catalog adds portable provenance, which is part of the placement digest.
+    let symbol = session.libraries().symbol(&item.library, &item.id, item.revision).unwrap();
+    let digest = pcbcraft_engine::library::sources::symbol_digest(&symbol).unwrap();
     session.apply(pcbcraft_engine::PLACE_SYMBOL, &json!({"library":item.library,"definition":item.id,"definition_revision":item.revision,"definition_digest":digest,"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
     let mut docs = encode_documents(session.snapshot().unwrap()).unwrap();
     let mut entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();

@@ -283,7 +283,7 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
             }
             let mut changed = docs.clone();
             changed.insert(ENTRY_POINT.into(), serde_json::to_vec(&invalid).unwrap());
-            let error = decode_documents(&changed).err().expect("invalid pin function record must be rejected");
+            let error = decode_documents(&changed).expect_err("invalid pin function record must be rejected");
             assert!(error.contains(expected), "{change}: {error}");
         }
         let clear = params(&session, Value::Null);
@@ -476,7 +476,7 @@ fn alternate_definition_validates_and_versions_lazily() {
     let mut old: Value = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(old["format"], "pcbcraft-library-item/5");
     old["format"] = json!("pcbcraft-library-item/1");
-    let error = Item::decode(&serde_json::to_vec(&old).unwrap()).err().expect("old library item format cannot contain alternates");
+    let error = Item::decode(&serde_json::to_vec(&old).unwrap()).expect_err("old library item format cannot contain alternates");
     assert_eq!(error, "Invalid or oversized native library item.");
     let good: Vec<_> =
         (0..MAX_ALTERNATES).map(|i| AlternatePinFunction { name: format!("ALT_{i}"), electrical_type: ElectricalType::Input }).collect();
