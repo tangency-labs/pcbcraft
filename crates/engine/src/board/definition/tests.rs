@@ -157,6 +157,7 @@ fn interactive_finish_rechecks_earlier_vias_at_final_diameter() {
 #[test]
 fn interactive_via_uses_the_connected_route_clearance() {
     use crate::nets::{Anchor, AnchorKind, ClassTarget};
+    use uuid::Uuid;
     let mut s = mounting_route_fixture(true);
     let initial = mounting_route(&s, 2_350_000, false);
     assert!(prepare_mounting_route(&s, &initial).is_ok(), "0.45 mm clears the board default");
