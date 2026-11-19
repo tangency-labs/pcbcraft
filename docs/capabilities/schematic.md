@@ -110,8 +110,8 @@
 
 The engine can produce a [vector schematic PDF](../manufacturing/schematic-pdf.md) of one sheet
 or all project sheets in hierarchy order, with searchable text at each sheet's
-saved paper size and project-export bookmarks. There is no export action in
-the UI or MCP yet.
+saved paper size. A project PDF includes hierarchy bookmarks and internal
+sheet and net navigation links. There is no export action in the UI or MCP yet.
 
 [Intentional no-connect markers](../schematic/no-connect-markers.md) attach to logical part
 terminals and open wire ends through Q, Capture and context actions. They follow
