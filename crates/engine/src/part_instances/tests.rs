@@ -9,6 +9,7 @@ use crate::{
 use serde_json::json;
 
 mod retained;
+mod voltage_rating;
 
 /// Inventory mirrors native Save's complete pinned closure and remains authoritative offline.
 #[test]
