@@ -106,7 +106,9 @@ impl Session {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
         view.require_no_arcs().map_err(CommandError::Unavailable)?;
-        check_teardrop_preparation(!view.teardrops().is_empty(), cfg!(target_arch = "wasm32"))?;
+        // The browser cooperatively polls on the frame thread. The WASI runner
+        // uses the headless engine and can prepare active intents like native builds.
+        check_teardrop_preparation(!view.teardrops().is_empty(), cfg!(all(target_arch = "wasm32", target_os = "unknown")))?;
         let effective = view.effective_rules();
         Ok(CopperPreparation {
             source: Source {
@@ -438,6 +440,7 @@ mod tests {
     use crate::persistence::encode_documents;
 
     /// Cooperative preparation only refuses boards that would need teardrop regeneration.
+    /// Headless WASI coverage also runs the active-intent move through actual admission.
     #[test]
     fn cooperative_preparation_refuses_active_teardrops() {
         for (has_teardrops, cooperative, refused) in [(false, false, false), (true, false, false), (false, true, false), (true, true, true)] {
