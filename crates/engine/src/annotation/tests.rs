@@ -183,13 +183,23 @@ fn annotation_preview_resolves_every_accepted_sheet_uuid_spelling() {
 
 /// Counts the shared command's work without a wall-clock requirement or non-test overhead.
 #[derive(Clone, Copy, Default)]
-pub(super) struct Work {
+pub(crate) struct Work {
     pub(super) occurrences: usize,
     pub(super) sort_keys: usize,
     pub(super) units: usize,
     pub(super) probes: usize,
     pub(super) references: usize,
     pub(super) rows: usize,
+    pub(super) apply_parts: usize,
+    pub(super) copied_parts: usize,
+    pub(super) writes: usize,
+    pub(super) stale_units: usize,
+    pub(super) stale_part_keys: usize,
+    pub(super) stale_parts: usize,
+    pub(crate) preparations: usize,
+    pub(crate) presentation_parts: usize,
+    pub(crate) invalidated_sheets: usize,
+    pub(crate) reconcile_graphs: usize,
 }
 
 thread_local! {
@@ -197,7 +207,7 @@ thread_local! {
 }
 
 /// Record work only while this thread is running the large-design regression.
-pub(super) fn count_work(update: impl FnOnce(&mut Work)) {
+pub(crate) fn count_work(update: impl FnOnce(&mut Work)) {
     WORK.with(|counter| {
         if let Some(mut work) = counter.get() {
             update(&mut work);
@@ -206,28 +216,41 @@ pub(super) fn count_work(update: impl FnOnce(&mut Work)) {
     });
 }
 
-/// Exercise the same command as the live editor, but count operations rather than fixture time.
-/// Even a one-row review indexes all 2,000 references once; it must not sort off-sheet units.
-#[test]
-fn annotation_preview_2000_parts_bounds_shared_command_work() {
-    const PARTS: usize = 2_000;
+const LARGE_PARTS: usize = 2_000;
+
+/// Build a scattered bulk sheet plus a one-part sheet with a single pending designator.
+fn large_annotation_fixture() -> (Session, SheetTarget, String) {
     const SPACING: i64 = crate::schematic::GRID_NM * 6;
     let mut session = Session::default();
     session.apply("project.new", &json!({})).unwrap();
     let first = session.project().unwrap().sheet_target().id();
     let sheet = second_sheet(&mut session);
-    for i in 0..PARTS - 1 {
-        let grid = (i * 997) % PARTS;
+    for i in 0..LARGE_PARTS - 1 {
+        let grid = (i * 997) % LARGE_PARTS;
         place(&mut session, PLACE_RESISTOR, json!({"sheet":first,"x_nm":(grid % 50) as i64 * SPACING,"y_nm":(grid / 50) as i64 * SPACING}));
     }
     let placeholder = place(&mut session, PLACE_RESISTOR, json!({"sheet":sheet.id(),"x_nm":0,"y_nm":0}));
     reference(&mut session, &placeholder, "R?", false, sheet.id());
+    (session, sheet, placeholder)
+}
+
+/// Count only the shared command under test, not fixture work or surrounding checks.
+fn measure_work<T>(run: impl FnOnce() -> T) -> (T, Work) {
+    WORK.set(Some(Work::default()));
+    let result = run();
+    (result, WORK.take().unwrap())
+}
+
+/// Exercise the same command as the live editor, but count operations rather than fixture time.
+/// Even a one-row review indexes all 2,000 references once; it must not sort off-sheet units.
+#[test]
+fn annotation_preview_2000_parts_bounds_shared_command_work() {
+    const PARTS: usize = LARGE_PARTS;
+    let (mut session, sheet, placeholder) = large_annotation_fixture();
     let before = session.snapshot().unwrap();
     let revision = session.revision();
     for (params, count) in [(json!({"sheet":sheet.id()}), 1), (json!({}), PARTS)] {
-        WORK.set(Some(Work::default()));
-        let result = session.execute(PREVIEW, &params);
-        let work = WORK.take().unwrap();
+        let (result, work) = measure_work(|| session.execute(PREVIEW, &params));
         let result = result.unwrap();
         let rows = result["annotation_preview"]["rows"].as_array().unwrap();
         assert_eq!(result["annotation_preview"]["errors"], json!([]));
@@ -244,6 +267,85 @@ fn annotation_preview_2000_parts_bounds_shared_command_work() {
         assert_eq!(session.revision(), revision);
         assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     }
+}
+
+/// A scoped Apply may index the whole project but must not replan off-sheet rows, copy the
+/// part map twice, or prepare an edit per part. Stale diagnostics are bounded separately.
+/// These counters cover named traversals and graph entries, not elapsed time or graph internals.
+#[test]
+fn annotation_apply_2000_parts_bounds_shared_command_work() {
+    let (mut session, sheet, placeholder) = large_annotation_fixture();
+    let scope = json!({"sheet":sheet.id()});
+    let review = session.execute(PREVIEW, &scope).unwrap();
+    let baseline = session.snapshot().unwrap();
+    let first_sheet = baseline.sheets().next().unwrap().target.id();
+    let first_unit = baseline.all_symbols().min_by_key(|unit| unit.ordinal).unwrap();
+    let first_symbol = first_unit.id();
+    let first_part = first_unit.component_id();
+    let first_reference = baseline.component(first_unit).unwrap().reference();
+    reference(&mut session, &first_symbol, first_reference, true, first_sheet);
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let (stale, work) = measure_work(|| session.apply(APPLY, &json!({"token":review["token"]})));
+    let stale = stale.unwrap_err();
+    assert_eq!(stale.code(), crate::error_codes::ErrorCode::StaleRevision);
+    assert_eq!(stale.details(), json!({"current_revision":revision,"part_instances":[first_part]}));
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!((work.stale_units, work.stale_part_keys, work.stale_parts), (2 * LARGE_PARTS, 2 * LARGE_PARTS, LARGE_PARTS));
+    assert_eq!((work.references, work.apply_parts, work.copied_parts, work.writes, work.preparations, work.reconcile_graphs), (0, 0, 0, 0, 0, 0));
+
+    let review = session.execute(PREVIEW, &scope).unwrap();
+    let row = &review["annotation_preview"]["rows"][0];
+    assert_eq!(row["symbol"], placeholder);
+    assert_eq!(row["proposed"], "R2000");
+    let (applied, work) = measure_work(|| session.apply(APPLY, &json!({"token":review["token"]})));
+    assert_eq!(applied.unwrap(), revision + 1);
+    assert_eq!(session.revision(), revision + 1);
+    let after = session.project().unwrap();
+    let unit = after.all_symbols().find(|unit| unit.id() == placeholder).unwrap();
+    let part = after.component(unit).unwrap();
+    assert_eq!(row["part_instance"], part.id());
+    assert_eq!(part.reference(), "R2000");
+    assert_eq!((work.occurrences, work.references, work.units, work.rows, work.probes), (2, LARGE_PARTS, 1, 1, LARGE_PARTS));
+    assert!(work.sort_keys <= 2, "do not sort off-sheet units for scoped Apply");
+    assert_eq!((work.apply_parts, work.copied_parts, work.writes, work.preparations), (LARGE_PARTS, LARGE_PARTS, 1, 1));
+    assert!(work.presentation_parts <= LARGE_PARTS, "presentation compares at most one part-map pass");
+    assert_eq!((work.invalidated_sheets, work.reconcile_graphs), (2, 2));
+    assert_eq!(work.stale_units, 0);
+}
+
+/// Numeric revisions do not authorize Apply, and a valid scoped token cannot rename a part
+/// on an unreviewed sheet even when that part would get a proposal in a project-wide review.
+#[test]
+fn annotation_apply_token_renames_only_parts_reviewed_on_its_sheet() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let first = session.project().unwrap().sheet_target().id();
+    let second = second_sheet(&mut session).id();
+    let r = place(&mut session, PLACE_RESISTOR, json!({"sheet":first,"x_nm":0,"y_nm":0}));
+    let c = place(&mut session, PLACE_SYMBOL, json!({"sheet":second,"definition":"capacitor","x_nm":0,"y_nm":0}));
+    reference(&mut session, &r, "R?", false, first);
+    reference(&mut session, &c, "C?", false, second);
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let reviewed = session.execute(PREVIEW, &json!({"sheet":second})).unwrap();
+    let rows = reviewed["annotation_preview"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["symbol"], c);
+    assert_eq!(rows[0]["proposed"], "C1");
+    assert_eq!(reviewed["revision"], revision);
+    assert!(matches!(session.execute(APPLY, &json!({"token":reviewed["revision"]})), Err(CommandError::InvalidParams(_))));
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+
+    assert_eq!(session.execute(APPLY, &json!({"token":reviewed["token"]})).unwrap()["revision"], revision + 1);
+    let after = session.project().unwrap();
+    let after_r = after.all_symbols().find(|unit| unit.id() == r).unwrap();
+    let after_c = after.all_symbols().find(|unit| unit.id() == c).unwrap();
+    assert_eq!(after.component(after_r), before.component(after_r));
+    assert_eq!(after.component(after_r).unwrap().reference(), "R?");
+    assert_eq!(after.component(after_c).unwrap().reference(), "C1");
 }
 
 /// The last allowed reference number may be proposed; the following one may not.

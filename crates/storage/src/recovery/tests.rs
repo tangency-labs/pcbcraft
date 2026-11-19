@@ -157,6 +157,44 @@ fn setup_preview_token_does_not_enter_recovery_records() {
     assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
 }
 
+/// Retain the annotation edit and its documents, but never journal the session-local token.
+#[test]
+fn annotation_apply_recovers_rename_without_recording_the_token() {
+    use pcbcraft_engine::{
+        SET_SYMBOL_FIELDS,
+        annotation::{APPLY, PREVIEW},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let symbol = last_symbol(&session);
+    session.apply(SET_SYMBOL_FIELDS, &json!({"symbol":symbol,"reference":"R?","value":"fixture","expected_revision":session.revision()})).unwrap();
+    let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let recorder = Arc::new(JournalRecorder::start(dir.path().to_owned(), "entry".to_owned()).unwrap());
+    session.observe_edits(Some(recorder.clone()));
+    let review = session.execute(PREVIEW, &json!({})).unwrap();
+    assert_eq!(review["annotation_preview"]["rows"][0]["proposed"], "R1");
+    let revision = session.revision();
+    assert_eq!(session.execute(APPLY, &json!({"token":review["token"]})).unwrap()["revision"], revision + 1);
+    session.observe_edits(None);
+    Arc::try_unwrap(recorder).unwrap().finish().unwrap();
+
+    let bytes = fs::read(entry_file(dir.path(), "entry", "journal")).unwrap();
+    let mut frames = bytes.strip_prefix(MAGIC).unwrap();
+    read_frame(&mut frames).unwrap().unwrap();
+    let (record, _) = decode_record(&read_frame(&mut frames).unwrap().unwrap()).unwrap();
+    assert_eq!(record.command, APPLY);
+    assert_eq!(record.params, json!({}));
+    assert!(read_frame(&mut frames).unwrap().is_none());
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.commands, [APPLY]);
+    assert_ne!(recovered.documents, before);
+    assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
+    assert_eq!(recovered.project.components().next().unwrap().reference(), "R1");
+}
+
 /// A journal with the given edits applied on top of a new project, and the documents after each.
 fn journal_with(dir: &Path, edits: usize) -> (EditJournal, Vec<Documents>) {
     let mut session = Session::default();

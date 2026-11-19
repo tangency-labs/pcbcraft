@@ -26,6 +26,8 @@ fn changed_parts(before: &Project, after: &Project) -> Vec<String> {
         let mut by_part: BTreeMap<_, Vec<_>> = BTreeMap::new();
         for sheet in project.sheets.iter() {
             for unit in sheet.symbols.iter() {
+                #[cfg(test)]
+                super::tests::count_work(|work| work.stale_units += 1);
                 by_part.entry(unit.component).or_default().push((unit.ordinal, sheet.sheet_id, unit.position));
             }
         }
@@ -33,18 +35,21 @@ fn changed_parts(before: &Project, after: &Project) -> Vec<String> {
     };
     let old_units = units(before);
     let new_units = units(after);
-    before
-        .components
-        .keys()
-        .chain(after.components.keys())
-        .copied()
+    let ids = before.components.keys().chain(after.components.keys());
+    #[cfg(test)]
+    let ids = ids.inspect(|_| super::tests::count_work(|work| work.stale_part_keys += 1));
+    ids.copied()
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .filter(|id| match (before.components.get(id), after.components.get(id)) {
-            (Some(old), Some(new)) => {
-                old.reference() != new.reference() || old.designator_locked() != new.designator_locked() || old_units.get(id) != new_units.get(id)
+        .filter(|id| {
+            #[cfg(test)]
+            super::tests::count_work(|work| work.stale_parts += 1);
+            match (before.components.get(id), after.components.get(id)) {
+                (Some(old), Some(new)) => {
+                    old.reference() != new.reference() || old.designator_locked() != new.designator_locked() || old_units.get(id) != new_units.get(id)
+                }
+                _ => true,
             }
-            _ => true,
         })
         .map(|id| format!("component-{id}"))
         .collect()
@@ -64,6 +69,8 @@ fn with_designators(project: &Project, edits: &BTreeMap<u64, &str>) -> Result<Pr
     let mut numbers: BTreeMap<&str, BTreeSet<usize>> = BTreeMap::new();
     let mut pending = Vec::new();
     for (&id, part) in project.components.iter() {
+        #[cfg(test)]
+        super::tests::count_work(|work| work.apply_parts += 1);
         let prefix = part.definition.reference_prefix();
         let proposed = edits.get(&id).copied().unwrap_or(part.reference());
         if !shown.insert(proposed) {
@@ -82,6 +89,10 @@ fn with_designators(project: &Project, edits: &BTreeMap<u64, &str>) -> Result<Pr
     }
 
     let mut next = project.clone();
+    #[cfg(test)]
+    if Arc::strong_count(&next.components) > 1 {
+        super::tests::count_work(|work| work.copied_parts += next.components.len());
+    }
     let parts = Arc::make_mut(&mut next.components);
     let mut collisions = Vec::new();
     for (id, part, reference, number) in pending {
@@ -110,6 +121,8 @@ fn with_designators(project: &Project, edits: &BTreeMap<u64, &str>) -> Result<Pr
 /// Change only the existing part's reference fields; even a multi-unit part keeps its identity.
 fn set_reference(parts: &mut BTreeMap<u64, PartInstance>, id: u64, reference: &str, number: usize) -> Result<(), CommandError> {
     let part = parts.get_mut(&id).ok_or_else(|| CommandError::NotFound(format!("unknown part instance component-{id}")))?;
+    #[cfg(test)]
+    super::tests::count_work(|work| work.writes += 1);
     part.reference = reference.into();
     part.reference_number = number;
     Ok(())

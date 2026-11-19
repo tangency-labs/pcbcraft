@@ -49,7 +49,8 @@ Call `annotate.apply` with the `token` from the latest preview in the same
 session. No scope or reference overrides are accepted; the token already binds
 that proposal and its revision. A new preview replaces the previous token. A
 successful apply consumes the token, even when there are no renames. Opening a
-project again discards outstanding tokens.
+project again discards outstanding tokens. Desktop recovery records the edit's
+resulting documents, not the token.
 
 Apply refuses a proposal with errors or a revision that changed even if Undo
 has since restored the same design. A stale-token refusal carries

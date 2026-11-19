@@ -16,7 +16,7 @@ pub use apply::APPLY;
 pub(crate) use apply::ReviewedPreview;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 /// One representative unit for the shared designator of a part instance.
 struct Target<'a> {

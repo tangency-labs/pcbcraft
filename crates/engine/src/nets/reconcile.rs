@@ -124,7 +124,11 @@ impl Project {
         {
             return Ok(());
         }
+        #[cfg(test)]
+        crate::annotation::tests::count_work(|work| work.reconcile_graphs += 1);
         let mut old = Graph::build(before).map_err(CommandError::InvalidParams)?;
+        #[cfg(test)]
+        crate::annotation::tests::count_work(|work| work.reconcile_graphs += 1);
         let after = Graph::build(self).map_err(CommandError::InvalidParams)?;
         let mut registry = (*before.net_registry).clone();
         if old_scope != scope {

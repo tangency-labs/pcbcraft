@@ -4402,6 +4402,8 @@ impl Session {
     /// Adopt required no-connect metadata; lock-introducing edits prepare their own metadata.
     /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
     fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
+        #[cfg(test)]
+        annotation::tests::count_work(|work| work.preparations += 1);
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
@@ -4447,6 +4449,8 @@ impl Session {
                 || (!Arc::ptr_eq(&old.components, &project.components)
                     && (old.components.len() != project.components.len()
                         || old.components.iter().any(|(id, part)| {
+                            #[cfg(test)]
+                            annotation::tests::count_work(|work| work.presentation_parts += 1);
                             project
                                 .components
                                 .get(id)
@@ -4461,6 +4465,8 @@ impl Session {
         if presentation_changed || project.requires_project_graph() || self.project.as_ref().is_some_and(|p| p.requires_project_graph()) {
             project.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut project.sheets) {
+                #[cfg(test)]
+                annotation::tests::count_work(|work| work.invalidated_sheets += 1);
                 sheet.connectivity = Arc::default();
             }
         }
