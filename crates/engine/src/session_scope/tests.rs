@@ -105,6 +105,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
     let board = project.board_target().unwrap().board;
     let drawing = project.boards().next().unwrap().drawings()[0].id;
     let (item_publication, part_publication) = publication_requests();
+    let remap_item = authoring::Item::new(authoring::Kind::Symbol).unwrap();
     let mut reader = Session::with_scope(SessionScope::ReadOnly);
     reader.open_snapshot(project.clone());
     // Use a fresh unrestricted control so openings and runtime revisions match.
@@ -166,6 +167,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             sources::SEARCH => json!({"query":"resistor"}),
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
             sources::PARSE_QUANTITY => json!({"quantity":"resistance","value":"100 mΩ"}),
+            sources::PREVIEW_PIN_REMAP => json!({"item":remap_item,"pins":[{"unit":"main","object":"1","number":"7"}]}),
             sources::PREPARE_PART_PUBLICATION => part_publication.clone(),
             sources::PREPARE_PUBLICATION => item_publication.clone(),
             _ => {
@@ -187,6 +189,11 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             assert_eq!(actual["revision"], expected["revision"], "{id}");
         } else {
             assert_eq!(actual, expected, "{id}");
+        }
+        if id == sources::PREVIEW_PIN_REMAP {
+            assert_eq!(actual["changes"][0]["after"], "7");
+            assert_eq!(actual["saved"], false);
+            assert_eq!(actual["placed_instances_changed"], false);
         }
         // Assembly profile preview returns its data only via execute, including in MCP.
         if id != PREVIEW_ASSEMBLY_PROFILE {
