@@ -156,13 +156,14 @@ these headers rather than discard identity, lineage or unresolved decisions.
 
 When no other content requires a later project format, a nonempty class catalog
 selects project/20; saved [net-class bindings](net-class-assignments.md) select
-project/21. Parameters, generated numbers and active designator locks select
-project/22, /23 and /51 respectively. Part groups and assembly profiles select
-project/24, /39 or /36 when locks are absent. Board-owned bindings use instances/3,
-or instances/4 with generated numbers; expanded or compact part-group memberships
-use instances/5 or /7, also under project/51. Bindings remain inside the same logical
-registry and carry class and origin net UUIDs, while physical board and sheet
-formats stay unchanged. Older headers refuse the new vocabulary, and project/21
+project/21. Parameters and generated numbers select project/22 and /23 unless
+other records require a later format. In precedence order, active designator
+locks select project/51, differential pairs /45, an assembly profile catalog /36,
+and part groups /39 with compact memberships or /24 otherwise. Board-owned
+bindings use instances/3, instances/4 with generated numbers, instances/5 or /7
+with expanded or compact memberships, or instances/8 with pairs. Bindings
+remain inside the same logical registry and carry class and origin net UUIDs,
+while physical board and sheet formats stay unchanged. Older headers refuse the new vocabulary, and project/21
 requires actual bindings.
 
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
@@ -355,11 +356,13 @@ identities without invalidating adoptions; cleanup discards only unused
 superseded or retired payloads in that transaction. Watermarks prevent reuse of
 cleaned revisions. Undo/Redo preserve the greatest issued revision in this project
 history without retaining undone payloads or changing restored board adoptions.
-A retained catalog, even with only watermarks, requires project/36 when there are
-no active designator locks. With an active lock, project/51 stores the same
-catalog under the same validation rules. In either format, Save/Open retains the
-required folder and occurrence metadata, even after the last unused payload is
-released. Opening another saved copy uses that copy’s own recorded lineage; no
+A retained catalog, even with only watermarks, uses project/51 with an active
+designator lock, otherwise project/45 with differential pairs, otherwise
+project/36. The catalog takes precedence over the project/39 header for compact
+memberships but does not change their representation. All three formats apply
+the same validation rules and retain folder and occurrence metadata, even after
+the last unused payload is released. Opening another saved copy uses that copy’s
+own recorded lineage; no
 cross-file issuance registry is provided. Immutable revision payloads are shared
 with Undo snapshots. No external file or network is needed after adoption.
 Projects without catalog identities use the format their other content requires.
@@ -687,10 +690,9 @@ content needs. The diagnostic single-file encoding refuses parameters.
 ### Part-group records
 
 Both project/24 and project/39 require a nonempty `part_groups` catalog
-(`pcbcraft-part-groups/1`) directly after any `net_classes` record. Project/36
-accepts that catalog optionally alongside its required assembly profile catalog;
-project/51 accepts it alongside designator locks, with profiles and pairs optional.
-Both preserve expanded or compact memberships with their respective instance headers.
+(`pcbcraft-part-groups/1`) directly after any `net_classes` record. Project/36,
+/45 and /51 also accept the group catalog, with either membership representation.
+Board-owned pairs keep instances/8 regardless of membership representation.
 Project/24, the expanded representation, is a superset of project/23: generated net numbers, net classes and
 their assignments, project parameters and no-connect intent are optional, each
 with its existing rules, and it requires adopted storage and occurrence metadata.
@@ -704,9 +706,12 @@ are rejected. `N` is the part instance's number, as in `components` and
 `component-N`; see [part groups](part-groups.md).
 
 Compact memberships replace that list with `compact_part_group_memberships`.
-Without profiles or locks they select project/39; with those records they select
-project/36 or /51. Without pairs, board-owned compact memberships select instances/7, while
-schematic-only memberships remain embedded in the entry point. The compact record contains a sorted UUID `groups` dictionary
+With compact memberships, the encoder selects project/51 if a designator lock
+is active, otherwise project/45 if pairs are present, otherwise project/36 if an
+assembly profile catalog is retained, otherwise project/39. Board-owned compact
+memberships use instances/8 with pairs and instances/7 without pairs.
+Schematic-only memberships remain embedded in the entry point. The compact
+record contains a sorted UUID `groups` dictionary
 and sorted `part_instances` rows (`part_instance` plus sorted numeric `groups`
 references into that dictionary). UUIDs remain the identity authority. The
 reader refuses duplicate, unused, nil or foreign dictionary UUIDs, duplicate or
