@@ -12,6 +12,8 @@ use std::{
     sync::{Barrier, mpsc},
 };
 
+mod open_preservation;
+
 /// Start from the checked-in migration fixture so comparisons retain stable UUIDs. The
 /// snapshot is prepared as opening does, so it already has its paper.
 fn session() -> Session {
