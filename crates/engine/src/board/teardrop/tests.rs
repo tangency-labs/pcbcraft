@@ -252,13 +252,98 @@ mod regeneration {
         let obstacle = view(&session).tracks().iter().find(|track| track.start == point(260_000, 19_770_000)).unwrap().id;
         let before = session.snapshot().unwrap();
         let revision = session.revision();
-        let blocked = session.apply(MOVE_TRACKS, &json!({"tracks":[obstacle],"dx_nm":0,"dy_nm":10_000,"expected_revision":revision}));
-        assert!(matches!(blocked, Err(CommandError::InvalidParams(message)) if message.contains("CopperClearance")
+        let params = json!({"tracks":[obstacle],"dx_nm":0,"dy_nm":10_000,"expected_revision":revision});
+        let mut job = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        for _ in 0..128 {
+            if job.step(64) {
+                break;
+            }
+        }
+        assert!(matches!(job.take_result(), Err(CommandError::InvalidParams(message)) if message.contains("CopperClearance")
             && message.contains(&intent.id.to_string()) && message.contains(&obstacle.to_string())));
         assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
         assert_eq!(session.revision(), revision);
         session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(view(&session).tracks().len(), 1);
         assert_eq!(view(&session).teardrops(), &[Record::from(intent)]);
+    }
+
+    /// Run the live-style prepare/commit split on a board with over 1,000 tracks. Bound
+    /// worker steps and ensure neither stage falls back to the synchronous geometry builder.
+    #[test]
+    fn large_board_prepares_teardrops_without_synchronous_geometry() {
+        let (mut session, intent) = checked_site();
+        let original = intent.derive(view(&session)).unwrap();
+        for row in 0..5 {
+            let points: Vec<_> = (0..=240).map(|x| point(x * 500_000, -20_000_000 - row * 1_000_000)).collect();
+            session
+                .apply(
+                    ADD_TRACKS,
+                    &json!({"layer":original.layer,"width_nm":100_000,
+                "points":points,"expected_revision":session.revision()}),
+                )
+                .unwrap();
+        }
+        assert_eq!(view(&session).tracks().len(), 1_201);
+        let before = session.snapshot().unwrap();
+        let revision = session.revision();
+        let params = json!({"vias":[intent.via],"tracks":[intent.track],"dx_nm":400_000,"dy_nm":0,"expected_revision":revision});
+        use crate::board::clearance::FORBID_SYNCHRONOUS_GEOMETRY;
+        FORBID_SYNCHRONOUS_GEOMETRY.set(true);
+        let mut job = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        assert!(!job.step(1));
+        assert!(job.take_result().unwrap().is_none());
+        for _ in 0..25_000 {
+            if job.step(128) {
+                break;
+            }
+        }
+        let prepared = job.take_result().unwrap().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        let committed = session.commit_copper_edit(prepared);
+        FORBID_SYNCHRONOUS_GEOMETRY.set(false);
+        committed.unwrap();
+        assert_eq!(session.revision(), revision + 1);
+        assert_eq!(view(&session).teardrops(), &[Record::from(intent)]);
+        assert_eq!(intent.derive(view(&session)).unwrap().vertices, original.vertices.map(|p| point(p.x_nm + 400_000, p.y_nm)));
+    }
+
+    /// On an active-intent board, source-contact defaults fail closed but explicitly sized
+    /// track and via additions still run regeneration. Outside that state, defaults still work.
+    #[test]
+    fn additions_require_explicit_dimensions_with_active_teardrops() {
+        let (mut session, intent) = checked_site();
+        let layer = intent.derive(view(&session)).unwrap().layer;
+        let revision = session.revision();
+        let before = session.snapshot().unwrap();
+        for (id, params) in [
+            (ADD_TRACKS, json!({"layer":layer,"points":[point(3_000_000,20_000_000),point(4_000_000,20_000_000)]})),
+            (ADD_VIA, json!({"at":point(5_000_000,20_000_000)})),
+        ] {
+            let mut params = params;
+            params["expected_revision"] = json!(session.revision());
+            let snapshot = session.snapshot().unwrap();
+            assert!(matches!(session.apply(id, &params), Err(CommandError::Unavailable(message))
+                if message == crate::board::teardrop::EXPLICIT_DIMENSIONS));
+            assert!(std::sync::Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+            let mut explicit = params.clone();
+            if id == ADD_TRACKS {
+                explicit["width_nm"] = json!(100_000);
+            } else {
+                explicit["via_diameter_nm"] = json!(500_000);
+                explicit["via_drill_nm"] = json!(300_000);
+            }
+            session.apply(id, &explicit).unwrap();
+            assert_eq!(view(&session).teardrops(), &[Record::from(intent)]);
+        }
+        assert_eq!(session.revision(), revision + 2);
+        session.open_snapshot(before);
+        session
+            .apply(
+                EDIT_TEARDROPS,
+                &json!({"board":intent.board.board,"expected_revision":session.revision(),"edits":{"add":[],"remove":[intent.id]}}),
+            )
+            .unwrap();
+        session.apply(ADD_VIA, &json!({"at":point(5_000_000,20_000_000),"expected_revision":session.revision()})).unwrap();
     }
 }

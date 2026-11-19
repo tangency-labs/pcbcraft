@@ -1,6 +1,9 @@
 //! Resumable preparation of existing copper commands against one immutable board snapshot.
 use super::*;
 use crate::board::{
+    class_rules::{Context, NetRules},
+    clearance::{BoardGeometry, ClearanceQuery},
+    teardrop,
     view::BoardTarget,
     work::{Progress, Source},
 };
@@ -27,6 +30,7 @@ struct BaseProjection {
 pub struct CopperPreparation {
     source: Source,
     base: Arc<Mutex<BaseProjection>>,
+    defer_net_reconciliation: bool,
 }
 impl std::fmt::Debug for CopperPreparation {
     /// Do not format project contents or lock a worker's projection state for diagnostics.
@@ -46,6 +50,8 @@ impl CopperPreparation {
 pub struct PreparedCopperEdit {
     source: Source,
     candidate: Option<Arc<Project>>,
+    /// Present when the worker already validated the publication candidate after regeneration.
+    prepared_highest: Option<u64>,
     command: &'static str,
     /// The parameters the edit was prepared with, reported with it once committed.
     params: Value,
@@ -102,6 +108,7 @@ impl Session {
                 effective,
             },
             base: Arc::default(),
+            defer_net_reconciliation: self.defer_net_reconciliation,
         })
     }
     /// Validate catalog parameters, source and revision before queuing work. Reusing a context
@@ -165,14 +172,18 @@ impl Session {
     }
     /// Consume an engine-validated candidate in one shared history transaction. Another session,
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
-    /// Teardrop regeneration can still refuse the transaction; report only a published edit to the observer.
+    /// A regenerated candidate is already validated; publication does not rebuild its geometry.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
         self.authorize_command(prepared.command)?;
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
         }
         if let Some(candidate) = prepared.candidate {
-            self.publish_change((*candidate).clone(), true)?;
+            if let Some(highest) = prepared.prepared_highest {
+                self.adopt_change(candidate, highest);
+            } else {
+                self.change((*candidate).clone())?;
+            }
             self.report_committed(prepared.command, &prepared.params);
         }
         Ok(self.revision())
@@ -224,6 +235,59 @@ impl CopperEditJob {
     pub fn take_result(&mut self) -> Result<Option<PreparedCopperEdit>, CommandError> {
         self.result.take().transpose()
     }
+    /// Capture and enforce class dimensions using the same candidate contacts as regeneration.
+    fn candidate_class_rules(&self, view: BoardView<'_>, geometry: &BoardGeometry) -> Result<Option<Context>, CommandError> {
+        let context = NetRules::new(view, self.context.source.effective.clone())?.map(|rules| rules.capture(view, geometry)).transpose()?;
+        if let Some(context) = &context {
+            for item in &geometry.items {
+                let Ok(id) = Uuid::parse_str(&item.name) else { continue };
+                if !self.added.contains(&id) {
+                    continue;
+                }
+                if item.intended_nets.len() > 1 {
+                    return Err(CommandError::InvalidParams("This copper would connect distinct intended nets.".into()));
+                }
+                if let Some(policy) = context.rules_for(&item.name).filter(|policy| policy.has_dimensions()) {
+                    if let Ok(index) = view.tracks().binary_search_by_key(&id, |track| track.id) {
+                        policy.track_width(Some(view.tracks()[index].width_nm))?;
+                    }
+                    if let Ok(index) = view.vias().binary_search_by_key(&id, |via| via.id) {
+                        let via = &view.vias()[index];
+                        policy.via_sizes(Some(via.diameter_nm), Some(via.drill_nm))?;
+                    }
+                }
+            }
+        }
+        Ok(context)
+    }
+
+    /// For an interactive route with layer changes, refuse an added via land too close to a
+    /// non-plated hole at the candidate's final sizes and resolved net clearance.
+    fn check_route_via_holes(
+        &self,
+        land_count: usize,
+        view: BoardView<'_>,
+        geometry: &BoardGeometry,
+        context: Option<&Context>,
+    ) -> Result<(), CommandError> {
+        if !self.check_route_vias {
+            return Ok(());
+        }
+        let via_start = land_count + view.tracks().len();
+        let baseline = self.context.source.effective.values.clearance_nm;
+        for (offset, via) in view.vias().iter().enumerate().filter(|(_, via)| self.added.contains(&via.id)) {
+            let index = via_start + offset;
+            let clearance = context.and_then(|rules| rules.object(index)).map_or(Ok(baseline), |policy| policy.clearance_nm())?;
+            if geometry.mechanical_violation(index, clearance) {
+                return Err(CommandError::InvalidParams(format!(
+                    "Via land at ({}, {}) is too close to a non-plated hole.",
+                    via.at.x_nm, via.at.y_nm
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Shared native/browser phases use exactly the synchronous command's geometry and short policy.
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
         match self.phase {
@@ -231,11 +295,12 @@ impl CopperEditJob {
                 let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
                 self.added = added;
                 self.candidate = candidate.map(Arc::new);
-                if self.candidate.is_none() || self.added.is_empty() {
+                if self.candidate.as_ref().is_none_or(|candidate| self.added.is_empty() && candidate.board.teardrops.is_empty()) {
                     self.phase = 4;
                     self.result = Some(Ok(PreparedCopperEdit {
                         source: self.context.source.clone(),
                         candidate: self.candidate.take(),
+                        prepared_highest: None,
                         command: self.command,
                         params: self.params.clone(),
                         class_rules: None,
@@ -279,6 +344,7 @@ impl CopperEditJob {
                         return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
                     }
                     if self.check_route_vias
+                        || !candidate.board.teardrops.is_empty()
                         || candidate.has_dimensional_net_classes()
                         || candidate.board.vias.iter().any(|v| v.net_assignment.is_some())
                     {
@@ -295,60 +361,53 @@ impl CopperEditJob {
                     self.work = self.work.saturating_add(budget);
                     return Ok(false);
                 }
-                let class_rules = if let (Some(candidate), Some(lands), Some(builder), Some((copper, members))) =
-                    (&self.candidate, &self.lands, self.builder.take(), self.class_islands.take())
+                let source = &self.context.source;
+                let mut candidate = self.candidate.take();
+                let mut class_rules = None;
+                let mut prepared_highest = None;
+                if let (Some(project), Some(lands), Some(builder), Some((copper, members))) =
+                    (&candidate, &self.lands, self.builder.take(), self.class_islands.take())
                 {
-                    let view =
-                        candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+                    let view = project.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
                     let (_, merged) = builder.finish(lands, view.tracks(), view.vias());
-                    if let Some((a, b)) = short_from_members(candidate, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
+                    if let Some((a, b)) = short_from_members(project, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
                         return Err(CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")));
                     }
-                    let geometry = crate::board::clearance::BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
-                    let context = crate::board::class_rules::NetRules::new(view, self.context.source.effective.clone())?
-                        .map(|rules| rules.capture(view, &geometry))
-                        .transpose()?;
-                    if let Some(context) = &context {
-                        for item in &geometry.items {
-                            let Ok(id) = Uuid::parse_str(&item.name) else { continue };
-                            if !self.added.contains(&id) {
-                                continue;
-                            }
-                            if item.intended_nets.len() > 1 {
-                                return Err(CommandError::InvalidParams("This copper would connect distinct intended nets.".into()));
-                            }
-                            if let Some(policy) = context.rules_for(&item.name).filter(|policy| policy.has_dimensions()) {
-                                if let Some(track) = view.tracks().iter().find(|track| track.id == id) {
-                                    policy.track_width(Some(track.width_nm))?;
+                    if view.teardrops().is_empty() {
+                        let geometry = BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
+                        class_rules = self.candidate_class_rules(view, &geometry)?;
+                        self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
+                    } else {
+                        // Reuse the worker's contact batches. Map the candidate memberships
+                        // after reconciliation and keep every polygon/rule query off commit.
+                        let (next, highest) = Session::prepare_change_from(
+                            Some(&source.snapshot),
+                            self.context.defer_net_reconciliation,
+                            (**project).clone(),
+                            Some(|project: &mut Project| {
+                                let view = project.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+                                let geometry = BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
+                                if self.check_route_vias
+                                    || project.has_dimensional_net_classes()
+                                    || view.vias().iter().any(|via| via.net_assignment.is_some())
+                                {
+                                    class_rules = self.candidate_class_rules(view, &geometry)?;
                                 }
-                                if let Some(via) = view.vias().iter().find(|via| via.id == id) {
-                                    policy.via_sizes(Some(via.diameter_nm), Some(via.drill_nm))?;
-                                }
-                            }
-                        }
+                                self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
+                                teardrop::regenerate(project, source.target, |project| {
+                                    let candidate_source = Source { snapshot: Arc::new(project.clone()), ..source.clone() };
+                                    ClearanceQuery::from_geometry(&candidate_source, Arc::new(geometry))
+                                })
+                            }),
+                        )?;
+                        candidate = Some(Arc::new(next));
+                        prepared_highest = Some(highest);
                     }
-                    if self.check_route_vias {
-                        let via_start = lands.len() + view.tracks().len();
-                        let baseline = self.context.source.effective.values.clearance_nm;
-                        for (offset, via) in view.vias().iter().enumerate().filter(|(_, via)| self.added.contains(&via.id)) {
-                            let index = via_start + offset;
-                            let clearance =
-                                context.as_ref().and_then(|rules| rules.object(index)).map_or(Ok(baseline), |policy| policy.clearance_nm())?;
-                            if geometry.mechanical_violation(index, clearance) {
-                                return Err(CommandError::InvalidParams(format!(
-                                    "Via land at ({}, {}) is too close to a non-plated hole.",
-                                    via.at.x_nm, via.at.y_nm
-                                )));
-                            }
-                        }
-                    }
-                    context
-                } else {
-                    None
-                };
+                }
                 self.result = Some(Ok(PreparedCopperEdit {
-                    source: self.context.source.clone(),
-                    candidate: self.candidate.take(),
+                    source: source.clone(),
+                    candidate,
+                    prepared_highest,
                     command: self.command,
                     params: self.params.clone(),
                     class_rules,

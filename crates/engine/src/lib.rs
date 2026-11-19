@@ -4286,20 +4286,29 @@ impl Session {
         }
     }
 
-    /// Prepare an edit without publishing it. Check locked copper, geometry support, metadata,
-    /// nets and zone ownership. Only prepared track/via edits may regenerate existing intents.
-    /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
-    fn prepare_change(&self, mut project: Project, prepared_copper: bool) -> Result<(Project, u64), CommandError> {
+    /// Prepare an ordinary edit without allowing it to regenerate teardrops.
+    fn prepare_change(&self, project: Project) -> Result<(Project, u64), CommandError> {
+        Self::prepare_change_from(self.project(), self.defer_net_reconciliation, project, None::<fn(&mut Project) -> Result<(), CommandError>>)
+    }
+
+    /// Validate a private candidate against its source. A copper worker may supply regeneration
+    /// using its projected contacts after net reconciliation and before native size validation.
+    fn prepare_change_from(
+        source: Option<&Project>,
+        defer_net_reconciliation: bool,
+        mut project: Project,
+        regenerate: Option<impl FnOnce(&mut Project) -> Result<(), CommandError>>,
+    ) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
-        if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
+        if !source.is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
         }
-        if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
+        if let Some(previous) = source.filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
             if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
                 return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
             }
-            if !prepared_copper
+            if regenerate.is_none()
                 && !previous.board.teardrops.is_empty()
                 && !Arc::ptr_eq(&previous.board, &project.board)
                 && previous.board.teardrops == project.board.teardrops
@@ -4310,9 +4319,7 @@ impl Session {
         }
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
-        let physical_changed = self
-            .project
-            .as_ref()
+        let physical_changed = source
             .is_some_and(|previous| previous.id == project.id && !Arc::ptr_eq(&previous.board, &project.board) && previous.board != project.board);
         if physical_changed
             && matches!(project.board.ownership, board::identity::Ownership::Legacy)
@@ -4329,7 +4336,7 @@ impl Session {
         project.refresh_board_folder();
         // Whole-project presentation is snapshot-owned. Sheet caches may retain unchanged
         // topology/metadata, but component names and occurrence paths invalidate their labels.
-        let topology_changed = self.project.as_ref().is_none_or(|old| {
+        let topology_changed = source.is_none_or(|old| {
             old.net_scope() != project.net_scope()
                 || old.sheets.len() != project.sheets.len()
                 || old
@@ -4338,7 +4345,7 @@ impl Session {
                     .zip(project.sheets.iter())
                     .any(|(before, after)| before.sheet_id != after.sheet_id || !Arc::ptr_eq(&before.connectivity, &after.connectivity))
         });
-        let presentation_changed = self.project.as_ref().is_none_or(|old| {
+        let presentation_changed = source.is_none_or(|old| {
             old.net_scope() != project.net_scope()
                 || (!Arc::ptr_eq(&old.components, &project.components)
                     && (old.components.len() != project.components.len()
@@ -4354,29 +4361,29 @@ impl Session {
             project.named_graph = Arc::default();
         }
         // Named anchors can attach to moving geometry and join other sheets.
-        if presentation_changed || project.requires_project_graph() || self.project.as_ref().is_some_and(|p| p.requires_project_graph()) {
+        if presentation_changed || project.requires_project_graph() || source.is_some_and(Project::requires_project_graph) {
             project.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut project.sheets) {
                 sheet.connectivity = Arc::default();
             }
         }
         let highest = project.highest_id();
-        let previous_highest = self.project.as_ref().filter(|old| old.same_document(&project)).map_or(0, |old| old.highest_id());
+        let previous_highest = source.filter(|old| old.same_document(&project)).map_or(0, Project::highest_id);
         if project.numeric_id_high_water.is_some()
             || highest != previous_highest
             || project.components.values().any(|component| !component.metadata.is_empty())
         {
             project.numeric_id_high_water = Some(project.numeric_id_high_water.unwrap_or(0).max(highest).max(previous_highest));
         }
-        if !self.defer_net_reconciliation {
-            project.reconcile_nets(self.project.as_deref())?;
+        if !defer_net_reconciliation {
+            project.reconcile_nets(source)?;
         }
-        if prepared_copper && !project.board.teardrops.is_empty() {
-            self.regenerate_teardrops(&mut project)?;
+        if let Some(regenerate) = regenerate {
+            regenerate(&mut project)?;
         }
         // Check the final candidate after pruning, before changing history or notifying observers.
         if (!project.board.tracks.is_empty() || !project.board.vias.is_empty())
-            && self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+            && source.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
         {
             persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
         } else {
@@ -4386,16 +4393,17 @@ impl Session {
         Ok((project, highest))
     }
 
-    /// Publish an ordinary command without enabling the prepared copper regeneration path.
+    /// Prepare and publish an ordinary edit, returning without publication on error.
     fn change(&mut self, project: Project) -> Result<(), CommandError> {
-        self.publish_change(project, false)
+        let (project, highest) = self.prepare_change(project)?;
+        self.adopt_change(Arc::new(project), highest);
+        Ok(())
     }
 
-    /// Prepare and publish one edit, including any regeneration for a prepared copper candidate.
+    /// Publish an already validated candidate. The caller must still hold its exact source.
     /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
-    fn publish_change(&mut self, project: Project, prepared_copper: bool) -> Result<(), CommandError> {
-        let (project, highest) = self.prepare_change(project, prepared_copper)?;
-        let project = self.retain_allocation_watermark(Arc::new(project));
+    fn adopt_change(&mut self, project: Arc<Project>, highest: u64) {
+        let project = self.retain_allocation_watermark(project);
         self.update_plan = None;
         self.setup_preview = None;
         self.undo.push(self.project.replace(project));
@@ -4404,7 +4412,6 @@ impl Session {
         }
         self.redo.clear();
         self.revision = (self.revision + 1).max(highest);
-        Ok(())
     }
 
     /// Restore authored content and advance the revision, retaining allocation and profile-revision

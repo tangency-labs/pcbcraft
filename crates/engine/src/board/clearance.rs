@@ -152,24 +152,6 @@ impl Session {
         self.clearance_query_impl(target, &serde_json::json!({}), true)
     }
 
-    /// Build an uncached base query against an unpublished candidate for transaction-time
-    /// teardrop checks. This authority stays inside preparation and is not returned to clients.
-    pub(super) fn teardrop_candidate_query(&self, project: Arc<crate::Project>, target: BoardTarget) -> Result<ClearanceQuery, CommandError> {
-        let view = project.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
-        view.require_no_arcs().map_err(CommandError::Unavailable)?;
-        let effective = view.effective_rules();
-        let geometry = Arc::new(BoardGeometry::new(view));
-        let source = super::work::Source {
-            snapshot: project,
-            session: self.clearance_identity.clone(),
-            target,
-            opening: self.history_root_revision(),
-            revision: self.revision(),
-            effective,
-        };
-        ClearanceQuery::from_geometry(&source, geometry)
-    }
-
     /// Share immutable geometry and policy; only the teardrop command supplies its own polygons.
     fn clearance_query_impl(
         &self,
@@ -211,7 +193,7 @@ impl Session {
 
 impl ClearanceQuery {
     /// Resolve policy over prepared contacts, preserving the source's session and board authority.
-    fn from_geometry(source: &super::work::Source, geometry: Arc<BoardGeometry>) -> Result<Self, CommandError> {
+    pub(super) fn from_geometry(source: &super::work::Source, geometry: Arc<BoardGeometry>) -> Result<Self, CommandError> {
         let view = source.snapshot.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable".into()))?;
         let rules = source.effective.clone();
         let copper_layers = view.layers().into_iter().filter(|l| l.purpose == super::setup::LayerPurpose::Copper).map(|l| l.id).collect();

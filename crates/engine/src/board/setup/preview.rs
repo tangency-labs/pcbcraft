@@ -101,7 +101,7 @@ impl Session {
         let changes = changes(&snapshot, before, &setup)?;
         let refusal = self
             .board_setup_candidate(params)
-            .and_then(|candidate| candidate.map(|project| self.prepare_change(project, false)).transpose())
+            .and_then(|candidate| candidate.map(|project| self.prepare_change(project)).transpose())
             .err()
             .map(refusal);
         let report = SetupPreview {

@@ -172,48 +172,51 @@ fn contour(addition: &Addition) -> Contour {
     Contour { core: addition.copper.vertices, radius: 0. }
 }
 
-impl Session {
-    /// Rebuild straight-via outlines on the candidate, not the published board. Prune sites
-    /// whose attachments no longer form a taper. A rule block or unavailable check refuses
-    /// the whole transaction; only a complete pass can replace the candidate's intent list.
-    pub(crate) fn regenerate_teardrops(&self, project: &mut Project) -> Result<(), CommandError> {
-        let target = project.board_target().ok_or_else(|| CommandError::Unavailable("teardrops require a physical board".into()))?;
-        let board = project.board_view(target).ok_or_else(|| CommandError::NotFound("board is unavailable".into()))?;
-        let mut retained = Vec::new();
-        for &record in board.teardrops() {
-            let intent = record.on(target);
-            match intent.derive(board) {
-                Ok(copper) => retained.push(Addition { intent, copper }),
-                Err(
-                    ShapeError::MissingTrack
-                    | ShapeError::MissingVia
-                    | ShapeError::NotCentered
-                    | ShapeError::TrackTooShort
-                    | ShapeError::NoTaper
-                    | ShapeError::WidthLimit
-                    | ShapeError::UnrepresentableContour,
-                ) => (),
-                Err(error) => return Err(CommandError::InvalidParams(format!("invalid teardrop {}: {error:?}", record.id))),
-            }
+/// Rebuild straight-via outlines on the candidate, not the published board. Prune sites
+/// whose attachments no longer form a taper. A rule block or unavailable check refuses
+/// the whole transaction; only a complete pass can replace the candidate's intent list.
+pub(in crate::board) fn regenerate(
+    project: &mut Project,
+    target: BoardTarget,
+    base_query: impl FnOnce(&Project) -> Result<ClearanceQuery, CommandError>,
+) -> Result<(), CommandError> {
+    let board = project.board_view(target).ok_or_else(|| CommandError::NotFound("board is unavailable".into()))?;
+    let mut retained = Vec::new();
+    for &record in board.teardrops() {
+        let intent = record.on(target);
+        match intent.derive(board) {
+            Ok(copper) => retained.push(Addition { intent, copper }),
+            Err(
+                ShapeError::MissingTrack
+                | ShapeError::MissingVia
+                | ShapeError::NotCentered
+                | ShapeError::TrackTooShort
+                | ShapeError::NoTaper
+                | ShapeError::WidthLimit
+                | ShapeError::UnrepresentableContour,
+            ) => (),
+            Err(error) => return Err(CommandError::InvalidParams(format!("invalid teardrop {}: {error:?}", record.id))),
         }
-        if !retained.is_empty() {
-            let query = self.teardrop_candidate_query(Arc::new(project.clone()), target)?;
-            let mut evaluator = Evaluator::new(&query, board);
-            for addition in &retained {
-                if let Some(block) = evaluator.check(board, addition, &[])? {
-                    return Err(CommandError::InvalidParams(format!(
-                        "teardrop {} blocked by {:?} at {} (gap {} nm; required {} nm)",
-                        addition.intent.id, block.rule, block.other_object, block.actual_nm, block.required_nm
-                    )));
-                }
-            }
-        }
-        if retained.len() != board.teardrops().len() {
-            Arc::make_mut(&mut project.board).teardrops = retained.into_iter().map(|addition| Record::from(addition.intent)).collect();
-        }
-        Ok(())
     }
+    if !retained.is_empty() {
+        let query = base_query(project)?;
+        let mut evaluator = Evaluator::new(&query, board);
+        for addition in &retained {
+            if let Some(block) = evaluator.check(board, addition, &[])? {
+                return Err(CommandError::InvalidParams(format!(
+                    "teardrop {} blocked by {:?} at {} (gap {} nm; required {} nm)",
+                    addition.intent.id, block.rule, block.other_object, block.actual_nm, block.required_nm
+                )));
+            }
+        }
+    }
+    if retained.len() != board.teardrops().len() {
+        Arc::make_mut(&mut project.board).teardrops = retained.into_iter().map(|addition| Record::from(addition.intent)).collect();
+    }
+    Ok(())
+}
 
+impl Session {
     /// Preview or publish the entire checked batch; a stale revision or evaluation error edits nothing.
     pub(crate) fn edit_teardrops(&mut self, params: &Value) -> Result<Value, CommandError> {
         self.validate_project_command(EDIT_TEARDROPS, params)?;
@@ -255,7 +258,7 @@ impl Session {
             records.extend(added.into_iter().map(|record| (record.id, record)));
             Arc::make_mut(&mut next.board).teardrops = records.into_values().collect();
             if dry_run {
-                self.prepare_change(next, false)?;
+                self.prepare_change(next)?;
             } else {
                 self.change(next)?;
             }

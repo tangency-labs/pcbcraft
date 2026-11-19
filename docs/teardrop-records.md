@@ -41,11 +41,16 @@ Deleting either source or breaking the centered attachment removes the intent;
 an attachment whose requested taper no longer fits also loses its intent.
 Undo restores the copper edit and any removed intents in one step.
 
-Regeneration checks the surviving polygons against the new copper and board
-outline using the same rules as an addition. If a surviving taper fails those
-rules, the edit is refused with the intent, obstacle and rule; no partial edit
-is published. Other board edits that cannot account for active teardrops
-still require removing the intents first.
+Copper preparation checks surviving polygons against the new copper and
+outline using the same rules as an addition. If a surviving taper fails,
+the edit is refused with the intent, obstacle and rule. Publication adopts
+the checked candidate only if its source snapshot still matches.
+
+On boards with active intents, additions need explicit track width and, for
+any new vias, explicit diameter and drill. A via with an explicit net target
+can still use that target's defaults without a copper-contact lookup. Other
+contact-based defaults and board edits that cannot account for teardrops
+remain unavailable until the intents are removed.
 
 ## Add and remove preview
 
