@@ -25,6 +25,7 @@ impl Registry {
         if self.records.len() > MAX_RECORDS || (!self.records.is_empty() && !project.has_sheet_occurrences()) {
             return Err("Net registry requires adopted occurrences and a bounded record count.".into());
         }
+        self.validate_pairs()?;
         if self.records.is_empty() {
             return Ok(());
         }
@@ -111,6 +112,7 @@ impl Registry {
 impl Project {
     /// Inspect persistent and revision-derived addresses without promotion, allocation or edits.
     /// Derived membership remains in the ordinary netlist; each row here supplies a typed key.
+    /// Explicit differential relationships appear only when stored.
     pub fn inspect_net_registry(&self) -> Result<serde_json::Value, String> {
         let graph = Graph::build(self)?;
         let electrical = self.electrical_connectivity();
@@ -137,7 +139,11 @@ impl Project {
                 serde_json::json!({"id":id,"anchor":network.anchors.first(),"names":network.names,"name":display_name})
             })
             .collect();
-        Ok(serde_json::json!({"scope":self.net_scope(),"records":self.net_registry.records,"nets":nets}))
+        let mut result = serde_json::json!({"scope":self.net_scope(),"records":self.net_registry.records,"nets":nets});
+        if self.net_registry.has_pairs() {
+            result["pairs"] = serde_json::to_value(&self.net_registry.pairs).map_err(|error| error.to_string())?;
+        }
+        Ok(result)
     }
 
     /// Return the active persistent ID of each row of [`Project::electrical_connectivity`], by

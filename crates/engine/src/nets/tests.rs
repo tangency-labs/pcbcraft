@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 mod codec;
 mod numbering;
+mod pairs;
 mod selection;
 
 /// All circuit authoring uses the same revision-checked command path as GUI and MCP.
@@ -271,6 +272,7 @@ fn exhausted_registry_preserves_the_project_revision_history_and_update_preview(
         records: (1..=MAX_RECORDS as u128)
             .map(|id| Record { id: Uuid::from_u128(id), generated_number: Some(id as u32), ..template.clone() })
             .collect(),
+        ..Registry::default()
     });
     project.net_registry.validate(&project).unwrap();
     session.open_snapshot(Arc::new(project));
@@ -421,7 +423,8 @@ fn canonical_creation_priority_explicit_selection_and_four_anchor_cap() {
     assert_eq!(&explicit.primary, selected);
     assert_eq!(explicit.fallbacks.first().unwrap().kind, AnchorKind::Label);
     let mut reserved = (1..=MAX_RECORDS as u128).map(Uuid::from_u128).collect();
-    assert!(reconcile::allocate(&mut reserved).is_err());
+    let error = reconcile::allocate(MAX_RECORDS, &mut reserved).unwrap_err();
+    assert!(matches!(error, crate::CommandError::Unavailable(ref reason) if reason == "Net identity registry is full."), "{error:?}");
     assert_eq!(reserved.len(), MAX_RECORDS);
 }
 

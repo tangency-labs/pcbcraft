@@ -21,7 +21,8 @@ no-connect intent in that envelope. Every record stored under project/23 has a p
 under older headers are rejected. Project/24 carries the same records beside
 [part groups](part-groups.md), with generated numbers optional: a
 registry there numbers every record under the same rules or numbers none.
-Board-owned expanded memberships select instances/5; dense memberships use
+Without assembly profiles or pairs, board-owned expanded memberships select
+instances/5; dense memberships use
 project/39 and instances/7 with the same optional net-registry records and a
 compact UUID dictionary. A part-group catalog without
 memberships keeps the instance header the other records need, such as
@@ -53,6 +54,43 @@ Lineage contains a source capture, a nullable persistent source UUID and one
 typed source anchor. A null UUID identifies a meaningful derived source in that
 capture. Captures identify the original bundle; they do not embed it or claim
 that historical endpoints can be resolved from the current project alone.
+
+## Differential pair records
+
+The native registry can retain explicit differential intent for
+[#306](https://github.com/tangency-labs/pcbcraft/issues/306). A nonempty `pairs`
+array follows `records` in the existing instance home. Each object has an
+independent `id` UUID, persistent net UUIDs `positive` and `negative`, and a
+`name`. Member UUIDs must differ and belong to this registry; a net can belong
+to at most one pair. Pair IDs are non-nil, distinct from net IDs, and stored in
+strictly ascending UUID order. Polarity is explicit, never inferred from a name.
+Names are nonempty, trimmed, control-free text of at most 200 Unicode characters.
+
+Omitted `state` means active intent. The reader accepts `{"kind":"active"}`
+and the writer omits it. `{"kind":"needs_review","reason":"Member endpoints require review"}`
+retains review context, with the same text bounds as `name`. Unknown fields and
+states, explicit nulls and missing required fields are refused. Active intent
+is not an electrical or routing qualification. A member may become retired or
+ambiguous; the stored relationship keeps that exact UUID and does not follow
+successors or set a review state automatically.
+
+A nonempty pair list selects project/45 and, for a board-owned registry,
+instances/8. These headers require pairs; earlier headers refuse them. An empty
+or null `pairs` field is invalid, not an alias for omission. Project/45 allows
+both fully numbered and fully unnumbered registries, but not a mixture. Existing
+class catalogs and bindings, parameters, no-connect intent, part groups and
+assembly profiles keep their existing validation rules. Either expanded or
+compact memberships can follow the registry; the field name selects which
+encoding instances/8 contains. Removing the last pair restores the envelope
+required by the remaining records. No sheet, board or `.pc` container version
+changes.
+
+At most 2,048 pairs fit alongside 4,096 net records. Pair content counts toward
+the registry's existing 8 MiB serialized limit. Incremental writing charges one
+record per pair, and history snapshots share the pair list and individual values.
+Read-only registry inspection includes `pairs` only when present. There is no
+pair authoring command, editor, class, inference, reconciliation or router in
+this storage change.
 
 ## Transactions and reconciliation
 
@@ -117,5 +155,7 @@ terminals, stale revisions, zero-board saves, first-board scope transfer and
 journal interruption. Non-anchor wire edits leave instance bytes unchanged,
 and board-baseline acceptance does not promote unnamed networks. Promotion alone
 leaves the accepted baseline unchanged and its connectivity update a no-op.
-Persistent class assignments use this registry's identity and reconciliation;
-relationship constraints, repeated circuit instances and zones remain separate.
+Pair regressions cover both storage homes, packed and split round trips,
+older-header refusal, invalid record shapes and references, history sharing,
+first-board transfer and retention when a member retires. Pair authoring and
+physical consumers remain separate.
