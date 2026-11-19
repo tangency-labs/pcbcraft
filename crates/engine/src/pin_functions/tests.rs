@@ -51,6 +51,7 @@ fn params(session: &Session, function: Value) -> Value {
     json!({"target":part_target(session),"function":function,"expected_revision":session.revision()})
 }
 
+/// Extract the rendered schematic labels, ignoring non-text shapes.
 fn ink(project: &Project) -> Vec<String> {
     let placed = &project.symbols()[0];
     placed
@@ -114,23 +115,28 @@ fn refuses_unknown_terminal_function_and_stale_request() {
     let mut session = fixture(false);
     let before = session.snapshot().unwrap();
     let valid = params(&session, json!("ADC_IN"));
-    for (key, value) in [
-        ("expected_revision", json!(0)),
-        ("function", json!("GPIO")),
-        ("function", json!(" ADC_IN")),
-        ("target", json!({"junction":"junction-1"})),
-        ("target", json!({"part":part_target(&session)["part"],"terminal":"99"})),
-        ("target", json!({"part":"component-9999","terminal":"1"})),
+    for (key, value, expected) in [
+        ("expected_revision", json!(0), None),
+        ("function", json!("GPIO"), Some("Unknown alternate pin function")),
+        ("function", json!(" ADC_IN"), Some("must be a trimmed pin function name or null")),
+        ("target", json!({"junction":"junction-1"}), Some("must be a logical {part, terminal} address")),
+        ("target", json!({"part":part_target(&session)["part"],"terminal":"99"}), Some("Unknown terminal")),
+        ("target", json!({"part":"component-9999","terminal":"1"}), Some("Unknown part instance")),
     ] {
         let mut invalid = valid.clone();
         invalid[key] = value;
-        assert!(session.execute(SET, &invalid).is_err(), "accepted {invalid}");
+        let error = session.execute(SET, &invalid).expect_err("invalid pin function request must be rejected");
+        match (expected, error) {
+            (None, CommandError::StaleRevision { current }) => assert_eq!(current, session.revision()),
+            (Some(expected), CommandError::InvalidParams(reason)) => assert!(reason.contains(expected), "{invalid}: {reason}"),
+            (_, error) => panic!("{invalid}: unexpected error {error}"),
+        }
         assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
         assert_eq!(session.revision(), valid["expected_revision"].as_u64().unwrap());
     }
     let mut missing = valid.clone();
     missing.as_object_mut().unwrap().remove("function");
-    assert!(session.apply(SET, &missing).is_err());
+    assert!(matches!(session.apply(SET, &missing), Err(CommandError::InvalidParams(reason)) if reason.contains("needs `function`")));
     session.apply(SET, &valid).unwrap();
     let clear = params(&session, Value::Null);
     session.apply(SET, &clear).unwrap();
@@ -162,7 +168,14 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
         assert_eq!(encode_documents(reopened).unwrap(), docs);
         assert_eq!(encode_documents(decode_packed(&encode_packed(selected).unwrap()).unwrap().project).unwrap(), docs);
         let old: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-        for change in ["old format", "missing", "empty", "null", "unknown", "duplicate"] {
+        for (change, expected) in [
+            ("old format", "require project format 48"),
+            ("missing", "require project format 48"),
+            ("empty", "Invalid alternate pin function record count"),
+            ("null", "invalid type: null, expected a sequence"),
+            ("unknown", "Unknown or duplicate alternate pin function selection"),
+            ("duplicate", "Unknown or duplicate alternate pin function selection"),
+        ] {
             let mut invalid = stored.clone();
             let component = &mut invalid["components"][0];
             match change {
@@ -177,7 +190,8 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
             }
             let mut changed = docs.clone();
             changed.insert(ENTRY_POINT.into(), serde_json::to_vec(&invalid).unwrap());
-            assert!(decode_documents(&changed).is_err(), "accepted {change}");
+            let error = decode_documents(&changed).err().expect("invalid pin function record must be rejected");
+            assert!(error.contains(expected), "{change}: {error}");
         }
         let clear = params(&session, Value::Null);
         session.apply(SET, &clear).unwrap();
@@ -278,18 +292,24 @@ fn alternate_definition_validates_and_versions_lazily() {
     let mut old: Value = serde_json::from_slice(&encoded).unwrap();
     assert_eq!(old["format"], "pcbcraft-library-item/5");
     old["format"] = json!("pcbcraft-library-item/1");
-    assert!(Item::decode(&serde_json::to_vec(&old).unwrap()).is_err());
+    let error = Item::decode(&serde_json::to_vec(&old).unwrap()).err().expect("old library item format cannot contain alternates");
+    assert_eq!(error, "Invalid or oversized native library item.");
     let good: Vec<_> =
         (0..MAX_ALTERNATES).map(|i| AlternatePinFunction { name: format!("ALT_{i}"), electrical_type: ElectricalType::Input }).collect();
-    for bad in [
-        vec![good[0].clone(); 2],
-        vec![AlternatePinFunction { name: "GPIO".into(), electrical_type: ElectricalType::Input }],
-        good.iter().cloned().chain([AlternatePinFunction { name: "TOO_MANY".into(), electrical_type: ElectricalType::Input }]).collect(),
+    for (bad, expected) in [
+        (vec![good[0].clone(); 2], "bounded list of uniquely named alternate pin functions"),
+        (vec![AlternatePinFunction { name: "GPIO".into(), electrical_type: ElectricalType::Input }], "repeats its primary name"),
+        (
+            good.iter().cloned().chain([AlternatePinFunction { name: "TOO_MANY".into(), electrical_type: ElectricalType::Input }]).collect(),
+            "bounded list of uniquely named alternate pin functions",
+        ),
     ] {
         let mut primitive = editor.snapshot().objects[&1].clone();
         let Primitive::Pin { alternates, .. } = &mut primitive else { panic!("expected pin") };
         *alternates = bad;
-        assert!(editor.execute(editor.revision(), Action::Replace { object: 1, primitive }).is_err());
+        let error =
+            editor.execute(editor.revision(), Action::Replace { object: 1, primitive }).expect_err("invalid alternate declarations must be rejected");
+        assert!(error.contains(expected), "{error}");
         assert!(Arc::ptr_eq(&editor.snapshot(), &draft));
     }
     let mut primitive = draft.objects[&1].clone();
