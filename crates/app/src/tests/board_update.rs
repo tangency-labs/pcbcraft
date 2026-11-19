@@ -282,6 +282,82 @@ fn placed_package_choice_waits_for_update_and_preserves_layout() {
     assert_eq!(replaced["mapping"], json!({"1":"2","2":"1"}));
 }
 
+/// A report click explicitly reveals the other schematic pane even with follow off. The
+/// originating schematic is also on the wrong sheet, but must keep its review authority.
+#[test]
+fn update_row_reveals_peer_sheet_without_retargeting_review_origin() {
+    use crate::{editor_view::DocumentTarget, preferences::SelectionFollow};
+    use pcbcraft_engine::{PLACE_SYMBOL, hierarchy::CREATE_CHILD};
+
+    let mut h = harness();
+    h.set_size(egui::vec2(1400., 900.));
+    h.state_mut().run("project.new", &json!({"create_board":true}));
+    h.run();
+    let root = h.state().session.project().unwrap().sheet_target();
+    edit(&mut h, CREATE_CHILD, json!({"sheet":root.id(),"name":"Power","x_nm":12_700_000,"y_nm":12_700_000}));
+    let project = h.state().session.project().unwrap();
+    let child = project.child_sheet(project.sheet_symbols()[0].id).unwrap();
+    edit(&mut h, PLACE_SYMBOL, json!({"sheet":child.id(),"definition":"resistor","x_nm":127_000_000,"y_nm":63_500_000}));
+    assign(&mut h, "resistor-0402", json!({"1":"1","2":"2"}));
+    place_first(&mut h, 0, 0);
+    edit(&mut h, pcbcraft_engine::board::update::INITIALIZE_BASELINE, json!({}));
+    assign(&mut h, "resistor-0603", json!({"1":"1","2":"2"}));
+    let (origin, peer, pcb) = {
+        let app = h.state_mut();
+        app.browser.open = false;
+        app.preferences.selection_follow = SelectionFollow::Off;
+        let origin = app.views.active.id();
+        let peer = app.views.open_beside(origin).unwrap();
+        let pcb = app.views.open_beside(peer).unwrap();
+        app.views.switch_workspace(pcb, Workspace::Board, &app.session);
+        (origin, peer, pcb)
+    };
+    h.run();
+    let before = h.state().session.snapshot().unwrap();
+    let board = before.board_target().unwrap();
+    let footprint = before.board_view(board).unwrap().footprint_ids().next().unwrap();
+    let child_project = before.for_sheet(child).unwrap();
+    let symbol = &child_project.symbols()[0];
+    let symbol_id = symbol.id();
+    assert_eq!(h.state().views.active.id(), origin);
+    for pane in [origin, peer] {
+        assert_eq!(h.state().views.view(pane).unwrap().target(), Some(DocumentTarget::Sheet(root)));
+    }
+
+    open(&mut h);
+    let app = h.state();
+    let host = app.views.host;
+    let input = app.views.active.input(&app.session).unwrap();
+    let camera = app.views.active.camera.saved_state();
+    let plan = app.session.cached_board_update().unwrap().plan_token;
+    click(&mut h, "Replace footprint for R1: basic-components / resistor-0603 · r4.");
+
+    let app = h.state();
+    // The peer pane shows a cached view of the child sheet; its root-sheet view stays cached.
+    let (cached, shown) = app.views.pane(peer);
+    assert_ne!(shown, peer);
+    assert!(cached.contains(&peer));
+    assert_eq!(app.views.view(peer).unwrap().target(), Some(DocumentTarget::Sheet(root)));
+    let peer_view = app.views.view(shown).unwrap();
+    assert_eq!(peer_view.target(), Some(DocumentTarget::Sheet(child)));
+    assert_eq!(app.views.schematic_paint_highlight(shown, &app.session).single_symbol(), Some(symbol_id.as_str()));
+    let peer_rect = h.get_by_label(&format!("Schematic canvas {}", shown.0 + 1)).rect();
+    assert!(peer_rect.contains(peer_view.camera.screen(symbol.position, peer_rect)));
+    assert_eq!(*app.views.board_paint_highlight(pcb, &app.session), [footprint].into());
+    assert!(app.views.view(pcb).unwrap().board.selection.is_empty());
+    assert!(peer_view.schematic.selection.is_empty());
+    assert_eq!(app.views.active.id(), origin);
+    assert_eq!(app.views.hosts[&host].focused, origin);
+    assert_eq!(app.views.active.target(), Some(DocumentTarget::Sheet(root)));
+    assert_eq!(app.views.active.input(&app.session), Some(input));
+    assert_eq!(app.views.active.camera.saved_state(), camera);
+    assert!(app.views.schematic_paint_highlight(origin, &app.session).is_empty());
+    assert!(matches!(app.dialog, Dialog::BoardUpdate(_)));
+    assert!(!h.get_by_label("Update PCB").accesskit_node().is_disabled());
+    assert_eq!(app.session.cached_board_update().unwrap().plan_token, plan);
+    assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+}
+
 /// Changing desired state from the post-Apply placement handoff requires another review.
 #[test]
 fn package_change_from_applied_result_requires_review_before_placement() {
@@ -670,6 +746,35 @@ fn placement_option_can_leave_an_updated_report_without_starting_a_cursor_group(
     assert!(matches!(h.state().dialog, Dialog::BoardUpdate(_)));
     assert!(h.state().views.active.board.placement.is_none());
     assert!(h.get_by_label("Update PCB").accesskit_node().is_disabled());
+    let row = "Add footprint R1: basic-components / resistor-0402 · r4.";
+    assert!(!h.get_by_label(row).accesskit_node().is_disabled());
+    let source = h.state().views.active.id();
+    click(&mut h, row);
+    assert!(!h.state().views.schematic_paint_highlight(source, &h.state().session).is_empty());
+
+    change_value(&mut h);
+    let app = h.state();
+    let document = app.views.active.target();
+    let camera = app.views.active.camera.saved_state();
+    let revision = app.session.revision();
+    let stale = h.get_by_label(row);
+    assert!(stale.accesskit_node().is_disabled());
+    let stale_point = stale.rect().center();
+    click_canvas_at(&mut h, stale_point);
+    let app = h.state();
+    assert_eq!(app.views.active.id(), source);
+    assert_eq!(app.views.active.target(), document);
+    assert_eq!(app.views.active.camera.saved_state(), camera);
+    assert!(app.views.schematic_paint_highlight(source, &app.session).is_empty());
+    assert_eq!(app.session.revision(), revision);
+    assert!(matches!(app.dialog, Dialog::BoardUpdate(_)));
+    assert!(h.query_by_label("Place footprints").is_none());
+    assert!(!h.get_by_label("Copy report").accesskit_node().is_disabled());
+    click(&mut h, "Actions");
+    assert!(h.query_by_label(row).is_none());
+    click(&mut h, "Actions");
+    assert!(h.get_by_label(row).accesskit_node().is_disabled());
+    click(&mut h, "Review again");
     click(&mut h, "Place footprints");
     assert!(matches!(h.state().dialog, Dialog::None));
     assert!(h.state().views.active.board.placement.is_some());

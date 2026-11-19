@@ -452,13 +452,23 @@ impl<'a> BoardView<'a> {
     /// Project part instance ordinals to actual placements, including placements pending removal.
     /// Proposed or accepted-but-unplaced packages have no physical address to highlight.
     pub fn footprints_for_parts(self, components: &BTreeSet<u64>) -> BTreeSet<String> {
-        self.project
-            .board
-            .footprints()
+        let board = &self.project.board;
+        components
             .iter()
-            .filter(|footprint| components.contains(&footprint.component))
+            .filter_map(|part| board.by_component.get(part).and_then(|&index| board.footprints().get(index)))
             .map(|footprint| format!("footprint-{}", footprint.id))
             .collect()
+    }
+
+    /// Resolve just the owner of a reported placement, without building graphics or net indexes.
+    pub fn footprint_part(self, id: &str) -> Option<u64> {
+        Some(self.placement(id)?.component)
+    }
+
+    /// Look up a placement anchor, without building geometry or accepted-net indexes.
+    pub fn footprint_anchor(self, id: &str) -> Option<Point> {
+        let footprint = self.placement(id)?;
+        Some(Point { x_nm: footprint.x_nm, y_nm: footprint.y_nm })
     }
 
     /// Resolve selected placements through their shared components and the part/unit index.
@@ -472,14 +482,9 @@ impl<'a> BoardView<'a> {
             .filter_map(|id| placements.binary_search_by_key(&id, |footprint| footprint.id).ok())
             .map(|index| placements[index].component)
             .collect();
-        self.selection_for_parts(&components)
-    }
-
-    /// Resolve the supplied part IDs to placed schematic units using the native part/unit index.
-    pub fn selection_for_parts(self, components: &BTreeSet<u64>) -> Selection {
         let symbols = components
-            .iter()
-            .flat_map(|&component| {
+            .into_iter()
+            .flat_map(|component| {
                 self.project
                     .units
                     .range((component, String::new())..)
@@ -488,6 +493,16 @@ impl<'a> BoardView<'a> {
             })
             .collect();
         Selection { symbols, ..Selection::default() }
+    }
+
+    /// Iterate placed units with their sheet in project order, without projecting or cloning
+    /// a new project for each sheet. Native editing caps the total at 4,096 symbols; the
+    /// document decoder caps each sheet at 4,096 and admits at most 64 sheets.
+    pub fn sheet_symbols(self) -> impl Iterator<Item = (crate::SheetTarget, u64, &'a crate::SymbolPlacement)> + 'a {
+        self.project.sheets.iter().flat_map(move |sheet| {
+            let target = crate::SheetTarget { project: self.project.id(), sheet: sheet.sheet_id };
+            sheet.symbols.iter().map(move |unit| (target, unit.component, unit))
+        })
     }
 }
 

@@ -153,7 +153,9 @@ messages reveal the parts at their ends, not the net itself. A proposed
 addition has no board geometry before it is placed. Another schematic pane
 can reveal the owning sheet; the pane that opened the review stays on its
 original document. The frozen plan remains open and **Assign footprint**
-is still a separate action. Stale previews must be reviewed again.
+is still a separate action. If the design changes while the applied report
+is open, its rows can still be read, filtered and copied. Choose **Review
+again** before navigating from a report on the changed design.
 
 ## Physical membership and exclusion
 

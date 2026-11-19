@@ -238,7 +238,7 @@ impl PcbApp {
                     Phase::Review => {
                         if let Some(preview) = preview.as_ref().filter(|_| current_plan) {
                             form::options(ui, &mut edit.place_new_footprints);
-                            draw_report(ui, &edit.report, &mut edit.filters, &mut action, preview.changes.is_noop());
+                            draw_report(ui, &edit.report, &mut edit.filters, &mut action, preview.changes.is_noop(), true);
                             if preview.changes.is_noop()
                                 && let Some(project) = project.as_ref()
                             {
@@ -251,7 +251,7 @@ impl PcbApp {
                     Phase::Applied => {
                         ui.add_enabled_ui(false, |ui| form::options(ui, &mut edit.place_new_footprints));
                         ui.label("PCB updated.");
-                        draw_report(ui, &edit.report, &mut edit.filters, &mut action, true);
+                        draw_report(ui, &edit.report, &mut edit.filters, &mut action, true, source_current);
                         if source_current {
                             if let Some(project) = project.as_ref() {
                                 draw_unplaced(ui, project, &mut action);
@@ -546,9 +546,9 @@ fn report_entries(preview: &BoardUpdatePreview<'_>) -> Vec<ReportRow> {
 }
 
 /// Keep navigation, explicit assignment and clipboard export separate from plan authority.
-fn draw_report(ui: &mut egui::Ui, rows: &[ReportRow], filters: &mut form::Filters, action: &mut Action, trailing_actions: bool) {
+fn draw_report(ui: &mut egui::Ui, rows: &[ReportRow], filters: &mut form::Filters, action: &mut Action, trailing_actions: bool, current: bool) {
     let messages: Vec<_> = rows.iter().map(|row| &row.message).collect();
-    let selected = form::report(ui, &messages, filters, trailing_actions);
+    let selected = form::report(ui, &messages, filters, trailing_actions, current);
     if let Some(component) = selected.row.and_then(|index| rows.get(index)).and_then(|row| row.assignment) {
         *action = Action::Assign(component);
     } else if let Some(index) = selected.probe {

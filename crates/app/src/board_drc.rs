@@ -57,7 +57,7 @@ pub(super) enum Action {
     Focus {
         at: Point,
         board: BoardTarget,
-        items: Vec<String>,
+        index: usize,
     },
     Rerun,
 }
@@ -174,6 +174,15 @@ impl Drc {
             .unwrap_or_default()
     }
 
+    /// Borrow the current finding addresses by index, without allocating a copy on activation.
+    pub(super) fn finding_items(&self, session: &pcbcraft_engine::Session, board: BoardTarget, index: usize) -> Option<&[String]> {
+        let ran = self.result.as_ref()?;
+        if ran.outdated || ran.source.target() != board || !ran.source.is_current(session) {
+            return None;
+        }
+        Some(&ran.report.violations.get(index)?.items)
+    }
+
     /// Float the results card inside `area`. Current findings can be focused; stale ones remain
     /// readable without navigating to obsolete objects. Run again requests a fresh check.
     pub(super) fn show(&mut self, ui: &Ui, area: Rect, revision: u64, unit: units::Unit) -> Action {
@@ -236,7 +245,7 @@ impl Drc {
                     let text = format!("{} · {}", label(violation.kind), violation.message);
                     if ui.add_enabled(current, egui::Button::selectable(self.focus == Some(index), text)).clicked() {
                         self.focus = Some(index);
-                        action = Action::Focus { at: violation.at, board: ran.source.target(), items: violation.items.clone() };
+                        action = Action::Focus { at: violation.at, board: ran.source.target(), index };
                     }
                 }
                 if report.violations.len() < report.total {

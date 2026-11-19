@@ -240,6 +240,15 @@ impl Camera {
         }
     }
 
+    /// Bring a report anchor into view, even if this canvas has yet to supply its geometry.
+    pub(crate) fn reveal_report_anchor(&mut self, at: Point) {
+        if self.uncovered.is_some_and(|rect| rect.is_positive()) {
+            self.reveal_bounds(Rect::from_pos(self.screen(at, Rect::ZERO)));
+        } else {
+            self.request_center(at);
+        }
+    }
+
     /// Fit after the menu closes using the next canvas rectangle, superseding pending centering.
     pub(crate) fn request_fit(&mut self) {
         self.cancel_zoom();
