@@ -682,8 +682,8 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
     }
 }
 
-/// Discovery retains every native library command alongside pin-remap preview over MCP;
-/// source loading/removal leave the project's electrical revision and history alone.
+/// Required library commands, including pin-remap preview, remain discoverable as the catalog grows.
+/// Source search and placement share a session; source loading/removal leave project revision and history alone.
 #[test]
 fn native_source_search_and_placement_share_the_mcp_session() {
     let mut s = server();
@@ -691,29 +691,22 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    let mut command_ids = commands
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|command| command["id"].as_str().unwrap())
-        .filter(|id| id.starts_with("library."))
-        .collect::<Vec<_>>();
-    command_ids.sort_unstable();
-    assert_eq!(
-        command_ids,
-        [
-            "library.available_revisions",
-            "library.list_sources",
-            "library.load_source",
-            "library.parse_quantity",
-            "library.prepare_part_publication",
-            "library.prepare_publication",
-            "library.preview_pin_remap",
-            "library.remove_source",
-            "library.resolve_part",
-            "library.search",
-        ]
-    );
+    let commands = commands.as_array().expect("library command list");
+    for id in [
+        "library.available_revisions",
+        "library.list_sources",
+        "library.load_source",
+        "library.parse_quantity",
+        "library.prepare_part_publication",
+        "library.prepare_publication",
+        "library.preview_pin_remap",
+        "library.remove_source",
+        "library.resolve_part",
+        "library.search",
+        "library.where_used",
+    ] {
+        assert!(commands.iter().any(|command| command["id"].as_str() == Some(id)), "missing required command {id}");
+    }
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);
