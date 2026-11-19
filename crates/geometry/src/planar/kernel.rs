@@ -11,7 +11,7 @@ use solidcore::{
     primitive::{api_trim_ops::create_planar_faces, primitive_creation::Boolean2d},
     prism::{profile, sheet},
 };
-use solidcore_record::{Plane, Region2};
+use solidcore_record::{Loop2, Plane, Region2, Seg2, Vec2};
 
 use super::{Operation, Regions, TOLERANCE_MM};
 use std::sync::Mutex;
@@ -94,7 +94,105 @@ pub(super) fn read(kernel: &Kernel, body: &Brep) -> Result<Vec<Region2>> {
         return Ok(Vec::new());
     }
     let frame = solidcore_convert::plane(&Plane::XY);
-    Ok(sheet::sheet_regions(kernel, body, &frame, TOLERANCE_MM)?.regions.iter().map(solidcore_convert::record_region2).collect())
+    let mut regions: Vec<Region2> =
+        sheet::sheet_regions(kernel, body, &frame, TOLERANCE_MM)?.regions.iter().map(solidcore_convert::record_region2).collect();
+    // SolidCore resolves some crossings within its fixed internal zone tolerance (1e-5 mm, not
+    // the configured one): a crossing 2 nm from an arc's end joins that end vertex while the
+    // arc keeps its full sweep, and the edge records the tolerance it is held to. Read back
+    // without that tolerance, such a loop is open by up to twice the largest edge tolerance.
+    // The body is queried only when a loop is open: the result is cached as a later operand,
+    // and a closed read must leave it exactly as the Boolean produced it.
+    if !regions.iter().flat_map(Region2::loops).any(has_gap) {
+        return Ok(regions);
+    }
+    let mut within = 0f64;
+    for edge in solidcore::topology::brep::p1::edges(body, None)? {
+        within = within.max(solidcore::topology::edge::tolerance(body, edge)?);
+    }
+    for region in &mut regions {
+        close(&mut region.outer, 2. * within);
+        region.holes.iter_mut().for_each(|hole| close(hole, 2. * within));
+    }
+    Ok(regions)
+}
+
+/// Close each junction gap the kernel holds within edge tolerance by trimming the segment left
+/// untrimmed: the computed crossing lies on both curves, the stale end on only one, so the end
+/// whose curve passes closer to the other's point moves. No connector is added; the kernel
+/// would merge its ends within its zone tolerance when the profile is read back as an operand.
+/// Larger gaps stay open for `checked` to refuse.
+fn close(lp: &mut Loop2, within: f64) {
+    let n = lp.segs.len();
+    for i in 0..n {
+        let j = (i + 1) % n;
+        if i == j {
+            continue;
+        }
+        let (Some((_, end)), Some((start, _))) = (ends(&lp.segs[i]), ends(&lp.segs[j])) else { continue };
+        let gap = (start.x - end.x).hypot(start.y - end.y);
+        if gap <= TOLERANCE_MM || gap > within {
+            continue;
+        }
+        if off_curve(&lp.segs[i], start) <= off_curve(&lp.segs[j], end) {
+            lp.segs[i] = moved(lp.segs[i], start, false);
+        } else {
+            lp.segs[j] = moved(lp.segs[j], end, true);
+        }
+    }
+}
+
+/// Whether any junction between consecutive lines/arcs is open by more than the read tolerance.
+fn has_gap(lp: &Loop2) -> bool {
+    let n = lp.segs.len();
+    (0..n).filter(|&i| (i + 1) % n != i).any(|i| match (ends(&lp.segs[i]), ends(&lp.segs[(i + 1) % n])) {
+        (Some((_, end)), Some((start, _))) => (start.x - end.x).hypot(start.y - end.y) > TOLERANCE_MM,
+        _ => false,
+    })
+}
+
+/// Start and end points of a line or arc; `None` for other curves, whose gaps stay open.
+fn ends(seg: &Seg2) -> Option<(Vec2, Vec2)> {
+    match *seg {
+        Seg2::Line { a, b } => Some((a, b)),
+        Seg2::Arc { center, radius, start, sweep } => {
+            let at = |angle: f64| Vec2::new(center.x + radius * angle.cos(), center.y + radius * angle.sin());
+            Some((at(start), at(start + sweep)))
+        }
+        _ => None,
+    }
+}
+
+/// Distance from `p` to the segment's supporting line or circle.
+fn off_curve(seg: &Seg2, p: Vec2) -> f64 {
+    match *seg {
+        Seg2::Line { a, b } => ((b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x)).abs() / (b.x - a.x).hypot(b.y - a.y),
+        Seg2::Arc { center, radius, .. } => ((p.x - center.x).hypot(p.y - center.y) - radius).abs(),
+        _ => f64::INFINITY,
+    }
+}
+
+/// Move the segment's start (or end) to `p`; an arc keeps its circle and turns to `p`'s angle.
+fn moved(seg: Seg2, p: Vec2, at_start: bool) -> Seg2 {
+    let wrap = |d: f64| d - std::f64::consts::TAU * (d / std::f64::consts::TAU).round();
+    match seg {
+        Seg2::Line { a, b } => {
+            if at_start {
+                Seg2::Line { a: p, b }
+            } else {
+                Seg2::Line { a, b: p }
+            }
+        }
+        Seg2::Arc { center, radius, start, sweep } => {
+            let angle = (p.y - center.y).atan2(p.x - center.x);
+            if at_start {
+                let delta = wrap(angle - start);
+                Seg2::Arc { center, radius, start: start + delta, sweep: sweep - delta }
+            } else {
+                Seg2::Arc { center, radius, start, sweep: sweep + wrap(angle - (start + sweep)) }
+            }
+        }
+        other => other,
+    }
 }
 
 /// Convert each completed offset region once, then combine its owned sheet in balanced
