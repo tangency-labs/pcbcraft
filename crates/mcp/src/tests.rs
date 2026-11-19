@@ -1,11 +1,17 @@
+#[cfg(not(target_arch = "wasm32"))]
 mod arcs;
 
 use std::io::Cursor;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod library_updates;
 
 use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, PLACE_SYMBOL, Session};
 use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
+
+mod command_api;
 
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
@@ -72,7 +78,7 @@ fn no_connect_wire_end_commands_are_shared_with_mcp() {
         &json!({"command":pcbcraft_engine::DRAW_WIRE,
         "params":{"from":{"junction":target.junction},"to":{"x_nm":-25_400_000,"y_nm":0},"bends":[],"expected_revision":revision},"inspect":false}),
     );
-    assert!(rejected.unwrap_err().contains(pcbcraft_engine::no_connect::WIRE_BLOCKED));
+    assert!(rejected.unwrap_err().message().contains(pcbcraft_engine::no_connect::WIRE_BLOCKED));
     assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     crate::backend::call_session(
         &mut s,
@@ -249,7 +255,7 @@ fn reviewed_board_updates_share_headless_and_live_authority_rules() {
         fn inspect(&self) -> Value {
             json!({})
         }
-        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), String> {
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), crate::Failure> {
             Err("not a window operation".into())
         }
     }
@@ -278,7 +284,7 @@ fn reviewed_board_updates_share_headless_and_live_authority_rules() {
     assert!(call_editor(&mut editor, &foreign).is_err());
     let own = json!({"method":"engine.execute","params":{"command":APPLY_UPDATE,"params":{"plan_token":live_report["plan_token"],"expected_revision":revision}}});
     editor.blocked = true;
-    assert!(call_editor(&mut editor, &own).unwrap_err().contains("dialog"));
+    assert!(call_editor(&mut editor, &own).unwrap_err().message().contains("dialog"));
     editor.blocked = false;
     let adopted = call_editor(&mut editor, &own).unwrap();
     assert_eq!(adopted["project"]["board"]["accepted_baseline"]["component_count"], 1);
@@ -570,7 +576,8 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 8);
+    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 9);
+    assert!(commands.as_array().unwrap().iter().any(|c| c["id"] == pcbcraft_engine::library::sources::AVAILABLE_REVISIONS));
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);
@@ -590,6 +597,67 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let placed = body(&placed);
     assert_ne!(call(&mut s, "execute", json!({"command":"library.remove_source","params":{"source":"workshop-source"}}))["isError"], true);
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), placed);
+}
+
+/// Setup reviews return the same data through the native live adapter and headless MCP,
+/// including when inspection is suppressed, while capabilities stay session-local.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn board_setup_preview_is_shared_by_live_and_headless_mcp() {
+    use crate::{
+        Backend,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, PREVIEW_BOARD_SETUP, SET_BOARD_SETUP};
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        /// Expose the editor-owned session without a second document path.
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        /// This test host has no modal interaction.
+        fn refusal(&self, _: &str) -> Option<String> {
+            None
+        }
+        /// No presentation commands are needed for a setup review.
+        fn window_commands(&self) -> Vec<Value> {
+            vec![]
+        }
+        /// Project inspection is provided by the shared session.
+        fn inspect(&self) -> Value {
+            json!({})
+        }
+        /// The host rejects unrelated window commands.
+        fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), crate::Failure> {
+            Err("not a window command".into())
+        }
+    }
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":s.revision()})).unwrap();
+    let snapshot = s.snapshot().unwrap();
+    let candidate = snapshot.board_setup().unwrap().with_copper_count(2).unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live = Session::default();
+    live.open_snapshot(snapshot);
+    let mut editor = OpenEditor(live);
+    let before = editor.0.inspect();
+    let revision = editor.0.revision();
+    let params = json!({"command":PREVIEW_BOARD_SETUP,"params":{"setup":candidate,"expected_revision":revision},"inspect":false});
+    let a = headless.call("engine.execute", params.clone()).unwrap()["board_setup_preview"].clone();
+    let b = call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap()["board_setup_preview"].clone();
+    assert_eq!(a["changes"], b["changes"]);
+    assert_eq!(a["can_apply"], true);
+    assert_ne!(a["plan_token"], b["plan_token"]);
+    assert_eq!(editor.0.inspect(), before);
+    let foreign = json!({"method":"engine.execute","params":{"command":SET_BOARD_SETUP,"params":{"setup":candidate,"plan_token":a["plan_token"],"expected_revision":revision}}});
+    let error = call_editor(&mut editor, &foreign).unwrap_err();
+    assert_eq!(error.code(), "unavailable");
+    assert!(error.message().contains("unknown, stale or replaced board setup preview"), "{error}");
+    let own = json!({"method":"engine.execute","params":{"command":SET_BOARD_SETUP,"params":{"setup":candidate,"plan_token":b["plan_token"],"expected_revision":revision}}});
+    let applied = call_editor(&mut editor, &own).unwrap();
+    assert_eq!(applied["revision"], revision + 1);
+    assert_eq!(applied["project"]["board"]["setup"]["stackup"]["strata"].as_array().unwrap().len(), 3);
 }
 
 /// Headless clients discover the strict setup schema and edit the same revisioned model.
@@ -688,7 +756,288 @@ fn discovery_reports_the_api_version_and_catalog_revision() {
     assert_eq!(resource, commands);
     let failed = call(&mut s, "describe_command", json!({"command": "schematic.nothing"}));
     assert_eq!(failed["isError"], true);
-    assert!(failed.get("structuredContent").is_none());
+    assert_eq!(failed["structuredContent"]["error"]["code"], "unknown_command");
+}
+
+/// A failed headless tool call keeps its message as the first text part and adds the published
+/// code and details, as a second text part and as the structured result.
+#[test]
+fn failures_carry_published_codes_and_details() {
+    use pcbcraft_engine::error_codes::ErrorCode;
+    let mut s = server();
+    let created = body(&call(&mut s, "execute", json!({"command": "project.new"})));
+    let revision = created["revision"].as_u64().unwrap();
+    let code = |result: &Value, reason: &str| {
+        assert_eq!(result["isError"], true, "{result}");
+        let error = &result["structuredContent"]["error"];
+        let second: Value = serde_json::from_str(result["content"][1]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(second, result["structuredContent"]);
+        assert_eq!(result["content"][0]["text"], error["message"]);
+        assert!(error["message"].as_str().unwrap().contains(reason), "{result}: expected {reason:?}");
+        assert!(error["details"].is_object(), "{result}");
+        let code = error["code"].as_str().unwrap().to_owned();
+        assert!(ErrorCode::parse(&code).is_some(), "{code} is not published");
+        code
+    };
+    let nothing = call(&mut s, "execute", json!({"command": "edit.redo"}));
+    assert_eq!(code(&nothing, "nothing to redo"), "unavailable");
+    let params = json!({"x_nm": 0, "y_nm": 0, "expected_revision": revision + 3});
+    let stale = call(&mut s, "execute", json!({"command": PLACE_RESISTOR, "params": params}));
+    assert_eq!(code(&stale, "project changed"), "stale_revision");
+    assert_eq!(stale["structuredContent"]["error"]["details"], json!({"current_revision": revision}));
+    assert_eq!(stale["content"][0]["text"], format!("project changed, inspect the current revision ({revision}) and retry"));
+    let extra = call(&mut s, "execute", json!({"command": PLACE_RESISTOR, "params": {"pin": 1}}));
+    assert_eq!(code(&extra, "has no parameter `pin`"), "invalid_params");
+    assert_eq!(code(&call(&mut s, "execute", json!({"command": "schematic.nothing"})), "unknown command `schematic.nothing`"), "unknown_command");
+    assert_eq!(
+        code(&call(&mut s, "execute", json!({"command": "view.fit", "params": {"view": 0}})), "this MCP session has none"),
+        "needs_live_editor"
+    );
+    assert_eq!(code(&call(&mut s, "inspect_editor", json!({})), "this MCP session has none"), "needs_live_editor");
+    assert_eq!(code(&call(&mut s, "cross_probe", json!({})), "provide either a terminal or a pad"), "invalid_params");
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({})))["revision"], revision);
+}
+
+/// Constructed failures retain an object of details and engine failures retain their revision.
+#[test]
+fn failure_details_are_objects() {
+    use crate::Failure;
+    use pcbcraft_engine::{CommandError, error_codes::ErrorCode};
+    let details = serde_json::Map::from_iter([("current_revision".into(), json!(u64::MAX))]);
+    let failure = Failure::new(ErrorCode::StaleRevision, "project changed").with_details(details.clone());
+    assert_eq!(failure.details(), &Value::Object(details));
+    assert!(Failure::new(ErrorCode::Unavailable, "nothing to undo").details().is_object());
+    let from_engine = Failure::from(CommandError::StaleRevision { current: u64::MAX });
+    assert_eq!(from_engine.code(), "stale_revision");
+    assert_eq!(from_engine.details(), &json!({"current_revision": u64::MAX}));
+}
+
+/// The transport accepts a complete JSON frame at EOF without its newline. A send failure
+/// after the JSON bytes, before the newline, therefore cannot establish that nothing ran.
+#[test]
+fn a_complete_request_at_eof_can_execute_without_a_newline() {
+    let request = json!({"method": "engine.execute", "params": {"command": "project.new", "params": {"name": "EOF request"}}});
+    let bytes = serde_json::to_vec(&request).unwrap();
+    let frame = craft_control::read_frame(&mut Cursor::new(&bytes), bytes.len()).unwrap().unwrap();
+    let craft_control::Frame::Message(delivered) = frame else { panic!("request should fit") };
+    assert_eq!(delivered, bytes);
+    let delivered: Value = serde_json::from_slice(&delivered).unwrap();
+    let mut session = Session::default();
+    crate::backend::call_session(&mut session, delivered["method"].as_str().unwrap(), &delivered["params"]).unwrap();
+    assert_eq!(session.project().unwrap().name, "EOF request");
+}
+
+/// Discovery distinguishes a typo in an editor's catalog from a headless-only limitation.
+#[test]
+fn describe_command_distinguishes_live_typos_from_headless_refusals() {
+    struct LiveCatalog;
+    impl crate::Backend for LiveCatalog {
+        fn call(&mut self, method: &str, _: Value) -> Result<Value, crate::Failure> {
+            assert_eq!(method, "engine.commands");
+            Ok(json!([{"id":"view.fit"}]))
+        }
+        fn has_live_editor(&self) -> bool {
+            true
+        }
+        fn describe(&self) -> String {
+            "a live catalog fixture".into()
+        }
+    }
+    let mut live = Server::new(Box::new(LiveCatalog));
+    let mut headless = server();
+    let ok = call(&mut live, "describe_command", json!({"command":"view.fit"}));
+    assert_eq!(body(&ok)["id"], "view.fit");
+    let expect_refusal = |server: &mut Server, id: &str, code: &str, reason: &str| {
+        let refused = call(server, "describe_command", json!({"command":id}));
+        assert_eq!(refused["isError"], true, "{refused}");
+        assert_eq!(refused["structuredContent"]["error"]["code"], code, "{refused}");
+        assert!(refused["content"][0]["text"].as_str().unwrap().contains(reason), "{refused}");
+    };
+    expect_refusal(&mut live, "view.no_such_command", "unknown_command", "unknown command `view.no_such_command`");
+    for id in ["view.fit", "view.no_such_command"] {
+        expect_refusal(&mut headless, id, "needs_live_editor", "acts on an open PCBCraft editor window");
+    }
+}
+
+/// MCP omission reaches the direct empty-map convention; explicit null fails tool validation.
+#[test]
+fn execute_omission_and_null_differ_at_the_mcp_boundary() {
+    let mut server = server();
+    let omitted = call(&mut server, "execute", json!({"command":"project.new"}));
+    assert!(body(&omitted)["project"].is_object(), "{omitted}");
+    let explicit = rpc(&mut server, "tools/call", json!({"name":"execute","arguments":{"command":"project.new","params":null}}));
+    assert_eq!(explicit["error"]["code"], -32602, "{explicit}");
+    assert!(explicit.get("result").is_none(), "{explicit}");
+}
+
+/// Live error replies preserve valid codes and object details, with unavailable as the legacy
+/// fallback. The closed-port fixture reports a connection failure with the selected port.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn live_replies_keep_their_codes() {
+    use crate::{Backend, Failure};
+    let coded = json!({"error": "project changed", "code": "stale_revision", "details": {"current_revision": 4}});
+    let failure = Failure::from_reply(&coded, "project changed");
+    assert_eq!((failure.code(), failure.message()), ("stale_revision", "project changed"));
+    assert_eq!(failure.details(), &json!({"current_revision": 4}));
+    let newer = Failure::from_reply(&json!({"error": "x", "code": "future_code"}), "x");
+    assert_eq!(newer.code(), "future_code");
+    for details in [Value::Null, json!([1]), json!(7), json!("revision"), json!(true)] {
+        let failure = Failure::from_reply(&json!({"code": "stale_revision", "details": details}), "project changed");
+        assert_eq!(failure.code(), "stale_revision");
+        assert_eq!(failure.message(), "project changed");
+        assert_eq!(failure.details(), &json!({}));
+    }
+    for reply in [
+        json!({"error": "busy"}),
+        json!({"error": "x", "code": 7}),
+        json!({"error": "x", "code": "Not Found"}),
+        json!({"error": "x", "code": ""}),
+        json!({"error": "x", "code": "_found"}),
+        json!({"error": "x", "details": [1]}),
+    ] {
+        let failure = Failure::from_reply(&reply, "x");
+        assert_eq!(failure.code(), "unavailable", "{reply}");
+        assert_eq!(failure.details(), &json!({}));
+    }
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut remote = crate::live::Remote::new(port, &"a".repeat(64)).unwrap();
+    let refused = remote.call("project.inspect", json!({})).unwrap_err();
+    assert_eq!(refused.code(), "connection_failed", "{refused}");
+    assert!(refused.message().starts_with(&format!("Could not send request to the PCBCraft editor on port {port}:")), "{refused}");
+}
+
+/// A lost, unreadable or unusable reply reports no_reply even when the shared command ran.
+/// Acceptance and socket I/O are bounded; the synthetic peer never retries or runs a second edit.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn no_reply_can_follow_an_executed_edit() {
+    use crate::Backend;
+    use std::{
+        io::{BufReader, Write},
+        net::TcpListener,
+        time::{Duration, Instant},
+    };
+    let cases: &[(&[u8], &str)] = &[
+        (b"", "No reply from the PCBCraft editor. Check the connection and inspect the project before retrying an edit."),
+        (b"not json\n", "No reply from the PCBCraft editor. Check the connection and inspect the project before retrying an edit."),
+        (b"{}\n", "Invalid reply from the PCBCraft editor"),
+        (b"[]\n", "Invalid reply from the PCBCraft editor"),
+        (b"7\n", "Invalid reply from the PCBCraft editor"),
+        (b"{\"error\":42}\n", "Invalid reply from the PCBCraft editor"),
+        (b"{\"result\":null,\"error\":\"ambiguous\"}\n", "Invalid reply from the PCBCraft editor"),
+    ];
+    for &(reply, reason) in cases {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::scope(|scope| {
+            let peer = scope.spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let socket = loop {
+                    match listener.accept() {
+                        Ok((socket, _)) => break socket,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "no request reached the synthetic peer");
+                            std::thread::yield_now();
+                        }
+                        Err(error) => panic!("could not accept the synthetic request: {error}"),
+                    }
+                };
+                socket.set_nonblocking(false).unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                socket.set_write_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut reader = BufReader::new(socket);
+                let frame = craft_control::read_frame(&mut reader, 64 * 1024).unwrap().unwrap();
+                let craft_control::Frame::Message(bytes) = frame else { panic!("request should fit") };
+                let request: Value = serde_json::from_slice(&bytes).unwrap();
+                assert_eq!(request["token"], "a".repeat(64));
+                assert_eq!(request["method"], "engine.execute");
+                assert_eq!(request["params"]["command"], "project.rename");
+                let mut session = Session::default();
+                session.apply("project.new", &json!({"name":"Before reply"})).unwrap();
+                let before = session.revision();
+                crate::backend::call_session(&mut session, request["method"].as_str().unwrap(), &request["params"]).unwrap();
+                let after = session.revision();
+                let name = session.project().unwrap().name.clone();
+                reader.get_mut().write_all(reply).unwrap();
+                (before, after, name)
+            });
+            let mut remote = crate::live::Remote::new(port, &"a".repeat(64)).unwrap();
+            let failure = remote.call("engine.execute", json!({"command":"project.rename","params":{"name":"After reply"}})).unwrap_err();
+            let (before, after, name) = peer.join().unwrap();
+            assert_eq!(failure.code(), "no_reply", "{reply:?}: {failure}");
+            assert!(failure.message().starts_with(reason), "{reply:?}: {failure}");
+            assert_eq!(failure.details(), &json!({}));
+            assert_eq!(after, before + 1);
+            assert_eq!(name, "After reply");
+        });
+    }
+}
+
+/// Direct live requests report invalid_request before dispatch for missing methods or command
+/// ids; headless dispatch shares command-id validation. Each refusal leaves the session intact.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn invalid_control_requests_leave_the_project_alone() {
+    use crate::{Backend, Failure, live::Editor};
+    struct OpenSession(Session);
+    impl Editor for OpenSession {
+        /// Borrow the real command session without another dispatch layer.
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        /// Permit requests so host policy cannot mask request validation.
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        /// This fixture has no window command catalog.
+        fn window_commands(&self) -> Vec<Value> {
+            vec![]
+        }
+        /// Inspect the same session used by command dispatch.
+        fn inspect(&self) -> Value {
+            self.0.inspect()
+        }
+        /// Window dispatch is outside this fixture's supported methods.
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Err(Failure::new(pcbcraft_engine::error_codes::ErrorCode::Unavailable, "no window commands in this fixture"))
+        }
+    }
+    let mut editor = OpenSession(Session::default());
+    editor.0.apply("project.new", &json!({"name":"Request validation"})).unwrap();
+    let before = editor.0.inspect();
+    for (request, reason) in [
+        (json!({}), "missing control method"),
+        (json!({"method":null}), "missing control method"),
+        (json!({"method":7}), "missing control method"),
+        (json!({"method":"unknown.control.method"}), "Unknown live control method `unknown.control.method`"),
+        (json!({"method":"engine.execute"}), "missing `command`"),
+        (json!({"method":"engine.execute","params":{"command":null}}), "missing `command`"),
+        (json!({"method":"engine.execute","params":{"command":7}}), "missing `command`"),
+    ] {
+        let failure = crate::live::call_editor(&mut editor, &request).unwrap_err();
+        assert_eq!(failure.code(), "invalid_request", "{request}: {failure}");
+        assert_eq!(failure.message(), reason, "{request}");
+        assert_eq!(editor.0.inspect(), before);
+    }
+    let mut headless = Headless::default();
+    headless.call("engine.execute", json!({"command":"project.new","params":{"name":"Headless validation"}})).unwrap();
+    let before = headless.call("project.inspect", json!({})).unwrap();
+    for (method, params, reason) in [
+        ("unknown.control.method", json!({}), "unknown method `unknown.control.method`"),
+        ("engine.execute", Value::Null, "missing `command`"),
+        ("engine.execute", json!({}), "missing `command`"),
+        ("engine.execute", json!({"command":null}), "missing `command`"),
+        ("engine.execute", json!({"command":7}), "missing `command`"),
+    ] {
+        let failure = headless.call(method, params).unwrap_err();
+        assert_eq!(failure.code(), "invalid_request");
+        assert_eq!(failure.message(), reason);
+        assert_eq!(headless.call("project.inspect", json!({})).unwrap(), before);
+    }
 }
 
 #[test]
@@ -828,9 +1177,17 @@ fn resolve_counterparts_preserves_legacy_cross_probe_and_returns_complete_sets()
     assert_eq!(stale["status"], "stale");
     assert_eq!(stale["pads"], json!([]));
     assert_eq!(stale["terminals"], json!([]));
+    for (invalid, reason) in [
+        (json!({"source":{},"expected_revision":0}), "missing field `kind`"),
+        (json!({"source":source,"expected_revision":-1}), "expected_revision must be an unsigned integer"),
+    ] {
+        let refused = call(&mut server, "resolve_counterparts", invalid);
+        assert_eq!(refused["isError"], true, "{refused}");
+        assert_eq!(refused["structuredContent"]["error"]["code"], "invalid_params", "{refused}");
+        assert_eq!(refused["content"][0]["text"], reason, "{refused}");
+    }
     for invalid in [
         json!({"source":source}),
-        json!({"source":source,"expected_revision":-1}),
         json!({"source":source,"expected_revision":1.5}),
         json!({"source":{"kind":"terminal","project":project_id,"sheet":sheet,"symbol":"symbol-01","terminal":"1"},"expected_revision":before["revision"]}),
         json!({"source":{"kind":"terminal","project":project_id,"sheet":sheet,"symbol":terminal["symbol"],"terminal":"1","extra":true},"expected_revision":before["revision"]}),
@@ -871,7 +1228,7 @@ fn resolve_counterparts_agrees_through_headless_and_live_dispatch() {
             json!({"unexpected":true})
         }
         /// A correspondence query never invokes an editor mutation.
-        fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), String> {
+        fn run_window_command(&mut self, _: &str, _: &Value) -> Result<(), crate::Failure> {
             Err("unexpected editor command".into())
         }
     }
@@ -1548,8 +1905,8 @@ fn assembly_output_profiles_preview_through_headless_and_live() {
         fn inspect(&self) -> Value {
             json!({})
         }
-        /// A mistaken window dispatch fails explicitly.
-        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), String> {
+        /// A mistaken window dispatch fails explicitly with an unavailable failure.
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), crate::Failure> {
             Err("not a window operation".into())
         }
     }

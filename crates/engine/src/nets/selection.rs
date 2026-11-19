@@ -36,9 +36,9 @@ impl Project {
     /// current class target. Foreign/missing endpoints fail; bare pins and free wire groups
     /// return None. The read neither allocates identities nor changes history or saved bytes.
     pub fn net_class_target_for_endpoint(&self, sheet: SheetTarget, selected: WireEndpoint) -> Result<Option<ClassTarget>, CommandError> {
-        let own = self.for_sheet(sheet).ok_or_else(|| CommandError::InvalidParams("Unknown selection sheet.".into()))?;
+        let own = self.for_sheet(sheet).ok_or_else(|| CommandError::NotFound("Unknown selection sheet.".into()))?;
         if own.endpoint_position(selected).is_none() {
-            return Err(CommandError::InvalidParams("Unknown or foreign selected endpoint.".into()));
+            return Err(CommandError::NotFound("Unknown or foreign selected endpoint.".into()));
         }
         let graph = Graph::build(self).map_err(CommandError::InvalidParams)?;
         if let Some(anchor) = graph.endpoint_anchor(sheet, selected) {

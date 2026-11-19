@@ -22,7 +22,7 @@ impl Editor for OpenEditor {
     fn inspect(&self) -> Value {
         json!({})
     }
-    fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), String> {
+    fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), crate::Failure> {
         Err("not a window command".into())
     }
 }
@@ -43,9 +43,16 @@ fn circular_arc_diffs_and_native_bytes_match_live_and_headless() {
     let mut params = json!({"board":board.board,"expected_revision":editor.0.revision(),"dry_run":true,"arcs":[{
         "id":"00000000-0000-0000-0000-000000000001","layer":layer,"width_nm":250000,
         "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}]});
+    let version = pcbcraft_engine::command_api::COMMAND_API_VERSION;
+    let mismatch = json!({"command":SET_ARCS,"version":version+1,"params":params,"inspect":false});
+    let headless_error = headless.call("engine.execute", mismatch.clone()).unwrap_err();
+    let live_error = call_editor(&mut editor, &json!({"method":"engine.execute","params":mismatch})).unwrap_err();
+    assert_eq!(headless_error, live_error);
+    assert_eq!(live_error.code(), "version_mismatch");
+    assert_eq!(encode_documents(editor.0.snapshot().unwrap()).unwrap(), encode_documents(snapshot.clone()).unwrap());
     for dry_run in [true, false] {
         params["dry_run"] = json!(dry_run);
-        let payload = json!({"command":SET_ARCS,"inspect":false,"params":params});
+        let payload = json!({"command":SET_ARCS,"version":version,"inspect":false,"params":params});
         let h = headless.call("engine.execute", payload.clone()).unwrap();
         let l = call_editor(&mut editor, &json!({"method":"engine.execute","params":payload})).unwrap();
         assert_eq!(h, l);

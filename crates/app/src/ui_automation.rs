@@ -644,6 +644,33 @@ impl Action {
     }
 }
 
+/// Check UI command ids and parameter names before the input queue sees them. Null uses
+/// the existing empty-map convention; required keys still apply, and other non-object forms
+/// are refused. Values are checked by the handler.
+pub(super) fn check_command(id: &str, params: &Value) -> Result<(), pcbcraft_mcp::Failure> {
+    use pcbcraft_engine::error_codes::ErrorCode;
+    use pcbcraft_mcp::Failure;
+    let catalog = catalog();
+    let command = catalog
+        .iter()
+        .find(|command| command["id"] == id)
+        .ok_or_else(|| Failure::new(ErrorCode::UnknownCommand, format!("unknown command `{id}`")))?;
+    let empty = serde_json::Map::new();
+    let given = match params {
+        Value::Null => &empty,
+        Value::Object(object) => object,
+        _ => return Err(Failure::new(ErrorCode::InvalidParams, format!("`{id}` takes an object of parameters"))),
+    };
+    let schema = &command["params"];
+    if let Some(extra) = given.keys().find(|key| schema["properties"].get(key.as_str()).is_none()) {
+        return Err(Failure::new(ErrorCode::InvalidParams, format!("`{id}` has no parameter `{extra}`")));
+    }
+    if let Some(missing) = schema["required"].as_array().into_iter().flatten().filter_map(Value::as_str).find(|name| !given.contains_key(*name)) {
+        return Err(Failure::new(ErrorCode::InvalidParams, format!("`{id}` needs `{missing}`")));
+    }
+    Ok(())
+}
+
 /// Discover the live automation contract beside the existing project/window command catalog.
 pub(super) fn catalog() -> Vec<Value> {
     let point = json!({"oneOf":[{"type":"object","properties":{"handle":{"type":"string"}},"required":["handle"],"additionalProperties":false},

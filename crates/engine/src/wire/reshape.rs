@@ -77,7 +77,7 @@ fn bends_of(path: &[Point]) -> Result<Vec<Point>, CommandError> {
         return Err(CommandError::InvalidParams("move exceeds schematic coordinate bounds".to_owned()));
     }
     if path.len() - 2 > MAX_BENDS {
-        return Err(CommandError::Unavailable(format!("the wire would have more than {MAX_BENDS} bends")));
+        return Err(CommandError::CapExceeded(format!("the wire would have more than {MAX_BENDS} bends")));
     }
     Ok(path[1..path.len() - 1].to_vec())
 }
@@ -161,7 +161,7 @@ impl Project {
             }
             Reshape::Junction(id) => {
                 let junction = WireEndpoint::Junction(*id);
-                let old = self.endpoint_position(junction).ok_or_else(|| CommandError::InvalidParams("junction does not exist".to_owned()))?;
+                let old = self.endpoint_position(junction).ok_or_else(|| CommandError::NotFound("junction does not exist".to_owned()))?;
                 for (index, wire) in self.wires.iter().enumerate() {
                     let ends = wire.endpoints.map(|end| end == junction);
                     if ends == [false, false] {
@@ -196,7 +196,7 @@ impl Project {
     /// The index of the wire with this ID.
     fn wire_index(&self, wire: &str) -> Result<usize, CommandError> {
         let id = parse_id(wire, "wire-");
-        self.wires.iter().position(|w| Some(w.ordinal) == id).ok_or_else(|| CommandError::InvalidParams("wire does not exist".to_owned()))
+        self.wires.iter().position(|w| Some(w.ordinal) == id).ok_or_else(|| CommandError::NotFound("wire does not exist".to_owned()))
     }
 }
 

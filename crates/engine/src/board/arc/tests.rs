@@ -196,10 +196,14 @@ fn invalid_arcs_fail_atomically_on_the_shared_command_path() {
     assert_invalid_params(s.execute(SET_ARCS, &params(&s, &[arc.clone(), arc.clone()])).unwrap_err(), "duplicate arc");
     let mut foreign = params(&s, std::slice::from_ref(&arc));
     foreign["board"] = json!(Uuid::from_u128(999));
-    assert_invalid_params(s.execute(SET_ARCS, &foreign).unwrap_err(), "unknown board ID");
+    let error = s.execute(SET_ARCS, &foreign).unwrap_err();
+    assert_eq!(error.code(), crate::error_codes::ErrorCode::NotFound);
+    assert!(error.to_string().contains("unknown board ID"), "{error}");
     let mut stale = params(&s, &[arc]);
     stale["expected_revision"] = json!(revision - 1);
-    assert_unavailable(s.execute(SET_ARCS, &stale).unwrap_err(), "project changed");
+    let error = s.execute(SET_ARCS, &stale).unwrap_err();
+    assert_eq!(error.code(), crate::error_codes::ErrorCode::StaleRevision);
+    assert_eq!(error.details(), json!({"current_revision":revision}));
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
 

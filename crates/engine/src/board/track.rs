@@ -916,7 +916,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         }
         let positions: BTreeMap<Uuid, usize> = tracks.iter().enumerate().map(|(position, track)| (track.id, position)).collect();
         for ends in &ends {
-            let &position = positions.get(&ends.track).ok_or_else(|| CommandError::InvalidParams("unknown track".into()))?;
+            let &position = positions.get(&ends.track).ok_or_else(|| CommandError::NotFound("unknown track".into()))?;
             (tracks[position].start, tracks[position].end) = (ends.start, ends.end);
         }
         added.extend(unique);

@@ -258,7 +258,7 @@ impl Session {
             .sheets
             .iter()
             .position(|sheet| sheet.junctions.contains_key(&id))
-            .ok_or_else(|| CommandError::InvalidParams("Unknown wire endpoint.".into()))?;
+            .ok_or_else(|| CommandError::NotFound("Unknown wire endpoint.".into()))?;
         let present = original.sheets[index].no_connect_ends.contains(&id);
         if present == marked {
             return Ok(());
@@ -269,7 +269,7 @@ impl Session {
             return Err(CommandError::InvalidParams("A wire no-connect mark requires a dangling wire end.".into()));
         }
         if marked && next.no_connect_count() >= MAX_MARKERS {
-            return Err(CommandError::Unavailable("No-connect marker limit reached.".into()));
+            return Err(CommandError::CapExceeded("No-connect marker limit reached.".into()));
         }
         if marked {
             Arc::make_mut(&mut next.sheet_mut().no_connect_ends).insert(id);

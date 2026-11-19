@@ -19,6 +19,7 @@ use super::{
 use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
@@ -48,6 +49,61 @@ pub struct Fabrication {
     pub origin: Resolved,
     /// The files in a fixed order with unique portable names.
     pub files: Vec<Output>,
+}
+
+/// Integrity of the exact bytes of one generated artifact, not a design-state identity.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Artifact {
+    pub name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+impl Artifact {
+    /// Describe bytes without normalizing their encoding, whitespace or line endings.
+    fn new(name: String, bytes: &[u8]) -> Self {
+        Self { name, size_bytes: bytes.len() as u64, sha256: format!("{:x}", Sha256::digest(bytes)) }
+    }
+}
+
+/// Integrity records for the generated files, not the ZIP itself or the design state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Manifest {
+    pub generator_version: String,
+    pub files: Vec<Artifact>,
+}
+
+impl Manifest {
+    /// Describe the exact uncompressed bytes that are passed to the ZIP writer.
+    fn from_outputs(outputs: &[Output]) -> Self {
+        Self {
+            generator_version: env!("CARGO_PKG_VERSION").into(),
+            files: outputs.iter().map(|output| Artifact::new(output.name.clone(), output.contents.as_bytes())).collect(),
+        }
+    }
+}
+
+/// Immutable ZIP bytes, including the manifest, built from captured outputs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Archive {
+    bytes: Vec<u8>,
+}
+
+impl Archive {
+    /// Pack the captured outputs and their manifest without editing the project or writing files.
+    pub fn new(outputs: &[Output]) -> Result<Self, String> {
+        Ok(Self { bytes: zip(outputs)? })
+    }
+
+    /// The complete deterministic ZIP, independent of its destination filename.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+/// The suggested archive name, using the same portable project-name rules as its members.
+pub fn archive_name(project: &str) -> String {
+    format!("{}-fabrication.zip", file_part(project))
 }
 
 /// Standard apertures retain shape as well as size when sharing D-codes.
@@ -450,10 +506,15 @@ impl BoardView<'_> {
     }
 }
 
-/// Pack outputs with fixed timestamps and Unix regular-file metadata on every platform.
-/// The same outputs give the same bytes; ZIP encoding failures are returned as errors.
+/// Pack the outputs and their `manifest.json` with fixed timestamps and Unix file metadata.
+/// The same outputs give the same bytes. A reserved member name or encoding failure is an error.
 pub fn zip(outputs: &[Output]) -> Result<Vec<u8>, String> {
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+    const MANIFEST_NAME: &str = "manifest.json";
+    if outputs.iter().any(|output| output.name.eq_ignore_ascii_case(MANIFEST_NAME)) {
+        return Err(format!("{MANIFEST_NAME} is reserved for fabrication integrity records"));
+    }
+    let manifest = serde_json::to_string_pretty(&Manifest::from_outputs(outputs)).map_err(|error| error.to_string())?;
     let mut writer = ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let options = SimpleFileOptions::default()
         .system(zip::System::Unix)
@@ -464,6 +525,8 @@ pub fn zip(outputs: &[Output]) -> Result<Vec<u8>, String> {
         writer.start_file(&output.name, options).map_err(|e| e.to_string())?;
         writer.write_all(output.contents.as_bytes()).map_err(|e| e.to_string())?;
     }
+    writer.start_file(MANIFEST_NAME, options).map_err(|e| e.to_string())?;
+    writeln!(writer, "{manifest}").map_err(|e| e.to_string())?;
     writer.finish().map(|cursor| cursor.into_inner()).map_err(|e| e.to_string())
 }
 
@@ -471,6 +534,12 @@ impl Session {
     /// Generate the addressed board's fabrication files without editing anything.
     pub fn export_fabrication(&self, params: &Value) -> Result<Vec<Output>, CommandError> {
         self.fabrication(params).map(|fabrication| fabrication.files)
+    }
+
+    /// Capture the addressed board's outputs and their manifest in one ZIP without editing.
+    pub fn export_fabrication_archive(&self, params: &Value) -> Result<Archive, CommandError> {
+        let fabrication = self.fabrication(params)?;
+        Archive::new(&fabrication.files).map_err(CommandError::Unavailable)
     }
 
     /// Generate the addressed board's fabrication files and the origin they use, without editing.
@@ -481,10 +550,11 @@ impl Session {
         view.fabrication().map_err(CommandError::Unavailable)
     }
 
-    /// The execute result for MCP: every file's name and text, and the origin they use.
+    /// Return file text, resolved origin and the same member records as the ZIP manifest.
     pub(crate) fn fabrication_report(&self, params: &Value) -> Result<Value, CommandError> {
         let fabrication = self.fabrication(params)?;
-        Ok(json!({"files": fabrication.files, "origin": fabrication.origin}))
+        let manifest = Manifest::from_outputs(&fabrication.files);
+        Ok(json!({"files": fabrication.files, "origin": fabrication.origin, "manifest": manifest}))
     }
 }
 

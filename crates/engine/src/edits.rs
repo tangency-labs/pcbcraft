@@ -68,7 +68,8 @@ mod tests {
         let created = session.revision();
         let stale = json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":created + 100});
         let refused = session.apply(PLACE_SYMBOL, &stale).unwrap_err();
-        assert!(matches!(&refused, crate::CommandError::Unavailable(reason) if reason.starts_with("project changed")), "{refused}");
+        assert!(matches!(&refused, crate::CommandError::StaleRevision { current } if *current == created), "{refused}");
+        assert!(refused.to_string().starts_with("project changed"), "{refused}");
         session.apply("project.rename", &json!({"name":"Observed"})).unwrap();
         session.execute(crate::no_connect::CHECK, &json!({})).unwrap();
         session.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":created})).unwrap();

@@ -142,7 +142,7 @@ impl Session {
     /// Rule changes invalidate the returned authority just like copper or connectivity changes.
     pub fn clearance_query_with_rules(&self, target: BoardTarget, overrides: &serde_json::Value) -> Result<ClearanceQuery, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
-        let view = snapshot.board_view(target).ok_or_else(|| CommandError::InvalidParams("unknown board target".into()))?;
+        let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
         view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let rules = view.resolve_rules(overrides)?;
         let geometry = self.clearance_cache.try_lock().ok().and_then(|cache| {
@@ -273,7 +273,7 @@ impl ClearanceQuery {
     pub fn probe(&self, contour: &Contour, layers: &[Uuid], intended_from: Option<usize>) -> Result<Results, CommandError> {
         let nets = match intended_from {
             Some(index) => {
-                &self.geometry.items.get(index).ok_or_else(|| CommandError::InvalidParams("unknown source copper object".into()))?.intended_nets[..]
+                &self.geometry.items.get(index).ok_or_else(|| CommandError::NotFound("unknown source copper object".into()))?.intended_nets[..]
             }
             None => &[],
         };

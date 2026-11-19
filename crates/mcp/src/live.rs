@@ -4,10 +4,17 @@
 use std::time::Duration;
 
 use craft_control::loopback::{Connection, Token};
-use pcbcraft_engine::{Session, catalog};
+use pcbcraft_engine::{
+    Session,
+    command_api::{self, COMMAND_API_VERSION, DEPRECATIONS},
+    error_codes::ErrorCode,
+};
 use serde_json::{Value, json};
 
-use crate::backend::{Backend, call_session, is_window_command};
+use crate::{
+    Failure,
+    backend::{Backend, api_metadata, call_session, command_id, describe_engine_commands, execute_warnings, is_window_command, legacy_api_metadata},
+};
 
 /// Environment variable used by the desktop configuration and the MCP CLI.
 pub const TOKEN_ENV: &str = "PCBCRAFT_CONTROL_TOKEN";
@@ -18,6 +25,7 @@ const MAX_TOKEN_FILE: u64 = 4096;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_REPLY_BYTES: usize = 16 << 20;
+const VERSIONED_EXECUTE: &str = "engine.execute_versioned";
 
 /// MCP backend for an explicitly selected local desktop editor.
 pub struct Remote {
@@ -54,24 +62,60 @@ impl Remote {
         self.wait = Duration::from_secs(seconds).clamp(TIMEOUT, MAX_WAIT);
         self
     }
+
+    /// Open one authenticated connection per call. Never retry a call after a lost reply.
+    /// A connect or send failure reports `connection_failed`; a lost or unreadable reply
+    /// reports `no_reply`. Either can follow a delivered request, so inspect before retrying.
+    fn request(&self, method: &str, params: Value) -> Result<Value, Failure> {
+        // An older editor ignores new fields on engine.execute. It refuses this distinct
+        // method instead, so a pinned edit never runs without a version check.
+        let method = if method == "engine.execute" && !params["version"].is_null() { VERSIONED_EXECUTE } else { method };
+        let request = json!({"method": method, "params": params});
+        let mut peer = Connection::connect(self.port, &self.token, request, self.wait).map_err(|error| {
+            Failure::new(ErrorCode::ConnectionFailed, format!("Could not send request to the PCBCraft editor on port {}: {error}", self.port))
+        })?;
+        const LOST_REPLY: &str = "No reply from the PCBCraft editor. Check the connection and inspect the project before retrying an edit.";
+        let reply = peer
+            .receive(MAX_REPLY_BYTES)
+            .map_err(|error| Failure::new(ErrorCode::NoReply, format!("{LOST_REPLY} ({error})")))?
+            .ok_or_else(|| Failure::new(ErrorCode::NoReply, LOST_REPLY))?;
+        match (reply.get("result"), reply.get("error").and_then(Value::as_str)) {
+            (Some(_), None) => Ok(reply),
+            (None, Some(error)) => Err(Failure::from_reply(&reply, error)),
+            _ => Err(Failure::new(ErrorCode::NoReply, "Invalid reply from the PCBCraft editor")),
+        }
+    }
 }
 
 impl Backend for Remote {
-    /// Open one authenticated connection per call. Never retry a call after a lost reply.
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let request = json!({"method": method, "params": params});
-        let mut peer = Connection::connect(self.port, &self.token, request, self.wait)
-            .map_err(|error| format!("Could not send request to the PCBCraft editor on port {}: {error}", self.port))?;
-        let lost_reply = || "No reply from the PCBCraft editor. Check the connection and inspect the project before retrying an edit.".to_owned();
-        let reply = peer.receive(MAX_REPLY_BYTES).map_err(|error| format!("{} ({error})", lost_reply()))?.ok_or_else(lost_reply)?;
-        match (reply.get("result"), reply.get("error").and_then(Value::as_str)) {
-            (Some(value), None) => Ok(value.clone()),
-            (None, Some(error)) => Err(error.to_owned()),
-            _ => Err("Invalid reply from the PCBCraft editor".to_owned()),
-        }
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+        self.request(method, params).map(|mut reply| reply["result"].take())
+    }
+
+    fn command_catalog(&mut self) -> Result<(Value, Value), Failure> {
+        let mut reply = self.request("engine.commands", json!({}))?;
+        // Preserve the previous discovery metadata for an old endpoint, but don't promise
+        // version checks or warnings it cannot provide.
+        let metadata = reply["command_api"].take();
+        let metadata = if metadata["command_api_version"].as_u64().is_some_and(|version| version > 0) && metadata["capabilities"].is_array() {
+            metadata
+        } else {
+            legacy_api_metadata()
+        };
+        Ok((reply["result"].take(), metadata))
+    }
+
+    fn execute(&mut self, request: Value) -> Result<(Value, Vec<Value>), Failure> {
+        let mut reply = self.request("engine.execute", request)?;
+        let warnings = reply["warnings"].as_array().into_iter().flatten().filter(|value| value.is_object()).cloned().collect();
+        Ok((reply["result"].take(), warnings))
     }
 
     /// Name the selected local editor and what its commands reach during MCP initialization.
+    fn has_live_editor(&self) -> bool {
+        true
+    }
+
     fn describe(&self) -> String {
         format!(
             "the open PCBCraft editor on port {}. Project commands share the window's undo history; \
@@ -86,12 +130,13 @@ view., window., arrangement., app. and file. commands change its views, windows,
 pub trait Editor {
     /// Run opt-in UI automation through the live host, with native input lifecycle ownership.
     /// Implementations without input automation retain an explicit refusal.
-    fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, String> {
-        Err("This editor does not support UI input automation".into())
+    fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, Failure> {
+        Err(Failure::new(ErrorCode::Unavailable, "This editor does not support UI input automation"))
     }
     /// The editor's project session, which document commands edit directly.
     fn session(&mut self) -> &mut Session;
     /// Why `command` can't run now (a dialog or file operation, say), or `None` when it can.
+    /// A refusal fails with `unavailable`.
     /// Consulted before document and presentation commands. UI input uses the host's separate
     /// automation lifecycle so it can operate ordinary modal controls and focused fields.
     fn refusal(&self, command: &str) -> Option<String>;
@@ -101,7 +146,55 @@ pub trait Editor {
     fn inspect(&self) -> Value;
     /// Run one window command through the handlers the editor's own controls use. A failure
     /// leaves the windows as they were; success never changes the project or its history.
-    fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), String>;
+    fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), Failure>;
+}
+
+/// Normalize the fail-closed wire method before the app applies its ordinary execute policies.
+///
+/// # Errors
+/// A guarded wire request without a stated version is invalid.
+pub fn normalize_request(request: &mut Value) -> Result<(), Failure> {
+    if request["method"] == VERSIONED_EXECUTE {
+        if request["params"]["version"].is_null() {
+            return Err(Failure::new(ErrorCode::InvalidRequest, "versioned execution requires `version`"));
+        }
+        request["method"] = "engine.execute".into();
+    }
+    Ok(())
+}
+
+/// Check the version before deferred engine work reaches its parameter or revision checks.
+///
+/// # Errors
+/// Returns a version failure for a known engine command with a malformed or different version.
+pub fn check_deferred_version(id: &str, params: &Value) -> Result<(), Failure> {
+    if !params["version"].is_null() && pcbcraft_engine::command(id).is_some() {
+        command_api::check_version(id, &params["version"], COMMAND_API_VERSION)?;
+    }
+    Ok(())
+}
+
+/// Form the successful live reply; keep existing execution results intact and add warnings only
+/// when used. The legacy catalog array is also unchanged; its API metadata travels beside it.
+pub fn success_reply(request: &Value, result: Value) -> Value {
+    let mut reply = json!({"result": result});
+    if request["method"] == "engine.execute" {
+        let warnings = execute_warnings(&request["params"], DEPRECATIONS);
+        if !warnings.is_empty() {
+            reply["warnings"] = Value::Array(warnings);
+        }
+    } else if request["method"] == "engine.commands" {
+        reply["command_api"] = api_metadata(COMMAND_API_VERSION);
+    }
+    reply
+}
+
+/// Unknown commands keep the window or UI handler's own refusal.
+fn check_window_version(editor: &dyn Editor, id: &str, stated: &Value) -> Result<(), Failure> {
+    if !stated.is_null() && editor.window_commands().iter().any(|command| command["id"] == id) {
+        command_api::check_version(id, stated, COMMAND_API_VERSION)?;
+    }
+    Ok(())
 }
 
 /// Serve one live request against the open editor, including callers that bypass the MCP CLI.
@@ -109,31 +202,36 @@ pub trait Editor {
 /// lifecycle and returns query data or a queue ticket. Other window commands answer with editor
 /// inspection (or only the unchanged revision when `inspect` is false); document commands answer
 /// as in a headless session.
-pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, String> {
-    let method = request["method"].as_str().ok_or("missing control method")?;
+pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Failure> {
+    let method = request["method"].as_str().ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "missing control method"))?;
     let params = &request["params"];
     match method {
         "engine.commands" => {
-            let mut commands: Vec<Value> = catalog().iter().map(|command| command.to_json()).collect();
-            commands.extend(editor.window_commands());
+            let mut commands = describe_engine_commands(DEPRECATIONS);
+            commands.extend(editor.window_commands().into_iter().map(|mut command| {
+                command_api::mark_deprecations(&mut command, DEPRECATIONS);
+                command
+            }));
             Ok(Value::Array(commands))
         }
         "project.inspect" | "project.cross_probe" | "project.resolve_counterparts" => call_session(editor.session(), method, params),
         "editor.inspect" => Ok(editor.inspect()),
         "engine.execute" => {
-            let id = params["command"].as_str().ok_or("missing `command`")?;
+            let id = command_id(params)?;
             if id.starts_with("ui.") {
+                check_window_version(editor, id, &params["version"])?;
                 return editor.ui_command(id, &params["params"]);
             }
             if let Some(reason) = editor.refusal(id) {
-                return Err(reason);
+                return Err(Failure::new(ErrorCode::Unavailable, reason));
             }
             if !is_window_command(id) {
                 return call_session(editor.session(), method, params);
             }
+            check_window_version(editor, id, &params["version"])?;
             editor.run_window_command(id, &params["params"])?;
             if params["inspect"].as_bool() == Some(false) { Ok(json!({"revision": editor.session().revision()})) } else { Ok(editor.inspect()) }
         }
-        _ => Err(format!("Unknown live control method `{method}`")),
+        _ => Err(Failure::new(ErrorCode::InvalidRequest, format!("Unknown live control method `{method}`"))),
     }
 }

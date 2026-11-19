@@ -14,7 +14,11 @@ project edits and reopened documents do not restore stale inspection selections.
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
 data is out of date. Existing replies keep their fields; see
-[command API version](docs/mcp.md#command-api-version).
+[command API version](docs/mcp.md#command-api-version). MCP `execute` now
+accepts an optional pin to that API version, refusing a different version with
+`version_mismatch`. Discovery can mark deprecated commands and parameters;
+successful calls that use them add warnings without changing the ordinary result.
+See [stating a version](docs/mcp.md#stating-a-version).
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,
@@ -28,6 +32,17 @@ vertex or placing a through via (#246).
 Placing a via at the current fixed route head now validates that exact location,
 even when an earlier, longer route preview remains visible, so invalid vias are
 rejected before changing layers.
+
+Failed MCP calls and live editor replies now carry a stable error code, such
+as `stale_revision`, `not_found` or `cap_exceeded`, with machine-readable
+details, so an agent can act on a failure without parsing its message. The
+codes are published in [error codes](docs/mcp.md#error-codes) and are never
+renamed or reused. Messages are unchanged, except that `ui.` commands now
+refuse unknown keys, missing required keys and non-null scalar or array
+parameter lists with the same wording as window commands. Omitted or null
+parameters retain their empty-map behavior. A stale `expected_revision` now
+precedes other edit parameter problems. Read-only route planning keeps its
+`stale` plan outcome.
 
 Preferences → Appearance → **Panel style** switches the workspace shell
 between **Floating** cards and a **Compact** layout, following SolidCraft. In

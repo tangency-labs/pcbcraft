@@ -409,8 +409,7 @@ impl Session {
         self.check_revision(params)?;
         let mut project = self.open_project()?.clone();
         let target = project.resolve_sheet(params["sheet"].as_str())?;
-        let index =
-            project.sheets().position(|sheet| sheet.target == target).ok_or_else(|| CommandError::InvalidParams("unknown sheet ID".into()))?;
+        let index = project.sheets().position(|sheet| sheet.target == target).ok_or_else(|| CommandError::NotFound("unknown sheet ID".into()))?;
         let paper = params["paper"].as_str().and_then(Paper::parse).ok_or_else(|| CommandError::InvalidParams("unknown paper size".into()))?;
         let orientation =
             params["orientation"].as_str().and_then(Orientation::parse).ok_or_else(|| CommandError::InvalidParams("unknown orientation".into()))?;
@@ -435,8 +434,7 @@ impl Session {
         self.check_revision(params)?;
         let mut project = self.open_project()?.clone();
         let target = project.resolve_sheet(params["sheet"].as_str())?;
-        let index =
-            project.sheets().position(|sheet| sheet.target == target).ok_or_else(|| CommandError::InvalidParams("unknown sheet ID".into()))?;
+        let index = project.sheets().position(|sheet| sheet.target == target).ok_or_else(|| CommandError::NotFound("unknown sheet ID".into()))?;
         let template = match &params["template"] {
             Value::Null => None,
             value => {

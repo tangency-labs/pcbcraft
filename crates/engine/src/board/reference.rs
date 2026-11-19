@@ -147,7 +147,7 @@ impl Session {
             .board
             .footprints
             .binary_search_by_key(&id.unwrap_or_default(), |f| f.id)
-            .map_err(|_| CommandError::InvalidParams("unknown footprint ID".into()))?;
+            .map_err(|_| CommandError::NotFound("unknown footprint ID".into()))?;
         let text: Option<Text> =
             serde_json::from_value(params["appearance"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
         if let Some(text) = &text {

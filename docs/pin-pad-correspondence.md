@@ -50,7 +50,11 @@ addresses are refused. The response has `format: "pcbcraft-counterparts/1"`,
 `source`, `status`, `component` (null if unavailable), `terminals` and `pads`, plus
 the current `revision` and runtime `opening`. Each endpoint in the arrays is
 itself a qualified source address. Resolved results include the complete
-terminal/land group in either query direction.
+terminal/land group in either query direction. An `unplaced_package` result
+naming a board-eligible component also includes `pending_update: true` if the
+package choice must be accepted through **Update PCB** before placement. This
+field is otherwise omitted. The status and endpoint arrays are unchanged; a
+pending package does not supply pad targets.
 
 The existing `cross_probe` tool and `Project::pad_for_terminal` /
 `terminal_for_pad` retain their representative, singular compatibility behavior.

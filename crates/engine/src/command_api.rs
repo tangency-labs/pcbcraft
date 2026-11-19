@@ -25,7 +25,76 @@ pub const COMMAND_API_VERSION: u32 = 1;
 
 /// The optional protocol features this build offers, so a client can check before relying on
 /// one. Features are only ever appended.
-pub const CAPABILITIES: &[&str] = &["command_api"];
+pub const CAPABILITIES: &[&str] = &["command_api", "error_codes", "version_check", "deprecation_warnings"];
+
+/// Validate an optional API version for a known command before dispatch. A missing or null
+/// version selects the current API on the raw live endpoint.
+///
+/// # Errors
+/// Returns `InvalidParams` for a malformed version and `VersionMismatch` for a different version.
+pub fn check_version(command: &str, stated: &Value, current: u32) -> Result<(), crate::CommandError> {
+    if stated.is_null() {
+        return Ok(());
+    }
+    let Some(stated) = stated.as_u64().filter(|version| *version > 0) else {
+        return Err(crate::CommandError::InvalidParams("`version` must be a positive integer".into()));
+    };
+    if stated == u64::from(current) { Ok(()) } else { Err(crate::CommandError::VersionMismatch { command: command.to_owned(), stated, current }) }
+}
+
+/// A still-supported command or top-level parameter announced for removal in a later release.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Deprecation {
+    /// The command id.
+    pub command: &'static str,
+    /// A parameter name, or `None` for the entire command.
+    pub parameter: Option<&'static str>,
+    /// The first release that marked it deprecated.
+    pub since: &'static str,
+    /// The command id or parameter name to use instead, if there is one.
+    pub replacement: Option<&'static str>,
+}
+
+/// The one deprecation table used by discovery and execution on this build.
+/// Announce a removal for at least one release before removing the old contract.
+pub const DEPRECATIONS: &[Deprecation] = &[];
+
+/// Add matching deprecation annotations without changing the accepted parameter schema.
+pub fn mark_deprecations(described: &mut Value, deprecations: &[Deprecation]) {
+    for entry in deprecations {
+        if described["id"] != entry.command {
+            continue;
+        }
+        let target = match entry.parameter {
+            None => Some(&mut *described),
+            Some(parameter) => {
+                described.get_mut("params").and_then(|params| params.get_mut("properties")).and_then(|properties| properties.get_mut(parameter))
+            }
+        };
+        if let Some(target) = target.and_then(Value::as_object_mut) {
+            target.insert("deprecated".into(), Value::Bool(true));
+            target.insert("x-deprecation".into(), serde_json::json!({"since": entry.since, "replacement": entry.replacement}));
+        }
+    }
+}
+
+/// Give one warning per deprecated command or explicitly supplied parameter, even if its
+/// value is null. Callers include warnings only on success.
+pub fn deprecation_warnings(command: &str, params: &Value, deprecations: &[Deprecation]) -> Vec<Value> {
+    deprecations
+        .iter()
+        .filter(|entry| entry.command == command && entry.parameter.is_none_or(|name| params.get(name).is_some()))
+        .map(|entry| {
+            let what = entry.parameter.map_or_else(|| format!("`{command}`"), |name| format!("`{name}` of `{command}`"));
+            let instead = entry.replacement.map(|name| format!("; use `{name}` instead")).unwrap_or_default();
+            serde_json::json!({
+                "code": "deprecated", "command": command, "parameter": entry.parameter,
+                "since": entry.since, "replacement": entry.replacement,
+                "message": format!("{what} is deprecated since {} and will be removed in a later release{instead}", entry.since),
+            })
+        })
+        .collect()
+}
 
 /// A fingerprint of `described` commands as discovery returns them: hex SHA-256 of the list sorted
 /// by id, every object's keys sorted, prose included. Any change a client could have cached
@@ -55,8 +124,8 @@ fn sorted_keys(value: &Value) -> Value {
 }
 
 /// A described command's contract as the snapshot stores it: the description without `id` and
-/// without the prose (`title`, `summary`, `description`) of the command and its schemas, keys
-/// sorted. Data values (`const`, `default`, `enum`, `examples`) are kept whole, and parameter
+/// without prose (`title`, `summary`, `description`) or deprecation annotations of the command
+/// and its schemas, keys sorted. Data values (`const`, `default`, `enum`, `examples`) are kept whole, and parameter
 /// names are kept even when a parameter is called `title`.
 pub fn contract_of(description: &Value) -> Value {
     let mut contract = contract(description, Level::Schema);
@@ -85,15 +154,16 @@ enum Level {
     Data,
 }
 
-/// Drop prose and rebuild objects with sorted keys. Only schema objects lose their prose: a
-/// parameter may itself be called `title` or `description`, and a default value may be an object
-/// with such a key.
+/// Drop prose and deprecation annotations when rebuilding schema objects with sorted keys.
+/// Keep parameter names and data values intact, including keys called `title` or `deprecated`.
 fn contract(value: &Value, level: Level) -> Value {
     match value {
         Value::Object(object) => {
             let sorted: BTreeMap<&String, Value> = object
                 .iter()
-                .filter(|(key, _)| level != Level::Schema || !matches!(key.as_str(), "title" | "summary" | "description"))
+                .filter(|(key, _)| {
+                    level != Level::Schema || !matches!(key.as_str(), "title" | "summary" | "description" | "deprecated" | "x-deprecation")
+                })
                 .map(|(key, value)| {
                     let inner = match level {
                         Level::Schema if NAMED_MAPS.contains(&key.as_str()) => Level::Names,

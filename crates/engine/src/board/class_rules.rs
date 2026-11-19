@@ -170,7 +170,7 @@ impl BoardView<'_> {
             .items
             .iter()
             .position(|item| item.name == object)
-            .ok_or_else(|| CommandError::InvalidParams("Unknown selected copper object.".into()))?;
+            .ok_or_else(|| CommandError::NotFound("Unknown selected copper object.".into()))?;
         let memberships: Vec<_> = geometry
             .members
             .iter()

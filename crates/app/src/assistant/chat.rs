@@ -501,7 +501,10 @@ impl Chat {
         for id in overdue {
             if let Some(Approval { source: Source::Tool { request, command }, .. }) = self.take_approval(id) {
                 let minutes = APPROVAL_WAIT.as_secs() / 60;
-                request.answer(Err(format!("Nobody answered within {minutes} minutes, so `{command}` was not run.")));
+                request.answer(Err(pcbcraft_mcp::Failure::new(
+                    pcbcraft_engine::error_codes::ErrorCode::Cancelled,
+                    format!("Nobody answered within {minutes} minutes, so `{command}` was not run."),
+                )));
                 self.push(Item::Notice(format!("`{command}` waited {minutes} minutes without an answer and was declined.")));
             }
         }
@@ -676,7 +679,9 @@ impl Chat {
     fn deny_all(&mut self, reason: &str) {
         for approval in std::mem::take(&mut self.approvals) {
             match approval.source {
-                Source::Tool { request, .. } => request.answer(Err(reason.to_owned())),
+                Source::Tool { request, .. } => {
+                    request.answer(Err(pcbcraft_mcp::Failure::new(pcbcraft_engine::error_codes::ErrorCode::Cancelled, reason)));
+                }
                 Source::Agent { key, .. } => self.answer_agent(key, None),
             }
         }
