@@ -681,7 +681,11 @@ impl crate::Session {
 /// of equal input have equal digests without recursively including their new ID.
 pub(crate) fn capture_source(project: &Project) -> Result<SourceCapture, crate::CommandError> {
     use sha2::{Digest, Sha256};
+    #[cfg(test)]
+    super::relations::probes::hit(super::relations::probes::Op::SourceEncode);
     let documents = crate::persistence::encode_documents(Arc::new(project.clone())).map_err(crate::CommandError::InvalidParams)?;
+    #[cfg(test)]
+    super::relations::probes::hit(super::relations::probes::Op::SourceDigest);
     let mut digest = Sha256::new();
     digest.update(b"pcbcraft-board-source-bundle/1\0");
     for (path, bytes) in &documents {
@@ -773,6 +777,8 @@ pub fn preview(accepted: &Baseline, proposed: &Baseline) -> Result<Preview, Stri
 /// without changing the input project. Revision checks and single-step publication
 /// belong to the caller; unsupported/missing assets produce no partial mutation.
 pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseline) -> Result<(Project, Baseline), String> {
+    #[cfg(test)]
+    super::relations::probes::hit(super::relations::probes::Op::BuildEco);
     let target = project.boards().next().map(|board| board.target).ok_or("no physical board is available")?;
     if target.project != proposed.project || target.board != proposed.board {
         return Err("board update target is not the current board".into());

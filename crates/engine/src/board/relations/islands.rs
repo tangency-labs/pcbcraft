@@ -14,7 +14,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum Key {
+pub(crate) enum Key {
     Land(String, String),
     Track(Uuid),
     Via(Uuid),
@@ -164,9 +164,12 @@ pub(super) fn check(previous: &Project, candidate: &Project, bodies: &BTreeSet<S
             let old = &before.nodes[j];
             !old.same_copper(node) || vanished.iter().any(|removed| removed.touches(old))
         });
-        if !physical && !after.electrical_changed(&before, group) {
+        let electrical = !physical && after.electrical_changed(&before, group);
+        if !physical && !electrical {
             continue;
         }
+        #[cfg(test)]
+        super::probes::hit(super::probes::Op::Marked { nodes: group.iter().map(|&i| after.nodes[i].key.clone()).collect(), physical, electrical });
         if let Some((a, b)) = track::intrinsic_short(group, &after.lands, &after.memberships, |i| after.nodes[i].net) {
             return Err(reason(
                 "affected_short",

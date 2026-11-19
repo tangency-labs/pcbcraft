@@ -4,6 +4,8 @@
 mod catalog;
 pub(crate) mod commands;
 mod islands;
+#[cfg(test)]
+pub(crate) mod probes;
 mod transaction;
 
 pub(crate) use transaction::{
@@ -230,4 +232,10 @@ impl Relations {
 #[cfg(test)]
 mod capacity_tests;
 #[cfg(test)]
-mod tests;
+mod catalog_tests;
+#[cfg(test)]
+mod eco_tests;
+#[cfg(test)]
+mod locality_tests;
+#[cfg(test)]
+pub(crate) mod tests;

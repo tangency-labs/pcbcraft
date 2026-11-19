@@ -214,6 +214,49 @@ mod tests {
         }
     }
 
+    /// A legacy marker on an F1 board uses only private native placements at open, not settle.
+    #[test]
+    fn a_nest_open_power_migration_reports_references_without_settling() {
+        use crate::{
+            board::relations::{
+                commands::LIST,
+                probes::trace,
+                tests::{Observe, add, assert_stage, fixture, origin, pick, run},
+            },
+            persistence::test_board_path,
+        };
+        use std::sync::Arc;
+        let mut s = fixture(false);
+        let reference = pick(&mut s, 0, "fp.origin", None);
+        add(&mut s, "horizontal", origin(), reference);
+        let at = s.project().unwrap().symbols()[0].pins()[0];
+        run(&mut s, crate::net_labels::ADD, json!({"name":"SUPPLY","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm})).unwrap();
+        let findings = run(&mut s, LIST, json!({})).unwrap()["relations"].clone();
+        let poses = s.project().unwrap().board.footprints().to_vec();
+        let mut old = encode_documents(crate::persistence::diagnostic_snapshot(s.snapshot().unwrap())).unwrap();
+        let board = test_board_path(&old);
+        let board_bytes = old[&board].clone();
+        let path = format!("sheets/{}.json", s.project().unwrap().sheet_target().sheet);
+        let mut sheet: Value = serde_json::from_slice(&old[&path]).unwrap();
+        sheet["net_labels"][0]["style"] = json!("power");
+        old.insert(path, serde_json::to_vec(&sheet).unwrap());
+        let package = encode_packed_documents(old).unwrap();
+        let (opened, ops) = trace(|| decode_packed(&package).unwrap());
+        // The compatibility session and its own sheet projection are both private native stages.
+        assert_stage(&ops, 2, 0, 0);
+        assert!(opened.needs_manifest);
+        assert_eq!(opened.documents[&board], board_bytes);
+        let mut live = crate::Session::default();
+        let observer: Arc<Observe> = Arc::default();
+        live.observe_edits(Some(observer.clone()));
+        let (_, ops) = trace(|| live.open_snapshot(opened.project));
+        assert!(ops.is_empty());
+        assert!(observer.0.lock().unwrap().is_empty());
+        assert!(live.undo.is_empty() && live.redo.is_empty());
+        assert_eq!(run(&mut live, LIST, json!({})).unwrap()["relations"], findings);
+        assert_eq!(live.project().unwrap().board.footprints(), poses);
+    }
+
     /// Every retired drawing becomes a pinned native symbol with the same named contact,
     /// rotation and wire route; unrelated payloads survive and conversion is deterministic.
     #[test]

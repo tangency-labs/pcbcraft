@@ -4292,6 +4292,8 @@ impl Session {
     /// check the exact candidate before any edit or approval can publish it.
     fn prepare_with(&self, mut project: Project, input: &board::relations::RelationInput) -> Result<board::relations::Prepared, CommandError> {
         use board::relations::{self, RelationStage};
+        #[cfg(test)]
+        relations::probes::hit(relations::probes::Op::Prepare(self.relation_stage));
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
@@ -4388,15 +4390,26 @@ impl Session {
                 return Err(relations::reason("arc_board", board::arc::UNSUPPORTED, Value::Null));
             }
         }
+        let certify = input.review || disclosure.affected;
+        let size_check = |project: &Project| {
+            let board_changed = self.project.as_ref().is_none_or(|p| !Arc::ptr_eq(&p.board, &project.board));
+            if board_changed && (!project.board.tracks.is_empty() || !project.board.vias.is_empty() || outer && project.board.relations.is_some()) {
+                persistence::check_board_document_size(project).map_err(CommandError::InvalidParams)
+            } else {
+                board::zones::validate(project).map_err(CommandError::InvalidParams)
+            }
+        };
+        let native = !outer || (!had_relations && project.board.relations.is_none());
+        if native && !certify {
+            // Preserve the native pre-watermark guard order for ordinary never-opted-in edits.
+            size_check(&project)?;
+        }
         let project = self.retain_allocation_watermark(Arc::new(project));
-        let board_changed = self.project.as_ref().is_none_or(|p| !Arc::ptr_eq(&p.board, &project.board));
-        let digest = if input.review || disclosure.affected {
+        let digest = if certify {
             Some(relations::certify(project.clone())?)
         } else {
-            if board_changed && (!project.board.tracks.is_empty() || !project.board.vias.is_empty() || outer && project.board.relations.is_some()) {
-                persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
-            } else {
-                board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+            if !native {
+                size_check(&project)?;
             }
             None
         };
@@ -4420,6 +4433,8 @@ impl Session {
 
     /// Adopt the exact checked candidate once, without deriving or mutating authored fields again.
     fn publish(&mut self, prepared: board::relations::Prepared) {
+        #[cfg(test)]
+        board::relations::probes::hit(board::relations::probes::Op::Publish(self.relation_stage));
         let board::relations::Prepared { snapshot: project, highest, .. } = prepared;
         self.update_plan = None;
         self.setup_preview = None;

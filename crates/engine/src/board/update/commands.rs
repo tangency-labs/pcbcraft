@@ -173,6 +173,15 @@ impl Session {
         self.eco_plan().map(CachedPlan::report)
     }
 
+    /// Expose the retained Arc to exact-candidate tests, not to the public command API.
+    #[cfg(test)]
+    pub(crate) fn checked_eco_candidate(&self) -> Option<&Arc<crate::Project>> {
+        match &self.eco_plan()?.payload {
+            Payload::Checked { prepared, .. } => Some(&prepared.snapshot),
+            _ => None,
+        }
+    }
+
     /// Inspect the current bounded review report. Cached data is runtime-only;
     /// stale plans are never presented as available approval authority.
     pub fn board_update_report(&self) -> Option<Value> {
@@ -233,6 +242,10 @@ impl Session {
         }
         serde_json::to_writer(ReportSize { bytes: 0 }, &Envelope { revision: self.revision, board_update_preview: plan.report() })
             .map_err(|error| CommandError::Unavailable(format!("board update preview is too large to review: {error}")))?;
+        #[cfg(test)]
+        if matches!(&plan.payload, Payload::Checked { .. }) {
+            relations::probes::hit(relations::probes::Op::RetainChecked);
+        }
         self.update_plan = Some(ReviewSlot::Eco(plan));
         Ok(())
     }
@@ -267,6 +280,8 @@ impl Session {
                     return Err(relations::commands::stale());
                 }
                 let (next, _) = apply_candidate(&plan.base.snapshot, &plan.accepted, &plan.proposed).map_err(CommandError::InvalidParams)?;
+                #[cfg(test)]
+                relations::probes::hit(relations::probes::Op::CandidateEncode);
                 crate::persistence::encode_documents(Arc::new(next.clone())).map_err(CommandError::InvalidParams)?;
                 self.change(next)?;
             }

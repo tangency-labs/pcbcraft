@@ -139,7 +139,11 @@ pub(crate) struct Prepared {
 
 /// Stable, unambiguous digest of the exact canonical native document set.
 pub(crate) fn certify(snapshot: Arc<Project>) -> Result<String, CommandError> {
+    #[cfg(test)]
+    super::probes::hit(super::probes::Op::CandidateEncode);
     let documents = crate::persistence::encode_documents(snapshot).map_err(crate::board::relations::commands::invalid)?;
+    #[cfg(test)]
+    super::probes::hit(super::probes::Op::CandidateDigest);
     let mut digest = Sha256::new();
     digest.update(b"pcbcraft-relation-candidate\0");
     for (path, bytes) in documents {
@@ -232,6 +236,8 @@ pub(crate) fn verify_final(
     revision: u64,
     input: &RelationInput,
 ) -> Result<Disclosure, CommandError> {
+    #[cfg(test)]
+    super::probes::hit(super::probes::Op::VerifyReferences);
     let previous = previous.filter(|p| p.same_document(candidate));
     let old = previous.and_then(|p| p.board.relations.as_deref());
     let next = candidate.board.relations.as_deref();

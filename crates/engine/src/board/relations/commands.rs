@@ -203,11 +203,12 @@ fn object(properties: Value, required: &[&str]) -> Value {
 
 /// Describe the exact closed feature tags and their individual fields.
 fn ref_schema() -> Value {
-    let key = object(
-        json!({"library":{"type":"string","maxLength":80},"id":{"type":"string","maxLength":80},
-        "revision":{"type":"integer","minimum":1,"maximum":u32::MAX}}),
-        &["id", "revision"],
-    );
+    let segment = json!({"type":"string","maxLength":64,"pattern":"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"});
+    let revision = json!({"type":"integer","minimum":1,"maximum":u32::MAX});
+    let key = json!({"oneOf":[
+        object(json!({"library":segment,"id":segment,"revision":revision}), &["library","id","revision"]),
+        object(json!({"id":{"const":crate::board::FOOTPRINT_DEFINITION},"revision":{"const":crate::board::FOOTPRINT_REVISION}}), &["id","revision"]),
+    ]});
     let mut tags = vec![object(json!({"tag":{"const":"board.origin"}}), &["tag"])];
     for tag in ["fp.origin", "pad.center", "pad.corner", "pad.edge", "courtyard.edge"] {
         let mut properties = json!({"tag":{"const":tag},"fp":{"type":"integer","minimum":1},"def":key});
@@ -356,6 +357,15 @@ pub(crate) fn stale() -> CommandError {
 }
 
 impl Session {
+    /// Read the exact certified generic snapshot only for byte equivalence assertions.
+    #[cfg(test)]
+    pub(crate) fn checked_generic_candidate(&self) -> Option<&Arc<crate::Project>> {
+        match &self.update_plan {
+            Some(ReviewSlot::GenericPrepared(p)) if p.base.matches(self) => Some(&p.prepared.snapshot),
+            _ => None,
+        }
+    }
+
     /// Revision-only dispatch must not publish a checked Cut while dropping its cached text.
     pub(crate) fn checked_relation_apply_has_clipboard(&self, params: &Value) -> bool {
         matches!(&self.update_plan, Some(ReviewSlot::GenericPrepared(p))

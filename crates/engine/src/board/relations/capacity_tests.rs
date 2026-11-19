@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 /// Use bounded display names in accepted history so the fixture needs very few live objects.
 /// Only the display length is adjusted; no board bytes or production limits are patched.
-fn fill_board(s: &Session, slack: usize) -> Arc<Project> {
+pub(super) fn fill_board(s: &Session, slack: usize) -> Arc<Project> {
     let mut p = s.project().unwrap().clone();
     let t = p.board_target().unwrap();
     let board = Arc::make_mut(&mut p.board);
@@ -29,7 +29,8 @@ fn fill_board(s: &Session, slack: usize) -> Arc<Project> {
     }
     let package = update::Package::from_assignment(board.assignments.values().next().unwrap());
     let start = 1000;
-    for i in start..start + 270 {
+    let entries = ((MAX_DOCUMENT_BYTES - slack) / 62_000) as u64;
+    for i in start..start + entries {
         baseline.components.insert(
             i,
             update::PartInstanceState {
@@ -107,7 +108,10 @@ fn a_f1_board_size_fit_overflow_inactive_and_native_control() {
         assert_eq!(bytes(&s), saved);
         assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], status);
         s.open_snapshot(Arc::new(native));
-        run(&mut s, crate::SET_FOOTPRINT_REFERENCE_TEXT, big).unwrap();
+        let (result, trace) = super::probes::trace(|| run(&mut s, crate::SET_FOOTPRINT_REFERENCE_TEXT, big));
+        result.unwrap();
+        use super::{RelationStage::Outer, probes::Op};
+        assert_eq!(trace, [Op::Prepare(Outer), Op::Publish(Outer)]);
         assert!(bytes(&s)[&path].len() <= MAX_DOCUMENT_BYTES);
     }
 }
@@ -148,8 +152,8 @@ fn a_final_bytes_copper_latch_fit_and_overflow() {
     let edge = pick(&mut s, 0, "pad.edge", Some("1"));
     let point = pick(&mut s, 1, "fp.origin", None);
     add(&mut s, "point_edge", edge, point);
-    let fp = s.project().unwrap().board.footprints()[0].id;
-    let args = json!({"footprint":format!("footprint-{fp}"),"rotation":37});
+    let fp = &s.project().unwrap().board.footprints()[0];
+    let args = json!({"footprint":format!("footprint-{}",fp.id),"x_nm":fp.x_nm,"y_nm":fp.y_nm,"rotation":37});
     let start = bytes(&s);
     let path = test_board_path(&start);
     let native_growth = {
@@ -166,15 +170,21 @@ fn a_final_bytes_copper_latch_fit_and_overflow() {
     let mut raw = s.project().unwrap().clone();
     Arc::make_mut(&mut raw.board).footprints[0].rotation = 37;
     assert_eq!(encode_documents(Arc::new(raw)).unwrap()[&path].len(), MAX_DOCUMENT_BYTES - 4);
+    let observer: Arc<super::tests::Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
     let error = unchanged(&mut s, |s| run(s, PREVIEW, intent.clone()));
     assert!(error.to_string().contains("size limit"), "{error}");
+    assert!(s.update_plan.is_none() && observer.0.lock().unwrap().is_empty());
     assert_eq!(bytes(&s), before);
     s.open_snapshot(fit);
     let report = run(&mut s, PREVIEW, intent).unwrap()["relation_preview"].clone();
-    let crate::board::relations::transaction::ReviewSlot::GenericPrepared(_) = s.update_plan.as_ref().unwrap() else {
-        panic!("no retained checked candidate")
-    };
-    run(&mut s, APPLY, decision(&report)).unwrap();
+    let certified = s.checked_generic_candidate().unwrap().clone();
+    let certified_docs = encode_documents(certified.clone()).unwrap();
+    assert!(certified_docs[&path].len() <= MAX_DOCUMENT_BYTES);
+    let (_, ops) = super::probes::trace(|| run(&mut s, APPLY, decision(&report)).unwrap());
+    assert_eq!(ops, [super::probes::Op::Publish(super::RelationStage::Outer)]);
+    assert!(Arc::ptr_eq(&certified, &s.snapshot().unwrap()));
+    assert_eq!(bytes(&s), certified_docs);
     assert_eq!(super::certify(s.snapshot().unwrap()).unwrap(), report["candidate_digest"].as_str().unwrap());
     assert!(matches!(s.project().unwrap().board.relations.as_ref().unwrap().relations[0].state, State::Lost { .. }));
     assert_eq!(s.project().unwrap().board.footprints()[0].rotation, 37);

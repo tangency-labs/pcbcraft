@@ -27,6 +27,11 @@ fn accept_update(s: &mut Session) {
 /// Author a legal bridge, then accept a schematic split while keeping the authored copper.
 /// This reproduces an existing short entirely through shared commands, without file surgery.
 pub(crate) fn bridged_split(bridge: Bridge) -> Session {
+    bridged_split_with(bridge, |_, _| {})
+}
+
+/// Add fixture-only native copper before the legal bridge becomes an accepted short.
+pub(crate) fn bridged_split_with(bridge: Bridge, extra: impl FnOnce(&mut Session, Point)) -> Session {
     let mut s = routed_fixture();
     let footprint = view(&s).footprints().find(|f| f.pads.iter().all(|p| p.net.is_some()) && f.pads[0].net != f.pads[1].net).unwrap();
     let component = crate::schematic::wiring::parse_id(&footprint.component, "component-").unwrap();
@@ -59,6 +64,7 @@ pub(crate) fn bridged_split(bridge: Bridge) -> Session {
     let added: Vec<_> = s.project().unwrap().wires().iter().map(|wire| wire.id()).filter(|id| !wires.contains(id)).collect();
     assert!(!added.is_empty());
     accept_update(&mut s);
+    extra(&mut s, b);
     let layers = copper_layers(&s);
     match bridge {
         Bridge::Track => {
@@ -95,7 +101,7 @@ pub(crate) fn bridged_split(bridge: Bridge) -> Session {
 }
 
 /// Select shorts without hiding unrelated DRC diagnostics; zero clearance still detects contact.
-fn shorts(s: &Session, clearance_nm: i64) -> Vec<Violation> {
+pub(crate) fn shorts(s: &Session, clearance_nm: i64) -> Vec<Violation> {
     view(s).check_design(Rules { clearance_nm, ..Rules::default() }).violations.into_iter().filter(|v| v.kind == Kind::Short).collect()
 }
 

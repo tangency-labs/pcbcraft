@@ -1,6 +1,7 @@
 use super::{
     catalog::{self, Measure},
     commands::*,
+    probes::{Op, trace},
     *,
 };
 use crate::{
@@ -12,7 +13,7 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 
 /// Execute the same addressed native/relationship commands that production clients discover.
-pub(super) fn run(s: &mut Session, command: &str, mut params: Value) -> Result<Value, CommandError> {
+pub(crate) fn run(s: &mut Session, command: &str, mut params: Value) -> Result<Value, CommandError> {
     if crate::command(command).unwrap().params.iter().any(|p| p.name == "expected_revision") {
         params["expected_revision"] = json!(s.revision());
     }
@@ -20,7 +21,7 @@ pub(super) fn run(s: &mut Session, command: &str, mut params: Value) -> Result<V
 }
 
 /// Real pinned resistor footprints on a native board, optionally with accepted physical history.
-pub(super) fn fixture(baseline: bool) -> Session {
+pub(crate) fn fixture(baseline: bool) -> Session {
     let mut s = Session::default();
     run(&mut s, "project.new", json!({"create_board":true})).unwrap();
     for (i, x) in [0, 10_000_000, 20_000_000].into_iter().enumerate() {
@@ -37,7 +38,7 @@ pub(super) fn fixture(baseline: bool) -> Session {
 }
 
 /// Select a reference exactly as the engine's public catalog emits it.
-pub(super) fn pick(s: &mut Session, index: usize, tag: &str, pad: Option<&str>) -> Value {
+pub(crate) fn pick(s: &mut Session, index: usize, tag: &str, pad: Option<&str>) -> Value {
     let id = s.project().unwrap().board.footprints()[index].id;
     let response = run(s, FEATURES, json!({"fp":format!("footprint-{id}")})).unwrap();
     response["features"]
@@ -51,14 +52,14 @@ pub(super) fn pick(s: &mut Session, index: usize, tag: &str, pad: Option<&str>) 
         .unwrap()
 }
 
-pub(super) fn add(s: &mut Session, kind: &str, a: Value, b: Value) -> Value {
+pub(crate) fn add(s: &mut Session, kind: &str, a: Value, b: Value) -> Value {
     run(s, ADD, json!({"relation":{"kind":kind,"refs":[a,b]}})).unwrap()["id"].clone()
 }
 
-pub(super) fn origin() -> Value {
+pub(crate) fn origin() -> Value {
     json!({"tag":"board.origin"})
 }
-pub(super) fn bytes(s: &Session) -> Documents {
+pub(crate) fn bytes(s: &Session) -> Documents {
     encode_documents(s.snapshot().unwrap()).unwrap()
 }
 pub(super) fn reviewed(s: &mut Session, command: &str, params: Value) -> Value {
@@ -73,7 +74,7 @@ pub(super) fn decision(preview: &Value) -> Value {
 }
 
 /// Compare immutable snapshot, revision and both history cursors across a refusal.
-pub(super) fn unchanged(s: &mut Session, attempt: impl FnOnce(&mut Session) -> Result<Value, CommandError>) -> CommandError {
+pub(crate) fn unchanged(s: &mut Session, attempt: impl FnOnce(&mut Session) -> Result<Value, CommandError>) -> CommandError {
     let before = (s.snapshot().unwrap(), s.revision(), s.undo.len(), s.redo.len());
     let error = attempt(s).unwrap_err();
     assert!(Arc::ptr_eq(&before.0, &s.snapshot().unwrap()));
@@ -93,6 +94,8 @@ fn a_cat_ref_transforms_and_closed_catalog() {
             let f = &mut board.footprints[0];
             (f.bottom, f.rotation, f.x_nm, f.y_nm) = (bottom, angle, 0, 0);
             let def = Arc::make_mut(board.definitions.get_mut(&f.key().unwrap()).unwrap());
+            def.pads[1].center = Point { x_nm: -1_000_000, y_nm: 3_000_000 };
+            let second = def.pads[1].number.clone();
             let pad = &mut def.pads[0];
             (pad.center, pad.width_nm, pad.height_nm, pad.rotation, pad.shape, pad.corner_radius_nm) =
                 (Point { x_nm: 2_000_000, y_nm: 1_000_000 }, 123_457, 765_431, pad_turn, board::definition::PadShape::Rectangle, 0);
@@ -103,8 +106,15 @@ fn a_cat_ref_transforms_and_closed_catalog() {
             assert!(
                 available.iter().any(|(r, w)| matches!(r, Reference::PadCenter { pad, .. } if pad == &number) && *w == Witness::Point { at: center })
             );
+            let second_center = p.board.footprints()[0].point(Point { x_nm: -1_000_000, y_nm: 3_000_000 });
+            assert!(
+                available
+                    .iter()
+                    .any(|(r, w)| matches!(r, Reference::PadCenter {pad,..} if pad == &second) && *w == Witness::Point { at: second_center })
+            );
             if bottom && angle == 0 {
                 assert_eq!(center, Point { x_nm: -2_000_000, y_nm: 1_000_000 });
+                assert_eq!(second_center, Point { x_nm: 1_000_000, y_nm: 3_000_000 });
             }
             let corners: Vec<_> = available
                 .iter()
@@ -144,8 +154,24 @@ fn a_cat_ref_ordered_measurement_and_refusal() {
     let Some(Measure::Projection { signed_nm: r, .. }) = catalog::measure(p, Kind::PointEdge, &[b.clone(), a.clone()]) else { panic!("edge-point") };
     assert_ne!(d, 0);
     assert_eq!(d, -r);
-    assert!(catalog::measure(p, Kind::Horizontal, &[a.clone(), a.clone()]).is_none());
-    assert!(catalog::measure(p, Kind::Aligned, &[Reference::BoardOrigin {}, a]).is_some());
+    let Witness::Segment { a: edge_a, b: edge_b } = catalog::resolve(p, &b).unwrap() else { panic!("edge") };
+    let Witness::Point { at } = catalog::resolve(p, &a).unwrap() else { panic!("point") };
+    assert_eq!(edge_a.x_nm, edge_b.x_nm);
+    assert_eq!(d, edge_a.x_nm - at.x_nm);
+    let Some(Measure::Aligned { distance_nm, .. }) = catalog::measure(p, Kind::Aligned, &[Reference::BoardOrigin {}, a.clone()]) else {
+        panic!("aligned")
+    };
+    assert!((distance_nm - 3_000_000_f64.hypot(2_000_000.)).abs() < 1e-9);
+    let fp = a.footprint().unwrap().0;
+    run(&mut s, crate::SET_FOOTPRINT_TRANSFORM, json!({"footprint":format!("footprint-{fp}"),"x_nm":at.x_nm,"y_nm":10_000_000,"rotation":0}))
+        .unwrap();
+    assert!(10_000_000 > edge_a.y_nm.max(edge_b.y_nm));
+    let p = s.project().unwrap();
+    assert!(matches!(catalog::measure(p, Kind::PointEdge, &[a.clone(), b.clone()]), Some(Measure::Projection {signed_nm,..}) if signed_nm == d));
+    assert!(matches!(catalog::measure(p, Kind::PointEdge, &[b.clone(), a.clone()]), Some(Measure::Projection {signed_nm,..}) if signed_nm == -d));
+    let same = pick(&mut s, 0, "pad.center", Some("1"));
+    let error = unchanged(&mut s, |s| run(s, ADD, json!({"relation":{"kind":"horizontal","refs":[a,same]}})));
+    assert_eq!(error.details()["reason"], "lost_reference");
     let edge = |r: &Reference, side: Side| match r {
         Reference::PadEdge { fp, def, pad, .. } => Reference::PadEdge { fp: *fp, def: def.clone(), pad: pad.clone(), side },
         _ => panic!(),
@@ -153,7 +179,12 @@ fn a_cat_ref_ordered_measurement_and_refusal() {
     let a: Reference = serde_json::from_value(pick(&mut s, 0, "pad.edge", Some("1"))).unwrap();
     let p = s.project().unwrap();
     assert!(catalog::measure(p, Kind::Gap, &[edge(&a, Side::Top), edge(&b, Side::Left)]).is_none());
-    assert!(catalog::measure(p, Kind::Gap, &[edge(&a, Side::Right), edge(&b, Side::Left)]).is_some());
+    let (left, right) = (edge(&a, Side::Right), edge(&b, Side::Left));
+    let Some(Measure::Projection { signed_nm: gap, .. }) = catalog::measure(p, Kind::Gap, &[left.clone(), right.clone()]) else {
+        panic!("parallel gap")
+    };
+    assert!(gap > 0);
+    assert!(matches!(catalog::measure(p, Kind::Gap, &[right,left]), Some(Measure::Projection {signed_nm,..}) if signed_nm == -gap));
 }
 
 /// F1 round-trips the original closed tags, adds no clipboard bytes, and downgrades only once
@@ -179,6 +210,13 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
         doc.insert(path.clone(), serde_json::to_vec(&changed).unwrap());
         assert!(decode_documents(&doc).is_err());
     }
+    let mut unknown = docs.clone();
+    let mut record = board.clone();
+    record["relations"]["relations"][0]["refs"][0] = json!({"tag":"outline.edge","drawing":Uuid::from_u128(27)});
+    unknown.insert(path.clone(), serde_json::to_vec(&record).unwrap());
+    let untouched = unknown.clone();
+    assert!(decode_documents(&unknown).unwrap_err().contains("unknown variant"));
+    assert_eq!(unknown, untouched);
     let mut changed = board.clone();
     changed["relations"]["relations"][0]["driving"] = json!(true);
     let mut doc = docs.clone();
@@ -186,10 +224,21 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
     let untouched = doc.clone();
     assert!(decode_documents(&doc).unwrap_err().contains("reference-only reader"));
     assert_eq!(doc, untouched);
+    s.open_snapshot(decode_documents(&docs).unwrap());
     run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
     assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "suppressed");
-    let future = json!({"tag":"outline.edge","drawing":Uuid::from_u128(27)});
-    assert!(serde_json::from_value::<Reference>(future).is_err());
+    run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":false}})).unwrap();
+    assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+    let p = reviewed(&mut s, board::clipboard::CUT, json!({"items":items}));
+    let cut = run(&mut s, APPLY, decision(&p)).unwrap()["clipboard"].clone();
+    run(&mut s, board::clipboard::PASTE, json!({"text":cut,"reuse_components":true,"x_nm":8_000_000,"y_nm":9_000_000})).unwrap();
+    let after = s.project().unwrap();
+    assert_eq!(after.board.footprints().len(), 3);
+    assert_ne!(after.board.footprints()[2].id, fp);
+    let rows = run(&mut s, LIST, json!({})).unwrap()["relations"].as_array().unwrap().clone();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["status"], "lost");
+    assert_eq!(rows[0]["refs"][1]["fp"], fp);
     run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
     let docs = bytes(&s);
     assert_ne!(serde_json::from_slice::<Value>(&docs[&test_board_path(&docs)]).unwrap()["format"], "pcbcraft-board/39");
@@ -201,12 +250,19 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
 fn a_native_outline_datum_lost_witness_reopen_no_motion() {
     let mut s = board::track::tests::routed_fixture();
     board::drc::tests::outline(&mut s);
-    run(&mut s, crate::SET_PLACEMENT_ORIGIN, json!({"origin":{"kind":"outline_lower_left"}})).unwrap();
+    let board_id = s.project().unwrap().board_target().unwrap().board;
+    run(&mut s, crate::SET_PLACEMENT_ORIGIN, json!({"board":board_id,"origin":{"kind":"outline_lower_left"}})).unwrap();
     let a = pick(&mut s, 0, "pad.center", Some("1"));
     add(&mut s, "horizontal", origin(), a);
-    let shown = run(&mut s, LIST, json!({})).unwrap()["relations"][0]["measure"]["witnesses"].clone();
+    let first = run(&mut s, LIST, json!({})).unwrap()["relations"][0]["measure"]["witnesses"].clone();
     let before = s.project().unwrap().board.footprints().to_vec();
     let drawing = s.project().unwrap().board.drawings.as_ref().unwrap().items[0].id;
+    run(&mut s, board::movement::MOVE_ITEMS, json!({"items":{"drawings":[drawing]},"dx_nm":1_000_000,"dy_nm":2_000_000})).unwrap();
+    let shown = run(&mut s, LIST, json!({})).unwrap()["relations"][0]["measure"]["witnesses"].clone();
+    assert_eq!(shown[0]["at"]["x_nm"].as_i64().unwrap(), first[0]["at"]["x_nm"].as_i64().unwrap() + 1_000_000);
+    assert_eq!(shown[0]["at"]["y_nm"].as_i64().unwrap(), first[0]["at"]["y_nm"].as_i64().unwrap() + 2_000_000);
+    assert_eq!(shown[1], first[1]);
+    assert_eq!(s.project().unwrap().board.footprints(), before.as_slice());
     let items = json!({"drawings":[drawing]});
     let error = unchanged(&mut s, |s| run(s, board::clipboard::DELETE, json!({"items":items})));
     assert_eq!(error.details()["reason"], "would_lose");
@@ -217,18 +273,63 @@ fn a_native_outline_datum_lost_witness_reopen_no_motion() {
     assert_eq!(s.project().unwrap().board.footprints(), before.as_slice());
     let stored = bytes(&s);
     assert_eq!(transaction::certify(s.snapshot().unwrap()).unwrap(), p["candidate_digest"].as_str().unwrap());
-    s.apply("edit.undo", &json!({})).unwrap();
+    let (_, ops) = trace(|| s.apply("edit.undo", &json!({})).unwrap());
+    assert!(ops.is_empty());
     assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
-    s.apply("edit.redo", &json!({})).unwrap();
+    let (_, ops) = trace(|| s.apply("edit.redo", &json!({})).unwrap());
+    assert!(ops.is_empty());
     assert_eq!(bytes(&s), stored);
-    s.open_snapshot(decode_documents(&stored).unwrap());
+    let (_, ops) = trace(|| s.open_snapshot(decode_documents(&stored).unwrap()));
+    assert!(ops.is_empty());
     assert_eq!(bytes(&s), stored);
+    assert_eq!(run(&mut s, FEATURES, json!({})).unwrap()["features"], json!([]));
     board::drc::tests::outline(&mut s);
     let result = run(&mut s, LIST, json!({})).unwrap();
     assert_eq!(result["relations"][0]["status"], "lost");
     assert_eq!(result["relations"][0]["last_resolved"], shown);
     assert!(result["relations"][0].get("measure").is_none());
     assert_eq!(s.project().unwrap().board.footprints(), before.as_slice());
+}
+
+/// Mixed native cut and delete prepare their complete selection once, never the incomplete inner result.
+#[test]
+fn a_nest_mixed_outline_cut_and_delete_exact_publication() {
+    for command in [board::clipboard::CUT, board::clipboard::DELETE, crate::DELETE_DRAWING] {
+        let mut s = board::track::tests::routed_fixture();
+        board::drc::tests::outline(&mut s);
+        let board_id = s.project().unwrap().board_target().unwrap().board;
+        run(&mut s, crate::SET_PLACEMENT_ORIGIN, json!({"board":board_id,"origin":{"kind":"outline_lower_left"}})).unwrap();
+        let reference = pick(&mut s, 0, "fp.origin", None);
+        add(&mut s, "horizontal", origin(), reference);
+        let f = s.project().unwrap().board.footprints()[2].id;
+        let drawing = s.project().unwrap().board.drawings.as_ref().unwrap().items[0].id;
+        let args = if command == crate::DELETE_DRAWING {
+            json!({"drawing":drawing})
+        } else {
+            json!({"items":{"drawings":[drawing],"footprints":[format!("footprint-{f}")]}})
+        };
+        let observer: Arc<Observe> = Arc::default();
+        s.observe_edits(Some(observer.clone()));
+        let history = s.undo.len();
+        let before = s.snapshot().unwrap();
+        let error = unchanged(&mut s, |s| run(s, command, args.clone()));
+        assert_eq!(error.details()["reason"], "would_lose");
+        let (p, ops) = trace(|| reviewed(&mut s, command, args));
+        assert_stage(&ops, if command == crate::DELETE_DRAWING { 0 } else { 2 }, 1, 0);
+        assert_eq!(p["disclosure"]["losses"].as_array().unwrap().len(), 1);
+        assert!(p.get("clipboard").is_none());
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+        assert!(observer.0.lock().unwrap().is_empty());
+        let (response, ops) = trace(|| run(&mut s, APPLY, decision(&p)).unwrap());
+        assert_eq!(ops, [Op::Publish(RelationStage::Outer)]);
+        assert_eq!(response.get("clipboard").is_some(), command == board::clipboard::CUT);
+        assert_eq!(response["candidate_digest"], p["candidate_digest"]);
+        assert_eq!(s.undo.len(), history + 1);
+        assert_eq!(observer.0.lock().unwrap().len(), 1);
+        let expected = if command == crate::DELETE_DRAWING { before.board.footprints() } else { &before.board.footprints()[..2] };
+        assert_eq!(s.project().unwrap().board.footprints(), expected);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "lost");
+    }
 }
 
 /// A structurally out-of-range display record can't be admitted; it is never resolved as native geometry.
@@ -254,7 +355,7 @@ fn dec_1415_witness_coordinate_and_arity_caps() {
 }
 
 #[derive(Debug, Default)]
-struct Observe(std::sync::Mutex<Vec<crate::edits::CommittedEdit>>);
+pub(crate) struct Observe(pub(crate) std::sync::Mutex<Vec<crate::edits::CommittedEdit>>);
 impl crate::edits::EditObserver for Observe {
     fn opened(&self, _: Arc<Project>) {}
     fn committed(&self, edit: crate::edits::CommittedEdit) {
@@ -306,6 +407,36 @@ fn a_generic_exact_cancel_and_engine_result_bounds() {
     unchanged(&mut s, |s| run(s, APPLY, decision.clone()));
 }
 
+/// First reference authoring on a native board runs final preparation exactly once, never moves it.
+#[test]
+fn a_preview_edge_first_create_and_reference_only_dispatch() {
+    let mut s = fixture(false);
+    let prior = s.snapshot().unwrap();
+    assert!(prior.board.relations.is_none());
+    let reference = pick(&mut s, 0, "fp.origin", None);
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let draft = json!({"kind":"horizontal","refs":[origin(),reference]});
+    for field in ["driving", "last_resolved", "value"] {
+        let mut bad = draft.clone();
+        bad[field] = json!(true);
+        unchanged(&mut s, |s| run(s, ADD, json!({"relation":bad})));
+    }
+    let (id, ops) = trace(|| add(&mut s, "horizontal", origin(), reference));
+    assert_eq!(
+        ops,
+        [Op::Prepare(RelationStage::Outer), Op::VerifyReferences, Op::CandidateEncode, Op::CandidateDigest, Op::Publish(RelationStage::Outer)]
+    );
+    let rows = run(&mut s, LIST, json!({})).unwrap();
+    assert_eq!(rows["relations"][0]["id"], id);
+    assert_eq!(rows["relations"][0]["measure"]["signed_nm"], 3_000_000);
+    assert_eq!(rows["relations"][0]["axes_set"], json!([]));
+    assert_eq!(s.project().unwrap().board.footprints(), prior.board.footprints());
+    let native = json!({"footprints":[format!("footprint-{}",prior.board.footprints()[0].id)],"accept_loss":[id]});
+    unchanged(&mut s, |s| run(s, crate::DELETE_FOOTPRINTS, native));
+    assert_eq!(observer.0.lock().unwrap().len(), 1);
+}
+
 /// The base Arc is part of authority even if save adoption changes neither revision nor board ID.
 #[test]
 fn a_preview_bind_metadata_arc_and_replacement() {
@@ -321,12 +452,32 @@ fn a_preview_bind_metadata_arc_and_replacement() {
     assert_eq!(s.revision(), rev);
     unchanged(&mut s, |s| run(s, APPLY, decision(&p)));
     let p = reviewed(&mut s, crate::DELETE_FOOTPRINTS, args.clone());
-    let replacement = reviewed(&mut s, crate::DELETE_FOOTPRINTS, args);
+    let other = s.project().unwrap().board.footprints()[1].id;
+    let target = s.project().unwrap().board_target().unwrap().board;
+    let replacement =
+        reviewed(&mut s, crate::DELETE_FOOTPRINTS, json!({"board":target,"footprints":[format!("footprint-{fp}"),format!("footprint-{other}")]}));
+    assert_ne!(p["intent_digest"], replacement["intent_digest"]);
     unchanged(&mut s, |s| run(s, APPLY, decision(&p)));
+    unchanged(&mut s, |s| {
+        run(
+            s,
+            PREVIEW,
+            json!({"intent":{"command":crate::DELETE_FOOTPRINTS,"params":{"board":Uuid::from_u128(7),"footprints":[format!("footprint-{fp}")]}}}),
+        )
+    });
     let mut extra = decision(&replacement);
     extra["intent"] = json!({});
     unchanged(&mut s, |s| run(s, APPLY, extra));
     run(&mut s, APPLY, decision(&replacement)).unwrap();
+    unchanged(&mut s, |s| run(s, APPLY, decision(&replacement)));
+    let still_present = s.project().unwrap().board.footprints()[0].id;
+    let p = reviewed(&mut s, crate::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{still_present}")]}));
+    let saved = bytes(&s);
+    s.open_snapshot(decode_documents(&saved).unwrap());
+    unchanged(&mut s, |s| run(s, APPLY, decision(&p)));
+    let p = reviewed(&mut s, crate::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{still_present}")]}));
+    run(&mut s, crate::PLACE_RESISTOR, json!({"x_nm":40_000_000,"y_nm":0})).unwrap();
+    unchanged(&mut s, |s| run(s, APPLY, decision(&p)));
 }
 
 /// Native ECO stays lazy without authored rows and returns the exact old command envelope.
@@ -383,21 +534,50 @@ fn a_preview_first_eco_requires_both_decisions() {
     .unwrap();
     let symbol = s.project().unwrap().symbols.last().unwrap().id();
     run(&mut s, crate::DELETE_SYMBOL, json!({"symbol":symbol})).unwrap();
-    let r = run(&mut s, update::PREVIEW_UPDATE, json!({})).unwrap()["board_update_preview"].clone();
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let before = s.snapshot().unwrap();
+    let (r, ops) = trace(|| run(&mut s, update::PREVIEW_UPDATE, json!({})).unwrap()["board_update_preview"].clone());
+    assert_eq!(ops, super::eco_tests::CHECKED);
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     let d = &r["relation_detail"];
+    assert_eq!(d["poses"].as_array().unwrap().len(), 1);
+    assert_eq!(d["losses"].as_array().unwrap().len(), 1);
+    assert_eq!(d["remaps"].as_array().unwrap().len(), 1);
     let loss = d["losses"][0]["id"].clone();
     let remap = d["remaps"][0]["id"].clone();
     assert!(loss.is_string() && remap.is_string());
     let token = &r["plan_token"];
+    let wrong = Uuid::from_u128(74);
+    let exact = json!({"plan_token":token,"accept_loss":[loss],"confirm_remaps":[remap]});
     for args in [
         json!({"plan_token":token}),
         json!({"plan_token":token,"accept_loss":[loss]}),
         json!({"plan_token":token,"confirm_remaps":[remap]}),
         json!({"plan_token":token,"accept_loss":[loss,loss],"confirm_remaps":[remap]}),
+        json!({"plan_token":token,"accept_loss":[loss],"confirm_remaps":[remap,remap]}),
+        json!({"plan_token":token,"accept_loss":[wrong],"confirm_remaps":[remap]}),
+        json!({"plan_token":token,"accept_loss":[loss],"confirm_remaps":[wrong]}),
+        json!({"plan_token":token,"accept_loss":[loss,wrong],"confirm_remaps":[remap]}),
+        json!({"plan_token":token,"accept_loss":[loss],"confirm_remaps":[remap,wrong]}),
+        json!({"plan_token":token,"accept_loss":[remap],"confirm_remaps":[loss]}),
+        json!({"plan_token":token,"accept_loss":[loss],"confirm_remaps":[remap],"remap_choices":[]}),
     ] {
-        unchanged(&mut s, |s| run(s, update::APPLY_UPDATE, args));
+        let (_, ops) = trace(|| unchanged(&mut s, |s| run(s, update::APPLY_UPDATE, args)));
+        assert!(ops.is_empty());
+        assert_eq!(s.board_update_report().unwrap(), r);
     }
-    run(&mut s, update::APPLY_UPDATE, json!({"plan_token":token,"accept_loss":[loss],"confirm_remaps":[remap]})).unwrap();
+    assert!(observer.0.lock().unwrap().is_empty());
+    let retained = s.checked_eco_candidate().unwrap().clone();
+    let docs = encode_documents(retained.clone()).unwrap();
+    let history = s.undo.len();
+    let (_, ops) = trace(|| run(&mut s, update::APPLY_UPDATE, exact.clone()).unwrap());
+    assert_eq!(ops, [Op::Publish(RelationStage::Outer)]);
+    assert!(Arc::ptr_eq(&retained, &s.snapshot().unwrap()));
+    assert_eq!(bytes(&s), docs);
+    assert_eq!(s.undo.len(), history + 1);
+    assert_eq!(observer.0.lock().unwrap().len(), 1);
+    unchanged(&mut s, |s| run(s, update::APPLY_UPDATE, exact));
     assert_eq!(transaction::certify(s.snapshot().unwrap()).unwrap(), r["candidate_digest"].as_str().unwrap());
 }
 
@@ -425,6 +605,35 @@ fn a_format_arc_read_save_and_edit_refusal() {
     assert_eq!(bytes(&s), saved);
 }
 
+/// Real native alignment and quarter turns remeasure only; a non-quarter turn discloses loss.
+#[test]
+fn a_preview_edge_align_and_reference_axis_turn_without_follow() {
+    let mut s = fixture(false);
+    let ids: Vec<_> = s.project().unwrap().board.footprints().iter().map(|f| format!("footprint-{}", f.id)).collect();
+    let transform =
+        |i: usize, y_nm: i64, rotation: u16| json!({"footprint":ids[i],"x_nm":(3 + i as i64 * 10) * 1_000_000,"y_nm":y_nm,"rotation":rotation});
+    run(&mut s, crate::SET_FOOTPRINT_TRANSFORM, transform(0, 4_000_000, 0)).unwrap();
+    let edge = pick(&mut s, 0, "pad.edge", Some("1"));
+    let point = pick(&mut s, 2, "fp.origin", None);
+    add(&mut s, "point_edge", edge, point);
+    let p0 = s.project().unwrap().board.footprints()[2].clone();
+    let p = reviewed(&mut s, crate::ALIGN_FOOTPRINTS, json!({"footprints":[ids[0],ids[1]],"mode":"center_y"}));
+    assert_eq!(p["disclosure"]["losses"], json!([]));
+    run(&mut s, APPLY, decision(&p)).unwrap();
+    let y = s.project().unwrap().board.footprints()[0].y_nm;
+    let before = run(&mut s, LIST, json!({})).unwrap()["relations"][0]["measure"].clone();
+    assert_eq!(before["axis"], "x");
+    let p = reviewed(&mut s, crate::SET_FOOTPRINT_TRANSFORM, transform(0, y, 90));
+    assert_eq!(p["disclosure"]["losses"], json!([]));
+    run(&mut s, APPLY, decision(&p)).unwrap();
+    assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["measure"]["axis"], "y");
+    let p = reviewed(&mut s, crate::SET_FOOTPRINT_TRANSFORM, transform(0, y, 37));
+    run(&mut s, APPLY, decision(&p)).unwrap();
+    run(&mut s, crate::SET_FOOTPRINT_TRANSFORM, transform(0, y, 0)).unwrap();
+    assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "lost");
+    assert_eq!(s.project().unwrap().board.footprints()[2], p0);
+}
+
 /// Projected and lifecycle deletion must settle only after the canonical outer candidate.
 #[test]
 fn a_preview_edge_projected_and_sheet_retirement() {
@@ -449,12 +658,24 @@ fn a_preview_edge_projected_and_sheet_retirement() {
                 assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
                 let preview = run(&mut s, update::PREVIEW_UPDATE, json!({})).unwrap()["board_update_preview"].clone();
                 let loss = preview["relation_detail"]["losses"][0]["id"].clone();
-                run(&mut s, update::APPLY_UPDATE, json!({"plan_token":preview["plan_token"],"accept_loss":[loss],"confirm_remaps":[]})).unwrap();
+                let retained = s.checked_eco_candidate().unwrap().clone();
+                unchanged(&mut s, |s| run(s, update::APPLY_UPDATE, json!({"plan_token":preview["plan_token"],"accept_loss":[loss]})));
+                let (_, ops) = trace(|| {
+                    run(&mut s, update::APPLY_UPDATE, json!({"plan_token":preview["plan_token"],"accept_loss":[loss],"confirm_remaps":[]})).unwrap()
+                });
+                assert_eq!(ops, [Op::Publish(RelationStage::Outer)]);
+                assert!(Arc::ptr_eq(&retained, &s.snapshot().unwrap()));
             } else {
                 let err = unchanged(&mut s, |s| run(s, command, args.clone()));
                 assert_eq!(err.details()["reason"], "would_lose");
-                let p = reviewed(&mut s, command, args);
-                let response = run(&mut s, APPLY, decision(&p)).unwrap();
+                let observer: Arc<Observe> = Arc::default();
+                s.observe_edits(Some(observer.clone()));
+                let (p, ops) = trace(|| reviewed(&mut s, command, args));
+                assert_stage(&ops, usize::from(command != crate::sheets::DELETE_SHEET), 1, 0);
+                assert!(observer.0.lock().unwrap().is_empty());
+                let (response, ops) = trace(|| run(&mut s, APPLY, decision(&p)).unwrap());
+                assert_eq!(ops, [Op::Publish(RelationStage::Outer)]);
+                assert_eq!(observer.0.lock().unwrap().len(), 1);
                 assert_eq!(response.get("clipboard").is_some(), command == crate::clipboard::CUT);
             }
             assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "lost");
@@ -537,6 +758,16 @@ fn a_eco_compat_exact_base_command_contracts() {
         }
         assert_eq!(prior, &now, "native command contract drift: {name}");
     }
+}
+
+/// Assert at native stage boundaries, independently of the resulting envelope.
+pub(crate) fn assert_stage(ops: &[Op], raw: usize, outer: usize, live_publish: usize) {
+    let count = |op| ops.iter().filter(|v| **v == op).count();
+    assert_eq!(count(Op::Prepare(RelationStage::Raw)), raw, "{ops:?}");
+    assert_eq!(count(Op::Publish(RelationStage::Raw)), raw, "{ops:?}");
+    assert_eq!(count(Op::Prepare(RelationStage::Outer)), outer, "{ops:?}");
+    assert_eq!(count(Op::VerifyReferences), outer, "{ops:?}");
+    assert_eq!(count(Op::Publish(RelationStage::Outer)), live_publish, "{ops:?}");
 }
 
 /// Guard every authorized nested native staging location; none is a client-facing input.
