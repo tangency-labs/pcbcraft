@@ -8,7 +8,7 @@ use super::{
 };
 use crate::{CommandError, Project, Session, schematic::Point};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, OnceLock, Weak},
 };
 use uuid::Uuid;
@@ -130,6 +130,8 @@ pub struct Results {
 pub struct ClearanceQuery {
     authority: Authority,
     geometry: Arc<BoardGeometry>,
+    /// Private connected overlay fragments share a guide hull; exact probes remain separate.
+    pub(super) route_hulls: BTreeMap<usize, Arc<[usize]>>,
     copper_layers: Vec<Uuid>,
     net_rules: Option<super::class_rules::NetRules>,
 }
@@ -213,9 +215,25 @@ impl ClearanceQuery {
                 class_rules,
             },
             geometry,
+            route_hulls: BTreeMap::new(),
             copper_layers,
             net_rules,
         })
+    }
+
+    /// Build a disposable contour projection with caller-preserved source intent/islands.
+    /// The source authority stays unchanged; this grants no transaction or connectivity proof.
+    /// Routing overlays and final compound validation share ordinary exact query predicates.
+    pub(super) fn with_objects(&self, items: Vec<Object>) -> Result<Self, CommandError> {
+        let source = super::work::Source {
+            snapshot: self.authority.snapshot.clone(),
+            session: self.authority.session.clone(),
+            target: self.authority.target,
+            opening: self.authority.opening,
+            revision: self.authority.revision,
+            effective: self.authority.rules.clone(),
+        };
+        Self::from_geometry(&source, Arc::new(BoardGeometry { items, lands: Vec::new(), members: Vec::new(), index: OnceLock::new() }))
     }
 
     /// Captured source, opening, board, revision and effective rule.
@@ -266,7 +284,7 @@ impl ClearanceQuery {
         self.net_rules.as_ref().map(|rules| rules.resolve(&self.authority.snapshot, members)).transpose().map(Option::flatten)
     }
     /// Probe and obstacle keep separate class preferences; only their spacing requirements combine.
-    fn membership_clearance(&self, left: &[usize], right: &[usize]) -> i64 {
+    pub(super) fn membership_clearance(&self, left: &[usize], right: &[usize]) -> i64 {
         self.net_rules.as_ref().map_or(self.authority.rules.values.clearance_nm, |rules| {
             crate::net_classes::pair_clearance(rules.clearance(left), rules.clearance(right))
         })
@@ -280,7 +298,7 @@ impl ClearanceQuery {
         Ok(ids)
     }
     /// Reject absent, technical or foreign layers before any overlay/query state changes.
-    fn validate_layers(&self, layers: &[Uuid]) -> Result<(), CommandError> {
+    pub(super) fn validate_layers(&self, layers: &[Uuid]) -> Result<(), CommandError> {
         if layers.is_empty() || layers.iter().any(|id| !self.copper_layers.contains(id)) {
             return Err(CommandError::InvalidParams("explicit copper layers of the query board are required".into()));
         }

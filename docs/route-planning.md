@@ -1,4 +1,4 @@
-# Walkaround route planning
+# Route planning
 
 `board::route::walkaround` is the engine's first routing solver for
 [#246](https://github.com/tangency-labs/pcbcraft/issues/246). It plans one route on
@@ -22,8 +22,8 @@ whole nanometres and every leg stays in the posture.
 Every kept leg is confirmed with the captured [snapshot copper query](copper-clearance-query.md):
 the exact `probe` decisions with per-pair, class-aware clearances, and the Board
 Outline containment and edge-clearance predicates that DRC uses. Hulls only
-guide the search. Existing pads, tracks and vias are fixed obstacles, locked or
-not; nothing is moved or shoved.
+guide the search. In the default walkaround mode, existing pads, tracks and vias
+are fixed obstacles, locked or not.
 
 Copper the head touches lends the route its intended membership and physical
 island, so the route may start on and run over it. Copper of the route's single
@@ -49,6 +49,43 @@ feed `pcb.add_tracks` (or its preparation job) with the same `layer` and
 `width_nm`; that command revalidates them, refuses a stale revision and adds the
 whole route in one undo step. The solver adds no saved data and needs no format
 change.
+
+If the first approach stops before a legal target, the planner makes one bounded
+attempt from the target back toward the head. It retains the original pickup’s
+net/island intent and shares the same global probe budget. Only a fully reached,
+validated reverse path is returned in the original direction; an obstructed target
+cannot lend its net to the route. This avoids false stops in concave pockets such
+as a legal gap between pads. If the local walk still cannot resolve a legal goal,
+walkaround can search a small visibility graph of up to 32 hull-corner portals
+from at most 32 nearby objects, including one bounded ring of neighbors along
+their full extents so an attached pad can guide a detour. Its edges are exact-checked posture elbows; only
+a complete, connected-path-validated route is adopted. These bounded alternatives
+share the original probe budget and contact authority, and do not guarantee a
+global shortest path or completeness on arbitrary boards.
+
+When a walkaround cursor is inside copper clearance, the planner can approach a
+nearby legal boundary instead of stopping at an earlier obstacle. It projects
+onto grown hull edges from at most four blocking objects, includes intersections
+between their edges for inside corners, and tries at most four legal nearby
+endpoints after at most 64 point checks. A new approach tries endpoints nearest
+the cursor; an existing path or fixed bend ranks them through its last endpoint
+to keep the continuation on its current side. The searches share the same probe
+budget and original pickup intent. Every returned approach is fully validated and remains `blocked` at the requested
+cursor. Its optional `adjusted_target` identifies the certified endpoint. Clicking
+fixes that visible endpoint after ordinary command preparation; it does not join
+copper under the blocked cursor or automatically finish on it. Explicit finishing
+still works, and via placement keeps its separate target validation. A fully
+validated partial walkaround path also certifies its visible endpoint when no
+closer approach succeeds. Invalid starts and canceled, stale or incomplete results
+do not grant placement authority; full command preparation still checks board
+edges, width and clearance.
+
+While routing, a primary-button release can fix a vertex even if pointer movement
+exceeded the canvas's ordinary click tolerance. The release position and modifiers
+are captured before later pointer motion, and the clicked target stays owned until
+its matching full-path preparation completes. Enter arriving during that work is
+retained, including when the pointer has left the canvas. Older prepared geometry
+cannot validate a newer target generation.
 
 The search is deterministic: the same board, request and budget give the same
 plan. Its work is bounded by a probe budget (default 4,096, at most 65,536 exact
@@ -138,11 +175,84 @@ separates frame feedback from CPU service cost and physical presentation latency
 The solver plans one copper layer at a time. The editor retains its existing through-via
 and layer-change gesture, validating each proposed via with the entire path before
 changing layer. It does not search for a multilayer route or choose via locations.
-Arcs, zones, differential pairs, length tuning and moving existing copper remain
+Arcs, zones, differential pairs, length tuning remain
 outside this solver. Routing on filled zones needs current fill integration from #232.
 A board containing [circular copper records](circular-copper-records.md) refuses
 query capture and `pcb.plan_route` rather than planning against incomplete
 straight-only copper.
+
+## Track shove
+
+The routing context menu offers **Shove tracks** alongside **Walk around
+obstacles**. Shove searches on a disposable overlay, displacing unlocked tracks
+while pads, vias and locked tracks stay fixed. Original track endpoints and
+branch/pad contact anchors also stay fixed; intervals between them can bend.
+This conservative solver can refuse a channel that would require relocating a
+junction or an endpoint. If a cascade blocks after choosing an earlier bend,
+one fresh attempt approaches displaced intervals from their return ends. This
+can keep the first moved trace from trapping a later neighbor near a fixed branch.
+Both attempts share the original pickup intent, forward push constraints and
+global probe budget. Exhausted searches do not start another attempt.
+
+When propagation cannot complete, it discards every replacement and returns a
+head-only blocked or incomplete result. It does not
+switch to walking around the original movable tracks. Fixed pads, vias and locked
+tracks still guide the initial walkaround approach. The editor keeps its last
+valid shove preview when the new target cannot be reached, but that retained
+preview cannot authorize placement at the blocked target.
+
+**Merge same-net copper** defaults off. Displaced source tracks that were
+originally separated must retain clearance, even if they already belong to one
+net or are joined through another branch. Existing direct contacts remain
+exempt so their junctions stay connected. Enabling the option also permits new
+contact within the original resolved net or physical island. With merging off,
+a displaced track entering a neighbor’s clearance queues that neighbor immediately,
+even on the same net; the incoming route need not reach it first. It never permits
+joining different nets, moving locked copper or losing an existing connection.
+The setting is captured with the gesture and cannot change after fixing a
+vertex; it does not rewrite a saved board preference.
+
+`pcb.plan_route` accepts `mode: "shove"`, optional `merge_same_net` and bounded
+`fixed` segment/via geometry for an existing gesture prefix. The result includes
+source-addressed `replacements` and `shove` work counters. Submit the returned
+paths with the incoming route through `pcb.add_tracks`, retaining the same
+`merge_same_net` choice and captured revision. Each replacement retains its
+original width, layer and first segment UUID; additional segments receive new
+UUIDs. The compound command independently checks original membership, contact
+preservation, clearance, widths and board edges before publishing one Undo/Redo
+entry. GUI and command clients use this same transaction.
+
+The counters include the number of attempts (at most two) and combined collision
+and queue work. Geometry payload estimates report the larger attempt, excluding
+the captured query/index and allocator overhead; they are not process memory measurements.
+
+Propagation follows the order in which each incoming route piece meets its obstacles,
+with source identity breaking ties. Each displaced track stays on the forward side
+of its original line; that direction follows the first colliding piece through
+cascades and fixed vertices. Interior contact anchors are reserved before moving
+any neighbor, so an earlier displacement cannot occupy a later branch junction.
+When a local displacement walk fails, the engine tries parallel runs derived
+from individual obstacle hulls, bounded to 32 objects contributing eligible
+forward portals and 64 runs. Indexed neighbors with no such portal do not consume
+that guide quota; every body remains in the exact collision checks. These
+alternatives share the existing probe budget, cancellation and exact leg/path
+validation; they cannot relax a narrow channel’s spacing or move a locked item.
+
+A reached displacement with a long backward return can also try up to two local
+hull shortcuts, capped at 128 probes within the same gesture budget. A shortcut
+must shorten the path, lower its length/backtracking cost and pass full connected
+path validation. This cleanup preserves the source interval's fixed contacts,
+membership and forward half-plane. If its optional search runs out of work, it
+keeps the already-certified path; remaining propagation still needs to finish
+within the gesture budget.
+
+The solver replaces at most
+96 original segments with at most 256 points each and preserving at most 128
+anchors per source segment. Nested walks and propagation share the request's
+probe budget. Cancellation or stale ownership cannot publish partial work, and
+the preview hides displaced originals only while their replacement paths are
+displayed. A rejected first click inside clearance releases the draft while
+leaving the routing tool armed.
 
 ## Measurement
 

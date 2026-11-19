@@ -168,6 +168,7 @@ enum ParamKind {
     TrackEnds,
     ArcTracks,
     TeardropEdits,
+    TrackReplacements,
     AlignMode,
     BoardSide,
     RuleLength,
@@ -207,6 +208,8 @@ enum ParamKind {
     ParameterValue,
     /// A route posture spelling, such as `diagonal`.
     RoutePosture,
+    RouteMode,
+    RouteFixed,
     /// A route planner's probe budget.
     RouteBudget,
     /// A bounded text whose references are resolved.
@@ -295,6 +298,7 @@ impl ParamKind {
                 schema
             }
             Self::LayerChanges => board::track::layer_changes_schema(),
+            Self::TrackReplacements => board::track::replacements::schema(),
             Self::TrackEnds => {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
             }
@@ -318,6 +322,8 @@ impl ParamKind {
             }
             Self::Closed | Self::Locked => json!({"type":"boolean"}),
             Self::RoutePosture => board::route::posture_schema(),
+            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove"]}),
+            Self::RouteFixed => board::route::fixed_schema(),
             Self::RouteBudget => board::route::budget_schema(),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
             Self::HierarchyId => json!({"type":"string", "pattern":"^(sheet-symbol|label)-[1-9][0-9]*$"}),
@@ -569,6 +575,20 @@ impl ParamKind {
             }
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
             Self::Closed | Self::Locked if value.is_boolean() => Ok(()),
+            Self::RouteMode => {
+                if matches!(value.as_str(), Some("walkaround" | "shove")) {
+                    Ok(())
+                } else {
+                    Err("must be walkaround or shove")
+                }
+            }
+            Self::RouteFixed => {
+                if board::route::valid_fixed(value) {
+                    Ok(())
+                } else {
+                    Err("must contain bounded fixed route segments and vias")
+                }
+            }
             Self::RoutePosture if value.as_str().is_some_and(|name| board::route::Posture::NAMES.contains(&name)) => Ok(()),
             Self::RouteBudget if value.as_u64().is_some_and(|n| (1..=board::route::MAX_BUDGET as u64).contains(&n)) => Ok(()),
             Self::TrackPath
@@ -670,6 +690,9 @@ impl ParamKind {
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
             Self::BoardSide => Err("must be front or back"),
+            Self::TrackReplacements => {
+                board::track::replacements::parse(value).map(drop).map_err(|_| "must list unique track UUIDs with bounded replacement paths")
+            }
             Self::TrackEnds
                 if value.as_array().is_some_and(|items| {
                     !items.is_empty()
@@ -2134,6 +2157,18 @@ const CATALOG: &[Command] = &[
                 kind: ParamKind::TrackPath,
             },
             Param {
+                name: "merge_same_net",
+                required: false,
+                summary: "Allow displaced tracks to merge with their original net or copper island; defaults to preserving spacing",
+                kind: ParamKind::Flag,
+            },
+            Param {
+                name: "replacements",
+                required: false,
+                summary: "Existing track UUIDs and replacement paths, validated with the new route in one edit; retained widths/layers and existing connections are enforced",
+                kind: ParamKind::TrackReplacements,
+            },
+            Param {
                 name: "layer_changes",
                 required: false,
                 summary: "Interior vertices where a via switches the route to another copper layer, in increasing order",
@@ -2357,6 +2392,24 @@ const CATALOG: &[Command] = &[
                 required: false,
                 summary: "Track width; omitted uses the head contact's net-class or board preferred width",
                 kind: ParamKind::TrackWidth,
+            },
+            Param {
+                name: "mode",
+                required: false,
+                summary: "walkaround (default) or shove unlocked tracks; pads, vias and locks stay fixed",
+                kind: ParamKind::RouteMode,
+            },
+            Param {
+                name: "merge_same_net",
+                required: false,
+                summary: "Allow displaced tracks to merge with their original net or copper island; defaults to preserving spacing",
+                kind: ParamKind::Flag,
+            },
+            Param {
+                name: "fixed",
+                required: false,
+                summary: "Already fixed gesture copper, included in the same speculative overlay",
+                kind: ParamKind::RouteFixed,
             },
             Param { name: "posture", required: false, summary: "diagonal (45°, default) or orthogonal (90°)", kind: ParamKind::RoutePosture },
             Param { name: "flipped", required: false, summary: "Start with the elbow's other leg first", kind: ParamKind::Flag },

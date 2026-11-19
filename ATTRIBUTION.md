@@ -1836,3 +1836,19 @@ integrated `solidcraft-ui-text` Hebrew catalogs (`crates/chrome/assets/shared-ui
 added RTL arrow/label positioning in `controls::collapsing`, and wired language
 selection into `crates/app/src/preferences.rs`. No GPL, KiCad, or `pcbcraft-gpl`
 source code or binary font assets were copied or added.
+
+## Track shove
+
+The #247 direction-aware propagation, original-contact anchors, disposable routing
+projections and compound add/replace validation are original MIT OR Apache-2.0
+PCBcraft work. They compose the attributed walkaround solver above; no external
+shove implementation was read or imported. The view uses the existing chrome
+menu rows, choices and toggle, with existing copper/clearance rendering. No new
+generic control, external artwork, library data, dependency or saved format was
+added.
+
+The bounded target-side retry, hull-corner visibility fallback and clearance-boundary
+projections/intersections for concave walkaround pockets are original PCBcraft work
+under MIT OR Apache-2.0. They preserve captured pickup intent and use the existing
+planner's budget, cancellation and exact validation. No external implementation
+was read or imported for these additions.

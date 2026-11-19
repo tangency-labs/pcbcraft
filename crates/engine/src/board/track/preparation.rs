@@ -27,6 +27,7 @@ struct BaseProjection {
 pub struct CopperPreparation {
     source: Source,
     base: Arc<Mutex<BaseProjection>>,
+    replacement_source: Arc<Mutex<crate::board::clearance::preparation::Preparation>>,
 }
 impl std::fmt::Debug for CopperPreparation {
     /// Do not format project contents or lock a worker's projection state for diagnostics.
@@ -82,6 +83,10 @@ pub struct CopperEditJob {
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
     check_route_vias: bool,
+    replacement_origins: Option<BTreeMap<Uuid, Uuid>>,
+    replacement_geometry: Option<Arc<crate::board::clearance::BoardGeometry>>,
+    replacement_validation: Option<replacements::Validation>,
+    class_rules: Option<crate::board::class_rules::Context>,
 }
 
 impl Session {
@@ -91,15 +96,17 @@ impl Session {
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
         view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let effective = view.effective_rules();
+        let source = Source {
+            snapshot,
+            session: self.clearance_identity.clone(),
+            opening: self.history_root_revision(),
+            revision: self.revision(),
+            target,
+            effective,
+        };
         Ok(CopperPreparation {
-            source: Source {
-                snapshot,
-                session: self.clearance_identity.clone(),
-                opening: self.history_root_revision(),
-                revision: self.revision(),
-                target,
-                effective,
-            },
+            replacement_source: Arc::new(Mutex::new(crate::board::clearance::preparation::Preparation::new(source.clone()))),
+            source,
             base: Arc::default(),
         })
     }
@@ -153,6 +160,10 @@ impl Session {
             result: None,
             class_islands: None,
             check_route_vias: false,
+            replacement_origins: None,
+            replacement_geometry: None,
+            replacement_validation: None,
+            class_rules: None,
         }
     }
     /// Prepare one existing copper command without adopting any authored state. Headless callers
@@ -194,6 +205,7 @@ impl CopperEditJob {
                 1 => "Preparing pad contacts",
                 2 => "Checking copper contacts",
                 3 => "Validating route",
+                4 => "Checking route replacements",
                 _ => "Prepared",
             },
             completed: self.work.min(total),
@@ -203,7 +215,7 @@ impl CopperEditJob {
     /// Advance bounded contact/placement batches, yielding between preparation phases. Errors
     /// terminate the job without a candidate; a zero budget performs no work.
     pub fn step(&mut self, budget: usize) -> bool {
-        if self.phase == 4 {
+        if self.phase == 5 {
             return true;
         }
         if budget == 0 {
@@ -213,7 +225,7 @@ impl CopperEditJob {
             Ok(done) => done,
             Err(error) => {
                 self.result = Some(Err(error));
-                self.phase = 4;
+                self.phase = 5;
                 true
             }
         }
@@ -223,15 +235,28 @@ impl CopperEditJob {
     pub fn take_result(&mut self) -> Result<Option<PreparedCopperEdit>, CommandError> {
         self.result.take().transpose()
     }
+    /// Finish the existing path immediately after its own checks. Compound routes reach this
+    /// only after replacement validation, avoiding an extra browser batch for ordinary edits.
+    fn finish_prepared(&mut self) {
+        self.result = Some(Ok(PreparedCopperEdit {
+            source: self.context.source.clone(),
+            candidate: self.candidate.take(),
+            command: self.command,
+            params: self.params.clone(),
+            class_rules: self.class_rules.take(),
+        }));
+        self.phase = 5;
+    }
     /// Shared native/browser phases use exactly the synchronous command's geometry and short policy.
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
         match self.phase {
             0 => {
-                let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
+                let CandidateEdit { candidate, added, replacements } = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
                 self.added = added;
+                self.replacement_origins = replacements;
                 self.candidate = candidate.map(Arc::new);
                 if self.candidate.is_none() || self.added.is_empty() {
-                    self.phase = 4;
+                    self.phase = 5;
                     self.result = Some(Ok(PreparedCopperEdit {
                         source: self.context.source.clone(),
                         candidate: self.candidate.take(),
@@ -278,6 +303,7 @@ impl CopperEditJob {
                         return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
                     }
                     if self.check_route_vias
+                        || self.replacement_origins.is_some()
                         || candidate.has_dimensional_net_classes()
                         || candidate.board.vias.iter().any(|v| v.net_assignment.is_some())
                     {
@@ -341,23 +367,47 @@ impl CopperEditJob {
                             }
                         }
                     }
+                    if self.replacement_origins.is_some() {
+                        self.replacement_geometry = Some(Arc::new(geometry));
+                    }
                     context
                 } else {
                     None
                 };
-                self.result = Some(Ok(PreparedCopperEdit {
-                    source: self.context.source.clone(),
-                    candidate: self.candidate.take(),
-                    command: self.command,
-                    params: self.params.clone(),
-                    class_rules,
-                }));
+                self.class_rules = class_rules;
+                if self.replacement_origins.is_none() {
+                    self.finish_prepared();
+                    return Ok(true);
+                }
+            }
+            4 => {
+                if self.replacement_validation.is_none()
+                    && let Some(origins) = self.replacement_origins.take()
+                {
+                    let geometry =
+                        self.replacement_geometry.take().ok_or_else(|| CommandError::Unavailable("Missing final copper geometry.".into()))?;
+                    self.replacement_validation = Some(replacements::Validation::new(
+                        self.context.source.clone(),
+                        self.context.replacement_source.clone(),
+                        geometry,
+                        origins,
+                        self.added.clone(),
+                        &self.params,
+                    )?);
+                }
+                if let Some(validation) = &mut self.replacement_validation
+                    && !validation.step(budget)?
+                {
+                    return Ok(false);
+                }
+                self.finish_prepared();
+                return Ok(true);
             }
             _ => {}
         }
         self.phase += 1;
         self.work = 0;
-        Ok(self.phase == 4)
+        Ok(self.phase == 5)
     }
 }
 
@@ -540,7 +590,7 @@ mod tests {
         let pads = view(&s).footprints().flat_map(|f| f.pads).collect::<Vec<_>>();
         for (a, b) in pads.iter().flat_map(|a| pads.iter().map(move |b| (a, b))).filter(|(a, b)| a.center != b.center) {
             let p = json!({"layer":copper_layers(&s)[0],"width_nm":250_000,"points":[a.center,b.center],"expected_revision":s.revision()});
-            let (candidate, added) = edit_candidate(s.project().unwrap(), ADD_TRACKS, &p).unwrap();
+            let CandidateEdit { candidate, added, .. } = edit_candidate(s.project().unwrap(), ADD_TRACKS, &p).unwrap();
             let expected_short = short(candidate.as_ref().unwrap(), &added).is_some();
             let mut job = s.prepare_copper_edit(ADD_TRACKS, &p).unwrap();
             while !job.step(7) {}

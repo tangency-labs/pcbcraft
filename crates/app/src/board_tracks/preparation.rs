@@ -225,6 +225,9 @@ impl PcbApp {
                 tracks.planning.cancel();
             } else {
                 tracks.planning.poll_preview(&self.session, source, layer.as_deref(), (tracks.width_nm, tracks.via_diameter_nm, tracks.via_drill_nm));
+                if tracks.release_blocked_pickup() {
+                    self.message = Some("Track start is blocked; choose another point.".into());
+                }
             }
         }
     }
@@ -255,12 +258,13 @@ impl PcbApp {
                 tracks.planning.cancel();
                 tracks.preparation.cancel();
             }
-            let validation = tracks.planning.current_ready().then(|| tracks.preparation.validation()).flatten();
+            let validation = tracks.planning.validation_current().then(|| tracks.preparation.validation()).flatten();
             if let Some(result) = tracks.planning.poll(&self.session, source, layer.as_deref(), sizes, validation) {
                 match result {
-                    Ok((points, action)) => {
+                    Ok(planning::Adoption { points, replacements, action }) => {
                         if let Some(mut draft) = tracks.draft.take().filter(|draft| Some(draft.source) == source) {
                             draft.points = points;
+                            draft.replacements = replacements;
                             match action {
                                 planning::Action::Vertex { finish: true } => {
                                     if let Some(mut edit) = add(tracks, draft) {
@@ -287,6 +291,10 @@ impl PcbApp {
                     }
                     Err(error) => self.message = Some(error),
                 }
+                ctx.request_repaint();
+            }
+            if tracks.release_blocked_pickup() {
+                self.message = Some("Track start is blocked; choose another point.".into());
                 ctx.request_repaint();
             }
             let completion = tracks.preparation.poll(&self.session, source, target, layer.as_deref(), sizes);

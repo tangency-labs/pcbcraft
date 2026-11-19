@@ -1,4 +1,4 @@
-//! Clearance-aware route planning around fixed copper.
+//! Clearance-aware walkaround and optional track-shove planning over captured copper.
 //!
 //! [`walkaround`] plans one single-layer route from a head point toward a target over a captured
 //! [`ClearanceQuery`]: horizontal, vertical and 45° legs (or horizontal and vertical only) that
@@ -7,7 +7,8 @@
 //! `pcb.add_tracks` command or copper preparation job, which revalidate and publish them in one
 //! undo step. Every kept leg is confirmed by the same exact probe and outline predicates that
 //! DRC uses. The search is deterministic and bounded by a probe budget and a cancellation flag.
-//! Vias, arcs, zones and moving existing copper (shove) are not planned here.
+//! Shove mode returns disposable track replacements for one atomic add/replace command.
+//! Pads, vias and locked copper remain fixed; arcs, zones and multilayer search are not planned.
 use super::clearance::ClearanceQuery;
 use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
@@ -18,6 +19,9 @@ mod hull;
 mod posture;
 mod preparation;
 mod search;
+mod shove;
+pub use shove::{FixedCopper, Mode, ShoveStats};
+pub(crate) use shove::{fixed_schema, valid_fixed};
 #[cfg(test)]
 mod tests;
 mod walkaround;
@@ -37,6 +41,13 @@ pub const MAX_BUDGET: usize = 65_536;
 /// prefers going round on the same side, so nearly equivalent routes do not alternate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
+    /// Walk around fixed copper or displace unlocked tracks on a disposable overlay.
+    pub mode: Mode,
+    /// Opt into joining displaced copper elsewhere on its resolved net/physical island.
+    /// False preserves spacing between source objects that were not directly touching.
+    pub merge_same_net: bool,
+    /// Already fixed gesture copper, checked together with each new shove plan.
+    pub fixed: Vec<FixedCopper>,
     pub head: Point,
     pub target: Point,
     pub layer: Uuid,
@@ -56,8 +67,9 @@ pub struct Request {
 pub enum Outcome {
     /// The points run from the head to the target.
     Reached,
-    /// No legal way round was found; the points end at the last legal point. When the head
-    /// itself is not legal, the points are the head alone and nothing can be added.
+    /// The requested target is obstructed or no legal way round was found. Points end at the
+    /// last legal point; `adjusted_target` identifies a certified placeable walkaround endpoint when available.
+    /// When the head itself is illegal, points are the head alone and nothing can be added.
     Blocked { last_legal: Point },
     /// The probe budget or a search bound ran out first; the points are the head alone.
     Incomplete,
@@ -70,6 +82,19 @@ pub enum Outcome {
 /// A planned route. Consecutive points are distinct; fewer than two points mean nothing to add.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Plan {
+    /// Certified endpoint of a blocked walkaround prefix, including a refined clearance
+    /// boundary. Clients may fix this vertex, without claiming contact at the raw cursor.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub adjusted_target: Option<Point>,
+    /// The captured head itself violates a rule, rather than merely having a blocked target.
+    /// A host may reject an initial pickup while retaining a valid multi-vertex gesture.
+    pub start_blocked: bool,
+    /// Source track paths to replace atomically with this route; empty for walkaround.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub replacements: Vec<super::track::replacements::Replacement>,
+    /// Bounded shove work, absent for walkaround.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shove: Option<ShoveStats>,
     pub points: Vec<Point>,
     pub outcome: Outcome,
     /// Query address of the copper that stopped a blocked route, absent for the board edge.
@@ -84,6 +109,9 @@ pub struct Plan {
 /// other copper, including copper of unknown membership, is an obstacle at its pair clearance.
 /// The result is a pure function of the query, request and budget unless `cancel` returns true.
 pub fn walkaround(query: &ClearanceQuery, request: &Request, budget: usize, cancel: &dyn Fn() -> bool) -> Result<Plan, CommandError> {
+    if request.mode != Mode::Walkaround {
+        return Err(CommandError::InvalidParams("Use Session::plan_route for shove requests.".into()));
+    }
     validate(query, request, budget)?;
     search::complete(query, request, budget, cancel)
 }
@@ -99,6 +127,7 @@ fn validate(query: &ClearanceQuery, request: &Request, budget: usize) -> Result<
     if request.previous.len() > super::track::MAX_PATH_POINTS || request.previous.iter().any(|point| !crate::wire::valid_point(point)) {
         return Err(CommandError::InvalidParams("Previous routes must contain at most 256 bounded board points.".into()));
     }
+    shove::validate_fixed(query, &request.fixed)?;
     super::geometry::Contour::segment(request.head, request.target, request.width_nm)?;
     if request.width_nm < query.authority().rules().values.min_track_width_nm {
         return Err(CommandError::InvalidParams("Track width cannot weaken the board minimum.".into()));
@@ -115,9 +144,19 @@ impl Session {
     /// Callers adopting the result later must check the query's authority again.
     pub fn plan_route(&self, query: &ClearanceQuery, request: &Request, budget: usize, cancel: &dyn Fn() -> bool) -> Result<Plan, CommandError> {
         if !query.authority().is_current(self) {
-            return Ok(Plan { points: Vec::new(), outcome: Outcome::Stale, blocker: None, probes: 0 });
+            return Ok(Plan {
+                adjusted_target: None,
+                start_blocked: false,
+                replacements: Vec::new(),
+                shove: None,
+                points: Vec::new(),
+                outcome: Outcome::Stale,
+                blocker: None,
+                probes: 0,
+            });
         }
-        walkaround(query, request, budget, cancel)
+        validate(query, request, budget)?;
+        search::complete(query, request, budget, cancel)
     }
 
     /// Answer `pcb.plan_route` without changing revision, history or saved bytes. An omitted
@@ -138,18 +177,36 @@ impl Session {
         let flipped = params.get("flipped").and_then(Value::as_bool).unwrap_or(false);
         let previous: Vec<Point> = params.get("previous").map(|_| field(params, "previous")).transpose()?.unwrap_or_default();
         let budget = params.get("budget").map(|_| field(params, "budget")).transpose()?.unwrap_or(DEFAULT_BUDGET);
-        let request = Request { head, target: goal, layer, origin: None, width_nm, posture, flipped, previous };
+        let mode = params.get("mode").map(|_| field(params, "mode")).transpose()?.unwrap_or_default();
+        let merge_same_net = params.get("merge_same_net").and_then(Value::as_bool).unwrap_or(false);
+        let fixed: Vec<FixedCopper> = params.get("fixed").map(|_| field(params, "fixed")).transpose()?.unwrap_or_default();
+        let origin = fixed.first().and_then(FixedCopper::origin);
+        let request = Request { mode, merge_same_net, fixed, head, target: goal, layer, origin, width_nm, posture, flipped, previous };
         let stale = params.get("expected_revision").is_some_and(|revision| revision.as_u64() != Some(self.revision()));
         let plan = if stale {
-            Plan { points: Vec::new(), outcome: Outcome::Stale, blocker: None, probes: 0 }
+            Plan {
+                adjusted_target: None,
+                start_blocked: false,
+                replacements: Vec::new(),
+                shove: None,
+                points: Vec::new(),
+                outcome: Outcome::Stale,
+                blocker: None,
+                probes: 0,
+            }
         } else {
             let query = self.clearance_query_with_rules(target, &json!({}))?;
             self.plan_route(&query, &request, budget, &|| false)?
         };
-        Ok(json!({"revision":self.revision(),"route_plan":{
-            "board":target.board,"layer":layer,"width_nm":width_nm,"posture":posture,"flipped":flipped,"budget":budget,
-            "points":plan.points,"outcome":plan.outcome,"blocker":plan.blocker,"probes":plan.probes
-        }}))
+        let mut result = json!({"revision":self.revision(),"route_plan":{
+            "board":target.board,"layer":layer,"mode":mode,"merge_same_net":merge_same_net,"width_nm":width_nm,"posture":posture,"flipped":flipped,"budget":budget,
+            "points":plan.points,"outcome":plan.outcome,"blocker":plan.blocker,"probes":plan.probes,
+            "replacements":plan.replacements,"shove":plan.shove,"start_blocked":plan.start_blocked
+        }});
+        if let Some(point) = plan.adjusted_target {
+            result["route_plan"]["adjusted_target"] = json!(point);
+        }
+        Ok(result)
     }
 }
 
