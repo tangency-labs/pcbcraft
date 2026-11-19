@@ -36,7 +36,7 @@ pub(super) fn plan(registry: &Registry, networks: &[Network]) -> Result<Plan, St
     }
     let mut last = used.last().copied().unwrap_or(0);
     let mut records = BTreeMap::new();
-    for record in &registry.records {
+    for record in registry.records.iter() {
         let number = match record.generated_number {
             Some(number) => number,
             None => allocate(&mut last)?,

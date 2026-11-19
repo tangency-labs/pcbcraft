@@ -1546,6 +1546,68 @@ pub fn encode_documents(project: Arc<Project>) -> Result<Documents, String> {
     }
 }
 
+/// Native capacity available to pair rows in one already encodable folder representation.
+/// Changing whether there are pairs changes the native headers and requires a fresh probe.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PairDocumentBudget {
+    pub(crate) has_pairs: bool,
+    pub(crate) pair_rows: usize,
+}
+
+/// Count only the bounded relationship rows, with the same streaming framing as Save.
+pub(crate) fn pair_row_bytes(pairs: &[Arc<crate::nets::Pair>]) -> Result<usize, crate::CommandError> {
+    #[derive(Default)]
+    struct Counter(usize);
+    impl Write for Counter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut bytes = Counter::default();
+    let mut first = true;
+    for pair in pairs {
+        record(&mut bytes, &mut first, pair).map_err(crate::CommandError::InvalidParams)?;
+    }
+    Ok(bytes.0)
+}
+
+/// Reuse the ordinary folder writer and its compact-membership fallback incrementally.
+/// The encoded documents are temporary and never enter project history or the session cache.
+pub(crate) struct PairDocumentProbe {
+    home: String,
+    has_pairs: bool,
+    row_bytes: usize,
+    encoder: DocumentsEncoder,
+}
+
+impl PairDocumentProbe {
+    /// Capture an exact candidate without walking any of its authored records.
+    pub(crate) fn new(project: Arc<Project>, row_bytes: usize) -> Self {
+        let home = project.instances_document_path().unwrap_or_else(|| ENTRY_POINT.into());
+        let has_pairs = project.net_registry.has_pairs();
+        Self { home, has_pairs, row_bytes, encoder: DocumentsEncoder::new(project) }
+    }
+
+    /// Count headroom once the native document batches complete; retain only the byte budget.
+    pub(crate) fn step(&mut self, records: usize) -> Result<Option<PairDocumentBudget>, crate::CommandError> {
+        match self.encoder.step(records) {
+            Ok(None) => Ok(None),
+            Ok(Some(documents)) => {
+                let bytes = documents.get(&self.home).ok_or_else(|| crate::CommandError::InvalidParams("Missing encoded pair document.".into()))?;
+                let file_headroom = MAX_DOCUMENT_BYTES - bytes.len();
+                let folder_headroom = MAX_DOCUMENTS_BYTES - documents.values().map(Vec::len).sum::<usize>();
+                Ok(Some(PairDocumentBudget { has_pairs: self.has_pairs, pair_rows: self.row_bytes + file_headroom.min(folder_headroom) }))
+            }
+            Err(error) if self.encoder.size_limit_exceeded => Err(crate::CommandError::CapExceeded(error)),
+            Err(error) => Err(crate::CommandError::InvalidParams(error)),
+        }
+    }
+}
+
 /// The last list written into an instance home, which decides its closing bytes.
 #[derive(Clone, Copy)]
 enum InstanceTail {

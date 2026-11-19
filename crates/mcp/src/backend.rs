@@ -143,7 +143,7 @@ impl Backend for Headless {
 
 /// Run an operation against the supplied session. Its owner controls execution policy.
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
-/// because a bare session has no window to act on. Clipboard/export queries retain their
+/// because a bare session has no window to act on. Queries and pair previews retain their
 /// requested data even when project inspection is suppressed.
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, Failure> {
@@ -162,7 +162,11 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
             if !params["version"].is_null() && pcbcraft_engine::command(id).is_some() {
                 command_api::check_version(id, &params["version"], api_version)?;
             }
+            let pair_preview =
+                matches!(id, pcbcraft_engine::nets::CREATE_PAIR | pcbcraft_engine::nets::UPDATE_PAIR | pcbcraft_engine::nets::REMOVE_PAIR)
+                    && params["params"]["dry_run"].as_bool() == Some(true);
             if params["inspect"].as_bool() == Some(false)
+                && !pair_preview
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES

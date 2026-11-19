@@ -73,3 +73,19 @@ saving, and closing that view expires the form. Successful class/assignment edit
 refresh the form from the same source view. Live MCP mutations are refused while
 a project modal owns input; after dismissal, GUI and MCP share revision checks,
 Undo/Redo and native save/reopen.
+
+## Differential pairs
+
+Open **Analyze → Rules → Differential pairs…** in the schematic or PCB editor.
+For a new pair, enter a name and choose the positive and negative nets explicitly.
+The pickers list current persistent nets in the project, not suffix matches; IDs
+shown with the names distinguish nets with the same display text. If a derived
+net has no persistent ID yet, promote it before pairing. To edit or remove an
+existing pair, select it from the pair picker. A retained member without a current
+name is shown by UUID, and a stored review reason remains visible after editing.
+
+**Save pair** and **Remove pair** each apply one edit and close the form. Removal
+leaves both nets intact. Cancel discards the draft, and Undo restores the exact
+previous relationship. The [MCP commands](mcp.md#differential-pairs) use the same
+validation and history. This records intent only: no pair classes, suffix
+inference, split/merge repair or differential routing are applied.

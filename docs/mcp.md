@@ -795,6 +795,30 @@ commands or Delete before connecting; saved conflicts from older projects are
 preserved and remain reportable.
 
 
+## Differential pairs
+
+`nets.create_pair`, `nets.update_pair` and `nets.remove_pair` take
+`expected_revision` and a `pair` UUID. Use a fresh, non-nil UUID to create a
+pair, or read its saved UUID from `project.inspect` (`project.net_registry.pairs`)
+for updates and removal. Create and update also take `name`, `positive` and
+`negative`. The two members must be distinct persistent net UUIDs in the open
+project's registry and cannot belong to another pair. Display names do not
+identify pairs or nets. Remove takes only the pair UUID and revision and leaves
+both member nets in place. Update preserves the pair UUID and any stored review
+state, and identical edits do not advance the revision.
+
+Set `dry_run: true` on any of the three commands to validate it and return a
+`pair_change` with `changed`, `before` and `after`, even with `inspect: false`.
+A missing record on either side is `null`. Dry runs do not publish state or add
+history. To apply the proposed edit, send the same parameters without `dry_run`.
+These commands honor the caller's command API version pin, including dry runs.
+A stale revision returns `stale_revision`; a missing pair on update or removal
+returns `not_found`; exceeding the pair count, registry byte limit, or native
+per-file or project byte budget returns `cap_exceeded`. Each applied change has
+one Undo step, and none alters
+connectivity or copper. See the
+[native relationship contract](net-registry-storage.md#differential-pair-records).
+
 ## Explicit net-class rules
 
 `net_classes.create`, `net_classes.update` and `net_classes.remove` author the

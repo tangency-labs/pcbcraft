@@ -1,7 +1,7 @@
 //! Validate bounded persisted identity authority against the complete current electrical graph.
 
 use super::{Anchor, AnchorKind, MAX_RECORDS, MAX_REGISTRY_BYTES, Registry, Retirement, ScopeKind, State, graph::Graph};
-use crate::Project;
+use crate::{CommandError, Project};
 use std::collections::BTreeSet;
 
 /// Live/storage anchors use the sole owner; historical lineage may additionally retain the
@@ -39,7 +39,7 @@ impl Registry {
         }
         let graph = Graph::build(project)?;
         let mut assigned = BTreeSet::new();
-        for record in &self.records {
+        for record in self.records.as_slice() {
             if record.fallbacks.len() > 3
                 || record.lineage.len() > MAX_RECORDS
                 || record.anchors().collect::<BTreeSet<_>>().len() != record.fallbacks.len() + 1
@@ -102,8 +102,14 @@ impl Registry {
             }
         }
         super::numbering::plan(self, &graph.networks)?;
-        if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_REGISTRY_BYTES {
-            return Err("Net registry exceeds its byte limit.".into());
+        self.validate_byte_limit().map_err(|error| error.to_string())
+    }
+
+    /// Check the native serialized limit without rebuilding the graph, distinguishing a
+    /// fixed cap from other serialization failures for pair-only command callers.
+    pub(super) fn validate_byte_limit(&self) -> Result<(), CommandError> {
+        if serde_json::to_vec(self).map_err(|error| CommandError::InvalidParams(error.to_string()))?.len() > MAX_REGISTRY_BYTES {
+            return Err(CommandError::CapExceeded("Net registry exceeds its byte limit.".into()));
         }
         Ok(())
     }
@@ -117,7 +123,7 @@ impl Project {
         let graph = Graph::build(self)?;
         let electrical = self.electrical_connectivity();
         let mut active_ids = vec![None; graph.networks.len()];
-        for record in &self.net_registry.records {
+        for record in self.net_registry.records.as_slice() {
             if matches!(record.state, State::Active {})
                 && let Some(index) = graph.network(&record.primary)
             {
@@ -155,7 +161,7 @@ impl Project {
             return Ok(ids);
         }
         let graph = Graph::build(self)?;
-        for record in &self.net_registry.records {
+        for record in self.net_registry.records.as_slice() {
             if !matches!(record.state, State::Active {}) {
                 continue;
             }

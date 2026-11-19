@@ -53,6 +53,7 @@ mod net_class_editor;
 mod net_inspector;
 mod net_labels;
 mod no_connect;
+mod pair_editor;
 mod part_documents;
 mod parts_browser;
 #[cfg(feature = "performance-harness")]
@@ -254,6 +255,7 @@ enum Dialog {
     BoardSetup(Box<board_setup::Edit>),
     BoardRules(Box<board_rules::Edit>),
     Rules(Box<net_class_editor::Edit>),
+    Pairs(Box<pair_editor::Edit>),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
@@ -309,6 +311,8 @@ pub struct PcbApp {
     remote_check: live_control::RemoteCheck,
     #[cfg(not(target_arch = "wasm32"))]
     remote_copper: live_control::RemoteCopper,
+    #[cfg(not(target_arch = "wasm32"))]
+    remote_pair: live_control::RemotePair,
     files: project_files::ProjectFiles,
     file_notice: Option<String>,
     preferences: Preferences,
@@ -2301,6 +2305,7 @@ impl PcbApp {
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
             Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
+            Dialog::Pairs(edit) => self.pair_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
@@ -2480,12 +2485,22 @@ impl PcbApp {
             }
             Some(Ok(Some(request))) => request,
         };
+        self.run_live_request(ctx, request);
+    }
+
+    /// Dispatch an authenticated live request, deferring expensive snapshot work before execution.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_live_request(&mut self, ctx: &egui::Context, request: live_control::Request) {
         if self.defer_design_check(ctx, request.body()) {
             self.start_remote_check(ctx, request, false);
             return;
         }
         if self.defer_copper(request.body()) {
             self.start_remote_copper(ctx, request, false);
+            return;
+        }
+        if self.defer_pair(request.body()) {
+            self.start_remote_pair(ctx, request, false);
             return;
         }
         let revision = self.session.revision();
@@ -2552,6 +2567,7 @@ impl PcbApp {
         {
             self.poll_remote_check(&ctx);
             self.poll_remote_copper(&ctx);
+            self.poll_remote_pair(&ctx);
             self.poll_live_control(&ctx);
         }
         self.poll_route_previews();

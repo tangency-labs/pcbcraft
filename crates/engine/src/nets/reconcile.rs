@@ -35,7 +35,7 @@ fn source_capture(capture: &mut Option<SourceCapture>, before: &Project) -> Resu
 
 /// Current instance storage follows a first-board scope transfer; lineage keeps its captured owner.
 pub(super) fn requalify(records: &mut Registry, scope: Scope) {
-    for record in &mut records.records {
+    for record in Arc::make_mut(&mut records.records) {
         if !matches!(record.state, State::Active {}) {
             continue;
         }
@@ -73,7 +73,8 @@ fn source_anchor(anchor: &Anchor, scope: Scope) -> Anchor {
 fn adopt_numbers(registry: &mut Registry, graph: &Graph, plan: &super::numbering::Plan) -> Result<(), CommandError> {
     let mut ids = registry.reserved_ids();
     let mut last = plan.records.values().copied().chain(plan.networks.iter().flatten().copied()).max().unwrap_or(0);
-    for record in &mut registry.records {
+    let records = Arc::make_mut(&mut registry.records);
+    for record in records.iter_mut() {
         if record.generated_number.is_none() {
             record.generated_number =
                 Some(match plan.records.get(&record.id).copied().or_else(|| graph.network(&record.primary).and_then(|index| plan.networks[index])) {
@@ -82,20 +83,16 @@ fn adopt_numbers(registry: &mut Registry, graph: &Graph, plan: &super::numbering
                 });
         }
     }
-    let existing: BTreeSet<_> = registry
-        .records
-        .iter()
-        .filter(|record| matches!(record.state, State::Active {}))
-        .filter_map(|record| graph.network(&record.primary))
-        .collect();
+    let existing: BTreeSet<_> =
+        records.iter().filter(|record| matches!(record.state, State::Active {})).filter_map(|record| graph.network(&record.primary)).collect();
     for (index, network) in graph.networks.iter().enumerate().filter(|(_, network)| network.meaningful()) {
         if !existing.contains(&index) {
-            let mut record = network.record(allocate(registry.records.len(), &mut ids)?, None).map_err(CommandError::InvalidParams)?;
+            let mut record = network.record(allocate(records.len(), &mut ids)?, None).map_err(CommandError::InvalidParams)?;
             record.generated_number = plan.networks[index];
-            registry.records.push(record);
+            records.push(record);
         }
     }
-    registry.records.sort_by_key(|record| record.id);
+    records.sort_by_key(|record| record.id);
     Ok(())
 }
 
@@ -157,7 +154,7 @@ impl Project {
         let plan = super::numbering::plan(&registry, &old.networks).map_err(CommandError::InvalidParams)?;
         adopt_numbers(&mut registry, &old, &plan)?;
         let mut by_source = BTreeMap::<usize, Record>::new();
-        for record in &registry.records {
+        for record in registry.records.as_slice() {
             if matches!(record.state, State::Active {}) {
                 let index = old.network(&record.primary).ok_or_else(|| CommandError::InvalidParams("Missing source net primary.".into()))?;
                 by_source.insert(index, record.clone());
@@ -266,7 +263,7 @@ impl Project {
         }
         // Existing unresolved decisions survive later graph edits with current result references.
         // No surviving candidate means retirement; choosing among survivors remains explicit.
-        for record in &registry.records {
+        for record in registry.records.as_slice() {
             if let State::Ambiguous { snapshot, branches } = &record.state {
                 let branches = unique(branches.iter().flat_map(|id| continuations.get(id).into_iter().flatten().copied()));
                 let mut next = record.clone();
@@ -278,7 +275,7 @@ impl Project {
                 result.insert(record.id, next);
             }
         }
-        let next = Registry { records: result.into_values().collect(), pairs: registry.pairs };
+        let next = Registry { records: Arc::new(result.into_values().collect()), pairs: registry.pairs };
         if next == *self.net_registry {
             return Ok(());
         }

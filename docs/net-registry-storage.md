@@ -88,9 +88,10 @@ changes.
 At most 2,048 pairs fit alongside 4,096 net records. Pair content counts toward
 the registry's existing 8 MiB serialized limit. Incremental writing charges one
 record per pair, and history snapshots share the pair list and individual values.
-Read-only registry inspection includes `pairs` only when present. There is no
-pair authoring command, editor, class, inference, reconciliation or router in
-this storage change.
+Read-only registry inspection includes `pairs` only when present. The
+[editor](net-class-editor.md#differential-pairs) and [shared commands](mcp.md#differential-pairs)
+author this same relationship without changing the format, the member records
+or stored review context. There is no pair class, inference, reconciliation or router.
 
 ## Transactions and reconciliation
 

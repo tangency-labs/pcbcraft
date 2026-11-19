@@ -235,6 +235,7 @@ impl PcbApp {
             Dialog::BoardSetup(edit) => Some(edit.source()),
             Dialog::BoardRules(edit) => Some(edit.source()),
             Dialog::Rules(edit) => Some(edit.source()),
+            Dialog::Pairs(edit) => Some(edit.source()),
             _ => None,
         }
     }
