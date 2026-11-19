@@ -9,7 +9,10 @@ use std::{
 
 use pcbcraft_engine::{
     Project, UNTITLED,
-    persistence::{Documents, ENTRY_POINT, Encoding, decode_documents, decode_packed, encode_documents, encode_packed_documents, read_bytes},
+    persistence::{
+        Documents, ENTRY_POINT, Encoding, decode_documents, decode_packed, encode_documents, encode_packed_documents, has_current_board_header,
+        read_bytes,
+    },
 };
 
 use super::{Outcome, SaveFormat, Saved, Upgrades, file_name_for};
@@ -212,12 +215,25 @@ fn name_for(snapshot: &Project, saved_before: bool, path: &Path) -> Option<Proje
     snapshot.renamed(stem(path.file_name()?.to_str()?)).ok()
 }
 
-/// Keep exact source bytes for every logically unchanged document, including Save As conversion.
+/// An older board must be written in the current format even on an otherwise unchanged Save.
+fn can_reuse_board(snapshot: &Project, original: Option<&Documents>) -> bool {
+    snapshot.board_document_path().is_none_or(|path| original.and_then(|docs| docs.get(&path)).is_some_and(|bytes| has_current_board_header(bytes)))
+}
+
+/// Keep exact source bytes for logically unchanged documents, except a noncanonical board header.
 fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, original: Option<&Documents>) -> Result<Documents, String> {
     if previous.is_some_and(|old| Arc::ptr_eq(old, snapshot))
         && let Some(original) = original
     {
-        return Ok(original.clone());
+        let mut documents = original.clone();
+        if !can_reuse_board(snapshot, Some(original))
+            && let Some(path) = snapshot.board_document_path()
+        {
+            let mut canonical = encode_documents(snapshot.clone())?;
+            let board = canonical.remove(&path).ok_or("Saved board document is missing")?;
+            documents.insert(path, board);
+        }
+        return Ok(documents);
     }
     let mut documents = encode_documents(snapshot.clone())?;
     if let (Some(old), Some(original)) = (previous, original) {
@@ -228,6 +244,7 @@ fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, o
             let source = if Some(path.as_str()) == new_board.as_deref() { old_board.as_deref().unwrap_or(path) } else { path };
             if canonical.get(source) == Some(bytes)
                 && let Some(original) = original.get(source)
+                && (Some(path.as_str()) != new_board.as_deref() || has_current_board_header(original))
             {
                 bytes.clone_from(original);
             }
@@ -252,7 +269,7 @@ fn save_target(
     let adopted = (!Arc::ptr_eq(&original, &snapshot)).then_some(original);
     let unchanged = previous.is_some_and(|old| Arc::ptr_eq(old, &snapshot));
     if target.encoding == Encoding::Zip {
-        let bytes = if unchanged && !target.needs_manifest {
+        let bytes = if unchanged && !target.needs_manifest && can_reuse_board(&snapshot, target.documents.as_deref()) {
             target.bytes.clone()
         } else {
             let documents = working_documents(&snapshot, previous, target.documents.as_deref())?;

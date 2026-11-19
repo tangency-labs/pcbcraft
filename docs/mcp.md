@@ -8,6 +8,13 @@ same engine commands and undo history within each session.
 with affected object IDs, consent/refusal and a session-local token, even with
 `inspect: false`. `pcb.set_board_setup` optionally consumes that token;
 `pcb.cancel_board_setup_preview` revokes it without an authored edit.
+`pcb.inspect_layer_groups` returns derived outer/inner/plane/signal and user groups
+with layer IDs and names, including with `inspect: false`. It is read-only. User
+memberships are edited in the complete setup candidate, not a separate mutation.
+Omit `stackup.layer_groups` in a setup edit to retain existing groups, or use
+`[]` to clear them. Mixed copper belongs to plane and signal. Preview reports
+members of removed copper by proposed group UUID, even for newly added groups.
+See [layer groups](board-materials.md#layer-groups).
 
 The built-in Assistant instructions and the server instructions sent to external
 MCP clients ask agents working in a live editor to keep the area they are editing
@@ -236,7 +243,7 @@ edits or reach file controls. Headless sessions cannot run them.
 
 `list_commands` keeps returning the command array as its first text part. A
 second text part, also given as the result's `structuredContent`, reads
-`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
+`{"command_api_version": 2, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
 
 - `command_api_version` is one number for the whole public command contract,

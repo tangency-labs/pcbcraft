@@ -106,7 +106,7 @@ fn smd_geometry_and_three_terminal_mappings_are_pinned_and_persistent() {
     let bytes = encode_documents(snapshot.clone()).unwrap();
     assert!(bytes.contains_key("library/footprints/basic-components/resistor-0402.r4.json"));
     assert!(bytes.contains_key("library/footprints/basic-components/sot23.r4.json"));
-    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/5"));
+    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/41"));
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
     assert_eq!(encode_documents(decode_packed(&encode_packed(snapshot.clone()).unwrap()).unwrap().project).unwrap(), bytes);
     let schematic = s.inspect()["project"]["schematic"].clone();

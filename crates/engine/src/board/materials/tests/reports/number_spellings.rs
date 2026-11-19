@@ -72,7 +72,7 @@ fn integer_report_tokens_agree_on_command_native_and_profile_paths() {
             apply(&mut s, SET_BOARD_SETUP, json!({"setup":canonical}));
             let inspected = setup(&s);
             assert_eq!(inspected["materials"][0].pointer(field.path).unwrap().as_i64(), Some(value));
-            let documents = saved(&s, "pcbcraft-board/25");
+            let documents = saved(&s, "pcbcraft-board/41");
             let board_path = persistence::test_board_path(&documents);
             let mut changed = documents.clone();
             changed.insert(board_path, encoded_spelling(board_json(&documents), field.path, &value.to_string()));
@@ -97,7 +97,7 @@ fn noninteger_report_tokens_and_bounds_are_refused_on_every_path() {
         let mut s = session();
         let canonical = numeric_candidate(&s, field.path, field.minimum.max(0));
         apply(&mut s, SET_BOARD_SETUP, json!({"setup":canonical}));
-        let documents = saved(&s, "pcbcraft-board/25");
+        let documents = saved(&s, "pcbcraft-board/41");
         let board_path = persistence::test_board_path(&documents);
         let board = board_json(&documents);
         let profile_json: Value = serde_json::from_slice(&profile(&s)).unwrap();

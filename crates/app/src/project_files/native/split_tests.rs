@@ -319,7 +319,8 @@ fn version_five_first_save_migrates_and_sheet_edits_preserve_unaffected_bytes() 
     let loaded = load(&root.join(ENTRY_POINT)).unwrap();
     assert_eq!(folder::load(&root).unwrap(), original);
     save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
-    let migrated = pcbcraft_engine::persistence::migrate_board_layout(original.clone(), ".").unwrap();
+    let mut migrated = pcbcraft_engine::persistence::migrate_board_layout(original.clone(), ".").unwrap();
+    refresh_expected_board(&mut migrated);
     assert_eq!(folder::load(&root).unwrap(), migrated);
     let loaded = load(&root).unwrap();
     let old = loaded.snapshot.clone();
@@ -707,7 +708,8 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     assert!(saved.target.added_manifest());
     let reopened = load(&path).unwrap();
     assert!(!reopened.target.needs_manifest);
-    let migrated = pcbcraft_engine::persistence::migrate_board_layout((*documents).clone(), ".").unwrap();
+    let mut migrated = pcbcraft_engine::persistence::migrate_board_layout((*documents).clone(), ".").unwrap();
+    refresh_expected_board(&mut migrated);
     assert_eq!(reopened.target.documents.as_deref(), Some(&migrated));
     let mut custom = (*documents).clone();
     custom.get_mut(ENTRY_POINT).unwrap().extend_from_slice(b"\n  ");
@@ -719,10 +721,18 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     assert_eq!(decode_packed(&packed).unwrap().documents, custom);
 }
 
-/// Native Save reuses an unchanged lock-bearing board verbatim but rewrites it after
-/// deletion of the only locked placement.
+/// Canonical comparison for tests which start from a dated, checked-in project fixture.
+fn refresh_expected_board(documents: &mut Documents) {
+    let project = decode_documents(documents).unwrap();
+    if let Some(path) = project.board_document_path() {
+        let board = encode_documents(project).unwrap().remove(&path).unwrap();
+        documents.insert(path, board);
+    }
+}
+
+/// Saving from an older board header writes /41 for folder and archive even without editing.
 #[test]
-fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() {
+fn native_save_upgrades_legacy_footprint_lock_board() {
     let mut s = Session::default();
     s.apply("project.new", &json!({"create_board":true})).unwrap();
     for x_nm in [0, 25_400_000] {
@@ -733,7 +743,7 @@ fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() 
     let path = s.project().unwrap().board_document_path().unwrap();
     let mut original = encode_documents(s.snapshot().unwrap()).unwrap();
     let mut board: serde_json::Value = serde_json::from_slice(&original[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/1");
+    assert_eq!(board["format"], "pcbcraft-board/41");
     assert_eq!(board["footprints"].as_array().unwrap().len(), 2);
     let locked_id = board["footprints"][0]["id"].as_u64().unwrap();
     let survivor = board["footprints"][1].clone();
@@ -742,19 +752,33 @@ fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() 
     board["footprints"][1]["locked"] = json!(false);
     original.insert(path.clone(), serde_json::to_vec(&board).unwrap());
     let previous = decode_documents(&original).unwrap();
+    let canonical = encode_documents(previous.clone()).unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("legacy");
+    let archive = dir.path().join("legacy.pc");
+    folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
+    fs::write(&archive, encode_packed_documents(original.clone()).unwrap()).unwrap();
+    for target in [&root, &archive] {
+        let loaded = load(target).unwrap();
+        let snapshot = loaded.snapshot.clone();
+        save_target(snapshot.clone(), Some(&snapshot), loaded.target, &mut |_| Ok(())).unwrap();
+        let reopened = load(target).unwrap();
+        assert_eq!(reopened.target.documents.as_ref().unwrap()[&path], canonical[&path]);
+        assert_eq!(encode_documents(reopened.snapshot).unwrap(), canonical);
+    }
     s.open_snapshot(previous.clone());
     let symbol = s.project().unwrap().symbols()[0].id();
     apply(&mut s, MOVE_SYMBOL, json!({"symbol":symbol,"x_nm":1_270_000,"y_nm":0}));
     let moved = s.snapshot().unwrap();
     let saved = working_documents(&moved, Some(&previous), Some(&original)).unwrap();
     assert!(saved.iter().any(|(name, bytes)| name.starts_with("sheets/") && original.get(name) != Some(bytes)));
-    assert_eq!(saved[&path], original[&path]);
+    assert_eq!(saved[&path], canonical[&path]);
 
     apply(&mut s, pcbcraft_engine::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{locked_id}")]}));
     let rewritten = working_documents(&s.snapshot().unwrap(), Some(&moved), Some(&saved)).unwrap();
     let board: serde_json::Value = serde_json::from_slice(&rewritten[&path]).unwrap();
     assert_ne!(rewritten[&path], saved[&path]);
-    assert_eq!(board["format"], "pcbcraft-board/1");
+    assert_eq!(board["format"], "pcbcraft-board/41");
     assert_eq!(board["footprints"], json!([survivor]));
     assert_eq!(encode_documents(decode_documents(&rewritten).unwrap()).unwrap(), rewritten);
 }

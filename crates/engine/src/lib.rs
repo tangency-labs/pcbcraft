@@ -897,6 +897,7 @@ pub const DELETE_FOOTPRINTS: &str = "pcb.delete_footprints";
 pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
 /// Atomically replace a validated board setup while retaining its profile identity.
 pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
+pub use board::setup::groups::INSPECT_LAYER_GROUPS;
 pub use board::setup::preview::{CANCEL_BOARD_SETUP_PREVIEW, PREVIEW_BOARD_SETUP};
 /// Set board-local physical silkscreen text height, stroke width and pad clearance.
 pub const SET_SILKSCREEN: &str = "pcb.set_silkscreen";
@@ -1862,6 +1863,12 @@ const CATALOG: &[Command] = &[
             },
             EXPECTED_REVISION,
         ],
+    },
+    Command {
+        id: INSPECT_LAYER_GROUPS,
+        title: "Inspect Layer Groups",
+        summary: "Read computed physical/role groups and authored named groups in physical order without changing revision or history.",
+        params: &[BOARD],
     },
     Command {
         id: PREVIEW_BOARD_SETUP,
@@ -3200,7 +3207,7 @@ impl Session {
             | board::clipboard::DELETE
             | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
-            SET_BOARD_SETUP | PREVIEW_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
+            SET_BOARD_SETUP | PREVIEW_BOARD_SETUP | INSPECT_LAYER_GROUPS => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
             CANCEL_BOARD_SETUP_PREVIEW => self.board_setup_preview().is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
@@ -3338,6 +3345,11 @@ impl Session {
         if id == EXPORT_FABRICATION {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
+        }
+        if id == INSPECT_LAYER_GROUPS {
+            self.validate_project_command(id, params)?;
+            let setup = self.open_project()?.board_setup().ok_or_else(|| CommandError::Unavailable("initialize board setup first".into()))?;
+            return Ok(json!({"revision":self.revision,"layer_groups":setup.layer_groups()}));
         }
         if id == netlist::EXPORT_NETLIST {
             self.validate_project_command(id, params)?;
@@ -3484,6 +3496,7 @@ impl Session {
                 | SET_BOARD_SETUP
                 | PREVIEW_BOARD_SETUP
                 | CANCEL_BOARD_SETUP_PREVIEW
+                | INSPECT_LAYER_GROUPS
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
                 | PREVIEW_ASSEMBLY_PROFILE
@@ -3779,6 +3792,9 @@ impl Session {
             DELETE_FOOTPRINTS => self.delete_footprints(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
+            INSPECT_LAYER_GROUPS => {
+                self.execute(id, params)?;
+            }
             PREVIEW_BOARD_SETUP => self.preview_board_setup(params)?,
             CANCEL_BOARD_SETUP_PREVIEW => self.cancel_board_setup_preview(params)?,
             SET_RULES => self.set_rules(params)?,

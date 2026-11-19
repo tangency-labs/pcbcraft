@@ -173,14 +173,14 @@ fn origin_format_round_trips_and_reset_restores_previous_bytes() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = test_board_path(&documents);
     let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/21");
+    assert_eq!(saved["format"], "pcbcraft-board/41");
     assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
     assert!(saved["rules"].is_object() && saved["vias"].is_array() && saved["tracks"].is_array());
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(encode_documents(reopened).unwrap(), documents);
 
     let text = String::from_utf8(documents[&path].clone()).unwrap();
-    for (from, to) in [("pcbcraft-board/21", "pcbcraft-board/19"), ("\"pcbcraft-origin/1\"", "\"pcbcraft-origin/2\"")] {
+    for (from, to) in [("pcbcraft-board/41", "pcbcraft-board/19"), ("\"pcbcraft-origin/1\"", "\"pcbcraft-origin/2\"")] {
         let mut altered = documents.clone();
         altered.insert(path.clone(), text.replacen(from, to, 1).into_bytes());
         assert!(decode_documents(&altered).is_err(), "{to}");
@@ -214,7 +214,7 @@ fn stack_format_carries_the_placement_origin() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = test_board_path(&documents);
     let saved: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/23");
+    assert_eq!(saved["format"], "pcbcraft-board/41");
     assert_eq!(saved["placement_origin"]["anchor"], json!({"kind":"point","x_nm":2 * MM,"y_nm":3 * MM}));
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(reopened.board_setup(), s.project().unwrap().board_setup());
@@ -225,7 +225,7 @@ fn stack_format_carries_the_placement_origin() {
 
     let text = String::from_utf8(documents[&path].clone()).unwrap();
     let mut altered = documents.clone();
-    altered.insert(path.clone(), text.replacen("pcbcraft-board/23", "pcbcraft-board/21", 1).into_bytes());
+    altered.insert(path.clone(), text.replacen("pcbcraft-board/41", "pcbcraft-board/21", 1).into_bytes());
     match decode_documents(&altered) {
         Ok(_) => panic!("format 21 opened the stack fields"),
         Err(error) => assert!(error.contains("require board format 23"), "{error}"),

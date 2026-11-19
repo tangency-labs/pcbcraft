@@ -55,13 +55,13 @@ fn rules_format_round_trips_and_reset_restores_previous_bytes() {
     let documents = encode_documents(session.snapshot().unwrap()).unwrap();
     let path = crate::persistence::test_board_path(&documents);
     let text = String::from_utf8(documents[&path].clone()).unwrap();
-    assert!(text.contains("pcbcraft-board/19"));
+    assert!(text.contains("pcbcraft-board/41"));
     assert_eq!(documents, encode_documents(decode_documents(&documents).unwrap()).unwrap());
     let packed = encode_packed(session.snapshot().unwrap()).unwrap();
     assert_eq!(packed, encode_packed(decode_packed(&packed).unwrap().project).unwrap());
     for old in ["pcbcraft-board/13", "pcbcraft-board/18"] {
         let mut bad = documents.clone();
-        bad.insert(path.clone(), text.replace("pcbcraft-board/19", old).into_bytes());
+        bad.insert(path.clone(), text.replace("pcbcraft-board/41", old).into_bytes());
         assert!(decode_documents(&bad).is_err());
     }
     set(&mut session, Value::Null).unwrap();

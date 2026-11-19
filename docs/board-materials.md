@@ -258,36 +258,56 @@ the Board setup copper-count control refuse to drop a copper layer carrying thes
 facts; the complete setup command instead accepts an explicit replacement, subject
 to ordinary topology and occupancy validation. The two-layer starting
 stackups replace copper thickness, so they clear its tolerance, basis and base copper
-and keep roles and the board thickness. The Board setup form keeps these fields
-when it applies other edits but does not edit them yet.
+and keep roles and the board thickness. The Board setup form edits copper roles
+and preserves base copper, copper thickness qualifiers and finished board thickness
+when applying other edits.
 
 ## Persistence and limits
 
-The original layer catalog, labels and thicknesses use `pcbcraft-board/2`;
-material-aware setup needs at least `pcbcraft-board/3`. These formats apply when
-no other authored data needs a later format. A canonical version-2 document
-round-trips byte-for-byte through the codec and does not acquire inferred materials,
-reports or construction. Version 3 and compatible later formats embed all selected
-definitions in `board.json`, with no source library needed. Each material revision
-and each dielectric gap has a stable
-record line, with ordered plies nested within their gap. Unknown versions and
-fields, unresolved pins and duplicate JSON keys fail before project adoption.
-
-Copper roles, base copper, copper thickness qualifiers and finished board
-thickness require at least `pcbcraft-board/23` when one of them is present.
-Explicit via assignments require at least board/24. Thermal conductivity,
-thermal expansion, dielectric strength and CTI reports require at least board/25;
-format 25 requires at least one such report. [Circular copper records](circular-copper-records.md)
-require at least board/26, and footprint locks require at least board/34.
-Compatible earlier extensions can coexist and keep their usual prerequisites.
-Removing reports selects the format required by the remaining authored data.
-Older headers refuse unsupported extensions, and canonical boards without them
-retain their earlier format and bytes.
+Every board Save writes `pcbcraft-board/41`, which carries the selected material
+revisions, the authored dielectric stack and its named groups without consulting a
+source library. Saved revisions, dielectric gaps and groups use stable IDs. Older
+board readers retain their original rules: /2 is layer-only, /3 adds material
+references and construction, /23 adds copper roles and stack thickness fields,
+and /25 adds thermal and insulation reports. Board/41 does not infer material
+values omitted by an older file. Unknown versions or fields, unresolved pins and
+duplicate JSON keys fail before project adoption.
 
 Version 3 does not introduce a reusable material library,
 manufacturing qualification, rule requirements, flex regions or an impedance
 solver. Extending those capabilities will use typed records and explicit format
 versions rather than an unchecked property bag.
+
+## Layer groups
+
+`pcb.inspect_layer_groups` returns current layer IDs and names without changing the
+revision, dirty state or history. Outer means the first and last copper strata;
+inner means the remaining copper, in physical order. Plane and signal follow the
+copper role. Mixed copper belongs to both; an unspecified role belongs to neither.
+These derived groups are computed, never saved as a second source of stack data.
+
+User groups live in `stackup.layer_groups`: stable group UUID, name and copper-layer
+UUIDs. Up to 64 groups with 64 distinct members each are supported. Names contain
+1–80 characters without padding/control characters and are unique ignoring case.
+Membership is normalized to physical order, independent of layer renames. Empty
+memberships are valid. A complete setup candidate with `stackup.layer_groups`
+absent or empty clears all named groups. Removing copper drops
+that layer from the groups on Apply; Undo restores both stack and groups.
+Preview lists changed or removed existing groups in `changes.affected_groups`
+and reports discarded members by proposed group UUID in
+`changes.pruned_group_memberships`, including for new groups. Foreign layer IDs
+are refused rather than silently dropped.
+
+The Physical stackup page stages the selected copper's role and named group
+memberships with every other setup field; `pcb.set_board_setup` remains the only
+stack mutation command. Board/41 is the sole board writer format and accepts absent
+or empty groups; clearing the final group does not downgrade the board. Authored
+profile groups use `pcbcraft-setup-profile/5` and are rebased onto the destination
+copper layer IDs on import. Importing a profile without groups clears the draft’s
+named groups. Older board and profile headers reject the field even when empty.
+Layer UUIDs and revision-checked candidates are the boundary for future external
+parametric/simulation adapters, not a live SolidCraft or FieldCraft connection.
+No rule-scope selector consumes these groups yet.
 
 ## Silkscreen and portable setup profiles
 
@@ -305,7 +325,8 @@ bounds; mask-opening, silk-to-silk and board-edge DRC remain outside this slice.
 Profiles imports/exports a named `.pcsetup.json` file with format
 `pcbcraft-setup-profile/1`, `/2` when the setup uses the copper and board
 thickness fields above, or `/3` when a material carries a thermal conductivity,
-thermal expansion, dielectric strength or CTI report, an independent UUID and positive revision, a complete
+thermal expansion, dielectric strength or CTI report, or `/5` with user layer groups.
+Each profile has an independent UUID and positive revision, a complete
 validated `setup`, and physical `silkscreen` settings. Lengths are integer nanometers;
 material definitions, reports and references are embedded. The bounded, strict decoder
 rejects unknown fields, unsupported versions, invalid pins and files over 1 MiB.
@@ -313,8 +334,11 @@ These setup snapshots carry no required electrical/fabrication constraints or pr
 paths and do not establish a live link to their source file. Every export creates a
 new snapshot identity. Broader fabrication/process profiles remain planned.
 
-Import stages a preview. Layer IDs are rebased to the target's surviving physical
-stack and unambiguous technical roles. Extra target technical layers survive,
+Import stages a draft for review. Profiles without named groups retain target
+groups and drop only members whose copper is removed. Profiles with named groups
+replace the target groups in the draft. The Profiles page shows the staged groups
+and notes any replacement or pruning before Apply. Layer IDs are rebased to the
+target's surviving physical stack and unambiguous technical roles. Extra target technical layers survive,
 preserving their drawing ownership; copper-count changes use the ordinary
 authored-stratum/removal checks. Existing immutable material pins cannot be replaced
 by contradictory data.

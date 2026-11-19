@@ -23,7 +23,7 @@ fn initialization_is_explicit_versioned_atomic_and_a_repeat_is_noop() {
     session.apply(INITIALIZE_BASELINE, &json!({"expected_revision":revision})).unwrap();
     assert_eq!(session.revision(), revision + 1);
     let docs = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&docs[&crate::persistence::test_board_path(&docs)]).unwrap().contains("pcbcraft-board/10"));
+    assert!(std::str::from_utf8(&docs[&crate::persistence::test_board_path(&docs)]).unwrap().contains("pcbcraft-board/41"));
     let source = session.project().unwrap().board.baseline.as_ref().unwrap().source.clone();
     source.validate().unwrap();
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);

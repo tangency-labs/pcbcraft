@@ -180,14 +180,14 @@ fn arc_format_retains_zones_rules_and_placement_origin() {
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = s.project().unwrap().board_document_path().unwrap();
     let previous: Value = serde_json::from_slice(&before[&path]).unwrap();
-    assert_eq!(previous["format"], "pcbcraft-board/21");
+    assert_eq!(previous["format"], "pcbcraft-board/41");
     assert_eq!(previous["zones"].as_array().unwrap().len(), 1);
     assert!(previous["placement_origin"].is_object());
     assert!(previous["rules"].is_object());
     s.apply(SET_ARCS, &params(&s, &[arc])).unwrap();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let current: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(current["format"], "pcbcraft-board/26");
+    assert_eq!(current["format"], "pcbcraft-board/41");
     assert_eq!(current["zones"], previous["zones"]);
     assert_eq!(current["placement_origin"], previous["placement_origin"]);
     assert_eq!(current["rules"], previous["rules"]);
