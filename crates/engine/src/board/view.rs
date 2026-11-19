@@ -7,6 +7,11 @@ use std::{
 };
 use uuid::Uuid;
 
+#[cfg(test)]
+std::thread_local! {
+    pub(super) static FOOTPRINT_GEOMETRY_RESOLUTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A board address distinguishes its project and physical board, independently of names,
 /// stackup identity and runtime opening. Legacy files have one deterministically addressed board.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
@@ -338,6 +343,8 @@ impl<'a> BoardView<'a> {
             let definition = self.project.board.definition_for(footprint);
             let pins = footprint.terminals_by_pad();
             let live = accepted.is_none().then(|| self.project.first_component_terminals(footprint.component));
+            #[cfg(test)]
+            FOOTPRINT_GEOMETRY_RESOLUTIONS.with(|count| count.set(count.get() + 1));
             Some(FootprintView {
                 board: self.target,
                 id: format!("footprint-{}", footprint.id),

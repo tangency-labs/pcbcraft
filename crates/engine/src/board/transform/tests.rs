@@ -648,7 +648,7 @@ fn align_to_locked_plated_mounting_hole_keeps_the_reference_fixed() {
     s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
     assert_eq!(s.revision(), revision + 1);
     for id in &ids[..3] {
-        assert_eq!(bounds(&view(&s).footprint(id).unwrap())[0], left);
+        assert_eq!(contour_bounds(&view(&s).footprint(id).unwrap())[0], left);
     }
     let fixed = view(&s).footprint(&reference).unwrap();
     assert_eq!(fixed.position, hole_at);
@@ -665,6 +665,110 @@ fn align_to_locked_plated_mounting_hole_keeps_the_reference_fixed() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), initial);
     s.apply("edit.redo", &json!({})).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), aligned);
+}
+
+/// The 45° plated land starts one radius left of its center, not at the corner of its
+/// rotated rectangle. The same footprint keeps its historical selection-only envelope.
+#[test]
+fn reference_alignment_uses_rotated_round_land_extent() {
+    use crate::board::track::tests::view;
+    let mut s = pitch_connectors(&[Point { x_nm: 32_000_000, y_nm: 12_000_000 }]);
+    let mover = view(&s).footprint_ids().next().unwrap();
+    let reference = place_plated_mounting_hole(&mut s);
+    s.apply(
+        SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":reference,"x_nm":17_000_000,"y_nm":-10_000_000,"rotation":45,"side":"back","expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let hole = view(&s).footprint(&reference).unwrap();
+    let left = hole.pads[0].center.x_nm - 2_500_000;
+    let legacy_left = hole.pads[0].center.x_nm - 3_535_534;
+    assert_eq!(bounds(&hole)[0], legacy_left);
+    assert_eq!(contour_bounds(&hole)[0], left);
+    let hole_at = hole.position;
+    let original = s.snapshot().unwrap();
+    let p = view(&s).footprint(&mover).unwrap();
+    let new_x = p.position.x_nm + left - contour_bounds(&p)[0];
+    let y = p.position.y_nm;
+    let mut params = json!({"footprints":[mover],"mode":"left","reference_footprint":reference,"expected_revision":s.revision()});
+    s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+    assert_eq!(view(&s).footprint(&mover).unwrap().position, Point { x_nm: new_x, y_nm: y });
+    assert_eq!(view(&s).footprint(&reference).unwrap().position, hole_at);
+    let revision = s.revision();
+    params["expected_revision"] = json!(revision);
+    assert_eq!(s.apply(ALIGN_FOOTPRINTS, &params).unwrap(), revision);
+
+    let mut legacy = Session::default();
+    legacy.open_snapshot(original);
+    legacy.apply(ALIGN_FOOTPRINTS, &json!({"footprints":[mover, reference],"mode":"left","expected_revision":legacy.revision()})).unwrap();
+    assert_eq!(bounds(&view(&legacy).footprint(&mover).unwrap())[0], legacy_left);
+}
+
+/// Bound geometry work on the actual synchronous edit path, not just its alignment planner.
+/// Timings for live MCP are a separate qualification: these counters are deterministic.
+#[test]
+fn large_routed_board_reference_alignment_has_bounded_geometry_work() {
+    use crate::board::{
+        track::tests::{copper_layers, route, routed_fixture, view},
+        update::TERMINAL_NET_INDEX_BUILDS,
+        view::FOOTPRINT_GEOMETRY_RESOLUTIONS,
+    };
+    const FILLERS: i64 = 256;
+    const SHIFT: i64 = 5_000_000;
+    let mut s = routed_fixture();
+    let ids: Vec<_> = view(&s).footprint_ids().collect();
+    let (mover, reference) = (&ids[0], &ids[1]);
+    let anchor = view(&s).footprint(reference).unwrap().position;
+    s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":reference,"x_nm":anchor.x_nm,"y_nm":anchor.y_nm + SHIFT,"expected_revision":s.revision()}))
+        .unwrap();
+    for i in 0..FILLERS {
+        let x = 100_000_000 + i % 16 * 10_000_000;
+        let y = 100_000_000 + i / 16 * 10_000_000;
+        s.apply(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":y,"expected_revision":s.revision()})).unwrap();
+        let symbol = s.project().unwrap().symbols().last().unwrap().id();
+        s.apply(
+            PLACE_FOOTPRINT,
+            &json!({"symbol":symbol,"definition":"header-1x02-254","mapping":{"1":"1","2":"2"},
+                "x_nm":x,"y_nm":y,"expected_revision":s.revision()}),
+        )
+        .unwrap();
+    }
+    let moving = view(&s).footprint(mover).unwrap();
+    let pad = moving.pads.iter().find(|p| p.net.as_deref() == Some("ACCEPTED")).unwrap().center;
+    let free = Point { x_nm: pad.x_nm, y_nm: pad.y_nm - 3_000_000 };
+    let layer = copper_layers(&s)[0];
+    route(&mut s, layer, &[pad, free]).unwrap();
+    let stub = view(&s).tracks()[0].id;
+    let background: Vec<_> = (0..=128).map(|i| Point { x_nm: 100_000_000 + i * 2_000_000, y_nm: 78_000_000 + (i % 2) * 500_000 }).collect();
+    route(&mut s, layer, &background).unwrap();
+    let board = view(&s);
+    let n = board.footprint_ids().count();
+    assert_eq!(n, FILLERS as usize + 3);
+    assert_eq!(board.tracks().len(), 129);
+    let revision = s.revision();
+    let mut params = json!({"board":board.target.board,"footprints":[mover],"mode":"top",
+        "reference_footprint":reference,"expected_revision":revision});
+    let align = |s: &mut Session, params: &Value| {
+        // Measure the edit and publication, without a full-board inspection response.
+        FOOTPRINT_GEOMETRY_RESOLUTIONS.with(|count| count.set(0));
+        TERMINAL_NET_INDEX_BUILDS.with(|count| count.set(0));
+        let revision = s.apply(ALIGN_FOOTPRINTS, params).unwrap();
+        (revision, FOOTPRINT_GEOMETRY_RESOLUTIONS.with(|count| count.get()), TERMINAL_NET_INDEX_BUILDS.with(|count| count.get()))
+    };
+    let (published, placements, indexes) = align(&mut s, &params);
+    assert_eq!(published, revision + 1);
+    // Two selected views plus at most three whole-board passes (old lands, new lands, shorts).
+    // The short check also builds a membership index independently of its geometry pass.
+    assert!(placements <= 3 * n + 2, "resolved {placements} footprints on a board with {n}");
+    assert!(indexes <= 5, "built {indexes} accepted-net indexes for one move");
+    let board = view(&s);
+    let carried = board.tracks().iter().find(|track| track.id == stub).unwrap();
+    assert_eq!((carried.start, carried.end), (Point { x_nm: pad.x_nm, y_nm: pad.y_nm + SHIFT }, free));
+    assert_eq!(board.footprint(reference).unwrap().position, Point { x_nm: anchor.x_nm, y_nm: anchor.y_nm + SHIFT });
+    params["expected_revision"] = json!(revision + 1);
+    let (published, placements, indexes) = align(&mut s, &params);
+    assert_eq!(published, revision + 1);
+    assert_eq!((placements, indexes), (2, 1), "a repeated alignment must not scan whole-board geometry or recheck copper");
 }
 
 /// The six target modes use the reference, not the movers' combined bounds. Centers round

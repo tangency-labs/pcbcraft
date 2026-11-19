@@ -100,12 +100,36 @@ pub(crate) fn require_unlocked_placements<'a>(
     }
 }
 
-/// Physical extent of pads, courtyards, fabrication graphics and non-plated holes.
-/// Round a half-nanometer hole radius outward to contain the entire opening.
-/// Silkscreen, including the reference text, is left out so labels never shift an alignment.
-/// Falls back to its origin when it has no geometry.
+/// Historical selection-only alignment and distribution envelope, using pad rectangle corners.
 fn bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
-    let points = footprint.pads.iter().flat_map(|pad| std::iter::once(pad.center).chain(pad.copper.into_iter().flatten())).chain(
+    bounds_with_pad_points(footprint, footprint.pads.iter().flat_map(|pad| std::iter::once(pad.center).chain(pad.copper.into_iter().flatten())))
+}
+
+/// The fixed-reference modes bound actual copper on both the anchor and the movers. Round
+/// outward to the enclosing nanometer; project the contour in placement-relative coordinates
+/// so an integer translation cannot change how a fractional core coordinate rounds.
+fn contour_bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
+    let origin = footprint.position;
+    let relative = |p: Point| Point { x_nm: p.x_nm - origin.x_nm, y_nm: p.y_nm - origin.y_nm };
+    let points = footprint.pads.iter().flat_map(|pad| {
+        let extrema = pad.copper.map(|corners| {
+            let contour = super::geometry::Contour::pad(relative(pad.center), corners.map(relative), pad.shape, pad.corner_radius_nm, pad.size_nm);
+            let [left, top, right, bottom] = contour.bounds();
+            [
+                Point { x_nm: origin.x_nm + left.floor() as i64, y_nm: origin.y_nm + top.floor() as i64 },
+                Point { x_nm: origin.x_nm + right.ceil() as i64, y_nm: origin.y_nm + bottom.ceil() as i64 },
+            ]
+        });
+        std::iter::once(pad.center).chain(extrema.into_iter().flatten())
+    });
+    bounds_with_pad_points(footprint, points)
+}
+
+/// Include courtyard and fabrication geometry and non-plated holes, but not silkscreen
+/// (including reference text). Round a half-nanometer hole radius outward to contain the
+/// entire opening. Fall back to the placement origin when nothing contributes points.
+fn bounds_with_pad_points(footprint: &super::view::FootprintView<'_>, pad_points: impl Iterator<Item = Point>) -> [i64; 4] {
+    let points = pad_points.chain(
         footprint
             .graphics
             .iter()
@@ -335,13 +359,12 @@ pub(super) fn alignment_candidate(project: &Project, params: &Value) -> Result<O
         let mut wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
         let mut found: std::collections::BTreeMap<String, [i64; 4]> = if let Some(reference) = reference {
             wanted.insert(reference.to_owned());
-            view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect()
+            view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), contour_bounds(&f))).collect()
         } else {
             view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect()
         };
-        let reference = reference
-            .map(|id| found.remove(id).ok_or_else(|| CommandError::NotFound(format!("unknown reference footprint {id}"))))
-            .transpose()?;
+        let reference =
+            reference.map(|id| found.remove(id).ok_or_else(|| CommandError::NotFound(format!("unknown reference footprint {id}")))).transpose()?;
         let boxes = ids
             .iter()
             .map(|id| found.remove(&format!("footprint-{id}")))
