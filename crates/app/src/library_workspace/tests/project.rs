@@ -99,14 +99,28 @@ fn where_used_category_is_reachable_from_source_and_offline_project() {
     let mut h = fixture(1800.);
     place(h.state_mut());
     let snapshot = h.state().session.snapshot().unwrap();
-    click(&mut h, "Native Parts Demo");
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id();
+    // Set up the exact source and search without relying on the tree's disclosure hit target.
+    // Do not preselect an item: the test must reach the category through its visible row.
+    h.state_mut()
+        .run_window_command(
+            &ctx,
+            "app.library_browse",
+            &json!({"view":view.0,"scope":"sources","source":"example-parts","type":0,"query":"resistor"}),
+        )
+        .unwrap();
+    h.run();
+    assert_eq!(h.state().views.active.library.as_ref().unwrap().source_id(), Some("example-parts"));
     click(&mut h, "Category parts-demo/resistor r1");
+    assert_eq!(h.state().views.active.library.as_ref().unwrap().selected.as_ref().unwrap().kind, Kind::Category);
     click(&mut h, "Where used");
     h.get_by_label("R1 · Schematic only");
     h.state_mut().session.execute(sources::REMOVE, &json!({"source":"example-parts"})).unwrap();
     h.run();
     click(&mut h, "Project libraries");
     click(&mut h, "Project Category parts-demo/resistor r1");
+    assert_eq!(h.state().views.active.library.as_ref().unwrap().selected.as_ref().unwrap().kind, Kind::Category);
     click(&mut h, "Where used");
     h.get_by_label("R1 · Schematic only");
     assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
