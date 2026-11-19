@@ -26,6 +26,19 @@ fn aperture_fixture_at(
     position: Point,
     plated_from: Option<usize>,
 ) -> Session {
+    aperture_fixture_with_pitch(pads, rotation, bottom, offset, position, plated_from, Point { x_nm: 2_000_000, y_nm: 0 })
+}
+
+/// Author lands with an explicit pitch vector to exercise arbitrary library zero orientations.
+fn aperture_fixture_with_pitch(
+    pads: &[(PadShape, i64, i64, u16)],
+    rotation: u16,
+    bottom: bool,
+    offset: Point,
+    position: Point,
+    plated_from: Option<usize>,
+    pitch: Point,
+) -> Session {
     use crate::authoring::{Action, Item, Kind, Primitive};
     let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
     editor.execute(editor.revision(), Action::Delete { objects: vec![2, 3] }).unwrap();
@@ -33,7 +46,7 @@ fn aperture_fixture_at(
     for (index, &(shape, width, height, pad_rotation)) in pads.iter().enumerate() {
         let mut pad = template.clone();
         pad.number = (index + 1).to_string();
-        pad.center = Point { x_nm: index as i64 * 2_000_000 + offset.x_nm, y_nm: offset.y_nm };
+        pad.center = Point { x_nm: index as i64 * pitch.x_nm + offset.x_nm, y_nm: index as i64 * pitch.y_nm + offset.y_nm };
         if plated_from.is_some_and(|first| index >= first) {
             pad.copper = crate::board::definition::CopperBinding::AllCopper;
             pad.drill_nm = Some(width.min(height) / 2);
@@ -81,6 +94,140 @@ fn aperture_fixture_at(
     .unwrap();
     outline(&mut s);
     s
+}
+
+/// Append a plain 0402 resistor through the live placement and transform commands.
+fn add_assembly_resistor(s: &mut Session, schematic_x: i64, at: Point, rotation: u16) -> String {
+    s.apply(crate::PLACE_RESISTOR, &json!({"x_nm":schematic_x,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    let part = s.project().unwrap().components().last().unwrap().id();
+    let definition = crate::board::definition::basic_components("resistor-0402").unwrap();
+    s.apply(
+        crate::ASSIGN_FOOTPRINT,
+        &json!({"component":part,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,
+            "mapping":{"1":"1","2":"2"},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    s.apply(crate::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":part,"x_nm":at.x_nm,"y_nm":at.y_nm,"expected_revision":s.revision()})).unwrap();
+    let footprint = view(s).footprint_ids().last().unwrap();
+    s.apply(
+        crate::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":footprint,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":rotation,"side":"front","expected_revision":s.revision()}),
+    )
+    .unwrap();
+    s.project().unwrap().symbols.last().unwrap().id()
+}
+
+/// Ucamco Gerber rev. 2026.05 §§5.6.3, 5.6.10, 5.6.15–16: the D10 aperture is a 0.300 mm
+/// main flash with its own attributes. Both sides are read looking from the top; the bottom
+/// layer follows the last physical copper layer. Library angles and drill geometry aren't metadata.
+#[test]
+fn gerber_x3_places_one_main_flash_per_part_on_its_own_side() {
+    let mut s = aperture_fixture_with_pitch(
+        &[(PadShape::Oval, 800_000, 900_000, 37); 2],
+        30,
+        true,
+        Point { x_nm: 0, y_nm: 0 },
+        Point { x_nm: 31_000_001, y_nm: -21_000_003 },
+        Some(0),
+        Point { x_nm: 2_000_000, y_nm: 1_000_000 },
+    );
+    let top = add_assembly_resistor(&mut s, 10_000_000, Point { x_nm: 7_000_000, y_nm: 9_000_000 }, 270);
+    add_assembly_resistor(&mut s, 20_000_000, Point { x_nm: 12_000_000, y_nm: 16_000_000 }, 90);
+    let bottom_name = s
+        .project()
+        .unwrap()
+        .board
+        .footprints()
+        .first()
+        .and_then(|placement| s.project().unwrap().board.definition_for(placement))
+        .unwrap()
+        .name
+        .clone();
+    s.apply(crate::SET_SYMBOL_FIELDS, &json!({"symbol":top,"reference":"R2","value":"4k7,±1%*\\nominal","expected_revision":s.revision()})).unwrap();
+    let before = view(&s).gerber_part_layers().unwrap();
+    assert!(before.files[0].contents.contains("X7000000Y-9000000D03*"));
+    assert!(before.files.iter().all(|file| !file.contents.contains(".SameCoordinates")));
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"expected_revision":s.revision(),
+        "origin":{"kind":"point","x_nm":8_000_000,"y_nm":10_000_001}}),
+    )
+    .unwrap();
+
+    let revision = s.revision();
+    let snapshot = s.snapshot().unwrap();
+    let bare_board = view(&s).fabrication_outputs().unwrap();
+    let layers = view(&s).gerber_part_layers().unwrap();
+    let [top, bottom] = layers.files.as_slice() else { panic!("Expected exactly two populated layers") };
+    assert!(top.name.ends_with("-Assembly_Top.gbr"));
+    assert!(bottom.name.ends_with("-Assembly_Bottom.gbr"));
+    for (file, function) in [(top, "L1,Top"), (bottom, "L4,Bot")] {
+        assert!(file.contents.contains(&format!("%TF.FileFunction,Component,{function}*%\n")));
+        assert!(file.contents.contains("%FSLAX46Y46*%\n%MOMM*%\n"));
+        assert!(file.contents.contains("%TA.AperFunction,ComponentMain*%\n%ADD10C,0.300000*%\n%TD.AperFunction*%\nD10*\n"));
+        assert_eq!(file.contents.lines().filter(|line| *line == "D10*").count(), 1);
+        assert!(!file.contents.contains(".SameCoordinates"));
+    }
+    let object_body = |file: &Output| file.contents.split_once("\nD10*\n").unwrap().1.to_owned();
+    assert_eq!(
+        object_body(top),
+        concat!(
+            "%TO.C,R2*%\n%TO.CVal,4k7\\u002C±1\\u0025\\u002A\\u005Cnominal*%\n",
+            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX-1000000Y1000001D03*\n%TD*%\n",
+            "%TO.C,R3*%\n%TO.CVal,R*%\n",
+            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX4000000Y-5999999D03*\n%TD*%\nM02*\n",
+        )
+    );
+    assert_eq!(object_body(bottom), format!("%TO.C,R1*%\n%TO.CVal,R*%\n%TO.CFtp,{bottom_name}*%\nX23000001Y31000004D03*\n%TD*%\nM02*\n"));
+    assert_eq!(layers, view(&s).gerber_part_layers().unwrap());
+    assert!(bare_board.iter().filter(|file| file.name.ends_with(".gbr")).all(|file| file.contents.contains("%TF.SameCoordinates,Original*%")));
+    assert_eq!(bare_board, view(&s).fabrication_outputs().unwrap());
+    assert_eq!(revision, s.revision());
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+}
+
+/// Empty sides stay absent, and unavailable setup or origin produces a specific refusal.
+#[test]
+fn gerber_x3_requires_setup_and_a_resolvable_origin() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    assert_eq!(view(&s).gerber_part_layers().unwrap_err(), "Initialize the board setup before generating Gerber assembly layers.");
+    s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
+    assert!(view(&s).gerber_part_layers().unwrap().files.is_empty());
+    add_assembly_resistor(&mut s, 0, Point { x_nm: 1_000_000, y_nm: 1_000_000 }, 0);
+    let layers = view(&s).gerber_part_layers().unwrap();
+    assert_eq!(layers.files.len(), 1);
+    assert!(layers.files[0].name.ends_with("-Assembly_Top.gbr"));
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(crate::SET_PLACEMENT_ORIGIN, &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"outline_lower_left"}})).unwrap();
+    assert!(view(&s).gerber_part_layers().unwrap_err().contains("Board Outline"));
+}
+
+/// Pending removals still flash while unique, even across sides; a reused live reference
+/// would link that retained placement to the wrong part, so fail the entire export (§§5.6.15–16).
+#[test]
+fn gerber_x3_rejects_a_reference_reused_while_removal_is_pending() {
+    let mut s = routed_fixture();
+    let project = s.project().unwrap();
+    let [first, second, ..] = &project.symbols[..] else { panic!("Expected at least two symbols") };
+    let (first, second) = (first.id(), second.id());
+    let placed_parts: Vec<_> = view(&s).footprints().collect();
+    let [placed, live, ..] = placed_parts.as_slice() else { panic!("Expected at least two footprints") };
+    let (retained, other) = (placed.id.clone(), live.id.clone());
+    let at = placed.position;
+    s.apply(
+        crate::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":retained,"x_nm":at.x_nm,"y_nm":at.y_nm,
+        "rotation":0,"side":"back","expected_revision":s.revision()}),
+    )
+    .unwrap();
+    s.apply(crate::DELETE_SYMBOL, &json!({"symbol":first,"expected_revision":s.revision()})).unwrap();
+    assert!(view(&s).footprint(&retained).unwrap().pending_removal);
+    let layers = view(&s).gerber_part_layers().unwrap();
+    assert!(layers.files[1].contents.contains("%TO.C,R1*%"));
+    s.apply(crate::SET_SYMBOL_FIELDS, &json!({"symbol":second,"reference":"R1","value":"R","expected_revision":s.revision()})).unwrap();
+    assert_eq!(view(&s).gerber_part_layers().unwrap_err(), format!("Duplicate Gerber reference \"R1\" on placements {retained} and {other}."));
 }
 
 /// Test-only read-back of the emitted Gerber subset, independent of the writer's aperture key.
