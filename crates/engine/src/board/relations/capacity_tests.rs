@@ -6,7 +6,7 @@ use crate::{
     board::{self, update},
     persistence::{MAX_DOCUMENT_BYTES, decode_documents, encode_documents, test_board_path},
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use std::sync::Arc;
 
 /// Use bounded display names in accepted history so the fixture needs very few live objects.
