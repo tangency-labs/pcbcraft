@@ -3027,7 +3027,8 @@ impl Session {
     /// identity/absence and retains a later root/folder choice made since the save began.
     /// Later created sheets retain their inspected compatibility IDs through occurrence adoption.
     /// The captured snapshot is replaced by the saved Arc so dirty-state comparisons stay valid.
-    /// When it changes anything, the edit observer is told the current project as a new root.
+    /// When both Arcs are already the same, only other history snapshots may need adoption.
+    /// If anything changes, the edit observer is told the current project as a new root.
     pub fn adopt_saved_metadata(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
         if !saved.same_document(original) {
             return false;
@@ -3039,8 +3040,10 @@ impl Session {
                 continue;
             }
             if Arc::ptr_eq(project, original) {
-                *project = saved.clone();
-                changed = true;
+                if !Arc::ptr_eq(project, saved) {
+                    *project = saved.clone();
+                    changed = true;
+                }
                 continue;
             }
             let mut next = Project::clone(project);
@@ -4792,6 +4795,21 @@ mod tests {
         assert_eq!(name(&s), Some(UNTITLED));
         s.apply("edit.undo", &Value::Null).unwrap();
         assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &saved));
+    }
+
+    /// Adopting the same snapshot is a no-op when history already has its saved metadata.
+    #[test]
+    fn adopting_an_unchanged_saved_snapshot_with_current_history_is_a_noop() {
+        let mut s = Session::default();
+        s.apply("project.new", &Value::Null).unwrap();
+        let prepared = s.snapshot().unwrap().with_board_folders(".").unwrap().with_sheet_occurrences().unwrap();
+        s.open_snapshot(Arc::new(prepared));
+        s.apply("project.rename", &json!({"name":"Already prepared"})).unwrap();
+        let saved = s.snapshot().unwrap();
+        let revision = s.revision();
+        assert!(!s.adopt_saved_metadata(&saved, &saved));
+        assert_eq!(s.revision(), revision);
+        assert!(Arc::ptr_eq(&saved, &s.snapshot().unwrap()));
     }
 
     #[test]

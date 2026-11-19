@@ -125,7 +125,7 @@ fn load_folder(root: &Path) -> Result<Saved, String> {
 /// destination in the requested format (a folder by default).
 /// Unchanged documents retain their bytes; dismissing the picker returns `Outcome::Cancelled`.
 /// A first save suggests the project's name; one still named Untitled is saved under its chosen
-/// folder or archive name (see [`name_for`]), and the outcome carries the snapshot it renamed.
+/// folder or archive name (see [`name_for`]); success carries the original captured snapshot.
 pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Target)>, format: Option<SaveFormat>) -> Result<Outcome, String> {
     if let Some((old, target)) = previous.as_ref().filter(|_| format.is_none()) {
         return save_target(snapshot, Some(old), target.clone(), &mut |_| Ok(()));
@@ -151,9 +151,8 @@ pub(super) fn save(snapshot: Arc<Project>, previous: Option<(Arc<Project>, Targe
 
 /// Publish to a destination the person chose, which must not exist yet, adding `.pc` to an
 /// archive name without it. An Untitled project saved for the first time takes the destination's
-/// name (see [`name_for`]); the outcome then carries the snapshot it renamed. A failure leaves no
-/// metadata change behind, since only a successful outcome is adopted. The same outcome
-/// adopts a prepared board-folder layout across the captured document's history.
+/// name (see [`name_for`]). Success carries the original captured snapshot for metadata
+/// adoption across history, including an already-prepared layout. Failure adopts nothing.
 pub(super) fn save_new(
     snapshot: Arc<Project>,
     previous: Option<&(Arc<Project>, Target)>,
@@ -162,10 +161,7 @@ pub(super) fn save_new(
 ) -> Result<Outcome, String> {
     let path = normalize(&with_extension(format, path)?)?;
     let original = snapshot.clone();
-    let (snapshot, renamed) = match name_for(&snapshot, previous.is_some(), &path) {
-        Some(named) => (Arc::new(named), Some(snapshot)),
-        None => (snapshot, None),
-    };
+    let snapshot = name_for(&snapshot, previous.is_some(), &path).map_or(snapshot, Arc::new);
     let mut target = Target {
         path,
         bytes: Arc::from([]),
@@ -175,7 +171,6 @@ pub(super) fn save_new(
         added_manifest: false,
     };
     let snapshot = folder::layout::prepare(snapshot, (target.encoding == Encoding::Json).then_some(target.path.as_path()), None)?;
-    let renamed = renamed.or_else(|| (!Arc::ptr_eq(&original, &snapshot)).then_some(original));
     let documents = working_documents(&snapshot, previous.map(|(old, _)| old), previous.and_then(|(_, target)| target.documents.as_deref()))?;
     if target.encoding == Encoding::Zip {
         target.bytes = encode_packed_documents(documents.clone())?.into();
@@ -184,7 +179,7 @@ pub(super) fn save_new(
         folder::save(&target.path, None, &documents, &mut |_| Ok(()))?;
     }
     target.documents = Some(Arc::new(documents));
-    Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, renamed))
+    Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, original))
 }
 
 /// Add `.pc` to an archive destination without it (in any case); folders and `.pc` names are kept.
@@ -239,7 +234,7 @@ fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, o
 /// Publish a folder or v3 archive while retaining unchanged input bytes. Comparing each old
 /// canonical document preserves custom formatting in files unaffected by the current edit.
 /// The first save prepares a board-folder migration even for an unchanged flat snapshot;
-/// session metadata is returned for adoption only after successful publication.
+/// the captured snapshot is returned for metadata adoption only after successful publication.
 fn save_target(
     snapshot: Arc<Project>,
     previous: Option<&Arc<Project>>,
@@ -249,7 +244,6 @@ fn save_target(
     let original = snapshot.clone();
     let snapshot =
         folder::layout::prepare(snapshot, (target.encoding == Encoding::Json).then_some(target.path.as_path()), target.documents.as_deref())?;
-    let adopted = (!Arc::ptr_eq(&original, &snapshot)).then_some(original);
     let unchanged = previous.is_some_and(|old| Arc::ptr_eq(old, &snapshot));
     if target.encoding == Encoding::Zip {
         let bytes = if unchanged && !target.needs_manifest {
@@ -269,7 +263,7 @@ fn save_target(
         folder::save(&target.path, target.documents.as_deref(), &documents, checkpoint)?;
         target.documents = Some(Arc::new(documents));
     }
-    Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, adopted))
+    Ok(Outcome::Saved(Saved { snapshot, opened: None, upgrades: Upgrades::default(), target }, original))
 }
 
 /// Canonicalize the parent directory so application instances use the same lock for the destination.
