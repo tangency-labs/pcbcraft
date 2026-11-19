@@ -698,7 +698,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
     if !lock_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
         return Err(
-            "Differential pairs require project format 45 or 51 and instances format 8 when board-owned; format 45 requires a nonempty pair list."
+            "Differential pairs require project format 45 or 51 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
                 .into(),
         );
     }
