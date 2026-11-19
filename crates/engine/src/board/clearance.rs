@@ -2,6 +2,7 @@
 //! contact/separation predicates; the exhaustive path is a reference for later spatial indexes.
 use super::{
     geometry::Contour,
+    pair_index::{PairStep, PairWalk},
     track::{Land, islands, lands, with_pad_contacts},
     view::{BoardTarget, BoardView},
 };
@@ -329,6 +330,13 @@ pub(super) struct BoardGeometry {
     index: OnceLock<Arc<index::Index>>,
 }
 
+// Used by the capacity regression to fail immediately if a doomed command starts
+// synchronous connectivity work. The guard applies only to that test thread.
+#[cfg(test)]
+thread_local! {
+    pub(in crate::board) static FORBID_SYNCHRONOUS_GEOMETRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl BoardGeometry {
     /// Publish a lazily built immutable index without making another query wait for a builder.
     /// Concurrent first queries may duplicate a bounded build; subsequent queries share one tree.
@@ -343,6 +351,8 @@ impl BoardGeometry {
     /// Resolve supported contours and the complete intended membership of every routed island.
     /// Keep legacy clearance islands separate from direct-pad contact traversal used for shorts.
     pub(crate) fn new(view: BoardView<'_>) -> Self {
+        #[cfg(test)]
+        assert!(!FORBID_SYNCHRONOUS_GEOMETRY.get(), "an over-capacity command started synchronous board geometry");
         let lands = lands(view);
         let (copper, members) = islands(&lands, view.tracks(), view.vias());
         Self::from_islands(view, lands, copper, members)
@@ -461,22 +471,50 @@ impl BoardGeometry {
     fn pairs(&self, clearance_nm: i64) -> impl Iterator<Item = Decision> + '_ {
         self.candidate_pairs(clearance_nm).filter_map(move |(i, j)| self.evaluate(i, j, clearance_nm))
     }
-    /// DRC needs only clearance decisions; skip its existing exemptions before narrow-phase
-    /// work, while the general query continues to expose contact independently for shorts.
-    /// Across different islands, unresolved membership remains a clearance obstacle even when
-    /// display names match: only one equal, resolved intended net proves a same-net exemption.
+    /// Build a conservative clearance cursor using the greatest applicable rule. Public
+    /// `pairs()` still returns its legacy AABB candidates, even when they do not violate.
+    pub(super) fn clearance_walk(&self, clearance_nm: i64, context: Option<&super::class_rules::Context>) -> PairWalk {
+        let maximum = context.map_or(clearance_nm, |context| context.max_clearance(clearance_nm));
+        PairWalk::new(self.items.iter().map(|item| &item.contour), maximum)
+    }
+
+    /// Apply the checker’s exemptions and exact spacing predicate to one canonical pair.
+    /// Only one equal, resolved intended net proves a same-net exemption; equal display names
+    /// do not exempt unresolved islands.
+    pub(super) fn clearance_decision(
+        &self,
+        i: usize,
+        j: usize,
+        clearance_nm: i64,
+        context: Option<&super::class_rules::Context>,
+    ) -> Option<Decision> {
+        let (a, b) = (&self.items[i], &self.items[j]);
+        if a.island == b.island || (a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets) {
+            return None;
+        }
+        self.evaluate(i, j, context.map_or(clearance_nm, |context| context.clearance(Some(i), j, clearance_nm)))
+    }
+
+    /// Stream conservative candidates for synchronous DRC without retaining an all-pairs table.
     pub(super) fn clearance_pairs<'a>(
         &'a self,
         clearance_nm: i64,
         context: Option<&'a super::class_rules::Context>,
     ) -> impl Iterator<Item = Decision> + 'a {
-        let maximum = context.map_or(clearance_nm, |context| context.max_clearance(clearance_nm));
-        self.candidate_pairs(maximum)
-            .filter(move |(i, j)| {
-                let (a, b) = (&self.items[*i], &self.items[*j]);
-                a.island != b.island && !(a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets)
-            })
-            .filter_map(move |(i, j)| self.evaluate(i, j, context.map_or(clearance_nm, |context| context.clearance(Some(i), j, clearance_nm))))
+        let mut walk = self.clearance_walk(clearance_nm, context);
+        std::iter::from_fn(move || {
+            loop {
+                match walk.step() {
+                    PairStep::Pending => (),
+                    PairStep::Done => return None,
+                    PairStep::Pair(i, j) => {
+                        if let Some(decision) = self.clearance_decision(i, j, clearance_nm, context) {
+                            return Some(decision);
+                        }
+                    }
+                }
+            }
+        })
     }
     /// Evaluate shape separation independently of the candidate-enumeration strategy.
     pub(super) fn evaluate(&self, i: usize, j: usize, clearance_nm: i64) -> Option<Decision> {

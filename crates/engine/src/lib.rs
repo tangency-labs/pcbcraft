@@ -218,9 +218,9 @@ impl ParamKind {
             Self::BoardSelection => json!({"type":"object","properties":{
                 "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
                 "drawings":{"type":"array","maxItems":512,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
-                "zones":{"type":"array","maxItems":board::zones::MAX_ZONES,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
-                "tracks":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
-                "vias":{"type":"array","maxItems":2048,"uniqueItems":true,"items":ParamKind::DrawingId.schema()}
+                "tracks":{"type":"array","maxItems":board::track::MAX_TRACKS,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
+                "vias":{"type":"array","maxItems":board::track::MAX_VIAS,"uniqueItems":true,"items":ParamKind::DrawingId.schema()},
+                "zones":{"type":"array","maxItems":board::zones::MAX_ZONES,"uniqueItems":true,"items":ParamKind::DrawingId.schema()}
             },"additionalProperties":false}),
             Self::SchematicPasteTargets => {
                 json!({"type":"object","maxProperties":sheets::MAX_SHEETS,"additionalProperties":{"type":"object","properties":{"sheet":ParamKind::SheetId.schema(),"at":ParamKind::Point.schema()},"required":["sheet","at"],"additionalProperties":false}})
@@ -417,6 +417,13 @@ impl ParamKind {
             }
             Self::ClipboardLayers if serde_json::from_value::<BTreeMap<uuid::Uuid, uuid::Uuid>>(value.clone()).is_ok_and(|m| m.len() <= 128) => {
                 Ok(())
+            }
+            // The counts are board::track::MAX_TRACKS and MAX_VIAS; a test keeps the text in step.
+            Self::BoardSelection if value["tracks"].as_array().is_some_and(|a| a.len() > board::track::MAX_TRACKS) => {
+                Err("must select at most 65536 tracks")
+            }
+            Self::BoardSelection if value["vias"].as_array().is_some_and(|a| a.len() > board::track::MAX_VIAS) => {
+                Err("must select at most 16384 vias")
             }
             Self::BoardSelection => Err("must be bounded unique board object ID lists"),
             Self::SchematicPasteTargets => Err("must map source sheet UUIDs to explicit destination sheets and anchors"),
@@ -628,6 +635,7 @@ impl ParamKind {
             {
                 Ok(())
             }
+            Self::TrackEnds if value.as_array().is_some_and(|items| items.len() > board::track::MAX_TRACKS) => Err("must list at most 65536 tracks"),
             Self::TrackEnds => Err("must list tracks with a UUID and bounded start and end points"),
             Self::AlignMode if value.as_str().and_then(AlignMode::parse).is_some() => Ok(()),
             Self::AlignMode => Err("must be an alignment mode"),
@@ -637,6 +645,7 @@ impl ParamKind {
             Self::TrackPath => Err("must contain 2–256 bounded vertices"),
             Self::PreviousRoute => Err("must contain at most 256 bounded vertices"),
             Self::TrackWidth => Err("must be a track width from 10000 to 10000000 nanometers"),
+            Self::TrackIds if value.as_array().is_some_and(|ids| ids.len() > board::track::MAX_TRACKS) => Err("must list at most 65536 IDs"),
             Self::TrackIds => Err("must contain unique non-nil track UUIDs"),
             Self::DrawingPoints => Err("must contain 2–256 bounded vertices"),
             Self::DrawingId => Err("must identify a drawing or layer by non-nil UUID"),
@@ -3261,6 +3270,7 @@ impl Session {
     /// queries return catalog data and board-update preview returns its bounded
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
+    /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
     /// Failed commands leave the project intact; a stale `expected_revision` is reported first
     /// unless the command returns a stale query outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
@@ -3282,10 +3292,7 @@ impl Session {
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if matches!(id, board::clipboard::COPY | board::clipboard::CUT) {
-            let text = self.copy_board(params, id == board::clipboard::CUT)?;
-            if id == board::clipboard::CUT {
-                self.apply(id, params)?;
-            }
+            let text = if id == board::clipboard::CUT { self.cut_board(params)? } else { self.copy_board(params)? };
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if matches!(id, clipboard::COPY | clipboard::CUT) {
@@ -3361,8 +3368,13 @@ impl Session {
     /// A command that advances the revision is reported to the edit observer once it has
     /// been adopted; failures, no-ops and queries are not reported. Copper commands report
     /// from their prepared publication path, which also serves direct prepared commits.
+    /// Board cut checks the encoded clipboard limit even though only the revision is returned.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         self.refuse_stale(id, params)?;
+        if id == board::clipboard::CUT {
+            self.cut_board(params)?;
+            return Ok(self.revision);
+        }
         let before = self.revision;
         let revision = self.apply_command(id, params)?;
         if revision != before && !board::track::preparation::is_copper_edit(id) {
@@ -3703,11 +3715,10 @@ impl Session {
                 self.prepare_text_clipboard(id, params)?;
             }
             board::clipboard::COPY => {
-                self.copy_board(params, false)?;
+                self.copy_board(params)?;
             }
-            board::clipboard::CUT => self.delete_board_items(params, true)?,
             board::movement::MOVE_ITEMS => self.move_board_items(params)?,
-            board::clipboard::DELETE => self.delete_board_items(params, false)?,
+            board::clipboard::DELETE => self.delete_board_items(params)?,
             board::clipboard::PASTE => self.paste_board(params)?,
             clipboard::COPY => {
                 self.copy_schematic(params, false)?;
@@ -4263,7 +4274,15 @@ impl Session {
         if !self.defer_net_reconciliation {
             project.reconcile_nets(self.project.as_deref())?;
         }
-        board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+        // A copper-bearing board must still fit the native board file after a physical edit.
+        // Do this before replacing the snapshot, changing history or notifying observers.
+        if (!project.board.tracks.is_empty() || !project.board.vias.is_empty())
+            && self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+        {
+            persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
+        } else {
+            board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+        }
         Ok((project, highest))
     }
 

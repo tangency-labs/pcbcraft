@@ -821,14 +821,16 @@ one straight segment on its own line: a UUID `id`, a copper `layer` UUID from th
 setup, an integer `width_nm` from 10,000 to 10,000,000, and integer-nanometer
 `start` and `end` points that differ. Records sort by UUID, so adding or deleting a
 segment changes only its own line. The codec rejects duplicate IDs, non-copper or
-unknown layers, out-of-range widths and more than 4096 segments. Format 12 requires
+unknown layers, out-of-range widths and more than 65,536 segments (4,096 in earlier
+releases, which reject larger boards with that error rather than truncating them). Format 12 requires
 at least one track and rejects `vias`, so readers released with it keep working.
 
 Board format 13 adds a `vias` array in the same style and is otherwise format 12: a
 UUID `id`, an integer-nanometer `at` point, and `diameter_nm` and `drill_nm`, with the
 drill at least 50,000 and smaller than the pad and the pad at most 10,000,000. A via
 spans every copper layer and needs a setup with at least two; a board holds at most
-2048. Format 13 requires at least one via, and its `tracks` array is optional. Either
+16,384 (2,048 in earlier releases), within the native board document size limit.
+Format 13 requires at least one via, and its `tracks` array is optional. Either
 array is omitted when empty, and formats before 12 reject both fields. With no
 vias, tracks alone require format 12 unless other fields require a later format.
 Deleting the last track and via leaves the format required by the remaining data.
