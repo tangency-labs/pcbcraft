@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
 
+mod command_api;
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
@@ -875,8 +877,8 @@ fn live_replies_keep_their_codes() {
     let failure = Failure::from_reply(&coded, "project changed");
     assert_eq!((failure.code(), failure.message()), ("stale_revision", "project changed"));
     assert_eq!(failure.details(), &json!({"current_revision": 4}));
-    let newer = Failure::from_reply(&json!({"error": "x", "code": "version_mismatch"}), "x");
-    assert_eq!(newer.code(), "version_mismatch");
+    let newer = Failure::from_reply(&json!({"error": "x", "code": "future_code"}), "x");
+    assert_eq!(newer.code(), "future_code");
     for details in [Value::Null, json!([1]), json!(7), json!("revision"), json!(true)] {
         let failure = Failure::from_reply(&json!({"code": "stale_revision", "details": details}), "project changed");
         assert_eq!(failure.code(), "stale_revision");

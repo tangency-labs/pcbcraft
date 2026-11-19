@@ -39,6 +39,8 @@ pub enum ErrorCode {
     ConnectionFailed,
     /// The request itself is malformed: an unknown method or a missing command id.
     InvalidRequest,
+    /// The call states a version of the command other than the one this build runs.
+    VersionMismatch,
 }
 
 impl ErrorCode {
@@ -57,6 +59,7 @@ impl ErrorCode {
         Self::NoReply,
         Self::ConnectionFailed,
         Self::InvalidRequest,
+        Self::VersionMismatch,
     ];
 
     /// The code as clients see it.
@@ -75,6 +78,7 @@ impl ErrorCode {
             Self::NoReply => "no_reply",
             Self::ConnectionFailed => "connection_failed",
             Self::InvalidRequest => "invalid_request",
+            Self::VersionMismatch => "version_mismatch",
         }
     }
 

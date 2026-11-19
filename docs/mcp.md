@@ -202,7 +202,7 @@ edits or reach file controls. Headless sessions cannot run them.
 
 `list_commands` keeps returning the command array as its first text part. A
 second text part, also given as the result's `structuredContent`, reads
-`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes"]}`.
+`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
 
 - `command_api_version` is one number for the whole public command contract,
@@ -231,8 +231,8 @@ and none is saved in projects.
 snapshot of every command's contract: `command_api_version`, then one line per
 command in `commands` (project commands) and `window_commands` (window and
 `ui.` commands), each the description without its `id` and without the
-`title`, `summary` and `description` of the command and its schemas, with
-object keys sorted (values of `const`, `default`, `enum` and `examples` are
+`title`, `summary`, `description` and deprecation annotations of the command
+and its schemas, with object keys sorted (values of `const`, `default`, `enum` and `examples` are
 kept whole). The engine and app tests compare the described commands with it
 and label detected differences. If either parameter schema contains `$ref`,
 `$dynamicRef` or `$recursiveRef`, every difference in it is conservatively
@@ -297,6 +297,60 @@ meaning still needs review, and it cannot tell whether a raise was the right
 decision; a review must still read
 every change to `command-contracts.json`.
 
+### Stating a version
+
+Pass optional `version` to `execute` to pin the `command_api_version` from
+`list_commands`. There is no per-command version. Omitting `version` runs
+against the session’s current API. The MCP tool accepts a positive JSON
+integer (for example `1`, not `1.0`, `"1"` or `null`). Check the serving
+session’s `version_check` capability before pinning. Legacy MCP backends that
+do not implement pinning refuse a pin without dispatching; unpinned calls
+still work.
+
+The MCP bridge and raw live clients that need a guarantee across editor versions
+use `engine.execute_versioned` with a required non-null `params.version` beside
+`params.command`. For example:
+
+```json
+{"method":"engine.execute_versioned","params":{"command":"edit.undo","version":1}}
+```
+
+A missing or null pin on that method is `invalid_request`; an older editor
+rejects the method rather than executing the command. Use plain `engine.execute`
+for unpinned requests. A current editor also checks a non-null `version` on
+plain `engine.execute` (omitted or `null` means unpinned), but a legacy editor
+ignores it and may execute the command. A malformed pin on a known command
+that reaches the version check returns `invalid_params` on the live endpoint.
+
+A known, routable project, window or `ui.` command with a different API version
+returns `version_mismatch` without running. Refresh the catalog and adapt the
+call. Unknown commands and a missing live editor keep their existing refusals.
+Outer admission checks still run first, including assistant approval, ordinary
+project/window editor refusal and deferred-job expiry, busy and editor refusal.
+The `ui.` handler's own checks, such as busy or native focus, run only after a
+matching or omitted pin.
+
+### Deprecated commands and parameters
+
+Mark a command or top-level parameter deprecated for at least one release
+before removing it. Discovery annotates the command or its schema under
+`params.properties` with `"deprecated": true` and
+`"x-deprecation": {"since": "0.2.0", "replacement": "new_name"}`. The
+replacement is a command id or parameter name, or `null` when there is none.
+Marking a deprecation changes discovery and its catalog revision, not the
+command contract snapshot or the API version.
+
+A successful call that uses something deprecated still returns its ordinary
+result as the first MCP text part. A second text part, also given as
+`structuredContent`, carries `{"warnings": [...]}`. Each entry has `code`
+(`deprecated`), `command`, `parameter` (`null` for a whole command), `since`,
+`replacement` and a human-readable `message`. Passing a deprecated parameter
+explicitly counts as use even when its value is `null` and the command accepts
+it. The live endpoint puts `warnings` beside `result`; failures and successes
+without warnings keep their previous execution reply shape. The
+`deprecation_warnings` capability indicates support. No production command or
+parameter is deprecated yet.
+
 ## Error codes
 
 A tool call that fails after its arguments were accepted is still a result with
@@ -329,11 +383,13 @@ a malformed reply from another editor may omit the facts it describes.
 | `busy` | The editor is already running a request of the same kind, such as a design check, or has reached a worker or request capacity limit; retry later. |
 | `no_reply` | No usable reply came back from the editor, so the command may have run; inspect before retrying an edit. |
 | `connection_failed` | Connecting or sending the request failed. A failed send may still have delivered a complete request; inspect before retrying an edit. |
-| `invalid_request` | The request to the live editor is malformed: an unknown method or a missing command id. |
+| `invalid_request` | The request to the live editor is malformed: an unknown method, a missing command id or a missing required version pin. |
+| `version_mismatch` | The stated command API version is older or newer than the one this session serves; the command did not run. `details` gives `command`, `stated_version` and `current_version`. |
 
-Project commands that take `expected_revision` check it first, so a stale edit
-reports `stale_revision` whatever else is wrong with its parameters; a malformed
-revision is `invalid_params`. The read-only [`pcb.plan_route`](route-planning.md#command)
+A version pin is checked before the command’s parameters, including
+`expected_revision`. Once that pin matches or is omitted, project commands that
+take `expected_revision` still check it before their other parameters. A stale
+edit reports `stale_revision`; a malformed revision is `invalid_params`. The read-only [`pcb.plan_route`](route-planning.md#command)
 query keeps its existing `stale` plan outcome for otherwise valid requests. The
 part and library document revisions that some window commands take are reported
 as `unavailable` when stale, for now.
@@ -429,9 +485,19 @@ Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the o
 plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
 resolvable placement origin.
 File names are deterministic and unique after portable-name sanitization,
-including case-insensitive collisions with fixed-purpose output names. One
-`execute` request generates the file contents once; `apply` still validates
-exportability without changing the project or revision.
+including case-insensitive collisions with fixed-purpose output names. `apply`
+validates board and file generation, not ZIP construction; `execute` also returns
+`fabrication.manifest` for the same captured files. Neither operation writes files
+or changes the project or revision; `execute` does not build or return a ZIP.
+
+The manifest matches the `manifest.json` embedded in the fabrication ZIP for the
+same capture: `generator_version` and ordered `files` records with `name`,
+`size_bytes` and lowercase hexadecimal `sha256` of the uncompressed UTF-8 bytes.
+It lists only the generated files, not itself. Clients that used
+`fabrication.manifest.archive` must adapt: the outer ZIP name, size and digest are
+no longer reported. Member records are independent of the ZIP filename. They
+support byte checks, not source identity, configuration or check freshness. See
+[desktop/browser publication limits](editor-guide.md).
 
 `project.export_netlist` generates the project's netlist without editing it;
 `execute` returns `netlist.files`, one `<project name>-netlist.json` (the project name made portable as for the
