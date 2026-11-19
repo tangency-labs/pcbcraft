@@ -109,6 +109,8 @@ enum ParamKind {
     LibrarySource,
     LibraryDocuments,
     AuthoringItem,
+    PinRemaps,
+    RemapBaseRevision,
     PartDraft,
     LibraryQuery,
     LibraryKind,
@@ -257,6 +259,8 @@ impl ParamKind {
             Self::AuthoringItem => {
                 json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
             }
+            Self::PinRemaps => authoring::remap::schema(),
+            Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision.schema(),
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
@@ -512,6 +516,11 @@ impl ParamKind {
             Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
+            Self::PinRemaps => authoring::remap::decode(value).map(|_| ()).map_err(|_| "must contain 1 to 128 explicit valid pin correspondences"),
+            Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision
+                .parse(value)
+                .map(|_| ())
+                .map_err(|_| "must be a canonical decimal string from 1 through 4294967295"),
             Self::AuthoringItem => Err("must contain a valid bounded native authoring item"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol, footprint, category or part"),
@@ -1901,6 +1910,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[6],
     library::sources::COMMANDS[7],
     library::sources::COMMANDS[8],
+    library::sources::COMMANDS[9],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -3076,7 +3086,8 @@ impl Session {
             | library::sources::RESOLVE_PART
             | library::sources::PARSE_QUANTITY
             | library::sources::PREPARE_PART_PUBLICATION
-            | library::sources::PREPARE_PUBLICATION => true,
+            | library::sources::PREPARE_PUBLICATION
+            | library::sources::PREVIEW_PIN_REMAP => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -4375,6 +4386,8 @@ fn assert_same_content(expected: &Arc<Project>, actual: &Arc<Project>) {
 }
 
 /// Validate declared inputs, requiring mandatory parameters and rejecting unknown or invalid values.
+/// Remap rows keep the decoder's shape or value reason, not necessarily an individual key path.
+/// The native item envelope is decoded separately after this outer check.
 fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
     let empty = Map::new();
     let given = match params {
@@ -4395,7 +4408,14 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
             continue;
         }
         let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
-        param.kind.validate(value).map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
+        let checked = if command.id == library::sources::PREVIEW_PIN_REMAP && param.name == "item" {
+            value.is_object().then_some(()).ok_or_else(|| "Pin remap item must be an object.".into())
+        } else if matches!(param.kind, ParamKind::PinRemaps) {
+            authoring::remap::decode(value).map(|_| ())
+        } else {
+            param.kind.validate(value).map_err(str::to_owned)
+        };
+        checked.map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
     }
     Ok(())
 }

@@ -132,7 +132,7 @@ fn listing(commands: &Value, all: &[Value], mut about: Value) -> Value {
 /// A failed command is a tool result the agent can read, not a protocol error. The message
 /// stays the first text part as clients have always read it; the second part and the
 /// structured result carry the stable code and details.
-fn failure(failure: &Failure) -> Value {
+pub(crate) fn failure(failure: &Failure) -> Value {
     let error = json!({"error": failure.to_json()});
     json!({
         "isError": true,

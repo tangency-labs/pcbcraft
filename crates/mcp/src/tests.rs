@@ -3,6 +3,7 @@ mod arcs;
 
 use std::io::Cursor;
 
+mod command_api;
 #[cfg(not(target_arch = "wasm32"))]
 mod library_updates;
 
@@ -11,7 +12,121 @@ use serde_json::{Value, json};
 
 use crate::{Headless, Server, tool_definitions};
 
-mod command_api;
+/// Focused headless pin-remap queries retain the review payload even with inspect:false;
+/// preview does not need an open project and never creates history or saves the candidate.
+#[test]
+fn pin_remap_mcp_preserves_the_preview_without_general_inspection() {
+    let mut server = Server::new(Box::new(Headless::default()));
+    let item = pcbcraft_engine::authoring::Item::new(pcbcraft_engine::authoring::Kind::Symbol).unwrap();
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let result = call(
+        &mut server,
+        "execute",
+        json!({
+            "command":pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP,"inspect":false,
+            "params":{"item":item,"pins":[{"unit":"main","object":"1","number":"2"},{"unit":"main","object":"3","number":"1"}]}
+        }),
+    );
+    assert_ne!(result["isError"], true, "{result}");
+    let report = body(&result);
+    assert_eq!(report["changes"][0]["before"], "1");
+    assert_eq!(report["changes"][0]["after"], "2");
+    assert_eq!(report["changes"][0]["object"], "1");
+    assert_eq!(report["source_revision"], Value::Null);
+    assert!(report["item"]["revision"].is_number());
+    assert_eq!(report["item"]["objects"]["1"]["number"], "2");
+    assert_eq!(report["item"]["objects"]["3"]["number"], "1");
+    assert_eq!(report["saved"], false);
+    assert_eq!(report["instances"], json!([]));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
+/// Raw remap items must preserve duplicate-key validation for single requests and batches.
+#[test]
+fn pin_remap_wire_refuses_duplicate_primitive_ids() {
+    let item = pcbcraft_engine::authoring::Item::new(pcbcraft_engine::authoring::Kind::Symbol).unwrap();
+    let item = serde_json::to_value(item).unwrap();
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute","arguments":{
+        "command":pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP,"params":{"item":item,"pins":[{"unit":"main","object":"1","number":"7"}]}
+    }}})
+    .to_string();
+    let duplicate = request.replacen("\"objects\":{", &format!("\"objects\":{{\"1\":{},", item["objects"]["1"]), 1);
+    let mut server = Server::new(Box::new(Headless::default()));
+    let reply = |server: &mut Server, line: &str| serde_json::from_str::<Value>(&server.handle_line(line).unwrap()).unwrap();
+    let valid = reply(&mut server, &request);
+    assert!(valid["result"]["content"][0]["text"].is_string(), "{valid}");
+    assert_ne!(valid["result"]["isError"], true, "{valid}");
+    let refused = reply(&mut server, &duplicate);
+    assert_eq!(refused["id"], 1);
+    assert!(refused.get("error").is_none(), "{refused}");
+    assert_eq!(refused["result"]["isError"], true);
+    assert_eq!(refused["result"]["content"][0]["text"], "Duplicate primitive ID in the pin remap item.");
+    assert_eq!(refused["result"]["structuredContent"]["error"]["code"], "invalid_params");
+    let batch = reply(&mut server, &format!(r#"[{duplicate},{{"jsonrpc":"2.0","id":2,"method":"ping"}}]"#));
+    assert_eq!(batch, json!([refused,{"jsonrpc":"2.0","id":2,"result":{}}]));
+
+    let padded = request.replacen("\"objects\":{", &format!("\"objects\":{{{}", " ".repeat(1 << 20)), 1);
+    assert!(padded.len() > 1 << 20);
+    assert_eq!(reply(&mut server, &padded), valid, "raw spacing must not count against the normalized item limit");
+
+    let mut invalid: Value = serde_json::from_str(&request).unwrap();
+    invalid["params"]["arguments"]["params"]["item"] = json!({});
+    let ordinary = server.handle(invalid.clone()).unwrap();
+    assert_eq!(ordinary["result"]["isError"], true);
+    assert_eq!(reply(&mut server, &invalid.to_string()), ordinary, "ordinary invalid items must keep their existing tool error");
+}
+
+/// Refuse two different raw bodies for one inactive unit while accepting two unique units.
+#[test]
+fn pin_remap_wire_refuses_duplicate_unit_names() {
+    use pcbcraft_engine::authoring::{Action, Item, Kind, Primitive, Session as Editor};
+
+    let mut editor = Editor::new(Item::new(Kind::Symbol).unwrap(), false).unwrap();
+    let template = editor.snapshot().objects[&1].clone();
+    for (unit, pin) in [("aux", "3"), ("spare", "4")] {
+        editor.execute(editor.revision(), Action::AddUnit { unit: unit.into() }).unwrap();
+        let mut primitive = template.clone();
+        let Primitive::Pin { number, .. } = &mut primitive else { panic!("fixture primitive must be a pin") };
+        *number = pin.into();
+        editor.execute(editor.revision(), Action::Insert { primitive }).unwrap();
+    }
+    editor.execute(editor.revision(), Action::SelectUnit { unit: "main".into() }).unwrap();
+    let item = serde_json::to_value(editor.snapshot()).unwrap();
+    let request = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute","arguments":{
+        "command":pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP,"params":{"item":item,"pins":[{"unit":"main","object":"1","number":"7"}]}
+    }}});
+    let wire = request.to_string();
+    let units = &item["other_units"];
+    assert_ne!(units["aux"], units["spare"]);
+    let duplicate = wire.replacen("\"other_units\":{", &format!("\"other_units\":{{\"aux\":{},", units["spare"]), 1);
+    assert_ne!(duplicate, wire);
+    assert_eq!(serde_json::from_str::<Value>(&duplicate).unwrap(), request, "normalization would silently keep the last aux body");
+
+    let mut server = Server::new(Box::new(Headless::default()));
+    let reply = |server: &mut Server, line: &str| serde_json::from_str::<Value>(&server.handle_line(line).unwrap()).unwrap();
+    let accepted = reply(&mut server, &wire);
+    assert!(accepted["result"]["content"][0]["text"].is_string(), "{accepted}");
+    assert_ne!(accepted["result"]["isError"], true, "{accepted}");
+    let refused = reply(&mut server, &duplicate);
+    assert_eq!(refused["id"], 1);
+    assert!(refused.get("error").is_none(), "{refused}");
+    assert_eq!(refused["result"]["isError"], true);
+    assert_eq!(refused["result"]["content"][0]["text"], "Duplicate unit name in the pin remap item.");
+    assert_eq!(refused["result"]["structuredContent"]["error"]["code"], "invalid_params");
+
+    for field in ["objects", "other_units"] {
+        let prefix = format!("\"{field}\":{{");
+        let repeated = wire.replacen(&prefix, &format!("\"{field}\":{{}},{prefix}"), 1);
+        assert_ne!(repeated, wire);
+        assert_eq!(serde_json::from_str::<Value>(&repeated).unwrap(), request);
+        let refused = reply(&mut server, &repeated);
+        assert_eq!(refused["id"], 1);
+        assert!(refused.get("error").is_none(), "{refused}");
+        assert_eq!(refused["result"]["isError"], true);
+        assert_eq!(refused["result"]["content"][0]["text"], "Duplicate member in the pin remap item.");
+        assert_eq!(refused["result"]["structuredContent"]["error"]["code"], "invalid_params");
+    }
+}
 
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
@@ -567,8 +682,8 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
     }
 }
 
-/// Source discovery and placement use the same session catalog over real MCP tool dispatch,
-/// while source loading/removal leave the project's electrical revision and history alone.
+/// Discovery retains every native library command alongside pin-remap preview over MCP;
+/// source loading/removal leave the project's electrical revision and history alone.
 #[test]
 fn native_source_search_and_placement_share_the_mcp_session() {
     let mut s = server();
@@ -576,8 +691,29 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    assert_eq!(commands.as_array().unwrap().iter().filter(|c| c["id"].as_str().is_some_and(|id| id.starts_with("library."))).count(), 9);
-    assert!(commands.as_array().unwrap().iter().any(|c| c["id"] == pcbcraft_engine::library::sources::AVAILABLE_REVISIONS));
+    let mut command_ids = commands
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|command| command["id"].as_str().unwrap())
+        .filter(|id| id.starts_with("library."))
+        .collect::<Vec<_>>();
+    command_ids.sort_unstable();
+    assert_eq!(
+        command_ids,
+        [
+            "library.available_revisions",
+            "library.list_sources",
+            "library.load_source",
+            "library.parse_quantity",
+            "library.prepare_part_publication",
+            "library.prepare_publication",
+            "library.preview_pin_remap",
+            "library.remove_source",
+            "library.resolve_part",
+            "library.search",
+        ]
+    );
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);

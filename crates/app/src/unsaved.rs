@@ -40,7 +40,9 @@ const SHOWN_NAME: usize = 40;
 
 impl PcbApp {
     /// Carry out `then` at once when nothing unsaved would be lost, otherwise ask first.
+    /// Displacing a remap form retires its review without editing either document.
     pub(crate) fn unless_unsaved(&mut self, then: Then, ctx: &egui::Context) {
+        self.dismiss_library_pin_remap();
         if self.files.dirty(&self.session) {
             self.dialog = Dialog::SaveChanges(then);
         } else {
@@ -67,7 +69,9 @@ impl PcbApp {
 
     /// Ask once before ending the project. Running file jobs retain their owner and captured
     /// decision; a repeated request cannot overwrite a pending Save or Don't Save answer.
+    /// A displaced remap form loses its authority even if the close question is cancelled.
     pub(super) fn begin_project_close(&mut self, ctx: &egui::Context) {
+        self.dismiss_library_pin_remap();
         if self.library_editors.unsaved() || self.library_editors.busy() {
             self.dialog = Dialog::LibraryClose(None);
             ctx.send_viewport_cmd_to(crate::editor_windows::viewport(self.views.main), ViewportCommand::Focus);
@@ -92,6 +96,7 @@ impl PcbApp {
     /// unsaved. A close that was waiting to decide asks now when there is. After a Save answer,
     /// unsaved work left behind (a cancelled or failed save, or edits made while it ran) keeps the
     /// project open; the save's own status explains why. After Don't Save, carry on regardless.
+    /// If the delayed prompt displaces a remap form, retire its captured review.
     pub(crate) fn finish_waiting(&mut self, ctx: &egui::Context) {
         if self.files.busy() {
             return;
@@ -108,6 +113,7 @@ impl PcbApp {
         if !self.files.dirty(&self.session) {
             self.carry_on(then, ctx);
         } else if ask {
+            self.dismiss_library_pin_remap();
             self.dialog = Dialog::SaveChanges(then);
         }
     }

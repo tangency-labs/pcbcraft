@@ -22,7 +22,31 @@ fn library_documents_are_independent_and_revision_checked() {
 
 use egui_kittest::{Harness, kittest::Queryable};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod remap;
+#[cfg(not(target_arch = "wasm32"))]
+mod remap_evidence;
 mod zoom;
+
+/// Explicit document close releases its captured project/report; reopening cannot reuse its token.
+/// This shared editor lifecycle also applies to the WebAssembly test target.
+#[test]
+fn pin_remap_close_cancels_review_and_reopen_has_new_authority() {
+    use pcbcraft_engine::authoring::remap::PinRemap;
+
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Symbol);
+    let id = app.library_editors.active.unwrap();
+    let item = app.library_editors.documents[&id].session.snapshot();
+    let pins = vec![PinRemap { unit: "main".into(), object: 1, number: "2".into() }, PinRemap { unit: "main".into(), object: 3, number: "1".into() }];
+    let token = app.preview_library_pin_remap(id, 0, pins).unwrap();
+    app.library_editors.close(id, true).unwrap();
+    assert!(app.library_editors.pin_remap.is_none());
+    let reopened = app.library_editors.open(item.as_ref().clone(), true).unwrap();
+    assert_ne!(id, reopened);
+    assert!(app.apply_library_pin_remap(reopened, 0, token).unwrap_err().contains("Preview"));
+    assert_eq!(app.library_editors.documents[&reopened].session.revision(), 0);
+}
 
 /// Definition panes extend their own canvas palette through the exposed ribbon margins, down to
 /// the pane's top edge, leaving no unpainted band between the ribbon and the canvas.

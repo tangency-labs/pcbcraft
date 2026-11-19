@@ -26,7 +26,7 @@ fn publish_restart_reopen_and_publish_again_preserves_older_revisions() {
         };
         assert_eq!(reopened.id, first.item().id);
         let mut session = Session::new(reopened, true).unwrap();
-        session.bind_published();
+        session.bind_published(record.symbol());
         session.execute(0, Action::Delete { objects: vec![3] }).unwrap();
         let second = prepare(session.snapshot(), &manifest, first.item().revision, Some(first.item().revision), false).unwrap();
         publish(&root, &second).unwrap();

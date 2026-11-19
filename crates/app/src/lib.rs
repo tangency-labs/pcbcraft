@@ -260,6 +260,7 @@ enum Dialog {
     LibraryClose(Option<u64>),
     LibraryProperties(u64, ViewId),
     LibraryArray(Box<library_editors::editing::ArrayDraft>),
+    LibraryPinRemap(Box<library_editors::remap::Draft>),
     LibraryPublish(library_editors::publishing::Draft),
     PartReference(Box<part_documents::picker::State>),
     NewLibrary(library_editors::publishing::NewLibrary),
@@ -934,13 +935,20 @@ impl PcbApp {
         self.assistant.show(ctx, workspace, &self.session, can_edit, has_document);
         self.serve_chat(ctx);
         if let Some(request) = self.assistant.take_settings_request() {
-            self.dialog = match request {
-                assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
-                assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
-            };
+            self.open_assistant_settings(request);
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.request_repaint();
         }
+    }
+
+    /// Retire the remap form's capture before either Assistant settings dialog displaces it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_assistant_settings(&mut self, request: assistant::SettingsRequest) {
+        self.dismiss_library_pin_remap();
+        self.dialog = match request {
+            assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
+            assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
+        };
     }
 
     /// Route the Assistant toggle and report whether its chat owns the canvas keys.
@@ -2285,6 +2293,7 @@ impl PcbApp {
             Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),
             Dialog::ExternalPasteOptions(draft) => self.external_paste_options_dialog(ctx, draft),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
+            Dialog::LibraryPinRemap(draft) => self.library_pin_remap_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),

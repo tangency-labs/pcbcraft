@@ -194,6 +194,168 @@ that library revision and use the same engine authoring transactions as the GUI.
 Headless project sessions do not yet host these editor documents. Bulk tables, arbitrary pad shapes, mask/paste, 3D, browser/remote publishing
 and reviewed updates to placed components remain follow-up scope under #78/#79.
 
+## Review pin renumbering
+
+In a Symbol Editor, **Library → Remap pins…** opens a private number table.
+Change both numbers for a swap, then choose **Preview current nets**. The review
+shows before/after numbers, the unchanged draft name, and separate pinned-before-number
+name, current net and native package-pad evidence. The pinned evidence is looked up
+by the draft's before number on the explicitly associated published copy, not by
+primitive lineage across earlier draft edits. For example, after swapping draft IN
+and OUT, draft IN at number 2 is shown separately from pinned number 2's OUT name
+and net. A known placed terminal with no net says **Unconnected**; actual net names
+are prefixed with **Net:** (for example, **Net: Unconnected**). An unassociated
+revision or missing pinned terminal stays **Unknown**. With no open project or no matching
+placed copy, pinned names, nets and pads are unavailable, not known unconnected evidence.
+Names, electrical types, geometry and package mappings are not
+edited by this operation. Shared appearances in other units and an explicit
+power-role terminal follow the same logical correspondence.
+
+The preview associates placed copies only with the same library/item identity
+and the editor's published base revision. **Edit copy** starts another identity;
+its resemblance to a placed symbol does not establish an association. Different
+pinned revisions, missing terminals and unplaced terminals are reported rather
+than matched by position or display text. The nets and pads describe the current
+project, not a proposed reconnection after adopting the edited definition.
+
+**Apply remap** commits an effective change in one library undo step. An explicit
+unchanged map submitted through the command is a no-op: applying it consumes the
+review without changing the authoring revision, history, encoded bytes or unrelated
+canvas tool/selection/error state. The
+form submits only changed rows. Apply does not publish, edit placed instances or
+change project history. **Cancel** consumes the addressed review without changing
+either document. Editing
+a number withdraws its review. Applying refuses a changed authoring revision,
+unapplied property fields, a changed/reopened project or a review from another
+document. An edit followed by Undo still requires a new preview. All existing
+symbol bounds and saved formats remain unchanged. Preparation is limited to
+4096 affected rows (matching part instances × requested logical pins), checked
+before connectivity/report allocation. Larger matching projects must review fewer
+pins per operation; a swap must still include every colliding terminal together.
+If it cannot fit, no preview or partial edit is produced. This is a transient
+review-operation budget, not a lower saved-project limit. Every route also limits the
+encoded report to 4 MiB, counting borrowed evidence before copying each row. Oversize
+reports refuse without truncation. Before borrowing or building whole-project
+connectivity, a 1,048,576-unit model charges pin appearances, anchors, direct marker
+fanout, resolved route segment bounds and endpoint lookups, occurrence searches,
+name collision candidates, and current and retired numbering records. Unrelated
+sheets count too. A separate 64 MiB model charges escaped occurrence-path and name
+input bytes, including a path allowance for each potential endpoint. The estimates
+can refuse conservatively; warm and cold requests follow the same rules. These are
+not bounds on ordered-map comparisons, total instructions, time or peak heap. Cold
+graph preparation still visits the admitted project and can retain multiple copies
+of path text. The report borrows the shared graph and display names, not a second
+connectivity store.
+The report can later gain bounded paging without changing explicit correspondence or apply authority.
+
+Headless `library.preview_pin_remap` accepts `item` (an authoring envelope), `pins`
+and optional `base_revision` (the published revision for project association).
+Each of 1–128 `pins` entries is an object (not a positional array) containing the owning `unit`, positive `object` primitive
+ID as a canonical decimal string and destination `number`. Numbers use the existing 1–8 ASCII letters/digits,
+`+`, `-`, `_` alphabet. Primitive IDs belong to the authoring document and are
+reconstructed when opening a published revision, not preserved across publication.
+The response contains a validated candidate `item`, `changes`, and `instances`
+with current nets/pads and association status; it writes nothing, including when
+no project is open. No paths or filesystem access are accepted.
+
+Live `app.library_pin_remap` requires `document`, `expected_revision` and `phase`.
+`preview` requires `pins` and forbids `token`; `apply` and `cancel` require `token`
+and forbid replacement `pins`. Obtain the captured token from
+`inspect_editor.library_editors.pin_remap`. A token binds the exact review to both
+the authoring revision, current project snapshot/runtime revision, and the
+published symbol's relevant catalog evidence. Matching project pins can still
+supply offline evidence, but a different published body or a quarantined
+revision cannot. If that evidence changes, Apply requires a fresh preview;
+Cancel still works. GUI and live commands use these same preview/apply/cancel handlers. A live preview refuses
+while any pin remap form is open, preserving typed numbers and the captured
+review, even for the same document. Apply or cancel that form before starting
+another live preview; the form's own **Preview current nets** can refresh its
+review. A failed refresh retains the form's previous token and unchanged captured
+map, so Cancel or dismissal of that owning form still consumes it; editing any number
+withdraws the old review before another preview can authorize Apply. Project-close or
+new/open decisions that displace the form retire its token, even if the close prompt is
+cancelled. Addressed apply/cancel cannot dismiss a different unreviewed form. Native preview also checks
+the complete prospective editor-inspection success reply against the live client's
+existing 16 MiB JSON-frame limit before publishing the new review/token. A reply
+that cannot fit refuses without replacing the prior capture or opening a new
+modal; required review data is not truncated. The check counts encoded bytes,
+including the success wrapper but excluding the transport newline. It does not
+replace the common report/preparation admission limits or measure peak heap. The
+prospective value uses the normal inspection emitter with the proposed review and modal
+state; the remap command preserves pane bindings rather than normalizing them afterward. Later unrelated
+editor-state changes can affect inspection size; the visible form can still cancel
+its capture. With normal inspection, live execution returns editor inspection;
+`inspect:false` returns only an acknowledgement/project revision, not the token
+or report. Headless `library.preview_pin_remap` instead preserves its focused
+query report even with `inspect:false`.
+
+Preparation is synchronous. A started operation can outlast its live request deadline;
+a lost or timed-out reply is not proof of rollback. Inspect the current document and
+`library_editors.pin_remap` before retrying. If a capture committed, use its visible
+Cancel or the addressed cancel phase; if Apply committed, inspect its revision/history
+rather than repeating it. Errors are returned to a receiving peer, not guaranteed delivered
+after disconnection. Inspection remains available; separate `ui.*` automation has its own
+input lifecycle rather than the document/presentation modal gate.
+
+The new `remap_pins` action is refused by generic `app.library_edit`; existing primitive
+replacement actions keep their prior behavior. Project adoption, terminal/gate
+swapping on placed instances and native package-map editing are separate work.
+
+These two commands use canonical decimal **strings**, not JSON numbers, for their
+remap identities and revisions. A string contains only ASCII digits, with no sign,
+whitespace, decimal point, exponent or leading zero except the value `"0"` itself.
+The scalar domains are:
+
+| Input | Inclusive range | Presence |
+| --- | --- | --- |
+| `pins[].object` | `"1"`–`"18446744073709551615"` (u64) | Required in each correspondence |
+| Headless `base_revision` | `"1"`–`"4294967295"` (u32) | Optional; omission means unassociated, null is refused |
+| Live `document`, `expected_revision` | `"0"`–`"18446744073709551615"` (u64) | Required in every phase |
+| Live `token` | `"1"`–`"18446744073709551615"` (u64) | Required for apply/cancel only |
+
+The corresponding report fields also use strings: `changes[].object`,
+`instances[].pins[].object`, `instances[].pinned_revision`, and the
+association value `source_revision` (null if unassociated). The live review's
+`document`, `expected_revision`, `project_revision` and `token` are strings too.
+The embedded native authoring `item` and native part-definition reference retain
+their existing codecs; other editor commands and general library inspection IDs
+are unchanged. Convert an exactly retained inspection ID to the new string form,
+never a value already rounded by a numeric client. A well-spelled scalar can still
+name an unknown primitive or document, or fail to address the captured review.
+Apply also requires the current library revision and project snapshot. Cancel can
+retire an old capture after either changes, provided the request still matches the
+captured document, revision, token and owning form. Unknown request/correspondence fields
+are refused. The structural array schema also forbids exact repeated rows.
+Distinct rows reusing `(unit, object)` or a destination number can still be
+structurally valid: both checked readers reject them through shared row validation.
+The headless schema treats `item` as an opaque object; its native envelope is
+validated by the reader. Resolved shared-terminal duplicates, unknown draft
+primitives and collisions with unchanged terminals need authored transaction validation.
+Pinned terminal existence is report lookup: an absent counterpart yields `missing_terminal`,
+not a transaction refusal. These are not claims made by the scalar or array schema.
+
+### Identity and external update boundary
+
+The durable library identity is the native `(library, id)` and its immutable
+published revision. The preview uses that identity and the explicit base revision
+to associate current placed copies; an authoring primitive ID is only local to
+that open draft, and live document IDs, revisions and review tokens are runtime
+authority, not saved exchange addresses. Reopening or changing the relevant
+project/draft requires fresh inspection and review before applying, rather than
+replaying a token.
+
+A future SolidCraft/Fieldcraft simulation or parametric adapter can resolve the
+native library/part identities and supply explicit correspondences through this
+same revision-checked review path. It must re-resolve draft-local primitive IDs,
+preserve native pin-to-pad ownership and obtain fresh review authority after any
+relevant edit. This adds no second mapping store or independent update authority.
+A SolidCraft-origin board-outline edit belongs to the existing board identity,
+project revision checks and shared geometry/native-storage path, not this symbol
+command; an effective project edit invalidates a captured remap review. Exchange
+transport, cross-application identity resolution and update/conflict policy remain
+future design work; no simulation or outline-exchange integration is implemented
+or tested by this operation.
+
 ## Additional manual review and local verification
 
 The November 2026 usability expansion consulted the same publisher manuals above,
