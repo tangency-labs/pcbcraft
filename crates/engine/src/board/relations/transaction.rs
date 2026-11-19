@@ -2,7 +2,7 @@
 //! placement outputs; stage 3 may update relation records, never native geometry.
 
 use super::{
-    Kind, MAX_WITNESS_NM, Reference, Relations, State, Witness,
+    Kind, MAX_WITNESS_NM, Reference, State, Witness,
     catalog::{self, Measure},
 };
 use crate::{CommandError, Project, Session, board::view::BoardTarget};
