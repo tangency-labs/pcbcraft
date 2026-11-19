@@ -266,10 +266,17 @@ fn a_native_outline_datum_lost_witness_reopen_no_motion() {
     let items = json!({"drawings":[drawing]});
     let error = unchanged(&mut s, |s| run(s, board::clipboard::DELETE, json!({"items":items})));
     assert_eq!(error.details()["reason"], "would_lose");
+    let selection = board::clipboard::BoardSelection::parse(&items).unwrap();
+    let native = |cut| board::clipboard::BoardFragment::capture(s.project().unwrap(), &selection, cut).unwrap().to_text().unwrap();
+    let (copy_text, cut_text) = (native(false), native(true));
+    let copy = run(&mut s, board::clipboard::COPY, json!({"items":items})).unwrap();
+    assert_eq!(copy["clipboard"], copy_text);
+    assert_eq!(copy["clipboard_notice"], json!({"kind":"relations_not_carried","count":1}));
     let p = reviewed(&mut s, board::clipboard::CUT, json!({"items":items}));
     assert_eq!(p["disclosure"]["losses"][0]["last_resolved"], shown);
     let response = run(&mut s, APPLY, decision(&p)).unwrap();
-    assert!(response["clipboard"].is_string());
+    assert_eq!(response["clipboard"], cut_text);
+    assert_eq!(response["clipboard_notice"], copy["clipboard_notice"]);
     assert_eq!(s.project().unwrap().board.footprints(), before.as_slice());
     let stored = bytes(&s);
     assert_eq!(transaction::certify(s.snapshot().unwrap()).unwrap(), p["candidate_digest"].as_str().unwrap());
@@ -382,6 +389,16 @@ fn a_generic_exact_cancel_and_engine_result_bounds() {
     assert!(s.apply(board::clipboard::CUT, &json!({"items":items,"expected_revision":expected_revision})).is_err());
     let old = reviewed(&mut s, board::clipboard::CUT, args.clone());
     assert!(old.get("clipboard").is_none());
+    let copied = run(&mut s, board::clipboard::COPY, args.clone()).unwrap();
+    assert_eq!(copied["clipboard"], board::clipboard::BoardFragment::capture(s.project().unwrap(), &selection, false).unwrap().to_text().unwrap());
+    assert_eq!(copied["clipboard_notice"], json!({"kind":"relations_not_carried","count":1}));
+    let remote = s.project().unwrap().board.footprints()[1].id;
+    assert!(
+        run(&mut s, board::clipboard::COPY, json!({"items":{"footprints":[format!("footprint-{remote}")]}}))
+            .unwrap()
+            .get("clipboard_notice")
+            .is_none()
+    );
     run(&mut s, CANCEL, json!({"token":old["token"]})).unwrap();
     unchanged(&mut s, |s| run(s, APPLY, decision(&old)));
     let live = reviewed(&mut s, board::clipboard::CUT, args.clone());
@@ -402,9 +419,130 @@ fn a_generic_exact_cancel_and_engine_result_bounds() {
     unchanged(&mut s, |s| s.apply(APPLY, &decision).map(|v| json!(v)));
     let response = s.relation_command(APPLY, &decision, usize::MAX).unwrap();
     assert_eq!(response["clipboard"].as_str(), Some(expected.as_str()));
+    assert_eq!(response["clipboard_notice"], copied["clipboard_notice"]);
     assert_eq!(observer.0.lock().unwrap().len(), 1);
     assert_eq!(observer.0.lock().unwrap()[0].command, board::clipboard::CUT);
     unchanged(&mut s, |s| run(s, APPLY, decision.clone()));
+}
+
+/// Exercise the real fixed engine result cap, not a smaller injected budget. Both native
+/// fragments are valid; the overflowing one becomes too large only in the escaped Apply reply.
+#[test]
+fn a_generic_public_cut_envelope_fit_and_refusal_keep_current_review() {
+    use board::{clipboard, track::Track};
+    let mut s = Session::default();
+    run(&mut s, "project.new", json!({"create_board":true})).unwrap();
+    run(&mut s, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2})).unwrap();
+    let layer = board::track::tests::copper_layers(&s)[0];
+    let mut fixture = s.project().unwrap().clone();
+    let tracks = &mut Arc::make_mut(&mut fixture.board).tracks;
+    tracks.extend((0..41_000).map(|i| {
+        let x_nm = 1_000_000 + (i % 205) * 40_000;
+        let y_nm = 1_000_000 + (i / 205) * 40_000;
+        Track {
+            id: Uuid::from_u128(1 + i as u128),
+            layer,
+            locked: false,
+            width_nm: 10_000,
+            start: Point { x_nm, y_nm },
+            end: Point { x_nm: x_nm + 15_000, y_nm },
+        }
+    }));
+    let saved = encode_documents(Arc::new(fixture)).unwrap();
+    s.open_snapshot(decode_documents(&saved).unwrap());
+    let args = |n| json!({"items":{"tracks":sliced_track_ids(n)}});
+    let cap = 8 * 1024 * 1024;
+    let (fit, overflow) = (args(39_940), args(39_960));
+    let original = s.snapshot().unwrap();
+    let text = |params: &Value| {
+        let selection = clipboard::BoardSelection::parse(&params["items"]).unwrap();
+        clipboard::BoardFragment::capture(&original, &selection, true).unwrap().to_text().unwrap()
+    };
+    let expected = text(&fit);
+    let too_large = text(&overflow);
+    assert!(too_large.len() < cap && serde_json::to_vec(&too_large).unwrap().len() > cap);
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let live = reviewed(&mut s, clipboard::CUT, fit);
+    let retained = s.checked_generic_candidate().unwrap().clone();
+    let error = unchanged(&mut s, |s| run(s, PREVIEW, json!({"intent":{"command":clipboard::CUT,"params":overflow}})));
+    assert!(matches!(error, CommandError::CapExceeded(ref msg) if msg.contains("complete relation command result")), "{error}");
+    assert!(Arc::ptr_eq(s.checked_generic_candidate().unwrap(), &retained));
+    let mut apply = decision(&live);
+    apply["expected_revision"] = json!(s.revision() - 1);
+    let error = unchanged(&mut s, |s| s.apply(APPLY, &apply).map(|v| json!(v)));
+    assert!(matches!(error, CommandError::StaleRevision { .. }));
+    assert!(observer.0.lock().unwrap().is_empty());
+    let response = run(&mut s, APPLY, decision(&live)).unwrap();
+    assert_eq!(response["clipboard"], expected);
+    assert!(response.get("clipboard_notice").is_none());
+    let envelope = serde_json::to_vec(&response).unwrap().len();
+    assert!((cap - 10_000..=cap).contains(&envelope), "{envelope}");
+    assert!(Arc::ptr_eq(&retained, &s.snapshot().unwrap()));
+    assert_eq!(observer.0.lock().unwrap().len(), 1);
+    unchanged(&mut s, |s| run(s, APPLY, decision(&live)));
+}
+
+fn sliced_track_ids(n: u128) -> Vec<Uuid> {
+    (1..=n).map(Uuid::from_u128).collect()
+}
+
+/// This exact bundle is the source witness for the separate #443 reader. Here we only
+/// qualify the current reader, without rewriting the board header or stripping any field.
+#[test]
+fn a_format_intact_f1_fixture_for_baseline_reader_qualification() {
+    const ROOT: &str = "sheets/00000000-0000-4000-8000-000000000003.json";
+    let docs = Documents::from([
+        ("project.json".into(), include_bytes!("../../../tests/fixtures/f1-intact/project.json").to_vec()),
+        ("board.json".into(), include_bytes!("../../../tests/fixtures/f1-intact/board.json").to_vec()),
+        (ROOT.into(), include_bytes!("../../../tests/fixtures/f1-intact/sheets/00000000-0000-4000-8000-000000000003.json").to_vec()),
+    ]);
+    let mut s = Session::default();
+    s.open_snapshot(decode_documents(&docs).unwrap());
+    assert_eq!(bytes(&s), docs);
+    let list = run(&mut s, LIST, json!({})).unwrap();
+    assert_eq!(list["relations"][0]["status"], "lost");
+    assert_eq!(list["relations"][0]["last_resolved"][1]["at"]["x_nm"], 1_000_000);
+    assert!(list["relations"][0].get("measure").is_none());
+}
+
+#[test]
+fn a_format_native_id_bound_in_commands_and_lost_readback() {
+    let mut s = fixture(false);
+    let reference = pick(&mut s, 0, "fp.origin", None);
+    let id = add(&mut s, "horizontal", origin(), reference.clone());
+    let mut invalid = reference.clone();
+    invalid["fp"] = json!(crate::MAX_OBJECT_ID + 1);
+    let live = reviewed(&mut s, board::clipboard::DELETE, json!({"items":{"footprints":[format!("footprint-{}",reference["fp"])]}}));
+    unchanged(&mut s, |s| run(s, ADD, json!({"relation":{"kind":"horizontal","refs":[origin(),invalid]}})));
+    unchanged(&mut s, |s| run(s, EDIT, json!({"id":id,"edit":{"repick":{"kind":"horizontal","refs":[origin(),invalid]}}})));
+    unchanged(&mut s, |s| {
+        run(
+            s,
+            PREVIEW,
+            json!({"intent":{"command":"pcb.delete_items","params":{"items":{"footprints":[format!("footprint-{}",reference["fp"])]}}},"remap_choices":[{"relation":id,"pick":1,"choice":{"kind":"repick","reference":invalid}}]}),
+        )
+    });
+    run(&mut s, APPLY, decision(&live)).unwrap();
+    let original = bytes(&s);
+    let path = test_board_path(&original);
+    let mut board: Value = serde_json::from_slice(&original[&path]).unwrap();
+    let altered = |board: &Value| {
+        let mut docs = original.clone();
+        docs.insert(path.clone(), serde_json::to_vec(board).unwrap());
+        docs
+    };
+    board["relations"]["relations"][0]["refs"][1] = invalid;
+    assert!(decode_documents(&altered(&board)).is_err());
+    board["relations"]["relations"][0]["refs"][1]["fp"] = json!(crate::MAX_OBJECT_ID);
+    s.open_snapshot(decode_documents(&altered(&board)).unwrap());
+    let valid = bytes(&s);
+    s.open_snapshot(decode_documents(&valid).unwrap());
+    assert_eq!(bytes(&s), valid);
+    let rows = run(&mut s, LIST, json!({})).unwrap();
+    assert_eq!(rows["relations"][0]["status"], "lost");
+    assert_eq!(rows["relations"][0]["refs"][1]["fp"], crate::MAX_OBJECT_ID);
+    assert_eq!(rows["relations"][0]["last_resolved"], live["disclosure"]["losses"][0]["last_resolved"]);
 }
 
 /// First reference authoring on a native board runs final preparation exactly once, never moves it.
@@ -634,6 +772,69 @@ fn a_preview_edge_align_and_reference_axis_turn_without_follow() {
     assert_eq!(s.project().unwrap().board.footprints()[2], p0);
 }
 
+/// Disclose native participants, not merely the relation bodies. Alignment includes the
+/// unchanged selected anchor but not the unchanged unselected footprint.
+#[test]
+fn a_preview_edge_complete_native_poses_match_certified_publication() {
+    for method in ["unreferenced", "mixed", "align", "transform"] {
+        let mut s = fixture(false);
+        let reference = pick(&mut s, usize::from(method == "align"), "fp.origin", None);
+        add(&mut s, "horizontal", origin(), reference);
+        let old = s.project().unwrap().board.footprints().to_vec();
+        let ids: Vec<_> = old.iter().map(|f| format!("footprint-{}", f.id)).collect();
+        let (command, params, indices) = match method {
+            "unreferenced" => (board::movement::MOVE_ITEMS, json!({"items":{"footprints":[ids[1]]},"dx_nm":600_000,"dy_nm":20_000}), vec![1]),
+            "mixed" => (board::movement::MOVE_ITEMS, json!({"items":{"footprints":[ids[1],ids[0]]},"dx_nm":600_000,"dy_nm":20_000}), vec![0, 1]),
+            "align" => (crate::ALIGN_FOOTPRINTS, json!({"footprints":[ids[1],ids[0]],"mode":"left"}), vec![0, 1]),
+            _ => {
+                (crate::SET_FOOTPRINT_TRANSFORM, json!({"footprint":ids[1],"x_nm":15_000_000,"y_nm":6_000_000,"rotation":90,"side":"back"}), vec![1])
+            }
+        };
+        let observer: Arc<Observe> = Arc::default();
+        s.observe_edits(Some(observer.clone()));
+        let before = s.revision();
+        let p = reviewed(&mut s, command, params);
+        let candidate = s.checked_generic_candidate().unwrap().clone();
+        let next = candidate.board.footprints();
+        assert_eq!(next[2], old[2]);
+        match method {
+            "unreferenced" | "mixed" => {
+                for &i in &indices {
+                    assert_eq!((next[i].x_nm, next[i].y_nm), (old[i].x_nm + 600_000, old[i].y_nm + 20_000));
+                }
+            }
+            "align" => {
+                assert_eq!(next[0], old[0]);
+                assert_ne!(next[1].x_nm, old[1].x_nm);
+            }
+            _ => assert_eq!((next[1].x_nm, next[1].y_nm, next[1].rotation, next[1].bottom), (15_000_000, 6_000_000, 90, true)),
+        }
+        if indices == [1] {
+            assert_eq!(next[0], old[0]);
+        }
+        let poses: Vec<_> = indices
+            .into_iter()
+            .map(|i| {
+                let f = &next[i];
+                json!({"fp":f.id,"x_nm":f.x_nm,"y_nm":f.y_nm,"rotation":f.rotation,"bottom":f.bottom})
+            })
+            .collect();
+        assert_eq!(p["disclosure"], json!({"poses":poses,"losses":[],"remaps":[]}));
+        let encoded = encode_documents(candidate.clone()).unwrap();
+        assert!(observer.0.lock().unwrap().is_empty());
+        let (reply, ops) = trace(|| run(&mut s, APPLY, decision(&p)).unwrap());
+        assert_eq!(ops, [Op::Publish(RelationStage::Outer)]);
+        assert_eq!(reply["candidate_digest"], p["candidate_digest"]);
+        assert_eq!(transaction::certify(s.snapshot().unwrap()).unwrap(), p["candidate_digest"].as_str().unwrap());
+        assert!(Arc::ptr_eq(&candidate, &s.snapshot().unwrap()));
+        assert_eq!(bytes(&s), encoded);
+        let events = observer.0.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].revision, before + 1);
+        assert!(Arc::ptr_eq(&candidate, &events[0].project));
+    }
+}
+
 /// Projected and lifecycle deletion must settle only after the canonical outer candidate.
 #[test]
 fn a_preview_edge_projected_and_sheet_retirement() {
@@ -740,6 +941,17 @@ fn a_eco_compat_exact_base_command_contracts() {
     let current: Value = serde_json::from_str(include_str!("../../../../../docs/schemas/command-contracts.json")).unwrap();
     let described: Vec<_> = crate::CATALOG.iter().map(crate::Command::to_json).collect();
     crate::command_api::check_snapshot(&current, "commands", &described, crate::command_api::COMMAND_API_VERSION).unwrap();
+    let arms = current["commands"][PREVIEW]["params"]["properties"]["intent"]["oneOf"].as_array().unwrap();
+    let mut seen = std::collections::BTreeSet::new();
+    assert_eq!(arms.len(), 16);
+    for arm in arms {
+        let id = arm["properties"]["command"]["const"].as_str().unwrap();
+        assert!(seen.insert(id));
+        let mut native = base["commands"][id]["params"].clone();
+        native["properties"].as_object_mut().unwrap().remove("expected_revision");
+        native["required"].as_array_mut().unwrap().retain(|p| p != "expected_revision");
+        assert_eq!(arm["properties"]["params"], native, "nested native contract drift: {id}");
+    }
     let changes = crate::command_api::compare_snapshots(&base, &current).unwrap();
     assert!(!changes.is_empty());
     assert_eq!(base["command_api_version"], current["command_api_version"]);

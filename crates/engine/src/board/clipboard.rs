@@ -184,6 +184,20 @@ pub struct BoardFragment {
     vias: Vec<Via>,
 }
 
+/// Non-persisted engine result for authored relations omitted from native board clipboard data.
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ClipboardNotice {
+    RelationsNotCarried { count: usize },
+}
+
+/// Native text and its optional advisory; the advisory is never encoded in the fragment.
+#[derive(Debug)]
+pub(crate) struct ClipboardResult {
+    pub(crate) text: String,
+    pub(crate) notice: Option<ClipboardNotice>,
+}
+
 /// A disposable physical preview caches the logical/package candidate once. Moving its ghost
 /// allocates no identities, recomputes no board acceptance and grants no commit authority.
 #[derive(Clone, Debug)]
@@ -872,20 +886,31 @@ impl Session {
         Ok((project, target, selection))
     }
     /// Export a revision-bound, explicitly addressed physical selection without an edit.
-    pub(crate) fn copy_board(&self, params: &Value) -> Result<String, CommandError> {
+    pub(crate) fn copy_board(&self, params: &Value) -> Result<ClipboardResult, CommandError> {
         crate::check_params(crate::command(COPY).ok_or_else(|| invalid("copy command unavailable"))?, params)?;
         let (project, _, selection) = self.board_clipboard_selection(params)?;
-        BoardFragment::capture(project, &selection, false)?.to_text()
+        Self::board_clipboard_result(project, &selection, false)
     }
     /// Encode and check the clipboard text before deleting anything, even for callers that only
     /// ask for the revision. Report the single edit only after the deletion is adopted.
-    pub(crate) fn cut_board(&mut self, params: &Value) -> Result<String, CommandError> {
+    pub(crate) fn cut_board(&mut self, params: &Value) -> Result<ClipboardResult, CommandError> {
         self.validate_project_command(CUT, params)?;
         let (project, target, selection) = self.board_clipboard_selection(params)?;
-        let text = BoardFragment::capture(project, &selection, true)?.to_text()?;
+        let result = Self::board_clipboard_result(project, &selection, true)?;
         self.publish_board_deletion(target, selection)?;
         self.report_committed(CUT, params);
-        Ok(text)
+        Ok(result)
+    }
+    /// Report only omitted rows relevant to this validated fragment; do not add a format field.
+    fn board_clipboard_result(project: &Project, selection: &BoardSelection, cut: bool) -> Result<ClipboardResult, CommandError> {
+        let fragment = BoardFragment::capture(project, selection, cut)?;
+        let notice = project.board.relations.as_ref().and_then(|rows| {
+            let carries_outline = project.board.placement_origin.as_ref().is_some_and(|o| o.anchor == super::origin::Anchor::OutlineLowerLeft)
+                && fragment.layers.iter().any(|l| l.purpose == LayerPurpose::Outline && fragment.drawings.iter().any(|d| d.layer == l.id));
+            let count = rows.omitted_by_copy(&selection.footprints, carries_outline);
+            (count != 0).then_some(ClipboardNotice::RelationsNotCarried { count })
+        });
+        Ok(ClipboardResult { text: fragment.to_text()?, notice })
     }
     /// Remove a selection without producing clipboard text or applying the clipboard byte limit.
     pub(crate) fn delete_board_items(&mut self, params: &Value) -> Result<(), CommandError> {

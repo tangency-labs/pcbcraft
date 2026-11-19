@@ -7,13 +7,17 @@ use std::cell::RefCell;
 pub(crate) enum Op {
     SourceEncode,
     SourceDigest,
+    EcoDiff,
+    NativeReportBound,
     BuildEco,
     CandidateEncode,
     CandidateDigest,
     Prepare(RelationStage),
     VerifyReferences,
     Publish(RelationStage),
+    CheckedReportBound,
     RetainChecked,
+    VanishedCandidates { removed: usize, queries: usize, candidates: usize },
     Marked { nodes: Vec<super::islands::Key>, physical: bool, electrical: bool },
 }
 

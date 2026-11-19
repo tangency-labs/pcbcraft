@@ -73,6 +73,34 @@ pub struct BoardUpdatePreview<'a> {
 }
 
 impl<'a> BoardUpdatePreview<'a> {
+    /// Borrow the mandatory native fields, independently of any physical candidate.
+    fn native(base: &Base, accepted: &'a Baseline, proposed: &'a Baseline, changes: &'a Preview) -> Self {
+        Self {
+            plan_token: base.token,
+            revision: base.revision,
+            project: proposed.project,
+            board: proposed.board,
+            source: &proposed.source,
+            changes,
+            can_apply: changes.blockers.is_empty(),
+            details: ComponentDetails { proposed: &proposed.components, accepted: &accepted.components, changes: &changes.components },
+            relation_detail: None,
+            candidate_digest: None,
+            intent_digest: None,
+        }
+    }
+
+    /// Size the complete engine reply before installing authority; never truncate report rows.
+    fn check_bound(self) -> Result<(), CommandError> {
+        #[derive(Serialize)]
+        struct Envelope<'a> {
+            revision: u64,
+            board_update_preview: BoardUpdatePreview<'a>,
+        }
+        serde_json::to_writer(ReportSize { bytes: 0 }, &Envelope { revision: self.revision, board_update_preview: self })
+            .map_err(|error| CommandError::Unavailable(format!("board update preview is too large to review: {error}")))
+    }
+
     /// Resolve stable part metadata from this captured plan, including parts
     /// removed from the current schematic. It is safe to use for review labels.
     pub fn component(&self, id: u64) -> Option<&'a PartInstanceState> {
@@ -136,25 +164,13 @@ impl CachedPlan {
 
     /// Borrow the complete report for size checking or explicit preview inspection.
     fn report(&self) -> BoardUpdatePreview<'_> {
-        let (relation_detail, candidate_digest, intent_digest) = match &self.payload {
-            Payload::Checked { prepared, intent_digest } => {
-                ((!prepared.disclosure.is_empty()).then_some(&prepared.disclosure), prepared.digest.as_deref(), Some(intent_digest.as_str()))
-            }
-            _ => (None, None, None),
-        };
-        BoardUpdatePreview {
-            plan_token: self.base.token,
-            revision: self.base.revision,
-            project: self.proposed.project,
-            board: self.proposed.board,
-            source: &self.proposed.source,
-            changes: &self.changes,
-            can_apply: self.changes.blockers.is_empty(),
-            details: ComponentDetails { proposed: &self.proposed.components, accepted: &self.accepted.components, changes: &self.changes.components },
-            relation_detail,
-            candidate_digest,
-            intent_digest,
+        let mut report = BoardUpdatePreview::native(&self.base, &self.accepted, &self.proposed, &self.changes);
+        if let Payload::Checked { prepared, intent_digest } = &self.payload {
+            report.relation_detail = (!prepared.disclosure.is_empty()).then_some(&prepared.disclosure);
+            report.candidate_digest = prepared.digest.as_deref();
+            report.intent_digest = Some(intent_digest);
         }
+        report
     }
 }
 
@@ -217,6 +233,12 @@ impl Session {
         };
         let proposed = Baseline::proposed(&snapshot, &Baseline::current_choices(&snapshot), source).map_err(CommandError::InvalidParams)?;
         let changes = preview(&accepted, &proposed).map_err(CommandError::InvalidParams)?;
+        #[cfg(test)]
+        relations::probes::hit(relations::probes::Op::EcoDiff);
+        let base = Base::new(self, snapshot.clone(), target)?;
+        #[cfg(test)]
+        relations::probes::hit(relations::probes::Op::NativeReportBound);
+        BoardUpdatePreview::native(&base, &accepted, &proposed, &changes).check_bound()?;
         let payload = if !changes.blockers.is_empty() {
             Payload::Blocked
         } else if changes.is_noop() {
@@ -231,19 +253,15 @@ impl Session {
             let intent = serde_json::to_vec(&json!({"project":target.project,"board":target.board,"source":proposed.source,"choices":choices}))
                 .map_err(relations::commands::invalid)?;
             let (next, _) = apply_candidate(&snapshot, &accepted, &proposed).map_err(CommandError::InvalidParams)?;
-            let prepared = self.prepare_with(next, &RelationInput { review: true, choices })?;
+            let prepared = self.prepare_with(next, &RelationInput { review: true, choices, ..RelationInput::default() })?;
             Payload::Checked { prepared, intent_digest: format!("{:x}", Sha256::digest(intent)) }
         };
-        let plan = CachedPlan { base: Base::new(self, snapshot, target)?, accepted, proposed, changes, payload };
-        #[derive(Serialize)]
-        struct Envelope<'a> {
-            revision: u64,
-            board_update_preview: BoardUpdatePreview<'a>,
-        }
-        serde_json::to_writer(ReportSize { bytes: 0 }, &Envelope { revision: self.revision, board_update_preview: plan.report() })
-            .map_err(|error| CommandError::Unavailable(format!("board update preview is too large to review: {error}")))?;
-        #[cfg(test)]
+        let plan = CachedPlan { base, accepted, proposed, changes, payload };
         if matches!(&plan.payload, Payload::Checked { .. }) {
+            #[cfg(test)]
+            relations::probes::hit(relations::probes::Op::CheckedReportBound);
+            plan.report().check_bound()?;
+            #[cfg(test)]
             relations::probes::hit(relations::probes::Op::RetainChecked);
         }
         self.update_plan = Some(ReviewSlot::Eco(plan));
@@ -270,7 +288,7 @@ impl Session {
             Payload::Checked { prepared, .. } => {
                 prepared.disclosure.consent(params, true)?;
                 let Some(ReviewSlot::Eco(CachedPlan { payload: Payload::Checked { prepared, .. }, .. })) = self.update_plan.take() else {
-                    unreachable!("validated checked ECO slot")
+                    return Err(relations::commands::stale());
                 };
                 self.publish(prepared);
             }

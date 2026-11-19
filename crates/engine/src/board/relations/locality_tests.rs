@@ -121,6 +121,7 @@ fn a_net_locality_vanished_contact_not_remote_same_net() {
             let (error, ops) = trace(|| unchanged(&mut s, command));
             assert_eq!(error.details()["reason"], "affected_short");
             assert!(ops.iter().any(|op| matches!(op, Op::Marked {nodes,physical:true,electrical:false} if nodes.contains(&Key::Track(bridge)) && nodes.contains(&Key::Land(aid.clone(), "2".into())) && !nodes.contains(&Key::Track(branch)))));
+            assert!(ops.iter().any(|op| matches!(op, Op::VanishedCandidates { removed: 1, candidates: 1, .. })));
             assert!(observer.0.lock().unwrap().is_empty());
         } else {
             let (report, ops) = trace(|| command(&mut s).unwrap());
@@ -163,6 +164,109 @@ fn a_net_locality_explicit_via_alias_changes_without_authored_copper_edit() {
     assert_eq!(s.project().unwrap().board.footprints(), before.board.footprints());
     assert_eq!(s.project().unwrap().board.tracks, before.board.tracks);
     assert!(shorts(&s, 0).is_empty());
+    let saved = bytes(&s);
+    s.open_snapshot(crate::persistence::decode_documents(&saved).unwrap());
+    assert_eq!(bytes(&s), saved);
+    assert!(is_aliased(&s));
+    assert_eq!(run(&mut s, super::commands::LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+}
+
+#[test]
+fn a_net_locality_layer_reorder_is_not_membership_change() {
+    use crate::board::{definition::CopperBinding, setup::BoardSetup};
+    let mut s = bridged_split(Bridge::Track);
+    let a = fp(&s, 1);
+    let mut p = s.project().unwrap().clone();
+    let f = &p.board.footprints()[a];
+    let component = format!("component-{}", f.component);
+    let mut d = p.board.definition_for(f).unwrap().clone();
+    d.revision += 1;
+    let land = d.pads.iter_mut().find(|pad| pad.number == "2").unwrap();
+    land.copper = CopperBinding::AllCopper;
+    land.drill_nm = Some(100_000);
+    let (library, name, revision) = d.key();
+    Arc::make_mut(&mut p.board).definitions.insert(d.key(), Arc::new(d));
+    s.project = Some(Arc::new(p));
+    run(
+        &mut s,
+        crate::ASSIGN_FOOTPRINT,
+        json!({"component":component,"library":library,"definition":name,"definition_revision":revision,"mapping":{"1":"2","2":"1"}}),
+    )
+    .unwrap();
+    let legacy = prepare(&mut s);
+    run(&mut s, eco::APPLY_UPDATE, json!({"plan_token":legacy["plan_token"]})).unwrap();
+    let two = serde_json::to_value(view(&s).setup().unwrap()).unwrap();
+    let four = serde_json::to_value(BoardSetup::preset(4).unwrap()).unwrap();
+    let mut setup = two.clone();
+    setup["layers"]
+        .as_array_mut()
+        .unwrap()
+        .extend(four["layers"].as_array().unwrap().iter().filter(|l| l["purpose"] == "copper" && l.get("side").is_none()).cloned());
+    setup["stackup"]["strata"].as_array_mut().unwrap().splice(2..2, four["stackup"]["strata"].as_array().unwrap()[2..6].iter().cloned());
+    run(&mut s, crate::SET_BOARD_SETUP, json!({"setup":setup,"resolve_existing_footprints":true})).unwrap();
+    let reference = pick(&mut s, a, "pad.center", Some("2"));
+    add(&mut s, "horizontal", origin(), reference);
+    let before = s.snapshot().unwrap();
+    let short = shorts(&s, 0);
+    assert_eq!(short.len(), 1);
+    let old_order = setup["stackup"]["strata"].clone();
+    setup["stackup"]["strata"].as_array_mut().unwrap().swap(2, 4);
+    assert_ne!(setup["stackup"]["strata"], old_order);
+    let (r, ops) = trace(|| run(&mut s, crate::SET_BOARD_SETUP, json!({"setup":setup,"resolve_existing_footprints":true})));
+    r.unwrap();
+    assert!(!ops.iter().any(|op| matches!(op, Op::Marked { .. })));
+    assert_eq!(shorts(&s, 0)[0].items, short[0].items);
+    assert_eq!(s.project().unwrap().board.tracks, before.board.tracks);
+    assert_eq!(s.project().unwrap().board.footprints(), before.board.footprints());
+    assert_eq!(serde_json::to_value(view(&s).setup().unwrap().stackup()).unwrap()["strata"], setup["stackup"]["strata"]);
+    let (e, ops) = trace(|| unchanged(&mut s, |s| run(s, crate::SET_BOARD_SETUP, json!({"setup":two,"resolve_existing_footprints":true}))));
+    assert_eq!(e.details()["reason"], "affected_short");
+    assert!(ops.iter().any(|op| matches!(op, Op::Marked { physical: true, electrical: false, .. })));
+}
+
+#[test]
+fn a_net_locality_bulk_remote_tracks_use_vanished_broad_phase() {
+    use crate::board::track::Track;
+    use uuid::Uuid;
+    let mut s = bridged_split(Bridge::Track);
+    let a = fp(&s, 1);
+    let (aid, at) = pad(&s, a, "2");
+    let reference = pick(&mut s, a, "pad.center", Some("2"));
+    add(&mut s, "horizontal", origin(), reference);
+    let layer = copper_layers(&s)[0];
+    let mut p = s.project().unwrap().clone();
+    let tracks = &mut Arc::make_mut(&mut p.board).tracks;
+    let mut removed = Vec::new();
+    for i in 0..10_000 {
+        let y_nm = at.y_nm + i * 20_000;
+        tracks.push(Track {
+            id: Uuid::from_u128(1 + i as u128),
+            layer,
+            locked: false,
+            width_nm: 10_000,
+            start: Point { x_nm: at.x_nm, y_nm },
+            end: Point { x_nm: at.x_nm, y_nm: y_nm + 20_000 },
+        });
+        let id = Uuid::from_u128(10_001 + i as u128);
+        let x_nm = -300_000_000 + (i % 100) * 50_000;
+        let y_nm = -300_000_000 + (i / 100) * 50_000;
+        removed.push(id);
+        tracks.push(Track { id, layer, locked: false, width_nm: 10_000, start: Point { x_nm, y_nm }, end: Point { x_nm: x_nm + 20_000, y_nm } });
+    }
+    tracks.sort_by_key(|t| t.id);
+    let saved = crate::persistence::encode_documents(Arc::new(p)).unwrap();
+    s.open_snapshot(crate::persistence::decode_documents(&saved).unwrap());
+    assert_eq!(bytes(&s), saved);
+    assert_eq!(shorts(&s, 0).len(), 1);
+    let copper = view(&s).copper().unwrap();
+    assert_eq!(copper.pads[&(aid, "2".into())], copper.tracks[&Uuid::from_u128(10_000)]);
+    let before = view(&s).tracks().len();
+    let (r, ops) = trace(|| run(&mut s, crate::DELETE_TRACKS, json!({"tracks":removed})));
+    r.unwrap();
+    assert_eq!(view(&s).tracks().len(), before - 10_000);
+    assert!(!ops.iter().any(|op| matches!(op, Op::Marked { .. })));
+    assert!(ops.iter().any(|op| matches!(op, Op::VanishedCandidates{removed:10_000, queries, candidates:0} if *queries >= 10_000)), "{ops:?}");
+    assert_eq!(shorts(&s, 0).len(), 1);
 }
 
 #[test]

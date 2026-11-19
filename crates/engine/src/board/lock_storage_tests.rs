@@ -278,6 +278,61 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
     }
 }
 
+/// Check dedicated native /24 and /25 independently of the arc/lock corpus.
+#[test]
+fn a_format_f1_composes_with_assigned_via_and_material_report() {
+    use crate::board::relations::{
+        commands::{DELETE, EDIT, LIST},
+        tests::{add, bytes, origin, pick, run},
+    };
+    for report in [false, true] {
+        let mut s = track::tests::routed_fixture();
+        if report {
+            add_material_report(&mut s);
+        } else {
+            let anchor = s.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+            run(&mut s, track::ADD_VIA, json!({"at":{"x_nm":-30_000_000,"y_nm":-30_000_000},"target":{"kind":"derived","anchor":anchor}})).unwrap();
+        }
+        let native = bytes(&s);
+        let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&native).unwrap()).unwrap(), native);
+        assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
+        let path = test_board_path(&native);
+        let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
+        assert_eq!(native_board["format"], if report { "pcbcraft-board/25" } else { "pcbcraft-board/24" });
+        if report {
+            assert!(native_board["setup"]["materials"][0]["thermal_conductivity"].is_array());
+        } else {
+            assert!(native_board["vias"][0]["net_assignment"].is_object());
+        }
+        let reference = pick(&mut s, 0, "fp.origin", None);
+        let id = add(&mut s, "horizontal", origin(), reference);
+        let composed = bytes(&s);
+        let mut b: Value = serde_json::from_slice(&composed[&path]).unwrap();
+        assert_eq!(b["format"], "pcbcraft-board/39");
+        assert_eq!(b.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
+        b["format"] = native_board["format"].clone();
+        assert_eq!(b, native_board);
+        for (file, data) in &native {
+            if *file != path {
+                assert_eq!(data, &composed[file]);
+            }
+        }
+        let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        s.open_snapshot(decode_packed(&packed).unwrap().project);
+        assert_eq!(bytes(&s), composed);
+        assert_eq!(encode_packed(s.snapshot().unwrap()).unwrap(), packed);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+        run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
+        let edited = bytes(&s);
+        s.open_snapshot(decode_documents(&edited).unwrap());
+        assert_eq!(bytes(&s), edited);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "suppressed");
+        run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
+        assert_eq!(bytes(&s), native);
+    }
+}
+
 /// Both features are required in format 35 and cannot be relabeled as either single-feature format.
 #[test]
 fn combined_format_requires_both_features() {

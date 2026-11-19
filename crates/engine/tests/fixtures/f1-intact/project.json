@@ -1,0 +1,10 @@
+{
+  "format": "pcbcraft-project/9",
+  "id": "00000000-0000-4000-8000-000000000001",
+  "name": "Intact F1 reader fixture",
+  "numeric_id_high_water": 1,
+  "boards": [{"id":"00000000-0000-4000-8000-000000000002","name":"Board","file":"board.json"}],
+  "sheets": [{"id":"00000000-0000-4000-8000-000000000003","name":"Schematic","file":"sheets/00000000-0000-4000-8000-000000000003.json"}],
+  "components": [
+  ]
+}

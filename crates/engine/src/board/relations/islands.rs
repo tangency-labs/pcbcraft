@@ -6,6 +6,7 @@ use crate::{
     board::{
         self,
         geometry::Contour,
+        pair_index::{PairIndex, Search},
         track::{self, Track, Via},
     },
 };
@@ -40,11 +41,10 @@ struct Node<'a> {
 impl Node<'_> {
     /// Compare only modeled physical geometry and native copper records, not inferred net IDs.
     fn same_copper(&self, after: &Self) -> bool {
-        self.contour.core == after.contour.core
-            && self.contour.radius == after.contour.radius
-            && self.layers == after.layers
+        self.layers == after.layers
             && self.track == after.track
             && self.via == after.via
+            && (self.track.is_some() || self.via.is_some() || same_land_contour(&self.contour, &after.contour))
     }
 
     /// Test original direct contact with native layer occupancy and contour policy.
@@ -55,6 +55,24 @@ impl Node<'_> {
                 _ => self.contour.touches(&other.contour),
             }
     }
+}
+
+/// A native pad has a convex integer core expanded by one radius. Corner winding and
+/// start index (e.g. on symmetric quarter turns) do not change its geometry.
+fn same_land_contour(before: &Contour, after: &Contour) -> bool {
+    let ordered = |contour: &Contour| {
+        let mut vertices = contour.core.map(|p| (p.x_nm, p.y_nm));
+        vertices.sort_unstable();
+        vertices
+    };
+    before.radius == after.radius && (before.core == after.core || ordered(before) == ordered(after))
+}
+
+/// The planar contact model uses occupancy sets, not ordinal stack positions.
+fn canonical_layers(mut layers: Vec<Uuid>) -> Vec<Uuid> {
+    layers.sort_unstable();
+    layers.dedup();
+    layers
 }
 
 struct Copper<'a> {
@@ -74,14 +92,16 @@ impl<'a> Copper<'a> {
         let (tracks, vias) = (view.tracks(), view.vias());
         let memberships = project.board_intent_memberships();
         let net = board::via_nets::node_membership(project, &lands, tracks.len(), vias, &memberships);
-        let layers = project
-            .board
-            .setup
-            .iter()
-            .flat_map(|s| s.layers())
-            .filter(|layer| layer.purpose == board::setup::LayerPurpose::Copper)
-            .map(|layer| layer.id)
-            .collect::<Vec<_>>();
+        let layers = canonical_layers(
+            project
+                .board
+                .setup
+                .iter()
+                .flat_map(|s| s.layers())
+                .filter(|layer| layer.purpose == board::setup::LayerPurpose::Copper)
+                .map(|layer| layer.id)
+                .collect(),
+        );
         let mut nodes = Vec::with_capacity(net.len());
         for land in &lands {
             let pin =
@@ -90,7 +110,7 @@ impl<'a> Copper<'a> {
             nodes.push(Node {
                 key: Key::Land(land.key.0.clone(), land.key.1.clone()),
                 contour: land.contour(),
-                layers: land.layers.clone(),
+                layers: canonical_layers(land.layers.clone()),
                 track: None,
                 via: None,
                 net: membership,
@@ -149,21 +169,50 @@ pub(super) fn check(previous: &Project, candidate: &Project, bodies: &BTreeSet<S
         return Ok(());
     }
     let Some(after) = Copper::read(candidate) else { return Ok(()) };
-    let (copper, groups) = track::islands(&after.lands, after.tracks, after.vias);
-    let groups = track::with_pad_contacts(&after.lands, &copper, groups);
+    if !after.lands.iter().any(|land| bodies.contains(&land.key.0)) {
+        return Ok(());
+    }
     let Some(before) = Copper::read(previous) else { return Ok(()) };
+    let origins: Vec<_> = after.nodes.iter().map(|node| before.index.get(&node.key).map(|&i| &before.nodes[i])).collect();
+    let changed: Vec<_> = after.nodes.iter().zip(&origins).map(|(node, old)| old.is_none_or(|old| !old.same_copper(node))).collect();
     let vanished: Vec<_> = before.nodes.iter().filter(|node| !after.index.contains_key(&node.key)).collect();
+    // Identical bindings AND identical per-node net ordinals are sufficient to prove
+    // unchanged local partitions. Unequal ordinals still take the island-local bijection.
+    if vanished.is_empty()
+        && !changed.iter().any(|&changed| changed)
+        && after.nodes.iter().zip(&origins).all(|(node, old)| old.is_some_and(|old| node.binding == old.binding && node.net == old.net))
+    {
+        return Ok(());
+    }
+    let missing = (!vanished.is_empty()).then(|| PairIndex::new(vanished.iter().map(|node| &node.contour)));
+    let mut search = Search::default();
+    #[cfg(test)]
+    let (mut queries, mut candidates) = (0, 0);
+    let groups = track::build_islands(&after.lands, after.tracks, after.vias, true).1;
     for group in &groups {
         if !group.iter().any(|&i| matches!(&after.nodes[i].key, Key::Land(fp, _) if bodies.contains(fp))) {
             continue;
         }
-        // Disappeared-node triggers use original direct contacts with surviving nodes.
-        let physical = group.iter().any(|&i| {
-            let node = &after.nodes[i];
-            let Some(&j) = before.index.get(&node.key) else { return true };
-            let old = &before.nodes[j];
-            !old.same_copper(node) || vanished.iter().any(|removed| removed.touches(old))
-        });
+        // Only unchanged surviving nodes of relevant, otherwise unmarked groups need an
+        // original contact query. The vanished-only index prunes remote copper before exact contact.
+        let physical = group.iter().any(|&i| changed[i])
+            || missing.as_ref().is_some_and(|index| {
+                group.iter().any(|&i| {
+                    origins[i].is_some_and(|old| {
+                        #[cfg(test)]
+                        {
+                            queries += 1;
+                        }
+                        index.any_overlapping(&old.contour, &mut search, |j| {
+                            #[cfg(test)]
+                            {
+                                candidates += 1;
+                            }
+                            vanished[j].touches(old)
+                        })
+                    })
+                })
+            });
         let electrical = !physical && after.electrical_changed(&before, group);
         if !physical && !electrical {
             continue;
@@ -171,12 +220,20 @@ pub(super) fn check(previous: &Project, candidate: &Project, bodies: &BTreeSet<S
         #[cfg(test)]
         super::probes::hit(super::probes::Op::Marked { nodes: group.iter().map(|&i| after.nodes[i].key.clone()).collect(), physical, electrical });
         if let Some((a, b)) = track::intrinsic_short(group, &after.lands, &after.memberships, |i| after.nodes[i].net) {
+            #[cfg(test)]
+            if missing.is_some() {
+                super::probes::hit(super::probes::Op::VanishedCandidates { removed: vanished.len(), queries, candidates });
+            }
             return Err(reason(
                 "affected_short",
                 &format!("This edit would short {a} and {b} in an affected relation island."),
                 json!({"nets":[a,b]}),
             ));
         }
+    }
+    #[cfg(test)]
+    if missing.is_some() {
+        super::probes::hit(super::probes::Op::VanishedCandidates { removed: vanished.len(), queries, candidates });
     }
     Ok(())
 }

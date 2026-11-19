@@ -165,7 +165,7 @@ impl Reference {
     /// Check payload invariants independent of whether the native placement still exists.
     fn valid(&self) -> bool {
         self.footprint().is_none_or(|(fp, def)| {
-            fp != 0
+            (1..=crate::MAX_OBJECT_ID).contains(&fp)
                 && def.revision != 0
                 && super::definition::valid_id(&def.id)
                 && def.library.as_ref().map_or_else(
@@ -195,6 +195,43 @@ impl Kind {
 }
 
 impl Relations {
+    /// Normalize only references to a matching placed pin whose new namespace is proved by
+    /// the native migration plan. Latched display history is not a live binding; leave it intact.
+    pub(super) fn migrate_library_addresses(&mut self, board: &super::Board, replacements: &crate::library::compatibility::migration::Replacements) {
+        for reference in self.relations.iter_mut().filter(|row| row.state == State::Ok).flat_map(|row| &mut row.refs) {
+            let (fp, def) = match reference {
+                Reference::BoardOrigin {} => continue,
+                Reference::Origin { fp, def }
+                | Reference::PadCenter { fp, def, .. }
+                | Reference::PadCorner { fp, def, .. }
+                | Reference::PadEdge { fp, def, .. }
+                | Reference::CourtyardEdge { fp, def, .. } => (*fp, def),
+            };
+            if let Some(key) = catalog::footprint(board, fp).and_then(super::Footprint::key)
+                && def.library.as_ref() == Some(&key.0)
+                && def.id == key.1
+                && def.revision == key.2
+                && let Some(library) = replacements.footprint_library(&key)
+            {
+                def.library = Some(library.into());
+            }
+        }
+    }
+
+    /// Count each omitted authored row once if the board selection carries a named footprint
+    /// or a native Outline drawing that supplies the board-origin pick. Includes lost/suppressed
+    /// rows without resolving them; the counter is bounded by the persisted relation cap.
+    pub(super) fn omitted_by_copy(&self, footprints: &BTreeSet<String>, carries_outline_datum: bool) -> usize {
+        self.relations
+            .iter()
+            .filter(|row| {
+                row.refs
+                    .iter()
+                    .any(|reference| reference.footprint().map_or(carries_outline_datum, |(fp, _)| footprints.contains(&format!("footprint-{fp}"))))
+            })
+            .count()
+    }
+
     /// Strict F1 ingestion: validate saved rows structurally without resolving or settling.
     /// In particular a known-kind future driving row is refused, not silently downgraded.
     pub(crate) fn validate(&self) -> Result<(), String> {

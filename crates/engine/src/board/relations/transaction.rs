@@ -26,6 +26,7 @@ pub(crate) enum RelationStage {
 pub(crate) struct RelationInput {
     pub(crate) review: bool,
     pub(crate) choices: Vec<Choice>,
+    pub(crate) explicit_poses: BTreeSet<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -198,7 +199,9 @@ pub(crate) enum ReviewSlot {
 pub(crate) fn choices(input: Option<&Value>) -> Result<Vec<Choice>, CommandError> {
     let Some(input) = input else { return Ok(Vec::new()) };
     let mut values: Vec<Choice> = serde_json::from_value(input.clone()).map_err(crate::board::relations::commands::invalid)?;
-    if values.len() > 2 * super::MAX_RELATIONS || values.iter().any(|c| c.relation.is_nil() || c.pick > 1) {
+    if values.len() > 2 * super::MAX_RELATIONS
+        || values.iter().any(|c| c.relation.is_nil() || c.pick > 1 || matches!(&c.choice, RemapChoice::Repick { reference } if !reference.valid()))
+    {
         return Err(CommandError::InvalidParams("invalid or excessive remap choices".into()));
     }
     values.sort_by_key(|c| (c.relation, c.pick));
@@ -246,6 +249,9 @@ pub(crate) fn verify_final(
         if !input.choices.is_empty() {
             return Err(CommandError::InvalidParams("no relation can use these remap choices".into()));
         }
+        if input.review {
+            report.poses = resulting_poses(previous, candidate, input, BTreeSet::new());
+        }
         return Ok(report);
     }
     let mut by_id: BTreeMap<_, _> = old.into_iter().flat_map(|rows| &rows.relations).map(|row| (row.id, row)).collect();
@@ -262,10 +268,12 @@ pub(crate) fn verify_final(
         let mut refs = row.refs.clone();
         let mut proposal = Vec::new();
         let mut loses = false;
+        let mut explicit_model = false;
         if let Some((base, prior)) = previous.zip(prior).filter(|(_, prior)| prior.refs == row.refs && prior.state == State::Ok) {
             for (pick, old_ref) in prior.refs.iter().enumerate() {
                 let offered = catalog::correspondence(base, candidate, old_ref);
                 let choice = choices.remove(&(row.id, pick as u8));
+                explicit_model |= matches!(choice, Some(RemapChoice::Correspond | RemapChoice::Repick { .. }));
                 let proposed = match (offered, choice) {
                     (None, Some(RemapChoice::Correspond)) => {
                         return Err(CommandError::InvalidParams("that correspondence is no longer offered".into()));
@@ -275,7 +283,7 @@ pub(crate) fn verify_final(
                     }
                     (_, Some(RemapChoice::KeepLost)) => None,
                     (_, Some(RemapChoice::Repick { reference })) => {
-                        if !reference.valid() || catalog::resolve(candidate, reference).is_none() {
+                        if reference == old_ref || catalog::resolve(candidate, reference).is_none() {
                             return Err(reason("lost_reference", "The replacement pick is not available.", Value::Null));
                         }
                         Some(reference.clone())
@@ -321,8 +329,12 @@ pub(crate) fn verify_final(
                 affected.extend(row.refs.iter().filter_map(|r| r.footprint().map(|(id, _)| id)));
             }
         } else if let Some(prior) = prior.filter(|p| p.refs == row.refs && p.state == State::Ok) {
-            if !proposal.is_empty() && !loses && !input.choices.is_empty() {
-                return Err(reason("lost_reference", "The selected correspondence no longer makes a measurable pair.", Value::Null));
+            if explicit_model {
+                return Err(reason(
+                    "lost_reference",
+                    "The selected repick or correspondence does not make a measurable pair. Review both picks.",
+                    json!({"id":row.id}),
+                ));
             }
             row.state = State::Lost { since_revision: revision };
             if let Some(old_witnesses) = previous.and_then(|p| live_measure(p, prior)).map(Measure::witnesses) {
@@ -354,15 +366,26 @@ pub(crate) fn verify_final(
         super::islands::check(base, candidate, &bodies)?;
     }
     if input.review {
-        report.poses = affected
-            .into_iter()
-            .filter_map(|id| {
-                let f = catalog::footprint(&candidate.board, id)?;
-                Some(Pose { fp: f.id, x_nm: f.x_nm, y_nm: f.y_nm, rotation: f.rotation, bottom: f.bottom })
-            })
-            .collect();
+        report.poses = resulting_poses(previous, candidate, input, affected);
     }
     Ok(report)
+}
+
+/// Disclose the union of surviving affected reference bodies, native placement deltas
+/// (including additions and ECO package changes), and validated native pose selections.
+/// Retired bodies have no resulting pose. Native placement order is stable by ID.
+fn resulting_poses(previous: Option<&Project>, candidate: &Project, input: &RelationInput, affected: BTreeSet<u64>) -> Vec<Pose> {
+    candidate
+        .board
+        .footprints()
+        .iter()
+        .filter(|f| {
+            affected.contains(&f.id)
+                || input.explicit_poses.contains(&f.id)
+                || previous.and_then(|base| catalog::footprint(&base.board, f.id)) != Some(*f)
+        })
+        .map(|f| Pose { fp: f.id, x_nm: f.x_nm, y_nm: f.y_nm, rotation: f.rotation, bottom: f.bottom })
+        .collect()
 }
 
 /// Report ordinary current findings without mutating records or treating history as current input.
@@ -396,10 +419,15 @@ pub(crate) fn findings(project: &Project) -> Value {
 /// Validate the complete engine envelope before installing a replacement or publishing a result.
 /// The later host may impose a smaller budget including its own framing/inspection.
 pub(crate) fn bounded_result(value: Value, limit: usize) -> Result<Value, CommandError> {
-    let mut remaining = limit;
-    serde_json::to_writer(Budget(&mut remaining), &value)
-        .map_err(|error| CommandError::CapExceeded(format!("complete relation command result is too large: {error}")))?;
+    check_result(&value, limit)?;
     Ok(value)
+}
+
+/// Size a borrowed typed result, including escaping and metadata, without allocating wire bytes.
+pub(super) fn check_result(value: &impl Serialize, limit: usize) -> Result<(), CommandError> {
+    let mut remaining = limit;
+    serde_json::to_writer(Budget(&mut remaining), value)
+        .map_err(|error| CommandError::CapExceeded(format!("complete relation command result is too large: {error}")))
 }
 
 struct Budget<'a>(&'a mut usize);

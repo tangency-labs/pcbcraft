@@ -10,15 +10,18 @@ use serde_json::{Value, json};
 use std::sync::Arc;
 use uuid::Uuid;
 
-const SOURCE: [Op; 2] = [Op::SourceEncode, Op::SourceDigest];
-pub(super) const CHECKED: [Op; 8] = [
+const SOURCE: [Op; 4] = [Op::SourceEncode, Op::SourceDigest, Op::EcoDiff, Op::NativeReportBound];
+pub(super) const CHECKED: [Op; 11] = [
     Op::SourceEncode,
     Op::SourceDigest,
+    Op::EcoDiff,
+    Op::NativeReportBound,
     Op::BuildEco,
     Op::Prepare(Outer),
     Op::VerifyReferences,
     Op::CandidateEncode,
     Op::CandidateDigest,
+    Op::CheckedReportBound,
     Op::RetainChecked,
 ];
 
@@ -206,11 +209,63 @@ fn a_eco_lazy_complete_report_bound_and_checked_cancel() {
     let observer = observe(&mut s);
     let (e, ops) = trace(|| unchanged(&mut s, |s| run(s, update::PREVIEW_UPDATE, json!({}))));
     assert!(e.to_string().contains("complete preview exceeds 8 MiB"), "{e}");
-    assert_eq!(ops, CHECKED[..CHECKED.len() - 1]);
+    assert_eq!(ops, SOURCE, "native-only overflow must never reach the physical builder");
     assert!(s.checked_eco_candidate().is_none());
     assert!(observer.0.lock().unwrap().is_empty());
     let (_, ops) = trace(|| run(&mut s, APPLY, super::tests::decision(&p)).unwrap());
     assert_eq!(ops, [Op::Publish(Outer)]);
+    assert_eq!(observer.0.lock().unwrap().len(), 1);
+}
+
+/// A native report that just fits may still refuse after adding checked detail, without
+/// losing the prior token. Calibrate only real historical display text, not a mock result cap.
+#[test]
+fn a_eco_checked_detail_overflow_keeps_prior_generic_review() {
+    let mut s = fixture(true);
+    let departing = pick(&mut s, 2, "fp.origin", None);
+    add(&mut s, "horizontal", origin(), departing);
+    pending(&mut s);
+    let normal = preview(&mut s, json!({}), &CHECKED);
+    assert_eq!(normal["relation_detail"]["losses"].as_array().unwrap().len(), 1);
+    let limit = update::MAX_PREVIEW_BYTES;
+    // 130 entries * 60,000 bytes fits with framing; 130 * 65,536 exceeds the cap.
+    let filled = fill_board(&s, crate::persistence::MAX_DOCUMENT_BYTES - 130 * 62_000);
+    let mut native = filled.as_ref().clone();
+    Arc::make_mut(&mut native.board).relations = None;
+    s.open_snapshot(Arc::new(native.clone()));
+    let raw = run(&mut s, update::PREVIEW_UPDATE, json!({})).unwrap();
+    let mut remaining = limit - serde_json::to_vec(&raw).unwrap().len();
+    drop(raw);
+    let baseline = Arc::make_mut(Arc::make_mut(&mut native.board).baseline.as_mut().unwrap());
+    for text in baseline.nets.iter_mut().filter_map(|net| net.display_name.as_mut()).filter(|text| text.len() >= 60_000) {
+        let n = remaining.min(65_536 - text.len());
+        text.push_str(&"x".repeat(n));
+        remaining -= n;
+        if remaining == 0 {
+            break;
+        }
+    }
+    assert_eq!(remaining, 0);
+    s.open_snapshot(Arc::new(native.clone()));
+    let (raw, ops) = trace(|| run(&mut s, update::PREVIEW_UPDATE, json!({})).unwrap());
+    assert_eq!(ops, SOURCE);
+    assert_eq!(serde_json::to_vec(&raw).unwrap().len(), limit);
+    assert!(raw["board_update_preview"].get("candidate_digest").is_none());
+    drop(raw);
+    Arc::make_mut(&mut native.board).relations = filled.board.relations.clone();
+    s.open_snapshot(Arc::new(native));
+    let fp = s.project().unwrap().board.footprints()[0].id;
+    let prior = super::tests::reviewed(&mut s, crate::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{fp}")]}));
+    let checked = s.checked_generic_candidate().unwrap().clone();
+    let observer = observe(&mut s);
+    let (error, ops) = trace(|| unchanged(&mut s, |s| run(s, update::PREVIEW_UPDATE, json!({}))));
+    assert!(error.to_string().contains("complete preview exceeds 8 MiB"), "{error}");
+    assert_eq!(ops, CHECKED[..CHECKED.len() - 1]);
+    assert!(observer.0.lock().unwrap().is_empty());
+    assert!(Arc::ptr_eq(&checked, s.checked_generic_candidate().unwrap()));
+    let (_, ops) = trace(|| run(&mut s, APPLY, super::tests::decision(&prior)).unwrap());
+    assert_eq!(ops, [Op::Publish(Outer)]);
+    assert!(Arc::ptr_eq(&checked, &s.snapshot().unwrap()));
     assert_eq!(observer.0.lock().unwrap().len(), 1);
 }
 

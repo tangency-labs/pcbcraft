@@ -821,9 +821,14 @@ pub struct Command {
 impl Command {
     /// Describe the command and its required inputs for discovery by MCP clients.
     pub fn to_json(&self) -> Value {
-        let mut params: Map<String, Value> = self
-            .params
-            .iter()
+        json!({"id": self.id, "title": self.title, "summary": self.summary, "params": self.parameter_schema(None)})
+    }
+
+    /// Build a closed parameter schema directly from typed entries. Nested review
+    /// intents omit the outer revision, but use the same native parameter declarations.
+    fn parameter_schema(&self, omit: Option<&str>) -> Value {
+        let included = || self.params.iter().filter(|p| Some(p.name) != omit);
+        let mut params: Map<String, Value> = included()
             .map(|p| {
                 let mut schema = p.kind.schema();
                 schema["description"] = json!(p.summary);
@@ -833,13 +838,8 @@ impl Command {
         if sheets::scoped_command(self.id) {
             params.insert("sheet".to_owned(), json!({"type":"string", "format":"uuid", "description":"Sheet UUID from inspection. Required when the project has multiple sheets; omission is compatible with one-sheet projects."}));
         }
-        let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
-        json!({
-            "id": self.id,
-            "title": self.title,
-            "summary": self.summary,
-            "params": {"type": "object", "properties": params, "required": required, "additionalProperties": false},
-        })
+        let required: Vec<&str> = included().filter(|p| p.required).map(|p| p.name).collect();
+        json!({"type": "object", "properties": params, "required": required, "additionalProperties": false})
     }
 }
 
@@ -3351,8 +3351,12 @@ impl Session {
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if matches!(id, board::clipboard::COPY | board::clipboard::CUT) {
-            let text = if id == board::clipboard::CUT { self.cut_board(params)? } else { self.copy_board(params)? };
-            return Ok(json!({"clipboard":text,"revision":self.revision}));
+            let clipboard = if id == board::clipboard::CUT { self.cut_board(params)? } else { self.copy_board(params)? };
+            let mut result = json!({"clipboard":clipboard.text,"revision":self.revision});
+            if let Some(notice) = clipboard.notice {
+                result["clipboard_notice"] = json!(notice);
+            }
+            return Ok(result);
         }
         if matches!(id, clipboard::COPY | clipboard::CUT) {
             let text = self.copy_schematic(params, id == clipboard::CUT)?;
@@ -3433,6 +3437,7 @@ impl Session {
     /// from their prepared publication path, which also serves direct prepared commits.
     /// Board cut checks the encoded clipboard limit even though only the revision is returned.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        self.refuse_stale(id, params)?;
         if board::relations::commands::handles(id) {
             if id == board::relations::commands::APPLY && self.checked_relation_apply_has_clipboard(params) {
                 return Err(CommandError::Unavailable("Use the result-bearing execute entry point to apply a checked Cut.".into()));
@@ -3440,7 +3445,6 @@ impl Session {
             self.relation_command(id, params, usize::MAX)?;
             return Ok(self.revision);
         }
-        self.refuse_stale(id, params)?;
         if id == board::clipboard::CUT {
             self.cut_board(params)?;
             return Ok(self.revision);
@@ -4376,7 +4380,7 @@ impl Session {
         let previous = self.project.as_deref().filter(|p| p.same_document(&project));
         let outer = self.relation_stage == RelationStage::Outer;
         let had_relations = previous.is_some_and(|p| p.board.relations.is_some());
-        let disclosure = if outer && (had_relations || project.board.relations.is_some() || !input.choices.is_empty()) {
+        let disclosure = if outer && (had_relations || project.board.relations.is_some() || !input.choices.is_empty() || input.review) {
             relations::verify_final(previous, &mut project, (self.revision + 1).max(highest), input)?
         } else {
             relations::Disclosure::default()
@@ -4419,15 +4423,23 @@ impl Session {
     /// A preview's private session captures one prepared candidate; ordinary callers publish
     /// without acquiring or accepting approval.
     fn change(&mut self, project: Project) -> Result<(), CommandError> {
-        if let Some((input, None)) = &self.relation_capture {
-            let prepared = self.prepare_with(project, input)?;
-            self.relation_capture.as_mut().expect("present capture").1 = Some(prepared);
-            return Ok(());
-        } else if self.relation_capture.is_some() {
-            return Err(CommandError::InvalidParams("preview intent attempted more than one publication".into()));
+        self.change_with_native_poses(project, [])
+    }
+
+    /// Carry validated native pose selections (including unchanged align anchors) to
+    /// review only. Direct and Raw commands retain the ordinary preparation path.
+    fn change_with_native_poses(&mut self, project: Project, poses: impl IntoIterator<Item = u64>) -> Result<(), CommandError> {
+        if let Some((mut input, prior)) = self.relation_capture.take() {
+            if prior.is_some() {
+                return Err(CommandError::InvalidParams("preview intent attempted more than one publication".into()));
+            }
+            input.explicit_poses.extend(poses);
+            let prepared = self.prepare_with(project, &input)?;
+            self.relation_capture = Some((input, Some(prepared)));
+        } else {
+            let prepared = self.prepare_change(project)?;
+            self.publish(prepared);
         }
-        let prepared = self.prepare_change(project)?;
-        self.publish(prepared);
         Ok(())
     }
 

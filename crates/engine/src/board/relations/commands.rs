@@ -4,7 +4,10 @@ use super::{
     Kind, Point, Reference, Relation, Relations, State, catalog,
     transaction::{self, Base, Prepared, RelationInput, ReviewSlot},
 };
-use crate::{Command, CommandError, Param, ParamKind, Session};
+use crate::{
+    Command, CommandError, Param, ParamKind, Session,
+    board::clipboard::{ClipboardNotice, ClipboardResult},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -211,7 +214,7 @@ fn ref_schema() -> Value {
     ]});
     let mut tags = vec![object(json!({"tag":{"const":"board.origin"}}), &["tag"])];
     for tag in ["fp.origin", "pad.center", "pad.corner", "pad.edge", "courtyard.edge"] {
-        let mut properties = json!({"tag":{"const":tag},"fp":{"type":"integer","minimum":1},"def":key});
+        let mut properties = json!({"tag":{"const":tag},"fp":{"type":"integer","minimum":1,"maximum":crate::MAX_OBJECT_ID},"def":key});
         let mut required = vec!["tag", "fp", "def"];
         if tag.starts_with("pad.") {
             properties["pad"] = json!({"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"});
@@ -268,12 +271,12 @@ impl Parameter {
             Self::Intent => {
                 let items: Vec<_> = SOURCES
                     .iter()
-                    .map(|source| {
-                        let id = source.id();
-                        let mut native = crate::command(id).expect("generic preview source has a native schema").to_json()["params"].clone();
-                        native["properties"].as_object_mut().expect("native parameter properties").remove("expected_revision");
-                        native["required"].as_array_mut().expect("native required parameters").retain(|p| p != "expected_revision");
-                        object(json!({"command":{"const":id},"params":native}), &["command", "params"])
+                    .filter_map(|source| crate::command(source.id()))
+                    .map(|native| {
+                        object(
+                            json!({"command":{"const":native.id},"params":native.parameter_schema(Some("expected_revision"))}),
+                            &["command", "params"],
+                        )
                     })
                     .collect();
                 json!({"oneOf":items})
@@ -294,8 +297,9 @@ impl Parameter {
                 .as_array()
                 .is_some_and(|v| v.len() <= self.cap() && v.iter().map(id).collect::<Result<BTreeSet<_>, _>>().is_ok_and(|ids| ids.len() == v.len())),
             Self::Remaps => transaction::choices(Some(value)).is_ok(),
-            Self::Draft => serde_json::from_value::<Draft>(value.clone()).is_ok(),
-            Self::Edit => serde_json::from_value::<Changes>(value.clone()).is_ok(),
+            Self::Draft => serde_json::from_value::<Draft>(value.clone()).is_ok_and(|draft| draft.refs.iter().all(Reference::valid)),
+            Self::Edit => serde_json::from_value::<Changes>(value.clone())
+                .is_ok_and(|edit| edit.repick.is_none_or(|draft| draft.refs.iter().all(Reference::valid))),
             Self::Intent => serde_json::from_value::<Intent>(value.clone()).is_ok_and(|i| !i.params.contains_key("expected_revision")),
         };
         valid.then_some(()).ok_or("must be a bounded typed relation input")
@@ -339,7 +343,33 @@ pub(crate) struct Generic {
     args: Value,
     intent_digest: String,
     prepared: Prepared,
-    clipboard: Option<String>,
+    clipboard: Option<ClipboardResult>,
+}
+
+/// The same success envelope is sized at preview and at Apply. The decoded text is borrowed
+/// from the capture; the advisory is a separate bounded engine field, not clipboard data.
+#[derive(Serialize)]
+struct ApplyResult<'a> {
+    revision: u64,
+    intent_digest: &'a str,
+    candidate_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clipboard: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clipboard_notice: Option<ClipboardNotice>,
+}
+
+impl Generic {
+    /// Freeze exactly the fields returned by successful Apply, including the published revision.
+    fn result(&self) -> ApplyResult<'_> {
+        ApplyResult {
+            revision: (self.base.revision + 1).max(self.prepared.highest),
+            intent_digest: &self.intent_digest,
+            candidate_digest: self.prepared.digest.as_deref(),
+            clipboard: self.clipboard.as_ref().map(|result| result.text.as_str()),
+            clipboard_notice: self.clipboard.as_ref().and_then(|result| result.notice),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -449,7 +479,7 @@ impl Session {
             project: Some(snapshot.clone()),
             revision: self.revision,
             history_root_revision: self.history_root_revision,
-            relation_capture: Some((RelationInput { review: true, choices }, None)),
+            relation_capture: Some((RelationInput { review: true, choices, ..RelationInput::default() }, None)),
             ..Session::default()
         };
         let clipboard = if command == crate::board::clipboard::CUT {
@@ -457,20 +487,25 @@ impl Session {
         } else if command == crate::clipboard::CUT {
             let text = capture.copy_schematic(&args, true)?;
             capture.apply_command(command, &args)?;
-            Some(text)
+            Some(ClipboardResult { text, notice: None })
         } else {
             capture.apply_command(command, &args)?;
             None
         };
         let prepared = capture.relation_capture.take().and_then(|(_, p)| p).ok_or_else(|| invalid("this intent has no committable edit"))?;
-        let base = Base::new(self, snapshot, target)?;
+        let pending = Generic { base: Base::new(self, snapshot, target)?, command, args, intent_digest, prepared, clipboard };
+        // A smaller caller budget here limits only Preview. Every public Execute Apply has
+        // the fixed engine budget; never displace a prior token with an impossible result.
+        if pending.clipboard.is_some() {
+            transaction::check_result(&pending.result(), RESULT_BYTES)?;
+        }
         let result = transaction::bounded_result(
             json!({"revision":self.revision,"relation_preview":{
-            "token":base.token,"project":target.project,"board":target.board,"intent_digest":intent_digest,
-            "candidate_digest":prepared.digest,"disclosure":prepared.disclosure}}),
+            "token":pending.base.token,"project":target.project,"board":target.board,"intent_digest":pending.intent_digest,
+            "candidate_digest":pending.prepared.digest,"disclosure":pending.prepared.disclosure}}),
             limit,
         )?;
-        self.update_plan = Some(ReviewSlot::GenericPrepared(Generic { base, command, args, intent_digest, prepared, clipboard }));
+        self.update_plan = Some(ReviewSlot::GenericPrepared(pending));
         Ok(result)
     }
 
@@ -483,13 +518,10 @@ impl Session {
             return Err(stale());
         }
         p.prepared.disclosure.consent(params, false)?;
-        let mut response = json!({"revision":(self.revision + 1).max(p.prepared.highest),"intent_digest":p.intent_digest,
-            "candidate_digest":p.prepared.digest});
-        if let Some(text) = &p.clipboard {
-            response["clipboard"] = json!(text);
-        }
-        let response = transaction::bounded_result(response, limit)?;
-        let Some(ReviewSlot::GenericPrepared(p)) = self.update_plan.take() else { unreachable!("validated generic slot") };
+        let result = p.result();
+        transaction::check_result(&result, limit)?;
+        let response = serde_json::to_value(result).map_err(invalid)?;
+        let Some(ReviewSlot::GenericPrepared(p)) = self.update_plan.take() else { return Err(stale()) };
         self.publish(p.prepared);
         self.report_committed(p.command, &p.args);
         Ok(response)
@@ -536,7 +568,7 @@ impl Session {
                 rows.retain(|r| !ids.contains(&r.id));
                 None
             }
-            _ => unreachable!(),
+            _ => return Err(CommandError::Unknown(command.into())),
         };
         if rows.as_slice() == project.board.relations.as_ref().map_or(&[][..], |r| r.relations.as_slice()) {
             return transaction::bounded_result(json!({"revision":self.revision,"id":response_id}), limit);

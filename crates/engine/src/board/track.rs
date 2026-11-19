@@ -379,7 +379,7 @@ fn join(parent: &mut [usize], a: usize, b: usize) {
 }
 
 /// Build islands from copper contours. Footprint edit validation also joins direct pad pairs.
-fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
+pub(super) fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
     let mut builder = IslandBuilder::new(lands, tracks, vias);
     while !builder.step(usize::MAX) {}
     if join_pad_pairs {

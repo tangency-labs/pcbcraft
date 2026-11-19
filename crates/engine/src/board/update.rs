@@ -24,6 +24,8 @@ std::thread_local! {
 pub const INITIALIZE_BASELINE: &str = "pcb.initialize_update_baseline";
 mod commands;
 pub(crate) use commands::CachedPlan;
+#[cfg(test)]
+pub(crate) use commands::MAX_PREVIEW_BYTES;
 pub use commands::{APPLY_UPDATE, BoardUpdatePreview, CANCEL_UPDATE, PREVIEW_UPDATE};
 
 /// Persisted accepted-input vocabulary; future shapes require an explicit migration.

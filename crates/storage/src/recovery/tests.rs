@@ -206,6 +206,81 @@ fn checked_relation_cut_recovers_lost_witness_and_exact_native_documents() {
     assert_eq!(project.board_view(project.board_target().unwrap()).unwrap().footprint_ids().len(), 0);
 }
 
+/// The normal storage editing-open, unlike raw decode, normalizes the proven bundled pin.
+#[test]
+fn native_folder_open_normalizes_exact_relation_pins_then_saves_without_motion() {
+    use pcbcraft_engine::{library::sources::symbol_digest, persistence::encode_documents};
+    let dir = tempfile::tempdir().unwrap();
+    let source_folder = dir.path().join("before");
+    let saved_folder = dir.path().join("after");
+    let run = |s: &mut Session, id: &str, mut args: Value| {
+        if pcbcraft_engine::command(id).unwrap().params.iter().any(|p| p.name == "expected_revision") {
+            args["expected_revision"] = json!(s.revision());
+        }
+        s.execute(id, &args).unwrap()
+    };
+    let mut s = Session::default();
+    run(&mut s, "project.new", json!({"create_board":true}));
+    let source = "bundled-starter";
+    let items = s.libraries().source_items(source);
+    let symbol = items.iter().filter(|i| i.key.id == "connector").max_by_key(|i| i.key.revision).unwrap().symbol().unwrap();
+    let footprint = items.iter().filter(|i| i.key.id == "header-1x02-254").max_by_key(|i| i.key.revision).unwrap().footprint().unwrap();
+    run(
+        &mut s,
+        "schematic.place_symbol",
+        json!({"library":"starter","definition":"connector","definition_revision":symbol.revision(),"definition_digest":symbol_digest(&symbol).unwrap(),"x_nm":0,"y_nm":0}),
+    );
+    let component = s.project().unwrap().components().next().unwrap().id();
+    let mapping = s.project().unwrap().default_footprint_mapping(&component, &footprint).unwrap();
+    run(
+        &mut s,
+        "pcb.assign_footprint",
+        json!({"component":component,"library":"starter","definition":footprint.id,"definition_revision":footprint.revision,"mapping":mapping}),
+    );
+    run(&mut s, "pcb.place_assigned_footprint", json!({"component":component,"x_nm":5_000_000,"y_nm":1_000_000}));
+    let pose = |s: &Session| {
+        let p = s.project().unwrap();
+        let view = p.board_view(p.board_target().unwrap()).unwrap().footprints().next().unwrap();
+        (view.id, view.position, view.rotation, view.bottom)
+    };
+    let placed = pose(&s);
+    let features = run(&mut s, "pcb.feature_catalog", json!({"fp":placed.0}));
+    let catalog = features["features"].as_array().unwrap();
+    for tag in ["fp.origin", "pad.center"] {
+        let reference = &catalog.iter().find(|r| r["reference"]["tag"] == tag).unwrap()["reference"];
+        assert_eq!(reference["def"]["library"], "starter");
+        run(&mut s, "pcb.add_relation", json!({"relation":{"kind":"horizontal","refs":[{"tag":"board.origin"},reference]}}));
+    }
+    let list = |s: &mut Session| run(s, "pcb.relations", json!({}))["relations"].as_array().unwrap().clone();
+    let before = list(&mut s);
+    let original = encode_documents(s.snapshot().unwrap()).unwrap();
+    crate::save(&source_folder, None, &original, &mut |_| Ok(())).unwrap();
+    s.open_snapshot(crate::open(&source_folder).unwrap());
+    let opened = list(&mut s);
+    assert_eq!(opened.len(), 2);
+    for (old, next) in before.iter().zip(&opened) {
+        assert_eq!(next["id"], old["id"]);
+        assert_eq!(next["status"], "reference");
+        assert_eq!(next["measure"], old["measure"]);
+        let mut expected = old["refs"].clone();
+        expected[1]["def"]["library"] = json!("basic-components");
+        assert_eq!(next["refs"], expected);
+    }
+    assert_eq!(pose(&s), placed);
+    let label = json!({"x_nm":2_000_000,"y_nm":3_000_000});
+    run(&mut s, "pcb.edit_relation", json!({"id":opened[0]["id"],"edit":{"label":label}}));
+    let edited = list(&mut s);
+    assert_eq!(edited[0]["label"], label);
+    assert_eq!(edited[0]["measure"], before[0]["measure"]);
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+    crate::save(&saved_folder, None, &saved, &mut |_| Ok(())).unwrap();
+    s.open_snapshot(crate::open(&saved_folder).unwrap());
+    assert_eq!(list(&mut s), edited);
+    assert_eq!(pose(&s), placed);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+    assert_eq!(crate::load(&source_folder).unwrap(), original);
+}
+
 /// A journal with the given edits applied on top of a new project, and the documents after each.
 fn journal_with(dir: &Path, edits: usize) -> (EditJournal, Vec<Documents>) {
     let mut session = Session::default();
