@@ -89,7 +89,7 @@ struct ReadAperture {
     kind: char,
     width: i64,
     height: i64,
-    function: &'static str,
+    function: Option<&'static str>,
 }
 
 #[derive(Debug, Default)]
@@ -226,12 +226,12 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
             if dimensions.len() != if kind == 'C' { 1 } else { 2 } {
                 return Err("invalid aperture arity");
             }
-            let function = pending_function.take().ok_or("missing aperture function")?;
+            let function = pending_function.take();
             let aperture = ReadAperture { kind, width: dimensions[0], height: *dimensions.last().unwrap(), function };
             if read.apertures.insert(code, aperture).is_some() {
                 return Err("duplicate aperture");
             }
-            if lines.next() != Some("%TD.AperFunction*%") {
+            if function.is_some() && lines.next() != Some("%TD.AperFunction*%") {
                 return Err("aperture function not cleared");
             }
             continue;
@@ -333,7 +333,7 @@ fn mixed_pad_shapes_use_standard_flashes_with_resolved_sizes() {
     assert_eq!(read.flashes.len(), expected.len());
     for (((center, aperture), pad), (kind, width, height)) in read.flashes.iter().zip(view(&s).footprints().next().unwrap().pads).zip(expected) {
         assert_eq!(*center, Point { x_nm: pad.center.x_nm, y_nm: -pad.center.y_nm });
-        assert_eq!(*aperture, ReadAperture { kind, width, height, function: "SMDPad,CuDef" });
+        assert_eq!(*aperture, ReadAperture { kind, width, height, function: Some("SMDPad,CuDef") });
     }
     assert_eq!(outputs, view(&s).fabrication_outputs().unwrap());
     assert_eq!(zip(&outputs).unwrap(), zip(&view(&s).fabrication_outputs().unwrap()).unwrap());
@@ -362,9 +362,9 @@ fn standard_pad_apertures_read_back_on_copper_mask_and_paste() {
                 let pads: Vec<_> = view(&s).footprints().flat_map(|f| f.pads).collect();
                 for (output, function) in surface_files(bottom).into_iter().zip(["SMDPad,CuDef", "Material", "Material"]) {
                     let read = read_gerber(&outputs, output);
-                    assert!(read.apertures.values().all(|aperture| aperture.function == function));
                     assert!(read.region_functions.iter().all(|&actual| actual == function));
                     if shape == PadShape::Oval && width % 2 != height % 2 {
+                        let function = (function == "Material").then_some(function);
                         assert!(read.flashes.is_empty() && read.regions.is_empty());
                         assert_eq!(read.strokes.len(), pads.len());
                         for ((a, b, aperture), pad) in read.strokes.iter().zip(&pads) {
@@ -379,6 +379,7 @@ fn standard_pad_apertures_read_back_on_copper_mask_and_paste() {
                         continue;
                     }
                     assert!(read.strokes.is_empty());
+                    assert!(read.apertures.values().all(|aperture| aperture.function == Some(function)));
                     if shape == PadShape::Rectangle && (width % 2 != 0 || height % 2 != 0) {
                         assert!(read.flashes.is_empty() && read.apertures.is_empty());
                         assert_eq!(read.regions.len(), pads.len());
@@ -434,10 +435,10 @@ fn aperture_identity_and_selection_retain_shape_and_orientation() {
         Aperture::Obround(800_000, 400_000),
         Aperture::Obround(400_000, 800_000),
     ] {
-        gerber.aperture(aperture, ApertureFunction::Material);
+        gerber.aperture(aperture, Some(ApertureFunction::Material));
         gerber.body.push_str("X0Y0D03*\n");
     }
-    gerber.stroke(&[point, Point { x_nm: 1_000_000, y_nm: 0 }], 400_000, ApertureFunction::Material);
+    gerber.stroke(&[point, Point { x_nm: 1_000_000, y_nm: 0 }], 400_000, Some(ApertureFunction::Material));
     let text = gerber.finish("Soldermask,Top", "Negative");
     let read = try_read_gerber(&text, "Soldermask,Top", "Negative").unwrap();
     assert_eq!(read.apertures.len(), 7);
@@ -453,11 +454,11 @@ fn aperture_identity_and_selection_retain_shape_and_orientation() {
             ('O', 800_000, 400_000),
             ('O', 400_000, 800_000),
         ]
-        .map(|(kind, width, height)| (point, ReadAperture { kind, width, height, function: "Material" }))
+        .map(|(kind, width, height)| (point, ReadAperture { kind, width, height, function: Some("Material") }))
     );
     assert_eq!(
         read.strokes,
-        [(point, Point { x_nm: 1_000_000, y_nm: 0 }, ReadAperture { kind: 'C', width: 400_000, height: 400_000, function: "Material" })]
+        [(point, Point { x_nm: 1_000_000, y_nm: 0 }, ReadAperture { kind: 'C', width: 400_000, height: 400_000, function: Some("Material") })]
     );
     assert_eq!(read.strokes[0].2.kind, 'C');
     assert_eq!(read.strokes[0].2.width, 400_000);
@@ -598,7 +599,7 @@ fn gerber_subset_reader_rejects_header_syntax_and_order_mutations() {
         (text.replace("%ADD10", "%ADD010"), "invalid aperture code"),
         (text.replacen(&definition_block, &definition_block.repeat(2), 1), "duplicate aperture"),
         (text.replace("M02*", &format!("{definition_block}M02*")), "late aperture definition"),
-        (text.replacen(set, "", 1), "missing aperture function"),
+        (text.replacen(set, "", 1), "unsupported record"),
         (text.replacen(clear, "", 1), "aperture function not cleared"),
         (text.replacen("SMDPad,CuDef", "SMDPad", 1), "unsupported aperture function"),
         (text.replace("M02*", &format!("{set}M02*")), "aperture function outside definition or region"),
@@ -673,8 +674,8 @@ fn aperture_eligibility_is_per_pad_within_one_footprint() {
     assert_eq!(
         read.flashes,
         [
-            (rect, ReadAperture { kind: 'R', width: 2, height: 2, function: "SMDPad,CuDef" }),
-            (oval, ReadAperture { kind: 'O', width: 2, height: 4, function: "SMDPad,CuDef" })
+            (rect, ReadAperture { kind: 'R', width: 2, height: 2, function: Some("SMDPad,CuDef") }),
+            (oval, ReadAperture { kind: 'O', width: 2, height: 4, function: Some("SMDPad,CuDef") })
         ]
     );
     assert_eq!(read.regions.len(), 1);
@@ -687,7 +688,7 @@ fn aperture_eligibility_is_per_pad_within_one_footprint() {
         [(
             Point { y_nm: rotated_oval.y_nm + 1, ..rotated_oval },
             Point { y_nm: rotated_oval.y_nm - 1, ..rotated_oval },
-            ReadAperture { kind: 'C', width: 2, height: 2, function: "SMDPad,CuDef" },
+            ReadAperture { kind: 'C', width: 2, height: 2, function: None },
         )]
     );
 }
@@ -831,6 +832,7 @@ fn obround_capsules_match_land_geometry_across_parity_sides_and_output_origins()
                                 assert_eq!(actual, expected, "analytic O core and land core");
                             }
                         } else {
+                            let function = (function == "Material").then_some(function);
                             assert!(read.flashes.is_empty());
                             assert_eq!(read.strokes.len(), lands.len());
                             for ((a, b, aperture), land) in read.strokes.iter().zip(&lands) {
@@ -867,6 +869,23 @@ fn obround_capsules_match_land_geometry_across_parity_sides_and_output_origins()
     assert!(observed_fallback_difference, "legacy endpoint rounding is not general exact land equivalence");
 }
 
+/// Ucamco Gerber 2026.05 §§5.6.10 and 6.4: a swept circular tool is not the pad. A
+/// mixed-parity obround retains its endpoints, but does not share the same-size pad flash's tag.
+#[test]
+fn legacy_copper_obround_stroke_does_not_inherit_pad_function() {
+    let s = aperture_fixture_with_pads(&[(PadShape::Circle, 400_000, 400_000, 0), (PadShape::Oval, 800_001, 400_000, 0)], 0, false);
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    let read = read_gerber(&outputs, TOP_COPPER);
+    let tagged = ReadAperture { kind: 'C', width: 400_000, height: 400_000, function: Some("SMDPad,CuDef") };
+    assert_eq!(read.apertures.len(), 2);
+    assert_eq!(read.flashes, [(Point { x_nm: 30_000_001, y_nm: 25_000_003 }, tagged)]);
+    assert_eq!(
+        read.strokes,
+        [(Point { x_nm: 31_800_000, y_nm: 25_000_003 }, Point { x_nm: 32_200_002, y_nm: 25_000_003 }, ReadAperture { function: None, ..tagged },)]
+    );
+    assert!(read.regions.is_empty());
+}
+
 /// All-copper plated pads reach every copper and both outer mask files, but not paste.
 #[test]
 fn through_hole_pad_flashes_are_excluded_from_paste() {
@@ -891,7 +910,7 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
             BOTTOM[1],
         ] {
             let function = if output.1.starts_with("Copper,") { "ComponentPad" } else { "Material" };
-            let aperture = ReadAperture { kind, width: 400_000, height: width, function };
+            let aperture = ReadAperture { kind, width: 400_000, height: width, function: Some(function) };
             let expected = [3_000_000, 1_000_000].map(|y_nm| (Point { x_nm: 3_000_000, y_nm }, aperture));
             let read = read_gerber(&outputs, output);
             assert_eq!(read.flashes, expected, "{}", output.0);
@@ -925,7 +944,7 @@ fn equal_size_copper_uses_distinct_aperture_functions() {
 
     let outputs = s.export_fabrication(&json!({})).unwrap();
     let top = read_gerber(&outputs, TOP_COPPER);
-    let circle = |function| ReadAperture { kind: 'C', width: size, height: size, function };
+    let circle = |function| ReadAperture { kind: 'C', width: size, height: size, function: Some(function) };
     let expected_apertures = ["SMDPad,CuDef", "ComponentPad", "Conductor", "ViaPad"].map(circle);
     assert_eq!(top.apertures.len(), expected_apertures.len(), "one D-code per function, not per pad");
     for aperture in expected_apertures {
@@ -999,6 +1018,29 @@ fn outputs_require_setup_and_a_closed_outline() {
     let s = routed_fixture();
     let error = view(&s).fabrication_outputs().unwrap_err();
     assert!(error.contains("closed Board Outline"), "{error}");
+}
+
+/// Ucamco Gerber 2026.05 §§5.6.10 and 6.5: a disconnected line is not the physical profile.
+/// Preserve the existing line and loop coordinates but separate the same-width apertures.
+#[test]
+fn only_the_closed_outline_drawing_gets_the_profile_function() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let layer = view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let stray = [Point { x_nm: 30_000_000, y_nm: 0 }, Point { x_nm: 35_000_000, y_nm: 0 }];
+    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":stray,"closed":false,"expected_revision":s.revision()})).unwrap();
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    let read = read_gerber(&outputs, ("-Outline.gbr", "Profile,NP", "Positive"));
+    let profile = ReadAperture { kind: 'C', width: 100_000, height: 100_000, function: Some("Profile") };
+    let loop_points =
+        [(-5_000_000, 5_000_000), (25_000_000, 5_000_000), (25_000_000, -35_000_000), (-5_000_000, -35_000_000), (-5_000_000, 5_000_000)]
+            .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    let expected: Vec<_> = loop_points.windows(2).map(|pair| (pair[0], pair[1], profile)).collect();
+    let (tagged, untagged): (Vec<_>, Vec<_>) = read.strokes.into_iter().partition(|(_, _, aperture)| aperture.function.is_some());
+    assert_eq!(read.apertures.len(), 2);
+    assert!(read.flashes.is_empty() && read.regions.is_empty());
+    assert_eq!(tagged, expected);
+    assert_eq!(untagged, [(stray[0], stray[1], ReadAperture { function: None, ..profile })]);
 }
 
 /// A local reference move affects only that footprint's silk and round-trips through native storage.
@@ -1147,10 +1189,10 @@ fn a_routed_board_produces_gerber_and_drill_files() {
     assert_eq!(file(&outputs, "-Paste_Bottom.gbr").matches("G36*").count(), 0);
     let profile = read_gerber(&outputs, ("-Outline.gbr", "Profile,NP", "Positive"));
     assert_eq!(profile.strokes.len(), 4, "a closed rectangle is four strokes");
-    assert!(profile.strokes.iter().all(|(_, _, aperture)| aperture.function == "Profile"));
+    assert!(profile.strokes.iter().all(|(_, _, aperture)| aperture.function == Some("Profile")));
     let silk = read_gerber(&outputs, ("-Silkscreen_Top.gbr", "Legend,Top", "Positive"));
     assert!(!silk.apertures.is_empty());
-    assert!(silk.apertures.values().all(|aperture| aperture.function == "Material"));
+    assert!(silk.apertures.values().all(|aperture| aperture.function == Some("Material")));
 
     let drill = file(&outputs, "-PTH.drl");
     assert!(drill.starts_with("M48\n") && drill.ends_with("M30\n"));

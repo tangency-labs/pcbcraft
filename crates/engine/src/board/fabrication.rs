@@ -90,7 +90,7 @@ impl ApertureFunction {
 
 /// Accumulates Gerber drawing operations and the standard apertures they use.
 struct Gerber {
-    apertures: BTreeMap<(Aperture, ApertureFunction), usize>,
+    apertures: BTreeMap<(Aperture, Option<ApertureFunction>), usize>,
     body: String,
     current: Option<usize>,
     frame: Frame,
@@ -101,8 +101,9 @@ impl Gerber {
         Self { apertures: BTreeMap::new(), body: String::new(), current: None, frame }
     }
 
-    /// Select an aperture, assigning a D-code on first use of this shape, size and function.
-    fn aperture(&mut self, aperture: Aperture, function: ApertureFunction) {
+    /// Select an aperture by shape, size and function. Untagged geometry does not share
+    /// a D-code with tagged geometry, even when their shape and size agree.
+    fn aperture(&mut self, aperture: Aperture, function: Option<ApertureFunction>) {
         let next = 10 + self.apertures.len();
         let code = *self.apertures.entry((aperture, function)).or_insert(next);
         if self.current != Some(code) {
@@ -111,8 +112,8 @@ impl Gerber {
         }
     }
 
-    /// Stroke a polyline with a round aperture; a single point is flashed.
-    fn stroke(&mut self, points: &[Point], width_nm: i64, function: ApertureFunction) {
+    /// Stroke a polyline with an optionally tagged round aperture; a single point is flashed.
+    fn stroke(&mut self, points: &[Point], width_nm: i64, function: Option<ApertureFunction>) {
         self.aperture(Aperture::Circle(width_nm.max(1)), function);
         let Some(first) = points.first() else { return };
         if points.len() == 1 {
@@ -144,6 +145,7 @@ impl Gerber {
     /// rectangle. R also needs an integral midpoint; O needs integral capsule endpoints to match
     /// the engine's land contour. Other R lands remain regions, even if tiny corners collapse.
     /// Other O lands retain the approximate round-ended stroke (a circle for equal sides).
+    /// A drawn copper obround is deliberately not identified as a fabrication pad (§§5.6.10, 6.4).
     /// Rounded rectangles use regions with chorded corners only when the resolved radius is positive.
     fn pad(&mut self, pad: &PadView, cardinal: bool, function: ApertureFunction) {
         let Some(corners) = pad.copper else { return };
@@ -158,7 +160,7 @@ impl Gerber {
                 _ => None,
             };
             if let Some(aperture) = aperture {
-                self.aperture(aperture, function);
+                self.aperture(aperture, Some(function));
                 let _ = writeln!(self.body, "{}D03*", xy(self.frame, pad.center));
                 return;
             }
@@ -168,7 +170,7 @@ impl Gerber {
         match pad.shape {
             PadShape::Rectangle => self.region(&corners, function),
             PadShape::RoundedRectangle => self.region(&rounded(&corners, pad.corner_radius_nm.min(w.min(h) / 2)), function),
-            PadShape::Circle => self.stroke(&[pad.center], w.min(h), function),
+            PadShape::Circle => self.stroke(&[pad.center], w.min(h), Some(function)),
             PadShape::Oval => {
                 // An obround is a stroke along the long axis with the short side as its width.
                 let (long, short, along) = if w >= h { (w, h, (corners[0], corners[1])) } else { (h, w, (corners[1], corners[2])) };
@@ -179,13 +181,19 @@ impl Gerber {
                     x_nm: pad.center.x_nm + (sign * half * ux).round() as i64,
                     y_nm: pad.center.y_nm + (sign * half * uy).round() as i64,
                 };
-                if half > 0. { self.stroke(&[end(-1.), end(1.)], short, function) } else { self.stroke(&[pad.center], short, function) }
+                if half > 0. {
+                    // The circular draw aperture describes the swept tool, not the copper pad.
+                    let stroke_function = (function == ApertureFunction::Material).then_some(function);
+                    self.stroke(&[end(-1.), end(1.)], short, stroke_function);
+                } else {
+                    self.stroke(&[pad.center], short, Some(function));
+                }
             }
         }
     }
 
-    /// Wrap the body in an X2 header and footer. Each AD captures the function currently
-    /// in the dictionary; TD clears it without changing the defined aperture (§§5.3, 5.5).
+    /// Wrap the body in an X2 header and footer. Tagged AD commands capture the current
+    /// dictionary entry, then TD clears it so later untagged apertures stay untagged (§§5.3, 5.5).
     fn finish(self, function: &str, polarity: &str) -> String {
         let mut text = String::new();
         let _ = writeln!(text, "G04 PCBcraft fabrication output*");
@@ -195,7 +203,9 @@ impl Gerber {
         let _ = writeln!(text, "%TF.FilePolarity,{polarity}*%");
         text.push_str("%FSLAX46Y46*%\n%MOMM*%\n%LPD*%\nG01*\n");
         for ((aperture, aperture_function), code) in &self.apertures {
-            aperture_function.set(&mut text);
+            if let Some(function) = aperture_function {
+                function.set(&mut text);
+            }
             match *aperture {
                 Aperture::Circle(diameter) => {
                     let _ = writeln!(text, "%ADD{code}C,{}*%", mm(diameter, 6));
@@ -205,7 +215,9 @@ impl Gerber {
                     let _ = writeln!(text, "%ADD{code}{kind},{}X{}*%", mm(width, 6), mm(height, 6));
                 }
             }
-            text.push_str(DELETE_APERTURE_FUNCTION);
+            if aperture_function.is_some() {
+                text.push_str(DELETE_APERTURE_FUNCTION);
+            }
         }
         text.push_str(&self.body);
         text.push_str("M02*\n");
@@ -296,7 +308,7 @@ fn board_graphics(gerber: &mut Gerber, view: BoardView<'_>, purpose: LayerPurpos
         {
             points.push(first);
         }
-        gerber.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), ApertureFunction::Material);
+        gerber.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), Some(ApertureFunction::Material));
     }
 }
 
@@ -393,10 +405,10 @@ impl BoardView<'_> {
             let mut tracks: Vec<_> = self.tracks().iter().filter(|track| track.layer == layer.id).collect();
             tracks.sort_by_key(|track| (track.width_nm, track.id));
             for track in tracks {
-                gerber.stroke(&[track.start, track.end], track.width_nm, ApertureFunction::Conductor);
+                gerber.stroke(&[track.start, track.end], track.width_nm, Some(ApertureFunction::Conductor));
             }
             for via in self.vias() {
-                gerber.stroke(&[via.at], via.diameter_nm, ApertureFunction::ViaPad);
+                gerber.stroke(&[via.at], via.diameter_nm, Some(ApertureFunction::ViaPad));
             }
             let position = match (index, layer.side) {
                 (_, Some(Side::Front)) => "Top",
@@ -437,7 +449,7 @@ impl BoardView<'_> {
                     if graphic.closed && points.len() > 2 {
                         points.push(points[0]);
                     }
-                    silk.stroke(&points, graphic.stroke_nm.unwrap_or(DEFAULT_SILK_NM), ApertureFunction::Material);
+                    silk.stroke(&points, graphic.stroke_nm.unwrap_or(DEFAULT_SILK_NM), Some(ApertureFunction::Material));
                 }
             }
             board_graphics(&mut silk, self, LayerPurpose::Silkscreen, Some(side));
@@ -450,7 +462,10 @@ impl BoardView<'_> {
             if drawing.closed {
                 points.push(points[0]);
             }
-            profile.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), ApertureFunction::Profile);
+            // Keep legacy artwork in the output, but do not identify an open drawing as
+            // the board's physical edge (§§5.6.10, 6.5).
+            let function = drawing.closed.then_some(ApertureFunction::Profile);
+            profile.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), function);
         }
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive") });
 

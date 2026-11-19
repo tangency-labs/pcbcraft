@@ -828,11 +828,14 @@ versions appear in the Gerber header. Saving can be cancelled, busy or fail at t
 destination; generation alone is not a successful save. Run DRC first: outputs do not
 check the design.
 
-Gerber X2 `.AperFunction` lets CAM distinguish copper-defined surface-mount pads,
-through-hole component pads, via pads and tracks, even when they have the same shape
-and size. Pad regions carry the same function as flashed pads. Mask, paste and
-silkscreen artwork use `Material`; the outline uses `Profile`. This does not change
-plotted geometry or add net and pin information.
+Gerber X2 `.AperFunction` distinguishes copper-defined surface-mount pad flashes,
+through-hole pad flashes, via pads and tracks, even when their apertures have the
+same shape and size. Pad regions carry a descriptive aperture attribute but are
+not pad flashes. Copper obrounds emitted as strokes are not tagged as pads. Mask,
+paste and silkscreen artwork use `Material`. Closed Board Outline drawings are
+tagged `Profile`; open outline artwork is still plotted but untagged. Remove stray
+open artwork before sending the profile to fabrication. The attributes do not
+change plotted geometry or add net and pin information.
 
 For pads exported on a layer, round pads use standard circular (`C`) flashes.
 Rectangular (`R`) and obround (`O`) flashes require library-pad and placement rotations
