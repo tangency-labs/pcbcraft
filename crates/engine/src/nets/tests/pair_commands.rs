@@ -224,10 +224,26 @@ fn pair_commands_cold_preparation_is_batched_and_snapshot_bound() {
     assert_eq!(session.revision(), revision);
     assert!(session.project().unwrap().differential_pairs().is_empty());
     apply(&mut session, CREATE_PAIR, create);
-    let mut remove_job = session.prepare_pair_edit(REMOVE_PAIR, &json!({"pair":pair})).unwrap();
+    let revision = session.revision();
+    let undo_count = session.undo.len();
+    let paired = session.snapshot().unwrap();
+    let mut remove_job = session.prepare_pair_edit(REMOVE_PAIR, &json!({"pair":pair,"expected_revision":revision})).unwrap();
+    assert!(!remove_job.step(1));
     assert!(!remove_job.step(1));
     assert!(remove_job.take_result().unwrap().is_none());
-    assert_eq!(session.project().unwrap().differential_pairs()[0].id, pair);
+    for _ in 0..1000 {
+        if remove_job.step(1) {
+            break;
+        }
+    }
+    let prepared = remove_job.take_result().unwrap().expect("last-pair probe completed");
+    assert!(Arc::ptr_eq(&paired, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert_eq!(session.undo.len(), undo_count);
+    session.complete_pair_edit(prepared, false).unwrap();
+    assert_eq!(session.revision(), revision + 1);
+    assert_eq!(session.undo.len(), undo_count + 1);
+    assert!(session.project().unwrap().differential_pairs().is_empty());
 }
 
 /// An explicitly recorded review reason survives member swaps and naming edits.
