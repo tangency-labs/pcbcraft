@@ -147,7 +147,7 @@ fn legacy_metadata_upgrade_preserves_allocation_watermark_and_retired_ids() {
         .unwrap();
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let header: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
-    assert_eq!(header["format"], "pcbcraft-project/11");
+    assert_eq!(header["format"], "pcbcraft-project/52");
     assert_eq!(header["numeric_id_high_water"], highest);
     s.apply("edit.undo", &Value::Null).unwrap();
     crate::assert_same_content(&legacy, &s.snapshot().unwrap());

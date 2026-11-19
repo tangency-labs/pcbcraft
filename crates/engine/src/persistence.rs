@@ -526,6 +526,9 @@ impl Encoder {
         if !project.labels.is_empty() || !project.subsheets.is_empty() || !project.net_labels.is_empty() {
             return Err("legacy single-file encoding cannot represent hierarchy; use split documents or a packed archive".into());
         }
+        if !project.lifecycle.is_empty() {
+            return Err("Lifecycle assessments require split documents or a packed archive.".into());
+        }
         if !project.schematic_packages.assignments.is_empty()
             || !project.board.assignments.is_empty()
             || project.board.baseline.is_some()
@@ -1066,6 +1069,7 @@ fn validate_with_hierarchy(
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
+        lifecycle: Arc::default(),
         part_groups: Arc::default(),
         part_group_memberships: Arc::default(),
         prefer_compact_part_groups: false,

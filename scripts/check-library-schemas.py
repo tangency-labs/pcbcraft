@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate native symbol, footprint, category and part JSON against the published schemas.
+"""Validate native symbol, footprint, category, part and lifecycle-assertion JSON against the published schemas.
 
 Uses Python 3.10+ and jsonschema 4.18+. References resolve from this repository
 only. Cross-record semantic validation belongs to the engine's library resolver.
@@ -33,6 +33,15 @@ FORMATS = {
     "pcbcraft-part/1": "urn:pcbcraft:schema:part:1",
     "pcbcraft-part/2": "urn:pcbcraft:schema:part:2",
     "pcbcraft-manufacturer-part/1": "urn:pcbcraft:schema:manufacturer-part:1",
+    "pcbcraft-lifecycle-assertion/1": "urn:pcbcraft:schema:lifecycle:1",
+}
+DIRECTORIES = {
+    "symbols": "pcbcraft-symbol/",
+    "footprints": "pcbcraft-footprint/",
+    "categories": "pcbcraft-category/",
+    "parts": "pcbcraft-part/",
+    "manufacturer-parts": "pcbcraft-manufacturer-part/",
+    "lifecycle-assertions": "pcbcraft-lifecycle-assertion/",
 }
 
 
@@ -59,16 +68,19 @@ def read_json(path):
 
 def validators():
     """Check every published schema and register all references without network retrieval."""
-    schemas = [read_json(path) for path in sorted((ROOT / "docs/schemas").glob("*.schema.json"))]
-    for schema in schemas:
+    paths = sorted((ROOT / "docs/schemas").glob("*.schema.json"))
+    schemas = [read_json(path) for path in paths]
+    for path, schema in zip(paths, schemas):
         Draft202012Validator.check_schema(schema)
+        if not isinstance(schema.get("$id"), str) or not schema["$id"]:
+            raise ValueError(f"{path}: published schema needs a nonempty $id")
     registry = Registry().with_resources((schema["$id"], Resource.from_contents(schema)) for schema in schemas)
     return {schema["$id"]: Draft202012Validator(schema, registry=registry) for schema in schemas}
 
 
 def records(root):
     """Discover flat native item directories; manifests are validated by the source loader."""
-    return [path for name in ("symbols", "footprints", "categories", "parts", "manufacturer-parts") for path in sorted((root / name).glob("*.json"))]
+    return [path for name in DIRECTORIES for path in sorted((root / name).glob("*.json"))]
 
 
 def validate(paths, sources):
@@ -78,13 +90,12 @@ def validate(paths, sources):
     examples = records(ROOT / "examples/native-library") + records(ROOT / "examples/native-parts") + records(ROOT / "examples/sensor-node-library")
     discovered = bundled + examples + [path for source in sources for path in records(source)]
     inputs = [(path, path.parent.name) for path in discovered] + [(path, None) for path in paths]
-    prefixes = {"symbols":"pcbcraft-symbol/", "footprints":"pcbcraft-footprint/", "categories":"pcbcraft-category/", "parts":"pcbcraft-part/", "manufacturer-parts":"pcbcraft-manufacturer-part/"}
     for path, directory in inputs:
         try:
             value = read_json(path)
             if not isinstance(value, dict) or value.get("format") not in FORMATS:
                 raise ValueError("Unsupported native record format")
-            if directory is not None and not value["format"].startswith(prefixes[directory]):
+            if directory is not None and not value["format"].startswith(DIRECTORIES[directory]):
                 raise ValueError(f"Format {value['format']} does not belong in {directory}/")
             checks[FORMATS[value["format"]]].validate(value)
         except (OSError, ValueError, ValidationError) as error:

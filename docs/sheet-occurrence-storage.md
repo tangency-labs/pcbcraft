@@ -9,14 +9,13 @@ instances and component-definition splitting remain separate. The subsequent
 
 ## Records and ownership
 
-Project format 16 extends project/15, retaining native part selections and multi-pad package maps. For a schematic-only project it requires
-`schematic_instances` in `project.json`. For a board project that field is
-absent and the board registration owns an `instances.json` beside `board.json`.
-The instance document's format is `pcbcraft-instances/1`, and its `board` header
-must match the registered board UUID. A second storage home is rejected.
-Container, sheet, board and pinned-definition versions do not change.
-When a sparse net registry is authored, project/17 and instances/2 add it beside
-these records; projects without a registry retain the project/16 encoding.
+Project/52 retains the instance records introduced in project/16. A
+schematic-only project embeds `schematic_instances` in `project.json`; a board
+project declares `board_instances: true` and owns an `instances.json` beside
+`board.json`. The instance document's `board` header must match the registered
+board UUID. A second storage home is rejected. The base instance header is
+`pcbcraft-instances/1`; a net registry or memberships can select a newer instance
+header without changing project/52.
 
 The instance payload contains `circuit_uses` and `sheet_occurrences`. There is
 exactly one circuit-use record, containing its non-nil UUID `id`. Every sheet
@@ -96,7 +95,7 @@ Recovery retains the existing old-before-commit/new-after-commit contract and
 platform durability limits.
 
 Project/15 remains readable with or without native part selections and its prior
-flat or board-folder layout. Migration to project/16 preserves its pinned parts,
+flat or board-folder layout. Migration to project/52 preserves its pinned parts,
 manufacturer records, typed requirements and physical maps. Multi-unit drawings
 across flat sheets retain one component/reference/package in the shared circuit
 use; sheet occurrences do not introduce independent part instances.

@@ -119,8 +119,8 @@ sheet/9. `prepare_opened` runs both opening steps; `adopt_paper` runs this one.
 
 ## Board folders and first-save migration
 
-New projects use `pcbcraft-project/16`, extending project/14's `layout_root: "."` and required
-zero-or-one `boards` registry. Each registration contains its stable `id`, `name`
+New projects use `pcbcraft-project/52`, retaining the `layout_root: "."` and
+zero-or-one `boards` registry introduced by project/14. Each registration contains its stable `id`, `name`
 and portable `folder` segment instead of `file`. Physical data resolves to
 `join(layout_root, "boards", folder, "board.json")`, including single-board
 projects. The folder is a board-name slug plus 12 hexadecimal UUID characters;
@@ -152,11 +152,10 @@ registries are refused. Existing projects without records retain their low-level
 encoding; Open and inspection never promote nets. Older readers must refuse
 these headers rather than discard identity, lineage or unresolved decisions.
 
-Without generated-number metadata, a nonempty project class catalog selects
-project/20; saved [net-class bindings](net-class-assignments.md) select project/21 and board-owned
-instances/3. Bindings remain inside the same logical registry and carry class and
-origin net UUIDs, while physical board and sheet formats stay unchanged. Older
-headers refuse the new vocabulary, and the new envelope requires actual bindings.
+The historical project/20 requires a class catalog; project/21 also requires
+[net-class bindings](net-class-assignments.md). Under project/52 the catalog and
+bindings are optional. Board-owned unnumbered bindings without part-group
+memberships or pairs still use instances/3.
 
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
 at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,
@@ -173,7 +172,7 @@ Undo/Redo without changing electrical revision or discarding intervening edits.
 A failed or cancelled save does not adopt it. Browser Download writes a migrated
 copy in bounded encoding batches, while the active session remains unchanged
 because a download request cannot confirm durable publication. Older readers
-that lack project/16 must refuse it rather than discarding occurrence metadata.
+that lack project/52 must refuse it rather than discarding project data.
 
 ## Schematic-only package choices
 
@@ -406,12 +405,13 @@ registry's retained identities.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39` or `/45` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45` or `/52` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs; [version 52](#adopted-lifecycle-assessments) is the current write format, with optional pairs and an optional lifecycle document |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34` or `/35` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; versions 27–33 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | [`pcbcraft-footprint/1` or `/4`](footprint-schema.md) | One full pinned physical footprint copy, including optional circular plated drills in pads and, in `/4` only, separate circular non-plated through holes |
+| `library/lifecycle.json` | No own `format` field; present only with `project.json` format `pcbcraft-project/52` | Adopted publisher lifecycle assertions (full content) and project lifecycle policies; see the [lifecycle schema](schemas/lifecycle-v1.schema.json) |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
 UUID must agree. Version 6 supports 1–64 ordered sheets with non-nil,
@@ -431,25 +431,48 @@ sheet belongs to user-local presentation state and is never saved in `project.js
 Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
 intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
-Legacy snapshots retain version 6 until numeric allocation or retirement adopts
-the version-7 watermark, an eligible physical edit persists version-9 board
-registration with the same compatibility ID, or component metadata requires
-version 11. New projects start at version 16 with no physical board, unless New PCB
-explicitly requests one. Supported flat and project/14 and /15 encodings upgrade to project/16 on Save. Component metadata with explicit zero-or-one ownership
-uses version 12, which retains the watermark and registry; version 11 keeps legacy
-implicit ownership and rejects a `boards` record. Version 9 rejects component
-metadata rather than interpreting version-12 fields. Sheet encodings remain
+New projects start with no physical board unless New PCB explicitly requests one.
+Older entry-point headers remain readable under their original field requirements.
+For example, version 12 carries both the watermark and an explicit board registry;
+version 11 keeps legacy implicit ownership and rejects a `boards` record. Version 9
+rejects component metadata. Current split saves always write project/52. Sheet encodings remain
 sheet/1 for ordinary sheets, sheet/2 for
 sheets with hierarchy records, sheet/3 for sheets with named anchors, sheet/4 for
 field appearance, sheet/5 for net-name appearance, sheet/6 for mirrored
 placements and sheet/7 for persisted generated-leg provenance, retaining existing
-board encodings. The low-level codec preserves
-original version-5 document bytes until an entry-point change, while ordinary Save
-adopts project/16 and retains unchanged payload bytes. Subsequent sheet changes keep
-the adopted folder layout. Legacy single-file encoding refuses
+board encodings. Ordinary Save adopts the current folder layout for supported
+legacy projects and retains unchanged payload bytes where possible. Subsequent
+sheet changes keep the adopted folder layout. Legacy single-file encoding refuses
 multiple or renamed sheets, hierarchical labels, child symbols, named net anchors,
 component metadata, field appearance, mirrored placements, live generated
 named-contact legs and adopted occurrence identities rather than discarding them.
+
+### Adopted lifecycle assessments
+
+Split saves write `pcbcraft-project/52` whether or not an assessment is pinned.
+The entry point directly owns the existing project fields: catalogs, profiles and
+pair records are optional. `board_instances: true` declares a separate
+`instances.json` at the registered board's path. Omit it when there are no
+instance records or when `schematic_instances` embeds them in a schematic-only
+project. A board-owned pair registry still uses `pcbcraft-instances/8`.
+`library/lifecycle.json` is written only when there are pinned assessments and is
+not accepted under earlier project headers.
+
+The [lifecycle schema](schemas/lifecycle-v1.schema.json) defines the required
+`assertions` and `policies` arrays (never null).
+Assertions contain the complete immutable publisher revision, keyed by exact
+definition address, so no source is required to reopen. Each policy maps state
+IDs for one exact scheme revision to a project disposition. There is at most
+one assertion per target revision and one policy per pinned scheme revision.
+An absent mapping is unknown. The document is bounded to 128 assertions, 32
+policies and 4 MiB. It is written in stable target and scheme address order.
+Unknown fields, inconsistent ownership and duplicate keys are refused. Legacy
+single-document export refuses projects with adopted assessments rather than
+silently discarding them.
+
+See [native library lifecycle metadata](native-library-sources.md#lifecycle-assertions)
+for the publisher record and shared commands. Neither a source refresh nor an
+assessment adoption changes the pinned definition bytes or placements.
 
 ### Component fields and text appearance
 
@@ -1294,7 +1317,7 @@ Trailing ASCII spaces in the text before the first dot do not bypass the check:
 `NUL ` and `COM¹  .pc` are also refused. The check does not rename the destination.
 Other platforms accept these as ordinary destination names. Both forms validate
 all managed documents and preserve stable IDs, pinned libraries and exact physical/sheet/library payload
-bytes. The entry point becomes project/16 with a board-folder registration and
+bytes. The entry point becomes project/52 with a board-folder registration and
 single-use occurrence records; the entry-point path, physical board path and
 packed manifest change. Unrelated root files such
 as notes and `.git` are left in the source rather than copied into the project.

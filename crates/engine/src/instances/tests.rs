@@ -5,7 +5,7 @@ use crate::{
 };
 use serde_json::{Value, json};
 
-/// Retain a production-encoded project/14 snapshot to exercise migration from the current layout.
+/// A board-folder project whose occurrence identities have not yet been persisted.
 fn legacy_folder() -> Arc<Project> {
     let p = decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap();
     Arc::new(p.with_board_folders(".").unwrap())
@@ -19,6 +19,41 @@ fn apply(s: &mut Session, command: &str, mut params: Value) {
     s.apply(command, &params).unwrap();
 }
 
+/// Project/52 declares exactly one instance home, without relying on an older project version.
+#[test]
+fn current_header_owns_only_declared_instances() {
+    for board in [false, true] {
+        let mut session = Session::default();
+        apply(&mut session, "project.new", json!({"create_board":board}));
+        let project = session.snapshot().unwrap();
+        let docs = encode_documents(project.clone()).unwrap();
+        let header: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+        assert_eq!(header["format"], "pcbcraft-project/52");
+        assert_eq!(header.get("board_instances"), board.then_some(&Value::Bool(true)));
+        assert_eq!(header.get("schematic_instances").is_some(), !board);
+        assert_eq!(crate::persistence::project_instances_path(&docs[ENTRY_POINT]).unwrap(), project.instances_document_path());
+        assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
+        for (bad, reason) in [(Value::Null, "expected a boolean"), (json!(false), "invalid board_instances"), (json!("true"), "expected a boolean")] {
+            let mut invalid = docs.clone();
+            let mut changed = header.clone();
+            changed["board_instances"] = bad;
+            invalid.insert(ENTRY_POINT.into(), serde_json::to_vec(&changed).unwrap());
+            let error = decode_documents(&invalid).unwrap_err();
+            assert!(error.contains(reason), "{error}");
+        }
+        if let Some(path) = project.instances_document_path() {
+            let mut missing = docs.clone();
+            missing.remove(&path);
+            assert_eq!(decode_documents(&missing).unwrap_err(), format!("{path}: missing project document"));
+            let mut undeclared = docs.clone();
+            let mut changed = header.clone();
+            changed.as_object_mut().unwrap().remove("board_instances");
+            undeclared.insert(ENTRY_POINT.into(), serde_json::to_vec(&changed).unwrap());
+            assert!(decode_documents(&undeclared).unwrap_err().contains("unexpected or unused project document"));
+        }
+    }
+}
+
 /// Fixed byte-encoding vectors protect compatibility across platforms and independent opens.
 #[test]
 fn legacy_uuid_vectors_are_domain_separated_and_stable() {
@@ -30,12 +65,12 @@ fn legacy_uuid_vectors_are_domain_separated_and_stable() {
     assert_ne!(legacy_id(b"pcbcraft:legacy-sheet-occurrence:1\0", p, Some(s)), legacy_id(b"pcbcraft:legacy-sheet-occurrence:1\0", s, Some(p)));
 }
 
-/// Project/14 remains unchanged through Open; migration persists the same identities without
+/// Opening alone does not adopt occurrences. Adoption persists the same identities without
 /// moving board folders or rewriting physical, schematic or pinned-definition payloads.
 #[test]
 fn current_folder_migration_preserves_payloads_and_inspected_legacy_ids() {
     let before = encode_documents(legacy_folder()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/14");
+    assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
     let a = decode_documents(&before).unwrap();
     let b = decode_documents(&before).unwrap();
     assert_eq!(a.sheet_instances(), b.sheet_instances());
@@ -44,7 +79,7 @@ fn current_folder_migration_preserves_payloads_and_inspected_legacy_ids() {
     let migrated = Arc::new(a.with_sheet_occurrences().unwrap());
     assert_eq!(migrated.sheet_instances(), a.sheet_instances());
     let after = encode_documents(migrated.clone()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&after[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/16");
+    assert_eq!(serde_json::from_slice::<Value>(&after[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
     assert_eq!(migrated.board_document_path(), a.board_document_path());
     for (path, bytes) in &before {
         if path != ENTRY_POINT {
@@ -269,7 +304,7 @@ fn native_multiunit_part_keeps_one_package_across_occurrence_migration() {
     apply(&mut session, crate::board::update::INITIALIZE_BASELINE, json!({"board":board}));
     let historical = crate::persistence::diagnostic_snapshot(session.snapshot().unwrap());
     let before = encode_documents(historical).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/15");
+    assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
     let original = decode_documents(&before).unwrap();
     assert!(!original.has_sheet_occurrences());
     assert_eq!(encode_documents(original.clone()).unwrap(), before);

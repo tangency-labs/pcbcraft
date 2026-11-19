@@ -69,15 +69,11 @@ check implementation.
 
 ## Native format review
 
-The split codec extension is `pcbcraft-project/19`, adding a nonempty
-`no_connects` list to each affected component record. Each item contains a
-terminal token and its captured electrical type, sorted by terminal. Project/18
-is already proposed by open PR #294 for named variants, so this work does not
-reuse that version. Other document paths and the container version are unchanged.
-The first marker adopts the existing board-folder and single-use occurrence
-metadata, following the net registry's transaction precedent. Project/19 can
-carry either existing instance vocabulary, depending on whether a net registry
-exists. It adds no parallel instance home or derived connectivity records.
+Current split saves use `pcbcraft-project/52`, which retains the optional
+no-connect intent introduced by project/19. A nonempty `no_connects` list on each
+affected component stores the terminal token and its captured electrical type,
+sorted by terminal. The first marker adopts the existing board-folder and
+single-use occurrence metadata. No separate instance home is added.
 Wire-end intent additionally uses `pcbcraft-sheet/8`, whose nonempty
 `no_connect_ends` array stores live junction IDs in ascending order. It composes
 with mirrored placements, field appearance and generated contact-leg provenance.
@@ -152,7 +148,7 @@ flat/hierarchical clipboard and undo/redo. Check exact folder/archive reopen and
 unchanged legacy bytes, including projects with a net registry. Use real UI
 input and rendered wide/narrow views in both themes. Mirror regressions cover
 both axes at every quarter turn, marker drawing and picking, undo/redo and exact
-folder/archive reopen with project/19 and sheet/6 together.
+folder/archive reopen with project/52 and sheet/6 together.
 
 Wire-end regressions additionally exercise nearby GUI picks, every rotated and
 mirrored pin lead, report Show/Remove, invalid interior clicks, native Save/Open

@@ -119,6 +119,7 @@ fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
         let mut downgraded = docs.clone();
         let mut entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
         entry["format"] = json!("pcbcraft-project/16");
+        entry.as_object_mut().unwrap().remove("board_instances");
         downgraded.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
         if board {
             let mut instance = original.clone();

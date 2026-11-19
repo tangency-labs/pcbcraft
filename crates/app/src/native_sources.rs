@@ -427,9 +427,9 @@ mod web {
           for(const file of files){
             const pieces=file.webkitRelativePath.split('/');pieces.shift();const path=pieces.join('/');
             // Root notices are not native documents; preserve the native folder adapter's scope.
-            if(path!=='library.json'&&!/^(symbols|footprints|categories|parts|manufacturer-parts)\//.test(path))continue;
+            if(path!=='library.json'&&!/^(symbols|footprints|categories|parts|manufacturer-parts|lifecycle-assertions)\//.test(path))continue;
             if(++count>maxFiles)throw Error(`Library source exceeds ${maxFiles} files`);
-            if(path!=='library.json'&&!/^(symbols|footprints|categories|parts|manufacturer-parts)\/[^/]+\.json$/.test(path)){problems.push(path+': unsupported native item path');continue;}
+            if(path!=='library.json'&&!/^(symbols|footprints|categories|parts|manufacturer-parts|lifecycle-assertions)\/[^/]+\.json$/.test(path)){problems.push(path+': unsupported native item path');continue;}
             if(file.size>maxFileBytes){if(path==='library.json')throw Error('Manifest exceeds 1 MiB');problems.push(path+': file exceeds 1 MiB');continue;}
             if((total+=file.size)>maxSourceBytes)throw Error(`Library source exceeds ${maxSourceBytes/1048576} MiB`);
             if(Object.hasOwn(documents,path))throw Error('Duplicate library path');

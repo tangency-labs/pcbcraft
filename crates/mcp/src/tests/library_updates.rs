@@ -1,8 +1,8 @@
-//! Available-revision discovery is one shared, non-editing engine query.
+//! Shared live and headless library revision and lifecycle commands.
 use super::{body, call, server};
 use crate::{
     Backend, Failure, Headless,
-    live::{Editor, call_editor},
+    live::{Editor, call_editor, normalize_request},
 };
 use pcbcraft_engine::{
     PLACE_SYMBOL, Session,
@@ -10,8 +10,16 @@ use pcbcraft_engine::{
         Item, Kind,
         publishing::{new_library, prepare},
     },
+    command_api::COMMAND_API_VERSION,
     error_codes::ErrorCode,
-    library::sources::{AVAILABLE_REVISIONS, LOAD, symbol_digest},
+    library::{
+        parts::Reference,
+        sources::{
+            AVAILABLE_REVISIONS, Key, Kind as NativeKind, LOAD,
+            lifecycle::{self, Assertion, Policy, Provenance},
+            symbol_digest,
+        },
+    },
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -80,6 +88,91 @@ fn available_revisions_has_identical_live_and_headless_results() {
     editor.blocked = true;
     assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap_err().message().contains("dialog"));
     assert_eq!(editor.session.inspect(), before);
+}
+
+/// Version-pinned lifecycle commands keep their reports with `inspect:false`; version,
+/// stale-revision and modal refusals keep distinct codes and never publish an edit.
+#[test]
+fn versioned_lifecycle_reports_and_typed_refusals_match_live_and_headless() {
+    let manifest = new_library("lifecycle-demo", "Lifecycle demo", "MIT OR Apache-2.0").unwrap();
+    let native = prepare(Arc::new(Item::new(Kind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
+    let symbol = native.item().symbol().unwrap();
+    let assertion = Assertion {
+        format: lifecycle::FORMAT.into(),
+        address: Reference { library: symbol.library.clone(), id: "drawing-review".into(), revision: 1 },
+        target: Key { library: symbol.library.clone(), kind: NativeKind::Symbol, id: symbol.id.clone(), revision: symbol.revision() },
+        scheme: Policy::standard().scheme,
+        state: "released".into(),
+        reason: "Drawing approved".into(),
+        provenance: Provenance { publisher: "Lifecycle demo".into() },
+    };
+    let mut documents = native.documents().clone();
+    documents.insert("library.json".into(), manifest);
+    documents.insert("lifecycle-assertions/drawing-review.r1.json".into(), assertion.encode().unwrap());
+
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({})).unwrap();
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut live = Session::default();
+    live.open_snapshot(snapshot.clone());
+    let mut editor = OpenEditor { session: live, blocked: false };
+    let opening = editor.session.revision();
+    let command = |id: &str, params| json!({"command":id,"params":params,"inspect":false,"version":COMMAND_API_VERSION});
+    let execute_live = |editor: &mut OpenEditor, params| {
+        let mut request = json!({"method":"engine.execute_versioned","params":params});
+        normalize_request(&mut request)?;
+        call_editor(editor, &request)
+    };
+    let execute_both = |h: &mut Headless, e: &mut OpenEditor, request: Value| {
+        let result = execute_live(e, request.clone()).unwrap();
+        let (headless, _) = h.execute(request).unwrap();
+        assert_eq!(headless, result);
+        result
+    };
+    execute_both(&mut headless, &mut editor, command(LOAD, json!({"source":"lifecycle-demo","documents":documents})));
+    let address = &assertion.address;
+    let exact = json!({"library":address.library,"assertion":address.id,"assertion_revision":address.revision});
+    let lookup = execute_both(&mut headless, &mut editor, command(lifecycle::LOOKUP, exact.clone()));
+    assert_eq!(lookup["assertion"], json!(assertion));
+    assert_eq!(lookup["digest"], assertion.digest().unwrap());
+    let mut params = exact;
+    params["digest"] = lookup["digest"].clone();
+    params["expected_revision"] = json!(opening);
+    let adopt = command(lifecycle::ADOPT, params.clone());
+    params["dry_run"] = json!(true);
+    let preview = command(lifecycle::ADOPT, params);
+    editor.blocked = true;
+    let refused = execute_live(&mut editor, adopt.clone()).unwrap_err();
+    assert_eq!(refused.code(), ErrorCode::Unavailable.as_str());
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    editor.blocked = false;
+    let mut incompatible = adopt.clone();
+    incompatible["version"] = json!(COMMAND_API_VERSION + 1);
+    let wrong_version = execute_live(&mut editor, incompatible.clone()).unwrap_err();
+    assert_eq!(headless.execute(incompatible).unwrap_err(), wrong_version);
+    assert_eq!(wrong_version.code(), ErrorCode::VersionMismatch.as_str());
+    assert_eq!(wrong_version.details()["current_version"], COMMAND_API_VERSION);
+    assert_eq!(wrong_version.details()["command"], lifecycle::ADOPT);
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    let report = execute_both(&mut headless, &mut editor, preview);
+    assert_eq!(report["changed"], true);
+    assert_eq!(report["dry_run"], true);
+    assert_eq!(report["revision"], opening);
+    assert_eq!(report["disposition_after"], "released");
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    let commit = execute_both(&mut headless, &mut editor, adopt.clone());
+    assert_eq!(commit["revision"], opening + 1);
+    assert_eq!(commit["dry_run"], false);
+    let adopted = editor.session.snapshot().unwrap();
+    let stale = execute_live(&mut editor, adopt.clone()).unwrap_err();
+    assert_eq!(headless.execute(adopt).unwrap_err(), stale);
+    assert_eq!(stale.code(), ErrorCode::StaleRevision.as_str());
+    assert_eq!(stale.details(), &json!({"current_revision":opening + 1}));
+    assert!(Arc::ptr_eq(&adopted, &editor.session.snapshot().unwrap()));
+    let inspection = execute_both(&mut headless, &mut editor, command(lifecycle::INSPECT, json!({})));
+    assert_eq!(inspection["revision"], opening + 1);
+    assert_eq!(inspection["assessments"][0]["assertion"], json!(assertion));
 }
 
 /// Exercise the ordinary live ownership adapter without opening an OS window.

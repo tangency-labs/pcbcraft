@@ -8,13 +8,16 @@ import argparse
 import json
 from pathlib import Path
 
+# Flat native directories, including publisher lifecycle assertions, in the source loader's order.
+DIRECTORIES = ("symbols", "footprints", "categories", "parts", "manufacturer-parts", "lifecycle-assertions")
+
 
 def bundle(root: Path) -> bytes:
     """Bound regular input files and reject symlinks before creating a portable bundle."""
     if root.is_symlink() or not root.is_dir():
         raise ValueError("The library must be a regular directory")
     paths = [root / "library.json"]
-    for directory in (root / name for name in ("symbols", "footprints", "categories", "parts", "manufacturer-parts")):
+    for directory in (root / name for name in DIRECTORIES):
         if directory.is_symlink():
             raise ValueError(f"{directory}: symlinks are unsupported")
         if directory.exists():

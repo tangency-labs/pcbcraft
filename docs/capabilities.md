@@ -231,6 +231,11 @@ loaded native revisions, including through live/headless MCP with `inspect: fals
 It preserves project pins and history, reports missing/conflicting/unresolved
 sources explicitly, and makes no compatibility or adoption decision; see
 [query available revisions](native-library-sources.md#query-available-revisions).
+[Lifecycle assertions](native-library-sources.md#lifecycle-assertions) are separate
+publisher records. With the publishing source loaded, projects can preview, adopt
+and undo an exact assessment through shared commands; inspecting an adopted
+assessment works offline. There is no lifecycle-specific
+editor, finding or placement gate.
 Schematic, PCB layout, symbol and footprint editors share manual zoom up to
 102400%, with pointer-anchored wheel/pinch navigation and content-specific Fit.
 

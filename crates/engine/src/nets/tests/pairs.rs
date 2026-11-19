@@ -44,7 +44,7 @@ fn pair_save_reopen_and_net_rename_preserve_identity_and_bytes() {
         let path = session.project().unwrap().instances_document_path().unwrap_or_else(|| ENTRY_POINT.into());
         let mut stored: Value = serde_json::from_slice(&before[&path]).unwrap();
         assert!(stored_registry(&mut stored)["pairs"][0].get("state").is_none());
-        assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/45");
+        assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
         if board {
             assert_eq!(stored["format"], "pcbcraft-instances/8");
         }
@@ -173,8 +173,8 @@ fn pair_codec_rejects_malformed_records_with_specific_reasons() {
     }
 }
 
-/// Pair-capable envelopes require actual pairs; prior supported project and instance envelopes
-/// refuse the extension, while removing the last pair restores the original generated-net bytes.
+/// Project/52 permits optional pairs; project/45 and instances/8 still require pairs.
+/// Older headers refuse pair data, and removing the last pair restores the earlier instance vocabulary.
 #[test]
 fn pair_envelopes_are_lazy_and_refuse_mismatched_vocabulary() {
     for board in [false, true] {
@@ -183,13 +183,19 @@ fn pair_envelopes_are_lazy_and_refuse_mismatched_vocabulary() {
         let docs = encode_documents(project.clone()).unwrap();
         let path = project.instances_document_path().unwrap_or_else(|| ENTRY_POINT.into());
         let original: Value = serde_json::from_slice(&docs[&path]).unwrap();
-        let mut missing = original.clone();
+        let mut entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+        entry["format"] = json!("pcbcraft-project/45");
+        entry.as_object_mut().unwrap().remove("board_instances");
+        let legacy = replaced(&docs, ENTRY_POINT, &entry);
+        assert_eq!(encode_documents(decode_documents(&legacy).unwrap()).unwrap(), docs);
+        let mut missing = if board { original.clone() } else { entry };
         stored_registry(&mut missing).as_object_mut().unwrap().remove("pairs");
-        let error = decode_documents(&replaced(&docs, &path, &missing)).unwrap_err();
+        let error = decode_documents(&replaced(&legacy, &path, &missing)).unwrap_err();
         assert!(error.contains("pair envelope requires a nonempty pair list"), "{error}");
         for (project_format, instances_format) in [("pcbcraft-project/23", "pcbcraft-instances/4"), ("pcbcraft-project/17", "pcbcraft-instances/2")] {
             let mut entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
             entry["format"] = json!(project_format);
+            entry.as_object_mut().unwrap().remove("board_instances");
             let mut downgraded = replaced(&docs, ENTRY_POINT, &entry);
             if board {
                 let mut instance = original.clone();
@@ -229,7 +235,7 @@ fn pair_envelopes_are_lazy_and_refuse_mismatched_vocabulary() {
         Arc::make_mut(&mut without.net_registry).pairs = Arc::default();
         let lower = encode_documents(Arc::new(without)).unwrap();
         let entry: Value = serde_json::from_slice(&lower[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/23");
+        assert_eq!(entry["format"], "pcbcraft-project/52");
         let mut stored: Value = serde_json::from_slice(&lower[&path]).unwrap();
         if board {
             assert_eq!(stored["format"], "pcbcraft-instances/4");
@@ -457,7 +463,6 @@ fn pair_bytes_cross_the_registry_budget_without_publishing_edits() {
     assert!(serde_json::to_vec(registry).unwrap().len() > MAX_REGISTRY_BYTES);
     let docs = encode_documents(before).unwrap();
     let mut stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-    stored["format"] = json!("pcbcraft-project/45");
     stored_registry(&mut stored)["pairs"] = json!(registry.pairs);
     let error = decode_documents(&replaced(&docs, ENTRY_POINT, &stored)).unwrap_err();
     assert!(error.contains("Net registry exceeds its byte limit."), "{error}");
@@ -579,7 +584,7 @@ fn pair_envelopes_keep_profiles_and_both_membership_encodings() {
             let mut candidate = (*project).clone();
             candidate.prefer_compact_part_groups = compact;
             let docs = encode_documents(Arc::new(candidate.clone())).unwrap();
-            assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/45");
+            assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
             let stored: Value = serde_json::from_slice(&docs[&path]).unwrap();
             if board {
                 assert_eq!(stored["format"], "pcbcraft-instances/8");
@@ -608,12 +613,7 @@ fn pair_envelopes_keep_profiles_and_both_membership_encodings() {
             };
             let lower = without_pairs(candidate);
             assert_eq!(without_pairs((*reopened).clone()), lower);
-            let earlier_format = match (board, compact) {
-                (true, _) => "pcbcraft-project/36",
-                (false, true) => "pcbcraft-project/39",
-                (false, false) => "pcbcraft-project/24",
-            };
-            assert_eq!(serde_json::from_slice::<Value>(&lower[ENTRY_POINT]).unwrap()["format"], earlier_format);
+            assert_eq!(serde_json::from_slice::<Value>(&lower[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
             if board {
                 assert_eq!(
                     serde_json::from_slice::<Value>(&lower[&path]).unwrap()["format"],

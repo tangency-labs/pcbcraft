@@ -690,7 +690,14 @@ not refresh a library, change geometry or adopt a revision. Missing sources are
 unknown, and available does not imply compatible. Native parts compare the owning
 part rather than separately updating its drawing dependencies. See
 [query available revisions](native-library-sources.md#query-available-revisions)
-for the result contract; dedicated update review and adoption remain future work.
+for the result contract; dedicated definition-update review and adoption remain future work.
+
+If a loaded source has a publisher lifecycle assertion, use
+[`library.lifecycle_assertion`](native-library-sources.md#lifecycle-assertions)
+with its exact assertion revision. Pass the returned digest and the project
+revision to `project.adopt_lifecycle`; `dry_run: true` previews the assessment
+without editing. `project.inspect_lifecycle` works offline after adoption. This
+changes lifecycle metadata, not the definition selected by the placed part.
 
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use

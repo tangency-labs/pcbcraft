@@ -118,7 +118,7 @@ fn native_part_selection_is_atomic_offline_and_shared_by_its_package() {
         assert_eq!(project.footprint_assignments().len(), 1);
         let docs = encode_documents(project.clone()).unwrap();
         let header: Json = serde_json::from_slice(&docs[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/16");
+        assert_eq!(header["format"], "pcbcraft-project/52");
         // Isolate the older vocabulary: remove occurrence records through the historical codec
         // before forging the format header, so only native part selections cause this rejection.
         let mut reserved_format = encode_documents(crate::persistence::diagnostic_snapshot(project.clone())).unwrap();

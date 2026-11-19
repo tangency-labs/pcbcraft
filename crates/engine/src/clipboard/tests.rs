@@ -285,7 +285,7 @@ fn marked_paste_adopts_legacy_destination_before_validation() {
         let copied = source.execute(COPY, &json!({"items":all(&source),"expected_revision":source.revision()})).unwrap();
         let legacy = persistence::decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap().with_board_folders(".").unwrap();
         let docs = persistence::encode_documents(Arc::new(legacy.clone())).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&docs["project.json"]).unwrap()["format"], "pcbcraft-project/14");
+        assert_eq!(serde_json::from_slice::<Value>(&docs["project.json"]).unwrap()["format"], "pcbcraft-project/52");
         let mut target = Session::default();
         target.open_snapshot(Arc::new(legacy));
         let before = target.snapshot().unwrap();
@@ -294,7 +294,7 @@ fn marked_paste_adopts_legacy_destination_before_validation() {
         assert!(after.has_sheet_occurrences());
         assert_eq!(after.no_connect_count(), if kind == "both" { 2 } else { 1 });
         let saved = persistence::encode_documents(after.clone()).unwrap();
-        assert_eq!(serde_json::from_slice::<Value>(&saved["project.json"]).unwrap()["format"], "pcbcraft-project/23");
+        assert_eq!(serde_json::from_slice::<Value>(&saved["project.json"]).unwrap()["format"], "pcbcraft-project/52");
         assert_eq!(persistence::encode_documents(persistence::decode_documents(&saved).unwrap()).unwrap(), saved);
         target.apply("edit.undo", &Value::Null).unwrap();
         crate::assert_same_content(&before, &target.snapshot().unwrap());

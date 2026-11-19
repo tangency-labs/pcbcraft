@@ -9,22 +9,14 @@ named anchors and hierarchy; the registry records identity and reconciliation.
 
 ## Records and version boundary
 
-The low-level codec preserves existing project bytes when no registry is present;
-the ordinary first-save board-folder/occurrence migration still applies.
-The first record selects project/17 and, for board projects, instances/2, unless
-another feature requires a newer envelope. [Class bindings](net-class-assignments.md)
-select project/21 and board-owned instances/3 in the same registry home when
-numbered names are absent. Net-owned generated numbers select **project/23** and
-board-owned **instances/4** instead, with optional class catalogs, assignments and
-no-connect intent in that envelope. Every record stored under project/23 has a positive
-`generated_number`; duplicate numbers, explicit nulls, missing numbers and use
-under older headers are rejected. Project/24 carries the same records beside
-[part groups](part-groups.md), with generated numbers optional: a
-registry there numbers every record under the same rules or numbers none.
-Without assembly profiles or pairs, board-owned expanded memberships select
-instances/5; dense memberships use
-project/39 and instances/7 with the same optional net-registry records and a
-compact UUID dictionary. A part-group catalog without
+Current split saves write project/52; the ordinary first-save
+board-folder/occurrence migration still applies. For a board-owned registry the
+plain record vocabulary uses instances/2, [class bindings](net-class-assignments.md)
+without generated numbers use instances/3, and generated numbers use instances/4
+unless memberships or pairs require another header. A numbered registry requires
+positive, unique numbers on every record; explicit null is invalid.
+[Part-group memberships](part-groups.md) use instances/5 for expanded records or
+instances/7 for compact records, unless pairs require instances/8. A part-group catalog without
 memberships keeps the instance header the other records need, such as
 instances/4 for a numbered registry. Active, ambiguous and retired records reserve
 their numbers, which are never inferred from component references.
@@ -74,16 +66,15 @@ is not an electrical or routing qualification. A member may become retired or
 ambiguous; the stored relationship keeps that exact UUID and does not follow
 successors or set a review state automatically.
 
-A nonempty pair list selects project/45 and, for a board-owned registry,
-instances/8. These headers require pairs; earlier headers refuse them. An empty
-or null `pairs` field is invalid, not an alias for omission. Project/45 allows
+Under project/52 pair lists are optional. A nonempty list for a board-owned
+registry requires instances/8. Historical project/45 also requires pairs, and its
+predecessors reject them. An empty or null `pairs` field is invalid. Project/52 allows
 both fully numbered and fully unnumbered registries, but not a mixture. Existing
 class catalogs and bindings, parameters, no-connect intent, part groups and
 assembly profiles keep their existing validation rules. Either expanded or
 compact memberships can follow the registry; the field name selects which
-encoding instances/8 contains. Removing the last pair restores the envelope
-required by the remaining records. No sheet, board or `.pc` container version
-changes.
+encoding instances/8 contains. Removing the last pair restores the board instance
+header required by the remaining records. The project stays at /52.
 
 At most 2,048 pairs fit alongside 4,096 net records. Pair content counts toward
 the registry's existing 8 MiB serialized limit. Incremental writing charges one

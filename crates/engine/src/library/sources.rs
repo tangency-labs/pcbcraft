@@ -2,6 +2,7 @@
 mod deletion;
 mod export;
 pub mod inventory;
+pub mod lifecycle;
 mod updates;
 use super::parts::{Category, ManufacturerPart, PartDefinition, Reference};
 use super::{parse_manifest, parse_symbol, saved_copy};
@@ -252,7 +253,7 @@ impl Provenance {
 }
 
 /// Item kind is part of identity: a symbol and a footprint may share an item ID.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
     Symbol,
@@ -263,7 +264,8 @@ pub enum Kind {
 }
 
 /// An exact native item revision, independent of source registration and file location.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Key {
     pub library: String,
     pub kind: Kind,
@@ -358,6 +360,7 @@ pub struct NativeSource {
     name: String,
     license: String,
     items: Vec<Item>,
+    assertions: Vec<(String, Arc<lifecycle::Assertion>)>,
     problems: Vec<String>,
     /// The original text, kept so the whole library can be exported unchanged.
     documents: Documents,
@@ -394,10 +397,19 @@ impl NativeSource {
             name: manifest.name,
             license: manifest.license,
             items: Vec::new(),
+            assertions: Vec::new(),
             problems: Vec::new(),
             documents: documents.clone(),
         };
         for (path, text) in documents.iter().filter(|(path, _)| path.as_str() != "library.json") {
+            if path.starts_with("lifecycle-assertions/") {
+                match lifecycle::Assertion::read(text) {
+                    Ok(assertion) if assertion.address.library == source.library => source.assertions.push((path.clone(), Arc::new(assertion))),
+                    Ok(_) => source.problems.push(format!("{path}: lifecycle assertion library does not match library.json")),
+                    Err(error) => source.problems.push(format!("{path}: {error}")),
+                }
+                continue;
+            }
             match source.parse_item(path, text) {
                 Ok(item) => source.items.push(item),
                 Err(error) => source.problems.push(format!("{path}: {error}")),
@@ -526,7 +538,7 @@ pub fn is_document_path(path: &str) -> bool {
         return true;
     }
     let Some((directory, name)) = path.split_once('/') else { return false };
-    matches!(directory, "symbols" | "footprints" | "categories" | "parts" | "manufacturer-parts")
+    matches!(directory, "symbols" | "footprints" | "categories" | "parts" | "manufacturer-parts" | lifecycle::DIRECTORY)
         && name.ends_with(".json")
         && name.len() <= 128
         && !name.starts_with('.')
@@ -566,6 +578,9 @@ pub struct Catalog {
     /// Keep changed revisions quarantined for this registration until it is removed.
     changed: BTreeMap<String, BTreeSet<Key>>,
     conflicts: BTreeSet<Key>,
+    assertion_conflicts: BTreeSet<Reference>,
+    changed_assertions: BTreeMap<String, BTreeSet<Reference>>,
+    assertions: BTreeMap<Reference, Arc<lifecycle::Assertion>>,
     /// Exact available definitions are indexed once per source generation.
     index: BTreeMap<Key, (String, usize)>,
     field_conflicts: BTreeSet<String>,
@@ -706,6 +721,7 @@ impl Catalog {
                 name: id.into(),
                 license: String::new(),
                 items: Vec::new(),
+                assertions: Vec::new(),
                 problems: vec![error],
                 documents: Documents::new(),
             });
@@ -799,7 +815,25 @@ impl Catalog {
         if changed.len() > MAX_FILES {
             return Err("Too many conflicting revisions in this source registration; correct the source or remove it".into());
         }
+        let mut changed_assertions = self.changed_assertions.get(id).cloned().unwrap_or_default();
+        if let Some(previous) = self.sources.get(id) {
+            let mut old = BTreeMap::new();
+            for (_, assertion) in &previous.assertions {
+                if old.insert(&assertion.address, assertion).is_some_and(|other| other != assertion) {
+                    changed_assertions.insert(assertion.address.clone());
+                }
+            }
+            for (_, assertion) in &source.assertions {
+                if old.get(&assertion.address).is_some_and(|previous| *previous != assertion) {
+                    changed_assertions.insert(assertion.address.clone());
+                }
+            }
+        }
+        if changed_assertions.len() > MAX_FILES {
+            return Err("Too many conflicting lifecycle assertions in this source registration".into());
+        }
         self.changed.insert(id.into(), changed);
+        self.changed_assertions.insert(id.into(), changed_assertions);
         self.sources.insert(id.into(), source);
         self.unavailable.remove(id);
         self.rebuild_conflicts();
@@ -813,6 +847,7 @@ impl Catalog {
             return Err("Unknown native source ID".into());
         }
         self.changed.remove(id);
+        self.changed_assertions.remove(id);
         self.unavailable.remove(id);
         self.rebuild_conflicts();
         self.generation = self.generation.wrapping_add(1);
@@ -829,6 +864,7 @@ impl Catalog {
     /// Rebuild immutable-revision conflicts, exact addresses and shared field meanings after a
     /// source change. Drop all cached dependency outcomes so missing/conflicting peers can recover.
     fn rebuild_conflicts(&mut self) {
+        self.rebuild_assertions();
         let mut known: BTreeMap<&Key, &Value> = BTreeMap::new();
         let mut conflicts: BTreeSet<_> = self.changed.values().flatten().cloned().collect();
         for item in self.sources.iter().filter(|(id, _)| !self.disabled_builtin.contains(*id)).flat_map(|(_, source)| &source.items) {
@@ -870,6 +906,35 @@ impl Catalog {
             self.manufacturer_index.entry(record.part.clone()).or_default().push(record.reference());
         }
     }
+    /// Rebuild exact assertion lookup and conflicts independently of definition availability.
+    fn rebuild_assertions(&mut self) {
+        let mut known = BTreeMap::new();
+        let mut conflicts: BTreeSet<_> = self.changed_assertions.values().flatten().cloned().collect();
+        let mut available = BTreeMap::new();
+        for (id, source) in self.sources.iter().filter(|(id, _)| !self.disabled_builtin.contains(*id)) {
+            for (_, assertion) in &source.assertions {
+                if known.insert(&assertion.address, assertion).is_some_and(|old| old != assertion) {
+                    conflicts.insert(assertion.address.clone());
+                }
+                if self.source_available(id) {
+                    available.insert(assertion.address.clone(), assertion.clone());
+                }
+            }
+        }
+        available.retain(|address, _| !conflicts.contains(address));
+        self.assertions = available;
+        self.assertion_conflicts = conflicts;
+    }
+
+    /// Read an exact unambiguous assertion without selecting a newer revision or mutating a project.
+    pub fn lifecycle_assertion(&self, address: &Reference) -> Result<&Arc<lifecycle::Assertion>, String> {
+        address.validate()?;
+        if self.assertion_conflicts.contains(address) {
+            return Err("Conflicting content at this immutable lifecycle assertion address".into());
+        }
+        self.assertions.get(address).ok_or_else(|| "Lifecycle assertion revision is unavailable".into())
+    }
+
     /// Search the latest revision of each native identity, omitting all copies of conflicting keys.
     /// Identical copies appear once; their source registrations remain separately inspectable.
     pub fn search(&self, query: &str, kind: Option<Kind>) -> Vec<(&str, &Item)> {
@@ -947,7 +1012,8 @@ impl Catalog {
     /// Refuse a redundant installation only when every revision already has identical content
     /// in available registrations. Conflicting or empty collections are never called redundant.
     pub fn contains_source(&self, source: &NativeSource) -> bool {
-        !source.items.is_empty()
+        (!source.items.is_empty() || !source.assertions.is_empty())
+            && source.assertions.iter().all(|(_, assertion)| self.lifecycle_assertion(&assertion.address).is_ok_and(|existing| existing == assertion))
             && source.items.iter().all(|item| {
                 !self.conflicts.contains(&item.key)
                     && self
@@ -968,6 +1034,11 @@ impl Catalog {
         let mut sources = Vec::new();
         sources.extend(self.sources.iter().filter(|(id, _)| id.as_str() != super::compatibility::SOURCE && !self.disabled_builtin.contains(*id)).map(|(id,source)| {
             let mut problems = source.problems.clone();
+            for (file, assertion) in &source.assertions {
+                if self.assertion_conflicts.contains(&assertion.address) {
+                    problems.push(format!("{file}: conflicting lifecycle assertion; use a new revision"));
+                }
+            }
             for item in &source.items {
                 if conflicts.contains(&item.key) { problems.push(format!("{}: conflicting {:?} {}/{} revision {}; use a new revision",item.file,item.key.kind,item.key.library,item.key.id,item.key.revision)); }
                 if let Some(part) = item.part()
@@ -1111,6 +1182,7 @@ impl Session {
                 Ok(self.libraries.inspect())
             }
             LIST => Ok(self.libraries.inspect()),
+            lifecycle::LOOKUP => self.lookup_lifecycle(params),
             AVAILABLE_REVISIONS => {
                 let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
                 updates::inspect(project, &self.libraries, self.revision()).map_err(CommandError::InvalidParams)

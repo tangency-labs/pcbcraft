@@ -24,6 +24,7 @@ fn previous_entry_point_migrates_at_every_checkpoint() {
     // cannot legally accompany that annotation, so it must not mask this compatibility test.
     let mut entry: serde_json::Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
     entry["format"] = json!("pcbcraft-project/16");
+    entry.as_object_mut().unwrap().remove("board_instances");
     before.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
     let instances = session.project().unwrap().instances_document_path().unwrap();
     let mut records: serde_json::Value = serde_json::from_slice(&before[&instances]).unwrap();
@@ -202,7 +203,7 @@ fn new_zero_and_one_board_projects_use_folder_format() {
         let snapshot = session.snapshot().unwrap();
         let docs = encode_documents(snapshot.clone()).unwrap();
         let entry: serde_json::Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/16");
+        assert_eq!(entry["format"], "pcbcraft-project/52");
         assert_eq!(entry["layout_root"], ".");
         assert_eq!(entry["boards"].as_array().unwrap().len(), usize::from(create_board));
         assert!(!docs.contains_key("board.json"));

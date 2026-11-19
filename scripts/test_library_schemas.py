@@ -79,6 +79,39 @@ class LibrarySchemaTests(unittest.TestCase):
                 checker.validate([], [source])
             checker.validate([path], [])
 
+    def test_lifecycle_assertions_are_discovered_and_validated(self):
+        assertion = {"format": "pcbcraft-lifecycle-assertion/1",
+                     "address": {"library": "lifecycle-demo", "id": "drawing-assessment", "revision": 1},
+                     "target": {"library": "lifecycle-demo", "kind": "symbol", "id": "resistor", "revision": 1},
+                     "scheme": {"library": "pcbcraft", "id": "lifecycle", "revision": 1},
+                     "state": "released", "reason": "Drawing review completed",
+                     "provenance": {"publisher": "Lifecycle demo"}}
+        validator = self.checks[checker.FORMATS[assertion["format"]]]
+        validator.validate(assertion)
+        validator.validate({"assertions": [assertion], "policies": [{"scheme": assertion["scheme"], "states": [
+            {"id": "released", "label": "Released", "disposition": "released"}]}]})
+        for change in [{"format": "pcbcraft-lifecycle-assertion/2"}, {"reason": None}, {"unexpected_field": True},
+                       {"state": "Released"}, {"address": {**assertion["address"], "revision": 0}}]:
+            with self.subTest(change=change):
+                self.assertFalse(validator.is_valid({**assertion, **change}))
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            path = source / "lifecycle-assertions" / "drawing-assessment.r1.json"
+            path.parent.mkdir()
+            path.write_text(json.dumps(assertion))
+            checker.validate([], [source])
+            path.write_text(json.dumps({**assertion, "unknown": 1}))
+            with self.assertRaisesRegex(ValueError, "drawing-assessment.r1.json"):
+                checker.validate([], [source])
+            path.write_text(json.dumps(self.category))
+            with self.assertRaisesRegex(ValueError, "does not belong in lifecycle-assertions/"):
+                checker.validate([], [source])
+
+    def test_every_published_schema_has_an_identifier(self):
+        for path in sorted((ROOT / "docs/schemas").glob("*.schema.json")):
+            with self.subTest(path=path.name):
+                self.assertIsInstance(checker.read_json(path).get("$id"), str)
+
     def test_symbol_binding_is_explicit_and_versioned(self):
         validator = self.checks[checker.FORMATS["pcbcraft-symbol/3"]]
         validator.validate(self.symbol)

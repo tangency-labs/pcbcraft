@@ -703,6 +703,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
         command_ids,
         [
             "library.available_revisions",
+            pcbcraft_engine::library::sources::lifecycle::LOOKUP,
             "library.list_sources",
             "library.load_source",
             "library.parse_quantity",
