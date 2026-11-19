@@ -178,6 +178,69 @@ fn command_adds_eight_reports_two_and_round_trips_intent() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_docs);
 }
 
+/// Multiple outline paths must identify the actual crossing, spacing or enclosure drawing.
+#[test]
+fn command_reports_the_blocking_outline_drawing() {
+    use crate::{
+        ADD_DRAWING, SET_RULES,
+        board::{
+            rules::Values,
+            setup::LayerPurpose,
+            teardrop::{EDIT_TEARDROPS, Record},
+        },
+    };
+
+    let (mut session, intents, _) = fixture(3, false);
+    let target = view(&session).target;
+    let layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let path = |session: &mut Session, coordinates: &[(i64, i64)], closed| {
+        let points: Vec<_> = coordinates.iter().map(|&(x_nm, y_nm)| Point { x_nm, y_nm }).collect();
+        session
+            .apply(ADD_DRAWING, &json!({"board":target.board,"layer":layer,"points":points,"closed":closed,"expected_revision":session.revision()}))
+            .unwrap();
+        view(session).drawings().iter().find(|drawing| drawing.points == points).unwrap().id
+    };
+    let bottom = 23_500_000;
+    let perimeter = path(&mut session, &[(-5_000_000, -5_000_000), (25_000_000, -5_000_000), (25_000_000, bottom), (-5_000_000, bottom)], true);
+    let spacing = path(&mut session, &[(260_000, 19_780_000), (260_000, 19_730_000)], false);
+    let crossing = path(&mut session, &[(260_000, 21_780_000), (260_000, 21_925_000)], false);
+    // This closer open path cannot be the enclosing reference for the last attachment.
+    path(&mut session, &[(260_000, 23_780_000), (260_000, 23_925_000)], false);
+    let add: Vec<_> = intents.iter().copied().map(Record::from).collect();
+    let outside = intents[2].derive(view(&session)).unwrap();
+    let outside_gap = (outside.vertices.iter().map(|point| point.y_nm).min().unwrap() - bottom) as f64;
+    let run = |session: &mut Session, edge_clearance_nm| {
+        let rules = Values { edge_clearance_nm, ..Values::default() };
+        session.apply(SET_RULES, &json!({"board":target.board,"rules":rules,"expected_revision":session.revision()})).unwrap();
+        session
+            .execute(
+                EDIT_TEARDROPS,
+                &json!({"board":target.board,"expected_revision":session.revision(),"edits":{"add":add,"remove":[]},"dry_run":true}),
+            )
+            .unwrap()
+    };
+    let report = run(&mut session, 100_000);
+    let rejected = report["teardrops"]["rejected"].as_array().unwrap();
+    assert_eq!(rejected.len(), 3);
+    for (item, (intent, drawing, rule, gap)) in rejected.iter().zip([
+        (add[0], spacing, "board_edge_clearance", 82_000.),
+        (add[1], crossing, "board_edge_crossing", 0.),
+        (add[2], perimeter, "outside_board_outline", outside_gap),
+    ]) {
+        assert_eq!(item["intent"], json!(intent));
+        assert_eq!(item["reason"]["kind"], "rule");
+        let reason = &item["reason"]["detail"];
+        assert_eq!(reason["rule"], rule);
+        assert_eq!(reason["other_object"], drawing.to_string());
+        assert_eq!(reason["required_nm"], 100_000);
+        assert!((reason["actual_nm"].as_f64().unwrap() - gap).abs() < 0.000_001);
+    }
+    let zero = run(&mut session, 0);
+    assert_eq!(zero["teardrops"]["added"], json!([add[0]]));
+    let still_crosses = &zero["teardrops"]["rejected"][0]["reason"]["detail"];
+    assert_eq!(still_crosses, &json!({"rule":"board_edge_crossing","other_object":crossing,"required_nm":0,"actual_nm":0.}));
+}
+
 /// A malformed second report fails the batch even after the first addition was accepted.
 #[test]
 fn refuses_malformed_rule_reports_without_returning_a_partial_plan() {

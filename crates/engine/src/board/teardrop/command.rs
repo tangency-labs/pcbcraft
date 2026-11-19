@@ -145,8 +145,12 @@ impl<'a> Evaluator<'a> {
         }
         let values = board.effective_rules().values;
         let required_nm = probe.probe_rules.as_ref().map_or(values, |rules| rules.hard_values(values)).edge_clearance_nm;
-        let (actual_nm, crosses) = drc::edge_gap(&self.outline.edges, &shape);
-        let rule = if !drc::contains(&self.outline.polygons, &shape) {
+        let outside = !drc::contains(&self.outline.polygons, &shape);
+        let (drawing, actual_nm, crosses) = self
+            .outline
+            .blocking_edge(&shape, outside)
+            .ok_or_else(|| CommandError::Unavailable("teardrop outline has no addressable edges".into()))?;
+        let rule = if outside {
             Some(Rule::OutsideBoardOutline)
         } else if crosses {
             Some(Rule::BoardEdgeCrossing)
@@ -156,7 +160,7 @@ impl<'a> Evaluator<'a> {
             None
         };
         if let Some(rule) = rule {
-            return Ok(Some(RuleBlock { rule, other_object: "board-outline".into(), required_nm, actual_nm }));
+            return Ok(Some(RuleBlock { rule, other_object: drawing.to_string(), required_nm, actual_nm }));
         }
         self.stage(addition, source, island)?;
         Ok(None)

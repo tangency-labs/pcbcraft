@@ -54,8 +54,11 @@ outside the closed outline is a separate report regardless of edge distance.
 The command uses the board's copper clearance query, including applicable net
 class rules, and the same outline predicates as board DRC. An addition needs a
 closed outline and cannot join separate copper islands. It reports rejected
-intents with the rule, obstacle and distances or a geometry reason. Reports
-for approved additions include derived vertices. A `dry_run: true` previews
+intents with the rule, obstacle and distances or a geometry reason. For edge
+clearance it reports the nearest outline drawing UUID; for crossing it reports
+the nearest crossing drawing. For copper outside the outline it references the
+nearest closed drawing, not an open path. Distance ties pick the lowest drawing
+UUID. Reports for approved additions include derived vertices. A `dry_run: true` previews
 this diff without changing the revision or undo history; applying the batch
 rechecks it and records the accepted additions and removals in one undo step.
 A fully rejected batch without removals does not take an undo step. Native save
