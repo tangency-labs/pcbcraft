@@ -296,18 +296,22 @@ fn pin_function_storage_is_lazy_and_refuses_invalid_records() {
 /// selection storage in both homes, with retained allocation metadata on pre-watermark Undo.
 #[test]
 fn first_pin_function_selection_adopts_legacy_storage_without_moving_identities() {
-    for (board, had_watermark) in [(false, false), (false, true), (true, false), (true, true)] {
+    // Before /9, board ownership was implicit and the format could not describe a schematic-only project.
+    for (board, version) in [(true, 6), (true, 7), (true, 9), (false, 9)] {
         let mut session = fixture(board);
         let mut legacy = Project::clone(&crate::persistence::diagnostic_snapshot(session.snapshot().unwrap()));
         legacy.layout = None;
+        let had_watermark = version != 6;
         if !had_watermark {
             legacy.numeric_id_high_water = None;
-            if board {
-                Arc::make_mut(&mut legacy.board).ownership = crate::board::identity::Ownership::Legacy;
-            }
+        }
+        if version < 9 {
+            Arc::make_mut(&mut legacy.board).ownership = crate::board::identity::Ownership::Legacy;
         }
         let old = encode_documents(Arc::new(legacy)).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&old[ENTRY_POINT]).unwrap()["format"], format!("pcbcraft-project/{version}"));
         let before = decode_documents(&old).unwrap();
+        assert_eq!(before.board_target().is_some(), board);
         assert!(before.layout.is_none());
         assert!(!before.has_sheet_occurrences());
         assert_eq!(before.numeric_id_high_water.is_some(), had_watermark);
@@ -344,16 +348,22 @@ fn first_pin_function_selection_adopts_legacy_storage_without_moving_identities(
         assert_eq!(restored.pin_function_count(), 0);
         assert_eq!(restored.numeric_id_high_water, selected.numeric_id_high_water);
         let expected = Project::with_allocation_watermark(before, selected.numeric_id_high_water);
-        let undo = encode_documents(restored).unwrap();
+        let undo = encode_documents(restored.clone()).unwrap();
         assert_eq!(undo, encode_documents(expected).unwrap());
         if had_watermark {
             assert_eq!(undo, old);
+        } else {
+            // Undo of /6 keeps the adopted watermark, but does not adopt the folder/occurrence layout.
+            let undo_entry: Value = serde_json::from_slice(&undo[ENTRY_POINT]).unwrap();
+            assert_eq!(undo_entry["format"], "pcbcraft-project/7");
+            let undo_reopened = decode_documents(&undo).unwrap();
+            assert_eq!(undo_reopened.board_target(), restored.board_target());
         }
     }
 }
 
-/// The choice envelope preserves the preceding entry/display contracts for assembly profiles
-/// and both membership encodings, in both storage homes.
+/// The choice envelope preserves both membership encodings in both storage homes, and
+/// assembly profiles on projects that own a board (the public profile command requires one).
 #[test]
 fn pin_function_storage_composes_with_profiles_and_memberships() {
     use crate::part_groups::{CREATE, SET_GROUPS};
@@ -365,7 +375,10 @@ fn pin_function_storage_composes_with_profiles_and_memberships() {
         let member = project.part_instance_addresses().next().unwrap();
         session.apply(SET_GROUPS, &json!({"part_instance":member,"groups":[group],"expected_revision":session.revision()})).unwrap();
         let grouped = session.snapshot().unwrap();
-        for (compact, profile) in [(false, true), (true, false), (true, true)] {
+        for (compact, profile) in [(false, false), (true, false), (false, true), (true, true)] {
+            if profile && !board {
+                continue;
+            }
             session.open_snapshot(Arc::new(Project { prefer_compact_part_groups: compact, ..Project::clone(&grouped) }));
             if profile {
                 session.apply(crate::SET_ASSEMBLY_PROFILE, &json!({"content":{"name":"Synthetic profile","revision":1,"provenance":{"kind":"authored"}},"expected_revision":session.revision()})).unwrap();
@@ -373,17 +386,31 @@ fn pin_function_storage_composes_with_profiles_and_memberships() {
             let original = session.snapshot().unwrap();
             let before = encode_documents(original.clone()).unwrap();
             let entry: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-            assert_eq!(entry["format"], if profile { "pcbcraft-project/36" } else { "pcbcraft-project/39" });
+            let prior_format = match (profile, compact) {
+                (true, _) => "pcbcraft-project/36",
+                (false, true) => "pcbcraft-project/39",
+                (false, false) => "pcbcraft-project/24",
+            };
+            assert_eq!(entry["format"], prior_format);
+            assert_eq!(entry.get("assembly_profiles").is_some(), profile);
+            let path = original.instances_document_path();
+            let membership_home: Value = match &path {
+                Some(path) => serde_json::from_slice(&before[path]).unwrap(),
+                None => entry["schematic_instances"].clone(),
+            };
+            assert_eq!(membership_home.get("part_group_memberships").is_some(), !compact);
+            assert_eq!(membership_home.get("compact_part_group_memberships").is_some(), compact);
             let choice = params(&session, json!("ADC_IN"));
             session.apply(SET, &choice).unwrap();
             let docs = encode_documents(session.snapshot().unwrap()).unwrap();
             let selected: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
             assert_eq!(selected["format"], "pcbcraft-project/48");
-            if let Some(path) = original.instances_document_path() {
+            if let Some(path) = path {
                 assert_eq!(docs[&path], before[&path]);
             } else {
                 assert_eq!(selected["schematic_instances"], entry["schematic_instances"]);
             }
+            assert_eq!(selected["assembly_profiles"], entry["assembly_profiles"]);
             let reopened = decode_documents(&docs).unwrap();
             assert_eq!(reopened.part_group_memberships(), original.part_group_memberships());
             assert_eq!(reopened.assembly_profiles(), original.assembly_profiles());
