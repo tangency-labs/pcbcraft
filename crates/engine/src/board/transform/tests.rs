@@ -229,12 +229,12 @@ fn align_modes_round_trip_their_names() {
 #[test]
 fn alignment_moves_boxes_to_shared_edges_and_equal_gaps() {
     let boxes = [[0, 0, 10, 10], [30, 5, 34, 25], [12, -4, 20, 2]];
-    assert_eq!(super::alignment(super::AlignMode::Left, &boxes).unwrap(), vec![(0, 0), (-30, 0), (-12, 0)]);
-    assert_eq!(super::alignment(super::AlignMode::Right, &boxes).unwrap(), vec![(24, 0), (0, 0), (14, 0)]);
-    assert_eq!(super::alignment(super::AlignMode::Top, &boxes).unwrap(), vec![(0, -4), (0, -9), (0, 0)]);
-    assert_eq!(super::alignment(super::AlignMode::Bottom, &boxes).unwrap(), vec![(0, 15), (0, 0), (0, 23)]);
-    assert_eq!(super::alignment(super::AlignMode::CenterX, &boxes).unwrap(), vec![(12, 0), (-15, 0), (1, 0)]);
-    let spread = super::alignment(super::AlignMode::DistributeX, &boxes).unwrap();
+    assert_eq!(super::alignment(super::AlignMode::Left, &boxes, None).unwrap(), vec![(0, 0), (-30, 0), (-12, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Right, &boxes, None).unwrap(), vec![(24, 0), (0, 0), (14, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Top, &boxes, None).unwrap(), vec![(0, -4), (0, -9), (0, 0)]);
+    assert_eq!(super::alignment(super::AlignMode::Bottom, &boxes, None).unwrap(), vec![(0, 15), (0, 0), (0, 23)]);
+    assert_eq!(super::alignment(super::AlignMode::CenterX, &boxes, None).unwrap(), vec![(12, 0), (-15, 0), (1, 0)]);
+    let spread = super::alignment(super::AlignMode::DistributeX, &boxes, None).unwrap();
     let placed: Vec<_> = boxes.iter().zip(&spread).map(|(b, (dx, _))| [b[0] + dx, b[2] + dx]).collect();
     assert_eq!(placed, vec![[0, 10], [30, 34], [16, 24]], "gaps of 6: 34 of span minus 22 of sizes, in two gaps");
 }
@@ -245,7 +245,7 @@ fn distribution_keeps_physical_outer_edges_fixed() {
     for spans in [[[0, 20], [1, 3], [30, 34]], [[0, 4], [10, 30], [27, 29]]] {
         let boxes = spans.map(|[a, b]| [a, a, b, b]);
         for (mode, axis) in [(super::AlignMode::DistributeX, 0), (super::AlignMode::DistributeY, 1)] {
-            let deltas = super::alignment(mode, &boxes).unwrap();
+            let deltas = super::alignment(mode, &boxes, None).unwrap();
             assert_eq!(deltas[0], (0, 0), "leading physical anchor: {mode:?}, {spans:?}");
             let trailing = if spans[1][1] > spans[2][1] { 1 } else { 2 };
             assert_eq!(deltas[trailing], (0, 0), "trailing physical anchor: {mode:?}, {spans:?}");
@@ -270,7 +270,8 @@ fn distribution_keeps_physical_outer_edges_fixed() {
 fn distribution_refuses_overlap_that_cannot_preserve_its_span() {
     let boxes = [[0, 0, 1, 1], [10, 10, 90, 90], [20, 20, 80, 80], [99, 99, 100, 100]];
     for mode in [super::AlignMode::DistributeX, super::AlignMode::DistributeY] {
-        assert!(super::alignment(mode, &boxes).is_err());
+        let error = super::alignment(mode, &boxes, None).unwrap_err();
+        assert!(error.to_string().contains("keeping the outer footprints"));
     }
     use crate::board::track::tests::{routed_fixture, view};
     let mut s = routed_fixture();
@@ -297,11 +298,14 @@ fn center_alignment_is_idempotent_across_zero() {
     for offset in [-20, 0, 20] {
         let boxes = [[-3 + offset, -3 + offset, offset, offset], [offset, offset, 10 + offset, 10 + offset]];
         for (mode, axis) in [(super::AlignMode::CenterX, 0), (super::AlignMode::CenterY, 1)] {
-            let moved: Vec<_> =
-                boxes.iter().zip(super::alignment(mode, &boxes).unwrap()).map(|(b, (dx, dy))| [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy]).collect();
+            let moved: Vec<_> = boxes
+                .iter()
+                .zip(super::alignment(mode, &boxes, None).unwrap())
+                .map(|(b, (dx, dy))| [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy])
+                .collect();
             let centers: Vec<_> = moved.iter().map(|b| (b[axis] + b[axis + 2]).div_euclid(2)).collect();
             assert_eq!(centers, vec![3 + offset; 2], "{mode:?} at offset {offset}: {moved:?}");
-            assert_eq!(super::alignment(mode, &moved).unwrap(), vec![(0, 0); 2], "repeating {mode:?} must not create another edit");
+            assert_eq!(super::alignment(mode, &moved, None).unwrap(), vec![(0, 0); 2], "repeating {mode:?} must not create another edit");
         }
     }
 }
@@ -443,7 +447,7 @@ fn set_pitch_distributes_five_connectors_and_round_trips_one_edit() {
 }
 
 /// Check the stable refusal code and message without changes to the snapshot, revision or history.
-fn assert_pitch_refused(s: &mut Session, params: &Value, code: ErrorCode, reason: &str) {
+fn assert_alignment_refused(s: &mut Session, params: &Value, code: ErrorCode, reason: &str) {
     let before = s.snapshot().unwrap();
     let history = (s.revision(), s.undo.len(), s.redo.len());
     let error = s.execute(ALIGN_FOOTPRINTS, params).unwrap_err();
@@ -474,13 +478,13 @@ fn set_pitch_rejects_invalid_inputs_and_out_of_range_targets_atomically() {
     ] {
         let mut invalid = params.clone();
         invalid[key] = value;
-        assert_pitch_refused(&mut s, &invalid, ErrorCode::InvalidParams, reason);
+        assert_alignment_refused(&mut s, &invalid, ErrorCode::InvalidParams, reason);
     }
     let mut unknown = params.clone();
     unknown["footprints"] = json!([ids[0], "footprint-999"]);
-    assert_pitch_refused(&mut s, &unknown, ErrorCode::NotFound, "unknown footprint ID");
+    assert_alignment_refused(&mut s, &unknown, ErrorCode::NotFound, "unknown footprint ID");
     unknown["expected_revision"] = json!(rev - 1);
-    assert_pitch_refused(&mut s, &unknown, ErrorCode::StaleRevision, "project changed");
+    assert_alignment_refused(&mut s, &unknown, ErrorCode::StaleRevision, "project changed");
     s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
     assert_eq!(view(&s).footprint(&ids[1]).unwrap().position.x_nm, -MAX_CENTER_NM + 1);
     params["expected_revision"] = json!(s.revision());
@@ -491,7 +495,7 @@ fn set_pitch_rejects_invalid_inputs_and_out_of_range_targets_atomically() {
     params["expected_revision"] = json!(s.revision());
     params["mode"] = json!("distribute_y");
     params["pitch_nm"] = json!(MAX_CENTER_NM + 1);
-    assert_pitch_refused(&mut s, &params, ErrorCode::InvalidParams, "outside the coordinate range");
+    assert_alignment_refused(&mut s, &params, ErrorCode::InvalidParams, "outside the coordinate range");
     params["pitch_nm"] = json!(MAX_CENTER_NM);
     s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
     assert_eq!(view(&s).footprint(&ids[1]).unwrap().position.y_nm, MAX_CENTER_NM);
@@ -513,7 +517,7 @@ fn set_pitch_refuses_locked_attached_copper_then_carries_it_unlocked() {
     let mut lock = json!({"board":board,"tracks":[track],"locked":true,"expected_revision":s.revision()});
     s.apply(crate::SET_COPPER_LOCKED, &lock).unwrap();
     let mut params = json!({"footprints":[mover, anchor],"mode":"distribute_x","pitch_nm":22_000_000,"expected_revision":s.revision()});
-    assert_pitch_refused(&mut s, &params, ErrorCode::InvalidParams, &format!("Track {track} is locked"));
+    assert_alignment_refused(&mut s, &params, ErrorCode::InvalidParams, &format!("Track {track} is locked"));
     lock["expected_revision"] = json!(s.revision());
     lock["locked"] = json!(false);
     s.apply(crate::SET_COPPER_LOCKED, &lock).unwrap();
@@ -541,7 +545,162 @@ fn set_pitch_refuses_new_shorts_atomically() {
     assert_eq!(obstacle_pad.center.y_nm, mover_pad.center.y_nm);
     let pitch = mover.position.x_nm + obstacle_pad.center.x_nm - mover_pad.center.x_nm - anchor.position.x_nm;
     let params = json!({"footprints":[mover.id, anchor.id],"mode":"distribute_x","pitch_nm":pitch,"expected_revision":s.revision()});
-    assert_pitch_refused(&mut s, &params, ErrorCode::InvalidParams, "would connect nets");
+    assert_alignment_refused(&mut s, &params, ErrorCode::InvalidParams, "would connect nets");
+}
+
+/// Author a one-terminal part and a footprint with one plated mounting drill, then place it
+/// through the library and placement commands. Do not stand in a via or a non-plated hole.
+fn place_plated_mounting_hole(s: &mut Session) -> String {
+    use crate::authoring::{Action, Item, Kind, Primitive};
+    use crate::board::definition::{CopperBinding, PadShape};
+    let mut symbol = crate::authoring::Session::new(Item::new(Kind::Symbol).unwrap(), false).unwrap();
+    symbol.execute(symbol.revision(), Action::Delete { objects: vec![3] }).unwrap();
+    let mut footprint = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    footprint.execute(footprint.revision(), Action::Delete { objects: vec![2, 3] }).unwrap();
+    let Primitive::Pad { mut pad } = footprint.snapshot().objects[&1].clone() else { panic!("pad") };
+    pad.center = Point { x_nm: 700_000, y_nm: 0 };
+    pad.width_nm = 5_000_000;
+    pad.height_nm = 5_000_000;
+    pad.shape = PadShape::Circle;
+    pad.corner_radius_nm = 0;
+    pad.copper = CopperBinding::AllCopper;
+    pad.drill_nm = Some(3_200_000);
+    footprint.execute(footprint.revision(), Action::Replace { object: 1, primitive: Primitive::Pad { pad } }).unwrap();
+    let definition = footprint.snapshot().footprint().unwrap();
+    let symbol_def = symbol.snapshot().symbol().unwrap();
+    let manifest = json!({"format":crate::library::LIBRARY_FORMAT,"id":definition.library,"name":"Test fixture","license":definition.license});
+    s.execute(
+        "library.load_source",
+        &json!({"source":"mounting-hole-fixture","documents":{
+            "library.json":manifest.to_string(),
+            "symbols/hole.json":symbol.snapshot().export_native().unwrap().to_string(),
+            "footprints/hole.json":footprint.snapshot().export_native().unwrap().to_string(),
+        }}),
+    )
+    .unwrap();
+    let entry = s
+        .libraries()
+        .search(&symbol_def.id, Some(crate::library::sources::Kind::Symbol))
+        .into_iter()
+        .find(|(source, _)| *source == "mounting-hole-fixture")
+        .unwrap()
+        .1
+        .inspect();
+    s.apply(
+        crate::PLACE_SYMBOL,
+        &json!({"library":symbol_def.library,"definition":symbol_def.id,"definition_revision":symbol_def.revision(),
+        "definition_digest":entry["digest"],"x_nm":100_000_000,"y_nm":0,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let component = s.project().unwrap().components().last().unwrap().id();
+    s.apply(
+        crate::ASSIGN_FOOTPRINT,
+        &json!({"component":component,"library":definition.library,"definition":definition.id,
+        "definition_revision":definition.revision,"mapping":{"1":"1"},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    s.apply(crate::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":17_000_000,"y_nm":-10_000_000,"expected_revision":s.revision()}))
+        .unwrap();
+    crate::board::track::tests::view(s).footprint_ids().last().unwrap()
+}
+
+/// Three placements align to the physical edge of a locked plated mounting hole even when it
+/// is in the selection. The hole and its drill stay fixed; repetition, undo and reopen agree.
+#[test]
+fn align_to_locked_plated_mounting_hole_keeps_the_reference_fixed() {
+    use crate::board::track::tests::view;
+    let mut fixture =
+        pitch_connectors(&[Point { x_nm: -10_000_000, y_nm: 0 }, Point { x_nm: -12_000_000, y_nm: 12_000_000 }, Point { x_nm: 0, y_nm: 24_000_000 }]);
+    let reference = place_plated_mounting_hole(&mut fixture);
+    let original = fixture.snapshot().unwrap();
+    let ids: Vec<_> = view(&fixture).footprint_ids().collect();
+    assert_eq!(ids.len(), 4);
+    let mut locked = original.as_ref().clone();
+    // The persisted lock has no public authoring command yet; only fixture metadata is injected.
+    Arc::make_mut(&mut locked.board).footprints.last_mut().unwrap().locked = true;
+    let initial = encode_documents(Arc::new(locked)).unwrap();
+    let mut s = Session::default();
+    s.open_snapshot(decode_documents(&initial).unwrap());
+    let hole = view(&s).footprint(&reference).unwrap();
+    assert!(hole.locked);
+    assert_eq!(hole.pads.len(), 1);
+    assert!(hole.pads[0].through_hole);
+    assert_eq!(hole.pads[0].drill_nm, Some(3_200_000));
+    let left = bounds(&hole)[0];
+    assert_eq!(left, 15_200_000);
+    let (hole_at, hole_pads) = (hole.position, hole.pads);
+    let revision = s.revision();
+    let mut params =
+        json!({"board":view(&s).target.board,"footprints":ids,"mode":"left","reference_footprint":reference,"expected_revision":revision});
+    s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    for id in &ids[..3] {
+        assert_eq!(bounds(&view(&s).footprint(id).unwrap())[0], left);
+    }
+    let fixed = view(&s).footprint(&reference).unwrap();
+    assert_eq!(fixed.position, hole_at);
+    assert_eq!(fixed.pads, hole_pads);
+    assert!(fixed.locked);
+    let aligned = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&aligned).unwrap()).unwrap(), aligned);
+    params["expected_revision"] = json!(s.revision());
+    params["footprints"] = json!(ids[..3]);
+    s.apply(ALIGN_FOOTPRINTS, &params).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), initial);
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), aligned);
+}
+
+/// The six target modes use the reference, not the movers' combined bounds. Centers round
+/// consistently for odd-size boxes and negative reference coordinates.
+#[test]
+fn fixed_reference_controls_all_edge_and_center_modes() {
+    let boxes = [[0, 0, 5, 5]];
+    let target = Some([-15, -9, -2, 6]);
+    for (mode, shift) in [
+        (AlignMode::Left, (-15, 0)),
+        (AlignMode::Right, (-7, 0)),
+        (AlignMode::Top, (0, -9)),
+        (AlignMode::Bottom, (0, 1)),
+        (AlignMode::CenterX, (-11, 0)),
+        (AlignMode::CenterY, (0, -4)),
+    ] {
+        assert_eq!(alignment(mode, &boxes, target).unwrap(), vec![shift], "{mode:?}");
+    }
+}
+
+/// Invalid references and locked movers refuse the whole edit, with typed errors and unchanged
+/// history. The same locked placement becomes a legal anchor when it is the chosen reference.
+#[test]
+fn reference_alignment_refuses_bad_targets_and_locked_movers_atomically() {
+    use crate::board::track::tests::view;
+    let fixture = pitch_connectors(&[Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 10_000_000, y_nm: 10_000_000 }]);
+    let ids: Vec<_> = view(&fixture).footprint_ids().collect();
+    let mut locked = fixture.snapshot().unwrap().as_ref().clone();
+    Arc::make_mut(&mut locked.board).footprints[0].locked = true;
+    let mut s = Session::default();
+    s.open_snapshot(Arc::new(locked));
+    let base = json!({"footprints":[ids[1]],"mode":"center_x","reference_footprint":ids[0],"expected_revision":s.revision()});
+    for (key, value, code, reason) in [
+        ("reference_footprint", json!("footprint-999"), ErrorCode::NotFound, "unknown reference footprint"),
+        ("reference_footprint", json!("footprint-01"), ErrorCode::InvalidParams, "must identify a placed footprint"),
+        ("footprints", json!([ids[0]]), ErrorCode::InvalidParams, "other than the reference"),
+        ("mode", json!("distribute_x"), ErrorCode::InvalidParams, "only for edge or center alignment"),
+        ("pitch_nm", json!(5_080_000), ErrorCode::InvalidParams, "pitch_nm requires"),
+    ] {
+        let mut args = base.clone();
+        args[key] = value;
+        assert_alignment_refused(&mut s, &args, code, reason);
+    }
+    let mut args = base.clone();
+    args["footprints"] = json!([ids[0]]);
+    args["reference_footprint"] = json!(ids[1]);
+    assert_alignment_refused(&mut s, &args, ErrorCode::InvalidParams, &format!("({})", ids[0]));
+    let revision = s.revision();
+    s.apply(ALIGN_FOOTPRINTS, &base).unwrap();
+    assert_eq!(s.revision(), revision + 1);
 }
 
 /// Moving, aligning and rotating a footprint carry the track end on its pad, one undo step each,

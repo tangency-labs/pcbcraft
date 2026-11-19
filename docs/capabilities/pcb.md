@@ -76,7 +76,8 @@
   appear in silkscreen output.
 - Properties accepts exact footprint X, Y, rotation and side. The Modify menu and
   `pcb.align_footprints` align or distribute footprints, with
-  [exact origin pitch](../pcb/set-pitch-distribution.md) available through MCP.
+  [exact origin pitch](../pcb/set-pitch-distribution.md) and
+  [fixed-reference alignment](../pcb/align-to-reference-footprint.md) available through MCP.
 - F, Modify › Flip or `pcb.set_footprint_transform` flips footprints onto back copper and technical
   layers. Board format 14 stores the side.
 - The view-only ruler (Inspect › Measure, Ctrl+Shift+M) snaps to pads, track ends and vias.

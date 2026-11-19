@@ -254,7 +254,8 @@ PCB routing is under **Layout → Route**, and **Draw → Line / Rectangle** use
 the active layer. Copper shapes are conductive linework; technical-layer graphics
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
-For exact spacing between footprint origins, use [set-pitch distribution through MCP](pcb-layout-workflow.md#set-pitch-distribution).
+Through MCP you can [set exact spacing between footprint origins](pcb-layout-workflow.md#set-pitch-distribution)
+or [align to a fixed reference footprint](pcb-layout-workflow.md#align-to-a-reference-footprint).
 The router defaults to Walkaround and keeps its starting net through vertices
 and vias. Open **Layout → Route → Router Settings** to choose Walkaround, Shove,
 or Highlight collisions for new routes, **D**, and held drags on a single track.

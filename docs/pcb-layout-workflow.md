@@ -66,6 +66,7 @@ grouped by snapshot-local net index. Those indices must not be used as saved bin
 
 - <a name="unroute-one-connection"></a>[Unroute one connection](pcb/unroute.md)
 - <a name="set-pitch-distribution"></a>[Set-pitch distribution](pcb/set-pitch-distribution.md)
+- <a name="align-to-a-reference-footprint"></a>[Align to a reference footprint](pcb/align-to-reference-footprint.md)
 - <a name="placed-footprint-locks"></a>[Placed-footprint locks](pcb/locks.md#placed-footprint-locks) and
   <a name="fixed-tracks-and-vias"></a>[fixed tracks and vias](pcb/locks.md#fixed-tracks-and-vias)
 - <a name="fabrication-drill-files"></a>[Fabrication drill files](manufacturing/drill-files.md)
