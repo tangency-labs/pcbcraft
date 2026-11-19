@@ -5,6 +5,7 @@ use super::view::{BoardTarget, BoardView};
 use crate::schematic::{MAX_CENTER_NM, Point};
 use uuid::Uuid;
 
+pub mod edit;
 #[cfg(test)]
 mod tests;
 

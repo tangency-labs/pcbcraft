@@ -28,3 +28,21 @@ consumer must not silently ignore active teardrop copper; clearance,
 connectivity, board DRC, pours and fabrication integration are not part of this
 boundary. No rule for clearance-based resizing or other attachment types is
 specified here.
+
+## Add and remove preview
+
+The read-only engine planner takes a board view, its current intent list, and
+proposed adds and removes. It rejects unknown removals, ambiguous IDs or
+sites, and records for another board before asking about rules. Removals are
+projected first. The planner then checks new sites in UUID order, so the rule
+evaluator sees retained intents and earlier accepted additions in a stable
+order. The diff records approved additions, requested removals, and rejected
+sites. A rule rejection includes the rule, obstacle, required distance and
+actual distance. If the evaluator cannot complete a check, no diff is returned.
+
+The rule evaluator is supplied by the caller; the planner has no default allow
+path. The synthetic fixture measures spacing to two authored obstacle tracks,
+not every board rule. No registered command or production evaluator calls the
+planner yet. A caller cannot treat a preview as authority to publish a later
+edit: an eventual command must check the current revision, enforce complete
+rules and publish all changes through the shared undo path.
