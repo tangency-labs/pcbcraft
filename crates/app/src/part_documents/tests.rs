@@ -108,6 +108,60 @@ fn invalid_mapping_and_pending_input_never_replace_published_records() {
     app.library_editors.close_part(id, true).unwrap();
     assert!(!app.library_editors.parts.contains_key(&id));
 }
+/// Losing a source with a pending bound leaves a visible way to discard just that text,
+/// without undoing or rewriting the authored range or discarding unrelated typed edits.
+#[test]
+fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::{
+        authoring::{Item, Primitive, publishing},
+        library::sources::{self, Documents, NativeSource},
+        schematic::ElectricalType,
+    };
+
+    let (mut app, _temp, id) = fixture();
+    let manifest = publishing::new_library("test-drawings", "Synthetic drawings", "MIT OR Apache-2.0").unwrap();
+    let mut item = Item::new(Kind::Symbol).unwrap();
+    item.library = "test-drawings".into();
+    item.id = "synthetic-supply".into();
+    let Some(Primitive::Pin { electrical_type, .. }) = item.objects.get_mut(&1) else { panic!("fixture needs a pin") };
+    *electrical_type = ElectricalType::PowerIn;
+    let prepared = publishing::prepare(Arc::new(item), &manifest, 0, None, false).unwrap();
+    let mut documents = Documents::from([("library.json".into(), manifest)]);
+    documents.extend(prepared.documents().clone());
+    app.session.install_library_source("test-drawings", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+
+    let doc = &app.library_editors.parts[&id];
+    let mut record = doc.session.record().clone();
+    let Record::Part(part) = &mut record else { panic!() };
+    let symbol = prepared.item();
+    part.symbol = Some(Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision });
+    part.set_supply_range("1", "4.5 V", "36 V").unwrap();
+    app.replace_part_document(id, doc.session.revision(), record.clone()).unwrap();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    let revision = doc.session.revision();
+    doc.pending.insert("supply/1/min".into(), "unfinished".into());
+    doc.pending.insert("test:field".into(), "other edit".into());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    assert!(h.query_by_label("Discard unavailable supply edits").is_none());
+    h.state_mut().session.execute(sources::REMOVE, &json!({"source":"test-drawings"})).unwrap();
+    h.run();
+    h.get_by_label("Terminal 1 minimum: \"unfinished\"");
+    h.get_by_label("Discard unavailable supply edits").click();
+    h.run();
+    assert!(h.query_by_label("Discard unavailable supply edits").is_none());
+    let doc = h.state_mut().library_editors.parts.get_mut(&id).unwrap();
+    assert_eq!(doc.pending, BTreeMap::from([("test:field".into(), "other edit".into())]));
+    assert_eq!(doc.session.record(), &record);
+    assert_eq!(doc.session.revision(), revision);
+    doc.pending.clear();
+    let ctx = h.ctx.clone();
+    h.state_mut().begin_part_reference(&ctx, id, ReferenceField::Symbol).unwrap();
+}
+
 /// Real workspace input creates a document and renders it in wide dark and compact light layouts.
 #[test]
 fn new_generic_part_uses_existing_workspace_and_discard_dialog() {

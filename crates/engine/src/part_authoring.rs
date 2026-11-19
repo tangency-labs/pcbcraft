@@ -353,8 +353,9 @@ pub fn prepare_record(
 }
 
 impl Record {
-    /// Advance an exact symbol or footprint reference in a derived draft, preserving every
-    /// mapping and authored value. Complete validation remains required before publication.
+    /// Advance an exact drawing reference without guessing terminal correspondence. A rated
+    /// symbol must be edited explicitly in the part draft before switching revisions; footprint
+    /// updates preserve authored values. Complete validation is still required before publication.
     pub fn advance_dependency(&self, kind: Kind, old: &Reference, new: &Reference) -> Result<Self, String> {
         if old.library != new.library || old.id != new.id || new.revision <= old.revision {
             return Err("Dependency update requires a later revision of the same item.".into());
@@ -365,6 +366,7 @@ impl Record {
         let mut part = part.clone();
         let mut changed = false;
         if kind == Kind::Symbol && part.symbol.as_ref() == Some(old) {
+            require_supply_range_reentry(&part)?;
             part.symbol = Some(new.clone());
             changed = true;
         }
@@ -380,6 +382,16 @@ impl Record {
             return Err("The part does not reference this exact earlier definition.".into());
         }
         Ok(Self::Part(part))
+    }
+}
+
+/// A terminal number can be reassigned in the next revision, even between two power inputs.
+/// Refuse the switch until the user explicitly removes the old ranges for re-entry.
+fn require_supply_range_reentry(part: &PartDefinition) -> Result<(), String> {
+    if part.terminal_ratings.is_empty() {
+        Ok(())
+    } else {
+        Err("In Device supply ranges, remove the existing bounds before changing the symbol revision, then re-enter them on the correct inputs.".into())
     }
 }
 
@@ -452,9 +464,10 @@ impl Record {
         let mut candidate = self.clone();
         match (&mut candidate, field, reference) {
             (Self::Part(p), ReferenceField::Symbol, reference) => {
-                // Terminal IDs are meaningful only within the same symbol lineage.
                 let same_symbol = p.symbol.as_ref().zip(reference.as_ref()).is_some_and(|(old, new)| old.library == new.library && old.id == new.id);
-                if !same_symbol {
+                if same_symbol {
+                    require_supply_range_reentry(p)?;
+                } else {
                     p.terminal_ratings.clear();
                     p.select_rating_format();
                 }

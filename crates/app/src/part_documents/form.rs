@@ -67,12 +67,13 @@ impl PcbApp {
                             pcbcraft_chrome::part_form::ReferenceAction::Clear => clear_field = Some(ReferenceField::Symbol),
                             _ => {}
                         }
-                        if let Some(symbol) = part.symbol.as_ref().and_then(|r| catalog.symbol(&r.library, &r.id, r.revision)) {
+                        let symbol = part.symbol.as_ref().and_then(|r| catalog.symbol(&r.library, &r.id, r.revision));
+                        if let Some(symbol) = &symbol {
                             properties::field(ui, "Units", |ui| {
                                 ui.label(symbol.units().iter().map(|unit| unit.unit_id()).collect::<Vec<_>>().join(", "));
                             });
-                            supply_ranges(ui, part, &symbol, &mut doc.pending, &mut doc.error);
                         }
+                        supply_ranges(ui, part, symbol.as_deref(), &mut doc.pending, &mut doc.error);
                         match pcbcraft_chrome::part_form::reference(
                             ui,
                             "Category",
@@ -209,21 +210,45 @@ impl PcbApp {
     }
 }
 /// Edit both bounds of one power input in one Apply/undo. Pending text is session UI,
-/// never a native value; errors leave the previous authored range untouched.
+/// never a native value; errors leave the previous authored range untouched. Unavailable
+/// inputs expose a text-only discard even when the exact symbol no longer resolves.
 fn supply_ranges(
     ui: &mut egui::Ui,
     part: &mut PartDefinition,
-    symbol: &pcbcraft_engine::schematic::SymbolDefinition,
+    symbol: Option<&pcbcraft_engine::schematic::SymbolDefinition>,
     pending: &mut BTreeMap<String, String>,
     error: &mut Option<String>,
 ) {
     use pcbcraft_engine::schematic::ElectricalType::PowerIn;
-    if part.terminal_ratings.is_empty() && !symbol.pins().iter().any(|pin| pin.electrical_type == PowerIn) {
+    let power_input = |id: &str| symbol.is_some_and(|symbol| symbol.pin_index(id).is_some_and(|index| symbol.pins()[index].electrical_type == PowerIn));
+    let mut unavailable = Vec::new();
+    for (key, text) in pending.iter() {
+        if let Some((terminal, bound)) = key.strip_prefix("supply/").and_then(|rest| rest.rsplit_once('/'))
+            && !power_input(terminal)
+        {
+            if unavailable.is_empty() {
+                properties::section(ui, "Unapplied supply ranges");
+            }
+            let label = if bound == "min" { "minimum" } else { "maximum" };
+            ui.label(format!("Terminal {terminal} {label}: {text:?}"));
+            unavailable.push(key.clone());
+        }
+    }
+    if !unavailable.is_empty() {
+        ui.label("The exact power input is unavailable. Restore it to apply these edits, or discard the unapplied text.");
+        if controls::button(ui, "Discard unavailable supply edits").clicked() {
+            for key in unavailable {
+                pending.remove(&key);
+            }
+        }
+    }
+    let pins = symbol.map_or(&[][..], |symbol| symbol.pins());
+    if part.terminal_ratings.is_empty() && !pins.iter().any(|pin| pin.electrical_type == PowerIn) {
         return;
     }
     controls::collapsing(ui, "supply_ranges", "Device supply ranges", false, None, |ui| {
         ui.label("Enter volts or SI-prefixed voltages. Leave either bound blank when unknown.");
-        for pin in symbol.pins().iter().filter(|pin| pin.electrical_type == PowerIn) {
+        for pin in pins.iter().filter(|pin| pin.electrical_type == PowerIn) {
             let id = &pin.number;
             ui.push_id(id, |ui| {
                 let name = pin.name.as_ref().map_or_else(|| id.clone(), |name| format!("{name} ({id})"));
@@ -252,18 +277,12 @@ fn supply_ranges(
                 }
             });
         }
-        // A newer symbol revision can invalidate an older terminal rating. Show it with
-        // a removal action instead of silently dropping it or making the draft unfixable.
-        let stale: Vec<_> = part
-            .terminal_ratings
-            .keys()
-            .filter(|id| symbol.pin_index(id).is_none_or(|index| symbol.pins()[index].electrical_type != PowerIn))
-            .cloned()
-            .collect();
-        for id in stale {
+        // Authored ranges are independent of pending text and never removed on source loss.
+        let unavailable: Vec<_> = part.terminal_ratings.keys().filter(|id| !power_input(id)).cloned().collect();
+        for id in unavailable {
             ui.push_id(&id, |ui| {
-                ui.label(format!("Terminal {id} is no longer a power input."));
-                if controls::button(ui, "Remove obsolete range").clicked() {
+                ui.label(format!("Exact power input {id} unavailable."));
+                if controls::button(ui, "Remove authored range").clicked() {
                     *error = part.set_supply_range(&id, "", "").err();
                 }
             });

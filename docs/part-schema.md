@@ -198,9 +198,13 @@ using exact decimal order. Negative bounds and equal endpoints are allowed.
 
 In a generic part document, open **Device supply ranges** and apply both bounds
 on a pin together; blank inputs remove the corresponding bounds. Changing to
-an unrelated symbol removes the old ranges in the same undoable edit. Advancing
-an exact symbol to a newer revision retains the ranges for validation and
-correction rather than silently discarding them. The schematic's **Pin functions**
+an unrelated symbol removes the old ranges in the same undoable edit. To change
+revisions of the same symbol, first remove the existing ranges from the draft,
+choose the new revision, then re-enter the bounds on the correct inputs. Terminal
+numbers can be reassigned between revisions, so they do not establish
+correspondence. If the exact power input becomes unavailable, the form still shows
+unapplied bound text so it can be discarded without changing saved bounds.
+The schematic's **Pin functions**
 shows the device's pinned limits read-only. `library.resolve_part` returns the
 map under `part.terminal_ratings`; placed-part inspection reads it under the
 pinned `part.definition`. This does not yet run an electrical rule check.

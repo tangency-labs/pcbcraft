@@ -175,6 +175,74 @@ fn supply_range_refusals_name_bounds_and_exact_terminal() {
     }
 }
 
+/// Swapping two power-input numbers in a real drawing edit cannot transfer either
+/// rating implicitly through dependency advancement or through the exact picker.
+#[test]
+fn supply_ranges_require_reentry_after_a_same_symbol_pin_swap() {
+    use crate::authoring::{
+        Action, Session as DrawingSession,
+        publishing::{self, Publication},
+        remap::PinRemap,
+    };
+    use crate::{library::sources::Kind as SourceKind, part_authoring::ReferenceField};
+
+    let mut session = Session::default();
+    let manifest = new_library(LIBRARY, "Synthetic supply ranges", LICENSE).unwrap();
+    let mut symbol = Item::new(Kind::Symbol).unwrap();
+    symbol.library = LIBRARY.into();
+    symbol.id = "dual-input".into();
+    for (object, label) in [(1, "VIN"), (3, "VIO")] {
+        let Some(Primitive::Pin { name, electrical_type, .. }) = symbol.objects.get_mut(&object) else { panic!("fixture needs a pin") };
+        *name = Some(label.into());
+        *electrical_type = ElectricalType::PowerIn;
+    }
+    let first = publishing::prepare(Arc::new(symbol), &manifest, 0, None, false).unwrap();
+    let item = first.item().as_ref().clone();
+    let unit = item.unit.clone();
+    let mut drawing = DrawingSession::new(item, true).unwrap();
+    let pins = vec![PinRemap { unit: unit.clone(), object: 1, number: "2".into() }, PinRemap { unit, object: 3, number: "1".into() }];
+    drawing.execute(0, Action::RemapPins { pins }).unwrap();
+    let second = publishing::prepare(drawing.snapshot(), &manifest, 1, Some(1), false).unwrap();
+    let mut documents = sources::Documents::from([("library.json".into(), manifest)]);
+    documents.extend(first.documents().clone());
+    documents.extend(second.documents().clone());
+    load(&mut session, &documents);
+
+    let old = first.reference();
+    let new = second.reference();
+    for (reference, terminal_one) in [(&old, "VIN"), (&new, "VIO")] {
+        let exact = session.libraries().symbol(&reference.library, &reference.id, reference.revision).unwrap();
+        let pin = &exact.pins()[exact.pin_index("1").unwrap()];
+        assert_eq!(pin.name.as_deref(), Some(terminal_one));
+        assert_eq!(pin.electrical_type, ElectricalType::PowerIn);
+        assert_eq!(exact.pins()[exact.pin_index("2").unwrap()].electrical_type, ElectricalType::PowerIn);
+    }
+    let mut rated = Draft::new_part(old.clone()).unwrap();
+    part_mut(&mut rated).set_supply_range("1", "4.5 V", "36 V").unwrap();
+    part_mut(&mut rated).set_supply_range("2", "1.8 V", "3.3 V").unwrap();
+    let catalog = session.libraries();
+    rated.validate(catalog).unwrap();
+    assert_eq!(rated.select_reference(&ReferenceField::Symbol, Some(old.clone()), catalog).unwrap(), rated);
+    for error in [
+        rated.advance_dependency(SourceKind::Symbol, &old, &new).unwrap_err(),
+        rated.select_reference(&ReferenceField::Symbol, Some(new.clone()), catalog).unwrap_err(),
+    ] {
+        assert!(error.contains("re-enter"), "{error}");
+    }
+    assert_eq!(part_mut(&mut rated).symbol.as_ref(), Some(&old));
+    assert_eq!(part_mut(&mut rated).terminal_ratings.len(), 2);
+    for id in ["1", "2"] {
+        part_mut(&mut rated).set_supply_range(id, "", "").unwrap();
+    }
+    let advanced = rated.advance_dependency(SourceKind::Symbol, &old, &new).unwrap();
+    let mut picked = rated.select_reference(&ReferenceField::Symbol, Some(new), catalog).unwrap();
+    assert_eq!(advanced, picked);
+    assert!(part_mut(&mut picked).terminal_ratings.is_empty());
+    part_mut(&mut picked).set_supply_range("2", "4.5 V", "36 V").unwrap();
+    picked.validate(catalog).unwrap();
+    assert!(part_mut(&mut picked).supply_range("1").is_none());
+}
+
 /// A complete Apply is one draft undo step, and removing the last range restores the unrated envelope.
 #[test]
 fn supply_range_edit_uses_one_draft_revision_and_native_format_is_strict() {
