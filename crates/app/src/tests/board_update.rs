@@ -102,8 +102,18 @@ fn initial_update_apply_undo_reopen_and_noop_use_the_real_dialog() {
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
     open(&mut h);
-    h.get_by_label("Add footprint R1: basic-components / resistor-0402 · r4.");
-    assert_eq!(h.state().session.revision(), revision);
+    let schematic = h.state().views.active.id();
+    let board = h.state().session.project().unwrap().board_target().unwrap();
+    let plan = h.state().session.cached_board_update().unwrap().plan_token;
+    let symbol = h.state().session.project().unwrap().symbols()[0].id();
+    click(&mut h, "Add footprint R1: basic-components / resistor-0402 · r4.");
+    let app = h.state();
+    assert_eq!(app.views.highlight_for(schematic, &app.session).single_symbol(), Some(symbol.as_str()));
+    assert!(app.session.project().unwrap().board_view(board).unwrap().footprint_ids().len() == 0);
+    assert!(app.views.active.schematic.selection.is_empty());
+    assert!(matches!(app.dialog, Dialog::BoardUpdate(_)));
+    assert_eq!(app.session.cached_board_update().unwrap().plan_token, plan);
+    assert_eq!(app.session.revision(), revision);
     click(&mut h, "Update PCB");
     assert!(matches!(h.state().dialog, Dialog::None));
     assert!(h.state().views.active.board.placement.is_some());
@@ -210,7 +220,8 @@ fn existing_board_adoption_is_explicit_and_survives_cancel() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Placed choices are proposals until review, and accepting a replacement preserves its transform.
+/// A replacement row highlights the existing placement and its symbol without approving the
+/// change, taking focus, replacing the plan or modifying either view's edit selection.
 #[test]
 fn placed_package_choice_waits_for_update_and_preserves_layout() {
     let mut h = fixture(true);
@@ -232,8 +243,34 @@ fn placed_package_choice_waits_for_update_and_preserves_layout() {
     h.get_by_label("Placed · update pending");
     assert_eq!(h.state().session.inspect()["project"]["board"]["footprints"][0]["definition"], original["definition"]);
     click(&mut h, "Close");
-    open(&mut h);
-    h.get_by_label("Replace footprint for R1: basic-components / resistor-0603 · r4.");
+    let pcb = h.state().views.active.id();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open Schematic beside current view");
+    let schematic = h.state().views.hosts[&h.state().views.host]
+        .layout
+        .visible_views()
+        .into_iter()
+        .find(|&id| h.state().views.view(id).unwrap().workspace == Workspace::Schematic)
+        .unwrap();
+    h.state_mut().begin_board_update(pcb).unwrap();
+    h.run();
+    let focus = h.state().views.active.id();
+    let before = h.state().session.snapshot().unwrap();
+    let revision = h.state().session.revision();
+    let plan = h.state().session.cached_board_update().unwrap().plan_token;
+    let symbol = before.symbols()[0].id();
+    let footprint = original["id"].as_str().unwrap();
+    click(&mut h, "Replace footprint for R1: basic-components / resistor-0603 · r4.");
+    let app = h.state();
+    assert_eq!(app.views.board_highlight_for(pcb, &app.session), [footprint.to_owned()].into());
+    assert_eq!(app.views.highlight_for(schematic, &app.session).single_symbol(), Some(symbol.as_str()));
+    assert!(app.views.view(pcb).unwrap().board.selection.is_empty());
+    assert!(app.views.view(schematic).unwrap().schematic.selection.is_empty());
+    assert_eq!(app.views.active.id(), focus);
+    assert!(matches!(app.dialog, Dialog::BoardUpdate(_)));
+    assert_eq!(app.session.cached_board_update().unwrap().plan_token, plan);
+    assert_eq!(app.session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
     h.get_by_label("Previous footprint for R1: basic-components / resistor-0402 · r4. Previous mapping: Pin 1 → pad 1, Pin 2 → pad 2.");
     click(&mut h, "Update PCB");
     assert!(matches!(h.state().dialog, Dialog::None));

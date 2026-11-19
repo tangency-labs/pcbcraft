@@ -1,10 +1,10 @@
 //! Independently addressed editor views over one session, placed in per-window layouts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use egui::{Rect, Ui};
 use pcbcraft_chrome::{editor, grid, shell, workspace};
-use pcbcraft_engine::{Session, selection::Selection};
+use pcbcraft_engine::{Session, board::view::BoardTarget, selection::Selection};
 
 use crate::{
     Dialog, EditorView, PcbApp, ViewId, ViewInput,
@@ -27,7 +27,18 @@ pub(super) struct EditorViews {
     next_host: u64,
     primary: ViewId,
     selection_source: Option<(ViewId, Workspace)>,
+    report_probe: Option<ReportProbe>,
     pending_reveal: BTreeMap<ViewId, PendingReveal>,
+}
+
+/// A report projects stable addresses for one board and one live source revision. Neither
+/// side is a local edit selection, and a report click never broadcasts a selection event.
+#[derive(Debug)]
+struct ReportProbe {
+    source: ViewInput,
+    board: BoardTarget,
+    schematic: Selection,
+    footprints: BTreeSet<String>,
 }
 
 /// A reveal addresses one live recipient and expires on input/revision or policy changes.
@@ -52,6 +63,7 @@ impl Default for EditorViews {
             next_host: 1,
             primary: ViewId(0),
             selection_source: None,
+            report_probe: None,
             pending_reveal: BTreeMap::new(),
         }
     }
@@ -134,6 +146,7 @@ impl EditorViews {
         self.next_view = next_view;
         self.next_host = next_host;
         self.selection_source = None;
+        self.report_probe = None;
         self.pending_reveal.clear();
         Some(())
     }
@@ -477,7 +490,10 @@ impl EditorViews {
     /// Remove selection/navigation references to closed views and choose a surviving primary
     /// role if necessary. Focus changes never change this role.
     fn prune_closed(&mut self) {
-        let live: std::collections::BTreeSet<_> = std::iter::once(self.active.id()).chain(self.rest.keys().copied()).collect();
+        let live: BTreeSet<_> = std::iter::once(self.active.id()).chain(self.rest.keys().copied()).collect();
+        if self.report_probe.as_ref().is_some_and(|probe| !live.contains(&probe.source.view())) {
+            self.report_probe = None;
+        }
         self.pending_reveal.retain(|_, pending| live.contains(&pending.source.view()) && live.contains(&pending.target.view()));
         if self.selection_source.is_some_and(|(id, _)| self.view(id).is_none()) {
             self.selection_source = None;
@@ -505,6 +521,7 @@ impl EditorViews {
             view.bind_opened_project(session);
         }
         self.selection_source = None;
+        self.report_probe = None;
         self.pending_reveal.clear();
     }
 
@@ -517,6 +534,9 @@ impl EditorViews {
         if changed {
             self.selection_source = None;
             self.pending_reveal.clear();
+        }
+        if self.report_probe.as_ref().is_some_and(|probe| !self.probe_is_current(probe, session)) {
+            self.report_probe = None;
         }
     }
 
@@ -573,6 +593,7 @@ impl EditorViews {
     /// counterpart without turning the old selection into edit authority in the new workspace.
     fn selection_changed(&mut self, session: &Session, policy: SelectionFollow) {
         self.selection_source = Some((self.active.id(), self.active.workspace));
+        self.report_probe = None;
         self.pending_reveal.clear();
         let Some(source) = self.active.input(session) else {
             return;
@@ -606,6 +627,51 @@ impl EditorViews {
                 .is_some_and(|pane| pane.views().contains(&id))
     }
 
+    /// Project an Update PCB row's part instances. The schematic side remains useful before
+    /// placement, or the PCB side alone when a placed part is pending removal.
+    pub(super) fn probe_update_parts(&mut self, source: ViewId, board: BoardTarget, parts: &BTreeSet<u64>, session: &Session) {
+        let Some(view) = session.project().and_then(|project| project.board_view(board)) else { return };
+        self.show_report_probe(source, board, view.selection_for_parts(parts), view.footprints_for_parts(parts), session);
+    }
+
+    /// Recognize only the DRC report's footprint and pad addresses, not track/via IDs, text or
+    /// coordinates. Pads identify their owning footprint here; the finding marker locates the fault.
+    fn probe_drc_items(&mut self, source: ViewId, board: BoardTarget, items: &[String], session: &Session) {
+        let Some(view) = session.project().and_then(|project| project.board_view(board)) else { return };
+        let owners: BTreeSet<_> = items.iter().map(|item| item.split_once(':').map_or(item.as_str(), |(owner, _)| owner)).collect();
+        let footprints = view.footprint_ids().filter(|id| owners.contains(id.as_str())).collect();
+        self.show_report_probe(source, board, view.selection_for_footprints(&footprints), footprints, session);
+    }
+
+    /// Show the latest report click in open views using the same highlight and camera paths as
+    /// selection following. Explicit clicks reveal regardless of the automatic follow preference.
+    fn show_report_probe(&mut self, source: ViewId, board: BoardTarget, schematic: Selection, footprints: BTreeSet<String>, session: &Session) {
+        let Some(input) = self.view(source).and_then(|view| view.input(session)) else { return };
+        if self.owner(source).is_none() {
+            return;
+        }
+        self.selection_source = None;
+        self.pending_reveal.clear();
+        self.report_probe = Some(ReportProbe { source: input, board, schematic, footprints });
+        let targets: Vec<_> = self.hosts.values().flat_map(|host| host.layout.visible_views()).collect();
+        // A report queues no follow reveal, so the automatic follow policy does not apply.
+        for id in targets {
+            self.reveal_highlight(id, session, SelectionFollow::Both);
+        }
+    }
+
+    /// Do not paint a captured report after an edit, reopen or change of source document.
+    fn probe_is_current(&self, probe: &ReportProbe, session: &Session) -> bool {
+        self.owner(probe.source.view()).is_some() && self.view(probe.source.view()).is_some_and(|view| view.accepts(probe.source, session))
+    }
+
+    /// A report applies only to a live project pane in its captured opening.
+    fn report_probe_for(&self, id: ViewId, session: &Session) -> Option<&ReportProbe> {
+        self.report_probe.as_ref().filter(|probe| {
+            self.probe_is_current(probe, session) && self.owner(id).is_some() && self.view(id).and_then(|view| view.input(session)).is_some()
+        })
+    }
+
     /// Resolve a live source and destination in this opening. A source workspace may be parked
     /// within its view after switching, but closed views or replaced projects cannot contribute.
     fn probe_source(&self, id: ViewId, session: &Session) -> Option<(&EditorView, Workspace)> {
@@ -622,9 +688,12 @@ impl EditorViews {
         Some((source, workspace))
     }
 
-    /// Resolve a schematic projection before filtering to the receiving sheet. Board placements
-    /// map through component identity; literal wires remain local to their schematic sheet.
-    fn schematic_probe(&self, id: ViewId, session: &Session) -> Option<(Workspace, Selection)> {
+    /// Resolve the schematic projection and whether it may reveal across sheets. A report can
+    /// pan the review's originating document, but only a different pane may change sheets.
+    fn schematic_probe(&self, id: ViewId, session: &Session) -> Option<(bool, Selection)> {
+        if let Some(probe) = self.report_probe_for(id, session) {
+            return Some((id != probe.source.view(), probe.schematic.clone()));
+        }
         let (source, workspace) = self.probe_source(id, session)?;
         let selection = match workspace {
             Workspace::Schematic => {
@@ -639,7 +708,7 @@ impl EditorViews {
                 .and_then(|p| p.board_view(source.board.target?))
                 .map_or_else(Selection::default, |board| board.selection_for_footprints(&source.board.probe_footprints())),
         };
-        Some((workspace, selection))
+        Some((workspace == Workspace::Board, selection))
     }
 
     /// Filter counterparts to the displayed sheet without moving the view or editing selection.
@@ -655,7 +724,10 @@ impl EditorViews {
     }
 
     /// Resolve board counterparts using the shared engine adapter, preserving stable placement IDs.
-    pub(super) fn board_highlight_for(&self, id: ViewId, session: &Session) -> std::collections::BTreeSet<String> {
+    pub(super) fn board_highlight_for(&self, id: ViewId, session: &Session) -> BTreeSet<String> {
+        if let Some(probe) = self.report_probe_for(id, session) {
+            return if self.view(id).and_then(|view| view.board.target) == Some(probe.board) { probe.footprints.clone() } else { BTreeSet::new() };
+        }
         let Some((source, workspace)) = self.probe_source(id, session) else {
             return Default::default();
         };
@@ -686,8 +758,8 @@ impl EditorViews {
         self.reveal_highlight(id, session, policy)
     }
 
-    /// Reveal the counterpart without selecting it. Only a board source can change the sheet a
-    /// schematic pane displays. Report that change so the host paints the pane again.
+    /// Reveal the counterpart without selecting it. PCB selections or report results may change
+    /// the sheet a schematic pane displays. Report that change so the host paints the pane again.
     pub(super) fn reveal_highlight(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) -> bool {
         match self.view(id).map(|view| view.workspace) {
             Some(Workspace::Schematic) => self.reveal_schematic(id, session, policy),
@@ -710,7 +782,7 @@ impl EditorViews {
     /// A sheet change shows that sheet's document in the same pane and reveals there on its next
     /// paint, once the pane has supplied geometry; the matching sheet then settles in place.
     fn reveal_schematic(&mut self, id: ViewId, session: &Session, policy: SelectionFollow) -> bool {
-        let Some((workspace, all)) = self.schematic_probe(id, session) else {
+        let Some((may_change_sheet, all)) = self.schematic_probe(id, session) else {
             return false;
         };
         let Some(current) = self.view(id).and_then(|view| view.snapshot(session)) else {
@@ -724,7 +796,7 @@ impl EditorViews {
             }
             return false;
         }
-        if workspace != Workspace::Board || all.symbols.is_empty() {
+        if !may_change_sheet || all.symbols.is_empty() {
             return false;
         }
         let Some(sheet) = current.first_sheet_for_symbols(&all) else {
@@ -733,6 +805,16 @@ impl EditorViews {
         let Some(shown) = self.show_sheet_in_pane(id, sheet, session) else {
             return false;
         };
+        if self.report_probe.is_some() {
+            if let Some(view) = self.view_mut(shown)
+                && let Some(project) = view.snapshot(session)
+            {
+                let mut matches = all;
+                matches.retain(&project);
+                view.camera.reveal_selection(&project, &matches);
+            }
+            return true;
+        }
         if let Some((source, _)) = self.selection_source
             && let Some(source) = self.view(source).and_then(|view| view.input(session))
             && let Some(target) = self.view(shown).and_then(|view| view.input(session))
@@ -1175,7 +1257,11 @@ impl PcbApp {
             let drc_area = follow(drc_area, [on_side(&self.views.active.panels, FILTERS, Position::Right, filters_rect)], compact);
             let revision = self.session.revision();
             match self.views.active.board.drc.show(ui, drc_area, revision, self.preferences.units) {
-                crate::board_drc::Action::Focus(at) => self.views.active.camera.center_on(at),
+                crate::board_drc::Action::Focus { at, board, items } => {
+                    self.views.probe_drc_items(self.views.active.id(), board, &items, &self.session);
+                    self.views.active.camera.center_on(at);
+                    self.repaint_editors(ui.ctx());
+                }
                 crate::board_drc::Action::Rerun => self.run_drc(),
                 crate::board_drc::Action::None => {}
             }

@@ -19,7 +19,9 @@ pub struct Message {
     pub kind: Kind,
     /// Human-readable action, diagnostic or connection description.
     pub text: String,
-    /// Optional corrective action, for example assigning a missing package.
+    /// Whether activating the message navigates to the affected parts.
+    pub probe: bool,
+    /// Optional corrective action, separate from navigation.
     pub action: Option<String>,
 }
 
@@ -54,7 +56,9 @@ impl Filters {
 /// UI results address report rows; domain IDs and mutation remain with the owning editor.
 #[derive(Default)]
 pub struct ReportAction {
-    /// Index of the corrective action activated in the unfiltered message list.
+    /// Index of the message activated for navigation in the unfiltered list.
+    pub probe: Option<usize>,
+    /// Index of the corrective action activated in the unfiltered list.
     pub row: Option<usize>,
     /// Request a clipboard copy of the full report, independently of filters.
     pub copy: bool,
@@ -138,7 +142,14 @@ pub fn report(ui: &mut Ui, messages: &[&Message], filters: &mut Filters, trailin
                         Kind::Warning => ui.visuals().warn_fg_color,
                         _ => t.text,
                     };
-                    ui.add(egui::Label::new(RichText::new(&message.text).color(color)).wrap());
+                    let text = RichText::new(&message.text).color(color);
+                    if message.probe {
+                        if crate::controls::button(ui, text).on_hover_text("Reveal affected parts").clicked() {
+                            action.probe = Some(index);
+                        }
+                    } else {
+                        ui.add(egui::Label::new(text).wrap());
+                    }
                     if let Some(label) = &message.action
                         && kit::button(ui, label, kit::Button::Normal).clicked()
                     {

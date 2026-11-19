@@ -128,8 +128,11 @@ until acceptance. The [PCB ratsnest](board-ratsnest.md) displays only accepted
 logical connections, with per-view visibility, live MCP control and explicit
 unavailable endpoints. The Update PCB dialog reviews those typed changes from
 either workspace in a scrollable change report, with category filters, unfiltered
-warning/error totals and clipboard export. It resolves missing choices through the
-package chooser and, by default, hands
+warning/error totals and clipboard export. Activating a review message highlights
+affected symbols and existing footprints without approving the update or selecting
+objects for editing. Current DRC rows also highlight the owners of reported pads
+and footprints; findings without linked parts still center the PCB on the marker.
+The review resolves missing choices through the package chooser and, by default, hands
 accepted unplaced parts to a spaced cursor group for one-click placement, with
 quarter-turn rotation and cancellation. Package assignment refreshes the review
 directly; compatible pad numbers are preselected for named and unnamed terminals, with

@@ -1303,6 +1303,12 @@ fn drc_lists_findings_focuses_them_and_goes_stale_after_edits() {
 
     add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
     assert!(h.query_by_label_contains("out of date").is_some());
+    let stale = h.get_all_by_label_contains("Unconnected · Unrouted connection").next().unwrap();
+    assert!(stale.accesskit_node().is_disabled());
+    let centered = h.state().views.active.camera.screen(finding, rect);
+    stale.click();
+    h.run();
+    assert_eq!(h.state().views.active.camera.screen(finding, rect), centered);
     click(&mut h, "Run again");
     finish_drc(&mut h);
     assert!(h.query_by_label_contains("out of date").is_none());
@@ -1346,11 +1352,23 @@ fn shorted_routable<'a>() -> Harness<'a, PcbApp> {
     h
 }
 
-/// The existing DRC card exposes the engine's short finding and focuses the corresponding marker.
-/// GUI and shared command checks agree and leave design bytes and revision untouched.
+/// A short's pad addresses reveal their owning footprints and schematic units without edit
+/// selection. A marker-only finding replaces that highlight without guessing a counterpart.
 #[test]
 fn drc_shows_and_focuses_an_existing_short() {
     let mut h = shorted_routable();
+    let pcb = h.state().views.active.id();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open Schematic beside current view");
+    let schematic = h.state().views.hosts[&h.state().views.host]
+        .layout
+        .visible_views()
+        .into_iter()
+        .find(|&id| h.state().views.view(id).unwrap().workspace == Workspace::Schematic)
+        .unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().activate_editor(&ctx, pcb);
+    h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
     let board = h.state().views.active.board.target.unwrap();
@@ -1364,7 +1382,19 @@ fn drc_shows_and_focuses_an_existing_short() {
     let label = format!("Short · {finding}");
     h.get_by_label(&label).click();
     h.run();
-    assert!(h.state().views.active.board.drc.markers(Some(board)).iter().any(|(_, focused)| *focused));
+    let app = h.state();
+    assert!(app.views.active.board.drc.markers(Some(board)).iter().any(|(_, focused)| *focused));
+    assert_eq!(app.views.active.id(), pcb);
+    let project = app.session.project().unwrap();
+    assert_eq!(app.views.board_highlight_for(pcb, &app.session), project.board_view(board).unwrap().footprint_ids().collect());
+    assert_eq!(app.views.highlight_for(schematic, &app.session).symbols, project.symbols().iter().map(|symbol| symbol.id()).collect());
+    assert!(app.views.active.board.selection.is_empty());
+    assert!(app.views.view(schematic).unwrap().schematic.selection.is_empty());
+    h.get_all_by_label_contains("No outline · The board has no closed Board Outline").next().unwrap().click();
+    h.run();
+    let app = h.state();
+    assert!(app.views.board_highlight_for(pcb, &app.session).is_empty());
+    assert!(app.views.highlight_for(schematic, &app.session).is_empty());
     assert_eq!(h.state().session.revision(), revision);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }

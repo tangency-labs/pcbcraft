@@ -446,6 +446,12 @@ impl<'a> BoardView<'a> {
     pub fn footprints_for_selection(self, selection: &Selection) -> BTreeSet<String> {
         let components: BTreeSet<_> =
             self.project.all_symbols().filter(|symbol| selection.symbols.contains(&symbol.id())).map(|symbol| symbol.component).collect();
+        self.footprints_for_parts(&components)
+    }
+
+    /// Project part instance ordinals to actual placements, including placements pending removal.
+    /// Proposed or accepted-but-unplaced packages have no physical address to highlight.
+    pub fn footprints_for_parts(self, components: &BTreeSet<u64>) -> BTreeSet<String> {
         self.project
             .board
             .footprints()
@@ -466,9 +472,14 @@ impl<'a> BoardView<'a> {
             .filter_map(|id| placements.binary_search_by_key(&id, |footprint| footprint.id).ok())
             .map(|index| placements[index].component)
             .collect();
+        self.selection_for_parts(&components)
+    }
+
+    /// Resolve the supplied part IDs to placed schematic units using the native part/unit index.
+    pub fn selection_for_parts(self, components: &BTreeSet<u64>) -> Selection {
         let symbols = components
-            .into_iter()
-            .flat_map(|component| {
+            .iter()
+            .flat_map(|&component| {
                 self.project
                     .units
                     .range((component, String::new())..)
