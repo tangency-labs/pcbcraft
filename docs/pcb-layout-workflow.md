@@ -260,8 +260,12 @@ ribbon's planned entries and the editor guide have a stated destination.
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for tracks and vias is implemented under #249 through per-object
   flags and the shared snapshot publication guard. Existing footprint locks protect
-  direct placement edits as described below. Footprint lock authoring, zone locks
-  and a locked-object selection filter are not available yet.
+  direct placement edits as described below. To skip locked footprints, tracks
+  and vias when selecting, clear **Locked objects** in the view's **Selection
+  filters** card. It is checked by default. Clearing it also drops those objects
+  from the current selection, but leaves them visible and listed in project
+  inspection. Footprint lock authoring and locks for zones and board graphics
+  are not available yet.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.

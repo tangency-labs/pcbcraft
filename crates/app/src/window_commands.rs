@@ -980,6 +980,7 @@ mod live {
                 setting("labels", "Select hierarchical labels", Kind::Bool),
                 setting("no_connects", "Select no-connect markers", Kind::Bool),
                 setting("footprints", "Select board footprints", Kind::Bool),
+                setting("include_locked", "Include locked footprints, tracks and vias in selection", Kind::Bool),
                 setting("tracks", "Select board tracks", Kind::Bool),
                 setting("vias", "Select board vias", Kind::Bool),
                 setting("graphics", "Select board graphics", Kind::Bool),
@@ -1814,20 +1815,18 @@ mod live {
                     if reference && wanted.len() != 1 {
                         return Err("Reference selection requires exactly one footprint ID".into());
                     }
-                    let placed: std::collections::BTreeSet<String> = self
-                        .views
-                        .view(view)
-                        .and_then(|view| view.board.target)
-                        .zip(self.session.project())
-                        .and_then(|(target, project)| project.board_view(target))
-                        .into_iter()
-                        .flat_map(|board| board.footprint_ids())
-                        .collect();
+                    let state = self.views.view(view).ok_or("The addressed view closed")?;
+                    let board = state.board.target.and_then(|target| self.session.project()?.board_view(target));
+                    let placed: std::collections::BTreeSet<_> = board.into_iter().flat_map(|board| board.footprint_ids()).collect();
                     if !wanted.is_subset(&placed) {
                         return Err("Some of those footprints aren't on this view's board. Inspect the project for current IDs.".to_owned());
                     }
-                    if !wanted.is_empty() && self.views.view(view).is_some_and(|v| !v.filters.footprints) {
+                    if !wanted.is_empty() && !state.filters.footprints {
                         return Err("Footprint selection is disabled in this view".into());
+                    }
+                    if !state.filters.include_locked && board.is_some_and(|board| board.footprints_for_ids(&wanted).any(|footprint| footprint.locked))
+                    {
+                        return Err("Locked footprint selection is disabled in this view".into());
                     }
                     let previous = self.views.active.id();
                     self.views.bind(view);

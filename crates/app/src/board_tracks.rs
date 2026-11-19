@@ -432,22 +432,38 @@ impl State {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Kinds {
     pub(super) tracks: bool,
-    pub(super) vias: bool,
+    vias: bool,
+    include_locked: bool,
 }
 
 impl Kinds {
     /// Every kind, for lookups that are not selection, such as net highlighting.
-    pub(super) const ALL: Self = Self { tracks: true, vias: true };
+    pub(super) const ALL: Self = Self { tracks: true, vias: true, include_locked: true };
+
+    /// Copper kinds and lock states allowed by the addressed view.
+    pub(super) fn from(filters: crate::selection_filters::Filters) -> Self {
+        Self { tracks: filters.tracks, vias: filters.vias, include_locked: filters.include_locked }
+    }
+
+    /// Whether a track is selectable, independently of its layer visibility.
+    fn track(self, track: &Track) -> bool {
+        self.tracks && (self.include_locked || !track.locked)
+    }
+
+    /// Whether a via is selectable, independently of layer visibility.
+    fn via(self, via: &Via) -> bool {
+        self.vias && (self.include_locked || !via.locked)
+    }
 }
 
 /// The topmost visible via or track under a screen point, among the allowed kinds.
 pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>, kinds: Kinds) -> Option<Uuid> {
-    let via = view.vias().iter().rev().filter(|_| kinds.vias).find(|via| hit_via(pointer, camera, rect, via)).map(|via| via.id);
+    let via = view.vias().iter().rev().filter(|via| kinds.via(via)).find(|via| hit_via(pointer, camera, rect, via)).map(|via| via.id);
     via.or_else(|| {
         view.tracks()
             .iter()
             .rev()
-            .filter(|track| kinds.tracks && !hidden.contains(&track.layer.to_string()))
+            .filter(|track| kinds.track(track) && !hidden.contains(&track.layer.to_string()))
             .find(|track| hit(pointer, camera, rect, track))
             .map(|track| track.id)
     })
@@ -762,7 +778,7 @@ pub(super) fn interact(
     let vias = view.vias();
     let vias_visible = view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
     let selectable = |id: &Uuid| {
-        (kinds.tracks && visible.iter().any(|track| track.id == *id)) || (kinds.vias && vias_visible && vias.iter().any(|via| via.id == *id))
+        visible.iter().any(|track| track.id == *id && kinds.track(track)) || (vias_visible && vias.iter().any(|via| via.id == *id && kinds.via(via)))
     };
     state.selected.retain(selectable);
     let stale_route = state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active);

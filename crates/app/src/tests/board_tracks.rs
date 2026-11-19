@@ -1125,6 +1125,50 @@ fn box_selection_picks_tracks_and_vias() {
     assert!(h.state().views.active.board.selection.is_empty(), "footprints outside the box stay unselected");
 }
 
+/// Copper boxes keep unlocked objects and inspection still reports the locked track and via.
+#[test]
+fn copper_box_excludes_locked_without_hiding_inspection() {
+    let mut h = routable();
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let unlocked = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 1_270_000 }, Point { x_nm: 7_620_000, y_nm: 1_270_000 });
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":5_080_000,"y_nm":-1_270_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    let via = vias(&h)[0].id;
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"tracks":[track],"vias":[via],"locked":true,"expected_revision":revision}));
+    h.run();
+    let box_copper = |h: &mut Harness<'_, PcbApp>| {
+        let from = at(h, Point { x_nm: 1_524_000, y_nm: -2_540_000 });
+        let to = at(h, Point { x_nm: 8_636_000, y_nm: 3_810_000 });
+        h.hover_at(from);
+        h.run();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(to);
+        h.run();
+        h.drop_at(to);
+        h.run();
+    };
+    let inspection = h.state().session.inspect();
+    let board = &inspection["project"]["boards"][0];
+    assert!(board["tracks"].as_array().unwrap().iter().any(|item| item["id"] == json!(track) && item["locked"] == true));
+    assert!(board["vias"].as_array().unwrap().iter().any(|item| item["id"] == json!(via) && item["locked"] == true));
+    box_copper(&mut h);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track, via, unlocked]));
+    let view = h.state().views.active.id();
+    h.state_mut().set_selection_filters(view, &json!({"include_locked":false})).unwrap();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    box_copper(&mut h);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    assert_eq!(h.state().session.inspect(), inspection);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"tracks":[unlocked],"locked":true,"expected_revision":revision}));
+    assert!(h.state().views.active.board.tracks.selected.is_empty(), "newly locked copper leaves the filtered view's selection");
+}
+
 /// U selects every track joined to the hovered one, and nothing else.
 #[test]
 fn u_selects_connected_copper() {

@@ -828,9 +828,8 @@ impl EditorView {
         {
             self.board.highlight_net = None;
         }
-        if !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new))
-            || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet
-        {
+        let snapshot_changed = !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new));
+        if snapshot_changed || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet {
             self.sheet_snapshot = root.as_ref().and_then(|p| {
                 let target = self.sheet?;
                 if p.sheet_target() == target { Some(p.clone()) } else { p.for_sheet(target).map(std::sync::Arc::new) }
@@ -877,7 +876,14 @@ impl EditorView {
             if self.board.reference.selected.as_ref().is_some_and(|id| !placed.contains(id)) {
                 self.board.reference = Default::default();
             }
-            let setup = self.board.target.and_then(|target| project.board_view(target)).and_then(|board| board.setup());
+            let board = self.board.target.and_then(|target| project.board_view(target));
+            if snapshot_changed
+                && !self.filters.include_locked
+                && let Some(board) = board
+            {
+                self.filters.prune_locked_board_selection(board, &mut self.board);
+            }
+            let setup = board.and_then(|board| board.setup());
             let layers: std::collections::BTreeSet<_> = self
                 .board
                 .target

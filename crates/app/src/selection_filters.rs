@@ -1,11 +1,12 @@
 //! Per-view selection policy, shared by canvas picking, Browser actions and live MCP.
 use crate::{
     PcbApp,
-    editor_view::{ViewId, Workspace},
+    editor_view::{BoardState, ViewId, Workspace},
 };
-use pcbcraft_engine::selection::Selection;
+use pcbcraft_engine::{board::view::BoardView, selection::Selection};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 
 /// Supported selectable categories. Missing fields in older local arrangements default to on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +24,7 @@ pub(super) struct Filters {
     pub vias: bool,
     pub graphics: bool,
     pub zones: bool,
+    pub include_locked: bool,
 }
 
 impl Default for Filters {
@@ -40,6 +42,7 @@ impl Default for Filters {
             vias: true,
             zones: true,
             graphics: true,
+            include_locked: true,
         }
     }
 }
@@ -74,6 +77,44 @@ impl Filters {
         }
     }
 
+    /// Reject locked board objects only when the view excludes them from selection.
+    pub(super) fn permits_lock(self, locked: bool) -> bool {
+        self.include_locked || !locked
+    }
+
+    /// Drop locked placements from a footprint selection without touching inspection.
+    pub(super) fn retain_unlocked_footprints(self, board: BoardView<'_>, selected: &mut BTreeSet<String>) {
+        if !self.include_locked && !selected.is_empty() {
+            let locked: Vec<_> = board.footprints_for_ids(selected).filter(|footprint| footprint.locked).map(|footprint| footprint.id).collect();
+            for id in locked {
+                selected.remove(&id);
+            }
+        }
+    }
+
+    /// Prune edit targets after a filter change, a board update or a mixed selection.
+    pub(super) fn prune_locked_board_selection(self, board: BoardView<'_>, state: &mut BoardState) {
+        if self.include_locked {
+            return;
+        }
+        self.retain_unlocked_footprints(board, &mut state.selection);
+        if state.reference.selected.as_ref().and_then(|id| board.footprint(id)).is_some_and(|footprint| footprint.locked) {
+            state.reference = Default::default();
+        }
+        self.retain_unlocked_copper(board, &mut state.tracks.selected);
+    }
+
+    /// Drop locked tracks and vias from a mixed copper selection.
+    pub(super) fn retain_unlocked_copper(self, board: BoardView<'_>, selected: &mut BTreeSet<uuid::Uuid>) {
+        if !self.include_locked && !selected.is_empty() {
+            let tracks = board.tracks().iter().filter(|track| track.locked).map(|track| track.id);
+            let vias = board.vias().iter().filter(|via| via.locked).map(|via| via.id);
+            for id in tracks.chain(vias) {
+                selected.remove(&id);
+            }
+        }
+    }
+
     /// Build the workspace's supported rows and the disabled categories shown in FigCraft.
     fn rows(self, workspace: Workspace) -> Vec<pcbcraft_chrome::selection_filters::Filter<'static>> {
         use pcbcraft_chrome::selection_filters::Filter;
@@ -101,6 +142,7 @@ impl Filters {
                 planned("text", "Text"),
                 row("graphics", "Graphics", self.graphics),
                 planned("dimensions", "Dimensions"),
+                row("include_locked", "Locked objects", self.include_locked),
             ],
         }
     }
@@ -126,6 +168,7 @@ impl PcbApp {
                 (Workspace::Board, "vias") => &mut next.vias,
                 (Workspace::Board, "zones") => &mut next.zones,
                 (Workspace::Board, "graphics") => &mut next.graphics,
+                (Workspace::Board, "include_locked") => &mut next.include_locked,
                 (_, "view" | "collapsed" | "open") => continue,
                 _ => return Err(format!("Selection filter `{key}` is unavailable in this workspace")),
             };
@@ -156,15 +199,14 @@ impl PcbApp {
                 view.board.selection.clear();
                 view.board.reference = Default::default();
             }
+            let board = self.session.project().and_then(|project| view.board.target.and_then(|target| project.board_view(target)));
             if !next.tracks || !next.vias {
                 // Drop only the copper kinds that can no longer be picked.
-                let vias: std::collections::BTreeSet<uuid::Uuid> = self
-                    .session
-                    .project()
-                    .and_then(|project| view.board.target.and_then(|target| project.board_view(target)))
-                    .map(|board| board.vias().iter().map(|via| via.id).collect())
-                    .unwrap_or_default();
+                let vias: BTreeSet<uuid::Uuid> = board.map(|board| board.vias().iter().map(|via| via.id).collect()).unwrap_or_default();
                 view.board.tracks.selected.retain(|id| if vias.contains(id) { next.vias } else { next.tracks });
+            }
+            if let Some(board) = board {
+                next.prune_locked_board_selection(board, &mut view.board);
             }
             if !next.zones {
                 view.board.zones.select(None);

@@ -520,9 +520,14 @@ impl EditorViews {
     }
 
     /// Select board placements explicitly; a highlight never calls this handler.
-    pub(super) fn select_board(&mut self, selection: std::collections::BTreeSet<String>, session: &Session, policy: SelectionFollow) {
+    pub(super) fn select_board(&mut self, mut selection: std::collections::BTreeSet<String>, session: &Session, policy: SelectionFollow) {
         if self.active.workspace != Workspace::Board {
             return;
+        }
+        if !self.active.filters.include_locked
+            && let Some(board) = self.active.board.target.and_then(|target| session.project()?.board_view(target))
+        {
+            self.active.filters.retain_unlocked_footprints(board, &mut selection);
         }
         self.active.inspection.clear();
         self.active.board.reference = Default::default();
@@ -541,6 +546,11 @@ impl EditorViews {
     /// Select text independently of editable footprint geometry and project its owning component to other views.
     pub(super) fn select_board_reference(&mut self, footprint: String, session: &Session, policy: SelectionFollow) {
         if self.active.workspace != Workspace::Board || !self.active.filters.footprints {
+            return;
+        }
+        if !self.active.filters.include_locked
+            && self.active.board.target.and_then(|target| session.project()?.board_view(target)?.footprint(&footprint)).is_some_and(|f| f.locked)
+        {
             return;
         }
         self.active.inspection.clear();

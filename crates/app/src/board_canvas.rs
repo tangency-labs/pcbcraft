@@ -200,11 +200,13 @@ pub(super) fn show(
             visible_footprint_bounds(footprint, &pads, &graphics, camera, rect)
         })
         .collect();
+    let selectable = |footprint: &FootprintView<'_>| filters.footprints && filters.permits_lock(footprint.locked);
     let hit = |pointer: egui::Pos2| {
         footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| {
-            (filters.footprints && footprint_interactive(visible, footprint) && bounds.contains(pointer)).then_some(footprint)
+            (selectable(footprint) && footprint_interactive(visible, footprint) && bounds.contains(pointer)).then_some(footprint)
         })
     };
+    let copper_kinds = crate::board_tracks::Kinds::from(filters);
     let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
     if !enabled || lost_focus || state.box_drag.as_ref().is_some_and(|drag| Some(drag.source) != source) {
         state.box_drag = None;
@@ -248,7 +250,8 @@ pub(super) fn show(
                 .zip(&hit_bounds)
                 .rev()
                 .find(|(footprint, bounds)| {
-                    reference_bounds(ui.painter(), camera, rect, project, state, footprint, **bounds, appearance).contains(pointer)
+                    selectable(footprint)
+                        && reference_bounds(ui.painter(), camera, rect, project, state, footprint, **bounds, appearance).contains(pointer)
                 })
                 .map(|(footprint, _)| footprint);
             hovered
@@ -318,7 +321,7 @@ pub(super) fn show(
             && state.drawing.tool.is_none()
             && state.drawing.source().is_none(),
         hovered.is_some() || pad_hover.is_some() || pad_drag,
-        crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
+        copper_kinds,
     );
     state.zones.zone = true;
     let zone = crate::board_drawing::interact(
@@ -417,14 +420,7 @@ pub(super) fn show(
         && (box_with_secondary
             || (response.drag_started_by(PointerButton::Primary)
                 && hit(start).is_none()
-                && !crate::board_tracks::copper_under(
-                    start,
-                    camera,
-                    rect,
-                    project,
-                    &state.hidden_layers,
-                    crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
-                )))
+                && !crate::board_tracks::copper_under(start, camera, rect, project, &state.hidden_layers, copper_kinds)))
     {
         state.box_drag = Some(BoxDrag {
             source,
@@ -599,6 +595,13 @@ pub(super) fn show(
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
     let mut openings = Vec::new();
+    let marquee = state.box_drag.as_ref().zip(ui.input(|i| i.pointer.interact_pos())).map(|(drag, pointer)| {
+        let window = egui::Rect::from_two_pos(drag.start, pointer);
+        let crossing = pointer.x < drag.start.x;
+        let mut hits = geometry_for_box(project, camera, rect, state, filters, window, crossing);
+        hits.footprints = footprints_for_box(&footprints, &hit_bounds, window, crossing, filters);
+        (window, crossing, hits)
+    });
     for mut footprint in footprints {
         if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -670,7 +673,7 @@ pub(super) fn show(
             bounds,
         );
         collect_openings(&mut openings, &footprint, camera, rect, state.selection.contains(&footprint.id));
-        if selected || reference_enabled && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
+        if selected || reference_enabled && selectable(&footprint) && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
             board::reference_outline(&p, reference_bounds, selected, reference_color);
         }
     }
@@ -681,14 +684,9 @@ pub(super) fn show(
             board::drc_marker(&p, at, *focused);
         }
     }
-    if let Some(drag) = &state.box_drag
-        && let Some(pointer) = ui.input(|i| i.pointer.interact_pos())
+    if let Some((window, crossing, hits)) = marquee
+        && let Some(drag) = &state.box_drag
     {
-        let window = egui::Rect::from_two_pos(drag.start, pointer);
-        let crossing = pointer.x < drag.start.x;
-        debug_assert_eq!(hit_bounds.len(), project.footprint_ids().len());
-        let mut hits = geometry_for_box(project, camera, rect, state, filters, window, crossing);
-        hits.footprints = footprints_for_box(project, &hit_bounds, window, crossing, filters.footprints);
         pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len());
         if ui.input(|i| i.pointer.button_released(drag.button)) {
             if enabled && response.contains_pointer() {
@@ -853,14 +851,24 @@ fn place_group(
 
 /// Select only visible footprint bounds, sharing the exact geometry used for click picking.
 /// A window requires full containment; crossing requires overlap. Empty hidden bounds never hit.
-/// `bounds` must contain one entry per `project.footprints()` item in the same iteration order.
-fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egui::Rect, crossing: bool, enabled: bool) -> BTreeSet<String> {
-    project
-        .footprint_ids()
+/// `bounds` must contain one entry per footprint in the same order.
+fn footprints_for_box(
+    footprints: &[FootprintView<'_>],
+    bounds: &[egui::Rect],
+    window: egui::Rect,
+    crossing: bool,
+    filters: crate::selection_filters::Filters,
+) -> BTreeSet<String> {
+    footprints
+        .iter()
         .zip(bounds)
-        .filter_map(|(id, bounds)| {
-            (enabled && bounds.is_positive() && if crossing { window.intersects(*bounds) } else { window.contains_rect(*bounds) }).then_some(id)
+        .filter(|(footprint, bounds)| {
+            filters.footprints
+                && filters.permits_lock(footprint.locked)
+                && bounds.is_positive()
+                && if crossing { window.intersects(**bounds) } else { window.contains_rect(**bounds) }
         })
+        .map(|(footprint, _)| footprint.id.clone())
         .collect()
 }
 
@@ -1191,7 +1199,7 @@ fn geometry_for_box(
     let tracks = project
         .tracks()
         .iter()
-        .filter(|t| filters.tracks && !state.hidden_layers.contains(&t.layer.to_string()))
+        .filter(|t| filters.tracks && filters.permits_lock(t.locked) && !state.hidden_layers.contains(&t.layer.to_string()))
         .filter(|t| stroke(vec![camera.screen(t.start, rect), camera.screen(t.end, rect)], false, radius(t.width_nm)))
         .map(|t| t.id)
         .collect();
@@ -1206,7 +1214,7 @@ fn geometry_for_box(
     let vias = project
         .vias()
         .iter()
-        .filter(|_| filters.vias && visible_copper)
+        .filter(|v| filters.vias && filters.permits_lock(v.locked) && visible_copper)
         .filter(|v| {
             let center = camera.screen(v.at, rect);
             let radius = radius(v.diameter_nm / 2);
@@ -1239,6 +1247,7 @@ pub(super) fn all_visible(
         let colors = FootprintColors::new(appearance, project, state.active_layer.as_deref(), &state.hidden_layers);
         selected.footprints = project
             .footprints()
+            .filter(|f| filters.permits_lock(f.locked))
             .filter(|f| {
                 let (pads, graphics) = drawing(f, &camera, rect, visible, &colors);
                 visible_footprint_bounds(f, &pads, &graphics, &camera, rect).is_positive()

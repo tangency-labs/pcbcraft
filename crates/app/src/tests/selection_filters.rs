@@ -247,7 +247,19 @@ fn filters_follow_the_view_and_restore_from_local_arrangements() {
     assert_eq!(fork.filters, view.filters);
     let app = h.state_mut();
     app.views.switch_workspace(id, Workspace::Board, &app.session);
-    app.set_selection_filters(id, &json!({"footprints":false})).unwrap();
+    app.set_selection_filters(id, &json!({"footprints":false,"include_locked":false})).unwrap();
+    let current = serde_json::to_value(app.views.active.saved_state(&app.session).unwrap()).unwrap();
+    let restored = serde_json::from_value(current.clone()).unwrap();
+    assert!(!EditorView::from_state(ViewId(903), &restored, &app.session).filters.include_locked);
+    let mut legacy = current;
+    legacy["filters"].as_object_mut().unwrap().remove("include_locked");
+    let restored = serde_json::from_value(legacy).unwrap();
+    assert!(EditorView::from_state(ViewId(904), &restored, &app.session).filters.include_locked);
+    let other = app.views.open_beside(id).unwrap();
+    app.set_selection_filters(other, &json!({"include_locked":true})).unwrap();
+    assert!(!app.views.view(id).unwrap().filters.include_locked);
+    assert!(app.views.view(other).unwrap().filters.include_locked);
+    app.views.close_view(other);
     app.views.switch_workspace(id, Workspace::Schematic, &app.session);
     assert!(!app.views.active.filters.symbols && !app.views.active.filters.footprints && app.views.active.filters_collapsed);
     app.views.active.bind_opened_project(&app.session);
@@ -309,7 +321,12 @@ fn live_filters_match_the_card_and_refuse_unsupported_or_filtered_targets() {
     assert_eq!(crate::window_commands::inspect_editor(h.state())["views"][0]["selection_filters"]["symbols"], false);
     assert!(h.state_mut().run_window_command(&ctx, "view.select", &json!({"view":id,"items":{"symbols":["symbol-2"],"wires":[]}})).is_err());
     let filters = h.state().views.active.filters;
-    for bad in [json!({"view":id,"symbols":true,"footprints":false}), json!({"view":id,"symbols":"false"}), json!({"view":999,"symbols":false})] {
+    for bad in [
+        json!({"view":id,"symbols":true,"include_locked":false}),
+        json!({"view":id,"symbols":true,"footprints":false}),
+        json!({"view":id,"symbols":"false"}),
+        json!({"view":999,"symbols":false}),
+    ] {
         assert!(h.state_mut().run_window_command(&ctx, "view.set_selection_filters", &bad).is_err());
         assert_eq!(h.state().views.active.filters, filters);
     }
