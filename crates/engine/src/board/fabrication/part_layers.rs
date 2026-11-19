@@ -143,11 +143,13 @@ fn part_outlines(writer: &mut Gerber, placement: &Footprint, definition: &Footpr
                 let points = [*min, Point { x_nm: max.x_nm, y_nm: min.y_nm }, *max, Point { x_nm: min.x_nm, y_nm: max.y_nm }];
                 polygon_outline(writer, placement, &points.map(|p| placement.point(p)), function, reference);
             }
-            Geometry::Polyline { points, closed: true } => {
+            Geometry::Polyline { points, closed } if *closed || points.first() == points.last() => {
                 let points: Vec<_> = points.iter().map(|&p| placement.point(p)).collect();
                 polygon_outline(writer, placement, &points, function, reference);
             }
-            Geometry::Circle { center, radius_nm } => circle_outline(writer, placement.point(*center), *radius_nm, function, reference),
+            Geometry::Circle { center, radius_nm } | Geometry::Arc { center, radius_nm, sweep_degrees: -360 | 360, .. } => {
+                circle_outline(writer, placement.point(*center), *radius_nm, function, reference);
+            }
             _ => {}
         }
     }

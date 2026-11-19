@@ -291,6 +291,26 @@ fn gerber_x3_pins_and_closed_outlines_use_the_placed_package_geometry() {
             for (purpose, geometry) in [
                 (GraphicPurpose::Fabrication, rectangle.clone()),
                 (GraphicPurpose::Courtyard, Geometry::Circle { center: p(-10, 20), radius_nm: 900_019 }),
+                (
+                    GraphicPurpose::Courtyard,
+                    Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 360 },
+                ),
+                (
+                    GraphicPurpose::Courtyard,
+                    Geometry::Arc { center: p(-200, -300), radius_nm: 920_000, start_degrees: 14, sweep_degrees: -360 },
+                ),
+                (
+                    GraphicPurpose::Fabrication,
+                    Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57), p(13, 27)], closed: false },
+                ),
+                (
+                    GraphicPurpose::Fabrication,
+                    Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57)], closed: false },
+                ),
+                (
+                    GraphicPurpose::Courtyard,
+                    Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 359 },
+                ),
                 (GraphicPurpose::Fabrication, Geometry::Line { from: p(0, 0), to: p(4, 3) }),
                 (
                     GraphicPurpose::Fabrication,
@@ -328,7 +348,11 @@ fn gerber_x3_pins_and_closed_outlines_use_the_placed_package_geometry() {
             "D12*\n%TO.P,R1,A1*%\nX23000458Y28999881D03*\n%TD*%\n",
             "D13*\n%TO.C,R1*%\nX22589998Y31600005D02*\n",
             "X22589998Y30499997D01*\nX23420014Y30499997D01*\nX23420014Y31600005D01*\nX22589998Y31600005D01*\n%TD*%\n",
-            "D14*\n%TO.C,R1*%\nX23900040Y31000014D02*\nG75*\nG03*\nX23900040Y31000014I-900019J0D01*\nG01*\n%TD*%\nM02*\n",
+            "D14*\n%TO.C,R1*%\nX23900040Y31000014D02*\nG75*\nG03*\nX23900040Y31000014I-900019J0D01*\nG01*\n%TD*%\n",
+            "%TO.C,R1*%\nX23910201Y30999904D02*\nG75*\nG03*\nX23910201Y30999904I-910000J0D01*\nG01*\n%TD*%\n",
+            "%TO.C,R1*%\nX23919701Y31000204D02*\nG75*\nG03*\nX23919701Y31000204I-920000J0D01*\nG01*\n%TD*%\n",
+            "D13*\n%TO.C,R1*%\nX23000028Y30999991D02*\n",
+            "X23000028Y30999971D01*\nX23000058Y30999991D01*\nX23000028Y30999991D01*\n%TD*%\nM02*\n",
         )
     );
 }

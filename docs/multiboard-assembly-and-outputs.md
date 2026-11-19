@@ -187,9 +187,10 @@ center. `.P` carries the part reference and the physical pad identifier, not
 the schematic terminal ID. Pad `1`, or `A1` when `1` is absent, uses the key-pin
 diamond. Closed, non-self-intersecting fabrication and courtyard contours are
 written as Body and Courtyard centerlines, respectively, with `.C` linking
-them to the part. Rectangles, closed polylines and circles are supported; open
-paths, individually drawn segments and lettering are not stitched or guessed
-into outlines. Legacy placements without pinned footprints have only the main
+them to the part. Rectangles, polylines closed by their flag or endpoints,
+and circles (including full-turn arcs) are supported. Open paths, individually
+drawn segments and lettering are not stitched or guessed into outlines. Legacy
+placements without pinned footprints have only the main
 flash. See the [Ucamco Gerber Layer Format Specification](https://www.ucamco.com/en/gerber/downloads/),
 revision 2026.05, §§4.2.2, 4.7.2, 5.6.10, 5.6.14–15 and 6.9.
 
