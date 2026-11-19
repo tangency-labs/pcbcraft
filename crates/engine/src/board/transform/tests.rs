@@ -718,9 +718,13 @@ fn large_routed_board_reference_alignment_has_bounded_geometry_work() {
     let mut s = routed_fixture();
     let ids: Vec<_> = view(&s).footprint_ids().collect();
     let (mover, reference) = (&ids[0], &ids[1]);
-    let anchor = view(&s).footprint(reference).unwrap().position;
-    s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":reference,"x_nm":anchor.x_nm,"y_nm":anchor.y_nm + SHIFT,"expected_revision":s.revision()}))
-        .unwrap();
+    let fixed = view(&s).footprint(reference).unwrap();
+    let (anchor, rotation) = (fixed.position, fixed.rotation);
+    s.apply(
+        SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":reference,"x_nm":anchor.x_nm,"y_nm":anchor.y_nm + SHIFT,"rotation":rotation,"expected_revision":s.revision()}),
+    )
+    .unwrap();
     for i in 0..FILLERS {
         let x = 100_000_000 + i % 16 * 10_000_000;
         let y = 100_000_000 + i / 16 * 10_000_000;
