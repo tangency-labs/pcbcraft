@@ -69,7 +69,9 @@ fn extract(objects: &[&str]) -> String {
     let resources = objects[2].split_once("/Font << ").unwrap().1.split_once(">>").unwrap().0;
     let resources: Vec<_> = resources.split_whitespace().collect();
     let mut encodings = BTreeMap::new();
-    for resource in resources.chunks_exact(4) {
+    let (resources, remainder) = resources.as_chunks::<4>();
+    assert!(remainder.is_empty());
+    for resource in resources {
         let font = objects[resource[1].parse::<usize>().unwrap() - 1];
         let cmap_id = font.split_once("/ToUnicode ").unwrap().1.split_whitespace().next().unwrap().parse::<usize>().unwrap();
         let mut encoding = BTreeMap::new();
@@ -81,8 +83,9 @@ fn extract(objects: &[&str]) -> String {
                 inside = false;
             } else if inside {
                 let (code, hex) = line.trim_start_matches('<').trim_end_matches('>').split_once("> <").unwrap();
-                let utf16: Vec<_> =
-                    hex.as_bytes().chunks_exact(4).map(|unit| u16::from_str_radix(std::str::from_utf8(unit).unwrap(), 16).unwrap()).collect();
+                let (units, remainder) = hex.as_bytes().as_chunks::<4>();
+                assert!(remainder.is_empty());
+                let utf16: Vec<_> = units.iter().map(|unit| u16::from_str_radix(std::str::from_utf8(unit).unwrap(), 16).unwrap()).collect();
                 encoding.insert(u8::from_str_radix(code, 16).unwrap(), String::from_utf16(&utf16).unwrap());
             }
         }
@@ -95,7 +98,9 @@ fn extract(objects: &[&str]) -> String {
         } else if let Some((font, run)) = line.split_once(" Tf <") {
             let font = font.split_whitespace().next().unwrap();
             let run = run.strip_suffix("> Tj").unwrap();
-            for code in run.as_bytes().chunks_exact(2) {
+            let (pairs, remainder) = run.as_bytes().as_chunks::<2>();
+            assert!(remainder.is_empty());
+            for code in pairs {
                 let code = u8::from_str_radix(std::str::from_utf8(code).unwrap(), 16).unwrap();
                 text.push_str(&encodings[font][&code]);
             }
