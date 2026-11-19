@@ -591,6 +591,7 @@ pub(super) fn show(
         }
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
+    let mut openings = Vec::new();
     for mut footprint in footprints {
         if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -661,11 +662,12 @@ pub(super) fn show(
             shift,
             bounds,
         );
-        paint_holes(&p, &footprint, camera, rect, state.selection.contains(&footprint.id));
+        collect_openings(&mut openings, &footprint, camera, rect, state.selection.contains(&footprint.id));
         if selected || reference_enabled && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
             board::reference_outline(&p, reference_bounds, selected, reference_color);
         }
     }
+    paint_openings(&p, openings);
     for (at, focused) in markers {
         let at = camera.screen(*at, rect);
         if rect.contains(at) {
@@ -794,6 +796,7 @@ fn place_group(
             }
         }
         let colors = FootprintColors::new(appearance, board, state.active_layer.as_deref(), &state.hidden_layers);
+        let mut openings = Vec::new();
         for mut footprint in board.footprints().filter(|f| ids.contains(&f.id)) {
             for pad in &mut footprint.pads {
                 pad.center = transform(pad.center);
@@ -830,8 +833,9 @@ fn place_group(
                 reference_shift(&footprint, camera, response.rect),
                 bounds,
             );
-            paint_holes(ui.painter(), &footprint, camera, response.rect, true);
+            collect_openings(&mut openings, &footprint, camera, response.rect, true);
         }
+        paint_openings(ui.painter(), openings);
     }
     if response.clicked() && response.contains_pointer() {
         return Some(placement);
@@ -1043,10 +1047,17 @@ fn footprint_interactive(copper_visible: bool, footprint: &FootprintView<'_>) ->
     copper_visible || !footprint.non_plated_holes.is_empty()
 }
 
-/// Paint openings last so any copper crossing the hole cannot hide the visible drill.
-fn paint_holes(painter: &egui::Painter, footprint: &FootprintView<'_>, camera: &Camera, rect: Rect, selected: bool) {
-    for hole in &footprint.non_plated_holes {
+/// Capture projected openings from the same pose and selection used to paint this footprint.
+fn collect_openings(openings: &mut Vec<(Pos2, f32, bool)>, footprint: &FootprintView<'_>, camera: &Camera, rect: Rect, selected: bool) {
+    openings.extend(footprint.non_plated_holes.iter().map(|hole| {
         let (center, radius) = hole_circle(hole, camera, rect);
+        (center, radius, selected)
+    }));
+}
+
+/// Paint openings after every footprint in this pass, including copper from other footprints.
+fn paint_openings(painter: &egui::Painter, openings: Vec<(Pos2, f32, bool)>) {
+    for (center, radius, selected) in openings {
         board::non_plated_hole(painter, center, radius, selected);
     }
 }
@@ -1275,6 +1286,7 @@ mod clipboard_geometry_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcbcraft_engine::board::definition::CircularNpth;
 
     /// Crossing includes the visible edge of a physical graphic, while enclosure requires
     /// its full width rather than only its centerline.
@@ -1302,14 +1314,14 @@ mod tests {
         assert_eq!(geometry_for_box(view, camera, rect, &state, filters, narrow.expand(2.), false).drawings.len(), 1);
     }
 
-    /// A published offset hole remains available to picking and Select All with copper hidden.
-    #[test]
-    fn offset_hole_extends_visible_bounds_with_copper_hidden() {
+    const OFFSET_HOLE: CircularNpth = CircularNpth { center: Point { x_nm: 8_000_000, y_nm: -9_000_000 }, diameter_nm: 3_000_000 };
+
+    /// Publish and place a footprint with a hole; optionally center a later footprint's pad over it.
+    fn offset_hole_fixture(overlap: bool) -> pcbcraft_engine::Session {
         use pcbcraft_engine::authoring::{Action, Item, Kind, Primitive};
-        use pcbcraft_engine::board::definition::CircularNpth;
         use serde_json::json;
 
-        let hole = CircularNpth { center: Point { x_nm: 8_000_000, y_nm: -9_000_000 }, diameter_nm: 3_000_000 };
+        let hole = OFFSET_HOLE;
         let mut editor = pcbcraft_engine::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
         editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
         let item = editor.snapshot();
@@ -1321,12 +1333,28 @@ mod tests {
         s.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
         s.execute("library.load_source", &json!({"source":"fixture","documents":{"library.json":manifest,"footprints/mounting.json":document}}))
             .unwrap();
-        s.apply(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
-        let component = s.project().unwrap().components().next().unwrap().id();
-        s.apply(pcbcraft_engine::ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"1","2":"2"},"expected_revision":s.revision()})).unwrap();
+        for i in 0..if overlap { 2 } else { 1 } {
+            s.apply(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":i*20_000_000,"y_nm":0,"expected_revision":s.revision()}))
+                .unwrap();
+        }
+        let components: Vec<_> = s.project().unwrap().components().map(|component| component.id()).collect();
+        for component in &components {
+            s.apply(pcbcraft_engine::ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"1","2":"2"},"expected_revision":s.revision()})).unwrap();
+        }
         s.apply(pcbcraft_engine::INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
-        s.apply(pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":0,"y_nm":0,"expected_revision":s.revision()}))
-            .unwrap();
+        let pad = definition.pads[0].center;
+        for (component, (x, y)) in components.iter().zip([(0, 0), (hole.center.x_nm - pad.x_nm, hole.center.y_nm - pad.y_nm)]) {
+            s.apply(pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":x,"y_nm":y,"expected_revision":s.revision()}))
+                .unwrap();
+        }
+        s
+    }
+
+    /// A published offset hole remains available to picking and Select All with copper hidden.
+    #[test]
+    fn offset_hole_extends_visible_bounds_with_copper_hidden() {
+        let hole = OFFSET_HOLE;
+        let s = offset_hole_fixture(false);
         let view = s.project().unwrap().boards().next().unwrap();
         let mut footprint = view.footprints().next().unwrap();
         let mut state = BoardState::default();
@@ -1348,6 +1376,88 @@ mod tests {
         let without = visible_footprint_bounds(&footprint, &pads, &graphics, &camera, rect);
         assert!(with_hole.top() < without.top());
         assert!(!footprint_interactive(false, &footprint));
+    }
+
+    /// The real board and rotated group-preview painters put the first drill over the second pad.
+    #[test]
+    fn earlier_footprint_opening_paints_over_later_copper() {
+        use crate::editor_view::{EditorView, ViewId};
+        use egui::{Color32, Shape};
+        use pcbcraft_chrome::Tokens;
+
+        let s = offset_hole_fixture(true);
+        let view = s.project().unwrap().boards().next().unwrap();
+        let footprints: Vec<_> = view.footprints().collect();
+        assert_eq!(footprints.len(), 2);
+        let hole = footprints[0].non_plated_holes[0];
+        assert_eq!(hole.center, OFFSET_HOLE.center);
+        assert!(footprints[1].pads.iter().any(|pad| pad.center == hole.center && pad.copper.is_some()));
+        let mut editor = EditorView::new(ViewId(1));
+        editor.sync(&s);
+        let source = editor.input(&s).unwrap();
+        let appearance = crate::board_appearance::Appearance::default();
+        let shift = Point { x_nm: 3_000_000, y_nm: -2_000_000 };
+        for preview in [false, true] {
+            let ctx = egui::Context::default();
+            pcbcraft_chrome::install(&ctx);
+            let mut camera = Camera::board();
+            let mut state = BoardState::default();
+            let mut opening = hole;
+            if preview {
+                state.placement = Some(Placement {
+                    source,
+                    components: footprints.iter().map(|f| f.component.clone()).collect(),
+                    candidate: s.snapshot().unwrap(),
+                    handoff: false,
+                    position: shift,
+                    rotation: 90,
+                });
+                let (x, y) = rotate(hole.center.x_nm, hole.center.y_nm, 1);
+                opening.center = Point { x_nm: x + shift.x_nm, y_nm: y + shift.y_nm };
+            }
+            let mut projected = (Pos2::ZERO, 0.);
+            let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 700.));
+            let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                let rect = ui.available_rect_before_wrap();
+                show(
+                    ui,
+                    view,
+                    &mut camera,
+                    &mut state,
+                    Some(source),
+                    &BTreeSet::new(),
+                    Default::default(),
+                    &appearance,
+                    preview,
+                    Navigation::default(),
+                    0,
+                    pcbcraft_chrome::grid::Style::Off,
+                    "PCB canvas",
+                    &[],
+                    &[],
+                    pcbcraft_chrome::units::Unit::Mm,
+                );
+                projected = hole_circle(&opening, &camera, rect);
+            });
+            let (center, radius) = projected;
+            let t = Tokens::get();
+            let ink = if preview { t.icon_active_2 } else { t.board_ink };
+            let copper = output.shapes.iter().rposition(|shape| shape.clip_rect.contains(center) && matches!(&shape.shape,
+                Shape::Path(path) if path.closed && path.fill != Color32::TRANSPARENT && Rect::from_points(&path.points).center().distance(center) < 0.1
+            )).expect("later pad is painted centered on the opening");
+            let opening = output
+                .shapes
+                .iter()
+                .position(|shape| {
+                    shape.clip_rect.contains(center)
+                        && matches!(&shape.shape,
+                            Shape::Circle(circle) if circle.center.distance(center) < 0.1 && (circle.radius - radius).abs() < 0.1
+                                && circle.fill == t.board_canvas && circle.stroke.color == ink
+                        )
+                })
+                .expect("earlier opening is painted with the correct selection outline");
+            assert!(opening > copper, "the later pad would hide the earlier opening (preview={preview})");
+        }
     }
 
     /// Whole-degree source poses move without changing their resolved offsets; side changes and
