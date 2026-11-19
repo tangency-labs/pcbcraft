@@ -423,7 +423,7 @@ impl Session {
                 let project = self.open_project()?;
                 project.resolve_board(params.get("board").and_then(Value::as_str))?;
                 let result = if id == LIST {
-                    json!({"revision":self.revision,"relations":transaction::findings(project)})
+                    json!({"revision":self.revision,"relations":super::advisory::RelationAdvisory::capture(project).unwrap_or_default()})
                 } else {
                     let features = if let Some(fp) = params.get("fp").and_then(Value::as_str) {
                         let key = crate::schematic::wiring::parse_id(fp, "footprint-").ok_or_else(|| invalid("invalid footprint ID"))?;

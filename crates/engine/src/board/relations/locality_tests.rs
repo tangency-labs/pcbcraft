@@ -2,7 +2,7 @@
 use super::{
     commands::PREVIEW,
     islands::Key,
-    probes::{Op, trace},
+    probes::{Op, trace, trace_final_pads},
     tests::{Observe, add, bytes, origin, pick, run, unchanged},
 };
 use crate::{
@@ -267,6 +267,132 @@ fn a_net_locality_bulk_remote_tracks_use_vanished_broad_phase() {
     assert!(!ops.iter().any(|op| matches!(op, Op::Marked { .. })));
     assert!(ops.iter().any(|op| matches!(op, Op::VanishedCandidates{removed:10_000, queries, candidates:0} if *queries >= 10_000)), "{ops:?}");
     assert_eq!(shorts(&s, 0).len(), 1);
+}
+
+/// Add native placements of one pinned synthetic 128-land definition. Only install the
+/// immutable fixture asset privately; assignment, optional ECO and placement are public.
+fn add_pad_columns(s: &mut Session, count: i64) {
+    use crate::board::definition::{CopperBinding, PadShape, RectPad, basic_components};
+    let mut d = basic_components("resistor-0402").unwrap().as_ref().clone();
+    d.id = "relation-work-fixture".into();
+    d.pads = (1..=128)
+        .map(|n| RectPad {
+            number: n.to_string(),
+            center: Point { x_nm: 0, y_nm: (n - 1) * 5_000 },
+            width_nm: 2_000,
+            height_nm: 2_000,
+            rotation: 0,
+            shape: PadShape::Circle,
+            copper: CopperBinding::ComponentSide,
+            corner_radius_nm: 0,
+            drill_nm: None,
+        })
+        .collect();
+    d.validate().unwrap();
+    let key = d.key();
+    let d = Arc::new(d);
+    let unconnected: Vec<_> = (3..=128).map(|n| n.to_string()).collect();
+    for i in 0..count {
+        run(s, crate::PLACE_RESISTOR, json!({"x_nm":50_000_000 + i * 10_000_000,"y_nm":100_000_000})).unwrap();
+        let mut p = s.project().unwrap().clone();
+        let component = format!("component-{}", p.components.keys().next_back().unwrap());
+        Arc::make_mut(&mut p.board).definitions.insert(key.clone(), d.clone());
+        s.project = Some(Arc::new(p));
+        run(
+            s,
+            crate::ASSIGN_FOOTPRINT,
+            json!({"component":component,"library":key.0,"definition":key.1,"definition_revision":key.2,
+            "mapping":{"1":"1","2":"2"},"unconnected_pads":unconnected}),
+        )
+        .unwrap();
+        if s.project().unwrap().board.baseline.is_some() {
+            let report = prepare(s);
+            run(s, eco::APPLY_UPDATE, json!({"plan_token":report["plan_token"]})).unwrap();
+        }
+        run(s, crate::PLACE_ASSIGNED_FOOTPRINT, json!({"component":component,"x_nm":50_000_000,"y_nm":100_000_000 + i * 1_000_000})).unwrap();
+    }
+}
+
+/// A direct public removal has no added-copper job and must not pay the old all-X sweep
+/// during final preparation. Bound the actual walk, not just surviving pair emissions.
+#[test]
+fn a_net_locality_remote_delete_bounds_final_pad_walk() {
+    let mut s = Session::default();
+    run(&mut s, "project.new", json!({"create_board":true})).unwrap();
+    run(&mut s, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true})).unwrap();
+    add_pad_columns(&mut s, 32);
+    let layer = copper_layers(&s)[0];
+    route(&mut s, layer, &[Point { x_nm: -50_000_000, y_nm: -50_000_000 }, Point { x_nm: -49_000_000, y_nm: -50_000_000 }]).unwrap();
+    let remote = view(&s).tracks()[0].id;
+    let reference = pick(&mut s, 0, "pad.center", Some("1"));
+    add(&mut s, "horizontal", origin(), reference);
+    let saved = bytes(&s);
+    s.open_snapshot(crate::persistence::decode_documents(&saved).unwrap());
+    assert_eq!(bytes(&s), saved);
+    let before = s.snapshot().unwrap();
+    let lands = crate::board::track::lands(view(&s));
+    let n = lands.len();
+    assert_eq!(n, 32 * 128);
+    let mut bounds: Vec<_> = lands.iter().map(|land| land.contour().bounds()).collect();
+    bounds.sort_by(|a, b| a[1].total_cmp(&b[1]));
+    assert!(bounds.iter().all(|b| b[0] == bounds[0][0] && b[2] == bounds[0][2]));
+    assert!(bounds.windows(2).all(|b| b[0][3] < b[1][1]));
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let revision = s.revision();
+    let (result, ops) = trace_final_pads(|| run(&mut s, crate::DELETE_TRACKS, json!({"tracks":[remote]})));
+    result.unwrap();
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::FinalPadWork { pads, units, candidates: 0, contacts: 0 }
+        if *pads == n && (2*n..=32*n).contains(units))),
+        "{ops:?}"
+    );
+    assert!(ops.iter().any(|op| matches!(op, Op::VanishedCandidates { removed: 1, queries: 128, candidates: 0 })), "{ops:?}");
+    assert!(!ops.iter().any(|op| matches!(op, Op::Marked { .. })));
+    assert_eq!(ops.iter().filter(|op| matches!(op, Op::Publish(super::RelationStage::Outer))).count(), 1);
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(observer.0.lock().unwrap().len(), 1);
+    assert!(view(&s).tracks().is_empty());
+    assert_eq!(s.project().unwrap().board.footprints(), before.board.footprints());
+    assert_eq!(s.project().unwrap().board.relations, before.board.relations);
+}
+
+/// The same indexed final pass must retain true direct pad contact even after the last
+/// track disappears. A short on that physically marked two-land island is not approvable.
+#[test]
+fn a_net_locality_final_pad_walk_keeps_native_direct_contact() {
+    let mut s = bridged_split_with(Bridge::Pads, |s, at| {
+        let layer = copper_layers(s)[0];
+        route(s, layer, &[at, Point { x_nm: at.x_nm, y_nm: at.y_nm + 2_000_000 }]).unwrap();
+    });
+    add_pad_columns(&mut s, 1);
+    let branch = view(&s).tracks()[0].id;
+    let violations = shorts(&s, 0);
+    assert_eq!(violations.len(), 1);
+    assert_eq!(violations[0].items.len(), 3);
+    let named: Vec<_> = violations[0].items.iter().filter_map(|item| item.split_once(':')).collect();
+    assert_eq!(named.len(), 2);
+    let index = view(&s).footprints().position(|f| f.id == named[0].0).unwrap();
+    let reference = pick(&mut s, index, "fp.origin", None);
+    add(&mut s, "aligned", origin(), reference);
+    let saved = bytes(&s);
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let (error, ops) = trace_final_pads(|| unchanged(&mut s, |s| run(s, crate::DELETE_TRACKS, json!({"tracks":[branch]}))));
+    assert_eq!(error.details()["reason"], "affected_short");
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::FinalPadWork { pads: 134, units, candidates, contacts }
+        if *units > *candidates && *candidates >= *contacts && *contacts >= 1)),
+        "{ops:?}"
+    );
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::Marked { nodes, physical:true, electrical:false }
+        if nodes.len() == 2 && named.iter().all(|&(fp, pad)| nodes.contains(&Key::Land(fp.into(),pad.into()))))),
+        "{ops:?}"
+    );
+    assert!(ops.iter().any(|op| matches!(op, Op::VanishedCandidates { removed: 1, candidates: 1, .. })));
+    assert!(observer.0.lock().unwrap().is_empty());
+    assert_eq!(bytes(&s), saved);
 }
 
 #[test]

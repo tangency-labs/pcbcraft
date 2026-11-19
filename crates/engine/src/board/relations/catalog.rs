@@ -1,6 +1,6 @@
 //! Pure reference resolution and measurement over one immutable native board.
 
-use super::{Corner, Definition, Kind, Point, Reference, Side, Witness};
+use super::{Corner, Definition, Kind, Point, Reference, Relation, Side, State, Witness};
 use crate::board::{
     Board, Footprint,
     definition::{CopperBinding, GraphicPurpose, GraphicRect, PadShape, RectPad},
@@ -16,11 +16,11 @@ pub(super) enum Axis {
     Y,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-pub(super) enum Measure {
+pub(super) enum Measure<Distance = f64> {
     Projection { axis: Axis, signed_nm: i64, witnesses: [Witness; 2] },
-    Aligned { distance_nm: f64, witnesses: [Witness; 2] },
+    Aligned { distance_nm: Distance, witnesses: [Witness; 2] },
 }
 
 impl Definition {
@@ -188,7 +188,22 @@ pub(super) fn measure(project: &Project, kind: Kind, refs: &[Reference; 2]) -> O
     Some(Measure::Projection { axis, signed_nm: witnesses[1].on_axis(axis) - witnesses[0].on_axis(axis), witnesses })
 }
 
+/// Read a live row without falling back to stored display geometry, including if suppressed.
+pub(super) fn live_measure(project: &Project, row: &Relation) -> Option<Measure> {
+    (row.state == State::Ok).then(|| measure(project, row.kind, &row.refs)).flatten()
+}
+
 impl Measure {
+    /// Adapt the bounded aligned distance to a JSON number so typed reports retain `Eq`.
+    /// The native projection stays integral; `None` preserves JSON's null for nonfinite floats
+    /// (not attainable from valid coordinates).
+    pub(super) fn for_report(self) -> Measure<Option<serde_json::Number>> {
+        match self {
+            Self::Projection { axis, signed_nm, witnesses } => Measure::Projection { axis, signed_nm, witnesses },
+            Self::Aligned { distance_nm, witnesses } => Measure::Aligned { distance_nm: serde_json::Number::from_f64(distance_nm), witnesses },
+        }
+    }
+
     /// The native resolver's geometry, in pick order, for a live label or future lost display.
     pub(super) fn witnesses(self) -> [Witness; 2] {
         match self {

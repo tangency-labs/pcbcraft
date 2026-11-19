@@ -159,6 +159,7 @@ fn setup_preview_token_does_not_enter_recovery_records() {
 
 /// A checked Cut writes one native patch; recovery reads its lost display witness from
 /// F1 bytes and never replays preview authority, clipboard adoption or placement edits.
+/// A subsequent advisory is read-only and does not veto an ordinary native folder Save.
 #[test]
 fn checked_relation_cut_recovers_lost_witness_and_exact_native_documents() {
     use pcbcraft_engine::{PLACE_FOOTPRINT, persistence::encode_documents};
@@ -204,6 +205,19 @@ fn checked_relation_cut_recovers_lost_witness_and_exact_native_documents() {
     assert!(findings["relations"][0].get("measure").is_none());
     let project = opened.project().unwrap();
     assert_eq!(project.board_view(project.board_target().unwrap()).unwrap().footprint_ids().len(), 0);
+    let captured = opened.snapshot().unwrap();
+    let revision = opened.revision();
+    let advisory = run(&mut opened, pcbcraft_engine::CHECK_DESIGN, json!({})).unwrap();
+    assert_eq!(advisory["design_check"]["relations"], findings["relations"]);
+    assert!(Arc::ptr_eq(&captured, &opened.snapshot().unwrap()));
+    assert_eq!(opened.revision(), revision);
+    let save = encode_documents(opened.snapshot().unwrap()).unwrap();
+    assert_eq!(save, recovered.documents);
+    let folder = dir.path().join("after-check");
+    crate::save(&folder, None, &save, &mut |_| Ok(())).unwrap();
+    assert_eq!(crate::load(&folder).unwrap(), save);
+    opened.open_snapshot(crate::open(&folder).unwrap());
+    assert_eq!(run(&mut opened, pcbcraft_engine::CHECK_DESIGN, json!({})).unwrap()["design_check"]["relations"], findings["relations"]);
 }
 
 /// The normal storage editing-open, unlike raw decode, normalizes the proven bundled pin.

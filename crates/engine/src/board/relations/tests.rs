@@ -772,6 +772,192 @@ fn a_preview_edge_align_and_reference_axis_turn_without_follow() {
     assert_eq!(s.project().unwrap().board.footprints()[2], p0);
 }
 
+/// Re-pick against the actual quarter-turned candidate: availability of each old address
+/// is insufficient when the ordered gap is no longer parallel. Failed re-reviews retain authority.
+#[test]
+fn a_preview_edge_quarter_turn_repick_repairs_ordered_gap() {
+    let mut s = fixture(false);
+    let edge = |s: &mut Session, fp, side| {
+        let features = run(s, FEATURES, json!({"fp":format!("footprint-{fp}")})).unwrap();
+        features["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|item| {
+                let r = &item["reference"];
+                (r["tag"] == "pad.edge" && r["pad"] == "1" && r["side"] == side).then(|| r.clone())
+            })
+            .unwrap()
+    };
+    let original = s.project().unwrap().board.footprints().to_vec();
+    let a = edge(&mut s, original[0].id, "left");
+    let b = edge(&mut s, original[1].id, "left");
+    let replacement = edge(&mut s, original[1].id, "top");
+    let incompatible = edge(&mut s, original[1].id, "right");
+    let typed = |r: &Value| serde_json::from_value::<Reference>(r.clone()).unwrap();
+    assert!(catalog::measure(s.project().unwrap(), Kind::Gap, &[typed(&a), typed(&replacement)]).is_none());
+    let row = add(&mut s, "gap", a.clone(), b.clone());
+    let base = s.snapshot().unwrap();
+    assert!(base.board.tracks.is_empty() && base.board.vias.is_empty());
+    let base_bytes = bytes(&s);
+    let (revision, undo, redo) = (s.revision(), s.undo.len(), s.redo.len());
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let moved = &original[1];
+    let native = json!({"footprint":format!("footprint-{}",moved.id),"x_nm":moved.x_nm,"y_nm":moved.y_nm,"rotation":90});
+    let loss = reviewed(&mut s, crate::SET_FOOTPRINT_TRANSFORM, native.clone());
+    let lost = s.checked_generic_candidate().unwrap().clone();
+    let history = loss["disclosure"]["losses"][0]["last_resolved"].clone();
+    assert_eq!(loss["disclosure"]["losses"].as_array().unwrap().len(), 1);
+    assert_eq!(loss["disclosure"]["losses"][0]["id"], row);
+    assert_eq!(loss["disclosure"]["remaps"], json!([]));
+    assert_eq!(catalog::correspondence(&base, &lost, &typed(&b)), Some(typed(&b)));
+    assert!(catalog::resolve(&lost, &typed(&a)).is_some());
+    assert!(catalog::measure(&lost, Kind::Gap, &[typed(&a), typed(&b)]).is_none());
+    let repreview = |s: &mut Session, id: &Value, pick: &Value| {
+        run(
+            s,
+            PREVIEW,
+            json!({
+                "intent":{"command":crate::SET_FOOTPRINT_TRANSFORM,"params":native},
+                "remap_choices":[{"relation":id,"pick":1,"choice":{"kind":"repick","reference":pick}}]
+            }),
+        )
+    };
+    let mut absent = replacement.clone();
+    absent["pad"] = json!("99");
+    for repick in [&b, &absent, &incompatible] {
+        assert_eq!(unchanged(&mut s, |s| repreview(s, &row, repick)).details()["reason"], "lost_reference");
+        assert!(Arc::ptr_eq(&lost, s.checked_generic_candidate().unwrap()));
+    }
+    assert!(matches!(unchanged(&mut s, |s| repreview(s, &json!(Uuid::from_u128(111)), &replacement)), CommandError::InvalidParams(_)));
+    assert!(Arc::ptr_eq(&lost, s.checked_generic_candidate().unwrap()));
+    let fixed = repreview(&mut s, &row, &replacement).unwrap()["relation_preview"].clone();
+    let candidate = s.checked_generic_candidate().unwrap().clone();
+    assert_eq!(fixed["disclosure"]["losses"], json!([]));
+    assert_eq!(fixed["disclosure"]["remaps"].as_array().unwrap().len(), 1);
+    let remap = &fixed["disclosure"]["remaps"][0];
+    assert_eq!(remap["relation"], row);
+    assert_eq!(remap["pick"], 1);
+    assert_eq!(remap["old"], b);
+    assert_eq!(remap["new"], replacement);
+    assert_eq!(remap["before"], history[1]);
+    let pair = [typed(&a), typed(&replacement)];
+    let measured = catalog::measure(&candidate, Kind::Gap, &pair).unwrap();
+    assert!(matches!(measured, Measure::Projection { axis: catalog::Axis::X, signed_nm, .. } if signed_nm > 0));
+    assert_eq!(remap["after"], json!(measured.witnesses()[1]));
+    assert_eq!(lost.board.footprints(), candidate.board.footprints());
+    let mut expected_poses = original;
+    expected_poses[1].rotation = 90;
+    assert_eq!(candidate.board.footprints(), expected_poses.as_slice());
+    let expected_disclosed: Vec<_> =
+        expected_poses[..2].iter().map(|f| json!({"fp":f.id,"x_nm":f.x_nm,"y_nm":f.y_nm,"rotation":f.rotation,"bottom":f.bottom})).collect();
+    assert_eq!(fixed["disclosure"]["poses"], json!(expected_disclosed));
+    assert_eq!(candidate.board.tracks, base.board.tracks);
+    assert_eq!(candidate.board.vias, base.board.vias);
+    let mut wrong = decision(&fixed);
+    wrong["confirm_remaps"] = json!([row]);
+    let mut prior_loss = decision(&fixed);
+    prior_loss["accept_loss"] = json!([row]);
+    let mut missing = decision(&fixed);
+    missing["confirm_remaps"] = json!([]);
+    for denied in [decision(&loss), wrong, prior_loss, missing] {
+        unchanged(&mut s, |s| run(s, APPLY, denied));
+        assert!(Arc::ptr_eq(&candidate, s.checked_generic_candidate().unwrap()));
+    }
+    assert!(Arc::ptr_eq(&base, &s.snapshot().unwrap()));
+    assert_eq!(bytes(&s), base_bytes);
+    assert!(observer.0.lock().unwrap().is_empty());
+    let expected = encode_documents(candidate.clone()).unwrap();
+    let (reply, ops) = trace(|| run(&mut s, APPLY, decision(&fixed)).unwrap());
+    assert_eq!(ops, [Op::Publish(RelationStage::Outer)]);
+    assert_eq!(reply["candidate_digest"], fixed["candidate_digest"]);
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &candidate));
+    assert_eq!(bytes(&s), expected);
+    assert_eq!((s.revision(), s.undo.len(), s.redo.len()), (revision + 1, undo + 1, redo));
+    let saved = &run(&mut s, LIST, json!({})).unwrap()["relations"][0];
+    assert_eq!(saved["refs"], json!(pair));
+    assert_eq!(saved["measure"], json!(measured));
+    assert_eq!(saved["status"], "reference");
+    unchanged(&mut s, |s| run(s, APPLY, decision(&fixed)));
+    let events = observer.0.lock().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(Arc::ptr_eq(&events[0].project, &candidate));
+}
+
+/// Both engine checkers (and the query) see one typed advisory from the captured snapshot.
+/// Checking is read-only even with a latched loss, and a later live edit cannot alter a job's rows.
+#[test]
+fn a_drc_relation_advisory_matches_sync_resumable_and_captured_history() {
+    let mut s = fixture(false);
+    let first = pick(&mut s, 0, "fp.origin", None);
+    let second = pick(&mut s, 1, "fp.origin", None);
+    let edge = pick(&mut s, 2, "pad.edge", Some("1"));
+    let live = add(&mut s, "aligned", origin(), first.clone());
+    let suppressed = add(&mut s, "horizontal", origin(), second.clone());
+    run(&mut s, EDIT, json!({"id":suppressed,"edit":{"suppressed":true}})).unwrap();
+    let lost = add(&mut s, "point_edge", first, edge);
+    let f = &s.project().unwrap().board.footprints()[2];
+    let transform = json!({"footprint":format!("footprint-{}",f.id),"x_nm":f.x_nm,"y_nm":f.y_nm,"rotation":37});
+    let review = reviewed(&mut s, crate::SET_FOOTPRINT_TRANSFORM, transform);
+    let witness = &review["disclosure"]["losses"][0]["last_resolved"];
+    run(&mut s, APPLY, decision(&review)).unwrap();
+    let snapshot = s.snapshot().unwrap();
+    let saved = bytes(&s);
+    let (revision, undo, redo) = (s.revision(), s.undo.len(), s.redo.len());
+    let observer: Arc<Observe> = Arc::default();
+    s.observe_edits(Some(observer.clone()));
+    let rows = run(&mut s, LIST, json!({})).unwrap()["relations"].clone();
+    let row = |id: &Value| rows.as_array().unwrap().iter().find(|r| r["id"] == *id).unwrap();
+    assert_eq!(rows.as_array().unwrap().len(), 3);
+    assert_eq!(row(&live)["status"], "reference");
+    assert_eq!(row(&live)["measure"]["kind"], "aligned");
+    assert_eq!(row(&live)["measure"]["distance_nm"], json!(3_000_000_f64.hypot(2_000_000.)));
+    assert_eq!(row(&suppressed)["status"], "suppressed");
+    assert_eq!(row(&suppressed)["suppressed"], true);
+    assert_eq!(row(&suppressed)["measure"]["signed_nm"], 13_000_000);
+    assert_eq!(row(&lost)["status"], "lost");
+    assert_eq!(row(&lost)["reason"], "lost_reference");
+    assert_eq!(row(&lost)["last_resolved"], *witness);
+    assert_eq!(row(&lost)["since_revision"], revision.max(snapshot.highest_id()));
+    assert!(row(&lost).get("measure").is_none());
+    let params = json!({"clearance_nm":300_000});
+    let envelope = run(&mut s, crate::CHECK_DESIGN, params.clone()).unwrap();
+    assert_eq!(envelope["revision"], revision);
+    let sync = &envelope["design_check"];
+    assert_eq!(sync["relations"], rows);
+    let mut captured = s.design_check_job(&params).unwrap();
+    for budget in [1, 17, 4096] {
+        let mut job = s.design_check_job(&params).unwrap();
+        assert!(Arc::ptr_eq(&job.source().snapshot, &snapshot));
+        let mut steps = 0;
+        while !job.step(budget) {
+            assert!(job.take_report().is_none());
+            steps += 1;
+            assert!(steps < 10_000);
+        }
+        assert_eq!(serde_json::to_vec(&json!(job.take_report().unwrap())).unwrap(), serde_json::to_vec(sync).unwrap());
+        assert!(job.take_report().is_none());
+        assert!(job.source().is_current(&s));
+    }
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+    assert_eq!((s.revision(), s.undo.len(), s.redo.len()), (revision, undo, redo));
+    assert_eq!(bytes(&s), saved);
+    assert!(observer.0.lock().unwrap().is_empty());
+    let packed = crate::persistence::encode(snapshot.clone()).unwrap();
+    assert_eq!(encode_documents(crate::persistence::decode(&packed).unwrap()).unwrap(), saved);
+
+    run(&mut s, EDIT, json!({"id":suppressed,"edit":{"suppressed":false}})).unwrap();
+    assert!(!captured.source().is_current(&s));
+    assert_ne!(run(&mut s, crate::CHECK_DESIGN, params).unwrap()["design_check"]["relations"], rows);
+    let mut steps = 0;
+    while !captured.step(4096) {
+        steps += 1;
+        assert!(steps < 10_000);
+    }
+    assert_eq!(&json!(captured.take_report().unwrap()), sync);
+}
+
 /// Disclose native participants, not merely the relation bodies. Alignment includes the
 /// unchanged selected anchor but not the unchanged unselected footprint.
 #[test]

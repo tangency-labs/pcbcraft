@@ -380,12 +380,7 @@ fn join(parent: &mut [usize], a: usize, b: usize) {
 
 /// Build islands from copper contours. Footprint edit validation also joins direct pad pairs.
 pub(super) fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
-    let mut builder = IslandBuilder::new(lands, tracks, vias);
-    while !builder.step(usize::MAX) {}
-    if join_pad_pairs {
-        for_each_pad_contact(lands, &builder.contours[..lands.len()], &builder.bounds[..lands.len()], |i, j| join(&mut builder.parent, i, j));
-    }
-    builder.finish(lands, tracks, vias)
+    IslandBuilder::complete(lands, tracks, vias, join_pad_pairs).finish(lands, tracks, vias)
 }
 
 /// Copper items (pads, tracks and vias together) below which island contact phases enumerate
@@ -416,6 +411,17 @@ pub(super) struct IslandBuilder {
     node: usize,
     /// That node's remaining neighbors to test.
     nearby: Nearby,
+    #[cfg(test)]
+    pub(super) walk_work: WalkWork,
+}
+
+/// Work in the current contact phase, excluding index construction and output grouping.
+#[cfg(test)]
+#[derive(Default)]
+pub(super) struct WalkWork {
+    pub(super) units: usize,
+    pub(super) candidates: usize,
+    pub(super) contacts: usize,
 }
 
 /// The lower-numbered nodes still to test against the current node.
@@ -454,7 +460,22 @@ impl IslandBuilder {
             search: Search::default(),
             node: lands,
             nearby: Nearby::Lookup,
+            #[cfg(test)]
+            walk_work: WalkWork::default(),
         }
+    }
+
+    /// Finish native contact enumeration, reusing the same contour bounds, index and roots
+    /// for the optional direct pad pass instead of enumerating all pairs with X overlap.
+    /// The caller still decides which groups to check before publishing any edit.
+    pub(super) fn complete(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> Self {
+        let mut builder = Self::new(lands, tracks, vias);
+        while !builder.step(usize::MAX) {}
+        if join_pad_pairs {
+            builder.begin_pads();
+            while !builder.step_pads(lands.len(), usize::MAX) {}
+        }
+        builder
     }
 
     /// The same builder forced onto one path, to check that both give the same islands.
@@ -476,9 +497,19 @@ impl IslandBuilder {
                 }
             }
         }
-        builder.node = 0;
-        builder.nearby = Nearby::Lookup;
+        builder.begin_pads();
         builder
+    }
+
+    /// Start a separate direct pad walk at node zero, keeping previously joined roots.
+    /// The next lookup resets the reusable cursor before inspecting a pair.
+    fn begin_pads(&mut self) {
+        self.node = 0;
+        self.nearby = Nearby::Lookup;
+        #[cfg(test)]
+        {
+            self.walk_work = WalkWork::default();
+        }
     }
 
     /// Evaluate at most `budget` work units of direct pad pairs, without rechecking track/via
@@ -502,6 +533,12 @@ impl IslandBuilder {
             if i >= end {
                 return true;
             }
+            // In tests count the same work envelope as the scheduler's budget: lookup,
+            // every visited branch/leaf (including pruned visits), and end-of-source steps.
+            #[cfg(test)]
+            {
+                self.walk_work.units += 1;
+            }
             let next = match (&mut self.nearby, &self.index) {
                 (Nearby::Lookup, index) => {
                     if let Some(index) = index {
@@ -522,6 +559,10 @@ impl IslandBuilder {
                 self.nearby = Nearby::Lookup;
                 continue;
             };
+            #[cfg(test)]
+            {
+                self.walk_work.candidates += 1;
+            }
             let layers = match (self.layers.get(i), self.layers.get(j)) {
                 (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
                 (None, Some(b)) => !b.is_empty(),
@@ -530,6 +571,10 @@ impl IslandBuilder {
             let (a, b) = (self.bounds[i], self.bounds[j]);
             if layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j]) {
                 join(&mut self.parent, i, j);
+                #[cfg(test)]
+                {
+                    self.walk_work.contacts += 1;
+                }
             }
         }
         self.node >= end

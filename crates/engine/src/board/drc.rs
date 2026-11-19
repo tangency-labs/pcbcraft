@@ -35,6 +35,8 @@ pub const DEFAULT_MIN_ANNULAR_RING_NM: i64 = 100_000;
 /// Violations listed per report; the counts still cover every finding.
 const MAX_LISTED: usize = 1000;
 
+pub use super::relations::advisory::RelationAdvisory;
+
 /// The shared effective board defaults; hard limits and preferences have distinct fields.
 pub use super::rules::Values as Rules;
 
@@ -104,6 +106,9 @@ pub struct Report {
     pub violations: Vec<Violation>,
     pub counts: BTreeMap<Kind, usize>,
     pub total: usize,
+    /// Read-only results from the same checked snapshot. Never included in native counts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relations: Option<RelationAdvisory>,
 }
 
 /// Count every finding while retaining only the first canonical report page. The sequence
@@ -131,9 +136,18 @@ impl Findings {
             }
         }
     }
-    /// Produce the deterministic capped report after every phase has completed.
-    fn finish(self, rules: Rules, sources: BTreeMap<String, super::rules::Source>) -> Report {
-        Report { rules, sources, class_rules: None, violations: self.listed.into_values().collect(), counts: self.counts, total: self.total }
+    /// Finish either checker with the advisory from its exact board snapshot. Both sections
+    /// are bounded independently; the advisory cannot change native findings or authored state.
+    fn finish(self, view: BoardView<'_>, effective: super::rules::Effective, class_rules: Option<super::class_rules::Context>) -> Report {
+        Report {
+            rules: effective.values,
+            sources: effective.sources,
+            class_rules,
+            violations: self.listed.into_values().collect(),
+            counts: self.counts,
+            total: self.total,
+            relations: RelationAdvisory::capture(view.project()),
+        }
     }
 }
 
@@ -242,7 +256,7 @@ impl BoardView<'_> {
                 items: self.arc_tracks().iter().map(|a| a.id.to_string()).collect(),
                 nets: Vec::new(),
             });
-            return found.finish(rules, effective.sources);
+            return found.finish(self, effective, None);
         }
         let geometry = BoardGeometry::new(self);
         let class_rules = capture_class_rules(self, &geometry, &effective, &mut found);
@@ -292,9 +306,7 @@ impl BoardView<'_> {
         self.check_outline(items, rules, class_rules.as_ref(), &mut found);
         self.check_courtyards(&mut found);
 
-        let mut report = found.finish(rules, effective.sources);
-        report.class_rules = class_rules;
-        report
+        found.finish(self, effective, class_rules)
     }
 
     /// Check authored track/via dimensions without preparing connectivity or changing state.
@@ -540,11 +552,7 @@ impl Session {
     /// Validate the board address and rules, then report findings without editing anything.
     pub fn check_design(&self, params: &Value) -> Result<Value, CommandError> {
         let (view, effective) = self.design_check_inputs(params)?;
-        let mut report = json!(view.check_design_resolved(effective));
-        if view.project().board.relations.is_some() {
-            report["relations"] = super::relations::findings(view.project());
-        }
-        Ok(report)
+        Ok(json!(view.check_design_resolved(effective)))
     }
 
     /// Refuse a design check's bad board address or rules without running the check, so the

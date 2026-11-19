@@ -211,11 +211,6 @@ pub(crate) fn choices(input: Option<&Value>) -> Result<Vec<Choice>, CommandError
     Ok(values)
 }
 
-/// Read an active row's measure without falling back to saved display geometry.
-fn live_measure(project: &Project, row: &super::Relation) -> Option<Measure> {
-    (row.state == State::Ok).then(|| catalog::measure(project, row.kind, &row.refs)).flatten()
-}
-
 /// Only new/re-picked relations infer a sided literal; visible reference remeasurement never
 /// changes the user-authored ordering or chooses a different side.
 pub(super) fn pick_literal(kind: Kind, measure: Measure) -> Result<(Option<i64>, Option<i8>), CommandError> {
@@ -278,7 +273,9 @@ pub(crate) fn verify_final(
                     (None, Some(RemapChoice::Correspond)) => {
                         return Err(CommandError::InvalidParams("that correspondence is no longer offered".into()));
                     }
-                    (Some(new), Some(_)) if &new == old_ref => {
+                    // Automatic address equality is not pair compatibility. An explicit re-pick
+                    // may fix the ordered pair on the candidate even when this old pick resolves.
+                    (Some(new), Some(RemapChoice::Correspond | RemapChoice::KeepLost)) if &new == old_ref => {
                         return Err(CommandError::InvalidParams("remap choice does not name a changed reference".into()));
                     }
                     (_, Some(RemapChoice::KeepLost)) => None,
@@ -324,7 +321,7 @@ pub(crate) fn verify_final(
                     .filter_map(Reference::footprint)
                     .any(|(id, _)| catalog::footprint(&base.board, id) != catalog::footprint(&candidate.board, id))
             });
-            if prior != Some(&*row) || changed_body || previous.zip(prior).and_then(|(p, r)| live_measure(p, r)) != Some(measurement) {
+            if prior != Some(&*row) || changed_body || previous.zip(prior).and_then(|(p, r)| catalog::live_measure(p, r)) != Some(measurement) {
                 report.affected = true;
                 affected.extend(row.refs.iter().filter_map(|r| r.footprint().map(|(id, _)| id)));
             }
@@ -337,7 +334,7 @@ pub(crate) fn verify_final(
                 ));
             }
             row.state = State::Lost { since_revision: revision };
-            if let Some(old_witnesses) = previous.and_then(|p| live_measure(p, prior)).map(Measure::witnesses) {
+            if let Some(old_witnesses) = previous.and_then(|p| catalog::live_measure(p, prior)).map(Measure::witnesses) {
                 row.last_resolved = old_witnesses;
             }
             report.affected = true;
@@ -386,34 +383,6 @@ fn resulting_poses(previous: Option<&Project>, candidate: &Project, input: &Rela
         })
         .map(|f| Pose { fp: f.id, x_nm: f.x_nm, y_nm: f.y_nm, rotation: f.rotation, bottom: f.bottom })
         .collect()
-}
-
-/// Report ordinary current findings without mutating records or treating history as current input.
-pub(crate) fn findings(project: &Project) -> Value {
-    let mut rows = Vec::new();
-    for row in project.board.relations.iter().flat_map(|r| &r.relations) {
-        let live = live_measure(project, row);
-        let mut entry =
-            json!({"id":row.id,"kind":row.kind,"refs":row.refs,"datum":row.datum,"label":row.label,"axes_set":[],"suppressed":row.suppressed});
-        match (row.state, live) {
-            (State::Lost { since_revision }, _) => {
-                entry["status"] = json!("lost");
-                entry["reason"] = json!("lost_reference");
-                entry["since_revision"] = json!(since_revision);
-                entry["last_resolved"] = json!(row.last_resolved);
-            }
-            (_, None) => {
-                entry["status"] = json!("lost");
-                entry["reason"] = json!("unresolved_reference");
-            }
-            (_, Some(measure)) => {
-                entry["status"] = json!(if row.suppressed { "suppressed" } else { "reference" });
-                entry["measure"] = json!(measure);
-            }
-        }
-        rows.push(entry);
-    }
-    json!(rows)
 }
 
 /// Validate the complete engine envelope before installing a replacement or publishing a result.

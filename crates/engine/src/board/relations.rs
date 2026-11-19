@@ -1,6 +1,7 @@
 //! Board-local reference dimensions. This module reads native geometry and owns
 //! annotations only; it never writes placements, copper, or outline geometry.
 
+pub(super) mod advisory;
 mod catalog;
 pub(crate) mod commands;
 mod islands;
@@ -8,9 +9,7 @@ mod islands;
 pub(crate) mod probes;
 mod transaction;
 
-pub(crate) use transaction::{
-    Base, Disclosure, Prepared, RelationInput, RelationStage, ReviewSlot, certify, choices, findings, reason, verify_final,
-};
+pub(crate) use transaction::{Base, Disclosure, Prepared, RelationInput, RelationStage, ReviewSlot, certify, choices, reason, verify_final};
 
 use crate::schematic::{MAX_CENTER_NM, PinNumber, Point};
 use serde::{Deserialize, Serialize};

@@ -188,7 +188,15 @@ pub(super) fn check(previous: &Project, candidate: &Project, bodies: &BTreeSet<S
     let mut search = Search::default();
     #[cfg(test)]
     let (mut queries, mut candidates) = (0, 0);
-    let groups = track::build_islands(&after.lands, after.tracks, after.vias, true).1;
+    let contacts = track::IslandBuilder::complete(&after.lands, after.tracks, after.vias, true);
+    #[cfg(test)]
+    super::probes::hit(super::probes::Op::FinalPadWork {
+        pads: after.lands.len(),
+        units: contacts.walk_work.units,
+        candidates: contacts.walk_work.candidates,
+        contacts: contacts.walk_work.contacts,
+    });
+    let groups = contacts.finish(&after.lands, after.tracks, after.vias).1;
     for group in &groups {
         if !group.iter().any(|&i| matches!(&after.nodes[i].key, Key::Land(fp, _) if bodies.contains(fp))) {
             continue;
