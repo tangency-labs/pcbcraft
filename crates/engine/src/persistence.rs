@@ -18,6 +18,7 @@ use crate::{
 mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
+pub(crate) use documents::check_board_document_size;
 pub mod layout;
 mod part_group_storage;
 pub use documents::{
@@ -531,6 +532,7 @@ impl Encoder {
             || project.board.silkscreen.is_some()
             || project.board.outline.is_some()
             || project.board.drawings.is_some()
+            || !project.board.arcs.is_empty()
             || !project.board.tracks.is_empty()
             || !project.board.vias.is_empty()
             || project.board.rules.is_some()

@@ -48,6 +48,8 @@ pub enum Kind {
     ViaNetUnresolved,
     /// Assigned policy could not be captured, so checking cannot establish a complete result.
     UnsupportedNetClasses,
+    /// Circular copper prevents complete checking; this finding replaces partial results.
+    UnsupportedGeometry,
     /// One physical copper island joins copper with distinct intended nets, independently of
     /// the clearance rule, including when the required clearance is zero.
     Short,
@@ -232,6 +234,16 @@ impl BoardView<'_> {
     fn check_design_resolved(self, effective: super::rules::Effective) -> Report {
         let rules = effective.values;
         let mut found = Findings::default();
+        if let Err(message) = self.require_linear_copper() {
+            found.push(Violation {
+                kind: Kind::UnsupportedGeometry,
+                message,
+                at: Point { x_nm: 0, y_nm: 0 },
+                items: self.arc_tracks().iter().map(|a| a.id.to_string()).collect(),
+                nets: Vec::new(),
+            });
+            return found.finish(rules, effective.sources);
+        }
         let geometry = BoardGeometry::new(self);
         let class_rules = capture_class_rules(self, &geometry, &effective, &mut found);
         let items = &geometry.items;
@@ -262,7 +274,7 @@ impl BoardView<'_> {
             }
         }
 
-        if let Some(ratsnest) = self.ratsnest() {
+        if let Ok(ratsnest) = self.ratsnest() {
             for line in &ratsnest.lines {
                 found.push(Violation {
                     kind: Kind::Unconnected,
@@ -542,6 +554,7 @@ impl Session {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
+        view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let mut overrides = params.clone();
         if overrides.is_null() {
             overrides = json!({});

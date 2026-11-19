@@ -171,7 +171,7 @@ artifact, not a new native project format. Do not hand-edit the embedded project
 | --- | ---: | ---: | ---: | --- |
 | `reference-v1` | 8 | 60 | 0 | Fast harness and comparison reference |
 | `dense-v1` | 128 | 1,008 | 112 | Mixed pad sizes, crowded long diagonals and alternating layers |
-| `capacity-v1` | 512 | 4,080 | 2,032 | Near current 4,096-track / 2,048-via limits |
+| `capacity-v1` | 512 | 4,080 | 2,032 | Near the former 4,096-track / 2,048-via limits |
 
 Geometry follows fixed integer patterns with recipe seed `237240`. Production
 commands allocate UUIDs, so regenerating a recipe does **not** recreate identical
@@ -417,7 +417,7 @@ The following original command-generated recipes extend the existing artifacts:
 
 | Recipe | Supported coverage |
 | --- | --- |
-| `board-limits-v1` | Exactly 4,096 tracks and 2,048 vias, with 512 footprints; the older `capacity-v1` artifact stays unchanged |
+| `board-limits-v1` | Exactly 4,096 tracks and 2,048 vias, the board limits when it was recorded, with 512 footprints; the older `capacity-v1` artifact stays unchanged |
 | `channels-v1` | 64 footprints, mixed widths/pad sizes, 410 tracks, through vias, two narrow parallel rails and 48 attached branches |
 | `hierarchy-v1` | The current 64-sheet limit, 63 explicit child links, shared global labels and one symbol per sheet |
 | `schematic-limits-v1` | The current 4,096-symbol / 64-sheet limits; eight physical footprints and explicit board exclusions for the other schematic parts |

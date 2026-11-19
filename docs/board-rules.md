@@ -70,11 +70,12 @@ format 19 or later. Zone outlines require at least 20, a placement origin 21,
 assembly profile adoptions 22, and copper roles, base copper, copper thickness
 qualifiers or finished board thickness 23. The [native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields)
 select a higher format when remaining data requires it, including explicit via
-assignments (24), thermal/insulation material reports (25) and footprint locks (34).
-Each accepts the earlier physical fields, including track/via locks. Format 19
-requires a valid rule record, older board headers reject it, and higher compatible
-formats permit omission. An explicitly null or invalid rule record is refused
-before adoption.
+assignments (24), thermal/insulation material reports (25), circular copper arcs
+(26) and footprint locks (34). Each accepts the earlier physical fields,
+including track/via locks. Format 19 requires a valid rule record, older board
+headers reject it, and higher compatible formats permit omission. An explicitly
+null or invalid rule record is refused before adoption. Removing the record
+returns to the format required by the board's remaining data.
 
 An unchanged canonical board without authored rules round-trips byte-for-byte
 through the codec. Clearing authored rules rewrites the board document and can

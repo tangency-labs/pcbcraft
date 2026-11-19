@@ -520,20 +520,20 @@ fn moving_a_footprint_leaves_track_outside_rounded_copper_fixed() {
     .unwrap();
     let before = view(&s).tracks().to_vec();
     let track = before[0].id;
-    let copper = view(&s).copper();
+    let copper = view(&s).copper().unwrap();
     assert_ne!(copper.pads[&pad_key], copper.tracks[&track], "the copper does not reach the rounded pad");
-    assert!(!view(&s).copper_nets().contains_key(&track));
+    assert!(!view(&s).copper_nets().unwrap().contains_key(&track));
     let position = Point { x_nm: origin.x_nm + 2_000_000, y_nm: origin.y_nm };
-    assert!(view(&s).carried_tracks(&id, position, 0, false).is_empty());
+    assert!(view(&s).carried_tracks(&id, position, 0, false).unwrap().is_empty());
     s.apply(
         SET_FOOTPRINT_TRANSFORM,
         &json!({"footprint":id,"x_nm":position.x_nm,"y_nm":position.y_nm,"rotation":0,"expected_revision":s.revision()}),
     )
     .unwrap();
     assert_eq!(view(&s).tracks(), before);
-    let copper = view(&s).copper();
+    let copper = view(&s).copper().unwrap();
     assert_ne!(copper.pads[&pad_key], copper.tracks[&track]);
-    assert!(!view(&s).copper_nets().contains_key(&track));
+    assert!(!view(&s).copper_nets().unwrap().contains_key(&track));
 }
 
 /// Direct pad overlap between different nets is refused on the same layer, even without routing.

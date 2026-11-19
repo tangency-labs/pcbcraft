@@ -178,7 +178,9 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::no_connect::CHECK
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::EXPORT_FABRICATION
+                        | pcbcraft_engine::board::arc::SET_ARCS
                         | pcbcraft_engine::netlist::EXPORT_NETLIST
+                        | pcbcraft_engine::netlist::EXPORT_BOARD_NETLIST
                         | pcbcraft_engine::clipboard::COPY
                         | pcbcraft_engine::clipboard::CUT
                         | pcbcraft_engine::board::clipboard::COPY

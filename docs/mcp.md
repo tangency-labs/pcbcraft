@@ -542,6 +542,17 @@ document lists every component with its logical terminals and every net across a
 sheets with its persistent UUID and joined terminals; see the
 [netlist format](netlist-format.md). Exporting an unchanged project gives the same bytes.
 
+`pcb.export_netlist` takes `board` and `dry_run` and returns the same shape for
+one board: `<project name>-<board name>-netlist.json`, format `pcbcraft-netlist/2` with `basis: accepted`, the
+components, packages, terminal pads and nets the board accepted at its last
+reviewed update. Findings report nets and components the schematic has changed
+since (`pending_net`, `pending_removal`) and a `pending_update` summary matching
+`pcb.preview_update` when comparison is available, or `update_unavailable` otherwise.
+It fails for a board with footprints but no accepted baseline. `dry_run: true`
+returns the filename and findings without rendering the file text. If the full
+reply exceeds the live editor's 16 MiB frame limit, save the project and use the
+headless command for the full export.
+
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks
 or unlocks the whole selection in one undo step, with no geometry or connectivity

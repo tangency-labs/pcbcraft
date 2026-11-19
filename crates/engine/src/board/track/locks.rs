@@ -37,8 +37,8 @@ impl Session {
     pub(crate) fn set_copper_locked(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
-        let tracks = ids(params, "tracks", |id| project.board.tracks.iter().any(|track| track.id == *id))?;
-        let vias = ids(params, "vias", |id| project.board.vias.iter().any(|via| via.id == *id))?;
+        let tracks = ids(params, "tracks", |id| project.board.tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
+        let vias = ids(params, "vias", |id| project.board.vias.binary_search_by_key(id, |via| via.id).is_ok())?;
         if tracks.is_empty() && vias.is_empty() {
             return Err(CommandError::InvalidParams("Select at least one track or via to lock or unlock.".into()));
         }

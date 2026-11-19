@@ -88,6 +88,7 @@ impl Session {
     pub fn copper_preparation(&self, target: BoardTarget) -> Result<CopperPreparation, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
+        view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let effective = view.effective_rules();
         Ok(CopperPreparation {
             source: Source {

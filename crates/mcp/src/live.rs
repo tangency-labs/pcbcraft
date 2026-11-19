@@ -1,7 +1,7 @@
 //! The live editor's MCP adapter. Document commands run on the editor's own session, sharing
 //! its undo history; window commands run through the editor's own handlers.
 
-use std::time::Duration;
+use std::{io, time::Duration};
 
 use craft_control::loopback::{Connection, Token};
 use pcbcraft_engine::{
@@ -253,13 +253,59 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
                 return Err(Failure::new(ErrorCode::Unavailable, reason));
             }
             if !is_window_command(id) {
-                return call_session(editor.session(), method, params);
+                let result = call_session(editor.session(), method, params)?;
+                return if id == pcbcraft_engine::netlist::EXPORT_BOARD_NETLIST { board_netlist_reply(result) } else { Ok(result) };
             }
             check_window_version(editor, id, &params["version"])?;
             editor.run_window_command(id, &params["params"])?;
             if params["inspect"].as_bool() == Some(false) { Ok(json!({"revision": editor.session().revision()})) } else { Ok(editor.inspect()) }
         }
         _ => Err(Failure::new(ErrorCode::InvalidRequest, format!("Unknown live control method `{method}`"))),
+    }
+}
+
+/// Measure the exact escaped JSON payload of the live reply, including the `result` envelope.
+/// The framing newline is not counted by `Connection::receive`. No second buffer is allocated.
+fn board_netlist_reply(result: Value) -> Result<Value, Failure> {
+    struct ReplyBudget(usize);
+
+    impl io::Write for ReplyBudget {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 = self.0.checked_sub(bytes.len()).ok_or_else(|| io::Error::other("reply exceeds the live limit"))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    serde_json::to_writer(ReplyBudget(MAX_REPLY_BYTES - b"{\"result\":}".len()), &result).map_err(|_| {
+        Failure::from("Board netlist reply exceeds the live editor's 16 MiB limit. Save the project and run pcb.export_netlist in a headless session for the full export, or use dry_run for findings only.")
+    })?;
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Live exports fit at the escaped reply limit and refuse one byte beyond it.
+    #[test]
+    fn live_board_netlist_reply_counts_escaping_and_envelope() {
+        let report = |contents: String| json!({"revision":7,"netlist":{"files":[{"name":"netlist.json","contents":contents}],"findings":[]}});
+        let overhead = serde_json::to_vec(&json!({"result":report(String::new())})).unwrap().len();
+        let length = MAX_REPLY_BYTES - overhead;
+        // CR, newline, quote and backslash each take two bytes on the wire.
+        let text = ["\r\n\"\\".repeat(length / 8), "x".repeat(length % 8)].concat();
+        assert!(text.len() < MAX_REPLY_BYTES);
+        let fits = board_netlist_reply(report(text.clone())).unwrap();
+        assert_eq!(serde_json::to_vec(&json!({"result":fits})).unwrap().len(), MAX_REPLY_BYTES);
+        let refused = board_netlist_reply(report(text + "x")).unwrap_err();
+        assert_eq!(refused.code(), ErrorCode::Unavailable.as_str());
+        assert!(refused.message().contains("16 MiB") && refused.message().contains("headless"), "{refused}");
+        let dry = json!({"revision":7,"netlist":{"files":[{"name":"netlist.json"}],"findings":[]}});
+        assert_eq!(board_netlist_reply(dry.clone()).unwrap(), dry);
     }
 }
 

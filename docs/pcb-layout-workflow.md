@@ -109,10 +109,10 @@ previous checks and unfinished route authority without resizing existing copper.
 `pcb.set_rules` requires the board ID and revision and creates one undo step.
 Authored defaults have a stable rule UUID and require at least board format 19.
 Zone outlines require at least 20, a placement origin 21, assembly profile adoptions
-22, and the board setup's copper or board thickness fields 23. The highest format
-required by the remaining data takes precedence, including explicit via assignments
-(24), thermal or insulation material reports (25) and footprint locks (34); see the
-[native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields).
+22, and the board setup's copper or board thickness fields 23. The format required
+by the remaining data takes precedence, including explicit via assignments (24),
+thermal or insulation material reports (25), circular copper arcs (26) and footprint
+locks (34); see the [native storage rules](native-project-storage.md#assembly-profiles-and-stack-fields).
 Removing the record restores built-in resolution and the format required by the
 remaining board data. Omitting rules does not itself require a new board format.
 Unchanged canonical codec bytes are stable; host Open and Save may apply the
@@ -152,7 +152,12 @@ up only when DRC runs.
   physically separate. DRC reports those violations, and the router still
   refuses shorts.
 
-**Model and commands.** No format change. The engine exposes one clearance query
+[Exact circular copper records](circular-copper-records.md) are a storage-only
+extension. Boards containing arcs refuse these geometry operations rather than
+substituting straight chords; curved routing and consumers remain separate work.
+
+**Model and commands.** The clearance-query slice itself makes no format change.
+The engine exposes one clearance query
 for DRC, the router and later zone fill. The
 [snapshot query](copper-clearance-query.md) now shares the supported contours,
 separates conservative candidates from final predicates and retains source
@@ -266,12 +271,13 @@ Copy and paste of board objects is in progress separately in #197 through #202.
 
 ## Footprint lock metadata (storage only)
 
-Placed footprints now retain an optional `locked` flag in native board format
-34. Inspection and typed board views report a boolean, defaulting to false for
-older files. Fresh canonical encoding omits false and preserves true; Native Save
-can reuse an unchanged board document verbatim, including explicit false.
-Without active footprint locks, the encoder uses format 25 if material reports
-remain, otherwise the format required by the remaining data. Reports are optional under format 34. This slice
+Placed footprints retain an optional `locked` flag in native board format 34,
+or 35 when the board also contains arcs. Inspection and typed board views report
+a boolean, defaulting to false for older files. Fresh canonical encoding omits
+false and preserves true; Native Save can reuse an unchanged board document
+verbatim, including explicit false. Without active locks the encoder chooses
+the format required by the remaining board data. Reports are optional under
+formats 34 and 35. This slice
 does **not** expose a lock/unlock command or GUI action, nor does the flag yet
 protect footprint movement, rotation, flipping, alignment or deletion. It is not
 a fixed-obstacle promise. Those shared-command and enforcement workflows remain
@@ -323,7 +329,7 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 | 3. Clearance while routing | none | — |
 | 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
-| Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) | At least one active footprint lock; formats 26–33 remain unsupported |
+| Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
 
 These are selected layout formats, not a consecutive version list. Canonical
 saves use the highest supported format required by the authored data; compatible
