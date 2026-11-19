@@ -204,6 +204,35 @@ fn circular_copper_keeps_native_bytes_and_explains_the_unavailable_canvas() {
     assert!(h.state().session.project().unwrap().boards().next().unwrap().arc_tracks().is_empty());
 }
 
+/// Browser selection remains view-local on arc-bearing boards even though the canvas is unavailable.
+#[test]
+fn circular_copper_keeps_browser_footprint_picks_available() {
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        let mut h = routable();
+        h.state_mut().preferences.theme = theme;
+        h.state_mut().browser.open = true;
+        let top = layer_named(&h, "Top");
+        let revision = h.state().session.revision();
+        let board = h.state().session.project().unwrap().board_target().unwrap().board;
+        h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board,"arcs":[{
+            "id":"00000000-0000-0000-0000-000000000001","layer":top,"width_nm":250000,
+            "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}],"expected_revision":revision}));
+        assert_eq!(h.state().message, None);
+        let footprints: Vec<_> =
+            h.state().session.project().unwrap().boards().next().unwrap().footprints().map(|footprint| footprint.id.clone()).collect();
+        let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        h.run();
+        for (label, footprint) in ["Footprint R1  R", "Footprint R2  R"].into_iter().zip(footprints) {
+            click(&mut h, label);
+            assert_eq!(h.state().views.active.board.selection, BTreeSet::from([footprint]));
+            assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+            assert_eq!(h.state().session.revision(), revision);
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+        }
+    }
+}
+
 pub(super) fn tracks(h: &Harness<'_, PcbApp>) -> Vec<Track> {
     h.state().session.project().unwrap().boards().next().unwrap().tracks().to_vec()
 }
