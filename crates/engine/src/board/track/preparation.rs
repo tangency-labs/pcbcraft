@@ -10,7 +10,15 @@ use std::sync::{Arc, Mutex, TryLockError};
 pub fn is_copper_edit(command: &str) -> bool {
     matches!(
         command,
-        super::super::via_nets::SET_VIA_NET | ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS
+        super::super::via_nets::SET_VIA_NET
+            | ADD_TRACKS
+            | ADD_VIA
+            | MOVE_TRACKS
+            | RESHAPE_TRACKS
+            | SET_TRACK_WIDTH
+            | SET_VIA_SIZE
+            | DELETE_TRACKS
+            | unroute::UNROUTE_CONNECTION
     )
 }
 
@@ -50,6 +58,7 @@ pub struct PreparedCopperEdit {
     /// The parameters the edit was prepared with, reported with it once committed.
     params: Value,
     class_rules: Option<crate::board::class_rules::Context>,
+    report: Option<Value>,
 }
 impl PreparedCopperEdit {
     /// Captured policies explain changed-copper validation, with source identities and conflicts.
@@ -153,6 +162,11 @@ impl Session {
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
     /// A committed candidate is reported to the edit observer as its prepared command.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
+        self.commit_copper_edit_with_report(prepared).map(|(revision, _)| revision)
+    }
+
+    /// Publish an edit or finish a preview and return its command-specific report, if any.
+    pub fn commit_copper_edit_with_report(&mut self, mut prepared: PreparedCopperEdit) -> Result<(u64, Option<Value>), CommandError> {
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
         }
@@ -160,7 +174,11 @@ impl Session {
             self.change((*candidate).clone())?;
             self.report_committed(prepared.command, &prepared.params);
         }
-        Ok(self.revision())
+        let revision = self.revision();
+        if let Some(report) = &mut prepared.report {
+            report["revision"] = json!(revision);
+        }
+        Ok((revision, prepared.report))
     }
 }
 impl CopperEditJob {
@@ -213,6 +231,20 @@ impl CopperEditJob {
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
         match self.phase {
             0 => {
+                if self.command == unroute::UNROUTE_CONNECTION {
+                    let source = &self.context.source;
+                    let (candidate, report) = unroute::prepare(&source.snapshot, source.target(), &self.params)?;
+                    self.phase = 4;
+                    self.result = Some(Ok(PreparedCopperEdit {
+                        source: source.clone(),
+                        candidate: candidate.map(Arc::new),
+                        command: self.command,
+                        params: self.params.clone(),
+                        class_rules: None,
+                        report: Some(report),
+                    }));
+                    return Ok(true);
+                }
                 let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
                 self.added = added;
                 self.candidate = candidate.map(Arc::new);
@@ -224,6 +256,7 @@ impl CopperEditJob {
                         command: self.command,
                         params: self.params.clone(),
                         class_rules: None,
+                        report: None,
                     }));
                     return Ok(true);
                 }
@@ -319,6 +352,7 @@ impl CopperEditJob {
                     command: self.command,
                     params: self.params.clone(),
                     class_rules,
+                    report: None,
                 }));
             }
             _ => {}

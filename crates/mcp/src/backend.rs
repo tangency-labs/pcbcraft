@@ -143,8 +143,8 @@ impl Backend for Headless {
 
 /// Run an operation against the supplied session. Its owner controls execution policy.
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
-/// because a bare session has no window to act on. Clipboard/export queries retain their
-/// requested data even when project inspection is suppressed.
+/// because a bare session has no window to act on. Clipboard/export queries and connection
+/// unroute retain their result data even when project inspection is suppressed.
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, Failure> {
     serve_session(session, method, params, COMMAND_API_VERSION)
@@ -168,6 +168,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                     pcbcraft_engine::nets::INSPECT_CLASSES
                         | pcbcraft_engine::board::class_rules::ROUTE_RULES
                         | pcbcraft_engine::board::route::PLAN_ROUTE
+                        | pcbcraft_engine::UNROUTE_CONNECTION
                         | pcbcraft_engine::net_classes::INSPECT
                         | pcbcraft_engine::net_classes::RESOLVE
                         | pcbcraft_engine::part_groups::INSPECT

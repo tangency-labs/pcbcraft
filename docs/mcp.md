@@ -500,6 +500,20 @@ vertex order after the first, places a through via at `points[at]` and continues
 that copper layer; a change at the last vertex ends the route on a via. Omitted
 width, via diameter and drill use the board routing preferences, including layer
 changes; explicit drills must be smaller than their pads.
+
+`pcb.unroute_connection` takes `board`, `expected_revision`, and `from` and `to`
+addresses such as `{"footprint":"footprint-7","pad":"2"}`. Pick `from` on the
+arm to remove and `to` on the retained side. `execute` returns `revision`,
+`dry_run`, `removed` (sorted `tracks` and `vias` UUID lists), `requested` (the
+input pair), and `unrouted` (the newly displayed ratsnest edges, as pairs of pad
+addresses), even with project inspection disabled. An edge may end at a different
+pad on the retained side than the requested `to`. Without accepted connectivity,
+there are no display edges to report. Set `dry_run: true` to get the same report
+without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
+`details`; a missing copper endpoint returns `not_found`. See
+[Unroute one connection](pcb-layout-workflow.md#unroute-one-connection) for the
+behavior and other refusal cases.
+
 `pcb.check_design` checks the addressed board without editing it; `execute` returns
 `design_check` with the `rules` used, `violations` (each with a `kind`, `message`,
 representative `at` point and `items`), `counts` per kind and the `total`, listing at

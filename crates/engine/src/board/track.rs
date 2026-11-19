@@ -35,6 +35,9 @@ pub const SET_TRACK_WIDTH: &str = "pcb.set_track_width";
 pub const SET_VIA_SIZE: &str = "pcb.set_via_size";
 /// Remove addressed track segments and vias without changing footprints or other copper.
 pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
+mod unroute;
+pub use unroute::UNROUTE_CONNECTION;
+pub(crate) use unroute::{pad_address, pad_address_schema};
 /// Lock or unlock explicitly addressed tracks and vias without changing geometry.
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
 
@@ -522,17 +525,23 @@ impl IslandBuilder {
                 self.nearby = Nearby::Lookup;
                 continue;
             };
-            let layers = match (self.layers.get(i), self.layers.get(j)) {
-                (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
-                (None, Some(b)) => !b.is_empty(),
-                _ => true,
-            };
-            let (a, b) = (self.bounds[i], self.bounds[j]);
-            if layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j]) {
+            if self.routed_contact(i, j) {
                 join(&mut self.parent, i, j);
             }
         }
         self.node >= end
+    }
+
+    /// Test one routed pair in node order (`i > j`), with any via first. Pad-only pairs
+    /// are checked separately by callers that need direct land overlap.
+    fn routed_contact(&self, i: usize, j: usize) -> bool {
+        let layers = match (self.layers.get(i), self.layers.get(j)) {
+            (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
+            (None, Some(b)) => !b.is_empty(),
+            _ => true,
+        };
+        let (a, b) = (self.bounds[i], self.bounds[j]);
+        layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j])
     }
 
     /// Canonicalize completed roots to the existing pad/track/via identity maps.
