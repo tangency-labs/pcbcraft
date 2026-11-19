@@ -138,8 +138,8 @@ separates frame feedback from CPU service cost and physical presentation latency
 The solver plans one copper layer at a time. The editor retains its existing through-via
 and layer-change gesture, validating each proposed via with the entire path before
 changing layer. It does not search for a multilayer route or choose via locations.
-Arcs, zones, differential pairs, length tuning and moving existing copper remain
-outside this solver. Routing on filled zones needs current fill integration from #232.
+Arcs, zones, differential pairs and length tuning remain outside this solver;
+[shove](route-shove.md) moves existing copper instead of going round it. Routing on filled zones needs current fill integration from #232.
 A board containing [circular copper records](circular-copper-records.md) refuses
 query capture and `pcb.plan_route` rather than planning against incomplete
 straight-only copper.

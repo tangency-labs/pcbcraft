@@ -10,7 +10,15 @@ use std::sync::{Arc, Mutex, TryLockError};
 pub fn is_copper_edit(command: &str) -> bool {
     matches!(
         command,
-        super::super::via_nets::SET_VIA_NET | ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS
+        super::super::via_nets::SET_VIA_NET
+            | ADD_TRACKS
+            | ADD_VIA
+            | MOVE_TRACKS
+            | RESHAPE_TRACKS
+            | SET_TRACK_WIDTH
+            | SET_VIA_SIZE
+            | DELETE_TRACKS
+            | super::super::route::SHOVE_TRACKS
     )
 }
 
@@ -213,7 +221,13 @@ impl CopperEditJob {
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
         match self.phase {
             0 => {
-                let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
+                // A shove plans against this preparation's exact source, so the committed copper
+                // is the plan for the board that is validated and published.
+                let (candidate, added) = if self.command == super::super::route::SHOVE_TRACKS {
+                    super::super::route::shove_candidate(&self.context.source, &self.params)?
+                } else {
+                    edit_candidate(&self.context.source.snapshot, self.command, &self.params)?
+                };
                 self.added = added;
                 self.candidate = candidate.map(Arc::new);
                 if self.candidate.is_none() || self.added.is_empty() {

@@ -171,7 +171,7 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
 }
 
 /// Resolve the same deterministic airwire, channel and crowded targets for both service runners.
-fn requests(view: pcbcraft_engine::board::view::BoardView<'_>) -> Result<Vec<(String, Request)>> {
+pub(super) fn requests(view: pcbcraft_engine::board::view::BoardView<'_>) -> Result<Vec<(String, Request)>> {
     let front = view
         .layers()
         .into_iter()

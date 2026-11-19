@@ -70,6 +70,10 @@ class-aware widths, clearances and board-edge clearance without editing. The rou
 tool uses resumable searches, magnetic target hysteresis and full-path validation
 before adopting clicked vertices or vias; final publication still uses one shared
 copper transaction. Full preview/commit latency qualification remains under #246.
+[Shove](route-shove.md) (`pcb.plan_shove`, `pcb.shove_tracks`) lays a single-layer
+route or drag and pushes other copper's unlocked tracks and vias aside, with bounded,
+deterministic propagation, committing all of it in one undo step or nothing. The
+route tool does not use it yet; multi-layer propagation and springback are follow-ups.
 Captured local queries
 now reuse a layer-aware packed index and support disposable geometry overlays;
 see the [query contract](copper-clearance-query.md) and

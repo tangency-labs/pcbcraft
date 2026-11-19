@@ -390,7 +390,8 @@ A version pin is checked before the command’s parameters, including
 `expected_revision`. Once that pin matches or is omitted, project commands that
 take `expected_revision` still check it before their other parameters. A stale
 edit reports `stale_revision`; a malformed revision is `invalid_params`. The read-only [`pcb.plan_route`](route-planning.md#command)
-query keeps its existing `stale` plan outcome for otherwise valid requests. The
+query and the read-only [`pcb.plan_shove`](route-shove.md#commands) query keep their
+`stale` plan outcome for otherwise valid requests. The
 part and library document revisions that some window commands take are reported
 as `unavailable` when stale, for now.
 At direct command and live control dispatch, catalog validation treats omitted
@@ -555,6 +556,17 @@ pair clearances and board-edge clearance. Check that there are at least two poin
 before passing them to `pcb.add_tracks` with the same `layer` and `width_nm`;
 `from` equal to `to` produces a one-point `reached` plan with nothing to add.
 See [walkaround route planning](route-planning.md).
+
+`pcb.plan_shove` plans a new route (`points`, optional `width_nm`) or a drag of
+existing tracks (`tracks`, each `{track, start, end}`) on one copper `layer` that
+pushes other copper's unlocked tracks and vias out of the way, with optional
+`budget` and `expected_revision`. `execute` returns `shove_plan` with the laid
+`points`, the `reshaped`, `added` and `removed` tracks, moved `vias`, an `outcome`
+(`reached`, `blocked` with `last_legal`, `incomplete`, `canceled` or `stale`), any
+`blocker`, `probes`, `depth` and `moved`, also with `inspect: false`.
+`pcb.shove_tracks` takes the same parameters and commits the shove in one undo step
+only when it is reached; otherwise it is refused with nothing changed. See
+[shove](route-shove.md).
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.

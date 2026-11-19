@@ -7,17 +7,22 @@
 //! `pcb.add_tracks` command or copper preparation job, which revalidate and publish them in one
 //! undo step. Every kept leg is confirmed by the same exact probe and outline predicates that
 //! DRC uses. The search is deterministic and bounded by a probe budget and a cancellation flag.
-//! Vias, arcs, zones and moving existing copper (shove) are not planned here.
-use super::clearance::ClearanceQuery;
-use crate::{CommandError, Session, schematic::Point};
+//! Vias, arcs and zones are not planned here. [`shove`] moves existing tracks and vias out of
+//! the way of a new route or dragged tracks instead of going round them.
+use super::{clearance::ClearanceQuery, view::BoardTarget, work::Source};
+use crate::{CommandError, Project, Session, schematic::Point};
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
 mod hull;
 mod posture;
 mod preparation;
 mod search;
+pub mod shove;
+#[cfg(test)]
+mod shove_tests;
 #[cfg(test)]
 mod tests;
 mod walkaround;
@@ -27,6 +32,10 @@ pub use posture::Posture;
 
 /// Plan a route around existing copper without editing the board.
 pub const PLAN_ROUTE: &str = "pcb.plan_route";
+/// Plan a shove of existing copper out of the way of a new route or dragged tracks, without editing.
+pub const PLAN_SHOVE: &str = "pcb.plan_shove";
+/// Add a route or drag tracks, shoving existing copper out of the way, in one undo step.
+pub const SHOVE_TRACKS: &str = "pcb.shove_tracks";
 /// Exact probes one plan may charge when the caller gives no budget.
 pub const DEFAULT_BUDGET: usize = 4096;
 /// The largest accepted probe budget.
@@ -129,11 +138,7 @@ impl Session {
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
         let (head, goal, layer): (Point, Point, Uuid) = (field(params, "from")?, field(params, "to")?, field(params, "layer")?);
-        let explicit_width: Option<i64> = params.get("width_nm").map(|_| field(params, "width_nm")).transpose()?;
-        let width_nm = match view.route_rules_at(head, Some(layer))?.filter(|policy| policy.has_dimensions()) {
-            Some(policy) => policy.track_width(explicit_width)?,
-            None => explicit_width.unwrap_or(view.effective_rules().values.preferred_track_width_nm),
-        };
+        let width_nm = route_width(view, head, layer, params)?;
         let posture: Posture = params.get("posture").map(|_| field(params, "posture")).transpose()?.unwrap_or_default();
         let flipped = params.get("flipped").and_then(Value::as_bool).unwrap_or(false);
         let previous: Vec<Point> = params.get("previous").map(|_| field(params, "previous")).transpose()?.unwrap_or_default();
@@ -150,6 +155,127 @@ impl Session {
             "board":target.board,"layer":layer,"width_nm":width_nm,"posture":posture,"flipped":flipped,"budget":budget,
             "points":plan.points,"outcome":plan.outcome,"blocker":plan.blocker,"probes":plan.probes
         }}))
+    }
+}
+
+/// The width of a new route from `head`: an explicit `width_nm` must satisfy the head contact's
+/// net-class limits; an omitted one uses that class's preference or the board's preferred width.
+fn route_width(view: super::view::BoardView<'_>, head: Point, layer: Uuid, params: &Value) -> Result<i64, CommandError> {
+    let explicit_width: Option<i64> = params.get("width_nm").map(|_| field(params, "width_nm")).transpose()?;
+    Ok(match view.route_rules_at(head, Some(layer))?.filter(|policy| policy.has_dimensions()) {
+        Some(policy) => policy.track_width(explicit_width)?,
+        None => explicit_width.unwrap_or(view.effective_rules().values.preferred_track_width_nm),
+    })
+}
+
+/// Read a shove from command parameters: the board, the request, the route width (zero for a
+/// drag) and the probe budget. Exactly one of `points` (a new route) or `tracks` (dragged
+/// tracks with new ends) is required.
+fn shove_request(project: &Project, params: &Value) -> Result<(BoardTarget, shove::Request, i64, usize), CommandError> {
+    let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
+    let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+    let layer: Uuid = field(params, "layer")?;
+    let budget = params.get("budget").map(|_| field(params, "budget")).transpose()?.unwrap_or(shove::DEFAULT_BUDGET);
+    let (shover, width_nm) = match (params.get("points"), params.get("tracks")) {
+        (Some(_), None) => {
+            let points: Vec<Point> = field(params, "points")?;
+            let head = *points.first().ok_or_else(|| CommandError::InvalidParams("A shoved route needs at least two points.".into()))?;
+            let width_nm = route_width(view, head, layer, params)?;
+            (shove::Shover::Route { points, width_nm }, width_nm)
+        }
+        (None, Some(_)) if params.get("width_nm").is_none() => (shove::Shover::Drag { tracks: field(params, "tracks")? }, 0),
+        (None, Some(_)) => return Err(CommandError::InvalidParams("Dragged tracks keep their width; omit width_nm.".into())),
+        _ => return Err(CommandError::InvalidParams("Give either points for a new route or tracks to drag.".into())),
+    };
+    Ok((target, shove::Request { layer, shover }, width_nm, budget))
+}
+
+/// Explain why a shove cannot be committed, naming what stopped it.
+fn refusal(plan: &shove::Shove) -> CommandError {
+    let at = |p: &Point| format!("({}, {}) nm", p.x_nm, p.y_nm);
+    CommandError::InvalidParams(match (&plan.outcome, &plan.blocker) {
+        (Outcome::Blocked { last_legal }, Some(blocker)) => format!("The shove is blocked by {blocker}; the last legal point is {}.", at(last_legal)),
+        (Outcome::Blocked { last_legal }, None) => {
+            format!("The shove is blocked by the board edge or a rule; the last legal point is {}.", at(last_legal))
+        }
+        (Outcome::Incomplete, Some(blocker)) => format!("The shove reached its depth, push or moved-copper bound while pushing {blocker}."),
+        (Outcome::Incomplete, None) => "The shove ran out of its probe budget.".into(),
+        _ => "The shove did not complete.".into(),
+    })
+}
+
+/// Build the copper candidate of `pcb.shove_tracks` from a captured source: plan the shove
+/// against that exact board and apply all of it. Anything but a reached shove is refused, so
+/// either every route segment, dragged track, pushed track and via lands or nothing changes.
+/// Returns the candidate (absent for a no-op) and the identities of changed copper.
+pub(crate) fn shove_candidate(source: &Source, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+    let project: &Project = &source.snapshot;
+    let (target, request, width_nm, budget) = shove_request(project, params)?;
+    if target != source.target {
+        return Err(CommandError::InvalidParams("The shove addresses another board than its preparation.".into()));
+    }
+    let mut preparation = super::clearance::preparation::Preparation::new(source.clone());
+    let mut query = None;
+    for _ in 0..project.board.footprints.len() / 32 + 8 {
+        query = preparation.step(usize::MAX)?;
+        if query.is_some() {
+            break;
+        }
+    }
+    let query = query.ok_or_else(|| CommandError::Unavailable("Shove obstacle preparation did not finish.".into()))?;
+    let plan = shove::shove(&query, &request, budget, &|| false)?;
+    if plan.outcome != Outcome::Reached {
+        return Err(refusal(&plan));
+    }
+    let (mut tracks, mut vias) = (project.board.tracks.clone(), project.board.vias.clone());
+    let changed = plan.apply(request.layer, width_nm, &mut tracks, &mut vias, &mut crate::fresh_id)?;
+    super::track::validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
+    if tracks == project.board.tracks && vias == project.board.vias {
+        return Ok((None, changed));
+    }
+    let mut next = project.clone();
+    let board = std::sync::Arc::make_mut(&mut next.board);
+    board.tracks = tracks;
+    board.vias = vias;
+    super::track::protect_locked(project, &next)?;
+    Ok((Some(next), changed))
+}
+
+impl Session {
+    /// Shove over `query` only while it still describes this session's current board; an edit,
+    /// Undo/Redo, reopen or another session's query gives a stale result without probing.
+    pub fn plan_shove(
+        &self,
+        query: &ClearanceQuery,
+        request: &shove::Request,
+        budget: usize,
+        cancel: &dyn Fn() -> bool,
+    ) -> Result<shove::Shove, CommandError> {
+        if !query.authority().is_current(self) {
+            return Ok(shove::Shove::stale());
+        }
+        shove::shove(query, request, budget, cancel)
+    }
+
+    /// Answer `pcb.plan_shove` without changing revision, history or saved bytes. A given
+    /// `expected_revision` that is not current gives a stale outcome instead of a plan.
+    pub(crate) fn shove_plan_query(&self, params: &Value) -> Result<Value, CommandError> {
+        let (target, request, width_nm, budget) = shove_request(self.open_project()?, params)?;
+        let stale = params.get("expected_revision").is_some_and(|revision| revision.as_u64() != Some(self.revision()));
+        let plan = if stale {
+            shove::Shove::stale()
+        } else {
+            let query = self.clearance_query_with_rules(target, &json!({}))?;
+            self.plan_shove(&query, &request, budget, &|| false)?
+        };
+        let mut report = json!(plan);
+        report["board"] = json!(target.board);
+        report["layer"] = json!(request.layer);
+        report["budget"] = json!(budget);
+        if matches!(request.shover, shove::Shover::Route { .. }) {
+            report["width_nm"] = json!(width_nm);
+        }
+        Ok(json!({"revision":self.revision(),"shove_plan":report}))
     }
 }
 

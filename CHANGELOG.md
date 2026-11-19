@@ -29,6 +29,14 @@ one undo step. The route tool now uses the same planner with bounded search,
 magnetic target hysteresis and full-path validation before fixing a clicked
 vertex or placing a through via (#246).
 
+Agents can shove: `pcb.plan_shove` lays a new route or drags tracks on one copper
+layer and pushes other copper's unlocked tracks and vias out of the way, keeping
+each pushed run's ends and connections, the net-class clearances and the board-edge
+clearance. Pushed copper pushes in turn, within bounds on depth, moved copper and
+probes. Pads, locked copper and copper on other layers never move; a blocked route
+reports its longest legal prefix and what blocked it. `pcb.shove_tracks` commits a
+complete shove in one undo step, or nothing. The route tool does not use it yet (#247).
+
 Placing a via at the current fixed route head now validates that exact location,
 even when an earlier, longer route preview remains visible, so invalid vias are
 rejected before changing layers.

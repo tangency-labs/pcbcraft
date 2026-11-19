@@ -16,6 +16,7 @@ pub mod rendered;
 mod replay;
 mod report;
 pub mod routing;
+pub mod shove;
 pub mod walkaround;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watchdog;
@@ -484,6 +485,20 @@ mod tests {
         // lend a net to an anonymous route; keep that blocked outcome in the measurements.
         assert!(outcomes.iter().any(|o| o["case"] == "airwire.0" && o["outcome"]["kind"] == "blocked"));
         for id in ["walkaround.prepare", "walkaround.plan.all", "walkaround.plan.channel"] {
+            let metric = report["metrics"].as_array().unwrap().iter().find(|m| m["id"] == id).unwrap();
+            assert_eq!(metric["samples_ms"].as_array().unwrap().len(), 2);
+        }
+    }
+
+    /// Shove diagnostics time complete plans, reproduce them exactly and commit each reached
+    /// plan through the shared command against the exhaustive pair reference.
+    #[test]
+    fn shove_diagnostic_reproduces_and_commits_its_plans() {
+        let artifact = generate("reference-v1", "test").unwrap();
+        let report = shove::run(&artifact, environment(), 2).unwrap();
+        assert_eq!(report["schema"], "pcbcraft-shove-performance/1");
+        assert!(!report["outcomes"].as_array().unwrap().is_empty());
+        for id in ["shove.prepare", "shove.plan.all", "shove.plan.channel"] {
             let metric = report["metrics"].as_array().unwrap().iter().find(|m| m["id"] == id).unwrap();
             assert_eq!(metric["samples_ms"].as_array().unwrap().len(), 2);
         }

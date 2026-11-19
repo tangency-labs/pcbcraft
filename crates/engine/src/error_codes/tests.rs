@@ -62,8 +62,8 @@ fn fixture() -> Session {
 
 /// Every catalogue command, given each failure the reference documents for all commands,
 /// refuses with the documented code and for the documented reason, changes nothing, and
-/// reports a published code. A stale revision names the current one, except for route planning,
-/// which tests its stale outcome separately. Parameters are checked in
+/// reports a published code. A stale revision names the current one, except for route and shove planning,
+/// which test their stale outcome separately. Parameters are checked in
 /// their declared order, so a malformed revision is tried on the commands that declare no
 /// required parameter before it, where its own check is the one that refuses.
 #[test]
@@ -97,7 +97,7 @@ fn every_command_reports_its_documented_failures_with_published_codes() {
             expect(&mut session, id, json!({}), "without its required parameters", invalid, &needs);
         }
         if command.params.iter().any(|param| param.name == "expected_revision") {
-            if id != crate::board::route::PLAN_ROUTE {
+            if !matches!(id, crate::board::route::PLAN_ROUTE | crate::board::route::PLAN_SHOVE) {
                 for (expected, case) in [(revision - 1, "with an older revision"), (revision + 7, "with a newer revision")] {
                     let stale = expect(&mut session, id, json!({"expected_revision": expected}), case, ErrorCode::StaleRevision, "revision");
                     if let Some(stale) = stale {

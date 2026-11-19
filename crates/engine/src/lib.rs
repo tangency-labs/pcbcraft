@@ -937,6 +937,37 @@ const CLIPBOARD_OBJECTS: Param = Param {
     kind: ParamKind::ClipboardHierarchyObjects,
     summary: "Selected root sheet symbols and hierarchical labels; sheet symbols include their complete child subtree",
 };
+/// Parameters shared by `pcb.plan_shove` and `pcb.shove_tracks`.
+const SHOVE_PARAMS: &[Param] = &[
+    BOARD,
+    Param { name: "layer", required: true, summary: "Copper layer UUID of the addressed board; the shove stays on it", kind: ParamKind::DrawingId },
+    Param {
+        name: "points",
+        required: false,
+        summary: "A new route's vertices in integer nanometres; copper the first point touches lends the route its net. Give points or tracks",
+        kind: ParamKind::TrackPath,
+    },
+    Param {
+        name: "width_nm",
+        required: false,
+        summary: "The new route's width; omitted uses the head contact's net-class or board preferred width",
+        kind: ParamKind::TrackWidth,
+    },
+    Param {
+        name: "tracks",
+        required: false,
+        summary: "Unlocked tracks on the layer to drag, each UUID with its new start and end. Give points or tracks",
+        kind: ParamKind::TrackEnds,
+    },
+    Param { name: "budget", required: false, summary: "Most exact clearance probes; defaults to 16384", kind: ParamKind::RouteBudget },
+    Param {
+        name: "expected_revision",
+        required: false,
+        summary: "Revision the caller planned against; a planning query answers stale and an edit is refused when it is not current",
+        kind: ParamKind::Revision,
+    },
+];
+
 const CATALOG: &[Command] = &[
     Command {
         id: no_connect::SET,
@@ -2272,6 +2303,18 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: board::route::PLAN_SHOVE,
+        title: "Plan Shove",
+        summary: "Plan a new route or a track drag on one copper layer that pushes other copper's unlocked tracks and vias out of the way, with effective clearance and board-edge rules, without editing. pcb.shove_tracks commits the same shove.",
+        params: SHOVE_PARAMS,
+    },
+    Command {
+        id: board::route::SHOVE_TRACKS,
+        title: "Shove Tracks",
+        summary: "Add a route or drag tracks on one copper layer, pushing other copper's unlocked tracks and vias out of the way, in one undo step. Refused with nothing changed unless the whole shove fits.",
+        params: SHOVE_PARAMS,
+    },
+    Command {
         id: CHECK_DESIGN,
         title: "Check Design Rules",
         summary: "Check the board for clearance, track width, annular ring, unrouted connections, board outline and courtyard problems. Edits nothing; execute returns the report.",
@@ -3157,6 +3200,8 @@ impl Session {
             | CHECK_DESIGN
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE
+            | board::route::PLAN_SHOVE
+            | board::route::SHOVE_TRACKS
             | EXPORT_FABRICATION
             | netlist::EXPORT_BOARD_NETLIST
             | ADD_TRACKS
@@ -3287,7 +3332,7 @@ impl Session {
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
     /// Failed commands leave the project intact; a stale `expected_revision` is reported first
-    /// unless the command returns a stale query outcome, as `pcb.plan_route` does.
+    /// unless the command returns a stale query outcome, as `pcb.plan_route` and `pcb.plan_shove` do.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         self.refuse_stale(id, params)?;
         if id == board::arc::SET_ARCS {
@@ -3348,6 +3393,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.route_plan_query(params);
         }
+        if id == board::route::PLAN_SHOVE {
+            self.validate_project_command(id, params)?;
+            return self.shove_plan_query(params);
+        }
         if matches!(id, net_classes::INSPECT | net_classes::RESOLVE) {
             self.validate_project_command(id, params)?;
             return self.net_class_query(id, params);
@@ -3383,7 +3432,8 @@ impl Session {
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
-    /// A stale `expected_revision` is reported before any other check, except for `pcb.plan_route`.
+    /// A stale `expected_revision` is reported before any other check, except for `pcb.plan_route`
+    /// and `pcb.plan_shove`.
     /// A command that advances the revision is reported to the edit observer once it has
     /// been adopted; failures, no-ops and queries are not reported. Copper commands report
     /// from their prepared publication path, which also serves direct prepared commits.
@@ -3488,6 +3538,8 @@ impl Session {
                 | CHECK_DESIGN
                 | board::class_rules::ROUTE_RULES
                 | board::route::PLAN_ROUTE
+                | board::route::PLAN_SHOVE
+                | board::route::SHOVE_TRACKS
                 | EXPORT_FABRICATION
                 | netlist::EXPORT_BOARD_NETLIST
                 | ADD_TRACKS
@@ -3786,6 +3838,9 @@ impl Session {
             board::route::PLAN_ROUTE => {
                 self.route_plan_query(params)?;
             }
+            board::route::PLAN_SHOVE => {
+                self.shove_plan_query(params)?;
+            }
             EXPORT_FABRICATION => {
                 self.export_fabrication(params)?;
             }
@@ -3797,9 +3852,15 @@ impl Session {
                 }
             }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
-            ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_NET | SET_VIA_SIZE | DELETE_TRACKS => {
-                self.edit_tracks(id, params)?
-            }
+            ADD_TRACKS
+            | ADD_VIA
+            | MOVE_TRACKS
+            | RESHAPE_TRACKS
+            | SET_TRACK_WIDTH
+            | SET_VIA_NET
+            | SET_VIA_SIZE
+            | DELETE_TRACKS
+            | board::route::SHOVE_TRACKS => self.edit_tracks(id, params)?,
             "edit.undo" => self.step(false),
             "edit.redo" => self.step(true),
             _ => return Err(CommandError::Unknown(id.to_owned())),
@@ -4211,10 +4272,10 @@ impl Session {
 
     /// Report a stale `expected_revision` before any other check of a command that takes one:
     /// those checks would judge the parameters against a state the caller has not seen. A
-    /// missing or malformed revision is left to parameter validation. Route planning retains
-    /// its public stale plan outcome and its existing validation order.
+    /// missing or malformed revision is left to parameter validation. Route and shove planning
+    /// retain their public stale plan outcome and their validation order.
     fn refuse_stale(&self, id: &str, params: &Value) -> Result<(), CommandError> {
-        if id == board::route::PLAN_ROUTE {
+        if matches!(id, board::route::PLAN_ROUTE | board::route::PLAN_SHOVE) {
             return Ok(());
         }
         let takes_revision = command(id).is_some_and(|command| command.params.iter().any(|param| param.name == EXPECTED_REVISION.name));
