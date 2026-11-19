@@ -75,51 +75,52 @@ fn raw_member<'a>(text: &'a str, key: &str) -> Result<&'a str, String> {
     object.get(key).map(|value| value.get()).ok_or_else(|| format!("Missing raw `{key}` member."))
 }
 
-/// Inspect the raw native item and its drawing maps without decoding primitive values.
-fn duplicate_remap_keys(text: &str, level: RemapMap) -> Option<&'static str> {
-    impl<'de> Visitor<'de> for RemapMap {
-        type Value = Option<&'static str>;
-
-        /// Describe the JSON shape accepted by the duplicate-key check.
-        fn expecting(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
-            out.write_str("a native item, drawing or unit map")
-        }
-
-        /// Compare decoded keys and inspect every original inactive drawing before any normalization.
-        fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-            let mut keys = BTreeSet::new();
-            let mut duplicate = false;
-            let mut nested_error = None;
-            while let Some((key, body)) = map.next_entry::<String, &RawValue>()? {
-                let nested = match (self, key.as_str()) {
-                    (Self::Item, "objects") | (Self::Units, _) => Some(Self::Drawing),
-                    (Self::Item, "other_units") => Some(Self::Units),
-                    _ => None,
-                };
-                duplicate |= !keys.insert(key);
-                if nested_error.is_none() {
-                    nested_error = nested.and_then(|level| duplicate_remap_keys(body.get(), level));
-                }
-            }
-            Ok(if duplicate {
-                Some(match self {
-                    Self::Item => "Duplicate member in the pin remap item.",
-                    Self::Units => "Duplicate unit name in the pin remap item.",
-                    Self::Drawing => "Duplicate primitive ID in the pin remap item.",
-                })
-            } else {
-                nested_error
-            })
-        }
-    }
-    serde_json::Deserializer::from_str(text).deserialize_map(level).ok().flatten()
-}
-
 #[derive(Clone, Copy)]
 enum RemapMap {
     Item,
     Units,
     Drawing,
+}
+
+impl<'de> Visitor<'de> for RemapMap {
+    type Value = Option<&'static str>;
+
+    /// Describe the JSON shape accepted by the duplicate-key check.
+    fn expecting(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str("a native item, drawing or unit map")
+    }
+
+    /// Compare decoded keys and inspect every original inactive drawing before any normalization.
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut keys = BTreeSet::new();
+        let mut duplicate = false;
+        let mut nested_error = None;
+        while let Some((key, body)) = map.next_entry::<String, &RawValue>()? {
+            let nested = match (self, key.as_str()) {
+                (Self::Item, "objects") | (Self::Units, _) => Some(Self::Drawing),
+                (Self::Item, "other_units") => Some(Self::Units),
+                _ => None,
+            };
+            duplicate |= !keys.insert(key);
+            if nested_error.is_none() {
+                nested_error = nested.and_then(|level| duplicate_remap_keys(body.get(), level));
+            }
+        }
+        Ok(if duplicate {
+            Some(match self {
+                Self::Item => "Duplicate member in the pin remap item.",
+                Self::Units => "Duplicate unit name in the pin remap item.",
+                Self::Drawing => "Duplicate primitive ID in the pin remap item.",
+            })
+        } else {
+            nested_error
+        })
+    }
+}
+
+/// Inspect the raw native item and its drawing maps without decoding primitive values.
+fn duplicate_remap_keys(text: &str, level: RemapMap) -> Option<&'static str> {
+    serde_json::Deserializer::from_str(text).deserialize_map(level).ok().flatten()
 }
 
 /// Detect duplicate item members and drawing/unit keys; keep normalized size accounting.
