@@ -1816,3 +1816,11 @@ tracks the captured pointer explicitly because ordinary toolkit menu rows
 activate on a click originating inside the row. Explicit view copies and full-window
 placement reuse the existing view fork and split-tree operations. No dependency, external artwork
 or project file format was added.
+
+## Hebrew localization and RTL support
+
+The `CRAFT_FONTS_DIR` build-script probe (`crates/chrome/build.rs`), BCP 47 and
+legacy `iw` language-tag normalization / RTL detection (`crates/chrome/src/i18n.rs`),
+and desktop system Hebrew font fallback list (`crates/chrome/src/fonts.rs`) adapt the
+localization helpers from FieldCraft (`tangency-labs/fieldcraft`, MIT OR Apache-2.0).
+No GPL, KiCad, or `pcbcraft-gpl` source code or binary font assets were copied or added.

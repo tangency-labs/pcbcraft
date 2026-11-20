@@ -41,10 +41,19 @@ pub fn collapsing<R>(
     if let Some(open) = open {
         state.set_open(open);
     }
+    let rtl = crate::i18n::is_rtl();
     let height = crate::Tokens::get().control_height;
     let (_, rect) = ui.allocate_space(egui::vec2(ui.available_width(), height));
-    let arrow = egui::Rect::from_min_size(rect.min, egui::vec2(height.min(rect.width()), height));
-    let label = egui::Rect::from_min_max(arrow.right_top(), rect.max);
+    let arrow_w = height.min(rect.width()).max(0.0);
+    let (arrow, label) = if rtl {
+        let arrow = egui::Rect::from_min_max(egui::pos2((rect.max.x - arrow_w).max(rect.min.x), rect.min.y), rect.max);
+        let label = egui::Rect::from_min_max(rect.min, egui::pos2(arrow.left(), rect.max.y));
+        (arrow, label)
+    } else {
+        let arrow = egui::Rect::from_min_size(rect.min, egui::vec2(arrow_w, height));
+        let label = egui::Rect::from_min_max(arrow.right_top(), rect.max);
+        (arrow, label)
+    };
     let response = kit::panel_host_control(
         ui,
         id.with("title"),
@@ -59,12 +68,13 @@ pub fn collapsing<R>(
             drag: false,
             title: false,
             grip_only: false,
-            rtl: false,
+            rtl,
         },
     );
     let expanded = state.is_open();
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), expanded, title));
-    let action = format!("{} {title}", if expanded { "Collapse" } else { "Expand" });
+    let verb = solidcraft_ui_text::tr(if expanded { "ui.collapse" } else { "ui.expand" });
+    let action = format!("{verb} {title}");
     let mut arrow_ui = ui.new_child(egui::UiBuilder::new().id_salt(id.with("disclosure")).max_rect(arrow));
     let disclosure = kit::panel_disclosure_button_at(&mut arrow_ui, arrow, expanded, &action);
     if response.clicked() || disclosure.clicked() {
@@ -139,7 +149,7 @@ pub fn glyph_target(ui: &mut Ui, id: egui::Id, bounds: egui::Rect, label: &str, 
             drag: false,
             title: false,
             grip_only: false,
-            rtl: false,
+            rtl: crate::i18n::is_rtl(),
         },
     );
     crate::automation::publish_enabled(ui, &response, format!("button:{label}"), enabled);
