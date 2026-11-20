@@ -218,6 +218,8 @@ struct ComponentRecord<'a> {
     part: Option<crate::part_instances::Record>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     no_connects: Option<Vec<crate::no_connect::Intent>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    designator_locked: Option<bool>,
 }
 
 /// A schematic unit stores only its identity, owner and geometry.
@@ -399,6 +401,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
             metadata: None,
             part: None,
             no_connects: None,
+            designator_locked: None,
         });
         used.insert((definition.id.clone(), definition.revision()), definition);
     }
@@ -497,9 +500,12 @@ pub struct Encoder {
 impl Encoder {
     /// Begin incremental single-document encoding after rejecting unsupported document features.
     /// Metadata, text appearance, setup, physical definitions, silkscreen, outlines, layer
-    /// drawings, rotation, active footprint locks, occurrence IDs, sheet paper, net classes and
-    /// part groups require split documents or an archive; refuse loss.
+    /// drawings, rotation, active footprint and designator locks, occurrence IDs, sheet paper,
+    /// net classes, and part groups require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.components.values().any(|part| part.designator_locked) {
+            return Err("Designator locks require split project format 51 or a packed archive.".into());
+        }
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
         }
@@ -638,6 +644,7 @@ impl Encoder {
                     metadata: None,
                     part: None,
                     no_connects: None,
+                    designator_locked: None,
                 };
                 let more = self.project.components.last_key_value().is_some_and(|(&last, _)| last != id);
                 write_record(&mut self.bytes, &record, more)?;
@@ -738,7 +745,7 @@ pub fn read_bytes(mut input: impl Read) -> io::Result<Vec<u8>> {
 }
 
 /// Read bounded single-file project data and validate identities and connections before adoption.
-/// Active footprint locks are refused here; they require the native split-board format.
+/// Footprint and designator locks are refused here; they require current native formats.
 pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
     if bytes.len() > MAX_PROJECT_BYTES {
         return Err("project exceeds the native file size limit".to_owned());
@@ -763,6 +770,9 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         }
         format => return Err(format!("unsupported project format {format}")),
     };
+    if document.components.iter().any(|part| part.designator_locked.is_some()) {
+        return Err("Designator locks require split project format 51.".into());
+    }
     if document.components.iter().any(|c| c.metadata.is_some()) || document.sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
         return Err("component fields and text appearance require split project/sheet formats 11/4".into());
     }
@@ -842,6 +852,9 @@ fn validate_with_hierarchy(
     let mut shown = BTreeSet::new();
     let mut components = BTreeMap::new();
     for record in records {
+        if record.designator_locked.is_some() {
+            return Err("Designator locks require split project format 51.".into());
+        }
         if record.no_connects.is_some() {
             return Err("No-connect intent requires the split marker format.".into());
         }
@@ -878,6 +891,7 @@ fn validate_with_hierarchy(
                 reference_number: record.reference_number,
                 reference: record.reference.into_owned(),
                 value: record.value.into_owned(),
+                designator_locked: false,
                 metadata,
                 part: None,
                 no_connects: BTreeMap::new(),
