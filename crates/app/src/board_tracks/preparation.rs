@@ -212,7 +212,8 @@ impl Preparation {
     }
 }
 impl PcbApp {
-    /// Consume completed read-only plans before a new pointer target can supersede them.
+    /// Consume completed read-only plans before a new pointer target can supersede them,
+    /// releasing a rejected first click while keeping the route tool armed.
     /// Final action adoption/publication stays after input so Escape and focus loss win.
     pub(crate) fn poll_route_previews(&mut self) {
         let blocked = !matches!(self.dialog, crate::Dialog::None) || self.files.busy() || self.project_action_pending() || self.parts.is_modal();
@@ -249,15 +250,13 @@ impl PcbApp {
             let target = view.board.target;
             let layer = view.board.active_layer.clone();
             let tracks = &mut view.board.tracks;
-            if blocked {
-                tracks.preparation.cancel();
+            if blocked || layer.as_ref().is_some_and(|layer| view.board.hidden_layers.contains(layer)) {
                 tracks.planning.cancel();
+                tracks.preparation.cancel();
+                tracks.retry_route = None;
+                tracks.committed = None;
             }
             let sizes = (tracks.width_nm, tracks.via_diameter_nm, tracks.via_drill_nm);
-            if layer.as_ref().is_some_and(|layer| view.board.hidden_layers.contains(layer)) {
-                tracks.planning.cancel();
-                tracks.preparation.cancel();
-            }
             let validation = tracks.planning.validation_current().then(|| tracks.preparation.validation()).flatten();
             if let Some(result) = tracks.planning.poll(&self.session, source, layer.as_deref(), sizes, validation) {
                 match result {

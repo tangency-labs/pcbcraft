@@ -787,9 +787,17 @@ fn blocked_cursor_approach_tracks_the_clearance_boundary() {
             assert!(done);
             assert_eq!(job.take_result().unwrap().unwrap(), planned);
             let exhausted = s.plan_route(&query(&s), &req, planned.probes - 1, &|| false).unwrap();
-            assert_eq!(exhausted.outcome, Outcome::Incomplete);
-            assert!(exhausted.probes < planned.probes);
-            assert_eq!(exhausted.points, vec![head]);
+            let Outcome::Blocked { last_legal } = exhausted.outcome else { panic!("{exhausted:?}") };
+            assert_eq!(exhausted.adjusted_target, Some(last_legal));
+            assert_ne!(last_legal, head);
+            assert_eq!(exhausted.probes, planned.probes - 1);
+            let mut candidate = Session::default();
+            candidate.open_snapshot(s.snapshot().unwrap());
+            commit_and_agree(&mut candidate, &exhausted, req.layer, WIDTH);
+            let no_prefix = s.plan_route(&query(&s), &req, 1, &|| false).unwrap();
+            assert_eq!(no_prefix.outcome, Outcome::Incomplete);
+            assert_eq!(no_prefix.points, vec![head]);
+            assert!(no_prefix.adjusted_target.is_none());
             let count = std::cell::Cell::new(0);
             let canceled = s
                 .plan_route(&query(&s), &req, DEFAULT_BUDGET, &|| {

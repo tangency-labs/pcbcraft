@@ -654,3 +654,35 @@ fn expanded_defaults_place_and_reopen_without_installed_sources() {
     assert_eq!(dual.pads[0].shape, PadShape::Rectangle);
     assert_eq!(basic_components("sod123").unwrap().pads[0].number, "1");
 }
+
+/// The compound transaction must refuse exact track contact with a non-plated opening even
+/// at zero copper clearance, while a one-nanometre separation remains legal.
+#[test]
+fn compound_replacement_rejects_zero_clearance_hole_tangency() {
+    use crate::board::{
+        rules::SET_RULES,
+        track::tests::{copper_layers, view},
+    };
+    let mut s = mounting_route_fixture(false);
+    let mut rules = view(&s).effective_rules().values;
+    rules.clearance_nm = 0;
+    s.apply(SET_RULES, &json!({"board":view(&s).target.board,"rules":rules,"expected_revision":s.revision()})).unwrap();
+    let layer = copper_layers(&s)[0];
+    let point = |x_nm, y_nm| Point { x_nm, y_nm };
+    let (start, end) = (point(-2_000_000, 8_000_000), point(8_000_000, 8_000_000));
+    s.apply(crate::ADD_TRACKS, &json!({"layer":layer,"points":[start,end],"width_nm":250_000,"expected_revision":s.revision()})).unwrap();
+    let track = view(&s).tracks()[0].id;
+    let revision = s.revision();
+    let before = s.snapshot().unwrap();
+    let params = |y| {
+        let path = [start, point(start.x_nm, y), point(end.x_nm, y), end];
+        json!({"layer":layer,"width_nm":250_000,"points":[point(10_000_000,8_000_000),point(12_000_000,8_000_000)],
+            "replacements":[{"track":track,"points":path}],"expected_revision":revision})
+    };
+    let error = s.apply(crate::ADD_TRACKS, &params(6_725_000)).unwrap_err();
+    assert!(error.to_string().contains("violates copper clearance"), "{error}");
+    assert_eq!(s.revision(), revision);
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &before));
+    s.apply(crate::ADD_TRACKS, &params(6_725_001)).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+}

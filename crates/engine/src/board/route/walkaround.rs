@@ -224,12 +224,19 @@ impl<'a> Walker<'a> {
         if self.probes >= self.budget {
             return first;
         }
-        let goal = self.check(request.target, request.target).await?;
+        let goal = match self.check(request.target, request.target).await {
+            Ok(goal) => goal,
+            Err(Stop::Exhausted) if request.mode == super::Mode::Walkaround => return self.refinement_exhausted(first),
+            Err(stop) => return Err(stop),
+        };
         if !goal.legal {
-            if request.mode == super::Mode::Walkaround
-                && let Some(plan) = self.approach_target(request, &goal).await?
-            {
-                return Ok(plan);
+            if request.mode == super::Mode::Walkaround {
+                match self.approach_target(request, &goal).await {
+                    Ok(Some(plan)) => return Ok(plan),
+                    Ok(None) => {}
+                    Err(Stop::Exhausted) => return self.refinement_exhausted(first),
+                    Err(stop) => return Err(stop),
+                }
             }
             return first.map(|mut plan| {
                 plan.probes = self.probes;
@@ -244,6 +251,16 @@ impl<'a> Walker<'a> {
         self.finish_target(request, first).await
     }
 
+    /// Preserve only a usable certified prefix when optional work spends the remaining budget.
+    fn refinement_exhausted(&self, first: Result<Plan, Stop>) -> Result<Plan, Stop> {
+        let mut first = first?;
+        if first.points.len() < 2 {
+            return Err(Stop::Exhausted);
+        }
+        first.probes = self.probes;
+        Ok(first)
+    }
+
     /// Refine an exact legal goal without discarding a certified fallback on a local
     /// search limit. All attempts share the captured intent and global probe budget.
     async fn finish_target(&mut self, request: &Request, first: Plan) -> Result<Plan, Stop> {
@@ -251,12 +268,16 @@ impl<'a> Walker<'a> {
             Ok(plan) if plan.outcome == Outcome::Reached => return Ok(plan),
             Ok(plan) => plan,
             Err(Stop::Exhausted) if request.mode == super::Mode::Walkaround && self.probes < self.budget => first,
+            Err(Stop::Exhausted) if request.mode == super::Mode::Walkaround => return self.refinement_exhausted(Ok(first)),
             Err(stop) => return Err(stop),
         };
-        if request.mode == super::Mode::Walkaround
-            && let Some(plan) = self.portal_target(request).await?
-        {
-            return Ok(plan);
+        if request.mode == super::Mode::Walkaround {
+            match self.portal_target(request).await {
+                Ok(Some(plan)) => return Ok(plan),
+                Ok(None) => {}
+                Err(Stop::Exhausted) => return self.refinement_exhausted(Ok(fallback)),
+                Err(stop) => return Err(stop),
+            }
         }
         fallback.probes = self.probes;
         Ok(fallback)
@@ -366,13 +387,7 @@ impl<'a> Walker<'a> {
         if self.half * 2. < rules.min_track_width_nm as f64 {
             legal = false;
         }
-        if !self.outline.polygons.is_empty() {
-            let edge = rules.edge_clearance_nm;
-            let (distance, crosses) = drc::edge_gap(&self.outline.edges, &contour);
-            if !drc::contains(&self.outline.polygons, &contour) || crosses || distance < edge as f64 {
-                legal = false;
-            }
-        }
+        legal &= self.outline.allows_copper(&contour, rules.edge_clearance_nm);
         if legal {
             self.clear.insert(key);
         }

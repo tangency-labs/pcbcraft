@@ -2947,6 +2947,13 @@ fn shoved_connected_rails_keep_spacing_in_the_editor() {
             let points = displayed.iter().find(|r| r.track == id).map_or_else(|| vec![original.start, original.end], |r| r.points.clone());
             points.windows(2).map(|p| Contour::segment(p[0], p[1], original.width_nm).unwrap()).collect::<Vec<_>>()
         };
+        assert!(
+            displayed.iter().any(|r| {
+                let rail = original.iter().find(|t| t.id == r.track).unwrap();
+                rail_ids[..2].contains(&r.track) && r.points != [rail.start, rail.end] && r.points != [rail.end, rail.start]
+            }),
+            "neither rail moved: {displayed:?}"
+        );
         let (a, b) = (paths(rail_ids[0]), paths(rail_ids[1]));
         let gap = a.iter().flat_map(|a| b.iter().map(move |b| a.gap(b))).fold(f64::INFINITY, f64::min);
         assert!(gap >= 200_000., "{theme:?} preview collapsed same-net rail clearance to {gap}");
@@ -3037,15 +3044,27 @@ fn shove_from_an_unconnected_pad_pushes_both_rails_forward() {
         at(&h, end),
         h.state().views.active.board.tracks
     );
+    let replacements = h.state().views.active.board.tracks.replacements().to_vec();
+    for rail in &rails {
+        let path = &replacements.iter().find(|r| r.track == rail.id).unwrap().points;
+        assert!(path.iter().all(|p| p.y_nm >= rail.start.y_nm), "a preview leg moved behind the approach: {path:?}");
+    }
     click_route(&mut h, end);
     h.key_press(Key::Enter);
     h.run_steps(200);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
+    let laid = tracks(&h);
     for rail in rails {
-        let changed = tracks(&h).into_iter().find(|t| t.id == rail.id).unwrap();
-        assert!(changed.start.y_nm >= rail.start.y_nm && changed.end.y_nm >= rail.start.y_nm, "rail moved behind the approach");
-        assert_ne!(changed, rail);
+        let changed = laid.iter().find(|t| t.id == rail.id).unwrap();
+        assert_ne!(*changed, rail);
+        let path = &replacements.iter().find(|r| r.track == rail.id).unwrap().points;
+        for pair in path.windows(2) {
+            assert!(
+                laid.iter().any(|t| t.layer == rail.layer && t.width_nm == rail.width_nm && ([t.start, t.end] == pair || [t.end, t.start] == pair)),
+                "published shove is missing {pair:?}"
+            );
+        }
     }
     let board = h.state().session.project().unwrap().board_view(target).unwrap();
     assert!(
@@ -3141,8 +3160,10 @@ fn shove_preview_stays_displaced_at_the_top_of_the_channel() {
     assert_eq!(h.state().views.active.board.tracks.displacement_preview(), 2);
     assert!(preview_ends_at(&h, ink, at(&h, retained)));
     assert!(!preview_ends_at(&h, ink, at(&h, forbidden)));
+    let fixed = h.state().views.active.board.tracks.fixed_route_points().unwrap().to_vec();
     click_route(&mut h, forbidden);
     h.run_steps(300);
+    assert_eq!(h.state().views.active.board.tracks.fixed_route_points(), Some(fixed.as_slice()), "the blocked click fixed a preview vertex");
     assert_eq!(h.state().session.revision(), rev, "a blocked preview cannot commit");
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
     h.hover_at(at(&h, stopped));

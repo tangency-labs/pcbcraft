@@ -149,6 +149,18 @@ fn bounded_jobs_cancel_and_match_the_synchronous_plan() {
     assert!(exhausted.replacements.is_empty());
     let expected = s.plan_route(&query, &request, DEFAULT_BUDGET, &|| false).unwrap();
     let context = s.route_planning(view(&s).target).unwrap();
+    let revision = s.revision();
+    let mut suspended = s.prepare_route_plan(&context, request.clone(), DEFAULT_BUDGET).unwrap();
+    for _ in 0..256 {
+        assert!(!suspended.step(1), "must still be pending after the first probe");
+        if suspended.progress().completed > 0 {
+            break;
+        }
+    }
+    assert!(suspended.progress().completed > 0);
+    drop(suspended);
+    assert_eq!(s.revision(), revision);
+    assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
     let mut job = s.prepare_route_plan(&context, request.clone(), DEFAULT_BUDGET).unwrap();
     assert!(!job.step(0));
     for i in 0..100_000 {
@@ -755,4 +767,70 @@ fn free_pickups_inside_original_clearance_are_refused_before_chain_preparation()
     let plan = s.plan_route(&q, &req, DEFAULT_BUDGET, &|| false).unwrap();
     assert_eq!(plan.outcome, Outcome::Reached);
     commit(&mut s, &req, &plan);
+}
+
+/// Two off-angle centerlines can meet far from every projected endpoint and midpoint.
+#[test]
+fn shove_keeps_a_proper_crossing_as_a_protected_contact() {
+    let mut s = board();
+    let rail = add(&mut s, vec![p(0, 0), p(100, 0)], 250_000)[0];
+    let crossing = add(&mut s, vec![p(20, -20), p(60, 60)], 250_000)[0];
+    let request = Request { head: p(60, 20), target: p(80, 1), ..request(&s) };
+    let plan = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+    let path = &plan.replacements.iter().find(|r| r.track == rail).expect("the intersecting rail should move").points;
+    assert_ne!(path, &[p(0, 0), p(100, 0)]);
+    let junction = p(30, 0);
+    assert!(
+        path.windows(2).any(|leg| leg[0].y_nm == 0
+            && leg[1].y_nm == 0
+            && (leg[0].x_nm.min(leg[1].x_nm)..=leg[0].x_nm.max(leg[1].x_nm)).contains(&junction.x_nm)),
+        "missing original crossing: {path:?}"
+    );
+    let original = view(&s).tracks().iter().find(|t| t.id == crossing).unwrap().clone();
+    commit(&mut s, &request, &plan);
+    assert_eq!(view(&s).tracks().iter().find(|t| t.id == crossing), Some(&original));
+}
+
+/// A dense trace outside the active copper layer cannot invalidate a clear route.
+#[test]
+fn capped_back_trace_does_not_stop_a_clear_front_route() {
+    let mut s = board();
+    let back = copper_layers(&s)[1];
+    let add_back = |s: &mut Session, points: Vec<Point>| {
+        s.apply(ADD_TRACKS, &json!({"layer":back,"points":points,"width_nm":200_000,"expected_revision":s.revision()})).unwrap();
+    };
+    add_back(&mut s, vec![p(0, 0), p(1300, 0)]);
+    let mut zigzag = vec![p(0, 30)];
+    for i in 0..127 {
+        zigzag.extend([p(10 * i + 5, 0), p(10 * i + 10, 30)]);
+    }
+    add_back(&mut s, zigzag);
+    let request = request(&s);
+    let plan = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+    assert!(plan.replacements.is_empty());
+}
+
+/// A prefix must remain inside the outline with clearance for every segment and via land.
+#[test]
+fn shove_checks_fixed_segments_and_vias_against_the_outline() {
+    let mut s = board();
+    crate::board::drc::tests::outline(&mut s);
+    let query = query(&s);
+    let layer = copper_layers(&s)[0];
+    let head = p(20, 50);
+    let target = p(40, 50);
+    for (piece, valid) in [
+        (FixedCopper::Segment { start: p(0, 50), end: head, layer, width_nm: 250_000 }, true),
+        (FixedCopper::Segment { start: p(-60, 50), end: head, layer, width_nm: 250_000 }, false),
+        (FixedCopper::Via { at: p(-41, 50), diameter_nm: 1_000_000 }, true),
+        (FixedCopper::Via { at: p(-45, 50), diameter_nm: 1_000_000 }, false),
+        (FixedCopper::Via { at: p(-55, 50), diameter_nm: 1_000_000 }, false),
+    ] {
+        let request = Request { head, target, origin: Some((p(0, 50), layer)), fixed: vec![piece.clone()], ..request(&s) };
+        let plan = s.plan_route(&query, &request, DEFAULT_BUDGET, &|| false).unwrap();
+        assert_eq!(plan.outcome == Outcome::Reached, valid, "{piece:?}: {plan:?}");
+        assert!(plan.replacements.is_empty());
+    }
 }

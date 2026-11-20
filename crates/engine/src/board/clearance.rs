@@ -326,12 +326,20 @@ impl ClearanceQuery {
         nets: &[usize],
         replaced: Option<usize>,
     ) -> Result<Results, CommandError> {
+        self.probe_membership_excluding(contour, layers, nets, |index| Some(index) == replaced)
+    }
+
+    /// Remove absent originals before collecting contacted nets as well as before testing gaps.
+    pub(super) fn probe_membership_excluding(
+        &self,
+        contour: &Contour,
+        layers: &[Uuid],
+        nets: &[usize],
+        excluded: impl Fn(usize) -> bool,
+    ) -> Result<Results, CommandError> {
         let candidates = self.candidates(contour, layers)?;
-        let gaps: Vec<_> = candidates
-            .into_iter()
-            .filter(|index| Some(*index) != replaced)
-            .map(|index| (index, contour.gap(&self.geometry.items[index].contour)))
-            .collect();
+        let gaps: Vec<_> =
+            candidates.into_iter().filter(|index| !excluded(*index)).map(|index| (index, contour.gap(&self.geometry.items[index].contour))).collect();
         let connected: Vec<_> = nets
             .iter()
             .copied()
