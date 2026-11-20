@@ -161,7 +161,7 @@ fn value<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<crate::nets::
 
 impl StoredInstances {
     /// Select exactly the encoding promised by the project/instance headers, expanding UUIDs
-    /// only for a compact envelope, including project/52 and read-only project/51 with designator locks.
+    /// only for a compact envelope, including project/51 with designator locks and project/52 with lifecycle assessments.
     /// The normal instance installer validates foreign identities.
     pub(super) fn into_records(self, compact: bool) -> Result<Instances, String> {
         if compact != self.compact_part_group_memberships.is_some() || (compact && self.part_group_memberships.is_some()) {

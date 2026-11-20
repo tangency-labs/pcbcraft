@@ -169,7 +169,7 @@ fn component_metadata_opens_and_saves_through_every_native_entry_path() {
         let snapshot = s.snapshot().unwrap();
         let documents = encode_documents(snapshot.clone()).unwrap();
         let entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/52");
+        assert_eq!(entry["format"], "pcbcraft-project/16");
         let root = dir.path().join("metadata");
         let archive = dir.path().join("metadata.pc");
         folder::save(&root, None, &documents, &mut |_| Ok(())).unwrap();
@@ -334,7 +334,7 @@ fn version_five_first_save_migrates_and_sheet_edits_preserve_unaffected_bytes() 
     save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
     let after = folder::load(&root).unwrap();
     let header: serde_json::Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
-    assert_eq!(header["format"], "pcbcraft-project/52");
+    assert_eq!(header["format"], "pcbcraft-project/16");
     assert_eq!(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap().sheets().len(), 2);
     for (path, bytes) in
         migrated.iter().filter(|(path, _)| path.as_str() != ENTRY_POINT && !path.starts_with("sheets/") && !path.ends_with("/instances.json"))
@@ -1265,4 +1265,31 @@ fn bundled_library_upgrade_is_saved_once_and_preserves_unrelated_source_bytes() 
         assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), encode_documents(loaded.snapshot.clone()).unwrap());
         save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| panic!("repeat Save must be a no-op")).unwrap();
     }
+}
+
+/// Ordinary edits to a project without adopted lifecycle assessments stay at the existing project
+/// format version and keep desktop byte reuse on unaffected documents.
+#[test]
+fn ordinary_edit_save_preserves_prior_project_format_and_unrelated_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("ordinary");
+    let mut s = session();
+    let mut initial = encode_documents(s.snapshot().unwrap()).unwrap();
+    let initial_entry: serde_json::Value = serde_json::from_slice(&initial[ENTRY_POINT]).unwrap();
+    assert_eq!(initial_entry["format"], "pcbcraft-project/16");
+    let board_path = s.project().unwrap().board_document_path().unwrap();
+    initial.get_mut(&board_path).unwrap().extend_from_slice(b"\n  ");
+    folder::save(&root, None, &initial, &mut |_| Ok(())).unwrap();
+    let loaded = load(&root.join(ENTRY_POINT)).unwrap();
+    s.open_snapshot(loaded.snapshot.clone());
+    let symbol = s.project().unwrap().symbols()[0].id();
+    s.apply(pcbcraft_engine::SET_SYMBOL_FIELDS, &json!({"symbol":symbol,"reference":"R1","value":"10k","expected_revision":s.revision()})).unwrap();
+    save_target(s.snapshot().unwrap(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
+    let after = folder::load(&root).unwrap();
+    let header: serde_json::Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
+    assert_eq!(header["format"], "pcbcraft-project/16");
+    assert!(header.get("board_instances").is_none());
+    assert!(!after.contains_key("library/lifecycle.json"));
+    assert_eq!(after[&board_path], initial[&board_path]);
+    assert_eq!(pcbcraft_storage::open(&root.join(ENTRY_POINT)).unwrap().components().next().unwrap().value(), "10k");
 }

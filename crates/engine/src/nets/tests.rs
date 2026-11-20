@@ -78,7 +78,7 @@ fn automatic_numbering_and_idempotent_promotion_are_read_only_on_inspection() {
     let original = session.snapshot().unwrap();
     let docs = encode_documents(original.clone()).unwrap();
     let revision = session.revision();
-    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
+    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/23");
     assert_eq!(session.inspect(), session.inspect());
     assert_eq!(session.revision(), revision);
     assert!(Arc::ptr_eq(&original, &session.snapshot().unwrap()));
@@ -89,7 +89,7 @@ fn automatic_numbering_and_idempotent_promotion_are_read_only_on_inspection() {
     assert_eq!(project.net_registry.record(id).unwrap().fallbacks.len(), 1);
     let saved = encode_documents(project.clone()).unwrap();
     let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/52");
+    assert_eq!(entry["format"], "pcbcraft-project/23");
     assert!(entry["schematic_instances"]["net_registry"].is_object());
     assert!(!saved.keys().any(|path| path.ends_with("board.json") || path.ends_with("instances.json")));
     let revision = session.revision();
@@ -544,7 +544,7 @@ fn opening_a_named_project_sixteen_does_not_promote_or_change_its_bytes() {
     let mut historical = session.project().unwrap().clone();
     historical.net_registry = Arc::default();
     let documents = encode_documents(Arc::new(historical)).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&documents[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
+    assert_eq!(serde_json::from_slice::<Value>(&documents[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/16");
     let a = decode_documents(&documents).unwrap();
     let b = decode_documents(&documents).unwrap();
     assert!(a.net_registry.records.is_empty());

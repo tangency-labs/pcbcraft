@@ -56,7 +56,7 @@ fn designator_lock_roundtrip_eligibility_and_one_step_undo() {
             [persistence::ENTRY_POINT]
         );
         let entry: Value = serde_json::from_slice(&locked[persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/52");
+        assert_eq!(entry["format"], "pcbcraft-project/51");
         assert_eq!(entry["components"][0]["designator_locked"], true);
         assert!(entry["components"][1].get("designator_locked").is_none());
         let reopened = persistence::decode_documents(&locked).unwrap();
@@ -288,7 +288,7 @@ fn designator_lock_invalid_commands_preserve_snapshot() {
     }
 }
 
-/// Lock fields are sparse true-only records in project/52 (and read-only project/51); older and unsupported headers,
+/// Lock fields are sparse true-only records in project/51; older and unsupported headers,
 /// missing flags, explicit false/null, wrong types, duplicate keys and unknown fields are refused.
 #[test]
 fn designator_lock_codec_rejects_noncanonical_and_older_records() {
@@ -326,7 +326,7 @@ fn designator_lock_codec_rejects_noncanonical_and_older_records() {
         text.replace("\"designator_locked\":true", "\"designator_locked\":true,\"designator_locked\":true").into_bytes(),
     );
     assert!(persistence::decode_documents(&duplicate).unwrap_err().contains("duplicate field `designator_locked`"));
-    assert!(persistence::encode(session.snapshot().unwrap()).unwrap_err().contains("Designator locks require split project format 52"));
+    assert!(persistence::encode(session.snapshot().unwrap()).unwrap_err().contains("Designator locks require split project format 51"));
 }
 
 /// Copy preserves intent while duplication allocates a fresh reference; preserve-reference
@@ -422,7 +422,7 @@ fn designator_locks_compose_with_project_parameters_and_numbered_nets() {
             }
             let variants = persistence::encode_documents(Arc::new(historical)).unwrap();
             let entry: Value = serde_json::from_slice(&variants[persistence::ENTRY_POINT]).unwrap();
-            assert_eq!(entry["format"], "pcbcraft-project/52");
+            assert_eq!(entry["format"], "pcbcraft-project/51");
             let decoded = persistence::decode_documents(&variants).unwrap();
             if let Some(path) = decoded.instances_document_path() {
                 let instance: Value = serde_json::from_slice(&variants[&path]).unwrap();
@@ -451,7 +451,7 @@ fn designator_locks_compose_with_project_parameters_and_numbered_nets() {
 
 /// Locks compose with group catalogs, expanded/compact memberships and pinned profiles.
 /// No-board cases load a retained, command-authored catalog; authoring still requires a board.
-/// Unlocking restores the previous project/52 bytes without changing those records or board bytes.
+/// Unlocking restores the lower canonical envelope without changing those records or board bytes.
 #[test]
 fn designator_locks_preserve_group_representations_and_assembly_profiles() {
     for board in [false, true] {
@@ -503,13 +503,19 @@ fn designator_locks_preserve_group_representations_and_assembly_profiles() {
                 let snapshot = session.snapshot().unwrap();
                 let original: Value = serde_json::from_slice(&before[persistence::ENTRY_POINT]).unwrap();
                 if profiles || group_mode != 0 {
-                    // Current saves write project/52 for every catalog combination.
-                    assert_eq!(original["format"], "pcbcraft-project/52");
+                    let expected = if profiles {
+                        36
+                    } else if group_mode == 3 {
+                        39
+                    } else {
+                        24
+                    };
+                    assert_eq!(original["format"], format!("pcbcraft-project/{expected}"));
                 }
                 lock(&mut session, true);
                 let locked = documents(&session);
                 let entry: Value = serde_json::from_slice(&locked[persistence::ENTRY_POINT]).unwrap();
-                assert_eq!(entry["format"], "pcbcraft-project/52");
+                assert_eq!(entry["format"], "pcbcraft-project/51");
                 for field in ["part_groups", "assembly_profiles", "schematic_instances"] {
                     assert_eq!(entry.get(field), original.get(field), "{field}");
                 }
@@ -593,7 +599,6 @@ fn designator_lock_adopts_legacy_metadata_without_changing_an_unlocked_save() {
 
 /// A genuinely pre-watermark project gains allocation metadata on first lock. Undo restores
 /// authored content and the earlier storage home, but must retain that monotonic watermark.
-/// Every save, before and after the lock, writes project/52.
 #[test]
 fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     let mut session = fixture(true);
@@ -603,7 +608,7 @@ fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     Arc::make_mut(&mut historical.board).ownership = crate::board::identity::Ownership::Legacy;
     let historical_documents = persistence::encode_documents(Arc::new(historical)).unwrap();
     let entry: Value = serde_json::from_slice(&historical_documents[persistence::ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/52");
+    assert_eq!(entry["format"], "pcbcraft-project/6");
     for field in ["layout_root", "numeric_id_high_water", "schematic_instances"] {
         assert!(entry.get(field).is_none(), "{field}");
     }
@@ -614,7 +619,7 @@ fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     assert!(before.layout.is_none() && before.numeric_id_high_water.is_none() && !before.has_sheet_occurrences());
     lock(&mut session, true);
     let locked = documents(&session);
-    assert_eq!(serde_json::from_slice::<Value>(&locked[persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
+    assert_eq!(serde_json::from_slice::<Value>(&locked[persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/51");
     let watermark = session.project().unwrap().numeric_id_high_water.unwrap();
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&locked).unwrap()).unwrap(), locked);
     edit(&mut session, "edit.undo", Value::Null);
@@ -624,7 +629,7 @@ fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     assert!(restored.components().all(|part| !part.designator_locked()));
     crate::assert_same_content(&before, &restored);
     let restored_documents = documents(&session);
-    assert_eq!(serde_json::from_slice::<Value>(&restored_documents[persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
+    assert_eq!(serde_json::from_slice::<Value>(&restored_documents[persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/7");
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&restored_documents).unwrap()).unwrap(), restored_documents);
     edit(&mut session, "edit.redo", Value::Null);
     assert_eq!(documents(&session), locked);

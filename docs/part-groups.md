@@ -66,8 +66,12 @@ numbers.
 
 ## Storage
 
-`pcbcraft-project/52` supports both expanded and compact memberships, with or
-without assembly profiles or designator locks. The catalog
+A nonempty catalog selects `pcbcraft-project/24` for expanded memberships, or
+`pcbcraft-project/39` for compact memberships, when no other content needs a
+higher format. Pinned assembly profiles select project/36, differential pairs
+project/45, and active designator locks project/51. These envelopes permit either
+membership representation. Board-owned [differential pairs](net-registry-storage.md#differential-pair-records)
+use instances/8 even alongside a lock. The catalog
 is stored in `project.json` directly after any net-class catalog, with groups
 sorted by UUID and one per line. Readers accept the groups in any order and sort
 them by UUID, as for net classes:
@@ -83,10 +87,9 @@ them by UUID, as for net classes:
 
 Memberships live in the project's instance home beside the sheet occurrences and
 any net registry: `schematic_instances` in `project.json` when there is no board,
-or the board folder's `instances.json`. Board-owned expanded memberships use
-`pcbcraft-instances/5`; compact memberships use instances/7. If the board's registry
-contains [differential pairs](net-registry-storage.md#differential-pair-records), both
-representations use instances/8. Expanded records are sorted by part instance and
+or the board folder's `instances.json`. Expanded memberships use board-owned
+`pcbcraft-instances/5`; compact memberships use instances/7, except where
+instances/8 carries differential pairs. Expanded records are sorted by part instance and
 then group, unique, and one per line:
 
 ```json
@@ -95,8 +98,9 @@ then group, unique, and one per line:
 ]
 ```
 
-Generated net numbers, net classes and their assignments, project parameters
-and no-connect intent are optional with their existing rules. Both fields are omitted when empty; explicitly empty
+Project/24 is a superset of project/23: generated net numbers, net classes and
+their assignments, project parameters and no-connect intent are all optional
+with their existing rules. Both fields are omitted when empty; explicitly empty
 lists, null, unknown fields, unsorted or repeated records, and records naming a
 missing part instance or group are refused. Older project and instance headers
 refuse these records, and instances/5 requires memberships. A catalog without
@@ -104,16 +108,20 @@ members leaves the board instance header chosen by the rest of the content uncha
 encoding refuses part groups.
 
 Inspection does not migrate a project. The first group edit adopts current
-folder and occurrence metadata in the same undo step. Removing the last group
-omits the catalog without changing the project header.
+folder and occurrence metadata in the same undo step. Projects without part
+groups keep their existing format and canonical encoder bytes; accepted
+noncanonical input may normalize when saved. Removing the last group returns
+the entry point to the version its other content needs.
 
 ### Dense membership
 
 Every supported part instance may belong to all 256 groups: up to 4,096 instances
 and 1,048,576 memberships. If the expanded representation exceeds the existing
 16 MiB document or 48 MiB total-document bound, the disposable encoder restarts
-once with compact memberships. Project/52 stays unchanged; the board instance
-header changes to instances/7 unless pairs require instances/8.
+once with compact memberships. The entry selects project/39 if no other feature
+requires a higher format. Project/36, /45 and /51 keep their headers. A board-owned
+instance document uses instances/7 for compact memberships without pairs, or
+keeps instances/8 when pairs are present.
 This is a representation choice inside encoding, not a refused edit or a Save
 precondition. The model capacity and file-size limits do not change.
 

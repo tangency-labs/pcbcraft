@@ -119,7 +119,6 @@ fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
         let mut downgraded = docs.clone();
         let mut entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
         entry["format"] = json!("pcbcraft-project/16");
-        entry.as_object_mut().unwrap().remove("board_instances");
         downgraded.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
         if board {
             let mut instance = original.clone();
@@ -140,19 +139,7 @@ fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
                 *registry(&mut value) = Value::Null;
             }
             missing.insert(path.clone(), serde_json::to_vec(&value).unwrap());
-            if absent && !board {
-                // Project/52 makes the embedded registry optional; a board header still names it.
-                assert!(decode_documents(&missing).unwrap().net_registry.records.is_empty());
-                // Project/17 cannot omit it.
-                let mut older = value.clone();
-                older["format"] = json!("pcbcraft-project/17");
-                let mut refused = docs.clone();
-                refused.insert(path.clone(), serde_json::to_vec(&older).unwrap());
-                let error = decode_documents(&refused).unwrap_err();
-                assert!(error.contains("Net registry records require project format 17"), "{error}");
-            } else {
-                assert!(decode_documents(&missing).is_err());
-            }
+            assert!(decode_documents(&missing).is_err());
         }
         if board {
             let mut bad = docs.clone();

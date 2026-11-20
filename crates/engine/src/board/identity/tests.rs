@@ -226,7 +226,7 @@ fn metadata_and_optional_board_ownership_round_trip_with_strict_combined_schema(
             .unwrap();
         let documents = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
         let header: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/52");
+        assert_eq!(header["format"], "pcbcraft-project/16");
         assert_eq!(header["boards"].as_array().unwrap().len(), usize::from(create_board));
         assert_eq!(crate::persistence::project_board_path(&documents["project.json"]).unwrap().is_some(), create_board);
         let loaded = persistence::decode_documents(&documents).unwrap();
@@ -276,7 +276,7 @@ fn legacy_metadata_remains_version_11_until_the_first_physical_edit() {
         .unwrap();
     let before = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
     let entry: Value = serde_json::from_slice(&before["project.json"]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/52");
+    assert_eq!(entry["format"], "pcbcraft-project/11");
     assert!(entry.get("boards").is_none());
     let reopened = persistence::decode_documents(&before).unwrap();
     assert_eq!(reopened.board_target(), Some(target));
@@ -285,7 +285,7 @@ fn legacy_metadata_remains_version_11_until_the_first_physical_edit() {
     session.apply(crate::PLACE_FOOTPRINT,&json!({"board":target.board,"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
     let after = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
     let registered: Value = serde_json::from_slice(&after["project.json"]).unwrap();
-    assert_eq!(registered["format"], "pcbcraft-project/52");
+    assert_eq!(registered["format"], "pcbcraft-project/12");
     assert_eq!(registered["boards"][0]["id"], json!(target.board));
     assert_eq!(registered["components"], entry["components"]);
     let reopened = persistence::decode_documents(&after).unwrap();
@@ -294,7 +294,7 @@ fn legacy_metadata_remains_version_11_until_the_first_physical_edit() {
     session.apply("edit.undo", &json!({})).unwrap();
     let undone = persistence::encode_documents(session.snapshot().unwrap()).unwrap();
     let undone_entry: Value = serde_json::from_slice(&undone["project.json"]).unwrap();
-    assert_eq!(undone_entry["format"], "pcbcraft-project/52");
+    assert_eq!(undone_entry["format"], "pcbcraft-project/11");
     assert_eq!(undone_entry["components"], entry["components"]);
     assert_eq!(session.project().unwrap().board_target(), Some(target));
 }

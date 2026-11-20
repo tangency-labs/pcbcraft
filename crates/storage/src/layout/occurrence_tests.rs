@@ -5,7 +5,7 @@ use pcbcraft_engine::{
 };
 use serde_json::{Value, json};
 
-/// A board-folder snapshot before adoption of instance records.
+/// Retain an original project/14 board-folder fixture, not a previous filename or flat layout.
 fn project_fourteen() -> Arc<Project> {
     Arc::new(decode(include_bytes!("../../../app/tests/fixtures/two-resistors.pc")).unwrap().with_board_folders(".").unwrap())
 }
@@ -48,10 +48,7 @@ fn check_every_checkpoint(before: &Documents, after: &Documents) {
 #[test]
 fn project_fourteen_occurrence_migration_recovers_at_every_checkpoint() {
     let source = project_fourteen();
-    let mut before = encode_documents(source.clone()).unwrap();
-    let mut entry: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-    entry["format"] = json!("pcbcraft-project/14");
-    before.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
+    let before = encode_documents(source.clone()).unwrap();
     let after_project = prepare(source.clone(), None, Some(&before)).unwrap();
     assert_eq!(source.board_document_path(), after_project.board_document_path());
     let after = encode_documents(after_project).unwrap();
@@ -140,5 +137,5 @@ fn occurrence_migration_keeps_registered_namespaces_and_user_notes() {
     assert_eq!(after[&board], before[&board]);
     assert_eq!(crate::load(&root).unwrap(), after);
     assert!(!root.join("board.json").exists());
-    assert_eq!(serde_json::from_slice::<Value>(&after[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
+    assert_eq!(serde_json::from_slice::<Value>(&after[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/16");
 }

@@ -172,7 +172,7 @@ fn parameters_are_stored_one_per_line_and_round_trip() {
     let untouched = encode_documents(s.snapshot().unwrap()).unwrap();
     let entry: Value = serde_json::from_slice(&untouched[ENTRY_POINT]).unwrap();
     assert!(entry.get("parameters").is_none());
-    assert_eq!(entry["format"], "pcbcraft-project/52");
+    assert_ne!(entry["format"], "pcbcraft-project/22");
     edit(&mut s, SET, json!({"scope":"sheet","sheet":sheet,"name":"Title","value":"Power supply"})).unwrap();
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(documents[ENTRY_POINT], untouched[ENTRY_POINT]);
@@ -184,7 +184,7 @@ fn parameters_are_stored_one_per_line_and_round_trip() {
     let project = s.snapshot().unwrap();
     let documents = encode_documents(project.clone()).unwrap();
     let entry: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/52");
+    assert_eq!(entry["format"], "pcbcraft-project/22");
     assert_eq!(entry["parameters"], json!({"Company":"Tangency","Revision":"B"}));
     let reopened = decode_documents(&documents).unwrap();
     assert_eq!(reopened.parameters(), project.parameters());
@@ -225,15 +225,7 @@ fn decoding_rejects_misplaced_or_invalid_lists() {
     assert!(mutate(ENTRY_POINT, &|v| v["format"] = json!("pcbcraft-project/21")).is_err());
     assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({})).is_err());
     assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({"bad name":"x"})).is_err());
-    // Project/52 makes the list optional; project/22 cannot omit it.
-    assert!(mutate(ENTRY_POINT, &|v| drop(v.as_object_mut().unwrap().remove("parameters"))).unwrap().parameters().is_empty());
-    assert!(
-        mutate(ENTRY_POINT, &|v| {
-            v["format"] = json!("pcbcraft-project/22");
-            v.as_object_mut().unwrap().remove("parameters");
-        })
-        .is_err()
-    );
+    assert!(mutate(ENTRY_POINT, &|v| drop(v.as_object_mut().unwrap().remove("parameters"))).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title":"x".repeat(MAX_VALUE_LEN + 1)})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title": 3})).is_err());

@@ -97,7 +97,7 @@ fn legacy_unnumbered_identities_adopt_without_renumbering_other_nets() {
         sheet.connectivity = Arc::default();
     }
     let docs = encode_documents(Arc::new(legacy)).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
+    assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/17");
     session.open_snapshot(decode_documents(&docs).unwrap());
     let a = name_at(&session, &pins[1]);
     let b = name_at(&session, &pins[4]);
@@ -216,7 +216,7 @@ fn numbered_nets_and_project_parameters_round_trip_together() {
         apply(&mut session, crate::parameters::SET, json!({"scope":"project","name":"Revision","value":"B"}));
         let docs = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
-        assert_eq!(entry["format"], "pcbcraft-project/52");
+        assert_eq!(entry["format"], "pcbcraft-project/23");
         assert_eq!(entry["parameters"], json!({"Revision":"B"}));
         let reopened = decode_documents(&docs).unwrap();
         assert_eq!(reopened.parameters().get("Revision").map(String::as_str), Some("B"));
@@ -225,7 +225,6 @@ fn numbered_nets_and_project_parameters_round_trip_together() {
         let mut old = docs.clone();
         let mut downgraded = entry.clone();
         downgraded["format"] = json!("pcbcraft-project/22");
-        downgraded.as_object_mut().unwrap().remove("board_instances");
         old.insert(ENTRY_POINT.into(), serde_json::to_vec(&downgraded).unwrap());
         assert!(decode_documents(&old).is_err());
         apply(&mut session, crate::parameters::SET, json!({"scope":"project","name":"Revision","value":null}));

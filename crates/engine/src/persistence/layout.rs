@@ -289,11 +289,9 @@ mod migration_tests {
             for sheet in Arc::make_mut(&mut Arc::make_mut(&mut historical).sheets) {
                 sheet.occurrence_id = None;
             }
-            let mut before = encode_documents(historical.clone()).unwrap();
-            let mut header: serde_json::Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
-            assert_eq!(header["format"], "pcbcraft-project/52");
-            header["format"] = json!(format!("pcbcraft-project/{version}"));
-            before.insert(ENTRY_POINT.into(), serde_json::to_vec(&header).unwrap());
+            let before = encode_documents(historical.clone()).unwrap();
+            let header: serde_json::Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
+            assert_eq!(header["format"], format!("pcbcraft-project/{version}"));
             let after = migrate_board_layout(before.clone(), ".").unwrap();
             let loaded = decode_documents(&after).unwrap();
             assert_eq!(loaded.board_target(), historical.board_target());

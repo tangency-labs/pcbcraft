@@ -18,7 +18,7 @@ fn locked_clipboard(tree: bool) -> (Session, Value) {
     let envelope: Value = serde_json::from_str(response["clipboard"].as_str().unwrap()).unwrap();
     assert_eq!(envelope["format"], "pcbcraft-clipboard/3");
     let entry: Value = serde_json::from_str(envelope["documents"][persistence::ENTRY_POINT].as_str().unwrap()).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/52");
+    assert_eq!(entry["format"], "pcbcraft-project/51");
     assert!(clipboard::Fragment::from_text(&envelope.to_string()).is_ok());
     (source, envelope)
 }

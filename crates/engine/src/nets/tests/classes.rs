@@ -58,7 +58,7 @@ fn promotion_assignment_inspection_and_removal_are_atomic_and_sparse() {
     assert_eq!(inspect(&mut s, id)["status"], "ready");
     let assigned = s.snapshot().unwrap();
     let saved = encode_documents(assigned.clone()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&saved[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
+    assert_eq!(serde_json::from_slice::<Value>(&saved[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/23");
     round_trip(&s);
     let addressed = address(&s, id);
     apply(&mut s, SET_CLASSES, json!({"target":addressed,"classes":[power]}));
@@ -78,7 +78,7 @@ fn promotion_assignment_inspection_and_removal_are_atomic_and_sparse() {
     assert_eq!(id_for(&s, &pins[0]), id);
     assert_eq!(
         serde_json::from_slice::<Value>(&encode_documents(s.snapshot().unwrap()).unwrap()[ENTRY_POINT]).unwrap()["format"],
-        "pcbcraft-project/52"
+        "pcbcraft-project/23"
     );
     apply(&mut s, "edit.undo", json!({}));
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
@@ -382,7 +382,6 @@ fn binding_codec_refuses_old_headers_empty_unknown_and_dangling_assignments() {
                     value["format"] = json!("pcbcraft-instances/3");
                     let mut entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
                     entry["format"] = json!("pcbcraft-project/21");
-                    entry.as_object_mut().unwrap().remove("board_instances");
                     changed.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
                 } else {
                     value["format"] = json!("pcbcraft-project/21");
@@ -393,7 +392,6 @@ fn binding_codec_refuses_old_headers_empty_unknown_and_dangling_assignments() {
         }
         let mut entry: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
         entry["format"] = json!("pcbcraft-project/20");
-        entry.as_object_mut().unwrap().remove("board_instances");
         let mut changed = docs.clone();
         changed.insert(ENTRY_POINT.into(), serde_json::to_vec(&entry).unwrap());
         assert!(decode_documents(&changed).is_err());

@@ -49,7 +49,7 @@ A placed part instance also owns `designator_locked`, independently of its
 symbol definition and unit drawings. All placed units share that flag; unit
 letters have no separate lock. Inspection includes false explicitly, and
 `schematic.set_symbol_fields` edits it through an existing placed symbol.
-[Project/52](native-project-storage.md#designator-locks) stores active locks
+[Project/51](native-project-storage.md#designator-locks) stores active locks
 without changing any library symbol schema. Manual reference edits remain
 available; automatic annotation itself is not implemented.
 

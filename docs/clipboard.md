@@ -143,7 +143,7 @@ relocation but never bypasses live ownership, cycle, revision or geometry checks
 
 A schematic fragment with a locked part instance uses `pcbcraft-clipboard/3`
 unless it also carries pinned non-plated holes, which require
-`pcbcraft-clipboard/6`. Both keep locks in project/52 in the native document map.
+`pcbcraft-clipboard/6`. Both keep locks in project/51 in the native document map.
 With a non-null, non-nil `root_sheet` UUID they use the closed-tree contract of
 version 2; an omitted or null root selects flat scope like version 1.
 Version 3 requires a lock and cannot carry non-plated holes. Version 6 requires

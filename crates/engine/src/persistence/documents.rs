@@ -55,7 +55,7 @@ const PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/24";
 const ASSEMBLY_PROFILE_PROJECT_FORMAT: &str = "pcbcraft-project/36";
 const COMPACT_PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/39";
 const PAIR_PROJECT_FORMAT: &str = "pcbcraft-project/45";
-const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/52";
+const LIFECYCLE_PROJECT_FORMAT: &str = "pcbcraft-project/52";
 const LIFECYCLE_PATH: &str = "library/lifecycle.json";
 const NO_CONNECT_PROJECT_FORMAT: &str = "pcbcraft-project/19";
 const INSTANCES_FORMAT: &str = "pcbcraft-instances/1";
@@ -207,7 +207,7 @@ impl ProjectDocument {
                 | ASSEMBLY_PROFILE_PROJECT_FORMAT
                 | PART_GROUP_PROJECT_FORMAT
                 | PAIR_PROJECT_FORMAT
-        ) || (matches!(self.format.as_str(), PART_PROJECT_FORMAT | CURRENT_PROJECT_FORMAT) && self.layout_root.is_some());
+        ) || (matches!(self.format.as_str(), PART_PROJECT_FORMAT | LIFECYCLE_PROJECT_FORMAT) && self.layout_root.is_some());
         if foldered != self.layout_root.is_some() {
             return Err(format!("{ENTRY_POINT}: incompatible layout_root and project format"));
         }
@@ -279,7 +279,7 @@ pub fn project_layout_root(entry: &[u8]) -> Result<Option<String>, String> {
 /// Schematic-only records are embedded in the entry point and have no separate managed path.
 pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
     let project: ProjectDocument = serde_json::from_slice(entry).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
-    if project.format == CURRENT_PROJECT_FORMAT {
+    if project.format == LIFECYCLE_PROJECT_FORMAT {
         return match project.board_instances {
             None => Ok(None),
             Some(true) if project.schematic_instances.is_some() => {
@@ -437,7 +437,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// either group membership encoding remain optional under those headers.
 /// Project/51 requires an active designator lock. Differential pairs are optional;
 /// board-owned pairs still use instances/8 with either group membership encoding.
-/// Project/51 is read only; current saves write project/52, where designator locks are optional.
+/// Project/52 requires adopted lifecycle assessments in `library/lifecycle.json`; designator
+/// locks, differential pairs and earlier optional project records remain optional under `/52`.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
 /// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
@@ -445,31 +446,32 @@ pub fn is_document_path(path: &str) -> bool {
 pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     check_documents(documents)?;
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
-    let current = project.format == CURRENT_PROJECT_FORMAT;
+    let lifecycle_format = project.format == LIFECYCLE_PROJECT_FORMAT;
     let lifecycle = match documents.get(LIFECYCLE_PATH) {
-        Some(bytes) if current => {
+        Some(bytes) if lifecycle_format => {
             crate::library::sources::lifecycle::Assessments::decode(bytes).map_err(|error| format!("{LIFECYCLE_PATH}: {error}"))?
         }
         Some(_) => return Err("library/lifecycle.json requires project/52".into()),
+        None if lifecycle_format => return Err("project/52 requires library/lifecycle.json".into()),
         None => Default::default(),
     };
     let mut compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
-    // Only the legacy compact envelope shares every non-membership rule with project/24.
+    // Only the compact envelope shares every non-membership rule with project/24.
     project.format = project.layout_format().to_owned();
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
     let lock_format = project.format == DESIGNATOR_LOCK_PROJECT_FORMAT;
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
-    if (!current && !lock_format && !pair_format && profile_format != project.assembly_profiles.is_some())
+    if (!lifecycle_format && !lock_format && !pair_format && profile_format != project.assembly_profiles.is_some())
         || project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty())
     {
         return Err("project.json: assembly profiles require project format 36, 45, 51 or 52 and a nonempty identity catalog.".into());
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
-    // Project/51 requires an active lock; project/52 carries locks optionally.
-    if (!current && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
+    // Project/51 requires an active lock; project/52 carries locks optionally alongside assessments.
+    if (!lifecycle_format && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
         || project.components.iter().any(|part| part.designator_locked == Some(false))
     {
         return Err(
@@ -478,7 +480,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         );
     }
     let instance_path = project_instances_path(&documents[ENTRY_POINT])?;
-    let occurrences = (current && (project.schematic_instances.is_some() || instance_path.is_some()))
+    let occurrences = (lifecycle_format && (project.schematic_instances.is_some() || instance_path.is_some()))
         || matches!(
             project.format.as_str(),
             OCCURRENCE_PROJECT_FORMAT
@@ -499,11 +501,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Project/24 is a superset of project/23: it requires a nonempty part-group catalog,
     // and every record project/23 accepts is optional, including generated net numbers.
     let part_group_format = project.format == PART_GROUP_PROJECT_FORMAT;
-    let optional_part_groups = lock_format || profile_format || pair_format || current;
+    let optional_part_groups = lock_format || profile_format || pair_format || lifecycle_format;
     let supports_part_groups = part_group_format || optional_part_groups;
     let superset_format = generated_net_format || supports_part_groups;
     let class_format = matches!(project.format.as_str(), CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
-    let no_connect_format = current
+    let no_connect_format = lifecycle_format
         || matches!(
             project.format.as_str(),
             NO_CONNECT_PROJECT_FORMAT
@@ -551,7 +553,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if !no_connect_format && project.components.iter().any(|part| part.no_connects.is_some()) {
         return Err("No-connect intent requires project format 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52.".into());
     }
-    let part_format = current
+    let part_format = lifecycle_format
         || matches!(
             project.format.as_str(),
             PART_PROJECT_FORMAT
@@ -609,14 +611,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
-            | CURRENT_PROJECT_FORMAT
+            | LIFECYCLE_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
         return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
     }
     let (mut registrations, storage_layout) = project.registry()?;
     let board_path = project_board_path(&documents[ENTRY_POINT])?;
-    if current {
+    if lifecycle_format {
         let metadata = project.components.iter().any(|component| component.metadata.is_some());
         if project.numeric_id_high_water.is_none() && (metadata || schematic_packages || occurrences) {
             return Err("Project/52 metadata, footprint choices and instances require a numeric ID watermark.".into());
@@ -651,7 +653,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
         return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52".into());
     }
-    if !current
+    if !lifecycle_format
         && matches!(
             project.format.as_str(),
             WATERMARK_PROJECT_FORMAT
@@ -698,12 +700,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 let optional_bindings =
                     (parameter_format || superset_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
                 let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
-                let pair_instances =
-                    pair_format || ((current || lock_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
+                let pair_instances = pair_format
+                    || ((lifecycle_format || lock_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
                 if pair_instances {
                     // Instances/8 keeps its header for either membership encoding.
                     compact_part_groups = instance.compact_part_group_memberships.is_some();
-                } else if current || lock_format || profile_format {
+                } else if lifecycle_format || lock_format || profile_format {
                     // Without pairs, the instance header distinguishes the two encodings.
                     compact_part_groups = instance.format == COMPACT_PART_GROUP_INSTANCES_FORMAT;
                 }
@@ -759,7 +761,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 51 or 52 with a net-class catalog and the content-selected instance format when board-owned; project format 21 requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
-    if !current && !lock_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
+    if !lifecycle_format && !lock_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
         return Err(
             "Differential pairs require project format 45, 51 or 52 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
                 .into(),
@@ -1438,7 +1440,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     }
     if (!class_format && !parameter_format && !superset_format && no_connect_format != (marker_count != 0))
-        || (current && !occurrences && marker_count != 0)
+        || (lifecycle_format && !occurrences && marker_count != 0)
         || marker_count > crate::no_connect::MAX_MARKERS
     {
         return Err("Project format 19 requires nonempty bounded no-connect intent.".into());
@@ -1722,8 +1724,9 @@ impl DocumentsEncoder {
     /// writes its bounded setup (at most 64 material revisions, 128 layers, 127 strata and
     /// 256 nested prepreg plies) and an enabled baseline within its 16 MiB bound.
     /// Net and pair records each consume one record budget in their shared instance home.
-    /// Expanded memberships that exceed a byte limit restart once in compact form.
-    /// Only disposable encoding state changes; the project header stays at /52.
+    /// A legacy membership home that exceeds a byte limit restarts once in the compact
+    /// envelope. Only disposable encoding state changes; no project edit or Save refusal is
+    /// introduced. Valid legacy documents retain their encoding while it fits the limits.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
         match self.step_records(records) {
             Err(_) if self.size_limit_exceeded && !self.use_compact_memberships && !self.project.part_group_memberships.is_empty() => {
@@ -1755,6 +1758,7 @@ impl DocumentsEncoder {
                             return Err("Occurrence records require the current project folder layout.".into());
                         }
                     }
+                    let format = if p.numeric_id_high_water.is_some() { WATERMARK_PROJECT_FORMAT } else { PROJECT_FORMAT };
                     let sheets = p
                         .sheets
                         .iter()
@@ -1770,6 +1774,12 @@ impl DocumentsEncoder {
                     if has_packages && (p.board_target().is_some() || p.numeric_id_high_water.is_none()) {
                         return Err("schematic package choices require no board and an allocation watermark".into());
                     }
+                    let has_parts = p.components.values().any(|part| part.part.is_some());
+                    let extended_choices = p
+                        .schematic_packages
+                        .assignments
+                        .values()
+                        .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
                     p.net_classes.validate()?;
                     let has_classes = !p.net_classes.definitions.is_empty();
                     if has_classes && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
@@ -1816,6 +1826,38 @@ impl DocumentsEncoder {
                     if (has_numbers || has_pairs) && !has_bindings {
                         p.net_registry.validate(p)?;
                     }
+                    let format = if has_pairs {
+                        PAIR_PROJECT_FORMAT
+                    } else if has_part_groups {
+                        if self.use_compact_memberships { COMPACT_PART_GROUP_PROJECT_FORMAT } else { PART_GROUP_PROJECT_FORMAT }
+                    } else if has_numbers {
+                        GENERATED_NET_PROJECT_FORMAT
+                    } else if has_parameters {
+                        PARAMETER_PROJECT_FORMAT
+                    } else if has_bindings {
+                        BINDING_PROJECT_FORMAT
+                    } else if has_classes {
+                        CLASS_PROJECT_FORMAT
+                    } else if has_no_connects {
+                        NO_CONNECT_PROJECT_FORMAT
+                    } else if !p.net_registry.records.is_empty() {
+                        NET_PROJECT_FORMAT
+                    } else if p.has_sheet_occurrences() {
+                        OCCURRENCE_PROJECT_FORMAT
+                    } else if has_parts || extended_choices {
+                        PART_PROJECT_FORMAT
+                    } else if p.layout.is_some() {
+                        FOLDER_PROJECT_FORMAT
+                    } else if has_packages {
+                        SCHEMATIC_PACKAGES_PROJECT_FORMAT
+                    } else {
+                        match (registrations.is_some(), has_metadata) {
+                            (true, true) => OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT,
+                            (true, false) => OPTIONAL_BOARD_PROJECT_FORMAT,
+                            (false, true) => FIELDS_PROJECT_FORMAT,
+                            (false, false) => format,
+                        }
+                    };
                     p.assembly_profiles.validate(&p.board.assembly_profiles)?;
                     let has_profiles = !p.assembly_profiles.is_empty();
                     if has_profiles && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
@@ -1824,11 +1866,21 @@ impl DocumentsEncoder {
                     if has_metadata && p.numeric_id_high_water.is_none() {
                         return Err("component metadata requires an adopted numeric ID watermark".into());
                     }
-                    if !p.lifecycle.is_empty() {
+                    let has_lifecycle = !p.lifecycle.is_empty();
+                    let format = if has_lifecycle {
+                        LIFECYCLE_PROJECT_FORMAT
+                    } else if has_locks {
+                        DESIGNATOR_LOCK_PROJECT_FORMAT
+                    } else if has_profiles && !has_pairs {
+                        ASSEMBLY_PROFILE_PROJECT_FORMAT
+                    } else {
+                        format
+                    };
+                    if has_lifecycle {
                         self.documents.insert(LIFECYCLE_PATH.into(), p.lifecycle.encode()?);
                     }
-                    writeln!(self.bytes, "{{\n  \"format\": \"{CURRENT_PROJECT_FORMAT}\",").map_err(|e| e.to_string())?;
-                    if self.instance_records.is_some() && p.board_target().is_some() {
+                    writeln!(self.bytes, "{{\n  \"format\": \"{format}\",").map_err(|e| e.to_string())?;
+                    if has_lifecycle && self.instance_records.is_some() && p.board_target().is_some() {
                         self.bytes.extend_from_slice(b"  \"board_instances\": true,\n");
                     }
                     write!(self.bytes, "  \"id\": \"{}\",\n  \"name\": {},\n", p.id, json(&p.name)?).map_err(|e| e.to_string())?;

@@ -26,7 +26,7 @@ geometry, endpoint references and topology. Additional scope checks reject board
 owners, orphan sheets/components, empty roots and a hierarchy disguised as a
 legacy flat payload. The 8 MiB bound applies before JSON parsing. Older clients
 reject version 2; source project paths and runtime providers are not required.
-A payload with part-instance designator locks uses project/52 documents within
+A payload with part-instance designator locks uses project/51 documents within
 `pcbcraft-clipboard/3`, or within `pcbcraft-clipboard/6` if it also carries
 non-plated holes. Both versions use flat scope when `root_sheet` is omitted or
 null; hierarchy requires an explicit non-nil root UUID. Copy and Cut relocation

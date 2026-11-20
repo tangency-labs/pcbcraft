@@ -15,8 +15,11 @@ Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
 Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
 in the entry point; only projects with authored classes select that version.
-[Designator locks](#designator-locks) are optional project/52 records; read-only
-project/51 files with locks remain readable and are rewritten as project/52.
+Active [designator locks](#designator-locks) select project/51, retaining the
+optional records and membership representations of the earlier envelopes.
+Adopted [lifecycle assessments](#adopted-lifecycle-assessments) select
+project/52 and write `library/lifecycle.json`; projects without adopted
+assessments keep their existing format selection and byte reuse.
 Project/22 adds [project parameters](#parameter-records); project/23 adds generated
 net numbers and can also store project parameters.
 Project/24 adds the [part-group catalog](part-groups.md); its expanded
@@ -121,8 +124,8 @@ sheet/9. `prepare_opened` runs both opening steps; `adopt_paper` runs this one.
 
 ## Board folders and first-save migration
 
-New projects use `pcbcraft-project/52`, retaining the `layout_root: "."` and
-zero-or-one `boards` registry introduced by project/14. Each registration contains its stable `id`, `name`
+New projects use `pcbcraft-project/16`, extending project/14's `layout_root: "."` and required
+zero-or-one `boards` registry. Each registration contains its stable `id`, `name`
 and portable `folder` segment instead of `file`. Physical data resolves to
 `join(layout_root, "boards", folder, "board.json")`, including single-board
 projects. The folder is a board-name slug plus 12 hexadecimal UUID characters;
@@ -154,10 +157,17 @@ registries are refused. Existing projects without records retain their low-level
 encoding; Open and inspection never promote nets. Older readers must refuse
 these headers rather than discard identity, lineage or unresolved decisions.
 
-The historical project/20 requires a class catalog; project/21 also requires
-[net-class bindings](net-class-assignments.md). Under project/52 the catalog and
-bindings are optional. Board-owned unnumbered bindings without part-group
-memberships or pairs still use instances/3.
+When no other content requires a later project format, a nonempty class catalog
+selects project/20; saved [net-class bindings](net-class-assignments.md) select
+project/21. Parameters and generated numbers select project/22 and /23 unless
+other records require a later format. In precedence order, adopted lifecycle assessments select project/52, active
+designator locks /51, differential pairs /45, an assembly profile catalog /36,
+and part groups /39 with compact memberships or /24 otherwise. Board-owned
+bindings use instances/3, instances/4 with generated numbers, instances/5 or /7
+with expanded or compact memberships, or instances/8 with pairs. Bindings
+remain inside the same logical registry and carry class and origin net UUIDs,
+while physical board and sheet formats stay unchanged. Older headers refuse the new vocabulary, and project/21
+requires actual bindings.
 
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
 at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,
@@ -174,7 +184,7 @@ Undo/Redo without changing electrical revision or discarding intervening edits.
 A failed or cancelled save does not adopt it. Browser Download writes a migrated
 copy in bounded encoding batches, while the active session remains unchanged
 because a download request cannot confirm durable publication. Older readers
-that lack project/52 must refuse it rather than discarding project data.
+that lack project/16 must refuse it rather than discarding occurrence metadata.
 
 ## Schematic-only package choices
 
@@ -361,10 +371,10 @@ identities without invalidating adoptions; cleanup discards only unused
 superseded or retired payloads in that transaction. Watermarks prevent reuse of
 cleaned revisions. Undo/Redo preserve the greatest issued revision in this project
 history without retaining undone payloads or changing restored board adoptions.
-Current saves write a retained catalog, even with only watermarks, in project/52,
-with or without designator locks or differential pairs. Historical project/36,
-/45 and read-only /51 files carrying a catalog remain readable; compact memberships
-keep their representation. All these formats apply
+A retained catalog, even with only watermarks, uses project/51 with an active
+designator lock, otherwise project/45 with differential pairs, otherwise
+project/36. The catalog takes precedence over the project/39 header for compact
+memberships but does not change their representation. All three formats apply
 the same validation rules and retain folder and occurrence metadata, even after
 the last unused payload is released. Opening another saved copy uses that copy’s
 own recorded lineage; no
@@ -427,13 +437,13 @@ registry's retained identities.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45`, `/51` or `/52` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs; version 51, now read only, requires an active designator lock and can also carry differential pairs; [version 52](#adopted-lifecycle-assessments) is the current write format, with optional pairs, optional designator locks and an optional lifecycle document |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45`, `/51` or `/52` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 51 requires an active designator lock and can also carry differential pairs; [version 52](#adopted-lifecycle-assessments) requires adopted lifecycle assessments in `library/lifecycle.json` and keeps the earlier extensions optional |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35` or `/37` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; versions 27–33 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | [`pcbcraft-footprint/1` or `/4`](footprint-schema.md) | One full pinned physical footprint copy, including optional circular plated drills in pads and, in `/4` only, separate circular non-plated through holes |
-| `library/lifecycle.json` | No own `format` field; present only with `project.json` format `pcbcraft-project/52` | Adopted publisher lifecycle assertions (full content) and project lifecycle policies; see the [lifecycle schema](schemas/lifecycle-v1.schema.json) |
+| `library/lifecycle.json` | No own `format` field; required by and accepted only with `project.json` format `pcbcraft-project/52` | Adopted publisher lifecycle assertions (full content) and project lifecycle policies; see the [lifecycle schema](schemas/lifecycle-v1.schema.json) |
 
 A sheet-list entry contains `id`, `name` and `file`. The file and the document's
 UUID must agree. Version 6 supports 1–64 ordered sheets with non-nil,
@@ -453,44 +463,55 @@ sheet belongs to user-local presentation state and is never saved in `project.js
 Version 5 remains readable with exactly one sheet. Its original default name
 `Schematic`, historically displayed as Main, migrates to `Main`; other names stay
 intact. Formats 1–4 migrate to one Main sheet with their original sheet UUID.
-New projects start with no physical board unless New PCB explicitly requests one.
-Older entry-point headers remain readable under their original field requirements.
-For example, version 12 carries both the watermark and an explicit board registry;
-version 11 keeps legacy implicit ownership and rejects a `boards` record. Version 9
-rejects component metadata. Current split saves always write project/52. Sheet encodings remain
+Legacy snapshots retain version 6 until numeric allocation or retirement adopts
+the version-7 watermark, an eligible physical edit persists version-9 board
+registration with the same compatibility ID, or component metadata requires
+version 11. New projects start at version 16 with no physical board, unless New PCB
+explicitly requests one. Supported flat and project/14 and /15 encodings upgrade to project/16 on Save. Component metadata with explicit zero-or-one ownership
+uses version 12, which retains the watermark and registry; version 11 keeps legacy
+implicit ownership and rejects a `boards` record. Version 9 rejects component
+metadata rather than interpreting version-12 fields. Sheet encodings remain
 sheet/1 for ordinary sheets, sheet/2 for
 sheets with hierarchy records, sheet/3 for sheets with named anchors, sheet/4 for
 field appearance, sheet/5 for net-name appearance, sheet/6 for mirrored
 placements and sheet/7 for persisted generated-leg provenance, retaining existing
-board encodings. Ordinary Save adopts the current folder layout for supported
-legacy projects and retains unchanged payload bytes where possible. Subsequent
-sheet changes keep the adopted folder layout. Legacy single-file encoding refuses
+board encodings. The low-level codec preserves
+original version-5 document bytes until an entry-point change, while ordinary Save
+adopts project/16 and retains unchanged payload bytes. Subsequent sheet changes keep
+the adopted folder layout. Legacy single-file encoding refuses
 multiple or renamed sheets, hierarchical labels, child symbols, named net anchors,
 component metadata, field appearance, mirrored placements, live generated
 named-contact legs and adopted occurrence identities rather than discarding them.
 
 ### Adopted lifecycle assessments
 
-Split saves write `pcbcraft-project/52` whether or not an assessment is pinned.
-The entry point directly owns the existing project fields: catalogs, profiles and
-pair records are optional. `board_instances: true` declares a separate
-`instances.json` at the registered board's path. Omit it when there are no
-instance records or when `schematic_instances` embeds them in a schematic-only
-project. A board-owned pair registry still uses `pcbcraft-instances/8`.
-`library/lifecycle.json` is written only when there are pinned assessments and is
-not accepted under earlier project headers.
+Split saves select `pcbcraft-project/52` only when the project stores at least
+one adopted lifecycle assessment in `library/lifecycle.json`. Projects without
+adopted assessments keep the existing content-driven project format selection
+and desktop byte reuse, so ordinary edits do not upgrade `project.json` to `/52`.
+Removing the last adopted assessment (for example by undoing the first adoption)
+omits `library/lifecycle.json` and returns `project.json` to the version
+required by its remaining content.
+
+Under `project/52`, earlier project records (catalogs, profiles, pairs and
+designator locks) remain optional with their existing validation rules.
+`board_instances: true` declares a separate `instances.json` at the registered
+board's path; omit it when there are no instance records or when
+`schematic_instances` embeds them in a schematic-only project. Earlier project
+headers refuse `board_instances` and `library/lifecycle.json`, and `project/52`
+refuses a missing or empty `library/lifecycle.json`. A board-owned pair registry
+still uses `pcbcraft-instances/8`.
 
 The [lifecycle schema](schemas/lifecycle-v1.schema.json) defines the required
-`assertions` and `policies` arrays (never null).
-Assertions contain the complete immutable publisher revision, keyed by exact
-definition address, so no source is required to reopen. Each policy maps state
-IDs for one exact scheme revision to a project disposition. There is at most
-one assertion per target revision and one policy per pinned scheme revision.
-An absent mapping is unknown. The document is bounded to 128 assertions, 32
-policies and 4 MiB. It is written in stable target and scheme address order.
-Unknown fields, inconsistent ownership and duplicate keys are refused. Legacy
-single-document export refuses projects with adopted assessments rather than
-silently discarding them.
+`assertions` and `policies` arrays (never null). Assertions contain the complete
+immutable publisher revision, keyed by exact definition address, so no source is
+required to reopen. Each policy maps state IDs for one exact scheme revision to
+a project disposition. There is at most one assertion per target revision and
+one policy per pinned scheme revision. An absent mapping is unknown. The
+document is bounded to 128 assertions, 32 policies and 4 MiB. It is written in
+stable target and scheme address order. Unknown fields, inconsistent ownership
+and duplicate keys are refused. Legacy single-document export refuses projects
+with adopted assessments rather than silently discarding them.
 
 See [native library lifecycle metadata](native-library-sources.md#lifecycle-assertions)
 for the publisher record and shared commands. Neither a source refresh nor an
@@ -627,12 +648,11 @@ changes nothing. Inspection reports each sheet's `page` in the same shape.
 
 ### Designator locks
 
-Project/52 stores optional `designator_locked: true` on each locked part-instance
+Project/51 stores optional `designator_locked: true` on each locked part-instance
 record in the existing `components` array. The missing field means false;
-explicit false, null, other types and unknown fields are refused. Read-only
-project/51, a historical format, requires at least one true flag; Save
-rewrites it as project/52. Headers before 51 reject lock fields. Older readers
-reject project/51 and /52 rather than silently dropping intent. The diagnostic
+explicit false, null, other types and unknown fields are refused. Project/51
+requires at least one true flag, and earlier headers reject lock fields. Older
+readers reject project/51 rather than silently dropping intent. The diagnostic
 single-file codec refuses locks; folder and `.pc` codecs retain them.
 
 Locks belong to the existing part-instance identity, not a unit placement or
@@ -641,20 +661,20 @@ terminal identities, package mappings, logical board ownership and sheet formats
 unchanged. First adoption can change storage paths and add occurrence metadata;
 that storage layout change does not transfer logical board ownership. The shared
 field command can also carry other edits, whose geometry, appearance and board-state
-effects are separate from the lock flag. Project/52 retains the optional
+effects are separate from the lock flag. Project/51 retains the optional
 project parameters, net-class catalog, assignments, net registry, no-connect
 intent, part groups and assembly profiles under their existing validation rules.
 Board-owned instance registries keep their existing instances/1–5, /7 or /8
 vocabulary according to their content. Projects with differential pairs keep all
-pair records when a lock is set; the entry point stays project/52; board-owned pairs
+pair records when a lock upgrades project/45 to project/51; board-owned pairs
 still use instances/8. Schematic-only projects keep the same embedded registry
 home.
 
 Setting the first lock adopts storage, allocation-watermark and sheet-occurrence
 metadata in that same undoable transaction if the older project lacks them.
-Opening, inspection and an unchanged edit never create a lock. Locking and unlocking
-keep project/52; unlocking the last part omits the flag and retains any adopted
-metadata. Undo restores
+Opening, inspection and an unchanged edit never create a lock. Unlocked projects
+retain their earlier encoding; unlocking the last part returns to the version
+required by the remaining content, retaining any adopted metadata. Undo restores
 the prior authored content. If no intervening Save has adopted storage metadata,
 Undo also removes layout and occurrence metadata added by the lock edit, and
 restores the exact prior documents for an already-watermarked project. Undo
@@ -684,9 +704,8 @@ A sheet/9 document may carry a nonempty `parameters` object directly after
 project/23 accepts the same object optionally alongside generated net numbers;
 project/24 and project/39 accept it optionally alongside the part-group catalog;
 project/36 accepts it alongside the assembly profile catalog, and project/45
-alongside differential pairs. Project/52, and read-only project/51 with its
-required designator lock, accept it with designator locks and differential pairs
-optional. In each of these project formats, the object appears directly before `sheets`:
+alongside differential pairs. Project/51 accepts it alongside designator locks,
+with differential pairs optional. In each of these project formats, the object appears directly before `sheets`:
 
 ```json
 "parameters": {
@@ -703,7 +722,7 @@ name, or from a standard name of its list (`Revision`, `Date`, `Company`,
 `DrawnBy` for the project; those and `Title` for a sheet), only in case is
 rejected. Empty objects, null and other value types are rejected. Sheet parameter
 objects require sheet/9; project parameter objects require project/22, project/23,
-project/24, project/36, project/39, project/45, project/51 or project/52 and are rejected in
+project/24, project/36, project/39, project/45 or project/51 and are rejected in
 other project versions. Project/22 is a superset
 of project/21 whose net-class catalog, class assignments, net registry and
 no-connect intent are optional, each with its existing rules. Project/23 requires
@@ -712,8 +731,8 @@ parameters. Project/24 adds the part-group catalog and keeps every record
 of project/23 optional, generated net numbers included. Project/39 keeps those
 same rules with compact part-group memberships. Project/36 permits the same optional records with either membership representation, alongside its required assembly profile catalog. Project/45 permits the same
 records and an optional profile catalog alongside its required differential
-pairs. Read-only project/51 requires a designator lock and permits the same
-records with or without pairs; project/52 permits them all optionally. All these formats require adopted storage and occurrence metadata;
+pairs. Project/51 requires a designator lock and permits the same records with or
+without pairs. All these formats require adopted storage and occurrence metadata;
 setting the first project value adopts them in the same undo step.
 Removing the last project value returns the entry point to the version its other
 content needs. The diagnostic single-file encoding refuses parameters.
@@ -722,7 +741,7 @@ content needs. The diagnostic single-file encoding refuses parameters.
 
 Both project/24 and project/39 require a nonempty `part_groups` catalog
 (`pcbcraft-part-groups/1`) directly after any `net_classes` record. Project/36,
-/45, /51 and /52 also accept the group catalog, with either membership representation.
+/45 and /51 also accept the group catalog, with either membership representation.
 Board-owned pairs keep instances/8 regardless of membership representation.
 Project/24, the expanded representation, is a superset of project/23: generated net numbers, net classes and
 their assignments, project parameters and no-connect intent are optional, each
@@ -737,8 +756,9 @@ are rejected. `N` is the part instance's number, as in `components` and
 `component-N`; see [part groups](part-groups.md).
 
 Compact memberships replace that list with `compact_part_group_memberships`.
-With compact memberships, the encoder writes project/52; historical project/39,
-/36, /45 and read-only /51 files with compact memberships remain readable. Board-owned compact
+With compact memberships, the encoder selects project/51 if a designator lock
+is active, otherwise project/45 if pairs are present, otherwise project/36 if an
+assembly profile catalog is retained, otherwise project/39. Board-owned compact
 memberships use instances/8 with pairs and instances/7 without pairs.
 Schematic-only memberships remain embedded in the entry point. The compact
 record contains a sorted UUID `groups` dictionary
@@ -1397,7 +1417,7 @@ Trailing ASCII spaces in the text before the first dot do not bypass the check:
 `NUL ` and `COM¹  .pc` are also refused. The check does not rename the destination.
 Other platforms accept these as ordinary destination names. Both forms validate
 all managed documents and preserve stable IDs, pinned libraries and exact physical/sheet/library payload
-bytes. The entry point becomes project/52 with a board-folder registration and
+bytes. The entry point becomes project/16 with a board-folder registration and
 single-use occurrence records; the entry-point path, physical board path and
 packed manifest change. Unrelated root files such
 as notes and `.git` are left in the source rather than copied into the project.

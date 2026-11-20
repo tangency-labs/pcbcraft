@@ -504,7 +504,7 @@ impl Encoder {
     /// net classes, and part groups require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
         if project.components.values().any(|part| part.designator_locked) {
-            return Err("Designator locks require split project format 52 or a packed archive.".into());
+            return Err("Designator locks require split project format 51 or a packed archive.".into());
         }
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
@@ -775,7 +775,7 @@ pub fn decode(bytes: &[u8]) -> Result<Arc<Project>, String> {
         format => return Err(format!("unsupported project format {format}")),
     };
     if document.components.iter().any(|part| part.designator_locked.is_some()) {
-        return Err("Designator locks require split project format 52.".into());
+        return Err("Designator locks require split project format 51.".into());
     }
     if document.components.iter().any(|c| c.metadata.is_some()) || document.sheet.symbols.iter().any(|s| s.field_layout.is_some()) {
         return Err("component fields and text appearance require split project/sheet formats 11/4".into());
@@ -857,7 +857,7 @@ fn validate_with_hierarchy(
     let mut components = BTreeMap::new();
     for record in records {
         if record.designator_locked.is_some() {
-            return Err("Designator locks require split project format 52.".into());
+            return Err("Designator locks require split project format 51.".into());
         }
         if record.no_connects.is_some() {
             return Err("No-connect intent requires the split marker format.".into());
