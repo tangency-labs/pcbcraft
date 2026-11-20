@@ -109,15 +109,11 @@ fn chooses_typed_function_without_changing_connectivity() {
     assert!(ink(session.project().unwrap()).contains(&"ADC_IN".to_owned()));
 }
 
-/// At the placement limit, set/clear and preview perform only indexed sparse lookups;
-/// drawing one addressed unit does not consult any of its unrelated placements.
-#[test]
-fn pin_function_edit_and_drawing_do_bounded_work_in_a_large_project() {
-    let mut session = fixture(false);
-    let mut project = session.project().unwrap().clone();
+/// Extend the fixture with independent, uniquely placed parts without replaying thousands of edits.
+fn extend_fixture(project: &mut Project, count: usize) {
     let part = project.components().next().unwrap().clone();
     let symbol = project.symbols()[0].clone();
-    for i in 1..crate::schematic::MAX_SYMBOLS {
+    for i in 1..count {
         let mut extra = part.clone();
         extra.ordinal = 2 * i as u64 + 1;
         extra.reference_number = i + 1;
@@ -132,6 +128,15 @@ fn pin_function_edit_and_drawing_do_bounded_work_in_a_large_project() {
         Arc::make_mut(&mut project.components).insert(extra.ordinal, extra);
         Arc::make_mut(&mut Arc::make_mut(&mut project.sheets)[0].symbols).push(placed);
     }
+}
+
+/// At the placement limit, the checked edit still shares untouched project data and skips
+/// general edit preparation. Drawing one unit does not consult its unrelated placements.
+#[test]
+fn pin_function_edit_shares_snapshot_and_drawing_uses_one_owner_in_a_large_project() {
+    let mut session = fixture(false);
+    let mut project = session.project().unwrap().clone();
+    extend_fixture(&mut project, crate::schematic::MAX_SYMBOLS);
     session.change(project).unwrap();
     let before = session.snapshot().unwrap();
     assert_eq!(before.components.len(), crate::schematic::MAX_SYMBOLS);
@@ -139,13 +144,10 @@ fn pin_function_edit_and_drawing_do_bounded_work_in_a_large_project() {
     let symbol_id = target.id();
     let target = json!({"part":target.component_id(),"terminal":"1"});
     let choice = |session: &Session, function: Value, dry_run| json!({"target":target,"function":function,"dry_run":dry_run,"expected_revision":session.revision()});
-    OWNER_LOOKUPS.set(0);
     FULL_PREPARATIONS.set(0);
     session.execute(SET, &choice(&session, json!("ADC_IN"), true)).unwrap();
     assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
-    assert_eq!(OWNER_LOOKUPS.replace(0), 1);
     session.apply(SET, &choice(&session, json!("ADC_IN"), false)).unwrap();
-    assert!(OWNER_LOOKUPS.replace(0) <= 3);
     let selected = session.snapshot().unwrap();
     assert_eq!(selected.pin_function_count(), 1);
     assert!(Arc::ptr_eq(&selected.components, &before.components));
@@ -154,15 +156,14 @@ fn pin_function_edit_and_drawing_do_bounded_work_in_a_large_project() {
     PLACEMENT_COMPARISONS.set(0);
     let symbol = selected.symbol(&symbol_id).unwrap();
     assert!((1..=14).contains(&PLACEMENT_COMPARISONS.get()));
+    OWNER_LOOKUPS.set(0);
     let graphics = selected.symbol_graphics(symbol);
     assert_eq!(OWNER_LOOKUPS.replace(0), 1);
     assert_eq!(graphics.len(), symbol.unit_definition().graphics().len());
     assert!(graphics.iter().any(|shape| matches!(shape, Shape::Graphic(crate::library_graphics::Graphic { geometry: crate::library_graphics::Geometry::Text { text, .. }, .. }) if text == "ADC_IN")));
     session.execute(SET, &choice(&session, Value::Null, true)).unwrap();
     assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &selected));
-    assert_eq!(OWNER_LOOKUPS.replace(0), 1);
     session.apply(SET, &choice(&session, Value::Null, false)).unwrap();
-    assert!(OWNER_LOOKUPS.get() <= 3);
     assert_eq!(FULL_PREPARATIONS.get(), 0);
     let cleared = session.snapshot().unwrap();
     assert_eq!(cleared.pin_function_count(), 0);
@@ -171,6 +172,53 @@ fn pin_function_edit_and_drawing_do_bounded_work_in_a_large_project() {
     assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &selected));
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+}
+
+/// A valid reopened entry point one byte under the native limit must refuse a growing
+/// selection in Preview and Apply without replacing the snapshot or touching history.
+#[test]
+fn pin_function_preview_and_apply_refuse_native_project_overflow() {
+    use crate::{persistence::MAX_DOCUMENT_BYTES, schematic::fields::Field};
+
+    let mut session = fixture(false);
+    let mut project = session.project().unwrap().clone();
+    extend_fixture(&mut project, 140);
+    for part in Arc::make_mut(&mut project.components).values_mut() {
+        for index in 1..=64 {
+            part.metadata.fields.insert(uuid::Uuid::from_u128(index).to_string(), Field { name: format!("Padding {index}"), value: String::new() });
+        }
+    }
+    session.change(project).unwrap();
+    let mut project = session.project().unwrap().clone();
+    let baseline = encode_documents(Arc::new(project.clone())).unwrap()[ENTRY_POINT].len();
+    let mut remaining = MAX_DOCUMENT_BYTES - 1 - baseline;
+    // ASCII padding grows the canonical entry point by precisely one byte per character.
+    for part in Arc::make_mut(&mut project.components).values_mut() {
+        for field in part.metadata.fields.values_mut() {
+            let count = remaining.min(2048);
+            field.value = "x".repeat(count);
+            remaining -= count;
+        }
+    }
+    assert_eq!(remaining, 0);
+    let saved = encode_documents(Arc::new(project)).unwrap();
+    assert_eq!(saved[ENTRY_POINT].len(), MAX_DOCUMENT_BYTES - 1);
+    session.open_snapshot(decode_documents(&saved).unwrap());
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    let mut request = params(&session, json!("ADC_IN"));
+    request["dry_run"] = json!(true);
+    let preview = session.execute(SET, &request).unwrap_err();
+    assert!(matches!(&preview, crate::CommandError::InvalidParams(reason) if reason.contains("encoded document exceeds its size limit")));
+    assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+    request["dry_run"] = json!(false);
+    let apply = session.apply(SET, &request).unwrap_err();
+    assert!(matches!(&apply, crate::CommandError::InvalidParams(reason) if reason.contains("encoded document exceeds its size limit")));
+    assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
 }
 
 /// Matching accepted terminals use the selected metadata without changing the accepted

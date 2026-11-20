@@ -558,8 +558,10 @@ Projects that pin version-5 symbols use project format 48, with or without an
 explicit selection. This format composes with part-group memberships and assembly
 profiles without changing board, sheet, or instance document headers. Placing a
 version-5 symbol and changing pin functions require current storage; neither edit
-migrates projects. Single-document diagnostic export refuses choices rather than
-omitting them.
+migrates projects. Pin function Preview and Apply both reject a changed selection
+that would exceed the native document size limits. A rejected edit does not
+advance the revision or add an undo step. Single-document diagnostic export
+refuses choices rather than omitting them.
 
 `pcbcraft-project/56` stores the same records when a project also has an active
 [designator lock](#designator-locks): it accepts both `pin_functions` and

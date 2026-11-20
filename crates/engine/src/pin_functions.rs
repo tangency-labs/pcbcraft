@@ -165,7 +165,7 @@ impl Session {
         if changed && !original.supports_pin_function_storage() {
             return Err(invalid("Alternate pin functions require current project storage."));
         }
-        if changed && !dry_run {
+        if changed {
             let mut project = original.clone();
             let mut choices = project.pin_functions.owner(id).cloned().unwrap_or_default();
             if let Some(name) = next {
@@ -174,8 +174,14 @@ impl Session {
                 choices.remove(target.terminal);
             }
             Arc::make_mut(&mut project.pin_functions).replace(id, choices).map_err(CommandError::InvalidParams)?;
-            // This edit owns no identity or topology, and its only new value was validated above.
-            self.publish_change(Arc::new(project), self.revision);
+            // Both paths must reject a candidate that the native writer cannot save.
+            // Reuse its exact size checks, including JSON escaping and the aggregate limit.
+            let project = Arc::new(project);
+            crate::persistence::encode_documents(project.clone()).map_err(CommandError::InvalidParams)?;
+            if !dry_run {
+                // This edit owns no identity or topology; no general edit preparation is needed.
+                self.publish_change(project, self.revision);
+            }
         }
         report["revision"] = json!(self.revision());
         Ok(report)

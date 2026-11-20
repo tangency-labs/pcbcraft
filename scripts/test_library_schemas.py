@@ -118,6 +118,12 @@ class LibrarySchemaTests(unittest.TestCase):
             broken = copy.deepcopy(symbol)
             broken["terminals"][0]["alternates"] = invalid
             self.assertFalse(validator.is_valid(broken))
+        large = copy.deepcopy(symbol)
+        count = len(large["terminals"])
+        large["terminals"].extend({"id": f"T{i}", "electrical_type": "input"} for i in range(count, 1024))
+        validator.validate(large)
+        large["terminals"].append({"id": "T1024", "electrical_type": "input"})
+        self.assertFalse(validator.is_valid(large))
         symbol["format"] = "pcbcraft-symbol/4"
         self.assertFalse(validator.is_valid(symbol))
 

@@ -49,7 +49,7 @@
         "$ref": "#/$defs/terminal"
       },
       "minItems": 1,
-      "maxItems": 128
+      "maxItems": 1024
     },
     "units": {
       "type": "array",
