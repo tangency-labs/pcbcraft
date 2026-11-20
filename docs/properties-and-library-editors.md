@@ -152,7 +152,9 @@ or circular non-plated hole for a footprint.
 
 The editable JSON envelope uses `pcbcraft-library-item/1` for single-unit symbols
 and footprints without non-plated holes, `pcbcraft-library-item/2` for multi-unit
-symbols, and `pcbcraft-library-item/3` for footprints with non-plated holes. It records definition identity,
+symbols, `pcbcraft-library-item/3` for footprints with non-plated holes, and
+`pcbcraft-library-item/5` for symbols with alternate pin functions, single- or
+multi-unit; removing the last alternate keeps format 5. It records definition identity,
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
 Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
