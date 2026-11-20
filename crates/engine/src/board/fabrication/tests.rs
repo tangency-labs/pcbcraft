@@ -1321,22 +1321,19 @@ fn rounded_pad_macro_fills_a_900_nm_core_without_an_outline() {
     }
 }
 
-/// A narrow core whose opposite edges can meet under Gerber perturbation must not
-/// produce a partial file set or an archive if no safe exact fill is available:
-/// both a rotated core and an axis-aligned core whose center-line rectangles lack
-/// sufficient overlap under ±0.5 µm shifts are refused cleanly.
+/// A rotated narrow core whose opposite edges can meet under Gerber perturbation must not
+/// produce a partial file set or an archive if no safe exact fill is available.
 #[test]
 fn fabrication_refuses_a_narrow_core_without_an_exact_gerber_fill() {
-    for pads in [[(PadShape::RoundedRectangle, 600_000, 1_500, 37, 300); 2], [(PadShape::RoundedRectangle, 600_000, 1_000, 0, 200); 2]] {
-        let mut s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
-        let before = s.revision();
-        let error = view(&s).fabrication_outputs().unwrap_err();
-        assert!(error.starts_with("Cannot export rounded pad at ("), "{error}");
-        assert!(error.ends_with("its core has no supported exact Gerber fill and its outline can self-intersect."), "{error}");
-        assert!(matches!(s.execute(EXPORT_FABRICATION, &json!({})), Err(CommandError::Unavailable(message)) if message == error));
-        assert!(matches!(s.export_fabrication_archive(&json!({})), Err(CommandError::Unavailable(message)) if message == error));
-        assert_eq!(s.revision(), before);
-    }
+    let pads = [(PadShape::RoundedRectangle, 600_000, 1_500, 37, 300); 2];
+    let mut s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
+    let before = s.revision();
+    let error = view(&s).fabrication_outputs().unwrap_err();
+    assert!(error.starts_with("Cannot export rounded pad at ("), "{error}");
+    assert!(error.ends_with("its core has no supported exact Gerber fill and its outline can self-intersect."), "{error}");
+    assert!(matches!(s.execute(EXPORT_FABRICATION, &json!({})), Err(CommandError::Unavailable(message)) if message == error));
+    assert!(matches!(s.export_fabrication_archive(&json!({})), Err(CommandError::Unavailable(message)) if message == error));
+    assert_eq!(s.revision(), before);
 }
 
 /// A rounded macro flash is drawn inside its pad's copper object scope: it carries the net,

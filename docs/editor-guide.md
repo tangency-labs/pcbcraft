@@ -890,9 +890,9 @@ emitted radius is within 1 nm of the authored radius. The diameter is rounded to
 the nearest nanometre after projection. The macro uses the placed pad's geometry,
 including rotation and side. If a narrow axis-aligned core needs a fill and its outline could cross under
 Gerber coordinate perturbation, the macro replaces the core and edge strips with
-two overlapping center-line rectangles when their overlap stays positive under
-that perturbation. Export stops without a file set if a convex macro core has no
-safe exact fill under Gerber coordinate perturbation.
+two overlapping center-line rectangles sharing the exact center. Export stops
+without a file set if a convex macro core needs a fill, its outline could cross,
+and the core is not an axis-aligned rectangle.
 Rounded pads that do not qualify for the macro retain resolved polygon regions.
 This changes only generated pad artwork, not saved pad geometry, track or Board
 Outline output.

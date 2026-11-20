@@ -457,18 +457,14 @@ fn rounded_quad_fill(points: &[MacroPoint; 4], diameter: i64) -> Option<RoundedF
     if perturbed_edges_separate(a, b, c, d) && perturbed_edges_separate(b, c, d, a) {
         return Some(RoundedFill::Outline);
     }
-    // For a strictly convex axis-aligned quad, two overlapping center-line rectangles replace
-    // the core and all four edge strips. Require strict overlap on both axes under ±0.5 µm shifts.
-    let axis_aligned = (0..4).all(|i| {
-        let (a, b) = (points[i], points[(i + 1) % 4]);
-        (a.0 == b.0) != (a.1 == b.1)
-    });
-    if !axis_aligned {
-        return None;
-    }
-    let (width, height) = ((c.0 - a.0).abs(), (c.1 - a.1).abs());
-    let min_overlap = 2 * i128::from(OUTLINE_CLEARANCE_NM);
-    (2 * i128::from(width) + i128::from(diameter) > min_overlap && 2 * i128::from(height) + i128::from(diameter) > min_overlap)
+    // For a strictly convex axis-aligned quad, two center-line rectangles sharing the exact
+    // same half-grid center replace the core and all four edge strips. Coincident centers
+    // move together under §4.14.2, so their core overlap stays positive with no outline.
+    (0..4)
+        .all(|i| {
+            let (a, b) = (points[i], points[(i + 1) % 4]);
+            (a.0 == b.0) != (a.1 == b.1)
+        })
         .then_some(RoundedFill::AxisAlignedRectangles)
 }
 
