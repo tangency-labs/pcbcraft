@@ -18,6 +18,8 @@ pub(super) struct PaneDrag {
     receiver: HostId,
     /// Explicit window-target row under the pointer; takes priority over geometric destinations.
     fallback: Option<DropDestination>,
+    /// The last rendered list stays with its pane while the pointer crosses an overhanging row.
+    popup: Option<(ViewId, Rect)>,
     released: bool,
 }
 
@@ -110,6 +112,7 @@ impl PcbApp {
             desktop,
             receiver: host,
             fallback: None,
+            popup: None,
             released: false,
         });
         self.repaint_editors(ctx);
@@ -255,9 +258,10 @@ impl PcbApp {
         remaining.and_then(|layout| layout.regions(area).into_iter().find(|(id, _)| *id == target).map(|(_, rect)| rect)).unwrap_or(current)
     }
 
-    /// Cache each host's panes, show discoverable destinations in the source and animate the
-    /// actual dock region. All platforms get the same local targets; geometry also enables
-    /// direct drops over exposed panes. Selected rows describe explicit window operations.
+    /// Cache each host's panes and show directions for the pane under the captured pointer.
+    /// Outside the source host's panes the list returns to the source header, where window
+    /// destinations stay available even without desktop coordinates. The preview uses the
+    /// same destination as release, including a peer's position after the source is removed.
     pub(crate) fn editor_drag_targets(&mut self, ui: &Ui, panes: &[(ViewId, Rect)]) {
         let host = self.views.host;
         if let Some(geometry) = self.windows.drag_geometry.get_mut(&host) {
@@ -268,12 +272,21 @@ impl PcbApp {
         {
             let targets: Vec<_> =
                 self.views.hosts.iter().filter(|(id, _)| **id != host).map(|(id, host)| (id.0, self.view_title(host.focused))).collect();
-            let pane = panes.iter().find(|(id, _)| *id == drag.source.view()).map_or(ui.available_rect_before_wrap(), |(_, rect)| *rect);
             let pointer = (drag.receiver == host).then_some(drag.source_pointer);
-            let hovered = pcbcraft_chrome::editor::window_drop_targets(
+            let (target_pane, pane) = pointer
+                .and_then(|point| {
+                    let popup_pane = drag.popup.filter(|(_, rect)| rect.contains(point)).map(|(id, _)| id);
+                    popup_pane
+                        .and_then(|pane| panes.iter().copied().find(|(id, _)| *id == pane))
+                        .or_else(|| panes.iter().copied().find(|(_, rect)| rect.contains(point)))
+                })
+                .or_else(|| panes.iter().copied().find(|(id, _)| *id == drag.source.view()))
+                .unwrap_or((drag.source.view(), ui.available_rect_before_wrap()));
+            let anchor = if target_pane == drag.source.view() { drag.header_anchor } else { pane.left_top() };
+            let (hovered, popup) = pcbcraft_chrome::editor::window_drop_targets(
                 ui,
                 pane,
-                drag.header_anchor,
+                anchor,
                 &targets,
                 self.views.main.0,
                 pcbcraft_chrome::editor::WindowDropState {
@@ -284,8 +297,11 @@ impl PcbApp {
             );
             let target = match hovered {
                 Some(pcbcraft_chrome::editor::WindowDrop::NewWindow) => Some(DropDestination::NewWindow),
+                Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) if target_pane == drag.source.view() => {
+                    Some(DropDestination::Duplicate(drag.source, side))
+                }
                 Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) => {
-                    self.windows.drag.as_ref().map(|drag| DropDestination::Duplicate(drag.source, side))
+                    self.views.view(target_pane).and_then(|view| view.control_input(&self.session)).map(|target| DropDestination::Split(target, side))
                 }
                 Some(pcbcraft_chrome::editor::WindowDrop::Host(id)) => self
                     .views
@@ -306,6 +322,7 @@ impl PcbApp {
             if let Some(drag) = &mut self.windows.drag {
                 let changed = drag.fallback != target;
                 drag.fallback = target;
+                drag.popup = Some((target_pane, popup));
                 if changed {
                     self.repaint_editors(ui.ctx());
                 }

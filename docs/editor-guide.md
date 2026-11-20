@@ -537,21 +537,20 @@ its own panels. Every window's operating-system title, which the taskbar and
 window switcher show, names its focused document, such as
 `Dual LED · transistor flasher › Main — PCBCraft`; Home shows `PCBCraft` alone.
 
-Right-click a split pane's header for **Open beside**, **Open in new window**, **Detach
-view**, **Dock in main window** or **Close view**, as applicable. These actions
-target that pane, including its remembered document navigation. Dividers resize
-panes, with narrow areas stacking vertically.
+Right-click a pane's header for **Split up** or **Split down** to open another
+view above or below that pane. The same menu offers **Open beside**, **Open in
+new window**, **Detach view**, **Dock in main window** and **Close view**, as
+applicable. These actions target that pane, including its remembered document
+navigation. Dividers resize panes, with narrow areas stacking vertically.
 
 On desktop, drag a pane header to its own top or bottom edge to divide that pane
-into two stacked views, leaving other panes in place. The drag destination list
-also offers **Split up** and **Split down** beside the header, without needing an
-outer-edge drop. Its left/right edges create
-two views side by side. The new half opens the same document at the same zoom.
-Dragging onto an edge of another pane moves the source pane there and closes its
-old slot. The highlighted half is labelled **Split above**, **Split below**, **Split
-left** or **Split right**. These explicit splits keep their direction when the
-window is resized, and saved layouts retain it. Existing adaptive splits still
-stack when their available width becomes narrow.
+into two stacked views, leaving other panes in place. Its left and right edges
+create two views side by side. The new half opens the same document at the same
+zoom. Within a window the drag list follows the pane under the pointer, with
+**Split up** and **Split down** beneath its header. Releasing over one of those
+rows on another pane, or over that pane's edge, moves the source pane there and
+closes its old slot. The highlighted half shows where it will land. Explicit
+splits keep their direction when resized or restored from a saved layout.
 
 On desktop, dragging a header shades its source pane and displays window
 destinations. Drop over the centre of another pane in the same window to move into that slot;
@@ -560,9 +559,9 @@ slot highlights **Move pane here**, retaining divider ratios and cached document
 Release outside the window or over **Open in new window** to detach, retaining
 its remembered documents and camera.
 Detached panes retain a draggable header with a leading **Dock** button that
-returns the pane to the main window in one click. Drag destinations stay beside
-the initial header press, rather than at a possibly off-screen far edge. Drag
-onto **Dock in main window** or another window target; its row and destination
+returns the pane to the main window in one click. Window destinations remain
+available beside the initial header press when the pointer leaves the source
+window. Drag onto **Dock in main window** or another window target; its row and destination
 split region highlight before release. Direct drops over exposed panes in another
 window are also available where the compositor exposes window positions. Moving outside the
 client highlights **Open in new window**; the new OS window is created on release.

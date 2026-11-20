@@ -925,3 +925,106 @@ fn split_up_down_drag_targets_subdivide_nested_panes() {
         }
     }
 }
+
+/// Each pane under the pointer offers both directions for moving the dragged view into it.
+#[test]
+fn peer_pane_drag_menu_splits_the_hovered_pane() {
+    for (theme, size) in [(ThemeChoice::Dark, vec2(2560.0, 1600.0)), (ThemeChoice::Light, vec2(760.0, 650.0))] {
+        for index in 0..3 {
+            for (label, caption, above) in [("Split up", "Split above", true), ("Split down", "Split below", false)] {
+                let (mut h, _) = many_windows();
+                h.state_mut().preferences.theme = theme;
+                h.set_size(size);
+                let ctx = h.ctx.clone();
+                h.state_mut().split_editors(&ctx, true);
+                let right = h.state().views.hosts[&HostId::ROOT].layout.visible_views()[1];
+                h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":right.0,"side":"right"})).unwrap();
+                h.run();
+                let (target, area) = h.state().views.hosts[&HostId::ROOT].rects[index];
+                let moved = root_drag(&mut h, usize::from(index == 0));
+                h.hover_at(area.center());
+                h.run();
+                for choice in ["Split up", "Split down"] {
+                    assert!(area.contains(h.get_by_label(choice).rect().center()), "{choice} should appear under the target pane's tab");
+                }
+                let row = h.get_by_label(label).rect().center();
+                h.hover_at(row);
+                h.run();
+                let preview = h.get_by_label(caption).rect();
+                h.drop_at(row);
+                h.run();
+                let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+                assert_eq!(panes.len(), 3, "the original pane is moved");
+                let moved_rect = panes.iter().find(|(id, _)| *id == moved).unwrap().1;
+                let target_rect = panes.iter().find(|(id, _)| *id == target).unwrap().1;
+                assert_eq!(preview, moved_rect.shrink(pcbcraft_chrome::Tokens::get().space_4));
+                let (first, second) = if above { (moved_rect, target_rect) } else { (target_rect, moved_rect) };
+                assert!(first.bottom() < second.top());
+                assert_eq!(first.x_range(), second.x_range());
+            }
+        }
+    }
+}
+
+/// A narrow boundary pane keeps its drag menu when the window fits the rows over its neighbour.
+#[test]
+fn overhanging_split_row_still_addresses_its_pane() {
+    let (mut h, _) = many_windows();
+    h.set_size(vec2(760.0, 650.0));
+    let ctx = h.ctx.clone();
+    for _ in 0..4 {
+        let target = h.state().views.hosts[&HostId::ROOT].layout.visible_views().last().copied().unwrap();
+        h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":target.0,"side":"right"})).unwrap();
+    }
+    h.run();
+    let (target, bounds) = *h.state().views.hosts[&HostId::ROOT].rects.last().unwrap();
+    let moved = root_drag(&mut h, 0);
+    h.hover_at(bounds.center());
+    h.run();
+    let row = h.get_by_label("Split down").rect().center();
+    assert!(!bounds.contains(row), "test must exercise a row outside its pane");
+    h.hover_at(row);
+    h.run();
+    let preview = h.get_by_label("Split below").rect();
+    h.drop_at(row);
+    h.run();
+    let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+    let to = panes.iter().find(|(id, _)| *id == target).unwrap().1;
+    let placed = panes.iter().find(|(id, _)| *id == moved).unwrap().1;
+    assert_eq!(to.x_range(), placed.x_range());
+    assert!(to.bottom() < placed.top());
+    assert_eq!(preview, placed.shrink(pcbcraft_chrome::Tokens::get().space_4));
+}
+
+/// A tab's own menu can split an unfocused pane directly, with the same geometry as a drop.
+#[test]
+fn pane_tab_menu_splits_its_own_view_up_or_down() {
+    for (theme, label, above) in [(ThemeChoice::Dark, "Split up", true), (ThemeChoice::Light, "Split down", false)] {
+        let (mut h, _) = many_windows();
+        h.state_mut().preferences.theme = theme;
+        let ctx = h.ctx.clone();
+        h.state_mut().split_editors(&ctx, true);
+        h.run();
+        let panes = h.state().views.hosts[&HostId::ROOT].rects.clone();
+        let (source, area) = panes.iter().copied().find(|(id, _)| *id != h.state().views.active.id()).unwrap();
+        let title = h.state().view_title(source);
+        h.get_all_by_label(&title).find(|node| area.contains(node.rect().center())).unwrap().click_secondary();
+        h.run();
+        let up = h.get_by_label("Split up").rect();
+        let down = h.get_by_label("Split down").rect();
+        assert!(up.bottom() <= down.top());
+        assert_eq!(up.x_range(), down.x_range());
+        click(&mut h, label);
+        let after = &h.state().views.hosts[&HostId::ROOT].rects;
+        assert_eq!(after.len(), 3);
+        let next = after.iter().find(|(id, _)| *id == source).unwrap().1;
+        let (_, added) = *after.iter().find(|(id, _)| !panes.iter().any(|(previous, _)| previous == id)).unwrap();
+        let (first, second) = if above { (added, next) } else { (next, added) };
+        assert!(first.bottom() < second.top());
+        assert_eq!(first.x_range(), area.x_range());
+        assert_eq!(second.x_range(), area.x_range());
+        assert_eq!((first.top(), second.bottom()), (area.top(), area.bottom()));
+        assert!(after.contains(panes.iter().find(|(id, _)| *id != source).unwrap()));
+        assert!(h.query_by_label("Split up").is_none());
+    }
+}

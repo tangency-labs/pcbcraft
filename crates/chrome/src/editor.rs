@@ -118,6 +118,7 @@ pub fn panel_area(mut area: Rect, panes: &[Rect], headers: bool, spacing: f32) -
 #[derive(Clone, Copy, Debug)]
 pub enum PaneAction {
     OpenBeside,
+    Split(DockSide),
     OpenWindow,
     Detach,
     Dock,
@@ -205,8 +206,12 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
     if native && response.drag_started_by(egui::PointerButton::Primary) {
         action = Some(PaneAction::Drag);
     }
-    response.context_menu(|ui| {
-        let mut choices = vec![("Open beside", PaneAction::OpenBeside)];
+    crate::menu::context(&response, |ui| {
+        let mut choices = vec![
+            ("Split up", PaneAction::Split(DockSide::Top)),
+            ("Split down", PaneAction::Split(DockSide::Bottom)),
+            ("Open beside", PaneAction::OpenBeside),
+        ];
         if native {
             choices.push(("Open in new window", PaneAction::OpenWindow));
             choices.push(("Detach view", PaneAction::Detach));
@@ -216,9 +221,8 @@ pub fn pane_header(ui: &mut Ui, path: &str, focused: bool, native: bool, detache
         }
         choices.push(("Close view", PaneAction::Close));
         for (label, choice) in choices {
-            if crate::controls::button(ui, label).clicked() {
+            if crate::MenuItem::new(label).show(ui) {
                 action = Some(choice);
-                ui.close();
             }
         }
     });
@@ -323,7 +327,8 @@ pub struct WindowDropState {
 /// window positions. Selection uses the host's captured pointer, including a release after
 /// native hover leaves the window; the highlighted row is the operation release will commit.
 /// The new-window row also highlights while the captured pointer is outside the client.
-/// Anchor beside the initial header press rather than the pane's far edge, which may be off-screen.
+/// Anchor below the destination pane's header, using the initial press when it is the source.
+/// Return the shown bounds so a short or narrow pane can keep control of an overhanging list.
 pub fn window_drop_targets(
     ui: &Ui,
     pane: Rect,
@@ -331,7 +336,7 @@ pub fn window_drop_targets(
     targets: &[(u64, String)],
     main: u64,
     state: WindowDropState,
-) -> Option<WindowDrop> {
+) -> (Option<WindowDrop>, Rect) {
     let mut hovered = None;
     let t = Tokens::get();
     let button_width = ["Above", "Below"]
@@ -342,11 +347,11 @@ pub fn window_drop_targets(
     let width = (pane.width() - 2.0 * t.space_12).clamp(180.0, 280.0);
     let left = pane.left() + t.space_12;
     let right = (pane.right() - width - t.space_12).max(left);
-    egui::Area::new(ui.scope_id().with("window_drop_targets"))
+    let popup = egui::Area::new(ui.scope_id().with("window_drop_targets"))
         .order(egui::Order::Tooltip)
         .fixed_pos(pos2((anchor.x - width).clamp(left, right), pane.top() + header_height() + t.space_4))
         .show(ui.ctx(), |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
+            crate::menu::frame().show(ui, |ui| {
                 ui.set_width(width);
                 let mut choices =
                     vec![(WindowDrop::Split(DockSide::Top), "Split up".to_owned()), (WindowDrop::Split(DockSide::Bottom), "Split down".to_owned())];
@@ -407,7 +412,7 @@ pub fn window_drop_targets(
                 }
             });
         });
-    hovered
+    (hovered, popup.response.rect)
 }
 
 /// Keep the source pane outlined and shaded until the drag ends, with a brief entrance fade.

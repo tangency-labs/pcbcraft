@@ -1066,6 +1066,7 @@ impl PcbApp {
                         use editor::PaneAction;
                         let action = match action {
                             PaneAction::OpenBeside => Some(ViewAction::OpenBeside),
+                            PaneAction::Split(side) => Some(ViewAction::OpenAt(side)),
                             PaneAction::OpenWindow => Some(ViewAction::OpenWindow),
                             PaneAction::Detach => Some(ViewAction::Detach),
                             PaneAction::Dock => Some(ViewAction::Dock),
