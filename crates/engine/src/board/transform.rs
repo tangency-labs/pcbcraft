@@ -67,7 +67,7 @@ impl AlignMode {
 
 /// Refuse an unknown or locked placement before editing or removing the supplied placements.
 /// Report each lock using its stable ID and, when available, its live or last accepted reference.
-pub(super) fn require_unlocked_placements<'a>(
+pub(crate) fn require_unlocked_placements<'a>(
     project: &Project,
     placements: impl IntoIterator<Item = Option<&'a Footprint>>,
 ) -> Result<(), CommandError> {

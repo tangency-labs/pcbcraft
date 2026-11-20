@@ -48,6 +48,31 @@ fn only_board_exclusion_changes_physical_membership() {
     assert!(!legacy.project().unwrap().component_is_board_eligible(u64::MAX));
 }
 
+/// Last-unit deletion stages an accepted placement's removal without dropping its lock or placement.
+#[test]
+fn last_unit_delete_stages_locked_accepted_placement_removal() {
+    let mut session = initialized();
+    let mut project = session.project().unwrap().clone();
+    let footprint = &mut Arc::make_mut(&mut project.board).footprints[0];
+    footprint.locked = true;
+    let (component, footprint_id) = (footprint.component, footprint.id);
+    let symbol = project.all_symbols().find(|symbol| symbol.component == component).unwrap().id();
+    session.open_snapshot(Arc::new(project));
+    edit(&mut session, DELETE_SYMBOL, json!({"symbol":symbol}));
+
+    let staged = session.snapshot().unwrap();
+    assert!(!staged.all_symbols().any(|symbol| symbol.component == component));
+    let footprint = staged.board.footprint_for_part_instance(component).unwrap();
+    assert_eq!(footprint.id, footprint_id);
+    assert!(footprint.locked);
+    let report = plan(&mut session);
+    assert_eq!(session.cached_board_update().unwrap().changes.components, [ComponentChange::Removed { component }]);
+    let params = json!({"plan_token":report["plan_token"],"expected_revision":session.revision()});
+    let error = session.apply(APPLY_UPDATE, &params).unwrap_err();
+    assert!(matches!(&error, CommandError::InvalidParams(message) if message.contains(&format!("footprint-{footprint_id}"))), "{error}");
+    assert!(Arc::ptr_eq(&staged, &session.snapshot().unwrap()));
+}
+
 /// Applying mixed locked and unlocked removals refuses the entire reviewed update.
 #[test]
 fn board_update_refuses_locked_removal_atomically() {

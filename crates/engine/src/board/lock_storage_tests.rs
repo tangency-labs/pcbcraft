@@ -54,6 +54,41 @@ fn marker_fixture() -> Session {
     session
 }
 
+/// Last-unit deletion on a board without a baseline leaves the locked placement and history intact.
+/// The same deletion on an unlocked placement still removes both the component and its footprint.
+#[test]
+fn last_unit_delete_refuses_locked_legacy_placement_atomically() {
+    let mut session = marker_fixture();
+    let original = session.snapshot().unwrap();
+    assert!(original.board.baseline.is_none());
+    let symbol = &original.symbols[0];
+    let footprint = &original.board.footprints[0];
+    let locked_name = format!("{} (footprint-{})", original.reference(symbol), footprint.id);
+    session.open_snapshot(with_lock(&original, true));
+    session.apply("project.rename", &json!({"name":"Locked legacy board"})).unwrap();
+    add_redo_control(&mut session);
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let root = session.history_root_revision();
+    let history = |session: &Session| {
+        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.as_ref().map(Arc::as_ptr)).collect::<Vec<_>>())
+    };
+    let before_history = history(&session);
+    assert!(before_history.iter().all(|entries| entries.iter().any(Option::is_some)));
+    let error = session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol.id(),"expected_revision":revision})).unwrap_err();
+    assert!(matches!(&error, crate::CommandError::InvalidParams(message) if message.contains(&locked_name)), "{error}");
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert!(session.project().unwrap().board.footprint_for_part_instance(symbol.component).unwrap().locked);
+    assert_eq!((session.revision(), session.history_root_revision(), history(&session)), (revision, root, before_history));
+
+    session.open_snapshot(original.clone());
+    session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol.id(),"expected_revision":session.revision()})).unwrap();
+    assert!(session.project().unwrap().symbols.is_empty());
+    assert!(session.project().unwrap().board.footprint_for_part_instance(symbol.component).is_none());
+    session.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&original, &session.snapshot().unwrap());
+}
+
 /// Split documents and packed bytes retain a legacy marker lock and a non-first physical lock,
 /// with and without setup. Compare the board as JSON and the unrelated documents as bytes.
 #[test]
