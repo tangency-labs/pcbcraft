@@ -1,7 +1,7 @@
 //! Dispatch MCP tools to a headless session or an open desktop editor.
 
 use pcbcraft_engine::{
-    Project, Session,
+    Project, Session, SessionScope,
     board::Pad,
     catalog,
     command_api::{self, CAPABILITIES, COMMAND_API_VERSION, DEPRECATIONS, Deprecation},
@@ -47,6 +47,10 @@ pub trait Backend {
     /// Whether discovery describes an editor, rather than a headless project session.
     fn has_live_editor(&self) -> bool {
         false
+    }
+    /// The fixed command scope, if this backend owns and can attest to it.
+    fn scope(&self) -> Option<SessionScope> {
+        None
     }
     /// Where the commands run, for the client's information.
     fn describe(&self) -> String;
@@ -106,8 +110,15 @@ impl Default for Headless {
 impl Headless {
     /// Start a separate MCP session from a validated snapshot.
     pub fn with_project(project: std::sync::Arc<Project>) -> Self {
-        let mut session = Session::default();
-        session.open_snapshot(project);
+        Self::with_scope(SessionScope::Edit, Some(project))
+    }
+
+    /// Start a headless MCP session with fixed access and an optional validated project.
+    pub fn with_scope(scope: SessionScope, project: Option<std::sync::Arc<Project>>) -> Self {
+        let mut session = Session::with_scope(scope);
+        if let Some(project) = project {
+            session.open_snapshot(project);
+        }
         Self { session, ..Self::default() }
     }
 
@@ -135,9 +146,17 @@ impl Backend for Headless {
         Ok((result, execute_warnings(&request, self.deprecations)))
     }
 
+    /// Report the engine's fixed scope, not a client-provided preference.
+    fn scope(&self) -> Option<SessionScope> {
+        Some(self.session.scope())
+    }
+
+    /// Describe this headless process and the scope it actually enforces.
     fn describe(&self) -> String {
-        "a headless session in this process, not an open window. Window commands (view., window., arrangement., app. and file.) need a live editor"
-            .to_owned()
+        format!(
+            "a headless session in this process with scope `{}`, not an open window. Window commands (view., window., arrangement., app. and file.) need a live editor",
+            self.session.scope().as_str()
+        )
     }
 }
 
@@ -193,6 +212,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::library::sources::PARSE_QUANTITY
                         | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION
                         | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
+                        | pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
                 )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(Failure::from)

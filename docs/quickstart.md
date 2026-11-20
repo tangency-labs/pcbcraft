@@ -57,6 +57,9 @@ instances/2 for a board; opening or inspecting an older project does not promote
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.
 The folder contains two wired resistors and their pinned symbol definition.
+On desktop you can also name the project on the command line:
+`cargo run --locked -p pcbcraft -- crates/app/tests/fixtures/split/two-resistors`
+opens it as the app starts.
 Use **File → Save As… → Project folder…** to save your own copy in a new or empty
 folder outside the checkout before making changes. This keeps the tracked test
 fixture intact. **View → Fit** brings the circuit into view. On desktop, use the
@@ -624,7 +627,9 @@ launch `target/debug/pcbcraft-cli` with arguments
 repository as its working directory. Use `.exe` on Windows. Running that command
 in a terminal waits for MCP input; it is not an interactive command prompt.
 Headless edits change only that process's in-memory session. They do not edit an
-open GUI window or save back to the file.
+open GUI window or save back to the file. For a review that must not edit even
+that snapshot, add `--read-only` to the headless arguments. See
+[headless MCP](mcp.md#headless-mcp) for scope discovery and refusal details.
 
 To read back a connectivity export, call `execute` with
 `{"command":"project.export_netlist","params":{}}`. Take the text from
@@ -750,6 +755,19 @@ last window still asks about unsaved work.
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
 To make a plated hole, set Layers to All copper and enter a positive drill smaller
 than the land. Corner radius is zero for rectangular/circular pads.
+
+For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
+pins, enter each other's numbers and choose **Preview current nets** before
+**Apply remap**. The table separates the draft's unchanged name from the pinned
+before-number name, current nets and native package pads; these are not predicted
+reconnections or proof of primitive lineage across prior draft renumbering.
+**Unconnected** is a known placed terminal without a net. Actual net names start
+with **Net:**, so a net named Unconnected reads **Net: Unconnected**. **Unknown**
+means missing association or evidence (for example, no open project or no matching
+placed copy), not a known no-net/no-package result. Only the library draft
+changes, in one Undo step. Cancel leaves both documents alone. To associate nets,
+edit the same published identity/revision used by the project; **Edit copy** does
+not infer that association. See [pin renumbering](properties-and-library-editors.md#review-pin-renumbering).
 
 On desktop, **Parts Library → New → Library** creates a writable native folder.
 Create a symbol or footprint and publish it to that collection first, or choose an

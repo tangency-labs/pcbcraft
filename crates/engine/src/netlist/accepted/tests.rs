@@ -193,7 +193,7 @@ fn board_netlist_matches_schematic_in_sync_and_shows_one_pending_change() {
 }
 
 /// Repeated exports, a save and reopen, and the execute and apply paths give the same bytes
-/// without changing the project or its history.
+/// without changing the project or its history. Unknown boards retain the shared NotFound category.
 #[test]
 fn board_export_is_byte_identical_and_edits_nothing() {
     let Fixture { mut session, .. } = synced();
@@ -217,7 +217,7 @@ fn board_export_is_byte_identical_and_edits_nothing() {
     assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
     assert_eq!(session.revision(), revision);
     let unknown = session.execute(EXPORT_BOARD_NETLIST, &json!({"board":Uuid::nil().to_string()}));
-    assert!(matches!(unknown, Err(CommandError::InvalidParams(ref message)) if message == "unknown board ID"), "{unknown:?}");
+    assert!(matches!(unknown, Err(CommandError::NotFound(ref message)) if message == "unknown board ID"), "{unknown:?}");
 
     let text = &first.contents;
     validate_v2(&serde_json::from_str(text).unwrap());

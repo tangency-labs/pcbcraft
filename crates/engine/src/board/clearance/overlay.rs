@@ -128,7 +128,8 @@ impl Overlay<'_> {
         self.room(false)?;
         self.advance()?;
         let at = contour.core[0];
-        self.added.insert(id, Object { name: id.to_string(), contour, layers, intended_nets: nets, at, island: usize::MAX, net: None });
+        self.added
+            .insert(id, Object { name: id.to_string(), contour, layers, intended_nets: nets, at, island: usize::MAX, net: None, mechanical: false });
         Ok(())
     }
 
@@ -199,6 +200,7 @@ impl Overlay<'_> {
             .map(|(id, item, gap)| {
                 let d =
                     decision(None, 0, gap, &connected, &item.intended_nets, false, self.query.membership_clearance(&connected, &item.intended_nets));
+                let d = if item.mechanical { d.mechanical_clearance() } else { d };
                 OverlayDecision {
                     obstacle: id,
                     gap_nm: d.gap_nm,

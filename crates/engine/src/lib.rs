@@ -33,6 +33,7 @@ pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;
+mod session_scope;
 pub mod sheets;
 pub mod wire;
 pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -43,6 +44,7 @@ pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
 pub use board::via_nets::SET_VIA_NET;
+pub use session_scope::SessionScope;
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -111,6 +113,8 @@ enum ParamKind {
     LibrarySource,
     LibraryDocuments,
     AuthoringItem,
+    PinRemaps,
+    RemapBaseRevision,
     PartDraft,
     LibraryQuery,
     LibraryKind,
@@ -262,6 +266,8 @@ impl ParamKind {
             Self::AuthoringItem => {
                 json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
             }
+            Self::PinRemaps => authoring::remap::schema(),
+            Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision.schema(),
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
@@ -519,6 +525,11 @@ impl ParamKind {
             Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
+            Self::PinRemaps => authoring::remap::decode(value).map(|_| ()).map_err(|_| "must contain 1 to 128 explicit valid pin correspondences"),
+            Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision
+                .parse(value)
+                .map(|_| ())
+                .map_err(|_| "must be a canonical decimal string from 1 through 4294967295"),
             Self::AuthoringItem => Err("must contain a valid bounded native authoring item"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol, footprint, category or part"),
@@ -1919,6 +1930,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[6],
     library::sources::COMMANDS[7],
     library::sources::COMMANDS[8],
+    library::sources::COMMANDS[9],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2610,6 +2622,10 @@ pub enum CommandError {
         stated: u64,
         current: u32,
     },
+    /// A scoped session may not run this known command.
+    OutOfScope {
+        command: &'static str,
+    },
 }
 
 impl CommandError {
@@ -2624,6 +2640,7 @@ impl CommandError {
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::CapExceeded(_) => ErrorCode::CapExceeded,
             Self::VersionMismatch { .. } => ErrorCode::VersionMismatch,
+            Self::OutOfScope { .. } => ErrorCode::OutOfScope,
         }
     }
 
@@ -2633,6 +2650,7 @@ impl CommandError {
         match self {
             Self::StaleRevision { current } => json!({"current_revision": current}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
+            Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
             _ => json!({}),
         }
     }
@@ -2649,6 +2667,7 @@ impl std::fmt::Display for CommandError {
                 f,
                 "`{command}` was requested with command API version {stated}, but this session runs version {current}; refresh the command catalog"
             ),
+            Self::OutOfScope { command } => write!(f, "`{command}` cannot run in a read-only session"),
         }
     }
 }
@@ -2905,6 +2924,8 @@ impl Project {
 /// separate session. Window placement and navigation are not part of the project history.
 #[derive(Debug)]
 pub struct Session {
+    /// Command authority fixed at construction, never part of a document.
+    scope: SessionScope,
     /// Runtime authority shared only by clearance captures from this session, never persisted.
     clearance_identity: Arc<()>,
     /// One disposable captured-board query cache; history snapshots never retain this cache.
@@ -2932,6 +2953,7 @@ impl Default for Session {
     /// Start with the bundled native sources; no project or authored history exists yet.
     fn default() -> Self {
         Self {
+            scope: SessionScope::Edit,
             clearance_identity: Arc::new(()),
             clearance_cache: std::sync::Mutex::new(None),
             libraries: Arc::new(library::sources::Catalog::bundled()),
@@ -3094,7 +3116,8 @@ impl Session {
             | library::sources::RESOLVE_PART
             | library::sources::PARSE_QUANTITY
             | library::sources::PREPARE_PART_PUBLICATION
-            | library::sources::PREPARE_PUBLICATION => true,
+            | library::sources::PREPARE_PUBLICATION
+            | library::sources::PREVIEW_PIN_REMAP => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -3216,7 +3239,7 @@ impl Session {
         }
     }
 
-    /// Return the current project, revision, and undo and redo availability as JSON.
+    /// Return the current project, scope, revision, and undo and redo availability as JSON.
     /// Each schematic wire reports explicit component/junction/interface endpoints, authored `bends`, and
     /// its drawn `path`: every corner from end to end in nanometres, so a point on any leg can be
     /// chosen for the commands that take one.
@@ -3290,6 +3313,7 @@ impl Session {
             "project": project,
             "footprint_catalog": self.project.as_ref().map(|p| p.inspect_footprint_catalog()),
             "revision": self.revision,
+            "scope": self.scope.as_str(),
             "can_undo": !self.undo.is_empty(),
             "can_redo": !self.redo.is_empty(),
         });
@@ -3305,9 +3329,11 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Failed commands leave the project intact; a stale `expected_revision` is reported first
-    /// unless the command returns a stale query outcome, as `pcb.plan_route` does.
+    /// Failed commands leave the project intact. Scope refusals precede validation; otherwise
+    /// a stale `expected_revision` is reported first unless the command returns a stale query
+    /// outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
         if id == board::arc::SET_ARCS {
             let before = self.revision;
@@ -3406,12 +3432,14 @@ impl Session {
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
-    /// A stale `expected_revision` is reported before any other check, except for `pcb.plan_route`.
+    /// Scope is checked first, then a stale `expected_revision` is reported before other
+    /// validation, except for `pcb.plan_route`.
     /// A command that advances the revision is reported to the edit observer once it has
     /// been adopted; failures, no-ops and queries are not reported. Copper commands report
     /// from their prepared publication path, which also serves direct prepared commits.
     /// Board cut checks the encoded clipboard limit even though only the revision is returned.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
         if id == board::clipboard::CUT {
             self.cut_board(params)?;
@@ -4402,6 +4430,8 @@ fn assert_same_content(expected: &Arc<Project>, actual: &Arc<Project>) {
 }
 
 /// Validate declared inputs, requiring mandatory parameters and rejecting unknown or invalid values.
+/// Remap rows keep the decoder's shape or value reason, not necessarily an individual key path.
+/// The native item envelope is decoded separately after this outer check.
 fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
     let empty = Map::new();
     let given = match params {
@@ -4422,7 +4452,14 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
             continue;
         }
         let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
-        param.kind.validate(value).map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
+        let checked = if command.id == library::sources::PREVIEW_PIN_REMAP && param.name == "item" {
+            value.is_object().then_some(()).ok_or_else(|| "Pin remap item must be an object.".into())
+        } else if matches!(param.kind, ParamKind::PinRemaps) {
+            authoring::remap::decode(value).map(|_| ())
+        } else {
+            param.kind.validate(value).map_err(str::to_owned)
+        };
+        checked.map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
     }
     Ok(())
 }

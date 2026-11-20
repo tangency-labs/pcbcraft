@@ -22,7 +22,31 @@ fn library_documents_are_independent_and_revision_checked() {
 
 use egui_kittest::{Harness, kittest::Queryable};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod remap;
+#[cfg(not(target_arch = "wasm32"))]
+mod remap_evidence;
 mod zoom;
+
+/// Explicit document close releases its captured project/report; reopening cannot reuse its token.
+/// This shared editor lifecycle also applies to the WebAssembly test target.
+#[test]
+fn pin_remap_close_cancels_review_and_reopen_has_new_authority() {
+    use pcbcraft_engine::authoring::remap::PinRemap;
+
+    let mut app = PcbApp::default();
+    app.new_library_item(Kind::Symbol);
+    let id = app.library_editors.active.unwrap();
+    let item = app.library_editors.documents[&id].session.snapshot();
+    let pins = vec![PinRemap { unit: "main".into(), object: 1, number: "2".into() }, PinRemap { unit: "main".into(), object: 3, number: "1".into() }];
+    let token = app.preview_library_pin_remap(id, 0, pins).unwrap();
+    app.library_editors.close(id, true).unwrap();
+    assert!(app.library_editors.pin_remap.is_none());
+    let reopened = app.library_editors.open(item.as_ref().clone(), true).unwrap();
+    assert_ne!(id, reopened);
+    assert!(app.apply_library_pin_remap(reopened, 0, token).unwrap_err().contains("Preview"));
+    assert_eq!(app.library_editors.documents[&reopened].session.revision(), 0);
+}
 
 /// Definition panes extend their own canvas palette through the exposed ribbon margins, down to
 /// the pane's top edge, leaving no unpainted band between the ribbon and the canvas.
@@ -1044,6 +1068,41 @@ fn normalized_clipboard_events_drive_library_copy_and_paste() {
         );
         h.key_press(egui::Key::Escape);
         h.run();
+        // Cut is copy + delete as one undoable edit; the cut selection still pastes.
+        let count = h.state().library_editors.documents[&id].session.snapshot().objects.len();
+        // Seed different content so Paste cannot pass using the preceding Copy's clipboard.
+        let ctx = h.ctx.clone();
+        let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+        let item = doc.session.snapshot();
+        let expected = item.objects[&first].clone();
+        let other = *item.objects.keys().find(|object| **object != first).unwrap();
+        doc.selection = [other].into_iter().collect();
+        doc.copy(&ctx);
+        doc.selection = [first].into_iter().collect();
+        h.event(egui::Event::Cut);
+        h.run();
+        let doc = &h.state().library_editors.documents[&id];
+        assert_eq!(doc.session.snapshot().objects.len(), count - 1, "{kind:?} cut removes the selection");
+        assert_eq!(doc.session.revision(), revision + 1, "{kind:?} cut is a single undoable edit");
+        h.event(egui::Event::Paste(String::new()));
+        h.run();
+        assert!(
+            matches!(&h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { primitives, .. } if primitives == &[expected]),
+            "{kind:?} the cut selection must reach the internal clipboard"
+        );
+        h.key_press(egui::Key::Escape);
+        h.run();
+        crate::tests::click(&mut h, "Undo Library Edit");
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&id].session.snapshot().objects.len(), count, "{kind:?} one undo restores the cut objects");
+        // The raw shifted chord reaches the same cut op (re-hover after the
+        // Undo click moved the pointer off the canvas).
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = [first].into_iter().collect();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, egui::Key::X);
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&id].session.snapshot().objects.len(), count - 1, "{kind:?} raw shifted X must cut as well");
     }
     // Pending property fields still refuse a normalized Paste.
     let mut app = PcbApp::default();
@@ -1069,6 +1128,77 @@ fn normalized_clipboard_events_drive_library_copy_and_paste() {
     assert!(doc.pending(), "unapplied fields must survive focus changes");
     assert!(matches!(doc.tool, canvas::Tool::Select));
     assert!(doc.error.is_some(), "pending property fields must refuse a normalized Paste");
+    // A pending draft also refuses Cut rather than discarding unapplied fields.
+    let revision = doc.session.revision();
+    let count = doc.session.snapshot().objects.len();
+    h.state_mut().library_editors.documents.get_mut(&id).unwrap().error = None;
+    h.event(egui::Event::Cut);
+    h.run();
+    let doc = &h.state().library_editors.documents[&id];
+    assert_eq!(doc.session.revision(), revision, "pending property fields must refuse a normalized Cut");
+    assert_eq!(doc.session.snapshot().objects.len(), count);
+    assert!(doc.error.is_some(), "cut must surface the pending-fields error");
+}
+
+/// A native input batch may end with different modifiers from its X press. Cut follows
+/// the pressed event, retains focus gating, and runs once if both event forms arrive.
+#[test]
+fn library_cut_uses_the_pressed_event_modifiers() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (command_at_press, command_at_end, focused, normalized, cuts) in
+            [(true, false, true, false, true), (false, true, true, false, false), (true, false, false, false, false), (true, false, true, true, true)]
+        {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+            let before = doc.session.snapshot();
+            let first = *before.objects.keys().next().unwrap();
+            doc.selection = [first].into_iter().collect();
+            let revision = doc.session.revision();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            let modifiers = |command| egui::Modifiers { ctrl: command, command, shift: true, ..Default::default() };
+            // Harness::event gives each queued event its own frame. RawInput is needed
+            // to reproduce a press and a later modifier change in one actual batch.
+            h.input_mut().focused = focused;
+            h.input_mut().events.extend([
+                egui::Event::ModifiersChanged(modifiers(command_at_press)),
+                egui::Event::Key {
+                    key: egui::Key::X,
+                    physical_key: Some(egui::Key::X),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: modifiers(command_at_press),
+                },
+                egui::Event::Key {
+                    key: egui::Key::X,
+                    physical_key: Some(egui::Key::X),
+                    pressed: false,
+                    repeat: false,
+                    modifiers: modifiers(command_at_press),
+                },
+                egui::Event::ModifiersChanged(modifiers(command_at_end)),
+            ]);
+            if normalized {
+                h.input_mut().events.push(egui::Event::Cut);
+            }
+            h.run();
+            let doc = &h.state().library_editors.documents[&id];
+            assert_eq!(
+                doc.session.revision(),
+                revision + u64::from(cuts),
+                "{kind:?}: press={command_at_press}, end={command_at_end}, focus={focused}, normalized={normalized}"
+            );
+            assert_eq!(doc.session.snapshot().objects.len(), before.objects.len() - usize::from(cuts));
+            if !cuts {
+                assert_eq!(doc.session.snapshot().as_ref(), before.as_ref());
+            }
+        }
+    }
 }
 
 /// Native keyboard→clipboard translation drives the library paste op for every OS
