@@ -113,7 +113,13 @@ leaves the whole project and history unchanged. Optional `metadata` replaces the
 component's standard/custom fields and attributes; optional `field_layout`
 replaces only the addressed unit's text appearance. Omission preserves either
 map. Inspection publishes component metadata and each symbol's field layout;
-positions remain symbol-local nanometres. `schematic.place_net_label` and
+positions remain symbol-local nanometres. Optional `designator_locked` sets the
+lock for the entire part instance; omitting it retains the current lock.
+`dry_run: true` previews the full changed native documents without applying the
+edit or adding an undo step. See [designator locks and previews](quickstart.md#designator-locks)
+for the response, revision requirements, and limits.
+
+`schematic.place_net_label` and
 `schematic.set_net_label` accept optional `text` with the same appearance schema;
 omission preserves a marker's existing appearance. The strict schemas appear in the shared
 command catalog, and dangling field layouts or invalid values reject the entire
@@ -630,7 +636,10 @@ To start the MCP server from the repository root, run
 at `pcbcraft-cli mcp`. Pass
 `--project path/to/project.json` (or a folder or `.pc`) after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
-`execute` to return just the resulting revision. Use `inspect_project` to read
+`execute` to omit inspection and return the revision for ordinary edits.
+Commands that return their own data, such as exports and clipboard queries,
+retain that data. In particular, `schematic.set_symbol_fields` with `dry_run: true`
+still returns the full preview, including the changed native documents. Use `inspect_project` to read
 the project, or `cross_probe` to look up a linked terminal or pad. The additive
 read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
 unavailable states at a captured revision; see [pin/pad correspondence](pin-pad-correspondence.md)

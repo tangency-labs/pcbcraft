@@ -228,7 +228,8 @@ fn check_window_version(editor: &dyn Editor, id: &str, stated: &Value) -> Result
 /// Document/presentation commands obey the editor's refusal; UI automation uses its own input
 /// lifecycle and returns query data or a queue ticket. Other window commands answer with editor
 /// inspection (or only the unchanged revision when `inspect` is false); document commands answer
-/// as in a headless session.
+/// as in a headless session. A symbol-field preview that exceeds the live reply limit
+/// returns a tool error without applying the edit.
 pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Failure> {
     let method = request["method"].as_str().ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "missing control method"))?;
     let params = &request["params"];
@@ -254,6 +255,17 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
             }
             if !is_window_command(id) {
                 let result = call_session(editor.session(), method, params)?;
+                // This dry run cannot publish an edit. Refuse an oversized reply before the
+                // host writes its frame, rather than truncating the proposed documents.
+                if id == pcbcraft_engine::SET_SYMBOL_FIELDS
+                    && params["params"]["dry_run"].as_bool() == Some(true)
+                    && check_reply_size(&result).is_err()
+                {
+                    return Err(Failure::new(
+                        ErrorCode::CapExceeded,
+                        "The symbol-field preview exceeds the 16 MiB live reply limit; no edit was applied.",
+                    ));
+                }
                 return match id {
                     pcbcraft_engine::netlist::EXPORT_BOARD_NETLIST => board_netlist_reply(result),
                     pcbcraft_engine::netlist::COMPARE_NETLIST => comparison_netlist_reply(result),
