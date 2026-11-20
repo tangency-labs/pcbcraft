@@ -5,6 +5,7 @@ use crate::board::{
     clearance::{Object, Overlay},
     geometry::Contour,
     track::{
+        MAX_TRACKS,
         chains::{self, Chains},
         replacements::Replacement,
     },
@@ -25,6 +26,17 @@ pub enum Mode {
     #[default]
     Walkaround,
     Shove,
+}
+
+impl Mode {
+    /// A shove can affect many independent runs. Give its cooperatively stepped
+    /// search the full allowed budget, with the smaller default for walkaround.
+    pub fn default_probe_budget(self) -> usize {
+        match self {
+            Self::Walkaround => DEFAULT_BUDGET,
+            Self::Shove => MAX_BUDGET,
+        }
+    }
 }
 
 /// Copper already fixed by the current gesture, never a live model edit. The final route
@@ -96,8 +108,8 @@ impl ShoveStats {
     }
 }
 
-/// Bound both speculative propagation and connected source anchors independently of probes.
-const MAX_SHOVES: usize = 96;
+/// Reserve most probe work for reaching a full cascade before optimizing bends.
+const REFINEMENT_BUDGET_DIVISOR: usize = 8;
 
 /// Validate fixed geometry before starting a continuation; bounded count and explicit layers
 /// prevent callers from growing work outside ordinary gesture/model limits.
@@ -290,65 +302,6 @@ fn split_chain(chains: &Chains, source: usize, path: &[Point]) -> Option<Vec<Rep
     Some(result)
 }
 
-/// Run a nested walk with inherited source intent; its probes charge the global gesture budget.
-async fn displace(
-    query: &ClearanceQuery,
-    request: &Request,
-    object: &Object,
-    contacts: Option<BTreeSet<String>>,
-    incoming: Push,
-    budget: usize,
-    progress: Arc<AtomicUsize>,
-) -> Result<Plan, CommandError> {
-    let mut walker = super::walkaround::Walker::new(query, request, budget, progress)?;
-    walker.inherit(object, contacts);
-    walker.push_forward(request.head, request.target, incoming.from, incoming.toward);
-    let first = match walker.run(request).await {
-        Ok(plan) if plan.outcome == Outcome::Reached => {
-            return walker.localize_displacement(plan, request).await;
-        }
-        Ok(plan) if plan.start_blocked => return Ok(plan),
-        Err(super::walkaround::Stop::Failed(error)) => return Err(error),
-        first => first,
-    };
-    if walker.probes() < budget {
-        match walker.parallel_alternatives(request).await {
-            Ok(Some(plan)) => return walker.tidy_displacement(plan, request.flipped).await,
-            Err(super::walkaround::Stop::Failed(error)) => return Err(error),
-            Err(super::walkaround::Stop::Exhausted) => {
-                return Ok(Plan {
-                    adjusted_target: None,
-                    start_blocked: false,
-                    replacements: Vec::new(),
-                    shove: None,
-                    points: vec![request.head],
-                    outcome: Outcome::Incomplete,
-                    blocker: None,
-                    probes: walker.probes(),
-                });
-            }
-            Ok(None) => {}
-        }
-    }
-    match first {
-        Ok(mut plan) => {
-            plan.probes = walker.probes();
-            Ok(plan)
-        }
-        Err(super::walkaround::Stop::Exhausted) => Ok(Plan {
-            adjusted_target: None,
-            start_blocked: false,
-            replacements: Vec::new(),
-            shove: None,
-            points: vec![request.head],
-            outcome: Outcome::Incomplete,
-            blocker: None,
-            probes: walker.probes(),
-        }),
-        Err(super::walkaround::Stop::Failed(error)) => Err(error),
-    }
-}
-
 /// Validate the original pickup before making any speculative copper movable. All
 /// candidates share the same captured source and probe budget; cancellation drops the search.
 pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
@@ -505,7 +458,7 @@ impl<'a> Search<'a> {
         }
         let geometry = query.with_objects(items)?;
         let incoming = {
-            let mut overlay = geometry.overlay();
+            let mut overlay = geometry.route_overlay();
             let mut next = 1;
             add_path(&mut overlay, &fixed, pickup.source, &mut next, &mut ShoveStats::default())?;
             super::search::yield_unit().await;
@@ -514,12 +467,36 @@ impl<'a> Search<'a> {
         Ok(Self { query, chains, geometry, incoming, pickup, fixed, movable, stats, budget, progress })
     }
 
+    /// Certify the incoming open stroke, including the contiguous fixed prefix on
+    /// this layer. A candidate must preserve spacing to its own earlier legs.
+    async fn legal_incoming(&self, request: &Request, points: &[Point]) -> bool {
+        if points.len() < 2 {
+            return true;
+        }
+        let mut prefix = Vec::new();
+        let mut head = points[0];
+        for piece in request.fixed.iter().rev() {
+            let FixedCopper::Segment { start, end, layer, width_nm } = piece else { continue };
+            if *end != head || *layer != request.layer || *width_nm != request.width_nm {
+                break;
+            }
+            prefix.push(*start);
+            head = *start;
+        }
+        prefix.reverse();
+        prefix.extend_from_slice(points);
+        let nets = &self.pickup.nets;
+        let spacing = request.width_nm as f64 + self.query.membership_clearance(nets, nets) as f64;
+        chains::legal_stroke(&prefix, spacing).await
+    }
+
     /// Try the requested posture first. If its cascade fails, allow a distinct
     /// incoming geometry to succeed under the same exact clearance and contact rules.
     async fn solve(&self, request: &Request) -> Result<Plan, CommandError> {
         let guides = std::iter::once(Approach::Walk(request.flipped))
             .chain(std::iter::once_with(|| continuations(request)).flatten())
             .chain([Approach::Walk(!request.flipped)]);
+        let reuse_previous = request.previous.last() != Some(&request.target) || self.legal_incoming(request, &request.previous).await;
         let mut tested = Vec::new();
         let mut stats = self.stats.clone();
         let mut blocker = None;
@@ -530,6 +507,9 @@ impl<'a> Search<'a> {
                 break;
             }
             let mut route = request.clone();
+            if !reuse_previous {
+                route.previous.clear();
+            }
             let proposed = match guide {
                 Approach::Walk(flipped) => {
                     route.flipped = flipped;
@@ -568,10 +548,13 @@ impl<'a> Search<'a> {
                 continue;
             }
             tested.push(proposed.points.clone());
-            for reverse in [false, true] {
-                let mut attempt = self.propagate(&route, proposed.clone(), reverse).await?;
+            if !self.legal_incoming(&route, &proposed.points).await {
+                continue;
+            }
+            for (reverse, flipped) in [(false, route.flipped), (true, route.flipped), (false, !route.flipped), (true, !route.flipped)] {
+                let mut attempt = self.propagate(&route, proposed.clone(), reverse, flipped).await?;
                 let mut attempt_stats = attempt.shove.take().unwrap_or_default();
-                let could_reverse = attempt_stats.queued_tracks > 0 && self.progress.load(Ordering::Relaxed) < self.budget;
+                let could_retry = attempt_stats.queued_tracks > 0 && self.progress.load(Ordering::Relaxed) < self.budget;
                 attempt_stats.include_previous(&stats);
                 stats = attempt_stats;
                 if attempt.outcome == Outcome::Reached {
@@ -580,7 +563,7 @@ impl<'a> Search<'a> {
                 }
                 incomplete |= attempt.outcome == Outcome::Incomplete;
                 blocker = attempt.blocker.or(blocker);
-                if !could_reverse {
+                if !could_retry {
                     break;
                 }
             }
@@ -599,9 +582,75 @@ impl<'a> Search<'a> {
         })
     }
 
+    /// Run a nested walk with inherited source intent; its probes charge the global gesture budget.
+    async fn displace(
+        &self,
+        query: &ClearanceQuery,
+        request: &Request,
+        object: &Object,
+        contacts: Option<BTreeSet<String>>,
+        incoming: Push,
+        refinement_remaining: &mut usize,
+    ) -> Result<Plan, CommandError> {
+        let budget = self.budget;
+        let mut walker = super::walkaround::Walker::new(query, request, budget, self.progress.clone())?;
+        walker.inherit(object, contacts);
+        walker.push_forward(request.head, request.target, incoming.from, incoming.toward);
+        let first = match walker.run(request).await {
+            Ok(plan) if plan.outcome == Outcome::Reached => {
+                return walker.polish_displacement(plan, request, refinement_remaining, true).await;
+            }
+            Ok(plan) if plan.start_blocked => return Ok(plan),
+            Err(super::walkaround::Stop::Failed(error)) => return Err(error),
+            first => first,
+        };
+        if walker.probes() < budget {
+            match walker.parallel_alternatives(request).await {
+                Ok(Some(plan)) => return walker.polish_displacement(plan, request, refinement_remaining, false).await,
+                Err(super::walkaround::Stop::Failed(error)) => return Err(error),
+                Err(super::walkaround::Stop::Exhausted) => {
+                    return Ok(Plan {
+                        adjusted_target: None,
+                        start_blocked: false,
+                        replacements: Vec::new(),
+                        shove: None,
+                        points: vec![request.head],
+                        outcome: Outcome::Incomplete,
+                        blocker: None,
+                        probes: walker.probes(),
+                    });
+                }
+                Ok(None) => {}
+            }
+        }
+        match first {
+            Ok(mut plan) => {
+                plan.probes = walker.probes();
+                Ok(plan)
+            }
+            Err(super::walkaround::Stop::Exhausted) => Ok(Plan {
+                adjusted_target: None,
+                start_blocked: false,
+                replacements: Vec::new(),
+                shove: None,
+                points: vec![request.head],
+                outcome: Outcome::Incomplete,
+                blocker: None,
+                probes: walker.probes(),
+            }),
+            Err(super::walkaround::Stop::Failed(error)) => Err(error),
+        }
+    }
+
     /// Displace a finite queue around one certified incoming path. A failed cascade cannot
-    /// publish partial geometry. The return pass walks displaced intervals from their other ends.
-    async fn propagate(&self, request: &Request, mut plan: Plan, reverse_displacements: bool) -> Result<Plan, CommandError> {
+    /// publish partial geometry. Return direction and elbow sense are independent choices.
+    async fn propagate(
+        &self,
+        request: &Request,
+        mut plan: Plan,
+        reverse_displacements: bool,
+        displacement_flipped: bool,
+    ) -> Result<Plan, CommandError> {
         let (query, chains, budget, progress) = (self.query, self.chains, self.budget, &self.progress);
         let Pickup { source: origin, nets, islands } = &self.pickup;
         let origin = *origin;
@@ -611,7 +660,7 @@ impl<'a> Search<'a> {
         stats.used_walkaround = plan.points != super::posture::elbow(request.head, request.target, request.posture, request.flipped);
         let mut next = 1;
         let fixed = &self.fixed;
-        let mut overlay = self.geometry.overlay();
+        let mut overlay = self.geometry.route_overlay();
         add_path(&mut overlay, fixed, origin, &mut next, &mut stats)?;
         let mut incomplete = false;
         let pieces: Vec<_> =
@@ -623,28 +672,28 @@ impl<'a> Search<'a> {
         let mut queue = BTreeSet::new();
         let mut pushes = BTreeMap::new();
         let mut replaced = BTreeSet::new();
+        let fixed_segments = request.fixed.iter().filter(|piece| matches!(piece, FixedCopper::Segment { .. })).count();
+        let mut segment_count = self.chains.tracks.len() + fixed_segments + plan.points.len().saturating_sub(1);
+        let mut refinement_remaining = self.budget / REFINEMENT_BUDGET_DIVISOR;
         let mut replacements = Vec::new();
-        let mut legal = Propagation {
-            chains,
-            movable,
-            replaced: &replaced,
-            queue: &mut queue,
-            pushes: &mut pushes,
-            incoming: None,
-            contact_exemptions: None,
-            stats: &mut stats,
-            progress,
-            budget,
-        }
-        .enqueue(query, &route, nets, islands)
-        .await?;
+        let mut legal = segment_count <= MAX_TRACKS
+            && Propagation {
+                chains,
+                movable,
+                replaced: &replaced,
+                queue: &mut queue,
+                pushes: &mut pushes,
+                incoming: None,
+                contact_exemptions: None,
+                stats: &mut stats,
+                progress,
+                budget,
+            }
+            .enqueue(query, &route, nets, islands)
+            .await?;
+        incomplete |= segment_count > MAX_TRACKS;
         while legal && !queue.is_empty() {
             super::search::yield_unit().await;
-            if replaced.len() >= MAX_SHOVES {
-                incomplete = true;
-                legal = false;
-                break;
-            }
             let Some(source) = queue.iter().copied().min_by(|a, b| {
                 pushes[a]
                     .piece
@@ -718,7 +767,7 @@ impl<'a> Search<'a> {
                     origin: None,
                     width_nm: track.width_nm,
                     posture: request.posture,
-                    flipped: request.flipped,
+                    flipped: displacement_flipped,
                     previous: chain.anchors[interval[0]..=interval[1]].iter().map(|a| a.point).collect(),
                     mode: Mode::Walkaround,
                     merge_same_net: request.merge_same_net,
@@ -728,7 +777,7 @@ impl<'a> Search<'a> {
                     std::mem::swap(&mut displaced.head, &mut displaced.target);
                     displaced.flipped = !displaced.flipped;
                 }
-                let mut result = displace(&obstacles, &displaced, object, contacts.clone(), incoming, budget, progress.clone()).await?;
+                let mut result = self.displace(&obstacles, &displaced, object, contacts.clone(), incoming, &mut refinement_remaining).await?;
                 if result.outcome != Outcome::Reached {
                     incomplete |= result.outcome == Outcome::Incomplete;
                     plan.blocker = result.blocker.or_else(|| Some(object.name.clone()));
@@ -753,7 +802,8 @@ impl<'a> Search<'a> {
                 legal = false;
                 break;
             };
-            if replacements.len() + parts.len() > MAX_SHOVES {
+            segment_count += parts.iter().map(|part| part.points.len().saturating_sub(2)).sum::<usize>();
+            if segment_count > MAX_TRACKS {
                 incomplete = true;
                 legal = false;
                 break;

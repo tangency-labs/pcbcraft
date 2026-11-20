@@ -2,8 +2,6 @@
 use super::*;
 use std::collections::BTreeMap;
 
-/// Retained parallel guide intervals, independent of source-fragment count.
-const MAX_BANDS: usize = 64;
 /// Optional compacting work, charged inside the gesture's global probe budget.
 const MAX_LOCAL_PROBES: usize = 128;
 
@@ -14,11 +12,33 @@ struct Band {
 }
 
 impl Walker<'_> {
+    /// Spend the cascade's shared refinement allowance only after this interval
+    /// has a certified path. Exhausted optional work keeps that result.
+    pub(in crate::board::route) async fn polish_displacement(
+        &mut self,
+        mut plan: Plan,
+        request: &Request,
+        remaining: &mut usize,
+        localize: bool,
+    ) -> Result<Plan, CommandError> {
+        let before = self.probes;
+        let budget = self.budget;
+        if *remaining == 0 || before >= budget {
+            plan.probes = before;
+            return Ok(plan);
+        }
+        self.budget = budget.min(before.saturating_add(*remaining));
+        let result = if localize { self.localize_displacement(plan, request).await } else { self.tidy_displacement(plan, request.flipped).await };
+        self.budget = budget;
+        *remaining = remaining.saturating_sub(self.probes - before);
+        result
+    }
+
     /// Prefer a compact, exactly certified displacement when the first hull walk
     /// spreads far along the source. This optional search shares the gesture budget,
     /// uses at most 128 additional probes and preserves its certified fallback on
     /// exhaustion. Query failures still propagate to the caller.
-    pub(in crate::board::route) async fn localize_displacement(&mut self, plan: Plan, request: &Request) -> Result<Plan, CommandError> {
+    async fn localize_displacement(&mut self, plan: Plan, request: &Request) -> Result<Plan, CommandError> {
         if plan.points.len() < 3 {
             return Ok(plan);
         }
@@ -47,6 +67,10 @@ impl Walker<'_> {
         let span2 = dx * dx + dy * dy;
         if span2 == 0 {
             return Ok(None);
+        }
+        let guide_limit = self.budget.saturating_sub(self.probes);
+        if guide_limit == 0 {
+            return Err(Stop::Exhausted);
         }
         self.path_membership = None;
         self.clear.clear();
@@ -109,12 +133,12 @@ impl Walker<'_> {
                         i += 1;
                     }
                 }
-                group.push(band);
-                group.sort_by_key(|b| (b.first.0, b.last.0));
+                let slot = group.partition_point(|b| (b.first.0, b.last.0) <= (band.first.0, band.last.0));
+                group.insert(slot, band);
                 count += 1;
-                // Stream the captured neighbors while keeping only the nearest
-                // bounded guide set. Every body remains an exact obstacle.
-                if count > MAX_BANDS {
+                // Retain guides in proportion to the work available to confirm them.
+                // Exact obstacle checks still use every body.
+                if count > guide_limit {
                     excess = true;
                     if let Some(mut far) = bands.last_entry() {
                         far.get_mut().pop();
@@ -126,8 +150,11 @@ impl Walker<'_> {
                 }
             }
         }
-        let mut paths = Vec::with_capacity(MAX_BANDS * 4);
+        // Order candidates as they are generated. This avoids a single large sort
+        // when there is enough probe budget for a wide search.
+        let mut paths = BTreeMap::<_, Vec<_>>::new();
         for band in bands.into_values().flatten() {
+            super::super::search::yield_unit().await;
             for first_flip in [false, true] {
                 for last_flip in [false, true] {
                     let mut path = elbow(request.head, band.first.1, self.posture, first_flip);
@@ -137,24 +164,28 @@ impl Walker<'_> {
                     path.extend(elbow(band.last.1, request.target, self.posture, last_flip).into_iter().skip(1));
                     let path = simplify(&path);
                     if path.len() >= 2 && path.windows(2).all(|p| self.posture.allows(p[0], p[1])) {
-                        paths.push(path);
+                        // Nonnegative finite floating-point scores sort by their bits.
+                        let score = (displacement_area(start, end, &path).to_bits(), length(&path).to_bits());
+                        paths.entry(score).or_default().push(path);
                     }
                 }
             }
         }
-        // Return to the original source line promptly when several elbows fit.
-        // A long displaced plateau needlessly propagates into distant neighbors.
-        paths.sort_by(|a, b| {
-            displacement_area(start, end, a).total_cmp(&displacement_area(start, end, b)).then_with(|| length(a).total_cmp(&length(b)))
-        });
-        paths.dedup();
-        for path in paths {
-            if !self.legal(&path).await? {
-                continue;
-            }
-            let confirmed = self.confirm(path).await?;
-            if confirmed.reached && confirmed.points.last() == Some(&request.target) {
-                return Ok(Some(self.plan(confirmed.points, Outcome::Reached, None)));
+        // Prefer an early return to the original line so the displacement stays local.
+        for candidates in paths.into_values() {
+            let mut previous = None;
+            for path in candidates {
+                if previous.as_ref() == Some(&path) {
+                    continue;
+                }
+                previous = Some(path.clone());
+                if !self.legal(&path).await? {
+                    continue;
+                }
+                let confirmed = self.confirm(path).await?;
+                if confirmed.reached && confirmed.points.last() == Some(&request.target) {
+                    return Ok(Some(self.plan(confirmed.points, Outcome::Reached, None)));
+                }
             }
         }
         if excess { Err(Stop::Exhausted) } else { Ok(None) }

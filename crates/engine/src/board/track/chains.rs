@@ -452,35 +452,43 @@ impl Chains {
             };
             previous = station;
         }
-        if points.windows(3).any(|p| backtracks(p[0], p[1], p[2])) {
-            return false;
-        }
         let Some((i, _)) = chain.members.first() else {
             return false;
         };
         let track = &self.tracks[i];
         let clearance = query.membership_clearance(&query.objects()[*i].intended_nets, &query.objects()[*i].intended_nets) as f64;
-        for a in 0..points.len().saturating_sub(1) {
-            let mut cone = Cone::new(points[a], points[a + 1]);
-            for b in a + 1..points.len().saturating_sub(1) {
-                work.tick().await;
-                cone.extend(points[b], points[b + 1]);
-                if b == a + 1 {
-                    continue;
-                }
-                let gap = segment_distance(points[a], points[a + 1], points[b], points[b + 1]);
-                let contact = gap == 0.
-                    || on_leg(points[a], points[b], points[b + 1])
-                    || on_leg(points[a + 1], points[b], points[b + 1])
-                    || on_leg(points[b], points[a], points[a + 1])
-                    || on_leg(points[b + 1], points[a], points[a + 1]);
-                if contact || (!merge && gap < track.width_nm as f64 + clearance && !cone.corner) {
-                    return false;
-                }
+        let spacing = if merge { 0. } else { track.width_nm as f64 + clearance };
+        legal_stroke(points, spacing).await
+    }
+}
+
+/// Reject overlapping legs and close returns on an open copper run. Ordinary
+/// bends share their local copper, while distant legs must keep centerline spacing.
+pub(crate) async fn legal_stroke(points: &[Point], return_spacing: f64) -> bool {
+    if points.windows(3).any(|p| backtracks(p[0], p[1], p[2])) {
+        return false;
+    }
+    let mut work = Work::default();
+    for a in 0..points.len().saturating_sub(1) {
+        let mut cone = Cone::new(points[a], points[a + 1]);
+        for b in a + 1..points.len().saturating_sub(1) {
+            work.tick().await;
+            cone.extend(points[b], points[b + 1]);
+            if b == a + 1 {
+                continue;
+            }
+            let gap = segment_distance(points[a], points[a + 1], points[b], points[b + 1]);
+            let contact = gap == 0.
+                || on_leg(points[a], points[b], points[b + 1])
+                || on_leg(points[a + 1], points[b], points[b + 1])
+                || on_leg(points[b], points[a], points[a + 1])
+                || on_leg(points[b + 1], points[a], points[a + 1]);
+            if contact || (gap < return_spacing && !cone.corner) {
+                return false;
             }
         }
-        true
     }
+    true
 }
 
 /// Two nonzero legs overlap when they leave their common vertex on the same ray.
