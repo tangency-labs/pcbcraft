@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    Session,
+    Project, Session,
     persistence::{ENTRY_POINT, decode_documents, decode_packed, encode_documents, encode_packed},
     selection::Selection,
 };

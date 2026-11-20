@@ -46,13 +46,6 @@ fn write<T: serde::Serialize>(documents: &mut Documents, kind: &str, reference: 
     bytes.push(b'\n');
     insert(documents, path(kind, reference)?, bytes)
 }
-/// Collect one part's complete offline closure, including unselected package choices and optional MPN.
-pub(crate) fn collect(selection: &Selection, documents: &mut Documents) -> Result<(), String> {
-    selection.validate()?;
-    let mut encoding = DependencyEncoding::default();
-    while !encoding.step(selection, documents)? {}
-    Ok(())
-}
 
 /// An already validated selection contributes one pinned dependency per step. Preserve
 /// the canonical bytes and conflict checks even for different allocations at the same path.

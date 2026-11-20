@@ -193,7 +193,7 @@ mod tests {
             Membership { part_instance: 9, group: Uuid::from_u128(2) },
         ];
         let stored = CompactMemberships::from_memberships(&Memberships::from_records(&records)).unwrap();
-        assert_eq!(stored.groups(), &[Uuid::from_u128(1), Uuid::from_u128(2)]);
+        assert_eq!(stored.groups, [Uuid::from_u128(1), Uuid::from_u128(2)]);
         assert_eq!(
             serde_json::to_value(&stored).unwrap()["part_instances"],
             json!([
