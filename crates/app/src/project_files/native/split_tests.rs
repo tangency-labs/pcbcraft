@@ -788,7 +788,7 @@ fn group_free_legacy_save_preserves_format_and_groups_round_trip_in_format_41() 
 
     let top = s.project().unwrap().board_setup().unwrap().copper_stack().next().unwrap().layer;
     let mut grouped_setup = serde_json::to_value(s.project().unwrap().board_setup().unwrap()).unwrap();
-    grouped_setup["stackup"]["layer_groups"] = json!([{"id":pcbcraft_engine::fresh_id().unwrap(),"name":"Outer","layers":[top]}]);
+    grouped_setup["stackup"]["layer_groups"] = json!([{"id":uuid::Uuid::from_u128(1),"name":"Outer","layers":[top]}]);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":grouped_setup}));
     let grouped_docs = encode_documents(s.snapshot().unwrap()).unwrap();
     assert_eq!(serde_json::from_slice::<serde_json::Value>(&grouped_docs[&path]).unwrap()["format"], "pcbcraft-board/41");

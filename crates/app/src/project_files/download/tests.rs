@@ -105,7 +105,7 @@ fn legacy_board_download_reuses_bytes_and_grouped_board_round_trips_in_format_41
         .unwrap();
     let top = session.project().unwrap().board_setup().unwrap().copper_stack().next().unwrap().layer;
     let mut setup = serde_json::to_value(session.project().unwrap().board_setup().unwrap()).unwrap();
-    setup["stackup"]["layer_groups"] = json!([{"id":pcbcraft_engine::fresh_id().unwrap(),"name":"Outer","layers":[top]}]);
+    setup["stackup"]["layer_groups"] = json!([{"id":uuid::Uuid::from_u128(1),"name":"Outer","layers":[top]}]);
     session.apply(pcbcraft_engine::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":session.revision()})).unwrap();
     let grouped = session.snapshot().unwrap();
     let grouped_download = encode(grouped.clone(), None);
