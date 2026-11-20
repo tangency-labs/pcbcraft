@@ -248,7 +248,8 @@ impl RectPad {
     /// Copper must enclose the complete opening, not only its width. Positive but small
     /// rings are permitted here and reported by the board's annular-ring rule.
     fn encloses_slot(&self, slot: super::slot::PlatedSlot) -> bool {
-        let land = super::geometry::Contour::pad(self.center, self.local_corners(), self.shape, self.corner_radius_nm);
+        let land =
+            super::geometry::Contour::pad(self.center, self.local_corners(), self.shape, self.corner_radius_nm, (self.width_nm, self.height_nm));
         slot.resolve(self.center, 0, false).is_some_and(|hole| hole.annular_ring_nm(&land) > 0.)
     }
 

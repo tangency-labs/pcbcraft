@@ -69,6 +69,7 @@ fn annular_ring_checks_end_margin_and_breakout_independent_of_land_shape() {
         [point(-800_000, -420_000), point(800_000, -420_000), point(800_000, 420_000), point(-800_000, 420_000)],
         PadShape::Rectangle,
         0,
+        (1_600_000, 840_000),
     );
     assert_eq!(slot.annular_ring_nm(&rectangle), 20_000.);
     let same_bounds_circle = Contour::capsule(ORIGIN, ORIGIN, 779_999.);
