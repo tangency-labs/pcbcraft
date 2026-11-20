@@ -22,7 +22,7 @@ impl PadIds {
     pub fn valid(&self) -> bool {
         let pads = self.pads();
         !pads.is_empty()
-            && pads.len() <= 128
+            && pads.len() <= crate::board::definition::MAX_PADS
             && pads.iter().all(|pad| crate::schematic::PinNumber::new(pad).is_some())
             && pads.iter().collect::<std::collections::BTreeSet<_>>().len() == pads.len()
     }

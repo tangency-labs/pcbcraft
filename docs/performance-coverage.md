@@ -5,7 +5,7 @@ This extends the [initial CPU baseline](performance-baseline.md) for
 adds command-generated capacity/channel/hierarchy fixtures, real-window replay,
 authenticated native MCP edits, GPU/canvas readback, process resources and strict
 rendered comparisons. The later #243 work adds asynchronous DRC and copper preparation. The infrastructure itself does not implement ERC, an index,
-walkaround, shove, BGA capacity or curved routing. Their measurements must accompany
+walkaround, shove, BGA routing or curved routing. Their measurements must accompany
 their owning features rather than appear as fabricated baseline values here.
 
 The saved [evidence directory](../tools/performance/baselines/extended/) contains
@@ -21,7 +21,7 @@ to collect matched evidence for a change.
 | --- | --- | --- |
 | Reproducible inputs | Original native-command/encoder artifacts, recipe/seed/revision, exact project/envelope hashes, versioned pointer/key trace | Production commands allocate UUIDs; reuse the saved bytes instead of regenerating comparison inputs |
 | Supported limits | Exactly 4,096 tracks / 2,048 vias (the board limits when measured); 4,096 schematic symbols / 64 sheets; explicit 63-link hierarchy | The recorded board-limit run is a smoke sample, not a tail baseline. A separate test saves, reloads and checks a board at the new 65,536-track / 16,384-via limits. |
-| Dense/crowded geometry | Existing dense diagonals/mixed pad widths, plus parallel narrow rails and attached branches; oracle-checked channel probe | High-pin-count BGA cases belong with #251–#253; radius/outline/offset traces with #259–#262 |
+| Dense/crowded geometry | Existing dense diagonals/mixed pad widths, plus parallel narrow rails and attached branches; oracle-checked channel probe | `bga-v1` adds regenerated, unrouted BGA-only diagnostics distinct from its saved reference-plus-BGA artifact; BGA fan-out and routing belong with #253; radius/outline/offset traces with #259–#262 |
 | Cold versus steady | Fresh model decode and lazy sheet connectivity separated from repeated access, preparation, queries, validated command publication and warmed replay | Whole-project first/repeat projection is not labeled as a cache hit; process/module startup is outside timings |
 | Cancel/layer/reversal | Actual app assertions before each captured frame; cancellation preserves authored bytes; layer transition and inactive final tool required | Serialized screenshots pace inputs; this is not an uninterrupted OS event-stream benchmark |
 | Concurrent edits | Native authenticated loopback MCP edit during an active route; exact revision increment and final draft invalidation verified | Browser uses the shared command, without a native transport endpoint |

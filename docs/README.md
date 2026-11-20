@@ -30,6 +30,7 @@ before treating an older plan as implemented behavior.
 | Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) · [Schematic keyboard shortcuts](keyboard-shortcuts.md) · [Board keyboard shortcuts](board-keyboard-shortcuts.md) · [Library editor keyboard shortcuts](library-editor-keyboard-shortcuts.md) |
 | Net names, labels and power symbols | [Named nets and power symbols](net-labels.md) |
 | Sheet hierarchy and interfaces | [Hierarchical sheets](hierarchical-sheets.md) |
+| Review reference designators | [Schematic annotation preview](annotation.md) |
 | Selection exchange and reuse | [Copy and paste](clipboard.md) |
 | Intentional unused connections | [No-connect markers](no-connect-markers.md) |
 | Schematic-to-board review and airwires | [Single-board updates](single-board-update.md) · [Accepted board connections](board-ratsnest.md) |
@@ -58,7 +59,7 @@ supported versions and deferred work before extending a format or consumer.
 | Library records | [Symbol schema](symbol-schema.md) · [Footprint and placement schema](footprint-schema.md) · [Parts, categories and manufacturer records](part-schema.md) · [Machine-readable schemas](schemas/) |
 | Typed quantities | [Quantities and units](quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](hierarchical-clipboard-contract.md) |
-| Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Exact circular copper records](circular-copper-records.md) · [Walkaround route planning](route-planning.md) |
+| Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Exact circular copper records](circular-copper-records.md) · [Straight via teardrop records](teardrop-records.md) · [Walkaround route planning](route-planning.md) |
 | Solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) |
 | Shared interface toolkit | [Craft UI migration and current pin](shared-ui-migration.md) |
 | Local transport | [Craft control protocol](../crates/craft-control/README.md) |

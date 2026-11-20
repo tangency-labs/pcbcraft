@@ -176,12 +176,14 @@ artifact, not a new native project format. Do not hand-edit the embedded project
 Geometry follows fixed integer patterns with recipe seed `237240`. Production
 commands allocate UUIDs, so regenerating a recipe does **not** recreate identical
 native bytes. Retain and reuse the exact artifact across revisions and runtimes;
-reports hash the entire envelope, including the trace. Changing recipes, seeds,
+reports hash the entire envelope, including the trace. The separately regenerated
+`bga.*` diagnostics do not use that envelope and are excluded from exact-input
+comparisons. Changing recipes, seeds,
 trace semantics or measurements requires a version change and a new baseline.
-Fixtures are synthetic workloads, not manufacturable reference designs or BGA
-capacity claims. The extended recipes below add branching/channel and current
-hierarchy-limit workloads. BGA, ERC progress and curved-routing cases still need
-their owning feature implementations.
+Fixtures are synthetic workloads, not manufacturable reference designs. The
+extended recipes below add branching/channel, current hierarchy-limit and
+full-size ball grid array workloads. BGA routing, ERC progress and
+curved-routing cases still need their owning feature implementations.
 
 `route-reverse-layer-cancel-edit-v1` arms X, starts a route in empty board space,
 reverses pointer direction repeatedly, changes copper layer with PgDn, cancels
@@ -230,6 +232,35 @@ between comparable native runs. Use runtime for the runtime version/mode. Native
 and browser reports are separate baselines and cannot be compared as one series.
 If a feature needs a new boundary, apply the same measurement-only instrumentation
 to both revisions and document that patch; do not silently compare different code.
+
+## Property-edit service-time diagnostic
+
+`property_edit_perf` in `pcbcraft-engine` measures synchronous shared property
+commands on an original 8- or 128-part schematic. Build that example in the same
+profile at both revisions, applying the same measurement-only source to an older
+revision that lacks it. Generate each artifact once and reuse its exact bytes:
+
+```sh
+cargo build --locked --release -p pcbcraft-engine --example property_edit_perf
+target/release/examples/property_edit_perf generate 8 /tmp/property-8.pc
+target/release/examples/property_edit_perf generate 128 /tmp/property-128.pc
+target/release/examples/property_edit_perf run /tmp/property-128.pc 100 /tmp/property-after.json
+```
+
+Retain environment metadata, source patch, compiler/profile, executable and
+revision hashes with the artifact and raw JSON. The `fields` boundary is the
+same reference edit on both versions. `lock` and `preview` are measured only when
+the command catalog exposes designator locks; their absolute costs are not a
+matched speedup over an implementation that lacks them. Use artifacts produced by
+this example; its count/shape checks do not authenticate their provenance. Each
+boundary uses eight warmup calls (preview calls do not edit), retains all samples,
+and checks the exact real-Apply document delta and rollback or preview non-mutation
+outside the timed command. The opened input uses the production cap+1 reader. Reports include the archive hash
+and nearest-rank distributions, with no CI timing threshold. A targeted run
+through a busy build queue records elapsed synchronous service time, not isolated
+CPU cost or a machine latency baseline. Outputs are exclusively created, never
+replaced; a failed write may leave a partial new artifact or report. Live MCP transport, UI frames and rendering remain
+explicitly unmeasured by this runner.
 
 ## Record browser evidence
 
@@ -421,13 +452,19 @@ The following original command-generated recipes extend the existing artifacts:
 | `channels-v1` | 64 footprints, mixed widths/pad sizes, 410 tracks, through vias, two narrow parallel rails and 48 attached branches |
 | `hierarchy-v1` | The current 64-sheet limit, 63 explicit child links, shared global labels and one symbol per sheet |
 | `schematic-limits-v1` | The current 4,096-symbol / 64-sheet limits; eight physical footprints and explicit board exclusions for the other schematic parts |
+| `bga-v1` | The `reference-v1` board plus one 32 x 32 ball grid array at the 1,024-pad, 256-artwork and 1,024-terminal limits, loaded as a native library and placed with all eight symbol units and the full terminal map. After all fixed-artifact samples, a separate pass times library load, part, unit and footprint placement, baseline capture, packed encode and decode, and the design check of a fresh project holding only the array (`bga.*` metrics). The fresh BGA-only subcase has no routing; the retained reference-plus-BGA artifact has the reference tracks and standard replay |
 
 Generate with `board_perf generate RECIPE REVISION ARTIFACT`, retain the exact
-artifact, then reuse it across runs. CPU reports now distinguish sheet-local
+artifact, then reuse it across runs. The `bga.*` diagnostics are generated from
+each checkout after fixed-artifact replay and are not identified by the artifact
+hash. Keep them as single-run diagnostics unless a separately pinned workload is
+available; the exact-input comparator ignores them when matching measurement
+boundaries or computing deltas. CPU reports distinguish sheet-local
 connectivity from project-wide electrical connectivity and include a channel
-probe checked against the exhaustive contour reference. BGA/high-pin-count and
-curved tracks remain owned by #251–#253 and #259–#262; straight-track fixtures do
-not qualify unsupported geometry or routing features.
+probe checked against the exhaustive contour reference. BGA fan-out and
+high-pin-count routing remain owned by #253, and curved tracks by
+#259–#262; straight-track fixtures do not qualify unsupported geometry or
+routing features.
 
 Collect process memory without adding an allocator to production Rust:
 
