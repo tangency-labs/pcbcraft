@@ -1803,8 +1803,12 @@ fn drill_fixture(holes: &[crate::board::definition::CircularNpth]) -> Session {
         &json!({"at":{"x_nm":12_000_000,"y_nm":20_000_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()}),
     )
     .unwrap();
-    s.apply(crate::SET_PLACEMENT_ORIGIN, &json!({"origin":{"kind":"point","x_nm":1_000_000,"y_nm":-2_000_000},"expected_revision":s.revision()}))
-        .unwrap();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"origin":{"kind":"point","x_nm":1_000_000,"y_nm":-2_000_000},"expected_revision":s.revision()}),
+    )
+    .unwrap();
     s
 }
 
