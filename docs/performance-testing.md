@@ -560,10 +560,13 @@ committed through `pcb.add_tracks` against the exhaustive pair reference. See
 service cost only; route-tool preview and commit latency need the tool integration.
 
 The #247 shove solver adds `board_perf shove ARTIFACT ENVIRONMENT ITERATIONS REPORT`.
-Its `pcbcraft-shove-performance/1` report times a straight shove along each walkaround
-case over a captured query and requires identical plans on every iteration; first
-reached plans are committed through `pcb.shove_tracks` against the exhaustive pair
-reference. See [shove](route-shove.md#measurement).
+Its `pcbcraft-shove-performance/2` report times a straight shove along each walkaround
+case and a command-generated pushing case over a captured query and requires
+identical plans on every iteration; first reached plans are committed through
+`pcb.shove_tracks` and compared with the plan, existing connections and the
+exhaustive pair reference. It also records the pushing job's longest uninterrupted
+step per stage and its cancellation acknowledgement. See
+[shove](route-shove.md#measurement).
 
 Copper preparation uses the same two-worker process limit and incremental browser
 logic as checking. Each view retains one running job, one coalesced desired input,

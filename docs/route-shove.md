@@ -128,11 +128,22 @@ walkaround.
 
 `board_perf shove ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT` times complete
 shoves over one captured query: a straight route along each walkaround case (the
-fixture's first airwires, the channel corridor and the crowded diagonal). Every
-iteration must reproduce the first iteration's plans, and each first reached plan
-is committed through `pcb.shove_tracks` on a fresh session and checked against the
-exhaustive pair reference outside the timed boundary. These are solver service
-costs, not editor preview or commit latency.
+fixture's first airwires, the channel corridor and the crowded diagonal), and a
+pushing case. The pushing case adds, through `pcb.add_tracks` and `pcb.add_via`, four
+parallel tracks and a via with a track ending on it in free space below the
+fixture's copper, and routes along them; it must be reached while moving copper at a
+push depth of at least two, and its samples are reported apart from the straight
+cases. Every iteration must reproduce the first iteration's plans. Each first
+reached plan is committed through `pcb.shove_tracks` on a fresh session, outside the
+timed boundary, and must equal the plan (every kept track and via, and the new
+tracks up to their fresh identities), keep every connection that existed before
+(copper joined by contact in the exhaustive pair reference) and have no clearance
+violation or short about the changed copper. Each iteration also drives the pushing
+case's `pcb.shove_tracks` copper job in 256-unit host batches, records the longest
+uninterrupted step of each stage and requires its result to be the plan, then
+measures how long a snapshot worker takes to retire the job after a cancel issued
+while it plans. These are solver and job service costs, not editor preview or
+commit latency.
 
 The [#247 evidence](../tools/performance/baselines/issue247/README.md) records the
 first runs on the `channels-v1` and `dense-v1` fixtures.

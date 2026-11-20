@@ -491,15 +491,28 @@ mod tests {
     }
 
     /// Shove diagnostics time complete plans, reproduce them exactly and commit each reached
-    /// plan through the shared command against the exhaustive pair reference.
+    /// plan through the shared command against the plan and the exhaustive pair reference. The
+    /// command-generated pushing case is reached while moving copper, and its batched job and
+    /// cancellation are timed separately from the straight cases.
     #[test]
     fn shove_diagnostic_reproduces_and_commits_its_plans() {
         let artifact = generate("reference-v1", "test").unwrap();
         let report = shove::run(&artifact, environment(), 2).unwrap();
-        assert_eq!(report["schema"], "pcbcraft-shove-performance/1");
-        assert!(!report["outcomes"].as_array().unwrap().is_empty());
-        for id in ["shove.prepare", "shove.plan.all", "shove.plan.channel"] {
-            let metric = report["metrics"].as_array().unwrap().iter().find(|m| m["id"] == id).unwrap();
+        assert_eq!(report["schema"], "pcbcraft-shove-performance/2");
+        let outcomes = report["outcomes"].as_array().unwrap();
+        let push = outcomes.iter().find(|o| o["case"] == "push").unwrap();
+        assert_eq!(push["outcome"]["kind"], "reached");
+        assert!(push["moved"].as_u64().unwrap() > 0 && push["depth"].as_u64().unwrap() >= 2, "{push}");
+        for id in [
+            "shove.prepare",
+            "shove.plan.all",
+            "shove.plan.channel",
+            "shove.plan.push",
+            "shove.job.step_max",
+            "shove.job.step_max.Planning shove",
+            "shove.job.cancel_acknowledgement",
+        ] {
+            let metric = report["metrics"].as_array().unwrap().iter().find(|m| m["id"] == id).unwrap_or_else(|| panic!("{id}"));
             assert_eq!(metric["samples_ms"].as_array().unwrap().len(), 2);
         }
     }
