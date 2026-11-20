@@ -305,6 +305,9 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
             assert_eq!(err.code(), crate::error_codes::ErrorCode::NotFound);
         }
         let request = crate::board::route::Request {
+            mode: crate::board::route::Mode::Walkaround,
+            merge_same_net: false,
+            fixed: Vec::new(),
             head: item.at,
             target: Point { x_nm: item.at.x_nm + 10_000_000, y_nm: item.at.y_nm },
             layer: item.layers[0],
