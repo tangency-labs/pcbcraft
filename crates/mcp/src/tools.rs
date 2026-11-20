@@ -1,6 +1,6 @@
 //! MCP tool definitions and dispatch. Every tool wraps an engine or window command, or an inspection.
 
-use pcbcraft_engine::{command_api::catalog_revision, error_codes::ErrorCode};
+use pcbcraft_engine::{SessionScope, command_api::catalog_revision, error_codes::ErrorCode};
 use serde_json::{Value, json};
 
 use crate::{
@@ -121,8 +121,11 @@ fn text(value: &Value) -> Value {
 /// The command list as clients have always read it, followed by the command API version, the
 /// revision of the whole unfiltered catalog `all` and the optional features this build offers,
 /// which are also the structured result.
-fn listing(commands: &Value, all: &[Value], mut about: Value) -> Value {
+fn listing(commands: &Value, all: &[Value], mut about: Value, scope: Option<SessionScope>) -> Value {
     about["catalog_revision"] = Value::String(catalog_revision(all));
+    if let Some(scope) = scope {
+        about["scope"] = json!(scope.as_str());
+    }
     json!({
         "content": [{"type": "text", "text": commands.to_string()}, {"type": "text", "text": about.to_string()}],
         "structuredContent": about,
@@ -142,11 +145,21 @@ pub(crate) fn failure(failure: &Failure) -> Value {
 }
 
 /// Describe a command from the backend's own discovery, so a live editor's window commands are
-/// described too. A window command a headless session lacks says what it needs.
+/// described too. Keep the descriptor identical to the catalog and append session metadata
+/// separately. A window command a headless session lacks says what it needs.
 fn describe_command(backend: &mut dyn Backend, id: &str) -> Result<Value, Failure> {
     let commands = backend.call("engine.commands", json!({}))?;
     match commands.as_array().into_iter().flatten().find(|command| command["id"] == id) {
-        Some(command) => Ok(command.clone()),
+        Some(command) => Ok(match backend.scope() {
+            Some(scope) => {
+                let about = json!({"scope":scope.as_str()});
+                json!({
+                    "content": [{"type":"text","text":command.to_string()}, {"type":"text","text":about.to_string()}],
+                    "structuredContent": about,
+                })
+            }
+            None => text(command),
+        }),
         None if is_window_command(id) && !backend.has_live_editor() => Err(needs_live_editor(&format!("`{id}`"))),
         None => Err(Failure::new(ErrorCode::UnknownCommand, format!("unknown command `{id}`"))),
     }
@@ -180,12 +193,14 @@ pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
                         let field = |key: &str| c[key].as_str().unwrap_or_default().to_lowercase();
                         field("id").contains(&filter) || field("summary").contains(&filter)
                     };
-                    listing(&Value::Array(all.iter().filter(keeps).cloned().collect()), &all, metadata)
+                    listing(&Value::Array(all.iter().filter(keeps).cloned().collect()), &all, metadata, backend.scope())
                 }
                 Err(message) => failure(&message),
             };
         }
-        "describe_command" => describe_command(backend, args["command"].as_str().unwrap_or_default()),
+        "describe_command" => {
+            return describe_command(backend, args["command"].as_str().unwrap_or_default()).unwrap_or_else(|error| failure(&error));
+        }
         "execute" => return execute(backend, args),
         "cross_probe" => backend.call("project.cross_probe", args.clone()),
         "resolve_counterparts" => backend.call("project.resolve_counterparts", args.clone()),

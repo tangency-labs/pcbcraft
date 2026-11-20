@@ -419,10 +419,12 @@ a malformed reply from another editor may omit the facts it describes.
 | `connection_failed` | Connecting or sending the request failed. A failed send may still have delivered a complete request; inspect before retrying an edit. |
 | `invalid_request` | The request to the live editor is malformed: an unknown method, a missing command id or a missing required version pin. |
 | `version_mismatch` | The stated command API version is older or newer than the one this session serves; the command did not run. `details` gives `command`, `stated_version` and `current_version`. |
+| `out_of_scope` | A known command is not allowed in the read-only session. `details.command` names it and `details.scope` is `read_only`. The check precedes revision and command parameter validation. |
 
 A version pin is checked before the command’s parameters, including
-`expected_revision`. Once that pin matches or is omitted, project commands that
-take `expected_revision` still check it before their other parameters. A stale
+`expected_revision`. Once that pin matches or is omitted, the read-only scope is checked.
+After that, project commands that take `expected_revision` check it before
+their other parameters. A stale
 edit reports `stale_revision`; a malformed revision is `invalid_params`. The read-only [`pcb.plan_route`](route-planning.md#command)
 query keeps its existing `stale` plan outcome for otherwise valid requests. The
 part and library document revisions that some window commands take are reported
@@ -531,7 +533,8 @@ editing it; `execute` returns `fabrication.files`, each with a `name` and text `
 and `fabrication.origin`, the placement origin every coordinate is measured from:
 Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
 plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
-resolvable placement origin.
+resolvable placement origin. It refuses boards containing placed circular non-plated holes
+until separate non-plated drill export is available; no partial set is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns
@@ -638,6 +641,27 @@ read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
 unavailable states at a captured revision; see [pin/pad correspondence](pin-pad-correspondence.md)
 for qualified addresses and the versioned response. `cross_probe` retains its
 singular compatibility response.
+
+To give a reviewer only command-level read access, start a separate headless process:
+
+```sh
+pcbcraft-cli mcp --read-only --project path/to/project.pc
+```
+
+The host sets this scope at startup; no MCP request can widen it. `inspect_project`
+reports `scope: "read_only"`. `describe_command` and `list_commands` report it
+in `structuredContent` and the second text part. The first text part keeps the
+unchanged command descriptor or catalog list.
+Queries, data exports and transient previews remain available; project edits,
+Undo/Redo, Cut and library-source changes return `out_of_scope` without changing
+the snapshot or the file. Startup does not recover an interrupted folder save;
+if recovery is needed, have the owner open the project normally first. A command
+added to the catalog must be explicitly classified as a read before a read-only
+session can run it.
+
+This setting confines the command interface of that process, not the client's
+filesystem permissions. It does not grant read-only access to a live editor:
+`--read-only` cannot be combined with `--connect`.
 
 An MCP client can use `schematic.connect_pins` to join two terminals from
 `inspect_project`. Describe the command for its input shape, and send the current

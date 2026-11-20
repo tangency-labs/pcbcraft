@@ -7,6 +7,16 @@ for the affected area. Keep task guides and the capability inventory consistent,
 mark proposals and historical plans clearly, and link canonical contracts
 instead of duplicating their rules. Add new documentation to the map.
 
+## Claiming issues
+
+Before implementing an issue, check its discussion and open PRs, then leave a
+`claimed` comment stating the scope you will work on. Follow the
+[issue claim policy](CONTRIBUTING.md#claim-the-issue-before-starting): the first
+claimant has merge priority, subject to review and verification. Coordinate with
+an existing claimant rather than starting a competing implementation; do not
+treat an unresolved or quiet claim as released without a maintainer's recorded
+decision. Comment on the issue when releasing your own claim.
+
 ## Opening issues
 
 Check for an existing issue and read the repository's current label names and

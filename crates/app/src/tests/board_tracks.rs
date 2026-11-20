@@ -233,6 +233,80 @@ fn circular_copper_keeps_browser_footprint_picks_available() {
     }
 }
 
+/// A Delete pressed while measurement owns the arc-bearing canvas must not delete a
+/// previously selected object when the measurement ends on the first linear frame.
+fn arc_board_measure_does_not_replay_delete(zone: bool) {
+    let mut h = routable();
+    let board_target = h.state().session.project().unwrap().board_target().unwrap();
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    let project = h.state().session.project().unwrap();
+    let outline = project
+        .board_view(board_target)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Outline)
+        .unwrap()
+        .id
+        .to_string();
+    let net = project.inspect_net_registry().unwrap()["nets"][0]["id"].clone();
+    let mut params = json!({"board":board_target.board,"layer":if zone {&top} else {&outline},"points":[
+        {"x_nm":-5_080_000,"y_nm":5_080_000},{"x_nm":5_080_000,"y_nm":5_080_000},{"x_nm":5_080_000,"y_nm":10_160_000}],"expected_revision":revision});
+    if zone {
+        params["net"] = net;
+    } else {
+        params["closed"] = json!(true);
+    }
+    h.state_mut().run(if zone { pcbcraft_engine::board::zones::ADD_ZONE } else { pcbcraft_engine::ADD_DRAWING }, &params);
+    assert_eq!(h.state().message, None);
+    h.run();
+    let board = h.state().session.project().unwrap().board_view(board_target).unwrap();
+    let mut items = pcbcraft_engine::board::clipboard::BoardSelection::default();
+    if zone {
+        items.zones.insert(board.zones()[0].id);
+    } else {
+        items.drawings.insert(board.drawings()[0].id);
+    }
+    h.state_mut().select_board_items(items);
+    h.state_mut().start_measure();
+    h.run();
+    assert!(h.state().views.active.board.measure.tool);
+
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board_target.board,"arcs":[{
+        "id":"00000000-0000-0000-0000-000000000001","layer":top,"width_nm":250000,
+        "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}],"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.state().views.active.board.measure.tool);
+    assert_eq!(h.state().session.revision(), revision + 1);
+
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board_target.board,"arcs":[],"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().views.active.board.measure.tool);
+    assert_eq!(h.state().session.revision(), revision, "leaving measurement must not replay Delete");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+#[test]
+fn unsupported_copper_does_not_replay_zone_delete_after_measurement() {
+    arc_board_measure_does_not_replay_delete(true);
+}
+
+#[test]
+fn unsupported_copper_does_not_replay_drawing_delete_after_measurement() {
+    arc_board_measure_does_not_replay_delete(false);
+}
+
 pub(super) fn tracks(h: &Harness<'_, PcbApp>) -> Vec<Track> {
     h.state().session.project().unwrap().boards().next().unwrap().tracks().to_vec()
 }
