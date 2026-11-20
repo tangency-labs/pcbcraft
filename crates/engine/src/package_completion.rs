@@ -264,19 +264,25 @@ fn transfer(before: &Project, moves: &[Move<'_>]) -> (Project, BTreeMap<Terminal
         }
         sheet.connectivity = Arc::default();
     }
-    Arc::make_mut(&mut next.components).retain(|id, _| !retired.contains(id));
-    if before.package_assignments().keys().any(|id| retired.contains(id)) {
-        if before.board_target().is_some() {
+    let drops_assignments = before.package_assignments().keys().any(|id| retired.contains(id));
+    if before.board_target().is_some() {
+        if drops_assignments || before.board.baseline.is_some() {
             let board = Arc::make_mut(&mut next.board);
-            board.assignments.retain(|id, _| !retired.contains(id));
-            let used = board.used_package_keys();
-            board.definitions.retain(|key, _| used.contains(key));
-        } else {
-            let packages = Arc::make_mut(&mut next.schematic_packages);
-            packages.assignments.retain(|id, _| !retired.contains(id));
-            let used: BTreeSet<_> = packages.assignments.values().map(crate::board::assignment::Assignment::key).collect();
-            packages.definitions.retain(|key, _| used.contains(key));
+            for &id in &retired {
+                board.retain_component_display(id, before.components.get(&id));
+            }
+            if drops_assignments {
+                board.assignments.retain(|id, _| !retired.contains(id));
+                let used = board.used_package_keys();
+                board.definitions.retain(|key, _| used.contains(key));
+            }
         }
+    } else if drops_assignments {
+        let packages = Arc::make_mut(&mut next.schematic_packages);
+        packages.assignments.retain(|id, _| !retired.contains(id));
+        let used: BTreeSet<_> = packages.assignments.values().map(crate::board::assignment::Assignment::key).collect();
+        packages.definitions.retain(|key, _| used.contains(key));
     }
+    Arc::make_mut(&mut next.components).retain(|id, _| !retired.contains(id));
     (next, terminals)
 }

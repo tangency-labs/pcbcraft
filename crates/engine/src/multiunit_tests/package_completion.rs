@@ -166,6 +166,45 @@ fn package_completion_packs_three_loose_quad_units_and_keeps_nets() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
 }
 
+/// Completion keeps the last visible donor fields without accepting a board update.
+#[test]
+fn package_completion_retains_donor_footprint_display_on_reopen() {
+    let mut session = quad();
+    place_loose(&mut session, 1, None);
+    let symbols = session.project().unwrap().symbols().to_vec();
+    place_quad_footprints(&mut session, &symbols);
+    apply(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    let donor = &symbols[1];
+    let component = donor.component;
+    let sheet = session.project().unwrap().sheet_target();
+    // Keep the packages equivalent: their live values match, even though both changed after acceptance.
+    for (symbol, reference) in symbols.iter().zip(["U10", "U20"]) {
+        apply(&mut session, SET_SYMBOL_FIELDS, json!({"sheet":sheet.id(),"symbol":symbol.id(),"reference":reference,"value":"Quad low noise"}));
+    }
+    let before = session.snapshot().unwrap();
+    let accepted = before.board.baseline.as_ref().unwrap();
+    assert_ne!(accepted.components[&component].reference, "U20");
+    assert_ne!(accepted.components[&component].value, "Quad low noise");
+    let result = complete(&mut session, Some("project"), false).unwrap();
+    assert_eq!(result["changes"][0]["symbol"], donor.id());
+    let after = session.snapshot().unwrap();
+    let retained = after.board.baseline.as_ref().unwrap();
+    assert_eq!(after.board.footprints(), before.board.footprints());
+    assert_eq!(retained.components[&component].package, accepted.components[&component].package);
+    assert_eq!(retained.components[&component].terminals, accepted.components[&component].terminals);
+    assert_eq!(retained.nets, accepted.nets);
+    assert_eq!(retained.source, accepted.source);
+
+    let saved = encode_documents(after).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    let board = reopened.boards().next().unwrap();
+    let footprint = board.footprints().find(|fp| fp.component == donor.component_id()).unwrap();
+    assert!(footprint.pending_removal);
+    assert_eq!((footprint.reference, &*footprint.value), ("U20", "Quad low noise"));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
 /// Reversed pin numbers sort only automatic links; authored route direction and saved bytes survive.
 #[test]
 fn package_completion_preserves_wire_direction_rules_on_reopen() {
@@ -379,16 +418,17 @@ fn package_completion_refuses_new_shared_connections_atomically() {
     let revision = session.revision();
     let before = session.snapshot().unwrap();
     let undo = session.undo.len();
-    for params in [
-        json!({"scope":"project","expected_revision":revision-1}),
-        json!({"scope":"all","expected_revision":revision}),
-        json!({"scope":"none","sheet":before.sheet_target().id(),"expected_revision":revision}),
-        json!({"scope":"project","expected_revision":revision}),
-        json!({"scope":"project","expected_revision":revision,"dry_run":true}),
+    for (params, expected_message) in [
+        (json!({"scope":"project","expected_revision":revision-1}), None),
+        (json!({"scope":"all","expected_revision":revision}), Some("`scope` must be none, sheet or project")),
+        (json!({"scope":"none","sheet":before.sheet_target().id(),"expected_revision":revision}), Some("`sheet` is only allowed with sheet scope.")),
+        (json!({"scope":"project","expected_revision":revision}), Some("would change connectivity")),
+        (json!({"scope":"project","expected_revision":revision,"dry_run":true}), Some("would change connectivity")),
     ] {
         let error = session.execute(COMPLETE_PACKAGES, &params).unwrap_err();
-        if params["scope"] == "project" && params["expected_revision"] == revision {
-            assert!(error.to_string().contains("would change connectivity"), "{error}");
+        match expected_message {
+            None => assert!(matches!(error, CommandError::StaleRevision { current } if current == revision), "{error}"),
+            Some(expected) => assert!(matches!(&error, CommandError::InvalidParams(message) if message.contains(expected)), "{error}"),
         }
         assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
         assert_eq!(session.revision(), revision);

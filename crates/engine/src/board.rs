@@ -383,10 +383,25 @@ impl Board {
     }
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
-    /// Format 3 and later also retain the last visible typed quantity; older history
-    /// stays text-only until a real board update accepts the newer vocabulary.
     pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let assigned = self.assignments.remove(&component).is_some();
+        self.retain_component_display(component, display);
+        if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
+            return;
+        }
+        if self.by_component.remove(&component).is_some() || assigned {
+            self.footprints.retain(|f| f.component != component);
+            self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
+        }
+    }
+
+    /// Preserve the last visible fields for pending removal without accepting other changes.
+    /// Format 3 and later retain the typed quantity; older history stays text-only.
+    pub(crate) fn retain_component_display(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let changed_display = display.and_then(|part| {
             let baseline = self.baseline.as_ref()?;
             let historical = baseline.components.get(&component)?;
@@ -405,17 +420,6 @@ impl Board {
             historical.reference = part.reference().into();
             historical.value = part.value().into();
             historical.primary_quantity = quantity;
-        }
-        if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
-            let used = self.used_package_keys();
-            self.definitions.retain(|key, _| used.contains(key));
-            return;
-        }
-        if self.by_component.remove(&component).is_some() || assigned {
-            self.footprints.retain(|f| f.component != component);
-            self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
-            let used = self.used_package_keys();
-            self.definitions.retain(|key, _| used.contains(key));
         }
     }
 
