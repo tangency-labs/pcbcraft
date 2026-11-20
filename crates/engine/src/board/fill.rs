@@ -251,7 +251,7 @@ fn zone_fill(
         }
         material = clip(&material, &Regions::union_all(&gaps).map_err(|e| e.to_string())?, Operation::Difference)?;
         if zone.options.connection == Connection::Thermal {
-            let mut connected = vec![material.clone()];
+            let mut connected = Vec::new();
             let body = material.clone();
             for pad in &pads {
                 for spoke in spokes(&pad.object, zone.options.spoke_width_nm, zone.options.thermal_gap_nm)? {
@@ -262,7 +262,9 @@ fn zone_fill(
                     }
                 }
             }
-            material = Regions::union_all(&connected).map_err(|e| e.to_string())?;
+            // Add the spokes to the material's existing kernel body. Uniting it in a batch would
+            // rebuild a many-island pour from its profiles, which the pinned kernel can refuse.
+            material = clip(&material, &Regions::union_all(&connected).map_err(|e| e.to_string())?, Operation::Union)?;
         }
     }
     let mut result = ZoneFill { id: zone.id, net: zone.net, layer: zone.layer, islands: Vec::new(), dropped: 0, clearance_nm: clearance };

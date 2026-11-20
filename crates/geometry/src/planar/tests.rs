@@ -252,3 +252,31 @@ fn prepared_operands_support_concurrent_independent_operations() {
     assert_eq!(source.worker_bytes().unwrap(), bytes);
     area_is(&source, 100. - std::f64::consts::PI);
 }
+
+/// A track's clearance edge passing 2 nm from the point where a pad clearance's corner arc
+/// meets its straight side, as two foreign obstacles produce with the fill's clearance reserve
+/// (a 0.5 mm track entering a 0603 land on a real board). SolidCore resolves the crossing
+/// onto the arc's end vertex within its internal zone tolerance but keeps the arc's full sweep,
+/// so the loop read back has a 2 nm gap; it must still be read as closed material.
+#[test]
+fn intersection_within_kernel_zone_tolerance_of_an_arc_end_reads_back_closed() {
+    let land =
+        Regions::rounded_core(&[[81_150_000, 98_525_000], [81_550_000, 98_525_000], [81_550_000, 99_075_000], [81_150_000, 99_075_000]], 500_002.)
+            .unwrap();
+    let track = Regions::rounded_core(&[[81_000_000, 99_150_000], [81_000_000, 111_720_000]], 550_002.).unwrap();
+    let union = Regions::union_all(&[land.clone(), track.clone()]).unwrap();
+    assert_eq!(union.region_count(), 1);
+    let shared = land.boolean(&track, Operation::Intersection).unwrap();
+    let [u, l, t, s] = [&union, &land, &track, &shared].map(|r| r.area().unwrap().value_nm2);
+    assert!((u - (l + t - s)).abs() < 1e3, "union {u} nm² != {l} + {t} - {s}");
+    let pair = land.boolean(&track, Operation::Union).unwrap();
+    // The fill feeds such results back to the kernel from their profiles (worker transport,
+    // batch unions), where vertices are merged within the kernel's own zone tolerance.
+    let reread = Regions::from_worker_bytes(&pair.worker_bytes().unwrap()).unwrap();
+    assert_eq!(reread.region_count(), 1);
+    let board = rectangle(70 * MM, 90 * MM, 20 * MM, 30 * MM);
+    let copper = board.boolean(&reread, Operation::Difference).unwrap();
+    area_is(&copper, 600. - u / 1e12);
+    let again = Regions::union_all(&[reread, rectangle(75 * MM, 95 * MM, MM, MM)]).unwrap();
+    assert_eq!(again.region_count(), 2);
+}
