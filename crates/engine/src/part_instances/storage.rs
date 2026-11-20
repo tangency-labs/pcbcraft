@@ -29,10 +29,15 @@ pub(crate) fn insert(documents: &mut Documents, path: String, bytes: Vec<u8>) ->
     if bytes.len() > crate::persistence::MAX_DOCUMENT_BYTES {
         return Err("Pinned dependency exceeds its native document limit.".into());
     }
-    if documents.get(&path).is_some_and(|existing| existing != &bytes) {
-        return Err(format!("Conflicting pinned definition {path}."));
+    match documents.entry(path) {
+        std::collections::btree_map::Entry::Occupied(existing) if existing.get() != &bytes => {
+            return Err(format!("Conflicting pinned definition {}.", existing.key()));
+        }
+        std::collections::btree_map::Entry::Occupied(_) => {}
+        std::collections::btree_map::Entry::Vacant(entry) => {
+            entry.insert(bytes);
+        }
     }
-    documents.insert(path, bytes);
     Ok(())
 }
 /// Write a canonical JSON dependency using the same bytes as the existing footprint encoder.
@@ -44,22 +49,57 @@ fn write<T: serde::Serialize>(documents: &mut Documents, kind: &str, reference: 
 /// Collect one part's complete offline closure, including unselected package choices and optional MPN.
 pub(crate) fn collect(selection: &Selection, documents: &mut Documents) -> Result<(), String> {
     selection.validate()?;
-    write(documents, "parts", &selection.resolved.definition.reference(), selection.resolved.definition.as_ref())?;
-    if let Some(category) = &selection.resolved.category {
-        write(documents, "categories", &category.reference(), category.as_ref())?;
-    }
-    for footprint in selection.resolved.footprints.values() {
-        write(
-            documents,
-            "footprints",
-            &Reference { library: footprint.library.clone(), id: footprint.id.clone(), revision: footprint.revision },
-            footprint.as_ref(),
-        )?;
-    }
-    if let Some(manufacturer) = &selection.manufacturer {
-        write(documents, "manufacturer-parts", &manufacturer.reference(), manufacturer.as_ref())?;
-    }
+    let mut encoding = DependencyEncoding::default();
+    while !encoding.step(selection, documents)? {}
     Ok(())
+}
+
+/// An already validated selection contributes one pinned dependency per step. Preserve
+/// the canonical bytes and conflict checks even for different allocations at the same path.
+#[derive(Default)]
+pub(crate) struct DependencyEncoding {
+    phase: u8,
+    footprint: Option<String>,
+}
+
+impl DependencyEncoding {
+    pub(crate) fn step(&mut self, selection: &Selection, documents: &mut Documents) -> Result<bool, String> {
+        match self.phase {
+            0 => write(documents, "parts", &selection.resolved.definition.reference(), selection.resolved.definition.as_ref())?,
+            1 => {
+                if let Some(category) = &selection.resolved.category {
+                    write(documents, "categories", &category.reference(), category.as_ref())?;
+                }
+            }
+            2 => {
+                let choices = &selection.resolved.footprints;
+                let next = self.footprint.as_ref().map_or_else(
+                    || choices.first_key_value(),
+                    |key| choices.range((std::ops::Bound::Excluded(key.clone()), std::ops::Bound::Unbounded)).next(),
+                );
+                if let Some((key, footprint)) = next {
+                    write(
+                        documents,
+                        "footprints",
+                        &Reference { library: footprint.library.clone(), id: footprint.id.clone(), revision: footprint.revision },
+                        footprint.as_ref(),
+                    )?;
+                    self.footprint = Some(key.clone());
+                    return Ok(false);
+                }
+            }
+            3 => {
+                if let Some(manufacturer) = &selection.manufacturer {
+                    write(documents, "manufacturer-parts", &manufacturer.reference(), manufacturer.as_ref())?;
+                }
+                *self = Self::default();
+                return Ok(true);
+            }
+            _ => unreachable!(),
+        }
+        self.phase += 1;
+        Ok(false)
+    }
 }
 /// Read one declared dependency, marking it used only after its path and encoding pass validation.
 fn text<'a>(documents: &'a Documents, used: &mut BTreeSet<String>, kind: &str, reference: &Reference) -> Result<&'a str, String> {

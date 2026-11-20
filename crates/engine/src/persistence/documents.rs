@@ -1659,6 +1659,7 @@ pub struct DocumentsEncoder {
     board_facts: BoardFacts,
     baseline_encoding: crate::board::update::BaselineEncoding,
     net_record_encoding: crate::nets::RecordEncoding,
+    dependency_encoding: crate::part_instances::storage::DependencyEncoding,
     board_rows: BoardRows,
 }
 
@@ -1669,7 +1670,7 @@ fn collect_definition<T: PartialEq>(
     definition: &Arc<T>,
     kind: &str,
 ) -> Result<(), String> {
-    if definitions.get(&key).is_some_and(|existing| existing != definition) {
+    if definitions.get(&key).is_some_and(|existing| !Arc::ptr_eq(existing, definition) && existing != definition) {
         return Err(format!("Conflicting pinned {kind} {}/{}.r{} during save", key.0, key.1, key.2));
     }
     definitions.insert(key, definition.clone());
@@ -1709,14 +1710,14 @@ impl DocumentsEncoder {
             board_facts: BoardFacts::default(),
             baseline_encoding: crate::board::update::BaselineEncoding::default(),
             net_record_encoding: crate::nets::RecordEncoding::default(),
+            dependency_encoding: crate::part_instances::storage::DependencyEncoding::default(),
             board_rows: BoardRows::default(),
         }
     }
 
-    /// Write at most `records` records or phase transitions. The board-header transition also
-    /// writes its bounded setup (at most 64 material revisions, 128 layers, 127 strata and
-    /// 256 nested prepreg plies) and an enabled baseline within its 16 MiB bound.
-    /// Net and pair records each consume one record budget in their shared instance home.
+    /// Advance at most `records` row, nested-row or phase-transition units. The board header
+    /// includes its independently bounded stackup; large accepted nets and history lists yield
+    /// between their members rather than counting their entire collection as a single unit.
     /// A legacy membership home that exceeds a byte limit restarts once in the compact
     /// envelope. Only disposable encoding state changes; no project edit or Save refusal is
     /// introduced. Valid legacy documents retain their encoding while it fits the limits.
@@ -2017,8 +2018,8 @@ impl DocumentsEncoder {
                                 no_connects: crate::no_connect::write_intents(&c.no_connects),
                             },
                         )?;
-                        if let Some(part) = &c.part {
-                            crate::part_instances::storage::collect(part, &mut self.documents)?;
+                        if c.part.is_some() {
+                            self.phase = 35;
                         }
                         collect_definition(
                             &mut self.definitions,
@@ -2036,6 +2037,13 @@ impl DocumentsEncoder {
                             self.first = true;
                             self.phase = 14;
                         }
+                    }
+                }
+                35 => {
+                    let part =
+                        self.project.components.get(&self.cursor).and_then(|component| component.part.as_ref()).ok_or("missing part during save")?;
+                    if self.dependency_encoding.step(part, &mut self.documents)? {
+                        self.phase = 1;
                     }
                 }
                 14 => {
