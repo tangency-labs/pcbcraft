@@ -4,14 +4,16 @@
 |---|---|
 | Status | Draft, open for comment. Unnumbered (see "Name" below) |
 | Started | 2026-11-19 |
-| Builds on | [SolidCraft RFC 0001: Craft bridge](https://github.com/tangency-labs/solidcraft/blob/a23b231a600eb606ddfa4be4deecb4f4f719196d/docs/rfcs/0001-craft-bridge.md) (the revision [#70](https://github.com/tangency-labs/pcbcraft/issues/70) adopted; unchanged on SolidCraft main at `8cf4a3f`) and #70's PCBCraft-specific decisions |
-| Issues | [#153](https://github.com/tangency-labs/pcbcraft/issues/153) (linked outline), [#70](https://github.com/tangency-labs/pcbcraft/issues/70) (Craft bridge integration), [#259](https://github.com/tangency-labs/pcbcraft/issues/259) and [#260](https://github.com/tangency-labs/pcbcraft/issues/260) (arcs and curved outlines), [#80](https://github.com/tangency-labs/pcbcraft/issues/80) (dimensions), [#86](https://github.com/tangency-labs/pcbcraft/issues/86) (3D and STEP), [#246](https://github.com/tangency-labs/pcbcraft/issues/246)/[#247](https://github.com/tangency-labs/pcbcraft/issues/247) (walkaround and shove) |
+| Builds on | [SolidCraft RFC 0001: Craft bridge](https://github.com/tangency-labs/solidcraft/blob/a23b231a600eb606ddfa4be4deecb4f4f719196d/docs/rfcs/0001-craft-bridge.md) (the revision [#70](https://github.com/tangency-labs/pcbcraft/issues/70) adopted; unchanged on SolidCraft main at `7f34f1f`) and #70's PCBCraft-specific decisions |
+| Issues | [#153](https://github.com/tangency-labs/pcbcraft/issues/153) (linked outline), [#70](https://github.com/tangency-labs/pcbcraft/issues/70) (Craft bridge integration), [#259](https://github.com/tangency-labs/pcbcraft/issues/259) and [#260](https://github.com/tangency-labs/pcbcraft/issues/260) (arcs and curved outlines), [#80](https://github.com/tangency-labs/pcbcraft/issues/80) (dimensions), [#86](https://github.com/tangency-labs/pcbcraft/issues/86) (3D, STEP and the model record), [#246](https://github.com/tangency-labs/pcbcraft/issues/246)/[#247](https://github.com/tangency-labs/pcbcraft/issues/247) (walkaround and shove) |
 | Discussion | the pull request that adds this file, then one issue per slice |
 
 Nothing here is built. This proposes the shape of the feature and the order of
 work, so that the outline, placement, routing, zone, 3D and bridge work that
-touches it fits from the start. Every command, record and field name below is a
-proposal for review.
+touches it fits from the start. The first two slices give SolidCraft a linked
+board that stays up to date as the board changes in PCBCraft; the parametric
+slices build on them. Every command, record and field name below is a proposal
+for review.
 
 **Name.** PCBCraft has no `docs/RFC/` index yet, and in Craft discussions
 "RFC 0001" already means SolidCraft's Craft bridge, which #70 and this document
@@ -22,9 +24,20 @@ assign a number when they start an index (question 15). In this document,
 
 ## 1. What the user sees at the end
 
-A board whose shape can come from the enclosure, whose key positions are named
-values, and whose parts stay where the designer meant them to be when either
-changes.
+Two things, in this order.
+
+**First, the board in the enclosure, kept up to date.** The designer sends a board
+to SolidCraft and places it in the enclosure assembly. From then on, each saved
+change in PCBCraft to the outline, cutouts, holes, thickness or part placement
+shows up in the same open assembly: the same linked board, in the same place, with
+its joints, and nothing duplicated. A reference the enclosure made to something
+that is gone is named, never moved to something else. Publishing is a command,
+so an agent can do it over MCP too. Section 6.7 describes it; slices 1 and 2
+deliver it. It needs no parametric work.
+
+**Then, a board that follows the enclosure:** a board whose shape can come from
+the enclosure, whose key positions are named values, and whose parts stay where
+the designer meant them to be when either changes.
 
 - **The outline from the enclosure.** In SolidCraft, the designer sketches the
   board pocket of the enclosure. "Send to PCBCraft" writes a `.craftx` exchange
@@ -52,9 +65,9 @@ changes.
   nets named, and the board is unchanged.
 - **The same from MCP.** An agent uses the same commands and gets the same
   result, the same preview and the same refusals, with a reply listing what moved.
-- **The other direction.** The board's outline, holes, placements and named
-  datums go to SolidCraft as `board/1` (#70), so the enclosure can follow the
-  board, for example an opening that follows a connector.
+- **The enclosure follows the board, too.** Labelled board datums ("USB edge",
+  "J1 origin") travel in `board/1`, so a SolidCraft sketch can follow them, for
+  example an opening that follows a connector.
 
 A board without links, parameters or holds works exactly as it does today.
 
@@ -97,10 +110,11 @@ identity is never inferred from names, paths or vertex order.
 | Item | Owner | The other side gets |
 |---|---|---|
 | Enclosure, board pocket sketch, mounting points, exposed parameters | SolidCraft | PCBCraft: a read-only linked copy, accepted into the board through a preview |
-| Accepted board outline, cutouts and holes | PCBCraft | SolidCraft: `board/1` |
+| Accepted board outline, cutouts, holes and finished thickness | PCBCraft | SolidCraft: the board body and `board/1`, refreshed in place (6.7) |
 | Board parameters and holds | PCBCraft | SolidCraft: nothing directly; their effect arrives as placements in `board/1` |
-| Placements, copper, zones, stackup | PCBCraft | SolidCraft: `board/1` (placements, heights, keep-outs) |
-| Board datums (named edges, points, part origins) | PCBCraft | SolidCraft: named entries in `board/1`, so its sketches can follow them |
+| Placements, copper, zones, stackup | PCBCraft | SolidCraft: placements and component model bodies in `board/1`; copper and keep-outs later (6.7) |
+| Board datums (board origin, holes, part origins; labelled edges and points later) | PCBCraft | SolidCraft: named entries in `board/1`, so its joints and sketches can follow them |
+| The linked board's placement in the assembly, its joints, and enclosure features that reference it | SolidCraft | PCBCraft: nothing |
 
 **What the bridge RFC does not define yet, and this feature needs.** The bridge
 RFC's parts describe 3D bodies with named faces and edges, parameters, metadata,
@@ -130,7 +144,11 @@ revision and frame.
   owned: drawn here, or in SolidCraft for a linked outline.
 - Driving SolidCraft parameters from PCBCraft. The bridge RFC mentions it as
   later work; it is out of scope here.
-- Silent or automatic acceptance of a linked revision.
+- Silent or automatic acceptance of a linked enclosure revision into PCBCraft's
+  board data. Refreshing SolidCraft's read-only copy of the board is a different
+  thing and may be automatic (section 6.7).
+- Building SolidCraft's receiver. Section 6.7 proposes its behaviour for
+  agreement in the bridge RFC's Phase 5; SolidCraft decides and builds it.
 - Parametric copper. Tracks and vias are never hold participants; they follow the
   parts they connect.
 - Holds to faces of 3D component models (depends on #86's model record).
@@ -153,6 +171,7 @@ All on main:
 | Origin | `pcb.set_placement_origin` with an `outline_lower_left` anchor that follows the outline | A hold to the outline, in miniature |
 | Parameters | Text parameters (`@project.Name`) for sheets | Not numeric (question 5) |
 | Edits | Revision-checked commands, `dry_run` on some, one undo step, preview/apply with a plan token ([single-board update](../single-board-update.md#preview-and-apply)) | The update and the linked preview follow these patterns |
+| 3D and STEP | `crates/geometry` reads and writes STEP; the board solid and the model record are claimed or proposed in #86; no `.craftx` writer | What slice 1 builds on |
 | Kernel | `crates/geometry` is the only crate linking SolidCore; the engine is kernel-free; the browser leaves the kernel off ([geometry kernel](../geometry-kernel.md#boundary)) | Why shape solving belongs in SolidCraft (section 6.1) |
 
 ## 5. Design constraints
@@ -309,7 +328,7 @@ A **datum** is anything a hold or an external design may reference:
 
 | Datum | Identity |
 |---|---|
-| Drawn outline edge or vertex | A new per-segment and per-vertex ID in the Board Outline drawing record (a format step, slice 0) |
+| Drawn outline edge or vertex | A new per-segment and per-vertex ID in the Board Outline drawing record (a format step, slice 3) |
 | Linked outline edge or point | `(link id, persistent name)`, the name taken from the exchange file as an opaque string |
 | Mounting hole center | Its footprint or hole record ID |
 | Footprint feature | Footprint ID plus origin, X axis, a pad center (pad token) or a courtyard side |
@@ -406,14 +425,209 @@ accepted geometry and reports the link as missing, with Relink. Break Link turns
 the accepted outline into ordinary drawn geometry with new segment IDs; holds on
 linked edges are remapped to them in the same step.
 
-### 6.7 Published datums in `board/1`
+### 6.7 The board in a SolidCraft assembly
 
-#70 defines `board/1`. This feature adds to it: published datums with stable
-IDs and labels, in the bridge frame, so a SolidCraft sketch can reference "J1
-origin" or "USB edge" by name rather than by coordinates. A published datum that
-no longer resolves blocks publishing and is named in the user's words. Detecting
-a cross-application cycle (an enclosure edge that follows a board datum which
-follows that edge) is question 10.
+This is the outbound direction, PCBCraft → SolidCraft, and the first thing this
+RFC proposes to build (slices 1 and 2). It needs none of the parametric work: an
+ordinary drawn board is published and kept up to date. The parametric slices
+later change only *why* a placement moved, not how the change travels.
+
+**The workflow.**
+
+1. In PCBCraft, the designer chooses **Send to SolidCraft** for a board.
+   PCBCraft publishes revision 1 of an exchange file for that board and starts
+   SolidCraft with its path (the bridge RFC, section 3, transport D). Or the
+   designer inserts the file in SolidCraft with Insert Exchange
+   (`file.insert_exchange`, the bridge RFC, section 5).
+2. In the enclosure assembly, the board is one linked component, placed and
+   jointed like any inserted design. Its placement and joints belong to the
+   assembly.
+3. Back in PCBCraft, the designer makes an edit the first milestone covers: moves
+   an outline edge or a cutout, adds, moves or deletes a mounting hole, changes
+   the finished thickness in Board Setup, or moves, rotates or flips a part.
+   Saving publishes revision 2 to the same file.
+4. SolidCraft sees the new file and refreshes the same linked component in place.
+   The board and its parts change in the open assembly. The component, its entry
+   in the Browser, its placement in the assembly and its joints stay. References
+   into the board re-resolve by name; one that no longer resolves is named, never
+   moved to something else.
+
+**What the first milestone carries.**
+
+| Item | In `board/1` and the exchange bodies |
+|---|---|
+| Board body | One solid: the closed outer outline extruded through the finished thickness, cutouts and holes as through-voids |
+| Holes | Footprint pad holes and non-plated footprint holes, at the size and shape the footprint defines, each with its own name |
+| Thickness | The declared finished board thickness from Board Setup ([board materials](../board-materials.md)). If none is declared, publishing is refused, naming the setting; no default stands in |
+| Components | One entry per placed footprint: footprint ID, reference designator (display only), side, position, rotation, model reference and content hash, and the composed transform below. Its body is the model bound through #86's model record, written once per content hash |
+| Datums | The board origin, the placement origin, the top and bottom faces, each hole's axis and each component's origin frame |
+
+Not in the first milestone: copper, solder mask, silkscreen and paste; vias
+(their drills matter electrically, not mechanically, and there can be thousands);
+keep-outs and height zones (not stored yet); zone fill; outline arcs (#260). A
+component without a usable model is listed with its state from #86 (no binding,
+record missing, bytes unavailable, hash mismatch, unreadable) and gets no body.
+No invented box or height stands in for a missing model (#70: missing data
+cannot become a mechanical boundary).
+
+**Names.** Every face and datum gets a persistent name in `faces.json` (the bridge
+RFC, section 2), built from PCBCraft identities, never from order or position:
+
+- `board:top`, `board:bottom`; `hole:<footprint>:<pad or hole>` for a hole's wall
+  and axis; `component:<footprint>` for a component's occurrence and origin
+  frame. These are `exact`.
+- Outline and cutout side faces: until outline segments have IDs (slice 3), they
+  are named from the drawing's UUID and the segment's position and published with
+  `exact: false`, so SolidCraft treats a reference to them as found by geometry
+  ("check this"). Slice 3 makes them exact.
+- Faces inside a component model come from its STEP file, which has no
+  persistent names. A reference to one is by geometry and is flagged whenever
+  that model changes.
+
+Footprint IDs are project counters today (question 11). The publication is per
+board, where they are unique.
+
+**Frames and units.** This is the shared contract #70 asks for ("Resolve units and
+transforms") and #86's model record uses; it follows the model-frame proposal in
+#86.
+
+- Lengths are millimetres, converted once from PCBCraft's whole nanometres.
+- **Board frame.** Origin at the board's coordinate zero. +X is board X; +Y is
+  board −Y, because board Y points down in PCBCraft; +Z points away from the
+  board on the top side. Z = 0 is the finished top outer surface, so the body
+  spans −t to 0 for finished thickness t. The frame is fixed to board zero, not to
+  the outline's lower-left corner or the placement origin, because those follow
+  the outline: a frame that moved with the outline would make every refresh shift
+  the whole board inside the enclosure. The placement origin is published as a
+  datum instead.
+- **Model frame** (#86). Origin at the footprint origin on the mounting surface;
+  +X is footprint X; +Y is footprint −Y; +Z points away from the board on the
+  component's side; Z = 0 is the model's seating plane.
+- **Component pose** in the board frame: `T(x, −y, 0) · Rz(r) · S · A`, where
+  `(x, y)` is the footprint position, `r` its rotation counterclockwise as seen
+  from the top, `A` the binding's alignment (#86), and `S` is the identity on the
+  top side and `T(0, 0, −t) · Ry(180°)` on the bottom. A bottom part is turned
+  over, not mirrored; this matches PCBCraft's bottom placement, which mirrors
+  local X before the rotation ([footprint schema](../footprint-schema.md)).
+- `board/1` carries each composed transform as a 4×4 matrix in millimetres, and
+  the inputs it came from (position, rotation, side, alignment, t). Receivers
+  place with the matrix and need not repeat PCBCraft's rules; tests check the
+  composition from the inputs.
+- Where the board frame sits in the enclosure belongs to the receiving assembly
+  (the bridge RFC, section 6).
+
+**Publishing and revisions** (PCBCraft).
+
+- Each board has its own export target: a path hint, auto-publish on or off, and
+  the last published revision. It is stored with the board, in a
+  board format step written only when a target exists. The default path is beside
+  the project, named after the project and the board, and chosen once.
+- `source_id` is `<project UUID>/<board UUID>` (question 18).
+- Publishing captures one immutable snapshot of the **saved** board (question 16)
+  and follows the [export snapshot rules](../multiboard-assembly-and-outputs.md).
+  Publish with unsaved changes saves first. With auto-publish on, each save that
+  changes the board publishes; a no-op save publishes nothing and changes no
+  bytes.
+- `revision` is the target's counter plus one, written in that same save. The
+  manifest also carries the content hash and the snapshot's capture ID. Revisions
+  only increase; a publish that fails leaves a gap, which is harmless.
+- The file is written under a temporary name and renamed over the previous one, so
+  a reader sees a whole revision or the previous one, never part of one.
+  Publishing runs as a bounded job off the editor thread and never waits for
+  SolidCraft.
+- Publishing never changes authored board data. A refused publish (no thickness,
+  a model whose bytes do not match their hash, a write error) leaves the previous
+  file and says why; the save itself still succeeds.
+
+**Refreshing in SolidCraft.** This is a proposal for SolidCraft's receiver, to be
+agreed in the bridge RFC's Phase 5; SolidCraft decides and builds it. It reuses
+Insert Design's link, Update Links and Break Link machinery, as the bridge RFC's
+`file.insert_exchange` already says.
+
+- Insert Exchange makes one linked component whose identity is the `source_id`.
+  Each PCB component is a child occurrence keyed by `component:<footprint>`;
+  occurrences with the same model hash share one body.
+- A refresh updates that component in place. The board body is replaced.
+  Occurrences are matched by key: kept and moved, added for new keys, removed for
+  keys that are gone. Nothing is matched by order or reference designator, and a
+  refresh never adds a second copy of the board or a part.
+- The assembly's placement of the linked component and its joints are kept.
+  SolidCraft-owned bodies, such as the enclosure, are never replaced or deleted by
+  a refresh. They change only through SolidCraft's own features that reference
+  the board, recomputed as for any linked design.
+- References into the board (a joint to a hole, a sketch that projects a board
+  edge, a measurement) re-resolve by name with the bridge RFC's outcomes. Exact and
+  merged follow. Split and by-geometry matches are flagged "check this" and are not
+  silently used for a joint or feature that would change meaning. Missing marks
+  the joint or feature broken, naming the item in the user's words ("hole MH2 of
+  J3 on board Main") and where it was; it keeps its last result. A broken
+  reference is never moved to another hole or face, even one in the same place.
+- A refresh is one undo step in SolidCraft, as Update Links is today, and its
+  report lists what moved, what was added or removed, and what broke.
+
+**When updates happen.**
+
+- PCBCraft publishes on save when auto-publish is on, or on an explicit
+  **Publish**.
+- SolidCraft watches the linked file and, when the live session is used, also
+  takes an `exchange.changed` notice (the bridge RFC, section 6). Either marks the
+  link changed, as `component.links` reports it. A notice only says "read the
+  file"; the file decides what the revision is.
+- The linked board is PCBCraft-owned and read-only in the assembly, so refreshing
+  it is not accepting a change to SolidCraft's authored design. The bridge RFC lets
+  the receiver choose automatic or one-click updates. Proposed: SolidCraft's
+  existing linked-design preference (**Update changed linked designs when a tab
+  comes back**, `update_changed_links`) also covers exchanges, so the board
+  refreshes when the assembly opens, comes back to the front, or gets a notice
+  while it is in front; with the preference off, **Update Links** refreshes it.
+- Accepting changes to authored data stays separate in both apps. In PCBCraft,
+  enclosure changes come back only through the reviewed preview in 6.6. In
+  SolidCraft, whether a refresh that would change an enclosure feature should
+  preview first, instead of recomputing and reporting, is question 17.
+- Continuous updates while a part is dragged are a follow-up (below). In the
+  first milestone the assembly changes when PCBCraft saves.
+
+**Failure outcomes.** Each leaves the assembly on its current revision unless
+stated, with nothing removed quietly:
+
+| Case | Outcome |
+|---|---|
+| The file holds a lower revision than the accepted one (a restored copy) | Refused as stale, naming both revisions; **Take This Revision** accepts it explicitly |
+| The same revision with a different hash (two writers) | Refused as a conflict, naming both; nothing changes |
+| A notice for a revision the file no longer holds | Ignored; the file is read instead |
+| Several revisions published while SolidCraft was closed or in the background | Only the newest file is read |
+| PCBCraft closed, or SolidCraft closed while PCBCraft publishes | Nothing waits on the other app; SolidCraft takes the newest file when it next opens the assembly |
+| The file is missing or moved | The link is reported missing; the last bodies stay (SolidCraft keeps linked bodies in the assembly); **Relink** |
+| A file with a different `source_id` at the path | Refused as another board; offered as Relink, never swapped in |
+| The file requires a capability or major version SolidCraft does not read | Refused (the bridge RFC, section 6); the last bodies stay |
+| An item a reference uses was deleted in PCBCraft (a hole, a part) | The reference is missing: its joint or feature is broken and named; no retargeting |
+| The file cannot be read | The last bodies stay and SolidCraft tries again on the next change, as it does for linked designs |
+
+**Follow-ups, not in the first milestone.** Continuous updates while dragging
+(transient previews over the live session, with their own rate and cancel rules,
+never durable revisions); copper, mask and silkscreen bodies, vias, keep-outs and
+height zones; exact outline side-face names (slice 3); labelled datums and
+enclosure features that follow them (below, slice 12); **Edit in PCBCraft** from
+the linked board.
+
+**Who specifies and builds what.**
+
+| Piece | Built by | Specified in |
+|---|---|---|
+| Exchange file, manifest, link record, outcomes, capabilities, transports | Both | The bridge RFC, sections 2–4 and 6 |
+| `board/1` payload, names, frames and units | PCBCraft | #70 ("Define `board/1`", "Resolve units and transforms"); this section |
+| Exporter: snapshot, target, revision, atomic write | PCBCraft | #70 ("Export one snapshot", "Persist and inspect links"); this section |
+| Board body | PCBCraft, `crates/geometry` | #86 (the board solid) |
+| Component models, binding and model frame | PCBCraft | #86 (the model record proposal) |
+| Insert Exchange, refresh in place, reference outcomes, update preference | SolidCraft | The bridge RFC, section 5 and Phase 5; this section as a proposal |
+| Fixtures and acceptance | Both | Slice 2; #70's checklist |
+
+**Labelled datums.** Later (slice 12), designers can label datums and mark them
+published (6.2), so a SolidCraft sketch can follow "J1 origin" or "USB edge" by
+name rather than by coordinates, for example an opening that follows a connector.
+A published datum that no longer resolves blocks publishing and is named in the
+user's words. Detecting a cross-application cycle (an enclosure edge that follows
+a board datum which follows that edge) is question 10.
 
 ### 6.8 Zones and keepouts
 
@@ -433,18 +647,81 @@ footprints.
 Each slice lands on its own with its own acceptance tests. Format changes follow
 [native storage](../native-project-storage.md): a new board format only when the
 new record is present, older readers refuse it, no-op saves stay byte-identical.
-Slices 0–4 need no bridge and no SolidCraft.
 
-### Slice 0: stable outline edge identity
+The outbound link comes first (slices 1 and 2): it is the interop #86 puts first,
+and it needs no parametric work. The parametric slices follow; slices 3–8 need no
+bridge and no SolidCraft.
+
+### Outbound: the board in a SolidCraft assembly
+
+#### Slice 1: publish the board as `board/1`
+
+The export target, **Send to SolidCraft**, **Publish** and auto-publish on save; a
+`craft-exchange/1` writer for the manifest, the board body as STEP (from #86's
+board solid), each bound component model once per content hash, `faces.json` and
+`board.json`, all as section 6.7 describes; `pcb.publish_board` and inspection of
+the target. Components are listed without bodies until #86's model record lands.
+
+*Acceptance:* an original fixture board (an outline with a cutout, four mounting
+holes, parts on both sides, a declared thickness) publishes a file whose board
+body, hole positions, thickness and component transforms, read back with
+PCBCraft's own reader and `read_step`, match the known dimensions in millimetres,
+with bottom parts turned over, not mirrored; the same saved board publishes the
+same bytes; a no-op save publishes nothing; an edit and save publishes the next
+revision with a new hash; a board without a declared thickness and a model whose bytes
+do not match their hash are refused, naming the cause, and the previous file
+stays; a crash between writing and renaming leaves the previous file whole;
+publishing changes no board data and no undo history.
+
+#### Slice 2: the linked board updated in the open assembly
+
+SolidCraft's Insert Exchange and refresh in place (6.7), which is SolidCraft's
+work in the bridge RFC's Phase 5, and the joint acceptance run. On the PCBCraft
+side this slice adds only the fixtures and the run.
+
+*Acceptance scenario*, on the slice 1 fixture and an original enclosure:
+
+1. Publish revision 1. In SolidCraft, insert it into the enclosure assembly, add
+   a joint between mounting hole MH1 and a boss, and save the assembly.
+2. In PCBCraft, move the right outline edge 5 mm, move connector J1 3 mm along
+   that edge, change the finished thickness from 1.6 mm to 1.2 mm, delete mounting
+   hole MH4, and save. Revision 2 is published.
+3. Without reopening, the same SolidCraft assembly shows the link as changed and
+   refreshes (automatically with the preference on, otherwise by Update Links).
+   Checked: the linked component is the same one (same `source_id`, same Browser
+   entry, same assembly placement, MH1's joint kept); the board body and J1 are at
+   the new known dimensions; bottom-side parts sit 0.4 mm higher in the board
+   frame; the linked component holds one board body and one occurrence per part
+   with a model, with no duplicates; the enclosure bodies are unchanged apart
+   from features that reference the board; a joint or feature that used MH4 is broken and names MH4,
+   keeps its last result and is not moved to another hole; one Undo returns the
+   assembly to revision 1's representation.
+4. Rotate a part 90° and flip another to the bottom in PCBCraft, save: revision 3
+   refreshes the same component again, with the same checks.
+5. Save and close the assembly, close PCBCraft, and reopen the assembly: revision 3
+   is shown with no change marker and no PCBCraft running.
+
+Failure fixtures, each with the outcome in 6.7's table: revision 2's file restored
+over revision 3 (stale, refused, explicit Take This Revision); two writers with
+the same revision and different hashes (conflict); a late notice for revision 2
+(ignored); revisions 4 and 5 published while SolidCraft is closed (5 is read);
+the file deleted (missing, bodies kept, Relink); another board's file at the path
+(refused, Relink offered); a file requiring an unknown capability (refused). No
+case moves a reference to a different item.
+
+### Parametric board
+
+#### Slice 3: stable outline edge identity
 
 Per-segment and per-vertex IDs in Board Outline drawings, kept through vertex
-edits, moves, undo and copy (copies get new IDs).
+edits, moves, undo and copy (copies get new IDs). Published outline side faces
+become `exact` (6.7).
 
 *Acceptance:* IDs survive drag, insert/delete of other vertices, undo/redo and
 reopen; boards without the IDs keep their format and bytes until edited; the
 identity inventory classifies the new IDs; clipboard copies get fresh IDs.
 
-### Slice 1: board parameters
+#### Slice 4: board parameters
 
 Records, evaluator, `pcb.set_board_parameters` (complete list,
 `expected_revision`, `dry_run`), inspection, Board Setup table.
@@ -453,7 +730,7 @@ Records, evaluator, `pcb.set_board_parameters` (complete list,
 division by zero, overflow and over-length input refused with nothing changed;
 rename keeps ID; one undo step; no-op edit keeps revision; reopen byte-stable.
 
-### Slice 2: parts held to outline edges, carrying copper
+#### Slice 5: parts held to outline edges, carrying copper
 
 Holds `distance`, `along` and `angle` to drawn edges; evaluation; the update
 (6.5) without step 5, so carried copper that ends up violating a rule refuses the
@@ -466,10 +743,11 @@ part held in distance slides it along the edge; a held move is refused with the
 way out; routed copper follows in one undo step; a change that would lose a
 connection or short a net is refused with the net names and the board
 byte-identical; locked copper refuses; deleting a referenced edge leaves the hold
-non-driving with a blocking finding; a corner rounded later (slice 8) does not
-move parts measured along its edges.
+non-driving with a blocking finding; inserting a vertex in an edge does not move
+parts measured along it, and neither does a corner rounded later (slice 11); with
+the board published (slice 1), the held parts arrive moved in the next revision.
 
-### Slice 3: parts held to parts
+#### Slice 6: parts held to parts
 
 `offset` holds; dependency-ordered evaluation; cycles and double holds refused,
 naming them; rigid carry of islands whose pads all move together.
@@ -477,18 +755,18 @@ naming them; rigid carry of islands whose pads all move together.
 *Acceptance:* a chain of three parts follows a parameter; a routed group keeps its
 internal routing shape exactly; a cycle is refused naming the holds in it.
 
-### Slice 4: re-route inside the update
+#### Slice 7: re-route inside the update
 
 Step 5 of the update on #246 walkaround (and #247 shove when it lands): remove only
 the offending carried segments and reconnect their ends deterministically within
 the router's budget; refuse if any connection cannot be restored (C7).
 
-*Acceptance:* slice 2 fixtures that were refused now succeed where a legal route
+*Acceptance:* slice 5 fixtures that were refused now succeed where a legal route
 exists and still refuse, naming nets, where none does; the same change twice gives
 byte-identical boards; undo restores exactly; results agree with full DRC; latency
-recorded with the #240 harness against slice 2.
+recorded with the #240 harness against slice 5.
 
-### Slice 5: one-way DXF outline import
+#### Slice 8: one-way DXF outline import
 
 The adapter suggested in #153's triage: closed polylines and arcs (once #260
 exists) from a chosen layer, units, gap tolerance from rules, into drawn outline
@@ -498,7 +776,7 @@ geometry with new segment IDs. No link; independent of every other slice.
 import with exact dimensions; open loops, crossings and unsupported entities are
 refused, naming them; one undo step.
 
-### Slice 6: reading `.craftx` and a linked outline (after `profile/1` is agreed)
+#### Slice 9: reading `.craftx` and a linked outline (after `profile/1` is agreed)
 
 A `craft-exchange/1` reader for the manifest, `requires` and the agreed profile
 part; the link record; refresh, preview and accept (6.6); missing source and
@@ -510,7 +788,7 @@ accept give the same board; nothing moves until accept; each outcome in 6.6 has 
 fixture; a file requiring an unknown capability is refused; the board opens and
 exports with the source file absent.
 
-### Slice 7: holds on linked datums and linked parameters
+#### Slice 10: holds on linked datums and linked parameters
 
 Holds may reference linked edges and points; expressions may use linked
 parameters. Mounting-hole footprints held to linked points (#153 step 4b:
@@ -520,22 +798,29 @@ position from the enclosure, hole type stays a PCBCraft decision).
 hole footprint and its copper in the preview; a missing point stops driving and
 blocks outputs.
 
-### Slice 8: curves (after #259/#260)
+#### Slice 11: curves (after #259/#260)
 
-Arc edges in drawn, imported and linked outlines; holds measure to arc edges
-(distance along the radius) and to virtual corners (C3).
+Arc edges in drawn, imported, linked and published outlines; holds measure to arc
+edges (distance along the radius) and to virtual corners (C3).
 
 *Acceptance:* rounding a corner moves no part measured along its edges; Gerber
-arcs and DRC agree within declared output precision.
+arcs, DRC and the published board body agree within declared output precision.
 
-### Slice 9: published datums and the outbound board (#70, #86)
+#### Slice 12: labelled published datums
 
-Published datums in `board/1`; the 3D view and STEP build from the same accepted
-board (C9). Mostly #70's and #86's work; listed for order.
+Labelled datums marked published (6.2) in `board/1`, so SolidCraft sketches can
+follow them (6.7); a published datum that no longer resolves blocks publishing.
 
-Slices 0 and 1 can be reviewed in parallel; 2 follows 0; 3 and 4 follow 2 (4
-also #246); 5 is independent; 6 needs the `profile/1` agreement; 7 follows 3 and
-6; 8 follows #260.
+*Acceptance:* a SolidCraft sketch that follows a published connector datum
+follows it through a placement change in the next revision; deleting the datum's
+footprint blocks publishing, naming the datum.
+
+### Order
+
+1 needs #86's board solid (component bodies follow its model record); 2 needs 1
+and SolidCraft's receiver. 3 and 4 can be reviewed in parallel with 1 and 2; 5
+follows 3; 6 and 7 follow 5 (7 also #246); 8 is independent; 9 needs the
+`profile/1` agreement; 10 follows 6 and 9; 11 follows #260; 12 follows 2 and 3.
 
 ## 8. Performance
 
@@ -548,6 +833,7 @@ revised from the data:
 | Whole update with carry, 100 held parts, nothing to re-route | ≤ 50 ms |
 | Whole update with re-route of up to 10 connections | ≤ 200 ms, or a snapshot job with progress |
 | Preview of a linked revision, excluding reading the file | Same as the update it previews |
+| Publish a revision of a 200-part board, model bytes already hashed | ≤ 1 s, as a job off the editor thread; editing stays responsive meanwhile |
 | Selection, hover, camera, opening a board | No evaluation, no geometry rebuild |
 
 For reference, the author's separate implementation (section 10) measured 5–10 ms
@@ -594,7 +880,10 @@ only suggest the targets are realistic.
     in the bridge RFC for every receiver?
 11. **Footprint identity.** Footprints use project counters. Holds work with
     those, but clipboard paste and merges of separate copies can collide. Does the
-    counter-to-UUID migration need to precede slice 2?
+    counter-to-UUID migration need to precede slice 5? The published
+    `component:<footprint>` names (6.7) rest on the same counters: a renumbered
+    footprint arrives in SolidCraft as a removed part and a new one, with any
+    references to it reported broken.
 12. **Router operation for updates.** Should #247 provide "reconnect these fixed
     ends of one connection, deterministically, within this budget", or does the
     update compose it from walkaround calls?
@@ -605,6 +894,22 @@ only suggest the targets are realistic.
 15. **RFC naming in PCBCraft.** Start `docs/RFC/README.md` with its own numbering
     (as SolidCraft's `docs/rfcs/README.md` does), with a prefix that cannot be
     confused with SolidCraft's RFC numbers?
+16. **Publish saved state only?** Recommended (6.7): the assembly never shows a
+    board that exists in no saved file, and the revision counter is written by the
+    save that publishes. The alternative is publishing unsaved state, as a
+    fabrication export may, with a revision kept outside the project.
+17. **SolidCraft refresh and enclosure features.** When a refresh changes an
+    enclosure feature that references the board, should SolidCraft recompute and
+    report (recommended for the first milestone, as linked designs do today, one
+    undo step) or preview before the feature changes?
+18. **`source_id` for a board.** `<project UUID>/<board UUID>` is proposed. A
+    copied project keeps its UUIDs, so two copies would publish under the same
+    ID, and a SolidCraft link could take revisions from either. Should copying a
+    project give it a new UUID, as Save As does for a SolidCraft design (the
+    bridge RFC, section 5)?
+19. **The second outbound milestone.** Which comes next after 6.7's first
+    milestone: copper and mask bodies, keep-outs and height zones, continuous
+    updates while dragging, or labelled datums?
 
 ## 10. Prior experience
 
