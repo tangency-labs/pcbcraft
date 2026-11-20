@@ -2,7 +2,7 @@
 //! every returned replacement is still checked by the shared compound transaction.
 use super::*;
 use crate::board::{
-    clearance::{Object, Overlay},
+    clearance::Object,
     geometry::Contour,
     track::{
         MAX_TRACKS,
@@ -20,11 +20,12 @@ use std::{
 };
 
 mod corridor;
+use crate::board::clearance::{RouteFragments, RouteObstacles};
 
 /// A coordinated retry reopens the directly hit runs with shared spacing.
 #[derive(Clone, Copy)]
 enum Cascade {
-    Walk { reverse: bool, flipped: bool },
+    Walk { reverse: bool, flipped: bool, posture: Posture },
     Shared { positive: bool, advance: i64 },
 }
 
@@ -167,6 +168,7 @@ struct Push {
     toward: Point,
     piece: usize,
     hit: usize,
+    collision: [Point; 2],
 }
 
 /// Source queue with the originating route-piece direction retained through a cascade.
@@ -220,8 +222,10 @@ impl Propagation<'_> {
                 }
                 if self.queue.insert(owner) {
                     self.pushes.entry(owner).or_insert_with(|| {
-                        let mut push = self.incoming.unwrap_or(Push { from: contour.core[0], toward: contour.core[1], piece, hit: hit.second });
+                        let collision = [contour.core[0], contour.core[1]];
+                        let mut push = self.incoming.unwrap_or(Push { from: collision[0], toward: collision[1], piece, hit: hit.second, collision });
                         push.hit = hit.second;
+                        push.collision = collision;
                         push
                     });
                     self.stats.queued_tracks += self.chains.units[&owner].members.len();
@@ -233,18 +237,17 @@ impl Propagation<'_> {
     }
 }
 
-/// Add one speculative connected path, preserving immutable original membership/island. IDs
-/// address only this overlay and are deterministic; authored segment IDs are allocated at commit.
-fn add_path(
-    overlay: &mut Overlay<'_>,
+/// Append one speculative path in bounded work units, preserving original membership.
+async fn add_path(
+    overlay: &mut RouteFragments,
+    base: &ClearanceQuery,
     pieces: &[(Contour, Vec<Uuid>)],
     source: Option<usize>,
-    next: &mut u128,
     stats: &mut ShoveStats,
 ) -> Result<(), CommandError> {
     for (contour, layers) in pieces {
-        overlay.add(Uuid::from_u128(*next), contour.clone(), layers.clone(), source)?;
-        *next += 1;
+        super::search::yield_unit().await;
+        overlay.push(base, contour.clone(), layers.clone(), source)?;
         stats.overlay_objects += 1;
         stats.overlay_geometry_bytes += std::mem::size_of::<Contour>() + layers.len() * std::mem::size_of::<Uuid>();
     }
@@ -420,7 +423,7 @@ struct Search<'a> {
     query: &'a ClearanceQuery,
     chains: &'a Chains,
     geometry: ClearanceQuery,
-    incoming: ClearanceQuery,
+    incoming: RouteFragments,
     pickup: Pickup,
     fixed: Vec<(Contour, Vec<Uuid>)>,
     movable: BTreeSet<usize>,
@@ -476,13 +479,9 @@ impl<'a> Search<'a> {
             stats.overlay_geometry_bytes += caps * (std::mem::size_of::<Contour>() + std::mem::size_of::<Uuid>());
         }
         let geometry = query.with_objects(items)?;
-        let incoming = {
-            let mut overlay = geometry.route_overlay();
-            let mut next = 1;
-            add_path(&mut overlay, &fixed, pickup.source, &mut next, &mut ShoveStats::default())?;
-            super::search::yield_unit().await;
-            overlay.routing_query(pickup.source)?
-        };
+        let mut incoming = RouteFragments::default();
+        add_path(&mut incoming, &geometry, &fixed, pickup.source, &mut ShoveStats::default()).await?;
+        incoming.finish_gesture();
         Ok(Self { query, chains, geometry, incoming, pickup, fixed, movable, stats, budget, progress })
     }
 
@@ -516,6 +515,7 @@ impl<'a> Search<'a> {
             .chain(std::iter::once_with(|| continuations(request)).flatten())
             .chain([Approach::Walk(!request.flipped)]);
         let reuse_previous = request.previous.last() != Some(&request.target) || self.legal_incoming(request, &request.previous).await;
+        let incoming = RouteObstacles::new(&self.geometry, &self.incoming);
         let mut tested = Vec::new();
         let mut stats = self.stats.clone();
         let mut blocker = None;
@@ -532,13 +532,13 @@ impl<'a> Search<'a> {
             let proposed = match guide {
                 Approach::Walk(flipped) => {
                     route.flipped = flipped;
-                    super::search::walk(&self.incoming, &route, self.budget, self.progress.clone()).await?
+                    super::search::walk(incoming, &route, self.budget, self.progress.clone()).await?
                 }
                 Approach::Continue(points) => {
                     if tested.contains(&points) {
                         continue;
                     }
-                    let mut walker = super::walkaround::Walker::new(&self.incoming, &route, self.budget, self.progress.clone())?;
+                    let mut walker = super::walkaround::Walker::new(incoming, &route, self.budget, self.progress.clone())?;
                     match walker.certify_candidate(&points).await {
                         Ok(Some(plan)) => plan,
                         Ok(None) => {
@@ -570,8 +570,14 @@ impl<'a> Search<'a> {
             if !self.legal_incoming(&route, &proposed.points).await {
                 continue;
             }
-            let walk = [(false, route.flipped), (true, route.flipped), (false, !route.flipped), (true, !route.flipped)]
-                .map(|(reverse, flipped)| Cascade::Walk { reverse, flipped });
+            let orders = [(false, route.flipped), (true, route.flipped), (false, !route.flipped), (true, !route.flipped)];
+            let walk = orders.map(|(reverse, flipped)| Cascade::Walk { reverse, flipped, posture: route.posture });
+            // A square return is also a legal diagonal-route candidate. Try it
+            // when a short chamfer would break the full run's return spacing.
+            let square = (route.posture == Posture::Diagonal)
+                .then(|| orders.map(|(reverse, flipped)| Cascade::Walk { reverse, flipped, posture: Posture::Orthogonal }))
+                .into_iter()
+                .flatten();
             // A short move can still need a deeper shove when a distant leg
             // blocks the group's return. Sample room ahead in clearance-sized
             // steps that grow with the approach and share its probe budget.
@@ -580,7 +586,7 @@ impl<'a> Search<'a> {
             let advances =
                 std::iter::once(0).chain(std::iter::successors(Some(first), |step| step.checked_mul(2)).take_while(|step| *step <= extent));
             let shared = advances.flat_map(|advance| [true, false].map(move |positive| Cascade::Shared { positive, advance }));
-            for strategy in walk.into_iter().chain(shared) {
+            for strategy in walk.into_iter().chain(shared).chain(square) {
                 let mut attempt = self.propagate(&route, proposed.clone(), strategy).await?;
                 let mut attempt_stats = attempt.shove.take().unwrap_or_default();
                 let could_retry = attempt_stats.queued_tracks > 0 && self.progress.load(Ordering::Relaxed) < self.budget;
@@ -614,7 +620,7 @@ impl<'a> Search<'a> {
     /// Run a nested walk with inherited source intent; its probes charge the global gesture budget.
     async fn displace(
         &self,
-        query: &ClearanceQuery,
+        query: RouteObstacles<'_>,
         request: &Request,
         object: &Object,
         contacts: Option<BTreeSet<String>>,
@@ -681,14 +687,14 @@ impl<'a> Search<'a> {
         let mut stats = self.stats.clone();
         stats.attempts = 1;
         stats.used_walkaround = plan.points != super::posture::elbow(request.head, request.target, request.posture, request.flipped);
-        let mut next = 1;
         let fixed = &self.fixed;
-        let mut overlay = self.geometry.route_overlay();
-        add_path(&mut overlay, fixed, origin, &mut next, &mut stats)?;
+        let mut overlay = RouteFragments::default();
+        add_path(&mut overlay, &self.geometry, fixed, origin, &mut stats).await?;
         let mut incomplete = false;
         let pieces: Vec<_> =
             plan.points.windows(2).map(|p| (Contour::capsule(p[0], p[1], request.width_nm as f64 / 2.), vec![request.layer])).collect();
-        add_path(&mut overlay, &pieces, origin, &mut next, &mut stats)?;
+        add_path(&mut overlay, &self.geometry, &pieces, origin, &mut stats).await?;
+        overlay.finish_gesture();
         let fixed_count = fixed.len();
         let mut route = fixed.clone();
         route.extend(pieces);
@@ -715,12 +721,12 @@ impl<'a> Search<'a> {
             .enqueue(query, &route, nets, islands)
             .await?;
         incomplete |= segment_count > MAX_TRACKS;
-        let (mut corridor, reverse_displacements, displacement_flipped) = match strategy {
-            Cascade::Walk { reverse, flipped } => (None, reverse, flipped),
+        let (mut corridor, reverse_displacements, displacement_flipped, displacement_posture) = match strategy {
+            Cascade::Walk { reverse, flipped, posture } => (None, reverse, flipped, posture),
             Cascade::Shared { .. } => {
                 let corridor = corridor::Corridor::new(self, request, &plan, &route, &queue, &pushes, strategy);
                 legal &= corridor.is_some();
-                (corridor, false, request.flipped)
+                (corridor, false, request.flipped, request.posture)
             }
         };
         while legal && !queue.is_empty() {
@@ -739,9 +745,9 @@ impl<'a> Search<'a> {
             let chain = &chains.units[&source];
             let track = &chains.tracks[&source];
             let contacts = (!request.merge_same_net).then(|| chain.contacts.clone());
-            let obstacles = overlay.routing_query(origin)?;
+            let obstacles = RouteObstacles::new(&self.geometry, &overlay);
             let path = if let Some(shared) = corridor.as_mut().filter(|_| track.layer == request.layer) {
-                match shared.path(self, &obstacles, request, source, incoming).await {
+                match shared.path(self, obstacles, request, source, incoming).await {
                     Ok(Some(path)) => path,
                     Ok(None) => {
                         plan.blocker = Some(object.name.clone());
@@ -772,10 +778,10 @@ impl<'a> Search<'a> {
                         fixed: Vec::new(),
                         mode: Mode::Walkaround,
                         merge_same_net: request.merge_same_net,
-                        posture: request.posture,
+                        posture: displacement_posture,
                         flipped: request.flipped,
                     };
-                    let mut walker = super::walkaround::Walker::new(&obstacles, &probe, budget, progress.clone())?;
+                    let mut walker = super::walkaround::Walker::new(obstacles, &probe, budget, progress.clone())?;
                     walker.inherit(object, contacts.clone());
                     match walker.displacement_anchor(anchor.point).await {
                         Ok(true) => retained.push(position),
@@ -805,7 +811,7 @@ impl<'a> Search<'a> {
                         layer: track.layer,
                         origin: None,
                         width_nm: track.width_nm,
-                        posture: request.posture,
+                        posture: displacement_posture,
                         flipped: displacement_flipped,
                         previous: chain.anchors[interval[0]..=interval[1]].iter().map(|a| a.point).collect(),
                         mode: Mode::Walkaround,
@@ -816,7 +822,7 @@ impl<'a> Search<'a> {
                         std::mem::swap(&mut displaced.head, &mut displaced.target);
                         displaced.flipped = !displaced.flipped;
                     }
-                    let mut result = self.displace(&obstacles, &displaced, object, contacts.clone(), incoming, &mut refinement_remaining).await?;
+                    let mut result = self.displace(obstacles, &displaced, object, contacts.clone(), incoming, &mut refinement_remaining).await?;
                     if result.outcome != Outcome::Reached {
                         incomplete |= result.outcome == Outcome::Incomplete;
                         plan.blocker = result.blocker.or_else(|| Some(object.name.clone()));
@@ -855,7 +861,7 @@ impl<'a> Search<'a> {
                 break;
             }
             let pieces: Vec<_> = path.windows(2).map(|p| (Contour::capsule(p[0], p[1], track.width_nm as f64 / 2.), vec![track.layer])).collect();
-            add_path(&mut overlay, &pieces, Some(source), &mut next, &mut stats)?;
+            add_path(&mut overlay, &self.geometry, &pieces, Some(source), &mut stats).await?;
             legal = Propagation {
                 chains,
                 movable,

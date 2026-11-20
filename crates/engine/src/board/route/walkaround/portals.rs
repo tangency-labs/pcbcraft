@@ -12,7 +12,7 @@ impl Walker<'_> {
         let span = ((request.target.x_nm - request.head.x_nm) as f64).hypot((request.target.y_nm - request.head.y_nm) as f64);
         let region = Contour::capsule(request.head, request.target, span + self.half);
         let nearby = self.query.candidates(&region, &self.layers).map_err(Stop::Failed)?;
-        let objects = self.query.objects();
+        let objects = self.query;
         let exempt = |index: usize| {
             let object = &objects[index];
             self.own_islands.contains(&object.island) || (self.route_nets.len() == 1 && object.intended_nets == self.route_nets)

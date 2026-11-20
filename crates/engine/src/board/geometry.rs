@@ -63,6 +63,22 @@ impl Contour {
         Self { core: [start, end, end, start], radius }
     }
 
+    /// Only straight, nondegenerate capsule cores describe track centerlines.
+    pub(super) fn track_centerline(&self) -> Option<[Point; 2]> {
+        let [a, b, c, d] = self.core;
+        (a == d && b == c && a != b).then_some([a, b])
+    }
+
+    /// Interval where a track would be too close to this convex copper core.
+    /// A line through the core meets it at edges or starts/ends inside it.
+    pub(super) fn track_proximity(&self, leg: [Point; 2], expansion: f64) -> Option<(f64, f64)> {
+        self.edges()
+            .filter_map(|(a, b)| proximity_interval(leg, [a, b], self.radius + expansion))
+            .chain(self.contains_core(leg[0]).then_some((0., 0.)))
+            .chain(self.contains_core(leg[1]).then_some((1., 1.)))
+            .reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
+    }
+
     /// Copper separation in nanometers. Zero or negative means contact; containment returns
     /// zero, not a penetration depth. Equality with a required clearance passes. Distances use
     /// the existing floating predicates and rounded integer pad cores, without a new epsilon.
@@ -190,4 +206,64 @@ pub(super) fn point_distance(p: Point, a: Point, b: Point) -> f64 {
     let length = dx * dx + dy * dy;
     let t = if length > 0. { (((px - ax) * dx + (py - ay) * dy) / length).clamp(0., 1.) } else { 0. };
     ((px - ax - t * dx).powi(2) + (py - ay - t * dy).powi(2)).sqrt()
+}
+
+/// Locate closest approach on the first closed segment. For a tied parallel
+/// overlap, prefer the station towards the incoming leg's tip.
+pub(super) fn closest_station([a, b]: [Point; 2], [c, d]: [Point; 2]) -> f64 {
+    let (u, v, w) = (delta(a, b), delta(c, d), delta(a, c));
+    let denominator = cross(u, v);
+    if denominator != 0. {
+        let (t, s) = (cross(w, v) / denominator, cross(w, u) / denominator);
+        if (0. ..=1.).contains(&t) && (0. ..=1.).contains(&s) {
+            return t;
+        }
+    }
+    let project = |p| (dot(delta(a, p), u) / dot(u, u)).clamp(0., 1.);
+    [(point_distance(d, a, b), project(d)), (point_distance(c, a, b), project(c)), (point_distance(a, c, d), 0.), (point_distance(b, c, d), 1.)]
+        .into_iter()
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map_or(0., |(_, station)| station)
+}
+
+/// The parameter interval where a straight leg enters an expanded capsule.
+/// End discs and the central strip cover the same capsule as the exact gap check.
+pub(super) fn proximity_interval([a, b]: [Point; 2], [c, d]: [Point; 2], radius: f64) -> Option<(f64, f64)> {
+    let (u, v, w) = (delta(a, b), delta(c, d), delta(c, a));
+    let interval = |offset: f64, slope: f64, low: f64, high: f64| {
+        if slope == 0. {
+            return (low <= offset && offset <= high).then_some((0., 1.));
+        }
+        let (x, y) = ((low - offset) / slope, (high - offset) / slope);
+        let (start, end) = (x.min(y).max(0.), x.max(y).min(1.));
+        (start <= end).then_some((start, end))
+    };
+    let disc = |at| {
+        let w = delta(at, a);
+        let length2 = dot(u, u);
+        let depth = radius * radius - cross(u, w).powi(2) / length2;
+        (depth >= 0.).then(|| depth.sqrt() * length2.sqrt()).and_then(|r| interval(dot(w, u), length2, -r, r))
+    };
+    let strip = || {
+        let length2 = dot(v, v);
+        if length2 == 0. {
+            return None;
+        }
+        let height = radius * length2.sqrt();
+        let (x0, x1) = interval(dot(w, v), dot(u, v), 0., length2)?;
+        let (y0, y1) = interval(cross(v, w), cross(v, u), -height, height)?;
+        let (start, end) = (x0.max(y0), x1.min(y1));
+        (start <= end).then_some((start, end))
+    };
+    [disc(c), disc(d), strip()].into_iter().flatten().reduce(|(a, b), (c, d)| (a.min(c), b.max(d)))
+}
+
+fn delta(a: Point, b: Point) -> (f64, f64) {
+    ((b.x_nm - a.x_nm) as f64, (b.y_nm - a.y_nm) as f64)
+}
+fn cross(a: (f64, f64), b: (f64, f64)) -> f64 {
+    a.0 * b.1 - a.1 * b.0
+}
+fn dot(a: (f64, f64), b: (f64, f64)) -> f64 {
+    a.0 * b.0 + a.1 * b.1
 }

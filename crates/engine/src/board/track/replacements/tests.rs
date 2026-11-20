@@ -324,3 +324,77 @@ fn compound_chain_self_contact_uses_exact_integer_incidence() {
     assert_eq!(revision, s.revision());
     assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
 }
+
+/// An off-angle authored leg may retain a fractional crossing while another
+/// span detours. A path that disconnects the contact must fail atomically.
+#[test]
+fn compound_edits_preserve_fractional_crossings() {
+    let mut s = board();
+    let at = |x_nm, y_nm| Point { x_nm, y_nm };
+    let a = at(0, 0);
+    let b = at(10_000_000, 3_000_000);
+    let root = add(&mut s, vec![a, b], 250_000)[0];
+    add(&mut s, vec![at(5_000_001, -2_000_000), at(5_000_001, 4_000_000)], 250_000);
+    let revision = s.revision();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let moved = params(&s, json!([{"track":root,"points":[a,p(0,6),p(10,6),b]}]));
+    assert!(s.apply(ADD_TRACKS, &moved).is_err());
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    let retained = params(&s, json!([{"track":root,"points":[a,at(8_000_000,2_400_000),p(9,2),b]}]));
+    s.apply(ADD_TRACKS, &retained).expect("the unchanged diagonal span retains the exact crossing");
+}
+
+/// A retained T-junction does not permit following the connected branch farther away.
+#[test]
+fn compound_edits_reject_new_overlap_along_existing_branch() {
+    let mut s = board();
+    let a = p(0, 0);
+    let joint = p(0, 5);
+    let b = p(0, 10);
+    let track = add(&mut s, vec![a, b], 250_000)[0];
+    add(&mut s, vec![joint, p(10, 5)], 250_000);
+    let invalid = params(&s, json!([{"track":track,"points":[a,joint,p(8,5),p(8,10),b]}]));
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    assert!(s.apply(ADD_TRACKS, &invalid).is_err());
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    let valid = params(&s, json!([{"track":track,"points":[a,joint,p(-4,9),p(-3,10),b]}]));
+    s.apply(ADD_TRACKS, &valid).expect("an edit departing from the retained junction is legal");
+}
+
+/// Through via dimensions obey the via rules even when the track minimum is larger.
+#[test]
+fn compound_edits_apply_track_width_only_to_tracks() {
+    let mut s = board();
+    let layers = copper_layers(&s);
+    s.apply(
+        crate::board::rules::SET_RULES,
+        &json!({"board":view(&s).target.board,"rules":crate::board::rules::Values { min_track_width_nm:1_000_000, preferred_track_width_nm:1_000_000, ..Default::default() },"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let track = add(&mut s, vec![p(0, 0), p(10, 0)], 1_000_000)[0];
+    let command = json!({"board":view(&s).target.board,"layer":layers[0],"width_nm":1_000_000,
+        "points":[p(-10,-10),p(-5,-10),p(-3,-10)],
+        "layer_changes":[{"at":1,"layer":layers[1]}],"via_diameter_nm":600_000,"via_drill_nm":300_000,
+        "replacements":[{"track":track,"points":[p(0,0),p(4,4),p(6,4),p(10,0)]}],"expected_revision":s.revision()});
+    s.apply(ADD_TRACKS, &command).expect("the via land can be narrower than a trace");
+    assert_eq!(view(&s).vias().len(), 1);
+}
+
+/// A slight slope on a returning leg must not let a full U-turn pass as a corner.
+#[test]
+fn compound_edit_enforces_spacing_on_nearly_parallel_return() {
+    let mut s = board();
+    let source = add(&mut s, vec![p(0, 0), p(12, 5)], 250_000)[0];
+    let command = |s: &Session, separation| {
+        let at = |x_nm, y_nm| Point { x_nm, y_nm };
+        let path = [p(0, 0), p(10, 0), at(10_000_000, separation), at(1_000_000, separation + 1), p(1, 5), p(12, 5)];
+        params(s, json!([{"track":source,"points":path}]))
+    };
+    let revision = s.revision();
+    assert!(s.apply(ADD_TRACKS, &command(&s, 300_000)).is_err());
+    assert_eq!(s.revision(), revision);
+    s.apply(ADD_TRACKS, &command(&s, 600_000)).expect("a separated return is legal");
+}

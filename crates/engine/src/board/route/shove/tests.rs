@@ -237,6 +237,32 @@ fn connected_parallel_tracks_cannot_be_shoved_under_each_other() {
         assert!(gap >= 200_000., "shared-island displacement collapsed spacing to {gap} nm: {plan:?}");
         commit(&mut s, &request, &plan);
     }
+    // The compact approach in the same branched fixture has space for both
+    // returns. Use its separately accepted witness so this test cannot pass
+    // by refusing every candidate.
+    let (mut s, a, b) = parallel_rails(false);
+    let head = Point { x_nm: 2_159_000, y_nm: 6_604_000 };
+    let target = Point { x_nm: 13_970_000, y_nm: -1_016_000 };
+    validate_clean_branch_return(&s, a, b, vec![head, Point { x_nm: 6_350_000, y_nm: 6_604_000 }, target]);
+    let request = Request { head, target, ..request(&s) };
+    let plan = s.plan_route(&query(&s), &request, request.mode.default_probe_budget(), &|| false).unwrap();
+    assert_eq!(plan.replacements.len(), 2, "{plan:?}");
+    let shapes = |id, width| {
+        plan.replacements
+            .iter()
+            .find(|r| r.track == id)
+            .unwrap()
+            .points
+            .windows(2)
+            .map(|p| Contour::segment(p[0], p[1], width).unwrap())
+            .collect::<Vec<_>>()
+    };
+    for left in shapes(a, 500_000) {
+        for right in shapes(b, 250_000) {
+            assert!(left.gap(&right) >= 200_000., "{plan:?}");
+        }
+    }
+    commit(&mut s, &request, &plan);
 }
 
 /// A push from either side keeps the displaced rails ahead, including after fixing a vertex.
@@ -343,8 +369,8 @@ fn advancing_to_the_top_keeps_the_two_rail_shove() {
         witness.apply(ADD_TRACKS,&json!({"board":view(&witness).target.board,"layer":copper_layers(&witness)[0],"width_nm":250_000,
             "points":[Point{x_nm:8_128_000,y_nm:9_398_000},Point{x_nm:8_128_000,y_nm:-2_159_000}],
             "replacements":[
-                {"track":upper,"points":[Point{x_nm:-975_000,y_nm:5_000_000},Point{x_nm:-480_576,y_nm:5_000_000},Point{x_nm:7_703_428,y_nm:-3_184_004},Point{x_nm:8_829_172,y_nm:-3_184_004},Point{x_nm:17_000_000,y_nm:4_986_824},Point{x_nm:17_000_000,y_nm:5_000_000},Point{x_nm:19_025_000,y_nm:5_000_000}]},
-                {"track":lower,"points":[Point{x_nm:0,y_nm:5_800_000},Point{x_nm:0,y_nm:5_332_600},Point{x_nm:7_941_602,y_nm:-2_609_002},Point{x_nm:8_577_822,y_nm:-2_609_002},Point{x_nm:16_986_824,y_nm:5_800_000},Point{x_nm:17_000_000,y_nm:5_800_000},Point{x_nm:20_000_000,y_nm:5_800_000}]}
+                {"track":upper,"points":[Point{x_nm:-975_000,y_nm:5_000_000},p(48,50),p(48,-32),p(105,-32),p(105,40),p(170,40),p(170,50),Point{x_nm:19_025_000,y_nm:5_000_000}]},
+                {"track":lower,"points":[p(0,58),p(54,58),Point{x_nm:5_400_000,y_nm:-2_620_000},Point{x_nm:9_900_000,y_nm:-2_620_000},p(99,58),p(200,58)]}
             ],"expected_revision":witness.revision()})).expect("a legal two-rail shove fits below the locked rail");
         let source = encode_documents(s.snapshot().unwrap()).unwrap();
         for y in [1_016_000, -1_524_000, -2_159_000] {
@@ -970,7 +996,22 @@ fn shove_coordinates_returns_across_staggered_runs() {
         for x in [-7_112, -5_080, -2_032] {
             let target = point((x, -19_050));
             let request = Request { head, target, previous, ..request(&session) };
-            let plan = session.plan_route(&query(&session), &request, request.mode.default_probe_budget(), &|| false).unwrap();
+            let budget = request.mode.default_probe_budget();
+            let context = session.route_planning(view(&session).target).unwrap();
+            let mut job = session.prepare_route_plan(&context, request.clone(), budget).unwrap();
+            let mut before = 0;
+            let mut done = false;
+            for _ in 0..100_000 {
+                done = job.step(1);
+                let after = job.progress().completed;
+                assert!((before..=before + 1).contains(&after), "a window rewound or overcharged the shared budget");
+                before = after;
+                if done {
+                    break;
+                }
+            }
+            assert!(done && before <= budget);
+            let plan = job.take_result().unwrap().unwrap();
             assert_eq!(plan.points.last(), Some(&target), "{plan:?}");
             assert_eq!(plan.replacements.iter().map(|part| part.track).collect::<BTreeSet<_>>(), tracks);
             commit(&mut session, &request, &plan);

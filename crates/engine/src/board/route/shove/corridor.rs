@@ -87,7 +87,7 @@ impl Corridor {
     pub(super) async fn path(
         &mut self,
         search: &Search<'_>,
-        obstacles: &ClearanceQuery,
+        obstacles: RouteObstacles<'_>,
         request: &Request,
         source: usize,
         push: Push,
@@ -119,8 +119,6 @@ impl Corridor {
             fixed: Vec::new(),
             ..request.clone()
         };
-        let mut walker = Walker::new(obstacles, &local, search.budget, search.progress.clone()).map_err(Stop::Failed)?;
-        walker.inherit(object, (!request.merge_same_net).then(|| chain.contacts.clone()));
         let nets = &object.intended_nets;
         let self_spacing = if request.merge_same_net { 0. } else { track.width_nm as f64 + search.query.membership_clearance(nets, nets) as f64 };
 
@@ -147,9 +145,15 @@ impl Corridor {
                 if path.len() <= super::super::super::track::MAX_PATH_POINTS
                     && path.iter().all(crate::wire::valid_point)
                     && chains::legal_stroke(&path, self_spacing).await
-                    && let Some(plan) = walker.certify_candidate(&path).await?
                 {
-                    return Ok(Some(plan.points));
+                    if search.progress.load(Ordering::Relaxed) >= search.budget {
+                        return Err(Stop::Exhausted);
+                    }
+                    let mut walker = Walker::new(obstacles, &local, search.budget, search.progress.clone()).map_err(Stop::Failed)?;
+                    walker.inherit(object, (!request.merge_same_net).then(|| chain.contacts.clone()));
+                    if let Some(plan) = walker.certify_candidate(&path).await? {
+                        return Ok(Some(plan.points));
+                    }
                 }
             }
         }
@@ -207,16 +211,31 @@ fn windows(chain: &Chain, hit: f64) -> (Vec<usize>, Vec<usize>) {
 /// Locate the portion of the hit track affected by this leg, even when the
 /// collision is clearance to an end instead of a centreline intersection.
 fn crossing_station(track: &crate::board::track::Track, reverse: bool, push: Push) -> f64 {
-    let (a, b) = if reverse { (track.end, track.start) } else { (track.start, track.end) };
-    let delta = |a: Point, b: Point| ((b.x_nm - a.x_nm) as f64, (b.y_nm - a.y_nm) as f64);
-    let cross = |a: (f64, f64), b: (f64, f64)| a.0 * b.1 - a.1 * b.0;
-    let (u, v) = (delta(a, b), delta(push.from, push.toward));
-    let d = cross(u, v);
-    let t = if d != 0. {
-        cross(delta(a, push.from), v) / d
-    } else {
-        let t = delta(a, push.toward);
-        (u.0 * t.0 + u.1 * t.1) / (u.0 * u.0 + u.1 * u.1)
-    };
-    t.clamp(0., 1.)
+    let leg = if reverse { [track.end, track.start] } else { [track.start, track.end] };
+    crate::board::geometry::closest_station(leg, push.collision)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A clearance-only endpoint hit belongs below the protected station,
+    /// even though extending the incoming line would cross above it.
+    #[test]
+    fn finite_hit_chooses_the_window_on_the_approach_side() {
+        let at = |x_nm, y_nm| Point { x_nm, y_nm };
+        let track = crate::board::track::Track {
+            id: Uuid::from_u128(1),
+            layer: Uuid::from_u128(2),
+            width_nm: 250_000,
+            start: at(0, 0),
+            end: at(0, 1_000_000),
+            locked: false,
+        };
+        let from = at(-400_000, 100_000);
+        let toward = at(-300_000, 300_000);
+        let push = Push { from, toward, collision: [from, toward], piece: 0, hit: 0 };
+        assert_eq!(crossing_station(&track, false, push), 0.3);
+        assert_eq!(crossing_station(&track, true, push), 0.7);
+    }
 }

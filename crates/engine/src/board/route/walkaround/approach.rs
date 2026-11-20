@@ -84,7 +84,7 @@ impl Walker<'_> {
             if plan.outcome == Outcome::Reached {
                 plan.outcome = Outcome::Blocked { last_legal: point };
                 plan.adjusted_target = Some(point);
-                plan.blocker = Some(self.query.objects()[blocker].name.clone());
+                plan.blocker = Some(self.query[blocker].name.clone());
                 return Ok(Some(plan));
             }
         }

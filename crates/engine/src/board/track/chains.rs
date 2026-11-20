@@ -38,6 +38,8 @@ pub(crate) struct Chain {
     pub members: Vec<(usize, bool)>,
     pub anchors: Vec<Anchor>,
     pub contacts: BTreeSet<String>,
+    /// Consecutive lattice points bracketing non-integral protected crossings.
+    protected_spans: Vec<[Point; 2]>,
 }
 
 /// Query indices remain snapshot-local; saved track UUIDs are retained independently.
@@ -304,6 +306,7 @@ async fn contacts(query: &ClearanceQuery, tracks: &BTreeMap<usize, Track>, membe
     let own: BTreeSet<_> = members.iter().map(|p| p.0).collect();
     let mut contacts = own.iter().map(|i| query.objects()[*i].name.clone()).collect::<BTreeSet<_>>();
     let mut anchors = Vec::new();
+    let mut protected_spans = Vec::new();
     let mut protected = 2;
     for (position, &(i, reverse)) in members.iter().enumerate() {
         work.tick().await;
@@ -331,19 +334,34 @@ async fn contacts(query: &ClearanceQuery, tracks: &BTreeMap<usize, Track>, membe
             let on_source = |t: f64| (t, Point { x_nm: (a.x_nm as f64 + t * dx).round() as i64, y_nm: (a.y_nm as f64 + t * dy).round() as i64 });
             let touches = |(_, p): &(f64, Point)| other.contour.touches(&Contour::capsule(*p, *p, object.contour.radius));
             let core = other.contour.core.as_slice();
-            let crossing = match core {
-                [c, d, end, start] if c == start && d == end => interior_crossing(a, b, *c, *d).map(on_source).filter(touches),
-                _ => None,
-            };
-            let best = crossing.or_else(|| {
-                core.iter()
-                    .copied()
-                    .chain([other.at])
-                    .map(|p| on_source((((p.x_nm - a.x_nm) as f64 * dx + (p.y_nm - a.y_nm) as f64 * dy) / span).clamp(0., 1.)))
-                    .filter(touches)
-                    .min_by(|(a, _), (b, _)| a.total_cmp(b))
+            if let [c, d, end, start] = core
+                && c == start
+                && d == end
+                && let Some((numerator, denominator)) = interior_crossing(a, b, *c, *d)
+            {
+                let bracket = bracket_crossing(a, b, numerator, denominator);
+                for (t, point) in bracket {
+                    anchors.push(Anchor { order: position as f64 + t, point, protected: true });
+                }
+                if bracket[0].1 != bracket[1].1 {
+                    protected += 1;
+                    if protected > MAX_CONTACTS {
+                        return Ok(None);
+                    }
+                    protected_spans.push([bracket[0].1, bracket[1].1]);
+                }
+                continue;
+            }
+            let best = core
+                .iter()
+                .copied()
+                .chain([other.at])
+                .map(|p| on_source((((p.x_nm - a.x_nm) as f64 * dx + (p.y_nm - a.y_nm) as f64 * dy) / span).clamp(0., 1.)))
+                .filter(touches)
+                .min_by(|(a, _), (b, _)| a.total_cmp(b));
+            let best = best.or_else(|| {
+                other.contour.edges().filter_map(|(c, d)| interior_crossing(a, b, c, d)).map(|(n, d)| on_source(n as f64 / d as f64)).find(touches)
             });
-            let best = best.or_else(|| other.contour.edges().filter_map(|(c, d)| interior_crossing(a, b, c, d)).map(on_source).find(touches));
             let Some((t, point)) = best else {
                 return Ok(None);
             };
@@ -352,22 +370,44 @@ async fn contacts(query: &ClearanceQuery, tracks: &BTreeMap<usize, Track>, membe
     }
     anchors.sort_by(|a, b| a.order.total_cmp(&b.order).then(b.protected.cmp(&a.protected)));
     anchors.dedup_by(|a, b| a.point == b.point);
-    Ok(Some(Chain { members, anchors, contacts }))
+    Ok(Some(Chain { members, anchors, contacts, protected_spans }))
 }
 
 /// Find a proper centerline crossing using integer predicates even for off-angle segments.
 /// Endpoint and collinear contacts continue through the ordinary station projection.
-fn interior_crossing(a: Point, b: Point, c: Point, d: Point) -> Option<f64> {
+fn interior_crossing(a: Point, b: Point, c: Point, d: Point) -> Option<(i128, i128)> {
     let delta = |a: Point, b: Point| (i128::from(b.x_nm) - i128::from(a.x_nm), i128::from(b.y_nm) - i128::from(a.y_nm));
     let cross = |(ax, ay), (bx, by)| ax * by - ay * bx;
     let (u, v, w) = (delta(a, b), delta(c, d), delta(a, c));
     let denominator = cross(u, v);
     let sign = denominator.signum();
     let (t, s, total) = (cross(w, v) * sign, cross(w, u) * sign, denominator.abs());
-    (0 < t && t < total && 0 < s && s < total).then(|| t as f64 / total as f64)
+    (0 < t && t < total && 0 < s && s < total).then_some((t, total))
+}
+
+/// Convert an exact crossing to the consecutive integer stations on its source
+/// line. A fractional crossing protects their entire span, not a rounded point.
+fn bracket_crossing(a: Point, b: Point, numerator: i128, denominator: i128) -> [(f64, Point); 2] {
+    let (dx, dy) = (b.x_nm - a.x_nm, b.y_nm - a.y_nm);
+    let (mut steps, mut rest) = (dx.abs(), dy.abs());
+    while rest != 0 {
+        (steps, rest) = (rest, steps % rest);
+    }
+    let scaled = numerator * i128::from(steps);
+    let low = scaled / denominator;
+    let high = low + i128::from(scaled % denominator != 0);
+    [low, high].map(|step| {
+        let step = step as i64;
+        (step as f64 / steps as f64, Point { x_nm: a.x_nm + dx / steps * step, y_nm: a.y_nm + dy / steps * step })
+    })
 }
 
 impl Chains {
+    /// Contiguous source members are already checked as one stroke.
+    pub fn same_run(&self, a: usize, b: usize) -> bool {
+        self.owner[a] == self.owner[b]
+    }
+
     /// Same trace or an existing external trace contact. Internal candidate geometry
     /// must pass `validate_paths` before this permission can authorize a transaction.
     pub fn contact(&self, a: usize, b: usize) -> bool {
@@ -378,7 +418,7 @@ impl Chains {
     /// Independently reconstruct submitted chains in source order, preserving all
     /// protected stations and refusing crossings or folded runs that lose spacing.
     async fn validate_paths(&self, query: &ClearanceQuery, replacements: &[Replacement], merge: bool) -> Result<(), CommandError> {
-        let paths: BTreeMap<_, _> = replacements.iter().map(|r| (r.track, &r.points)).collect();
+        let paths: BTreeMap<_, _> = replacements.iter().map(|r| (r.track, r.points.as_slice())).collect();
         let mut work = Work::default();
         for (index, track) in &self.tracks {
             work.tick().await;
@@ -391,7 +431,7 @@ impl Chains {
             if !chain.members.iter().any(|(i, _)| paths.contains_key(&self.tracks[i].id)) {
                 continue;
             }
-            if !self.legal_replacements(query, chain, replacements, merge).await? {
+            if !self.legal_paths(query, chain, &paths, merge).await {
                 return Err(invalid("A replacement trace moves a protected contact, crosses itself or collapses a returning run."));
             }
         }
@@ -406,23 +446,28 @@ impl Chains {
         replacements: &[Replacement],
         merge: bool,
     ) -> Result<bool, CommandError> {
-        let paths: BTreeMap<_, _> = replacements.iter().map(|r| (r.track, &r.points)).collect();
+        let paths: BTreeMap<_, _> = replacements.iter().map(|r| (r.track, r.points.as_slice())).collect();
+        Ok(self.legal_paths(query, chain, &paths, merge).await)
+    }
+
+    /// Reuse the request's lookup across independent chains during compound validation.
+    async fn legal_paths(&self, query: &ClearanceQuery, chain: &Chain, paths: &BTreeMap<Uuid, &[Point]>, merge: bool) -> bool {
         let mut points = Vec::new();
         for (i, reverse) in &chain.members {
             yield_unit().await;
             let track = &self.tracks[i];
             let original = [track.start, track.end];
-            let path = paths.get(&track.id).map_or(original.as_slice(), |p| p.as_slice());
+            let path = paths.get(&track.id).copied().unwrap_or(&original);
             let path: Vec<_> = if *reverse { path.iter().rev().copied().collect() } else { path.to_vec() };
             if !points.is_empty() && points.last() != path.first() {
-                return Ok(false);
+                return false;
             }
             points.extend(path.into_iter().skip(usize::from(!points.is_empty())));
             if points.len() > MAX_POINTS {
-                return Ok(false);
+                return false;
             }
         }
-        Ok(self.legal_path(query, chain, &points, merge).await)
+        self.legal_path(query, chain, &points, merge).await
     }
 
     /// Shared exact topology/self-spacing oracle for a proposed whole-chain path.
@@ -451,6 +496,12 @@ impl Chains {
                 return false;
             };
             previous = station;
+        }
+        for [a, b] in &chain.protected_spans {
+            work.tick().await;
+            if !points.windows(2).any(|leg| on_leg(*a, leg[0], leg[1]) && on_leg(*b, leg[0], leg[1])) {
+                return false;
+            }
         }
         let Some((i, _)) = chain.members.first() else {
             return false;
@@ -541,6 +592,7 @@ impl Cone {
         } else {
             self.corner = false;
         }
+        self.corner &= dot(self.low, self.high) >= 0;
     }
 }
 
@@ -650,12 +702,7 @@ mod tests {
                     None => cone = Some(Cone::new(p, end)),
                     Some(cone) => cone.extend(p, end),
                 }
-                let axes: Vec<_> = directions
-                    .iter()
-                    .copied()
-                    .chain((0..8).map(|i| (directions[i].0 + directions[(i + 1) % 8].0, directions[i].1 + directions[(i + 1) % 8].1)))
-                    .collect();
-                let expected = axes.iter().any(|(x, y)| sequence.iter().all(|(a, b)| x * a + y * b > 0));
+                let expected = (0..8).any(|i| sequence.iter().all(|d| (0..=2).any(|offset| directions[(i + offset) % 8] == *d)));
                 assert_eq!(cone.as_ref().unwrap().corner, expected, "{sequence:?}");
             }
         }

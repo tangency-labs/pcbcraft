@@ -233,6 +233,11 @@ impl Planning {
     pub(super) fn current_path(&self) -> Option<Vec<Point>> {
         self.ready.as_ref().filter(|_| self.current_ready()).map(Ready::points)
     }
+    /// Validate the same replacements the current result will adopt, including a
+    /// reached plan at the fixed head whose old visible preview is still on screen.
+    pub(super) fn current_replacements(&self) -> Option<&[Replacement]> {
+        self.ready.as_ref().filter(|_| self.current_ready()).map(|ready| ready.plan.replacements.as_slice())
+    }
     /// Status distinguishes a solved route from blocked/exhausted work without certifying DRC.
     pub(super) fn status(&self) -> Option<String> {
         if let Some(error) = &self.error {
@@ -432,6 +437,7 @@ mod tests {
         let draft = Draft {
             source: view.input(&s).unwrap(),
             mode: Default::default(),
+            shove_prefix_dirty: false,
             merge_same_net: false,
             replacements: Vec::new(),
             contact: None,
@@ -629,6 +635,7 @@ mod tests {
         let (s, view, mut draft) = fixture();
         let head = Point { x_nm: 2_000_000, y_nm: 0 };
         draft.points.push(head);
+        draft.mode = Mode::Shove;
         let mut p = Planning::default();
         let sizes = (250_000, 600_000, 300_000);
         let target = Point { x_nm: 5_000_000, y_nm: 0 };
@@ -642,7 +649,19 @@ mod tests {
         }
         assert_eq!(p.current_path().unwrap().last(), Some(&target));
         let visible = p.preview(&draft, sizes.0);
-        p.request(&draft, view.board.target.unwrap(), head, false, sizes, Some(Action::Vertex { finish: false }));
+        p.visible.as_mut().unwrap().plan.replacements.push(Replacement { track: Uuid::from_u128(1), points: vec![head, target] });
+        let next = s
+            .project()
+            .unwrap()
+            .board_view(view.board.target.unwrap())
+            .unwrap()
+            .layers()
+            .into_iter()
+            .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper && layer.id.to_string() != draft.layer)
+            .unwrap()
+            .id
+            .to_string();
+        p.request(&draft, view.board.target.unwrap(), head, false, sizes, Some(Action::Via(next.clone())));
         for _ in 0..100 {
             assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, None).is_none());
             if p.current_ready() {
@@ -653,9 +672,14 @@ mod tests {
         assert_eq!(p.ready.as_ref().unwrap().plan.points, vec![head]);
         assert_eq!(p.preview(&draft, sizes.0), visible);
         assert_eq!(p.current_path(), Some(draft.points.clone()));
+        assert_eq!(p.replacements(&draft, sizes.0).len(), 1);
+        let validation_replacements = p.current_replacements().unwrap().to_vec();
+        assert!(validation_replacements.is_empty());
         p.mark_preparation_requested();
         let adopted = p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().unwrap();
         assert_eq!(adopted.points, draft.points);
+        assert_eq!(adopted.replacements, validation_replacements);
+        assert!(matches!(adopted.action, Action::Via(layer) if layer == next));
         assert!(p.current_path().is_none());
     }
 }

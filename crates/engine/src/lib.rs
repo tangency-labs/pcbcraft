@@ -2376,7 +2376,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::route::PLAN_ROUTE,
         title: "Plan Route",
-        summary: "Plan one route on a copper layer around existing copper with effective width, clearance and board-edge rules, without editing. Feed reached points to pcb.add_tracks.",
+        summary: "Plan one route on a copper layer with effective width, clearance and board-edge rules, without editing. To commit a fresh reached plan, submit the full route including any fixed prefix and layer changes, replacements, merge_same_net and expected_revision to pcb.add_tracks.",
         params: &[
             BOARD,
             Param {
@@ -2408,7 +2408,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "fixed",
                 required: false,
-                summary: "Already fixed gesture copper, included in the same speculative overlay",
+                summary: "Already fixed gesture copper. List segments in order from the pickup. Fixed vias may appear anywhere in the array.",
                 kind: ParamKind::RouteFixed,
             },
             Param { name: "posture", required: false, summary: "diagonal (45°, default) or orthogonal (90°)", kind: ParamKind::RoutePosture },
@@ -2419,7 +2419,12 @@ const CATALOG: &[Command] = &[
                 summary: "The last plan's points for this gesture; kept while still legal, and its side is preferred",
                 kind: ParamKind::PreviousRoute,
             },
-            Param { name: "budget", required: false, summary: "Most exact clearance probes; defaults to 4096", kind: ParamKind::RouteBudget },
+            Param {
+                name: "budget",
+                required: false,
+                summary: "Maximum planning probes (4,096 by default for walkaround, 65,536 for shove)",
+                kind: ParamKind::RouteBudget,
+            },
             Param {
                 name: "expected_revision",
                 required: false,

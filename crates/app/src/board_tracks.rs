@@ -43,6 +43,8 @@ const PICK_PX: f32 = 4.;
 struct Draft {
     source: ViewInput,
     mode: Mode,
+    /// Backspace edits the fixed path without adopting a displacement for it.
+    shove_prefix_dirty: bool,
     merge_same_net: bool,
     replacements: Vec<Replacement>,
     /// Existing copper that stays emphasized until the draft ends.
@@ -1011,6 +1013,9 @@ pub(super) fn interact(
                     state.draft = None;
                 }
             }
+            if let Some(draft) = &mut state.draft {
+                draft.shove_prefix_dirty = draft.mode == Mode::Shove && draft.points.len() >= 2;
+            }
         }
         if (via || via_side.is_some() || action == Some(RouteAction::Via))
             && let Some(pointer) = pointer
@@ -1048,7 +1053,21 @@ pub(super) fn interact(
 
         if finish || action == Some(RouteAction::Finish) {
             if let Some(draft) = state.draft.take() {
-                out.command = add(state, draft);
+                if draft.shove_prefix_dirty
+                    && let Some(&head) = draft.points.last()
+                {
+                    state.planning.request(
+                        &draft,
+                        view.target,
+                        head,
+                        state.diagonal_first,
+                        (state.width_nm, state.via_diameter_nm, state.via_drill_nm),
+                        Some(planning::Action::Vertex { finish: true }),
+                    );
+                    state.draft = Some(draft);
+                } else {
+                    out.command = add(state, draft);
+                }
             }
             return out;
         }
@@ -1068,6 +1087,7 @@ pub(super) fn interact(
                         state.draft = Some(Draft {
                             source,
                             mode: state.mode,
+                            shove_prefix_dirty: false,
                             merge_same_net: state.merge_same_net,
                             replacements: Vec::new(),
                             contact,
@@ -1384,10 +1404,13 @@ pub(super) fn prepare_preview(response: &Response, camera: &Camera, view: BoardV
         }
         // Queue the exact geometry already resolved for painting; do not project every pad
         // a second time merely to prepare the same pointer request.
-        if state.planning.current_ready() && (2..=MAX_PATH_POINTS).contains(&path.len()) && Some(draft.layer.as_str()) == active {
+        if let Some(replacements) = state.planning.current_replacements()
+            && (2..=MAX_PATH_POINTS).contains(&path.len())
+            && Some(draft.layer.as_str()) == active
+        {
             let mut params = json!({"board":view.target.board,"layer":draft.start,"width_nm":state.width_nm,"points":path,"expected_revision":draft.source.revision});
             if draft.mode == Mode::Shove {
-                params["replacements"] = json!(state.planning.replacements(draft, state.width_nm));
+                params["replacements"] = json!(replacements);
                 params["merge_same_net"] = json!(draft.merge_same_net);
             }
             if !changes.is_empty() {

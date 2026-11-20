@@ -121,20 +121,20 @@ editor forwards engine commands to its session like other read-only queries.
 X starts the existing route tool. Pointer requests capture the view, board, revision,
 layer, width, posture and fixed vertices. They coalesce into one current search;
 a previous legal path stays visible while a replacement is being solved. An exhausted
-or blocked result with no drawable leg keeps that preview; only the current reached
-result can authorize a vertex, so the retained path cannot be placed for a different
-target. Copper
+or blocked result with no drawable leg keeps that preview for display. A current
+reached result can authorize a vertex. Walkaround can also place a vertex at the
+certified adjusted endpoint of a blocked result. Copper
 snapping has an 8-pixel pickup radius and a 12-pixel release radius, so nearby
 contacts do not alternate at the pickup boundary.
 
 A click freezes its exact target until its plan and the ordinary full-path copper
-validation finish. The pointer cannot replace that clicked target. A blocked or
-incomplete plan reports its state and fixes no new vertex. The full route, including
+validation finish. The pointer cannot replace that clicked target. An incomplete
+plan or a blocked result without a certified adjustment fixes no new vertex. The full route, including
 through vias, publishes through the existing prepared `pcb.add_tracks` transaction
 with one undo entry. Escape, focus/view release, hidden or changed active layers,
 size changes, shared edits and project replacement revoke pending adoption.
 
-Validation extends the fixed vertices with the current reached plan and checks a
+Validation extends the fixed vertices with the current eligible plan and checks a
 pending via at the last adopted point. Returning to the fixed head can produce a
 one-point plan while an older, longer preview remains visible; that preview is
 display-only and does not determine the validated path or via location.
@@ -200,8 +200,9 @@ ordered lanes and stagger their returns around the cursor. Neighboring runs can
 join as those lanes push into their clearance. If a return remains blocked, the
 solver can try moving the group farther ahead. Each edit widens across ordinary
 bends only as needed and is checked against the same clearance rules and
-protected contacts. The solver can also continue a previously displayed guide to
-the new cursor or change the incoming elbow.
+protected contacts. In diagonal mode, displaced tracks can also retry with square
+turns. The solver can continue a previously displayed guide to the new cursor or
+change the incoming elbow.
 
 Each candidate runs from the same head to the requested target and shares the
 original pickup, fixed gesture copper and probe budget. A previously displayed
@@ -252,7 +253,7 @@ can relax spacing but cannot authorize a trace self-crossing or lost protected c
 Unchanged source portions keep their original geometry and IDs; moved bends repartition
 only the affected source span, and each original record retains its width and layer.
 
-The counters include the number of attempts (at most two) and combined collision
+The counters include the number of attempts within the probe budget and combined collision
 and queue work. Geometry payload estimates report the larger attempt, excluding
 the captured query/index and allocator overhead; they are not process memory measurements.
 

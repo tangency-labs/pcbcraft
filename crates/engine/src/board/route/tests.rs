@@ -919,3 +919,24 @@ fn pad_pocket_subgrid_targets_agree_with_legal_command_witnesses() {
         }
     }
 }
+
+/// Fixed vias can precede a segment in the MCP payload without moving the
+/// original pickup from front copper to the new route layer.
+#[test]
+fn shove_pickup_uses_first_fixed_segment_after_a_via() {
+    let mut s = board();
+    let [front, back, ..] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let start = p(1_000_000, 0);
+    let head = p(5_000_000, 0);
+    let target = p(8_000_000, 0);
+    add(&mut s, ADD_TRACKS, json!({"layer":front,"width_nm":WIDTH,"points":[p(0,0),start]}));
+    let track = view(&s).tracks()[0].id;
+    let board = view(&s).target.board;
+    add(&mut s, SET_COPPER_LOCKED, json!({"board":board,"tracks":[track],"locked":true}));
+    let segment = FixedCopper::Segment { start, end: head, layer: front, width_nm: WIDTH };
+    let via = FixedCopper::Via { at: head, diameter_nm: 600_000 };
+    let plan = |fixed| s.route_plan_query(&json!({"mode":"shove","from":head,"to":target,"layer":back,"width_nm":WIDTH,"fixed":fixed})).unwrap();
+    let result = plan([via.clone(), segment.clone()]);
+    assert_eq!(result, plan([segment, via]));
+    assert_eq!(result["route_plan"]["outcome"]["kind"], "reached");
+}

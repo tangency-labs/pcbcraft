@@ -470,6 +470,17 @@ fn click_route(h: &mut Harness<'_, PcbApp>, point: Point) {
     h.run_steps(20);
 }
 
+/// Send an exact route click and leave asynchronous settling to the caller.
+fn click_route_with_modifiers(h: &mut Harness<'_, PcbApp>, point: Point, modifiers: Modifiers) {
+    let pos = at(h, point);
+    h.hover_at(pos);
+    h.step();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers });
+        h.step();
+    }
+}
+
 /// Open the route menu using a complete right-click at the requested board point.
 fn right_click_route(h: &mut Harness<'_, PcbApp>, point: Point) {
     let pos = at(h, point);
@@ -3102,23 +3113,36 @@ fn shove_from_an_unconnected_pad_pushes_both_rails_forward() {
         let path = &replacements.iter().find(|r| r.track == rail.id).unwrap().points;
         assert!(path.iter().all(|p| p.y_nm >= rail.start.y_nm), "a preview leg moved behind the approach: {path:?}");
     }
+    let placed = h.state().views.active.camera.snap(at(&h, end), h.get_by_label("PCB canvas").rect());
     click_route(&mut h, end);
     h.key_press(Key::Enter);
     h.run_steps(200);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
     let laid = tracks(&h);
-    for rail in rails {
-        let changed = laid.iter().find(|t| t.id == rail.id).unwrap();
-        assert_ne!(*changed, rail);
-        let path = &replacements.iter().find(|r| r.track == rail.id).unwrap().points;
-        for pair in path.windows(2) {
-            assert!(
-                laid.iter().any(|t| t.layer == rail.layer && t.width_nm == rail.width_nm && ([t.start, t.end] == pair || [t.end, t.start] == pair)),
-                "published shove is missing {pair:?}"
-            );
+    for rail in &rails {
+        assert_ne!(laid.iter().find(|track| track.id == rail.id).unwrap(), rail);
+    }
+    let displaced = assert_published_replacements(&laid, &replacements);
+    let mut frontier = vec![start];
+    let mut reached = BTreeSet::from([(start.x_nm, start.y_nm)]);
+    while let Some(point) = frontier.pop() {
+        for track in laid.iter().filter(|track| !displaced.contains(&track.id)) {
+            let next = if track.start == point {
+                Some(track.end)
+            } else if track.end == point {
+                Some(track.start)
+            } else {
+                None
+            };
+            if let Some(next) = next
+                && reached.insert((next.x_nm, next.y_nm))
+            {
+                frontier.push(next);
+            }
         }
     }
+    assert!(reached.contains(&(placed.x_nm, placed.y_nm)), "the incoming route did not connect its pickup and goal");
     let board = h.state().session.project().unwrap().board_view(target).unwrap();
     assert!(
         !board
@@ -3130,6 +3154,26 @@ fn shove_from_an_unconnected_pad_pushes_both_rails_forward() {
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Compare every authored rail leg with the exact replacement used for placement.
+fn assert_published_replacements(laid: &[Track], replacements: &[pcbcraft_engine::board::track::replacements::Replacement]) -> BTreeSet<Uuid> {
+    let mut matched = BTreeSet::new();
+    for replacement in replacements {
+        let rail = laid.iter().find(|track| track.id == replacement.track).expect("published source identity");
+        for pair in replacement.points.windows(2) {
+            let segment = laid
+                .iter()
+                .find(|track| {
+                    track.layer == rail.layer
+                        && track.width_nm == rail.width_nm
+                        && ([track.start, track.end] == pair || [track.end, track.start] == pair)
+                })
+                .unwrap_or_else(|| panic!("published shove is missing {pair:?} for {}", rail.id));
+            matched.insert(segment.id);
+        }
+    }
+    matched
 }
 
 /// A native-command rail scene with fixed pad contacts, a branch, locked rail and fixed via.
@@ -3214,7 +3258,7 @@ fn shove_preview_stays_displaced_at_the_top_of_the_channel() {
     assert!(preview_ends_at(&h, ink, at(&h, retained)));
     assert!(!preview_ends_at(&h, ink, at(&h, forbidden)));
     let fixed = h.state().views.active.board.tracks.fixed_route_points().unwrap().to_vec();
-    click_route(&mut h, forbidden);
+    click_route_with_modifiers(&mut h, forbidden, Modifiers::CTRL);
     h.run_steps(300);
     assert_eq!(h.state().views.active.board.tracks.fixed_route_points(), Some(fixed.as_slice()), "the blocked click fixed a preview vertex");
     assert_eq!(h.state().session.revision(), rev, "a blocked preview cannot commit");
@@ -3222,7 +3266,7 @@ fn shove_preview_stays_displaced_at_the_top_of_the_channel() {
     h.hover_at(at(&h, stopped));
     h.run_steps(300);
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
-    click_route(&mut h, p(8_128_000, -2_159_000));
+    click_route_with_modifiers(&mut h, stopped, Modifiers::CTRL);
     h.key_press(Key::Enter);
     h.run_steps(200);
     assert_eq!(h.state().message, None);
@@ -3263,10 +3307,14 @@ fn lateral_shove_preview_preserves_the_branch_return_corridor() {
     }
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     click_route(&mut h, p(13_970_000, -1_016_000));
+    h.run_steps(250);
+    let expected = h.state().views.active.board.tracks.replacements().to_vec();
+    assert_eq!(expected.len(), 2);
     h.key_press(Key::Enter);
     h.run_steps(200);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
+    assert_published_replacements(&tracks(&h), &expected);
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
@@ -3305,10 +3353,14 @@ fn shove_return_preview_does_not_form_a_long_hairpin() {
     }
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     click_route(&mut h, p(13_462_000, 254_000));
+    h.run_steps(250);
+    let expected = h.state().views.active.board.tracks.replacements().to_vec();
+    assert_eq!(expected.len(), 2);
     h.key_press(Key::Enter);
     h.run_steps(200);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
+    assert_published_replacements(&tracks(&h), &expected);
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
@@ -3483,8 +3535,9 @@ fn walkaround_pad_bend_and_inside_corner_remain_placeable() {
         h.run_steps(300);
         assert!(preview_ends_at(&h, ink, at(&h, p(-660_000, -1_050_002))));
         if fixed {
-            click_route(&mut h, above);
+            click_route_with_modifiers(&mut h, above, Modifiers::CTRL);
             h.run_steps(300);
+            assert_eq!(h.state().views.active.board.tracks.fixed_route_points().and_then(|points| points.last()), Some(&p(-660_000, -1_050_002)));
         }
         for target in [p(-254_000, 1_016_000), p(-300_000, 1_100_000), p(-200_000, 1_270_000)] {
             h.hover_at(at(&h, target));
@@ -3576,6 +3629,45 @@ fn shove_from_a_bent_prefix_advances_through_both_rails() {
     h.run_steps(300);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+}
+
+/// Backspace and Enter can share a frame. Finishing at the shortened prefix
+/// still needs the displacement for that prefix, including its existing rails.
+#[test]
+fn shove_backspace_and_finish_revalidate_the_retained_prefix() {
+    let (mut h, _) = parallel_rail_board();
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let start = p(2_159_000, 6_604_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, start);
+    click(&mut h, "Shove tracks");
+    click_route_with_modifiers(&mut h, start, Modifiers::CTRL);
+    h.run_steps(40);
+    let retained = p(13_970_000, -1_016_000);
+    click_route_with_modifiers(&mut h, retained, Modifiers::NONE);
+    h.run_steps(300);
+    let prefix = h.state().views.active.board.tracks.fixed_route_points().unwrap().to_vec();
+    let next = p(13_970_000, -1_778_000);
+    click_route_with_modifiers(&mut h, next, Modifiers::NONE);
+    h.run_steps(300);
+    let points = h.state().views.active.board.tracks.fixed_route_points().unwrap();
+    assert_eq!(&points[..points.len() - 1], &prefix);
+    assert_eq!(points.last(), Some(&next));
+    h.key_press(Key::Backspace);
+    h.key_press(Key::Enter);
+    h.run_steps(300);
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(tracks(&h).iter().any(|track| track.end == retained));
+    assert!(!tracks(&h).iter().any(|track| track.end == next));
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());

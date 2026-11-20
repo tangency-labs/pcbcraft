@@ -200,19 +200,9 @@ impl Validation {
                 let other = &query.objects()[decision.second];
                 let same_net = object.intended_nets.len() == 1 && object.intended_nets == other.intended_nets;
                 let same_island = object.island == other.island;
-                let original_contact = match (self.final_origins[index], self.final_origins[decision.second]) {
-                    (Some(a), Some(b)) => self.chains.as_ref().map_or_else(
-                        || {
-                            a == b
-                                || (source.objects()[a].layers.iter().any(|l| source.objects()[b].layers.contains(l))
-                                    && source.objects()[a].contour.touches(&source.objects()[b].contour))
-                        },
-                        |chains| chains.contact(a, b),
-                    ),
-                    _ => false,
-                };
                 let exempt = if !self.merge_same_net && (self.final_displaced[index] || self.final_displaced[decision.second]) {
-                    original_contact
+                    decision.gap_nm < decision.clearance_nm as f64
+                        && self.preserves_local_contact(&source, query, index, decision.second, decision.clearance_nm as f64)
                 } else {
                     same_net || same_island
                 };
@@ -225,7 +215,7 @@ impl Validation {
             }
             let baseline = self.source.effective.values;
             let rules = result.probe_rules.as_ref().map_or(baseline, |p| p.hard_values(baseline));
-            if object.contour.radius * 2. < rules.min_track_width_nm as f64 {
+            if object.contour.track_centerline().is_some() && object.contour.radius * 2. < rules.min_track_width_nm as f64 {
                 return Err(CommandError::InvalidParams("The compound route violates a minimum track width.".into()));
             }
             if !outline.allows_copper(&object.contour, rules.edge_clearance_nm) {
@@ -234,6 +224,36 @@ impl Validation {
         }
         self.cursor = self.cursor.saturating_add(budget.min(8));
         Ok(self.cursor >= query.objects().len())
+    }
+
+    /// Within a source run, the complete stroke validator checks bends and
+    /// returns. Across runs, exempt only contact inside both original copper
+    /// neighborhoods. This allows departure from the junction while rejecting
+    /// a fragment that starts following another run beyond that contact.
+    fn preserves_local_contact(&self, source: &ClearanceQuery, final_query: &ClearanceQuery, a: usize, b: usize, clearance: f64) -> bool {
+        let (Some(chains), Some(old_a), Some(old_b)) = (&self.chains, self.final_origins[a], self.final_origins[b]) else { return false };
+        if chains.same_run(old_a, old_b) {
+            return true;
+        }
+        if !chains.contact(old_a, old_b) {
+            return false;
+        }
+        let (original_a, original_b) = (&source.objects()[old_a].contour, &source.objects()[old_b].contour);
+        if !original_a.touches(original_b) {
+            return false;
+        }
+        let within_original = |changed: usize, neighbor: usize, original: usize| {
+            let shape = &final_query.objects()[changed].contour;
+            let other = &final_query.objects()[neighbor].contour;
+            let original = &source.objects()[original].contour;
+            let Some(leg) = shape.track_centerline() else { return true };
+            let Some((start, end)) = other.track_proximity(leg, shape.radius + clearance) else { return true };
+            // Allow the local departure of a 45-degree bend. The required
+            // normal spacing is reached after this much travel from the joint.
+            let reach = (shape.radius + other.radius + clearance) * std::f64::consts::SQRT_2;
+            original.track_proximity(leg, reach - original.radius).is_some_and(|(lo, hi)| lo <= start + 1e-12 && end <= hi + 1e-12)
+        };
+        within_original(a, b, old_a) && within_original(b, a, old_b)
     }
 
     /// Final contours retain their original island/membership; only genuinely new route
@@ -257,7 +277,7 @@ impl Validation {
                 item.intended_nets = original.intended_nets.clone();
                 item.island = original.island;
             } else {
-                self.final_origins.push(contacts.first().copied());
+                self.final_origins.push(None);
                 item.intended_nets = nets.clone();
                 item.island = island;
             }
