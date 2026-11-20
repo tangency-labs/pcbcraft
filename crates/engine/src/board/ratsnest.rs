@@ -91,11 +91,12 @@ impl BoardView<'_> {
     }
 
     /// Reuse completed copper connectivity when checking the same immutable snapshot.
+    /// The non-cooperative build never yields; a pending poll is reported as an error, not a panic.
     pub(super) fn ratsnest_with_copper(self, copper: &super::track::Copper) -> Result<Ratsnest, String> {
         let mut work = std::pin::pin!(self.build_ratsnest::<false>(copper));
         match work.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
             Poll::Ready(result) => result,
-            Poll::Pending => unreachable!("synchronous ratsnest has no suspension points"),
+            Poll::Pending => Err("ratsnest computation unexpectedly suspended".into()),
         }
     }
 
