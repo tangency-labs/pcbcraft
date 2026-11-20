@@ -354,6 +354,46 @@ Library tabs show the exact definition retained by the project. The **Footprint*
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
+### Designator locks
+
+Select a symbol and check **Lock designator** in compact Properties, then choose
+**Apply changes**; the expanded **E** form has the same checkbox and **OK** action.
+The lock belongs to the part instance and is visible from all its placed units.
+It is intent for automatic annotation, not a prohibition on deliberately editing
+Reference. Reset/Cancel discard drafts, and one Undo reverses an applied edit.
+Save/reopen retains the flag; copy and paste carry it even when ordinary paste
+renumbers the new instance's reference.
+
+GUI, headless MCP and the live connection share `schematic.set_symbol_fields`.
+Include `symbol`, `reference`, `value`, current `expected_revision`, and optional
+boolean `designator_locked` (omit it to retain the current lock). Include `sheet`
+when several sheets exist. `symbol` takes the placed unit's `symbol-N` address,
+not its owner's `component-N` inspection address. `dry_run: true` validates the
+ordinary transaction first, then encodes the original and candidate, and returns `{revision, provisional: true, changes}` without changing project state
+or undo. Each change contains `path` and the complete proposed native UTF-8
+texts `before` and `after` (null for an absent document). An unchanged preview
+returns an empty list when both snapshots are encodable. Encoding can refuse a
+preview at the native size limits; ordinary Apply does not perform those full
+encodes, so successful Apply does not guarantee a later Save fits. See the
+[storage limits and refusal behavior](native-project-storage.md#designator-locks).
+New net and lineage-capture UUIDs from topology edits are provisional: Apply
+can allocate different UUIDs even at the same revision. Adopting legacy storage
+persists the deterministic circuit-use and sheet-occurrence compatibility UUIDs
+already visible in inspection. These are candidate documents, not replay-ready
+replacements. A lock-only edit in an already-adopted project retains its existing
+net and lineage-capture identities.
+MCP `inspect:false` still returns this preview. The live connection limits the
+complete JSON reply (including escaping) to 16 MiB. A larger preview returns a
+tool error without applying the edit or truncating documents. Preview confers no authority to
+apply later: send the edit again against the same current revision, or inspect
+and review again after a concurrent edit.
+
+Inspection reports `designator_locked` even when false. Automatic annotation and
+its skipped-item report are not implemented yet; the engine's
+`PartInstance::can_annotate_designator()` predicate exposes this lock policy for
+that implementation. Unit-letter locks and package completion remain separate
+work. See the [storage contract](native-project-storage.md#designator-locks).
+
 ## Inspect a board beside its schematic
 
 Generate an original example into a directory that does not already exist:
