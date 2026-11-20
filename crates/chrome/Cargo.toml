@@ -20,3 +20,6 @@ solidcraft-look = { workspace = true }
 egui = { workspace = true }
 egui_extras = { version = "=0.37.0", default-features = false, features = ["svg"] }
 serde = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ttf-parser = "0.25.1"

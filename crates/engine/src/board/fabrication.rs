@@ -10,7 +10,11 @@
 //! retain their existing approximations. Vias receive no automatic mask opening; authored mask
 //! artwork can still open them. Mounting-side pads follow the placement side; silkscreen follows
 //! the top or bottom legend. X2 aperture functions describe the emitted features without changing
-//! their geometry. Arcs and zones are not produced yet.
+//! their geometry. Copper object attributes describe intended nets and component pins.
+//! Arcs and zones are not produced yet.
+mod object_attributes;
+
+use self::object_attributes::{Object, RoutedNets};
 use super::{
     definition::{GraphicPurpose, PadShape},
     origin::{Frame, Resolved},
@@ -26,6 +30,8 @@ use std::{
     fmt::Write as _,
     io::Write as _,
 };
+
+mod part_layers;
 
 /// Generate the board's fabrication files; returns them without editing anything.
 pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
@@ -115,7 +121,7 @@ enum Aperture {
     Obround(i64, i64),
 }
 
-/// X2 functions supported by the existing board model (Ucamco Gerber 2026.05 §5.6.10).
+/// Aperture functions supported by the board writers (Ucamco Gerber 2026.05 §5.6.10).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ApertureFunction {
     SmdPad,
@@ -125,6 +131,8 @@ enum ApertureFunction {
     Conductor,
     Material,
     Profile,
+    /// A flash marking the placed part's reference point, independent of its pads.
+    PartMain,
 }
 
 const DELETE_APERTURE_FUNCTION: &str = "%TD.AperFunction*%\n";
@@ -139,6 +147,7 @@ impl ApertureFunction {
             Self::Conductor => "Conductor",
             Self::Material => "Material",
             Self::Profile => "Profile",
+            Self::PartMain => "ComponentMain",
         };
         let _ = writeln!(text, "%TA.AperFunction,{value}*%");
     }
@@ -166,6 +175,14 @@ impl Gerber {
             let _ = writeln!(self.body, "D{code}*");
             self.current = Some(code);
         }
+    }
+
+    /// Scope X2 object attributes across all primitives for one feature, including region
+    /// contours, without changing the selected aperture (Ucamco Gerber 2026.05 §§5.4–5.5).
+    fn object(&mut self, attributes: Object<'_>, draw: impl FnOnce(&mut Self)) {
+        attributes.set(&mut self.body);
+        draw(self);
+        attributes.clear(&mut self.body);
     }
 
     /// Stroke a polyline with an optionally tagged round aperture; a single point is flashed.
@@ -248,13 +265,21 @@ impl Gerber {
         }
     }
 
-    /// Wrap the body in an X2 header and footer. Tagged AD commands capture the current
-    /// dictionary entry, then TD clears it so later untagged apertures stay untagged (§§5.3, 5.5).
+    /// Finish a layer in the existing bare-board export, which writes all layers in one frame.
     fn finish(self, function: &str, polarity: &str) -> String {
+        self.finish_in_frame(function, polarity, Some("Original"))
+    }
+
+    /// Wrap one layer in a Gerber header and footer. Only a coordinated export supplies a frame
+    /// identity (§5.6.5). Tagged AD commands capture the current dictionary entry, then TD clears
+    /// it so later untagged apertures stay untagged (§§5.3, 5.5).
+    fn finish_in_frame(self, function: &str, polarity: &str, same_coordinates: Option<&str>) -> String {
         let mut text = String::new();
         let _ = writeln!(text, "G04 PCBcraft fabrication output*");
         let _ = writeln!(text, "%TF.GenerationSoftware,PCBcraft,PCBcraft,{}*%", env!("CARGO_PKG_VERSION"));
-        text.push_str("%TF.SameCoordinates,Original*%\n");
+        if let Some(identity) = same_coordinates {
+            let _ = writeln!(text, "%TF.SameCoordinates,{identity}*%");
+        }
         let _ = writeln!(text, "%TF.FileFunction,{function}*%");
         let _ = writeln!(text, "%TF.FilePolarity,{polarity}*%");
         text.push_str("%FSLAX46Y46*%\n%MOMM*%\n%LPD*%\nG01*\n");
@@ -407,7 +432,8 @@ impl BoardView<'_> {
     /// Circular copper is refused before generating any straight-only output.
     /// Refuses projects with placed NPTH until their separate drill output is supported.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
-    /// X2 functions distinguish copper pad, track and via uses even when apertures match in size.
+    /// X2 attributes describe pad, track and via functions and intended copper membership.
+    /// Ambiguous routed copper does not acquire an arbitrary net name.
     pub fn fabrication(self) -> Result<Fabrication, String> {
         self.require_linear_copper()?;
         let board = &self.project().board;
@@ -435,10 +461,15 @@ impl BoardView<'_> {
         let origin = self.placement_origin()?;
         let frame = origin.frame();
         let base = file_part(&self.project().name);
+        let routed_nets = RoutedNets::new(self);
+        let nets = &routed_nets;
         let pads: Vec<_> = self
             .footprints()
             .flat_map(|footprint| {
-                let definition = self.placement(&footprint.id).and_then(|placed| self.project().board.definition_for(placed));
+                let placement = self.placement(&footprint.id);
+                let definition = placement.and_then(|placed| self.project().board.definition_for(placed));
+                let unconnected: BTreeSet<_> = placement.into_iter().flat_map(|placed| &placed.unconnected_pads).map(String::as_str).collect();
+                let reference = footprint.reference;
                 let cardinal_pads: BTreeSet<_> = definition
                     .into_iter()
                     .flat_map(|d| &d.pads)
@@ -449,7 +480,9 @@ impl BoardView<'_> {
                 footprint.pads.into_iter().filter_map(move |pad| {
                     pad.copper?;
                     let cardinal = placed_cardinal && cardinal_pads.contains(pad.number.as_str());
-                    Some((pad, cardinal))
+                    let has_pin = !unconnected.contains(pad.number.as_str());
+                    let net = nets.pad_name(&footprint.id, &pad.number);
+                    Some((pad, cardinal, reference, has_pin, net))
                 })
             })
             .collect();
@@ -460,19 +493,26 @@ impl BoardView<'_> {
         for (index, layer_id) in order.iter().enumerate() {
             let Some(layer) = copper.iter().find(|layer| layer.id == *layer_id) else { continue };
             let mut gerber = Gerber::new(frame);
-            for (pad, cardinal) in pads.iter().filter(|(pad, _)| on(pad, layer.id)) {
-                // Plated through-hole lands keep their function on inner copper. The pad-derived
+            let outer = index == 0 || index + 1 == order.len();
+            for (pad, cardinal, reference, has_pin, net) in pads.iter().filter(|(pad, ..)| on(pad, layer.id)) {
+                // Plated through-hole lands keep their function on inner copper, but .P describes
+                // part pins on outer copper, not inner plated lands (§5.6.14). The pad-derived
                 // mask opening does not shrink the mounting-side copper land (CuDef).
                 let function = if pad.through_hole { ApertureFunction::ThroughHolePad } else { ApertureFunction::SmdPad };
-                gerber.pad(pad, *cardinal, function);
+                let pin = outer.then_some(if *has_pin { pad.number.as_str() } else { "" });
+                gerber.object(Object { net: Some(net), component: Some((reference, pin)) }, |gerber| {
+                    gerber.pad(pad, *cardinal, function);
+                });
             }
             let mut tracks: Vec<_> = self.tracks().iter().filter(|track| track.layer == layer.id).collect();
             tracks.sort_by_key(|track| (track.width_nm, track.id));
             for track in tracks {
-                gerber.stroke(&[track.start, track.end], track.width_nm, Some(ApertureFunction::Conductor));
+                gerber.object(routed_nets.object(track.id), |gerber| {
+                    gerber.stroke(&[track.start, track.end], track.width_nm, Some(ApertureFunction::Conductor));
+                });
             }
             for via in self.vias() {
-                gerber.stroke(&[via.at], via.diameter_nm, Some(ApertureFunction::ViaPad));
+                gerber.object(routed_nets.object(via.id), |gerber| gerber.stroke(&[via.at], via.diameter_nm, Some(ApertureFunction::ViaPad)));
             }
             let position = match (index, layer.side) {
                 (_, Some(Side::Front)) => "Top",
@@ -490,7 +530,7 @@ impl BoardView<'_> {
         let back = order.last().copied().filter(|_| order.len() > 1);
         for (side, label, layer) in [("Top", "Mask_Top", front), ("Bot", "Mask_Bottom", back)] {
             let mut gerber = Gerber::new(frame);
-            for (pad, cardinal) in pads.iter().filter(|(pad, _)| layer.is_some_and(|layer| on(pad, layer))) {
+            for (pad, cardinal, ..) in pads.iter().filter(|(pad, ..)| layer.is_some_and(|layer| on(pad, layer))) {
                 gerber.pad(pad, *cardinal, ApertureFunction::Material);
             }
             board_graphics(&mut gerber, self, LayerPurpose::Mask, Some(if side == "Top" { Side::Front } else { Side::Back }));
@@ -498,7 +538,7 @@ impl BoardView<'_> {
         }
         for (side, label, layer) in [("Top", "Paste_Top", front), ("Bot", "Paste_Bottom", back)] {
             let mut gerber = Gerber::new(frame);
-            for (pad, cardinal) in pads.iter().filter(|(pad, _)| !pad.through_hole && layer.is_some_and(|layer| on(pad, layer))) {
+            for (pad, cardinal, ..) in pads.iter().filter(|(pad, ..)| !pad.through_hole && layer.is_some_and(|layer| on(pad, layer))) {
                 gerber.pad(pad, *cardinal, ApertureFunction::Material);
             }
             board_graphics(&mut gerber, self, LayerPurpose::Paste, Some(if side == "Top" { Side::Front } else { Side::Back }));
