@@ -104,17 +104,17 @@ impl Registry {
         self.validate_byte_limit().map_err(|error| error.to_string())
     }
 
-    /// Pair preparation has already checked the changed pair rows and the compact byte cap.
-    /// Reuse the exact non-pair proof when it survives a pair-only clone; an unproven source
-    /// still takes the full validation path rather than waiving any registry check.
-    pub(crate) fn validate_pair_capacity_candidate(&self, project: &Project) -> Result<(), String> {
+    /// Pair-only work can neither alter nor re-prove this graph on the browser input loop.
+    /// Every admitted snapshot gets its proof from decoding or normal edit publication.
+    /// An unsupported source without proof is refused, not silently rubber-stamped.
+    pub(crate) fn require_records_proof(&self, project: &Project) -> Result<(), String> {
         if self.records.len() > MAX_RECORDS || (!self.records.is_empty() && !project.has_sheet_occurrences()) {
             return Err("Net registry requires adopted occurrences and a bounded record count.".into());
         }
         if self.records.is_empty() || self.has_records_proof(project) {
             return Ok(());
         }
-        self.validate_records(project)
+        Err("Pair edits require a validated source net registry.".into())
     }
 
     /// Check for evidence that this exact non-pair graph/registry input was validated.
@@ -224,6 +224,17 @@ impl Registry {
 }
 
 impl Project {
+    /// Paper adoption changes only sheet page fields, never electrical inputs. Re-key an
+    /// already validated registry after that specific transformation, not after geometry edits.
+    pub(crate) fn carry_net_proof_after_paper_adoption(&self, before: &Self) {
+        let mut proof = RecordsProof::new(&self.net_registry, self);
+        let sheets = std::mem::replace(&mut proof.sheets, Arc::downgrade(&before.sheets));
+        if before.net_records_proof.contains(&proof) {
+            proof.sheets = sheets;
+            self.net_records_proof.remember(proof);
+        }
+    }
+
     /// Inspect persistent and revision-derived addresses without promotion, allocation or edits.
     /// Derived membership remains in the ordinary netlist; each row here supplies a typed key.
     /// Explicit differential relationships appear only when stored.

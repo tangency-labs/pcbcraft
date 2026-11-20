@@ -371,12 +371,23 @@ fn pair_capacity_reuses_only_exact_net_record_proof() {
     let mut invalid = Project::clone(&candidate);
     Arc::make_mut(&mut Arc::make_mut(&mut invalid.net_registry).records)[0].id = Uuid::nil();
     assert!(!invalid.net_registry.has_records_proof(&invalid));
-    assert!(invalid.net_registry.validate_pair_capacity_candidate(&invalid).unwrap_err().contains("non-nil UUIDs"));
+    assert!(invalid.net_registry.require_records_proof(&invalid).unwrap_err().contains("validated source"));
+    assert!(invalid.net_registry.validate(&invalid).unwrap_err().contains("non-nil UUIDs"));
     let mut changed_hierarchy = Project::clone(&candidate);
     Arc::make_mut(&mut changed_hierarchy.sheets)[0].sheet_name.push_str(" B");
-    assert!(!changed_hierarchy.net_registry.has_records_proof(&changed_hierarchy));
-    assert!(changed_hierarchy.net_registry.validate_pair_capacity_candidate(&changed_hierarchy).is_ok());
-    assert!(changed_hierarchy.net_registry.has_records_proof(&changed_hierarchy));
+    assert!(changed_hierarchy.net_registry.require_records_proof(&changed_hierarchy).is_err());
+    changed_hierarchy.net_registry.validate(&changed_hierarchy).unwrap();
+    assert!(changed_hierarchy.net_registry.require_records_proof(&changed_hierarchy).is_ok());
+
+    // Opening an older current-layout file may add paper. That representation-only
+    // change must not force the next Pair poll to rebuild its graph or reject the open.
+    let mut missing_paper = Project::clone(&candidate);
+    Arc::make_mut(&mut missing_paper.sheets)[0].page = None;
+    let decoded = decode_documents(&crate::persistence::encode_documents(Arc::new(missing_paper)).unwrap()).unwrap();
+    assert!(decoded.sheets[0].page.is_none());
+    let opened = crate::persistence::prepare_opened(decoded).unwrap();
+    assert!(opened.sheets[0].page.is_some());
+    assert!(opened.net_registry.require_records_proof(&opened).is_ok());
 }
 
 /// An explicitly recorded review reason survives member swaps and naming edits.

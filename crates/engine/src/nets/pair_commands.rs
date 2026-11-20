@@ -317,7 +317,9 @@ impl PairEditJob {
             }
             return Ok(None);
         } else {
-            let (edit, draft) = pair_edit(&self.source.project, self.command, &self.params)?;
+            let project = &self.source.project;
+            project.net_registry.require_records_proof(project).map_err(CommandError::InvalidParams)?;
+            let (edit, draft) = pair_edit(project, self.command, &self.params)?;
             if let Some(draft) = draft {
                 self.draft = Some((edit, draft));
                 return Ok(None);

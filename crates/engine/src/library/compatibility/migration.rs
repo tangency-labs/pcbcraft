@@ -174,6 +174,9 @@ pub(crate) fn project(mut project: Arc<Project>) -> Result<Arc<Project>, String>
     replacements.definitions(&mut choices.definitions)?;
     Arc::make_mut(&mut candidate.board).migrate_library_addresses(&replacements)?;
     crate::part_instances::storage::validate_project(candidate)?;
+    // Pin normalization replaces immutable graph dependencies. Prove the new inputs at
+    // open, not later from a pair command's browser capacity poll.
+    candidate.net_registry.validate(candidate)?;
     if let Some(baseline) = &candidate.board.baseline {
         baseline.validate_assets(candidate)?;
     }

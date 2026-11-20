@@ -2391,7 +2391,7 @@ impl DocumentsEncoder {
     /// record and graph inputs rather than rebuilding the graph.
     fn validate_registry(&self) -> Result<(), String> {
         let project = &self.project;
-        if self.pair_capacity_only { project.net_registry.validate_pair_capacity_candidate(project) } else { project.net_registry.validate(project) }
+        if self.pair_capacity_only { project.net_registry.require_records_proof(project) } else { project.net_registry.validate(project) }
     }
 
     /// Finish components/package choices, writing adopted instances in their single storage home

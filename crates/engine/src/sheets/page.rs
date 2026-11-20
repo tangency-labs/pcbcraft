@@ -395,9 +395,13 @@ pub(crate) fn adopt(mut project: Arc<Project>) -> Arc<Project> {
         .zip(project.sheets())
         .map(|(sheet, info)| sheet.page.unwrap_or_else(|| Page::around(project.for_sheet(info.target).and_then(|sheet| sheet.drawing_bounds()))))
         .collect();
+    let before = (!project.net_registry.records.is_empty()).then(|| project.clone());
     let candidate = Arc::make_mut(&mut project);
     for (sheet, page) in Arc::make_mut(&mut candidate.sheets).iter_mut().zip(pages) {
         sheet.page = Some(page);
+    }
+    if let Some(before) = before {
+        candidate.carry_net_proof_after_paper_adoption(&before);
     }
     project
 }
