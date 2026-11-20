@@ -207,7 +207,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 
 | Commands | Matching control |
 |---|---|
-| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Project and definition pane headers and **View → Split / Detach / New window** |
+| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Project and definition pane headers and **View → Split / Detach / New window**. `view.open_beside` takes optional `beside` and `side` to open source `view` inside a destination pane. `view.dock` accepts source `view`, destination `beside` and optional `side` (`top`, `bottom`, `left`, `right`) for an explicit move within or across windows; `scope: "window"` splits the entire destination window. |
 | `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
 | `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
 | `app.set_workspace` | Choose Schematic, PCB layout, Symbol Editor or Footprint Editor in an addressed pane, here/beside/in a native window; definition workspaces resume their last document |
@@ -232,7 +232,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window stays in the editor, which asks about unsaved changes.
 Headless sessions refuse window commands with a reason.
 
-The native live connection also exposes `ui.handles`, `ui.at` and queued pointer,
+The native live connection also exposes `ui.handles`, `ui.at`, `ui.project` and queued pointer,
 keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
 for named targets, window-local coordinates, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
@@ -561,6 +561,15 @@ It fails for a board with footprints but no accepted baseline. `dry_run: true`
 returns the filename and findings without rendering the file text. If the full
 reply exceeds the live editor's 16 MiB frame limit, save the project and use the
 headless command for the full export.
+
+`project.compare_netlist` takes a netlist file's text as `netlist` and compares
+it with what the open project exports now, the project netlist or, for a board
+file, that board's accepted netlist, without editing anything. `execute` returns
+`comparison`: `matches`, `identical`, the counts on both sides, `differences`
+such as a terminal on another net (named with its net in the design and the
+file's net it is on), and `notes` for renamed nets and other changes that leave connectivity
+alone. Terminals are matched by part and terminal, never by net name or
+position; see [comparing a file with the design](netlist-format.md#comparing-a-file-with-the-design).
 
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks

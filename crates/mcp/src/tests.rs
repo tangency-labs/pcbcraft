@@ -786,6 +786,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
             "library.parse_quantity",
             "library.prepare_part_publication",
             "library.prepare_publication",
+            "library.preview_footprint_revision",
             "library.preview_pin_remap",
             "library.remove_source",
             "library.resolve_part",
@@ -2208,6 +2209,28 @@ fn netlist_file_survives_suppressed_project_inspection() {
     assert_eq!(files.len(), 1);
     assert!(files[0]["name"].as_str().unwrap().ends_with("-netlist.json"));
     assert!(files[0]["contents"].as_str().unwrap().contains("\"components\""));
+    assert_eq!(result["revision"], before["revision"]);
+    assert!(result.get("project").is_none());
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
+/// A netlist comparison with inspect:false still returns its result and leaves the project unchanged.
+#[test]
+fn netlist_comparison_survives_suppressed_project_inspection() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({})).unwrap();
+    setup.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let exported = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::netlist::EXPORT_NETLIST,"params":{},"inspect":false})));
+    let text = exported["netlist"]["files"][0]["contents"].clone();
+    let params = json!({"netlist":text});
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::netlist::COMPARE_NETLIST,"params":params,"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["comparison"]["matches"], true);
+    assert_eq!(result["comparison"]["identical"], true);
+    assert_eq!(result["comparison"]["found"]["components"], 1);
     assert_eq!(result["revision"], before["revision"]);
     assert!(result.get("project").is_none());
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
