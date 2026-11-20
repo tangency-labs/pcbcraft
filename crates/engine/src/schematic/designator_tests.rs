@@ -411,7 +411,7 @@ fn designator_locks_compose_with_project_parameters_and_numbered_nets() {
             if version == 1 {
                 historical.net_registry = Arc::default();
             } else {
-                for record in Arc::make_mut(&mut Arc::make_mut(&mut historical.net_registry).records) {
+                for record in &mut Arc::make_mut(&mut historical.net_registry).records {
                     if version < 4 {
                         record.generated_number = None;
                     }
