@@ -175,7 +175,10 @@ fn package_completion_preserves_wire_direction_rules_on_reopen() {
         let donor = session.project().unwrap().symbols()[1].clone();
         let mut params = json!({"from":{"symbol":donor.id(),"terminal":"5"},"to":{"symbol":donor.id(),"terminal":"6"}});
         let command = if authored {
-            let [from, to, ..] = donor.pins()[..] else { panic!("quad lacks signal pins") };
+            // Pins follow the symbol's terminal list, where the supply pins come first.
+            let pins = donor.pins();
+            let at = |number| pins[donor.unit_definition().pin_index(number).unwrap()];
+            let (from, to) = (at("5"), at("6"));
             params["bends"] = json!([{"x_nm":from.x_nm,"y_nm":from.y_nm + 2 * schematic::GRID_NM},
                 {"x_nm":to.x_nm,"y_nm":to.y_nm + 2 * schematic::GRID_NM}]);
             params["auto_heal"] = json!(false);
