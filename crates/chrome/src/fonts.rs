@@ -29,6 +29,12 @@ fn append_hebrew_fallback(fonts: &mut egui::FontDefinitions, name: &str) {
     }
 }
 
+/// Return whether `bytes` parses as a font whose primary face covers Hebrew letters.
+#[cfg(all(not(has_hebrew_craft_font), not(target_arch = "wasm32")))]
+fn covers_hebrew(bytes: &[u8]) -> bool {
+    ttf_parser::Face::parse(bytes, 0).is_ok_and(|face| face.glyph_index('א').is_some() && face.glyph_index('ע').is_some())
+}
+
 /// Register a bundled (`CRAFT_FONTS_DIR`) or desktop system Hebrew fallback font without
 /// committing binary font assets.
 fn install_hebrew_fallback_fonts(fonts: &mut egui::FontDefinitions) {
@@ -42,18 +48,28 @@ fn install_hebrew_fallback_fonts(fonts: &mut egui::FontDefinitions) {
 
     #[cfg(all(not(has_hebrew_craft_font), not(target_arch = "wasm32")))]
     {
-        const CANDIDATES: [(&str, &str); 8] = [
-            ("arial-hebrew", "/System/Library/Fonts/Supplemental/Arial Hebrew.ttf"),
-            ("sf-hebrew", "/System/Library/Fonts/SFHebrew.ttf"),
-            ("arial-hebrew-local", "/Library/Fonts/Arial Hebrew.ttf"),
-            ("noto-sans-hebrew", "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf"),
-            ("noto-sans-hebrew-arch", "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf"),
-            ("dejavu-sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-            ("arial", "C:\\Windows\\Fonts\\arial.ttf"),
+        const CANDIDATES: [(&str, &str); 13] = [
+            // Windows
             ("segoe-ui", "C:\\Windows\\Fonts\\segoeui.ttf"),
+            ("arial", "C:\\Windows\\Fonts\\arial.ttf"),
+            // macOS
+            ("arial-hebrew", "/System/Library/Fonts/ArialHB.ttc"),
+            ("sf-hebrew", "/System/Library/Fonts/SFHebrew.ttf"),
+            ("arial-macos", "/System/Library/Fonts/Supplemental/Arial.ttf"),
+            // Linux
+            ("noto-sans-hebrew-arch", "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf"),
+            ("noto-sans-hebrew", "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf"),
+            ("noto-sans-hebrew-fedora", "/usr/share/fonts/google-noto/NotoSansHebrew-Regular.ttf"),
+            ("noto-sans-hebrew-fedora-vf", "/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf"),
+            ("noto-sans-hebrew-otf", "/usr/share/fonts/opentype/noto/NotoSansHebrew-Regular.ttf"),
+            ("dejavu-sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
+            ("dejavu-sans-arch", "/usr/share/fonts/TTF/DejaVuSans.ttf"),
+            ("dejavu-sans-fedora", "/usr/share/fonts/dejavu/DejaVuSans.ttf"),
         ];
         for (name, path) in CANDIDATES {
-            if let Ok(bytes) = std::fs::read(path) {
+            if let Ok(bytes) = std::fs::read(path)
+                && covers_hebrew(&bytes)
+            {
                 fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_owned(bytes)));
                 append_hebrew_fallback(fonts, name);
                 break;
@@ -105,10 +121,23 @@ mod tests {
             assert!(galley.size().x > 0.0);
         });
         out.textures_delta.clear();
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         {
-            let has_hebrew = ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::proportional(14.0), 'ע'));
-            assert!(has_hebrew, "expected system Hebrew fallback font on macOS");
+            let has_hebrew =
+                ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::proportional(14.0), 'ע') && fonts.has_glyph(&FontId::proportional(14.0), 'א'));
+            assert!(has_hebrew, "expected system Hebrew fallback font to cover Hebrew glyphs on {}", std::env::consts::OS);
+        }
+    }
+
+    /// Reject invalid bytes and valid fonts that lack Hebrew glyphs before registering a fallback.
+    #[cfg(all(not(has_hebrew_craft_font), not(target_arch = "wasm32")))]
+    #[test]
+    fn covers_hebrew_rejects_non_hebrew_and_invalid_fonts() {
+        assert!(!covers_hebrew(b""));
+        assert!(!covers_hebrew(b"not a font"));
+        let bundled = solidcraft_look::fonts::definitions();
+        for data in bundled.font_data.values() {
+            assert!(!covers_hebrew((*data.font).as_ref()), "bundled Latin font should not pass Hebrew coverage check");
         }
     }
 }

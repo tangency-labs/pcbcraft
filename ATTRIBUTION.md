@@ -1826,6 +1826,10 @@ adapted from:
 
 - `tangency-labs/fieldcraft` (`hrb9/fieldcraft` PR #988 at commit
   `2d546a6b32c061b3d51d29f2d40a5d6f69d4a5f1`, MIT OR Apache-2.0).
+- `tangency-labs/solidcraft` at revision
+  `73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR Apache-2.0): desktop Hebrew
+  fallback candidate paths (`crates/sketch/src/fonts/fallback.rs`) and
+  `ttf-parser` glyph coverage validation (`crates/ui-egui/src/fonts.rs`).
 
 Changes for PCBCraft: adapted crate paths and tokens to `pcbcraft-chrome`,
 integrated `solidcraft-ui-text` Hebrew catalogs (`crates/chrome/assets/shared-ui/he.json`),
