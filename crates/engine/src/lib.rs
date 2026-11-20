@@ -2711,7 +2711,7 @@ impl std::fmt::Display for CommandError {
             Self::StaleAnnotation { current, part_instances } => {
                 write!(f, "annotation preview is stale at revision {current}; preview again")?;
                 if !part_instances.is_empty() {
-                    write!(f, "; changed part instances: {}", part_instances[..part_instances.len().min(8)].join(", "))?;
+                    write!(f, "; changed part instances: {}", part_instances.iter().take(8).map(String::as_str).collect::<Vec<_>>().join(", "))?;
                     if part_instances.len() > 8 {
                         write!(f, " and {} more", part_instances.len() - 8)?;
                     }
