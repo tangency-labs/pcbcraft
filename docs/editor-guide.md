@@ -863,7 +863,10 @@ carry `.C` (reference designator) and, on outer copper, `.P` (reference and phys
 number). A footprint land explicitly unmapped to a pin has an empty pin number.
 A short between intended nets or an unresolved via assignment leaves the affected
 tracks and vias without `.N`; individually assigned pads keep their intended net.
-Copper with no net has an empty `.N`. To avoid the reserved `N/C` marker, net names
+Pads, tracks and vias use the same Gerber name for a given intended net. Distinct
+nets with the same display name get distinct Gerber names, including separate
+unwired terminals that each join several pads. Copper with no net has an empty
+`.N`. To avoid the reserved `N/C` marker, net names
 that equal `N/C` or begin with `N/C:` gain one `N/C:` prefix in Gerber only.
 These attributes change neither the plotted geometry nor the saved board. They describe
 intent, not verification of connectivity. Layer exports include the actual net and pin

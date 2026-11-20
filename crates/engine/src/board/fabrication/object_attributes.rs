@@ -5,7 +5,10 @@ use crate::board::{
     track::{IslandBuilder, lands},
     via_nets::node_membership,
 };
-use std::{collections::BTreeMap, fmt::Write as _};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write as _,
+};
 use uuid::Uuid;
 
 /// Attributes captured by a single pad, track or via's drawing operations.
@@ -89,44 +92,86 @@ impl Intent {
 }
 
 /// Export-local island intent. Keep one name per intended net, not a name or a set per member.
-#[derive(Default)]
 pub(super) struct RoutedNets {
     objects: BTreeMap<Uuid, Intent>,
+    pads: BTreeMap<String, BTreeMap<String, usize>>,
     names: BTreeMap<usize, String>,
 }
 
+/// Allocate one Gerber name per identity in membership order. Reserve every original name
+/// before adding suffixes, so generated names cannot shadow another net's original name.
+fn distinct_names(names: BTreeMap<usize, String>) -> BTreeMap<usize, String> {
+    let mut reserved: BTreeSet<_> = names.values().cloned().collect();
+    let mut next_suffix = BTreeMap::new();
+    names
+        .into_iter()
+        .map(|(id, name)| {
+            use std::collections::btree_map::Entry;
+            match next_suffix.entry(name.clone()) {
+                Entry::Vacant(entry) => {
+                    entry.insert(2usize);
+                    (id, name)
+                }
+                Entry::Occupied(mut entry) => loop {
+                    let suffix = entry.get_mut();
+                    let candidate = format!("{name} ({suffix})");
+                    *suffix += 1;
+                    if reserved.insert(candidate.clone()) {
+                        break (id, candidate);
+                    }
+                },
+            }
+        })
+        .collect()
+}
+
 impl RoutedNets {
-    /// Derive track and via intent once for the export, including plated transitions,
-    /// direct pad contacts and authored via assignments. Pad intent remains independent.
+    /// Share one name table across all copper layers, keyed by intended membership rather than
+    /// display text. Only routed objects need physical contact traversal; pads keep their own intent.
     pub(super) fn new(view: BoardView<'_>) -> Self {
         let (tracks, vias) = (view.tracks(), view.vias());
-        if tracks.is_empty() && vias.is_empty() {
-            return Self::default();
-        }
         let lands = lands(view);
         let project = view.project();
         let memberships = project.board_intent_memberships();
         let intrinsic = node_membership(project, &lands, tracks.len(), vias, &memberships);
-        let roots = IslandBuilder::new(&lands, tracks, vias).fabrication_roots();
-        let mut intents = vec![Intent::Unnamed; roots.len()];
-        let mut names = memberships.names;
-        for (node, (&root, member)) in roots.iter().zip(intrinsic).enumerate() {
-            let intent = match member {
-                Some(net) => {
-                    if let Some(name) = lands.get(node).and_then(|land| land.net.as_ref()) {
-                        names.entry(net).or_insert_with(|| name.clone());
+        let land_count = lands.len();
+        let mut names = BTreeMap::new();
+        let objects = if tracks.is_empty() && vias.is_empty() {
+            BTreeMap::new()
+        } else {
+            let roots = IslandBuilder::new(&lands, tracks, vias).fabrication_roots();
+            let mut intents = vec![Intent::Unnamed; roots.len()];
+            for (node, (&root, &member)) in roots.iter().zip(&intrinsic).enumerate() {
+                let intent = match member {
+                    Some(net) => Intent::Named(net),
+                    None if node.checked_sub(land_count + tracks.len()).and_then(|i| vias.get(i)).is_some_and(|via| via.net_assignment.is_some()) => {
+                        Intent::Unresolved
                     }
-                    Intent::Named(net)
+                    None => Intent::Unnamed,
+                };
+                intents[root] = intents[root].combine(intent);
+            }
+            tracks.iter().map(|t| t.id).chain(vias.iter().map(|v| v.id)).zip(roots[land_count..].iter().map(|&i| intents[i])).collect()
+        };
+        let mut pads = BTreeMap::<String, BTreeMap<String, usize>>::new();
+        for (land, &member) in lands.into_iter().zip(&intrinsic) {
+            if let Some(id) = member {
+                let (footprint, pad) = land.key;
+                pads.entry(footprint).or_default().insert(pad, id);
+                if let Some(name) = land.net.filter(|name| !name.is_empty()) {
+                    names.entry(id).or_insert(name);
                 }
-                None if node.checked_sub(lands.len() + tracks.len()).and_then(|i| vias.get(i)).is_some_and(|via| via.net_assignment.is_some()) => {
-                    Intent::Unresolved
-                }
-                None => Intent::Unnamed,
-            };
-            intents[root] = intents[root].combine(intent);
+            }
         }
-        let objects = tracks.iter().map(|t| t.id).chain(vias.iter().map(|v| v.id)).zip(roots[lands.len()..].iter().map(|&i| intents[i])).collect();
-        Self { objects, names }
+        for id in intrinsic.into_iter().flatten() {
+            names.entry(id).or_insert_with(|| memberships.names.get(&id).filter(|name| !name.is_empty()).cloned().unwrap_or_else(|| "Net".into()));
+        }
+        Self { objects, pads, names: distinct_names(names) }
+    }
+
+    /// Resolve pad intent independently of physical contacts, including on a board without routes.
+    pub(super) fn pad_name(&self, footprint: &str, pad: &str) -> &str {
+        self.pads.get(footprint).and_then(|pads| pads.get(pad)).and_then(|id| self.names.get(id)).map_or("", String::as_str)
     }
 
     /// Unnamed copper gets an explicit empty field. An unresolved or shorted island gets
@@ -138,5 +183,17 @@ impl RoutedNets {
             Some(Intent::Unresolved) | None => None,
         };
         Object { net, component: None }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A generated suffix must not overwrite a display name that already uses that spelling.
+    #[test]
+    fn gerber_names_reserve_existing_suffixes() {
+        let names = [(0, "Signal"), (1, "Signal"), (2, "Signal (2)"), (3, "Signal")].map(|(id, name)| (id, name.to_owned()));
+        assert_eq!(distinct_names(BTreeMap::from(names)).into_values().collect::<Vec<_>>(), ["Signal", "Signal (3)", "Signal (2)", "Signal (4)"]);
     }
 }

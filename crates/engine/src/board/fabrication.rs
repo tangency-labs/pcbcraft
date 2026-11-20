@@ -448,6 +448,8 @@ impl BoardView<'_> {
         let origin = self.placement_origin()?;
         let frame = origin.frame();
         let base = file_part(&self.project().name);
+        let routed_nets = RoutedNets::new(self);
+        let nets = &routed_nets;
         let pads: Vec<_> = self
             .footprints()
             .flat_map(|footprint| {
@@ -466,26 +468,26 @@ impl BoardView<'_> {
                     pad.copper?;
                     let cardinal = placed_cardinal && cardinal_pads.contains(pad.number.as_str());
                     let has_pin = !unconnected.contains(pad.number.as_str());
-                    Some((pad, cardinal, reference, has_pin))
+                    let net = nets.pad_name(&footprint.id, &pad.number);
+                    Some((pad, cardinal, reference, has_pin, net))
                 })
             })
             .collect();
         let on =
             |pad: &PadView, layer: uuid::Uuid| matches!(&pad.copper_layers, Some(CopperLayers::Resolved { layers, .. }) if layers.contains(&layer));
         let mut files = Vec::new();
-        let routed_nets = RoutedNets::new(self);
 
         for (index, layer_id) in order.iter().enumerate() {
             let Some(layer) = copper.iter().find(|layer| layer.id == *layer_id) else { continue };
             let mut gerber = Gerber::new(frame);
             let outer = index == 0 || index + 1 == order.len();
-            for (pad, cardinal, reference, has_pin) in pads.iter().filter(|(pad, ..)| on(pad, layer.id)) {
+            for (pad, cardinal, reference, has_pin, net) in pads.iter().filter(|(pad, ..)| on(pad, layer.id)) {
                 // Plated through-hole lands keep their function on inner copper, but .P describes
                 // part pins on outer copper, not inner plated lands (§5.6.14). The pad-derived
                 // mask opening does not shrink the mounting-side copper land (CuDef).
                 let function = if pad.through_hole { ApertureFunction::ThroughHolePad } else { ApertureFunction::SmdPad };
                 let pin = outer.then_some(if *has_pin { pad.number.as_str() } else { "" });
-                gerber.object(Object { net: Some(pad.net.as_deref().unwrap_or("")), component: Some((reference, pin)) }, |gerber| {
+                gerber.object(Object { net: Some(net), component: Some((reference, pin)) }, |gerber| {
                     gerber.pad(pad, *cardinal, function);
                 });
             }

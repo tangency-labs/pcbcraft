@@ -13,11 +13,12 @@ fn aperture_fixture(shape: PadShape, width: i64, height: i64, pad_rotation: u16,
 /// Author lands through the library editor, load its production encoding, then assign
 /// and place the package through the same commands used by live and headless clients.
 fn aperture_fixture_with_pads(pads: &[(PadShape, i64, i64, u16)], rotation: u16, bottom: bool) -> Session {
-    aperture_fixture_at(pads, rotation, bottom, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None)
+    aperture_fixture_at(pads, rotation, bottom, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None, None)
 }
 
 /// Author the command-built fixture with explicit centers and optionally plate pads from a
-/// zero-based index onward. A plated fixture has inner copper too.
+/// zero-based index onward. A plated fixture has inner copper too. An explicit mapping
+/// covers every pad; otherwise pads beyond the first two are left unconnected.
 fn aperture_fixture_at(
     pads: &[(PadShape, i64, i64, u16)],
     rotation: u16,
@@ -25,6 +26,7 @@ fn aperture_fixture_at(
     offset: Point,
     position: Point,
     plated_from: Option<usize>,
+    mapping: Option<serde_json::Value>,
 ) -> Session {
     use crate::authoring::{Action, Item, Kind, Primitive};
     let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
@@ -60,11 +62,12 @@ fn aperture_fixture_at(
     s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":copper_layers,"expected_revision":s.revision()})).unwrap();
     s.apply(crate::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     let component = s.project().unwrap().components().next().unwrap().id();
+    let unconnected = if mapping.is_some() { Vec::new() } else { (3..=pads.len()).map(|number| number.to_string()).collect() };
     s.apply(
         crate::ASSIGN_FOOTPRINT,
         &json!({"component":component,"library":definition.library,"definition":definition.id,
-        "definition_revision":definition.revision,"mapping":{"1":"1","2":"2"},
-        "unconnected_pads":(3..=pads.len()).map(|number|number.to_string()).collect::<Vec<_>>(),"expected_revision":s.revision()}),
+        "definition_revision":definition.revision,"mapping":mapping.unwrap_or_else(|| json!({"1":"1","2":"2"})),
+        "unconnected_pads":unconnected,"expected_revision":s.revision()}),
     )
     .unwrap();
     s.apply(
@@ -812,8 +815,15 @@ fn tiny_and_composed_rotations_do_not_flash_rectangular_or_obround_apertures() {
         (PadShape::Rectangle, 800_000, 400_000, 45, 45, false, Point { x_nm: 0, y_nm: 0 }),
         (PadShape::Oval, 800_000, 400_000, 45, 45, true, Point { x_nm: 0, y_nm: 0 }),
     ] {
-        let s =
-            aperture_fixture_at(&[(shape, width, height, local); 2], rotation, bottom, offset, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
+        let s = aperture_fixture_at(
+            &[(shape, width, height, local); 2],
+            rotation,
+            bottom,
+            offset,
+            Point { x_nm: 30_000_001, y_nm: -25_000_003 },
+            None,
+            None,
+        );
         let pads: Vec<_> = view(&s).footprints().flat_map(|f| f.pads).collect();
         if width == 2 && (height == 2 || height == 4) {
             assert_eq!(axis_aligned_size(&pads[0].copper.unwrap()), Some((width, height)), "snapped geometry alone would permit a flash");
@@ -879,6 +889,7 @@ fn obround_capsules_match_land_geometry_across_parity_sides_and_output_origins()
                         bottom,
                         Point { x_nm: 0, y_nm: 0 },
                         Point { x_nm: center, y_nm: -center },
+                        None,
                         None,
                     );
                     s.apply(crate::SET_PLACEMENT_ORIGIN, &json!({"board":s.project().unwrap().board_target().unwrap().board,"origin":{"kind":"point","x_nm":origin,"y_nm":-origin},"expected_revision":s.revision()})).unwrap();
@@ -983,6 +994,7 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
             Point { x_nm: 0, y_nm: 0 },
             Point { x_nm: 3_000_000, y_nm: -3_000_000 },
             Some(0),
+            None,
         );
         let outputs = view(&s).fabrication_outputs().unwrap();
         // The back-side quarter turn swaps the aperture axes and mirrors the local X offsets.
@@ -1015,6 +1027,52 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
         for output in [TOP[2], BOTTOM[2]] {
             let read = read_gerber(&outputs, output);
             assert!(read.flashes.is_empty() && read.regions.is_empty() && read.strokes.is_empty());
+        }
+    }
+}
+
+/// Distinct pad-only identities can share the same display name. Each keeps one Gerber
+/// name across all its pads and attached copper, before and after routing.
+#[test]
+fn gerber_distinguishes_unwired_multi_pad_terminal_groups() {
+    let mut s = aperture_fixture_at(
+        &[(PadShape::Circle, 400_000, 400_000, 0); 4],
+        0,
+        false,
+        Point { x_nm: 0, y_nm: 0 },
+        Point { x_nm: 3_000_000, y_nm: 3_000_000 },
+        None,
+        Some(json!({"1":["1","2"],"2":["3","4"]})),
+    );
+    s.apply(crate::board::update::INITIALIZE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
+    let pads = view(&s).footprints().next().unwrap().pads;
+    assert_eq!(pads.len(), 4);
+    assert!(pads.iter().all(|pad| pad.net.as_deref() == Some("Unconnected")));
+    let pad_names = |read: &ReadGerber| {
+        read.objects.iter().filter_map(|(_, object)| Some((object.pin.as_ref()?.1.clone(), object.net.clone().unwrap()))).collect::<BTreeMap<_, _>>()
+    };
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    let names = pad_names(&read_gerber(&outputs, TOP_COPPER));
+    assert_eq!(names.len(), 4);
+    assert_eq!(names["1"], names["2"]);
+    assert_eq!(names["3"], names["4"]);
+    assert_ne!(names["1"], names["3"]);
+    assert!(names.values().all(|name| !name.is_empty()));
+
+    let center = |number| pads.iter().find(|pad| pad.number == number).unwrap().center;
+    let (a, b) = (center("1"), center("2"));
+    let y_nm = a.y_nm + 2_000_000;
+    let [front, back] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    route_with_vias(&mut s, front, &[a, Point { y_nm, ..a }, Point { y_nm, ..b }, b], &[(1, back), (2, front)]).unwrap();
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    let top = read_gerber(&outputs, TOP_COPPER);
+    assert_eq!(pad_names(&top), names);
+    let bottom = read_gerber(&outputs, ("-Bottom.gbr", "Copper,L2,Bot", "Positive"));
+    for (layer, tracks) in [(top, 2), (bottom, 1)] {
+        for (function, count) in [("Conductor", tracks), ("ViaPad", 2)] {
+            let routed: Vec<_> = layer.objects.iter().filter(|(kind, _)| *kind == Some(function)).collect();
+            assert_eq!(routed.len(), count);
+            assert!(routed.iter().all(|(_, object)| object.net.as_deref() == Some(names["1"].as_str())));
         }
     }
 }
@@ -1225,6 +1283,7 @@ fn equal_size_copper_uses_distinct_aperture_functions() {
         Point { x_nm: 0, y_nm: 0 },
         Point { x_nm: 3_000_000, y_nm: -3_000_000 },
         Some(2),
+        None,
     );
     let front = copper_layers(&s)[0];
     let points = [Point { x_nm: 1_000_000, y_nm: 20_000_000 }, Point { x_nm: 3_000_000, y_nm: 20_000_000 }];
