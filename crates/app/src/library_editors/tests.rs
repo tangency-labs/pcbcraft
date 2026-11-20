@@ -1066,6 +1066,21 @@ fn normalized_clipboard_events_drive_library_copy_and_paste() {
             matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select),
             "{kind:?} raw-key paste before a same-frame Escape must cancel"
         );
+        // Ctrl+D arms the same preview and resolves in the same event order.
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select),
+            "{kind:?} Escape after a same-frame duplicate must cancel it"
+        );
+        h.key_press(egui::Key::Escape);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::D);
+        h.run();
+        assert!(
+            matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { .. }),
+            "{kind:?} a duplicate after the frame's Escape must still arm"
+        );
         h.key_press(egui::Key::Escape);
         h.run();
         // Cut is copy + delete as one undoable edit; the cut selection still pastes.
@@ -1260,6 +1275,67 @@ fn library_copy_uses_the_pressed_event_modifiers() {
                 matches!(&h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { primitives, .. } if primitives == &expected_primitives),
                 "{kind:?}: press={command_at_press}, end={command_at_end}, focus={focused} must copy={copied}"
             );
+        }
+    }
+}
+
+/// A native input batch may end with different modifiers from its command chord.
+/// Select-all and duplicate follow the pressed event and retain focus gating —
+/// a modifier released later in the batch cannot suppress them, a modifier only
+/// appearing at batch end cannot fire them, and focus loss cannot arm them.
+#[test]
+fn library_command_chords_use_the_pressed_event_modifiers() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for key in [egui::Key::A, egui::Key::D] {
+            for (command_at_press, command_at_end, focused, fires) in
+                [(true, false, true, true), (false, true, true, false), (true, false, false, false)]
+            {
+                let mut app = PcbApp::default();
+                app.new_library_item(kind);
+                let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+                h.run();
+                let id = h.state().library_editors.active.unwrap();
+                let first = *h.state().library_editors.documents[&id].session.snapshot().objects.keys().next().unwrap();
+                let count = h.state().library_editors.documents[&id].session.snapshot().objects.len();
+                h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = [first].into_iter().collect();
+                let area = h.get_by_label("Library canvas").rect();
+                h.hover_at(area.center());
+                h.run();
+                // Alt is the extra modifier: Ctrl+Shift+A already belongs to the
+                // Assistant toggle, which consumes the chord before the canvas.
+                let modifiers = |command| egui::Modifiers { ctrl: command, command, alt: true, ..Default::default() };
+                h.input_mut().focused = focused;
+                h.input_mut().events.extend([
+                    egui::Event::ModifiersChanged(modifiers(command_at_press)),
+                    egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: modifiers(command_at_press) },
+                    egui::Event::Key { key, physical_key: Some(key), pressed: false, repeat: false, modifiers: modifiers(command_at_press) },
+                    egui::Event::ModifiersChanged(modifiers(command_at_end)),
+                ]);
+                h.run();
+                let doc = &h.state().library_editors.documents[&id];
+                match (key, fires) {
+                    (egui::Key::A, true) => {
+                        assert_eq!(doc.selection.len(), count, "{kind:?}: Ctrl+A at press must select all (end={command_at_end}, focus={focused})");
+                    }
+                    (egui::Key::D, true) => {
+                        assert!(
+                            matches!(doc.tool, canvas::Tool::Paste { .. }),
+                            "{kind:?}: Ctrl+D at press must arm the preview (end={command_at_end}, focus={focused})"
+                        );
+                    }
+                    _ => {
+                        assert_eq!(
+                            doc.selection.len(),
+                            1,
+                            "{kind:?}: {key:?} without command at press must not fire (end={command_at_end}, focus={focused})"
+                        );
+                        assert!(
+                            matches!(doc.tool, canvas::Tool::Select),
+                            "{kind:?}: {key:?} without command at press must not arm (end={command_at_end}, focus={focused})"
+                        );
+                    }
+                }
+            }
         }
     }
 }
