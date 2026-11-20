@@ -69,8 +69,9 @@ fn board_mesh_preserves_bounds_and_through_voids() {
     assert_eq!(solid.target, view(&session).target);
     assert_eq!(solid.thickness, Thickness::SpecifiedFinishedNm(1_600_000));
     let bounds = solid.body.bounding_box().unwrap();
-    assert_eq!(bounds.min_nm, [5_000_000, -3_000_000, 0]);
-    assert_eq!(bounds.max_nm, [55_000_000, 27_000_000, 1_600_000]);
+    // The board/1 frame: Y negated, and the body spans −thickness..0 below the finished top.
+    assert_eq!(bounds.min_nm, [5_000_000, -27_000_000, -1_600_000]);
+    assert_eq!(bounds.max_nm, [55_000_000, 3_000_000, 0]);
     let mesh = substrate::tessellate(&solid.body, 1_000).unwrap();
     for i in 0..3 {
         let lo = mesh.positions_nm.iter().map(|p| p[i]).min().unwrap();
@@ -110,7 +111,8 @@ fn board_solid_uses_finished_thickness_and_rotated_pad_drill_centres() {
     }
     let solid = solid.unwrap();
     assert_eq!(solid.thickness, Thickness::SpecifiedFinishedNm(2_350_000));
-    assert_eq!(solid.body.bounding_box().unwrap().max_nm[2], 2_350_000);
+    let bounds = solid.body.bounding_box().unwrap();
+    assert_eq!((bounds.min_nm[2], bounds.max_nm[2]), (-2_350_000, 0));
     let mesh = substrate::tessellate(&solid.body, 1_000).unwrap();
     // The library centres are ±1.27 mm on local X. A quarter turn puts them on board Y.
     // Derive neither the expected centres nor the controls from the projection under test.
@@ -162,9 +164,15 @@ fn cuts_footprint_non_plated_holes_at_their_finished_diameter() {
     assert_eq!(vertical_hits(&mesh, [19_500_000, 12_000_000]), [true; 2], "undrilled pads leave no hole");
 }
 
-/// Scan exact projected triangles against a ray from negative Z. Non-degenerate
-/// XY projections are the caps in a prismatic body, and their Z identifies the end.
+/// [`frame_hits`] at an authored board point, which the board/1 frame puts at (x, −y).
 fn vertical_hits(mesh: &substrate::BoardMesh, [x, y]: [i64; 2]) -> [bool; 2] {
+    frame_hits(mesh, [x, -y])
+}
+
+/// Scan exact projected triangles against a vertical ray at a board/1 frame point. Non-degenerate
+/// XY projections are the caps in a prismatic body: the top cap at Z = 0 (index 1) and the bottom
+/// at Z = −thickness (index 0), at least 1.6 mm down in these fixtures.
+fn frame_hits(mesh: &substrate::BoardMesh, [x, y]: [i64; 2]) -> [bool; 2] {
     let orient =
         |a: [i64; 3], b: [i64; 3], p: [i64; 3]| i128::from(b[0] - a[0]) * i128::from(p[1] - a[1]) - i128::from(b[1] - a[1]) * i128::from(p[0] - a[0]);
     let mut hits = [false; 2];
@@ -173,7 +181,7 @@ fn vertical_hits(mesh: &substrate::BoardMesh, [x, y]: [i64; 2]) -> [bool; 2] {
         let sign = orient(a, b, c).signum();
         let p = [x, y, 0];
         if sign != 0 && [orient(a, b, p), orient(b, c, p), orient(c, a, p)].into_iter().all(|t| sign * t >= 0) {
-            hits[usize::from(a[2] > 0)] = true;
+            hits[usize::from(a[2] > -100_000)] = true;
         }
     }
     hits
@@ -197,7 +205,31 @@ fn closes_exact_paths_and_labels_the_nominal_fallback() {
     let solid = solid.unwrap();
     // The documented two-layer default is a nominal value, not a guarantee.
     assert_eq!(solid.thickness, Thickness::NominalFallback);
-    assert_eq!(solid.body.bounding_box().unwrap().max_nm, [4_000_000, 3_000_000, 1_600_000]);
+    let bounds = solid.body.bounding_box().unwrap();
+    assert_eq!((bounds.min_nm, bounds.max_nm), ([0, -3_000_000, -1_600_000], [4_000_000, 0, 0]));
+}
+
+/// An outline wholly at positive authored Y, away from board zero, with one via. In the board/1
+/// frame it lies at negative Y: the drill opens at (x, −y), the mirror row about the board's
+/// centre is solid, and the authored location itself has no material.
+#[test]
+fn board_solid_uses_the_board1_frame() {
+    let mut session = board(Some(1_600_000));
+    draw(&mut session, &[[2_000_000, 1_000_000], [12_000_000, 1_000_000], [12_000_000, 7_000_000], [2_000_000, 7_000_000]], true);
+    apply(&mut session, "pcb.add_via", json!({"at":{"x_nm":4_000_000,"y_nm":5_000_000},"via_diameter_nm":1_200_000,"via_drill_nm":800_000}));
+    let solid = BoardSolid::build(view(&session));
+    if cfg!(all(target_arch = "wasm32", not(feature = "wasm-kernel"))) {
+        assert_eq!(solid.unwrap_err().code(), ErrorCode::KernelUnavailable);
+        return;
+    }
+    let solid = solid.unwrap();
+    let bounds = solid.body.bounding_box().unwrap();
+    assert_eq!((bounds.min_nm, bounds.max_nm), ([2_000_000, -7_000_000, -1_600_000], [12_000_000, -1_000_000, 0]));
+    let mesh = substrate::tessellate(&solid.body, 1_000).unwrap();
+    assert_eq!(mesh.positions_nm.iter().map(|p| p[2]).max(), Some(0), "the finished top is at Z = 0");
+    assert_eq!(frame_hits(&mesh, [4_000_000, -5_000_000]), [false; 2], "the via opens at (x, −y)");
+    assert_eq!(frame_hits(&mesh, [4_000_000, -3_000_000]), [true; 2], "its mirror about the board centre is solid");
+    assert_eq!(frame_hits(&mesh, [4_000_000, 5_000_000]), [false; 2], "nothing remains at the unflipped location");
 }
 
 /// A crossing outline is refused on all builds rather than silently masking a region.

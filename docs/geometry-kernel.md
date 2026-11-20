@@ -96,7 +96,7 @@ could later move into an engine module if that proves simpler.
 
 `pcbcraft-board-solid` builds a read-only solid from one addressed board, without
 linking the kernel into `pcbcraft-engine`. It uses the centre lines of Board
-Outline drawings in board coordinates. Open paths can join only at exactly
+Outline drawings, mapped into the board/1 frame described below. Open paths can join only at exactly
 coincident endpoints. Nested contours alternate material and void regardless of
 winding; crossings, touches and unfinished contours are refused. Round through
 pad and via drills are removed at their resolved board centres, using drill
@@ -104,10 +104,11 @@ rather than copper-land diameters. Circular footprint non-plated holes are remov
 at their resolved board centres using their finished diameters. This does not
 infer slots, which the board document cannot yet represent.
 
-The underside is at Z=0. The top is at the stackup's declared nominal finished
-thickness, not its minimum or the sum of stock plies. If there is no finished
-thickness declaration, the result carries the explicit nominal fallback of
-1.6 mm. The solid and its optional triangle mesh are derived memory objects;
+The solid is in the shared board/1 frame: the origin at board zero, +X along
+board X, +Y along board −Y, and Z = 0 at the finished top surface. The body spans
+−t..0, where t is the stackup's declared nominal finished thickness, not its
+minimum or the sum of stock plies. If there is no finished thickness
+declaration, the result carries the explicit nominal fallback of 1.6 mm. The solid and its optional triangle mesh are derived memory objects;
 no document, undo history, file format, viewport or STEP output changes. On a
 build without the optional browser kernel, valid substrate inputs return
 `kernel_unavailable`.

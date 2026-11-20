@@ -29,8 +29,8 @@ pub struct BoardMesh {
     pub triangles: Vec<[u32; 3]>,
 }
 
-/// Build substrate from the Board Outline centre lines and round through drills. Material starts
-/// at Z=0 and ends at `thickness_nm`. Closed contours alternate material and void by nesting,
+/// Build substrate from the Board Outline centre lines and round through drills, in the XY frame
+/// the caller chooses. Material starts at Z=0 and ends at `thickness_nm`. Closed contours alternate material and void by nesting,
 /// independent of winding; open paths must join at exactly matching endpoints. Drawings that
 /// cross, touch or leave an unclosed contour are refused, never replaced with a bounding box.
 /// Drills are subtracted as circles, including where they overlap or meet a board edge.

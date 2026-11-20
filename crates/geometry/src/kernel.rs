@@ -30,12 +30,23 @@ pub(crate) fn substrate(regions: &[Region], drills: BTreeSet<RoundDrill>, thickn
     fn xy(BoardPoint([x, y]): BoardPoint) -> Vec2 {
         Vec2 { x: x as f64 / NM_PER_MM as f64, y: y as f64 / NM_PER_MM as f64 }
     }
-    fn polygon(points: &[BoardPoint]) -> Loop2 {
-        Loop2::polygon(&points.iter().copied().map(xy).collect::<Vec<_>>())
+    /// The kernel's region convention: outer loops counter-clockwise, holes clockwise. Callers
+    /// may supply either winding, for example after mirroring Y, so orient each loop exactly.
+    fn polygon(points: &[BoardPoint], counter_clockwise: bool) -> Loop2 {
+        let twice_area: i128 = points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .map(|(BoardPoint([ax, ay]), BoardPoint([bx, by]))| i128::from(*ax) * i128::from(*by) - i128::from(*bx) * i128::from(*ay))
+            .sum();
+        let mut pts: Vec<_> = points.iter().copied().map(xy).collect();
+        if (twice_area > 0) != counter_clockwise {
+            pts.reverse();
+        }
+        Loop2::polygon(&pts)
     }
     guard("build board substrate", || {
         let regions: Vec<_> =
-            regions.iter().map(|r| Region2 { outer: polygon(&r.outer), holes: r.holes.iter().map(|h| polygon(h)).collect() }).collect();
+            regions.iter().map(|r| Region2 { outer: polygon(&r.outer, true), holes: r.holes.iter().map(|h| polygon(h, false)).collect() }).collect();
         let drills: Vec<_> = drills
             .into_iter()
             .map(|d| Region2 { outer: Loop2::circle(xy(d.center), d.diameter_nm as f64 / (2.0 * NM_PER_MM as f64)), holes: Vec::new() })
