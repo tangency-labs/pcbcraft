@@ -153,6 +153,80 @@ fn pair_editor_and_live_mcp_match_project_bytes_and_one_undo() {
     assert_eq!(bytes(h.state()), bytes(&live));
 }
 
+/// Submit a cold pair via the editor's browser queue. Observe actual native writer work for
+/// several frame budgets on a large opened project, then revoke it while Save is still pending.
+#[test]
+fn large_browser_pair_capacity_yields_and_cancels_during_native_save() {
+    use crate::board_drc::jobs::{Queue, Request, Work};
+    use pcbcraft_engine::persistence::{ENTRY_POINT, decode_documents};
+
+    const EXTRA_PARTS: u64 = 1024;
+    let (h, choices) = fixture();
+    let mut docs = bytes(h.state());
+    let mut project: serde_json::Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+    let sheet_path = docs.keys().find(|path| path.starts_with("sheets/")).unwrap().clone();
+    let mut sheet: serde_json::Value = serde_json::from_slice(&docs[&sheet_path]).unwrap();
+    let part = project["components"][0].clone();
+    let symbol = sheet["symbols"][0].clone();
+    for i in 0..EXTRA_PARTS {
+        let mut component = part.clone();
+        let instance = 10_000 + 2 * i;
+        component["id"] = json!(instance);
+        component["reference_number"] = json!(100 + i);
+        component["reference"] = json!(format!("R{}", 100 + i));
+        project["components"].as_array_mut().unwrap().push(component);
+        let mut placement = symbol.clone();
+        placement["id"] = json!(instance + 1);
+        placement["component"] = json!(instance);
+        placement["x_nm"] = json!((i % 32) * 25_400_000);
+        placement["y_nm"] = json!((i / 32 + 1) * 25_400_000);
+        sheet["symbols"].as_array_mut().unwrap().push(placement);
+    }
+    project["numeric_id_high_water"] = json!(10_000 + 2 * EXTRA_PARTS);
+    docs.insert(ENTRY_POINT.into(), serde_json::to_vec(&project).unwrap());
+    docs.insert(sheet_path, serde_json::to_vec(&sheet).unwrap());
+    let mut session = pcbcraft_engine::Session::default();
+    session.open_snapshot(decode_documents(&docs).unwrap());
+    let original = session.snapshot().unwrap();
+    assert_eq!(original.components().count(), 6 + EXTRA_PARTS as usize);
+    let revision = session.revision();
+    let pair = nets::new_pair_id().unwrap();
+    let params = json!({"pair":pair,"name":"Cold pair","positive":choices[0].0,"negative":choices[1].0,"expected_revision":revision});
+    let mut queue = Queue::default();
+    queue.submit(Request { id: 1, job: session.prepare_pair_edit(nets::CREATE_PAIR, &params).unwrap() });
+    let per_poll = <nets::PairEditJob as Work>::BROWSER_BATCH;
+    let mut measured = 0;
+    for _ in 0..64 {
+        assert!(queue.poll().is_none());
+        let progress = queue.progress().unwrap();
+        if progress.stage == "Encoding native pair documents" {
+            assert!(progress.completed - measured <= per_poll);
+            measured = progress.completed;
+        }
+        if measured >= per_poll * 16 {
+            break;
+        }
+    }
+    assert_eq!(measured, per_poll * 16);
+    assert!(measured < EXTRA_PARTS as usize);
+    queue.cancel();
+    let revoked = queue.poll().expect("cancellation returns on the next frame");
+    assert_eq!(revoked.id, 1);
+    assert!(revoked.report.unwrap().is_none());
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&original, &session.snapshot().unwrap()));
+    assert!(session.project().unwrap().differential_pairs().is_empty());
+
+    queue.submit(Request { id: 2, job: session.prepare_pair_edit(nets::CREATE_PAIR, &params).unwrap() });
+    let complete = (0..4096).find_map(|_| queue.poll()).expect("fresh cold work finishes");
+    let prepared = complete.report.unwrap().unwrap().unwrap();
+    assert!(Arc::ptr_eq(&original, &session.snapshot().unwrap()));
+    session.complete_pair_edit(prepared, false).unwrap();
+    assert_eq!(session.revision(), revision + 1);
+    let final_docs = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(decode_documents(&final_docs).unwrap().differential_pairs()[0].id, pair);
+}
+
 /// An existing pair adds controls at the top; a short host can still scroll to edit the
 /// lower picker or discard the draft while the fixed footer stays visible.
 #[test]

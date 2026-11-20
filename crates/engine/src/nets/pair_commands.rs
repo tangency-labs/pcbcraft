@@ -239,6 +239,11 @@ impl PairEditJob {
         &self.source
     }
 
+    /// The native writer's completed units after the candidate reaches document sizing.
+    pub fn document_work_done(&self) -> Option<usize> {
+        self.probe.as_ref().map(|(_, probe)| probe.work_done())
+    }
+
     /// Advance the bounded preparation phase or one batch of the native Save writer.
     /// A zero budget performs no work. No session, history or editor state is accessed.
     pub fn step(&mut self, records: usize) -> bool {

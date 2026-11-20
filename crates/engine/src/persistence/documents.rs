@@ -1579,6 +1579,11 @@ impl PairDocumentProbe {
         Self { home, has_pairs, row_bytes, encoder }
     }
 
+    /// Completed native writer units, including work in a discarded legacy envelope.
+    pub(crate) fn work_done(&self) -> usize {
+        self.encoder.work_done
+    }
+
     /// Count headroom once the native document batches complete; retain only the byte budget.
     pub(crate) fn step(&mut self, records: usize) -> Result<Option<PairDocumentBudget>, crate::CommandError> {
         match self.encoder.step(records) {
@@ -1623,6 +1628,7 @@ pub struct DocumentsEncoder {
     project: Arc<Project>,
     documents: Documents,
     bytes: Vec<u8>,
+    work_done: usize,
     phase: u8,
     sheet_cursor: usize,
     cursor: u64,
@@ -1666,6 +1672,7 @@ impl DocumentsEncoder {
             project,
             documents: Documents::new(),
             bytes: Vec::new(),
+            work_done: 0,
             phase: 26,
             sheet_cursor: 0,
             cursor: 0,
@@ -1700,7 +1707,9 @@ impl DocumentsEncoder {
             Err(_) if self.size_limit_exceeded && !self.use_compact_memberships && !self.project.part_group_memberships.is_empty() => {
                 let project = self.project.clone();
                 let pair_capacity_only = self.pair_capacity_only;
+                let work_done = self.work_done;
                 *self = Self::new(project);
+                self.work_done = work_done;
                 self.pair_capacity_only = pair_capacity_only;
                 self.use_compact_memberships = true;
                 Ok(None)
@@ -1718,6 +1727,7 @@ impl DocumentsEncoder {
     /// Advance the current representation within the caller's incremental record budget.
     fn step_records(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
+            self.work_done += 1;
             match self.phase {
                 26 => {
                     let p = &self.project;

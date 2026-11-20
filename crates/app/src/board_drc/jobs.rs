@@ -5,6 +5,8 @@ use pcbcraft_engine::board::drc::{CheckJob, CheckProgress, CheckSource, Report};
 pub(crate) trait Work: Send + 'static {
     type Output: Send + 'static;
     type Source: Clone + Send + 'static;
+    #[cfg(any(target_arch = "wasm32", test))]
+    const BROWSER_BATCH: usize = 256;
     fn source(&self) -> &Self::Source;
     fn progress(&self) -> CheckProgress;
     fn step(&mut self, budget: usize) -> bool;
@@ -64,11 +66,17 @@ impl Work for pcbcraft_engine::board::route::PlanningJob {
 impl Work for pcbcraft_engine::nets::PairEditJob {
     type Output = Result<pcbcraft_engine::nets::PreparedPairEdit, pcbcraft_engine::CommandError>;
     type Source = pcbcraft_engine::nets::PairEditSource;
+    #[cfg(any(target_arch = "wasm32", test))]
+    const BROWSER_BATCH: usize = 8;
     fn source(&self) -> &Self::Source {
         self.source()
     }
     fn progress(&self) -> CheckProgress {
-        CheckProgress { stage: "Checking pair document capacity", completed: 0, total: 1 }
+        if let Some(completed) = self.document_work_done() {
+            CheckProgress { stage: "Encoding native pair documents", completed, total: completed + 1 }
+        } else {
+            CheckProgress { stage: "Checking pair registry capacity", completed: 0, total: 1 }
+        }
     }
     fn step(&mut self, budget: usize) -> bool {
         self.step(budget)
@@ -216,7 +224,7 @@ mod incremental {
         /// Advance one engine batch, publishing only a complete report or cancellation.
         fn poll_batch(&mut self) -> Option<Completion<J::Output, J::Source>> {
             let request = self.request.as_mut()?;
-            if !self.canceled && !request.job.step(256) {
+            if !self.canceled && !request.job.step(J::BROWSER_BATCH) {
                 return None;
             }
             let mut request = self.request.take()?;
