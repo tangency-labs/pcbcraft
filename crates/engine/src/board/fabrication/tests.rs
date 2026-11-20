@@ -935,6 +935,25 @@ fn rotated_maximum_radius_pads_keep_circular_corners() {
     }
 }
 
+/// A core narrower than the corner diameter is covered by its edge strips alone, so the
+/// macro writes no sliver outline that coordinate perturbation could make self-intersect.
+/// Ucamco Gerber 2026.05 §§4.5.1.6 and 4.10.3.
+#[test]
+fn rounded_pad_macros_omit_the_outline_of_a_core_narrower_than_the_diameter() {
+    for local in [0, 90] {
+        let pads = [(PadShape::RoundedRectangle, 600_000, 400_000, local, 199_999); 2];
+        let s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
+        let read = read_gerber(&view(&s).fabrication_outputs().unwrap(), TOP_COPPER);
+        assert!(read.regions.is_empty() && read.strokes.is_empty() && read.flashes.is_empty());
+        assert_eq!(read.rounded_flashes.len(), 2);
+        let aperture = &read.rounded[&read.rounded_flashes[0].1];
+        assert!(aperture.outline.is_empty(), "a 2 nm core needs no outline at {local}");
+        assert_eq!((aperture.circles.len(), aperture.strips.len()), (4, 4));
+        assert!(aperture.circles.iter().all(|&(d, _)| d == 399_998));
+        assert!(aperture.strips.iter().all(|&(d, _, _)| d == 399_998));
+    }
+}
+
 /// Two rotations can snap a tiny inner box onto three edges without clamping its radius.
 /// Keep that pad's original closed region rather than writing a malformed quad primitive.
 #[test]

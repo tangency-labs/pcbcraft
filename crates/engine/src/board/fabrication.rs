@@ -344,13 +344,15 @@ impl Gerber {
     }
 }
 
-/// Fill the inner polygon and add a strip along each edge and a circle at each vertex.
+/// Add a strip along each edge and a circle at each vertex, and fill the inner polygon unless
+/// the strips already cover it.
 /// Their union is the core expanded by half the emitted diameter, without chord approximations.
 /// Ucamco Gerber 2026.05 §§4.5.1.3, 4.5.1.4 and 4.5.1.6 define these primitives. Their
 /// rotation is about the macro origin, not each primitive's center: use zero because
 /// the core already includes pad rotation, placement mirroring/rotation and the Y flip.
 fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: RoundedCore) {
     let _ = writeln!(text, "%AMRoundRect{code}*");
+    let diameter_nm = diameter;
     let diameter = mm(diameter, 6);
     let pair = |(x, y)| format!("{},{}", mm(x, 6), mm(y, 6));
     let edge = |text: &mut String, a, b| {
@@ -366,11 +368,16 @@ fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: Roun
             for (a, b) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)) {
                 edge(text, a, b);
             }
-            text.push_str("4,1,4");
-            for &point in points.iter().chain(&points[..1]) {
-                let _ = write!(text, ",{}", pair(point));
+            // A core clearly narrower than the diameter is already covered by its edge strips. Writing
+            // its outline would only add a sliver contour that coordinate perturbation can turn
+            // into a self-intersection (§§4.5.1.6, 4.10.3).
+            if !strips_cover_core(points, diameter_nm) {
+                text.push_str("4,1,4");
+                for &point in points.iter().chain(&points[..1]) {
+                    let _ = write!(text, ",{}", pair(point));
+                }
+                text.push_str(",0*\n");
             }
-            text.push_str(",0*\n");
             points.as_slice()
         }
     };
@@ -378,6 +385,22 @@ fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: Roun
         let _ = writeln!(text, "1,1,{diameter},{},0*", pair(point));
     }
     text.push_str("%\n");
+}
+
+/// Whether the diameter-wide strips along a strictly convex core's edges clearly cover all of it.
+/// They do when every vertex lies less than one diameter from some edge's line: the core is then
+/// narrower than the diameter, so each interior point is within half a diameter of the nearest
+/// edge, whose strip covers it. Require the core to be narrower by the diameter tolerance, so
+/// snapping a rotated full-width core a fraction of a nanometre narrower keeps its outline.
+fn strips_cover_core(points: &[MacroPoint; 4], diameter: i64) -> bool {
+    let reach = diameter - ROUNDED_DIAMETER_TOLERANCE_NM as i64;
+    reach > 0
+        && (0..4).any(|i| {
+            let (a, b) = (points[i], points[(i + 1) % 4]);
+            let (dx, dy) = (i128::from(b.0 - a.0), i128::from(b.1 - a.1));
+            let limit = i128::from(reach).pow(2) * (dx * dx + dy * dy);
+            points.iter().all(|&p| (dx * i128::from(p.1 - a.1) - dy * i128::from(p.0 - a.0)).pow(2) < limit)
+        })
 }
 
 /// Resolve global X/Y sizes of a nondegenerate ordered axis-aligned rectangle. Opposite corners
