@@ -27,13 +27,30 @@ def needs(block):
     return {item.strip() for item in match[1].split(",")} if match else set()
 
 
-def build_allowed(**changes):
-    """Exercise the actual workflow guard with only its boolean/comparison grammar enabled."""
-    values = {"needs.checks.result": "success", "needs.changes.outputs.mode": "full",
+def job_allowed(job, *, ancestor_results=(), cancelled=False, **changes):
+    """Evaluate a Pages guard, including Actions' implicit ancestor success check.
+
+    This bounded evaluator supports the workflow's boolean/comparison grammar and
+    status functions; it does not simulate the hosted scheduler or deployment.
+    """
+    values = {"needs.changes.result": "success", "needs.checks.result": "success",
+              "needs.changes.outputs.mode": "full",
+              "needs.pages-build.result": "success",
               "github.ref": "refs/heads/main", "github.event_name": "push",
               "github.event.repository.private": False, **changes}
-    expression = re.search(r"^    if: \$\{\{ (.*?) \}\}$", jobs()["pages-build"], re.MULTILINE)[1]
-    expression = re.sub(r"\b(?:needs|github)\.[\w.]+", lambda match: repr(values[match[0]]), expression)
+    block = jobs()[job]
+    ancestor_results = (*ancestor_results, *(values[f"needs.{name}.result"] for name in needs(block)))
+    match = re.search(r"^    if: \$\{\{ (.*?) \}\}$", block, re.MULTILINE)
+    expression = match[1] if match else "True"
+    status = {"always": True, "cancelled": cancelled,
+              "success": not cancelled and all(result == "success" for result in ancestor_results),
+              "failure": "failure" in ancestor_results}
+    if not re.search(r"\b(?:always|cancelled|success|failure)\(\)", expression):
+        if not status["success"]:
+            return False
+    expression = re.sub(r"\b(always|cancelled|success|failure)\(\)",
+                        lambda match: repr(status[match[1]]), expression)
+    expression = re.sub(r"\b(?:needs|github)\.[\w.-]+", lambda match: repr(values[match[0]]), expression)
     expression = expression.replace("&&", " and ").replace("||", " or ")
     expression = re.sub(r"!(?!=)", "not ", expression)
     tree = ast.parse(expression, mode="eval")
@@ -42,6 +59,11 @@ def build_allowed(**changes):
     if any(not isinstance(node, allowed) for node in ast.walk(tree)):
         raise ValueError("Unsupported Pages guard expression")
     return eval(compile(tree, str(WORKFLOW), "eval"), {"__builtins__": {}}, {})
+
+
+def build_allowed(**changes):
+    """Evaluate the build guard for the public-main publication policy cases."""
+    return job_allowed("pages-build", **changes)
 
 
 class PagesGateTests(unittest.TestCase):
@@ -53,8 +75,24 @@ class PagesGateTests(unittest.TestCase):
         self.assertEqual(needs(graph["checks"]), validation)
         self.assertEqual(needs(graph["pages-build"]), {"changes", "checks"})
         self.assertEqual(needs(graph["pages-deploy"]), {"checks", "pages-build"})
-        # Its default success condition must retain the build dependency's refusal/skip.
-        self.assertIsNone(re.search(r"^    if:", graph["pages-deploy"], re.MULTILINE))
+
+    def test_intentional_upstream_skip_does_not_suppress_qualified_pages_jobs(self):
+        # Full main CI skips quick-compile, then the aggregate checks job succeeds.
+        for job in ("pages-build", "pages-deploy"):
+            with self.subTest(job=job):
+                self.assertTrue(job_allowed(job, ancestor_results=("success", "skipped", "success")))
+
+    def test_failed_or_unfinished_dependencies_and_cancellation_cannot_publish(self):
+        for job in ("pages-build", "pages-deploy"):
+            for result in ("failure", "cancelled", "skipped", "in_progress", "", None):
+                with self.subTest(job=job, checks=result):
+                    self.assertFalse(job_allowed(job, ancestor_results=("skipped",),
+                                                 **{"needs.checks.result": result}))
+            with self.subTest(job=job, cancelled=True):
+                self.assertFalse(job_allowed(job, cancelled=True))
+        for result in ("failure", "cancelled", "skipped", "in_progress", "", None):
+            with self.subTest(build=result):
+                self.assertFalse(job_allowed("pages-deploy", **{"needs.pages-build.result": result}))
 
     def test_only_successful_full_main_pushes_and_manual_runs_can_publish(self):
         self.assertTrue(build_allowed())

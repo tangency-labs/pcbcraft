@@ -129,8 +129,8 @@ as explicitly unconnected. Without a symbol, `mapping` is empty and
 `unconnected_pads` is omitted. Multiple lands can belong to one terminal, but one pad cannot
 belong to two terminals. Identifier spelling is preserved, including `01`, `EP`
 and alphanumeric names. Names, positions and package size codes never establish
-a map. Parts support at most 64 packages; this first native contract retains
-the current 128-terminal/pad limits.
+a map. Parts support at most 64 packages; a package maps at most 1,024
+terminals and 1,024 pads, matching the symbol and footprint limits.
 
 Physical assignments preserve a single-pad string or a multi-pad array per
 terminal, plus optional `unconnected_pads`. Multi-pad/NC assignments require
@@ -165,7 +165,10 @@ connector can declare contact count, pitch and rated current; an IC can declare
 supply-voltage limits and functional choices. These are fields of category
 definitions, not new top-level part kinds. A part's optional `primary_value`
 must name a quantity field in its exact category. Fixed values must name existing
-fields and satisfy their types, units, bounds and permitted choices.
+fields and satisfy their types, units, bounds and permitted choices. A unit
+error reports the category field ID when preparing a part or manufacturer
+record, applying an instance requirement, or editing an explicitly bound
+primary Value. This uses the category's existing field IDs and units.
 
 ## Canonical quantities
 

@@ -2,6 +2,7 @@
 use super::{Field, FieldType, display_quantity};
 use pcbcraft_units::quantity::{CanonicalQuantity, validate_quantity};
 use serde::{Deserialize, Serialize};
+
 /// Known fixed requirements of a generic part. Unknown/missing specifications are not fixed values.
 /// Decimal strings are canonical base-unit values, preserving precision across JSON consumers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +30,13 @@ impl Value {
         }
         Ok(())
     }
+    /// Validate a standalone map entry and identify the field and any supplied quantity unit on refusal.
+    pub(super) fn validate_entry(&self, id: &str) -> Result<(), String> {
+        self.validate().map_err(|error| match self {
+            Self::Quantity { unit, .. } => format!("{id} (unit {unit:?}): {error}"),
+            _ => format!("{id}: {error}"),
+        })
+    }
     /// Readable presentation text; quantities use SI prefixes via [`display_quantity`] and parse back exactly.
     pub fn display(&self) -> String {
         match self {
@@ -42,7 +50,12 @@ impl Value {
     pub fn validate_field(&self, field: &Field) -> Result<(), String> {
         self.validate()?;
         let valid = match (self, &field.value_type) {
-            (Self::Quantity { unit, .. }, FieldType::Quantity { unit: expected, .. }) => unit == expected,
+            (Self::Quantity { unit, .. }, FieldType::Quantity { unit: expected, .. }) => {
+                if unit != expected {
+                    return Err(format!("Expected unit {expected}, got {unit}."));
+                }
+                true
+            }
             (Self::Choice { value }, FieldType::Choice { choices }) => choices.contains(value),
             (Self::Integer { value }, FieldType::Integer { minimum, maximum }) => (*minimum..=*maximum).contains(value),
             (Self::Text { .. }, FieldType::Text {}) | (Self::Boolean { .. }, FieldType::Boolean {}) => true,
