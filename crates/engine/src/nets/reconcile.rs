@@ -1,6 +1,6 @@
 //! Transactional continuation evidence comes from frozen before/after graphs, never saved members.
 
-use super::{Anchor, Lineage, MAX_RECORDS, Record, Registry, Retirement, Scope, State, graph::Graph};
+use super::{Anchor, Appearance, Lineage, MAX_RECORDS, Record, Registry, Retirement, Scope, State, graph::Graph};
 use crate::{CommandError, Project, board::update::SourceCapture};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -63,6 +63,25 @@ fn unique(ids: impl IntoIterator<Item = Uuid>) -> Vec<Uuid> {
     ids.into_iter().collect::<BTreeSet<_>>().into_iter().collect()
 }
 
+/// Choose the drawing appearance a rebuilt successor inherits from its contributing sources.
+///
+/// Appearance is net-owned presentation intent, so a successor keeps the effective override of
+/// any source it merges or splits from, even after that source retires: `wire_appearances` reads
+/// only active records, and leaving a fresh successor unset would silently drop the override.
+/// A single source override is inherited unchanged. Conflicting overrides resolve to the source
+/// with the lowest UUID, matching the UUID-sorted registry and `unique()` ordering so the result
+/// never depends on graph traversal or authoring order. Sources without an override contribute
+/// nothing, leaving an unstyled net unstyled. Retired records are not consulted for their state
+/// and always keep their own saved appearance as historical evidence.
+fn inherited_appearance(parents: &[usize], by_source: &BTreeMap<usize, Record>) -> Option<Appearance> {
+    parents
+        .iter()
+        .filter_map(|source| by_source.get(source))
+        .filter(|record| record.appearance.is_some())
+        .min_by_key(|record| record.id)
+        .and_then(|record| record.appearance)
+}
+
 /// Preserve source-qualified identity evidence even when first-board creation changes live scope.
 fn source_anchor(anchor: &Anchor, scope: Scope) -> Anchor {
     Anchor { scope, ..anchor.clone() }
@@ -109,7 +128,9 @@ impl Project {
     /// Stored pair members and review intent are preserved, not retargeted or evaluated here.
     /// An explicit pair edit combined with a topology change is refused rather than discarded.
     /// Newly adopted registries and changed registries on unchanged topology also validate,
-    /// even when they contain pairs but no net records.
+    /// even when they contain pairs but no net records. Rebuilt successors carry forward the
+    /// effective appearance of their contributing sources; conflicting overrides resolve to the
+    /// lowest source UUID (see [`inherited_appearance`]).
     pub(crate) fn reconcile_nets(&mut self, before: Option<&Project>) -> Result<(), CommandError> {
         let Some(before) = before.filter(|before| before.same_document(self)) else {
             return self.net_registry.validate(self).map_err(CommandError::InvalidParams);
@@ -239,6 +260,7 @@ impl Project {
                 }
             }
             record.class_bindings = inherited.into_iter().collect();
+            record.appearance = inherited_appearance(parents, &by_source);
             assigned[index] = Some(record.id);
             result.insert(record.id, record);
         }

@@ -234,10 +234,16 @@ fn anchor_endpoint(project: &Project, anchor: &Anchor) -> Option<WireEndpoint> {
 /// Resolve a wire to the current logical network that owns it.
 ///
 /// Terminals, labels and hierarchical ports project straight to a graph anchor. Junction-only
-/// geometry (including junction-to-junction wires) is instead resolved through its electrical
-/// network: find the electrical group of any endpoint, then the current logical network whose
-/// anchors belong to that same group. Geometry with no supported identity resolves to `None`.
-fn wire_network(project: &Project, graph: &Graph, electrical: &Connectivity, sheet: SheetTarget, endpoints: [WireEndpoint; 2]) -> Option<usize> {
+/// geometry (including junction-to-junction wires) is instead resolved through `by_net`, a map
+/// built once per derivation from an electrical network to the first current logical network
+/// whose anchors belong to it. Geometry with no supported identity resolves to `None`.
+fn wire_network(
+    graph: &Graph,
+    electrical: &Connectivity,
+    by_net: &BTreeMap<usize, usize>,
+    sheet: SheetTarget,
+    endpoints: [WireEndpoint; 2],
+) -> Option<usize> {
     for endpoint in endpoints {
         if let Some(anchor) = graph.endpoint_anchor(sheet, endpoint)
             && let Some(index) = graph.network(anchor)
@@ -246,10 +252,7 @@ fn wire_network(project: &Project, graph: &Graph, electrical: &Connectivity, she
         }
     }
     let net = endpoints.into_iter().find_map(|endpoint| electrical.net_index_for_endpoint(endpoint))?;
-    graph
-        .by_anchor
-        .iter()
-        .find_map(|(anchor, index)| (electrical.net_index_for_endpoint(anchor_endpoint(project, anchor)?) == Some(net)).then_some(*index))
+    by_net.get(&net).copied()
 }
 
 impl Project {
@@ -257,8 +260,9 @@ impl Project {
     ///
     /// This read builds the electrical graph only when at least one override exists, so ordinary
     /// projects keep the existing paint cost. A single network-index-to-appearance map replaces a
-    /// per-wire registry scan. Wires without a supported current identity are omitted; selection
-    /// and highlight colors still take precedence when drawing.
+    /// per-wire registry scan, and one electrical-to-logical network lookup is reused for every
+    /// fallback wire instead of rescanning the graph. Wires without a supported current identity
+    /// are omitted; selection and highlight colors still take precedence when drawing.
     pub fn wire_appearances(&self) -> Result<BTreeMap<String, Appearance>, CommandError> {
         if !self.net_registry.has_appearance() {
             return Ok(BTreeMap::new());
@@ -275,11 +279,19 @@ impl Project {
             return Ok(BTreeMap::new());
         }
         let electrical = self.electrical_connectivity();
+        let mut by_net: BTreeMap<usize, usize> = BTreeMap::new();
+        for (anchor, index) in &graph.by_anchor {
+            if let Some(endpoint) = anchor_endpoint(self, anchor)
+                && let Some(net) = electrical.net_index_for_endpoint(endpoint)
+            {
+                by_net.entry(net).or_insert(*index);
+            }
+        }
         let mut result = BTreeMap::new();
         for sheet in self.sheets() {
             let own = self.for_sheet(sheet.target).ok_or_else(|| CommandError::NotFound("Unknown appearance sheet.".into()))?;
             for wire in own.wires() {
-                let Some(network) = wire_network(self, &graph, &electrical, sheet.target, wire.endpoints()) else { continue };
+                let Some(network) = wire_network(&graph, &electrical, &by_net, sheet.target, wire.endpoints()) else { continue };
                 if let Some(appearance) = network_appearance.get(&network) {
                     result.insert(wire.id(), *appearance);
                 }
@@ -289,13 +301,21 @@ impl Project {
     }
 }
 
-/// Publish the strict patch schema used by the appearance command.
-///
-/// The object branch intentionally stays unchanged: adding a property inside this `oneOf` is a
-/// breaking command-contract change that would require a `COMMAND_API_VERSION` bump. The `clear`
-/// marker is documented on the parameter summary and enforced by [`validate_appearance_patch`].
+/// The JSON schema of the command patch object, kept separate from [`Appearance::schema`] so the
+/// saved record never advertises command-only markers. This adds the `clear` channel array with
+/// exactly the values [`validate_appearance_patch`] accepts; `color` and `width_cp` keep the
+/// saved record's shape and bounds.
+fn patch_schema() -> Value {
+    let mut schema = Appearance::schema();
+    schema["properties"]["clear"] = json!({"type":"array","items":{"type":"string","enum":["color","width_cp"]}});
+    schema
+}
+
+/// Publish the strict patch schema used by the appearance command: a null full reset or the patch
+/// object. The object is closed, so unknown keys and invalid channels are refused by
+/// [`validate_appearance_patch`].
 pub(crate) fn appearance_param_schema() -> Value {
-    json!({"oneOf":[{"type":"null"}, Appearance::schema()]})
+    json!({"oneOf":[{"type":"null"}, patch_schema()]})
 }
 
 /// Validate the command patch contract without promoting a net or editing the project. Accepts a

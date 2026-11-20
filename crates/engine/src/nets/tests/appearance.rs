@@ -98,3 +98,19 @@ fn appearance_clear_marker_removes_one_channel_and_is_one_undo_step() {
     apply(&mut s, SET_APPEARANCE, json!({"target":target,"appearance":{}}));
     assert_eq!(s.project().unwrap().net_registry.record(id).unwrap().appearance, None);
 }
+
+/// The published patch schema advertises exactly the clear channels the command accepts, while
+/// the saved record schema stays free of command-only markers.
+#[test]
+fn appearance_patch_schema_advertises_supported_clear_channels() {
+    assert!(Appearance::schema()["properties"].get("clear").is_none());
+
+    let clear = &crate::nets::appearance_param_schema()["oneOf"][1]["properties"]["clear"];
+    assert_eq!(clear["type"], "array");
+    assert_eq!(clear["items"]["enum"], json!(["color", "width_cp"]));
+
+    for channel in ["color", "width_cp"] {
+        assert!(crate::nets::validate_appearance_patch(&json!({"clear":[channel]})).is_ok());
+    }
+    assert!(crate::nets::validate_appearance_patch(&json!({"clear":["unknown"]})).is_err());
+}

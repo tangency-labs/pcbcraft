@@ -11,6 +11,7 @@ mod appearance;
 mod codec;
 mod numbering;
 mod pairs;
+mod reconciliation;
 mod selection;
 
 /// All circuit authoring uses the same revision-checked command path as GUI and MCP.
