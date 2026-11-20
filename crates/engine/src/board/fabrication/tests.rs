@@ -927,10 +927,9 @@ fn rotated_maximum_radius_pads_keep_circular_corners() {
                 assert_eq!(aperture.strips, [(diameter, start, end)]);
                 // The core runs along the long axis, 100,000 nm each side of the center.
                 let (x, y) = (100_000. * cos, 100_000. * sin);
-                for (point, sign) in [(start, -1.), (end, 1.)] {
-                    let near = |s: f64| (point.x_nm as f64 - s * x).abs() <= 2. && (point.y_nm as f64 - s * y).abs() <= 2.;
-                    assert!(near(sign) || near(-sign), "{point:?} at {local}/{placed}");
-                }
+                // One endpoint must reach each end, in either order, so a collapsed core fails.
+                let near = |p: Point, s: f64| (p.x_nm as f64 - s * x).abs() <= 2. && (p.y_nm as f64 - s * y).abs() <= 2.;
+                assert!((near(start, -1.) && near(end, 1.)) || (near(start, 1.) && near(end, -1.)), "{start:?}..{end:?} at {local}/{placed}");
             }
         }
     }
