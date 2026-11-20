@@ -50,9 +50,10 @@ impl Session {
 }
 
 /// These commands return data or manage only ephemeral review state. In particular, Copy
-/// returns data without setting a system clipboard, and export/publication preparation does
-/// not write files. Annotation preview keeps only a session-local Apply token, and Apply is
-/// not a read. Loading/removing library sources and Cut are not reads.
+/// returns data without setting a system clipboard. Export/publication preparation does
+/// not write files, and netlist comparison only reads the text it is given. Annotation
+/// preview keeps its proposal and Apply token only in the session. Apply, loading/removing
+/// library sources, and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
@@ -66,6 +67,7 @@ fn is_read_command(id: &str) -> bool {
             | parameters::RESOLVE
             | annotation::PREVIEW
             | netlist::EXPORT_NETLIST
+            | netlist::COMPARE_NETLIST
             | netlist::EXPORT_BOARD_NETLIST
             | PREVIEW_UPDATE
             | CANCEL_UPDATE
@@ -87,6 +89,7 @@ fn is_read_command(id: &str) -> bool {
             | sources::RESOLVE_PART
             | sources::PARSE_QUANTITY
             | sources::PREVIEW_PIN_REMAP
+            | sources::PREVIEW_FOOTPRINT_REVISION
             | sources::PREPARE_PART_PUBLICATION
             | sources::PREPARE_PUBLICATION
     )

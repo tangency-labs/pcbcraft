@@ -5,12 +5,13 @@ bodies, reads and writes STEP (ISO 10303-21) files and measures them. It is the
 shared base for 3D board inspection and STEP assembly export
 ([#86](https://github.com/tangency-labs/pcbcraft/issues/86)). This page records
 which kernel it uses, why, how the dependency was qualified and what is still
-open. No command, panel or saved format uses the crate yet.
+open. The board substrate adapter uses this crate; no command, panel or saved
+format uses it yet.
 
 ## Choice
 
 The kernel is SolidCraft's `solidcore`, a Rust port of the SMLib and SM_API parts
-of NVIDIA's USD BRep. PCBcraft uses four crates from it:
+of NVIDIA's USD BRep. PCBcraft uses these crates from it:
 
 | Crate | Job |
 | --- | --- |
@@ -18,6 +19,7 @@ of NVIDIA's USD BRep. PCBcraft uses four crates from it:
 | `solidcore-ops` | Modelling calls on kernel bodies: primitives, copies and transforms, record conversion, bounding boxes, assembly placement matrices, the session's panic guard |
 | `solidcore-record` | The product structure of a STEP file: parts, assemblies, occurrences and their placements, in millimetres |
 | `solidcore-step` | STEP read (AP203, AP214 and AP242 geometry and topology, units) and AP242 write with products, names and colours |
+| `solidcore-tess` | Tessellation of a derived substrate body; already pinned through the Craft toolkit |
 
 They come from `https://github.com/tangency-labs/solidcraft.git` at
 `73bdb6cdd39efc3899fb54e7217289a630a89efe`, the revision the workspace already
@@ -89,6 +91,27 @@ could later move into an engine module if that proves simpler.
   design proposes, or the dimensions a simple body was built from. Bodies, boxes
   and meshes are derived and rebuilt on load, so a kernel change never breaks a
   saved file.
+
+### Board substrate
+
+`pcbcraft-board-solid` builds a read-only solid from one addressed board, without
+linking the kernel into `pcbcraft-engine`. It uses the centre lines of Board
+Outline drawings, mapped into the board/1 frame described below. Open paths can join only at exactly
+coincident endpoints. Nested contours alternate material and void regardless of
+winding; crossings, touches and unfinished contours are refused. Round through
+pad and via drills are removed at their resolved board centres, using drill
+rather than copper-land diameters. Circular footprint non-plated holes are removed
+at their resolved board centres using their finished diameters. This does not
+infer slots, which the board document cannot yet represent.
+
+The solid is in the shared board/1 frame: the origin at board zero, +X along
+board X, +Y along board −Y, and Z = 0 at the finished top surface. The body spans
+−t..0, where t is the stackup's declared nominal finished thickness, not its
+minimum or the sum of stock plies. If there is no finished thickness
+declaration, the result carries the explicit nominal fallback of 1.6 mm. The solid and its optional triangle mesh are derived memory objects;
+no document, undo history, file format, viewport or STEP output changes. On a
+build without the optional browser kernel, valid substrate inputs return
+`kernel_unavailable`.
 
 ### Later integrations
 
@@ -299,7 +322,5 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   native release binary for a full kernel round trip. The browser size is not
   measured; the kernel should load there only when a 3D view or STEP action
   needs it.
-- **Distance, meshes and assemblies.** Tessellation for the 3D view, body
-  distance and assembly export are not in the crate yet. They
-  are added as new functions over the same `Body` type without changing the
-  error codes or units.
+- **Distance and assemblies.** Body distance, assembly export and a 3D view
+  are not implemented here. The substrate tessellation supplies geometry only.
