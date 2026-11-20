@@ -1,0 +1,21 @@
+[package]
+name = "pcbcraft-board-solid"
+description = "Read-only board substrate geometry from an addressed PCBcraft board"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+pcbcraft-engine = { workspace = true }
+pcbcraft-geometry = { path = "../geometry" }
+
+[features]
+wasm-kernel = ["pcbcraft-geometry/wasm-kernel"]
+
+[dev-dependencies]
+serde_json = { workspace = true }
