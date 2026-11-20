@@ -2951,7 +2951,7 @@ impl BoardFacts {
                         if !board.arcs.is_empty() {
                             return Err("teardrop checking does not support boards with circular copper arcs".into());
                         }
-                    } else if board.teardrops[self.index - 1].id >= intent.id {
+                    } else if board.teardrops.get(self.index - 1).is_none_or(|previous| previous.id >= intent.id) {
                         return Err("too many or non-unique teardrop identities".into());
                     }
                     let view = project.board_target().and_then(|target| project.board_view(target)).ok_or("teardrops require a physical board")?;
