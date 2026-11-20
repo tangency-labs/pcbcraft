@@ -544,10 +544,12 @@ applicable. These actions target that pane, including its remembered document
 navigation. Dividers resize panes, with narrow areas stacking vertically.
 
 On desktop, drag a pane header over a destination pane and choose **Split up** or
-**Split down** beneath that pane's header. A new view of the dragged document
-opens inside the selected pane; its outer bounds and the original source pane
-stay in place. Its top, bottom, left and right edges offer the same pane-specific
-placement. Dropping on the source pane opens another view there.
+**Split down** beneath that pane's header. Between different panes this moves the
+existing view and its cached documents, then collapses the old slot. Neighbouring
+panes expand into the vacated space; with only two panes, the resulting split can
+span the window. Its top, bottom, left and right edges offer the same placement.
+Dropping onto the source pane itself, or choosing Split up/down in its context
+menu, opens another view there.
 
 The drag list also offers **Split window up** and **Split window down**. These move
 the existing pane above or below the window's entire remaining layout, closing

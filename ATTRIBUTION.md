@@ -1813,6 +1813,6 @@ does not own PCBcraft's view IDs, native-window transfers or saved split trees;
 those remain host responsibilities. Split up/down in the pane tab menu uses
 PCBcraft's shared Craft menu adapter. The drag list shares its menu surface and
 tracks the captured pointer explicitly because ordinary toolkit menu rows
-activate on a click originating inside the row. Pane-specific copies and full-window
+activate on a click originating inside the row. Explicit view copies and full-window
 placement reuse the existing view fork and split-tree operations. No dependency, external artwork
 or project file format was added.

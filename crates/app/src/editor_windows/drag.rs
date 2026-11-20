@@ -207,7 +207,7 @@ impl PcbApp {
                 return side.map(|side| DropDestination::Duplicate(input, side));
             }
             return Some(match side {
-                Some(side) => DropDestination::Duplicate(input, side),
+                Some(side) => DropDestination::Split(input, side),
                 None => DropDestination::Reorder(input),
             });
         }
@@ -231,7 +231,7 @@ impl PcbApp {
             if let Some((target, side)) = target {
                 let target = self.views.view(target)?.control_input(&self.session)?;
                 return Some(match side {
-                    Some(side) => DropDestination::Duplicate(target, side),
+                    Some(side) => DropDestination::Split(target, side),
                     None => DropDestination::Beside(target),
                 });
             }
@@ -298,11 +298,12 @@ impl PcbApp {
             );
             let target = match hovered {
                 Some(pcbcraft_chrome::editor::WindowDrop::NewWindow) => Some(DropDestination::NewWindow),
-                Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) => self
-                    .views
-                    .view(target_pane)
-                    .and_then(|view| view.control_input(&self.session))
-                    .map(|target| DropDestination::Duplicate(target, side)),
+                Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) if target_pane == drag.source.view() => {
+                    Some(DropDestination::Duplicate(drag.source, side))
+                }
+                Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) => {
+                    self.views.view(target_pane).and_then(|view| view.control_input(&self.session)).map(|target| DropDestination::Split(target, side))
+                }
                 Some(pcbcraft_chrome::editor::WindowDrop::WindowSplit(side)) => self
                     .views
                     .view(target_pane)
@@ -391,9 +392,9 @@ impl PcbApp {
     }
 
     /// Commit only after every host has restored its render slots. A release in another pane
-    /// creates a view inside that destination without removing the source. Explicit window
-    /// targets move the original pane across the full window; outside native bounds detaches
-    /// it. This queue uses the same handlers as other view controls.
+    /// moves the original group and collapses its old slot. Splitting the source pane itself
+    /// creates another view. Explicit window targets wrap the full remaining layout, and a
+    /// release outside native bounds detaches. All paths share the usual view-action handlers.
     pub(crate) fn finish_editor_drag(&mut self, ctx: &Context) {
         self.windows.drag_geometry.retain(|host, _| self.views.hosts.contains_key(host));
         self.windows.spawn_positions.retain(|host, _| self.views.hosts.contains_key(host));
