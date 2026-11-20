@@ -242,6 +242,89 @@ fn hierarchy_labels_point_to_their_contacts() {
     }
 }
 
+/// Look up the Type 3 glyph stream emitted for `target` via `/ToUnicode` and `/CharProcs`.
+fn glyph_program<'a>(objects: &[&'a str], target: char) -> &'a str {
+    let want = target.to_string();
+    let resources = objects[2].split_once("/Font << ").unwrap().1.split_once(">>").unwrap().0;
+    let resources: Vec<_> = resources.split_whitespace().collect();
+    let (resources, remainder) = resources.as_chunks::<4>();
+    assert!(remainder.is_empty());
+    for resource in resources {
+        let font = objects[resource[1].parse::<usize>().unwrap() - 1];
+        let cmap_id = font.split_once("/ToUnicode ").unwrap().1.split_whitespace().next().unwrap().parse::<usize>().unwrap();
+        let mut inside = false;
+        for line in objects[cmap_id - 1].lines() {
+            if line.ends_with(" beginbfchar") {
+                inside = true;
+            } else if line == "endbfchar" {
+                inside = false;
+            } else if inside {
+                let (code, hex) = line.trim_start_matches('<').trim_end_matches('>').split_once("> <").unwrap();
+                let (units, remainder) = hex.as_bytes().as_chunks::<4>();
+                assert!(remainder.is_empty());
+                let utf16: Vec<_> = units.iter().map(|unit| u16::from_str_radix(std::str::from_utf8(unit).unwrap(), 16).unwrap()).collect();
+                if String::from_utf16(&utf16).unwrap() == want {
+                    let code = u8::from_str_radix(code, 16).unwrap();
+                    let procs = font.split_once("/CharProcs << ").unwrap().1.split_once(">>").unwrap().0;
+                    let proc_id = procs.split_once(&format!(" /g{code} ")).unwrap().1.split_whitespace().next().unwrap().parse::<usize>().unwrap();
+                    return objects[proc_id - 1].split_once("\nstream\n").unwrap().1.split_once("\nendstream").unwrap().0;
+                }
+            }
+        }
+    }
+    panic!("missing glyph for {target:?}");
+}
+
+/// Resistor values with `Ω` (and `Ω`) draw a visible ohm glyph rather than falling back to `?`,
+/// while still extracting as the original Unicode through `/ToUnicode`. Common EE unit symbols
+/// (`µ`, `μ`, `°`, `±`) likewise emit real glyphs instead of `?`.
+#[test]
+fn ohm_and_common_unit_symbols_draw_real_glyphs() {
+    let (mut session, target) = fixture();
+    let id = target.id();
+    let view = session.project().unwrap().for_sheet(target).unwrap();
+    let r1 = view.symbols()[0].id();
+    let r2 = view.symbols()[1].id();
+    let r3 = view.symbols()[2].id();
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"sheet":id,"symbol":r1,"reference":"R1","value":"10 kΩ"}));
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"sheet":id,"symbol":r2,"reference":"R2","value":"10 k\u{2126} 10 µF 10 μF"}));
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"sheet":id,"symbol":r3,"reference":"R3","value":"±5% 25°C ?"}));
+    let bytes = export(session.project().unwrap(), target).unwrap();
+    let objects = objects(&bytes);
+    let text = extract(&objects);
+    for expected in ["10 kΩ", "10 k\u{2126} 10 µF 10 μF", "±5% 25°C ?"] {
+        assert!(text.lines().any(|line| line == expected), "missing {expected}: {text}");
+    }
+    let question = glyph_program(&objects, '?');
+    let omega = glyph_program(&objects, 'Ω');
+    let ohm_sign = glyph_program(&objects, '\u{2126}');
+    assert_ne!(omega, question, "Ω fell back to '?'");
+    assert_eq!(ohm_sign, omega, "U+2126 should draw the same ohm glyph as U+03A9");
+    let points: Vec<[f64; 2]> = omega
+        .lines()
+        .filter_map(|line| line.strip_suffix(" m").or_else(|| line.strip_suffix(" l")))
+        .map(|coords| {
+            let (x, y) = coords.split_once(' ').unwrap();
+            [x.parse().unwrap(), y.parse().unwrap()]
+        })
+        .collect();
+    assert!(points.len() >= 10, "ohm glyph should have a smooth arch: {points:?}");
+    let first = points[0];
+    let second = points[1];
+    let before_last = points[points.len() - 2];
+    let last = points[points.len() - 1];
+    // Left and right feet sit on the baseline; the arch peaks symmetrically at full cap height.
+    assert!(first[1].abs() < 0.1 && second[1].abs() < 0.1 && second[0] > first[0]);
+    assert!(before_last[1].abs() < 0.1 && last[1].abs() < 0.1 && last[0] > before_last[0]);
+    let apex = points.iter().copied().max_by(|a, b| a[1].total_cmp(&b[1])).unwrap();
+    assert!((apex[1] - 930.).abs() < 1., "unexpected ohm arch height: {apex:?}");
+    assert!((apex[0] - (first[0] + last[0]) / 2.).abs() < 1., "ohm arch is not centered: {apex:?}");
+    for symbol in ['µ', 'μ', '°', '±'] {
+        assert_ne!(glyph_program(&objects, symbol), question, "{symbol:?} fell back to '?'");
+    }
+    assert_eq!(glyph_program(&objects, 'μ'), glyph_program(&objects, 'µ'));
+}
+
 /// An independent viewer's text extractor can read the exact same command-built fixture.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

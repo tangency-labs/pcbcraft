@@ -40,13 +40,46 @@ pub(crate) struct StrokeGlyph {
     pub paths: &'static [Vec<[f64; 2]>],
 }
 
-/// Borrow the regular face's glyph. Unknown characters draw a question mark; a caller can
+/// Single-line capital omega (`Ω` / `Ω`) in the regular face's Y-up font units (`cap_height = 680`).
+/// Keeps `strokes.json` untouched as the direct OFL conversion while giving PDF schematic values
+/// a real ohm glyph instead of `?`.
+fn omega_glyph() -> &'static Glyph {
+    static OMEGA: OnceLock<Glyph> = OnceLock::new();
+    OMEGA.get_or_init(|| {
+        const STEPS: usize = 32;
+        const CX: f64 = 358.;
+        const CY: f64 = 390.;
+        const RX: f64 = 248.;
+        const RY: f64 = 290.;
+        let start = 238_f64.to_radians();
+        let end = (-58_f64).to_radians();
+        let mut path = Vec::with_capacity(STEPS + 5);
+        path.push([95., 0.]);
+        path.push([260., 0.]);
+        for i in 0..=STEPS {
+            let angle = start + (end - start) * i as f64 / STEPS as f64;
+            path.push([CX + RX * angle.cos(), CY + RY * angle.sin()]);
+        }
+        path.push([456., 0.]);
+        path.push([621., 0.]);
+        Glyph { advance: 716., paths: vec![path] }
+    })
+}
+
+/// Borrow the regular face's glyph. Common schematic ohm (`Ω`, `Ω`) and Greek-mu (`μ`) characters
+/// resolve to real stroke outlines; other unknown characters draw a question mark while callers
 /// still map the encoded glyph back to the original Unicode scalar.
 pub(crate) fn stroke_glyph(c: char) -> Option<StrokeGlyph> {
     let font = font()?;
-    let mut utf8 = [0; 4];
-    let key: &str = c.encode_utf8(&mut utf8);
-    let glyph = font.glyphs.get(key).or_else(|| font.glyphs.get("?"))?;
+    let glyph = match c {
+        'Ω' | '\u{2126}' => omega_glyph(),
+        'μ' => font.glyphs.get("µ").or_else(|| font.glyphs.get("?"))?,
+        _ => {
+            let mut utf8 = [0; 4];
+            let key: &str = c.encode_utf8(&mut utf8);
+            font.glyphs.get(key).or_else(|| font.glyphs.get("?"))?
+        }
+    };
     Some(StrokeGlyph { cap_height: font.cap_height, advance: glyph.advance, paths: &glyph.paths })
 }
 
