@@ -1816,3 +1816,12 @@ tracks the captured pointer explicitly because ordinary toolkit menu rows
 activate on a click originating inside the row. Explicit view copies and full-window
 placement reuse the existing view fork and split-tree operations. No dependency, external artwork
 or project file format was added.
+
+## Windows startup diagnostics
+
+The launcher uses `win32console` 0.1.5 (MIT), from
+<https://github.com/Neo-Ciber94/win32console>, for its safe `AttachConsole` and
+`SetStdHandle` wrappers. Only these wrappers and the borrowed handle type are
+used; standard Rust I/O owns the console file and writes Unicode diagnostics.
+The dependency is Windows-only. PCBcraft's `unsafe_code = "forbid"` remains in
+force, and no console is created for GUI launches without a launching console.

@@ -16,28 +16,43 @@ def commands() -> list[list[str]]:
             base + ["-p", "pcbcraft-app", "--features", "performance-harness", "performance::"]]
 
 
-def stage_lifecycle(destination: Path) -> None:
-    """Read Cargo's exact executable path; ambiguous/missing artifacts fail instead of globbing."""
-    command = ["cargo", "test", "--locked", "--profile", "ci", "-p", "pcbcraft", "--test",
-               "native_window_lifecycle", "--no-run", "--message-format=json"]
+def cargo_executable(command: list[str], name: str) -> Path:
+    """Require Cargo to name exactly one matching Windows executable."""
     result = subprocess.run(command, text=True, encoding="utf-8", stdout=subprocess.PIPE, check=True)
     executables = []
     for line in result.stdout.splitlines():
         item = json.loads(line)
-        if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == "native_window_lifecycle" and item.get("executable"):
+        if item.get("reason") == "compiler-artifact" and item.get("target", {}).get("name") == name and item.get("executable"):
             executables.append(Path(item["executable"]))
         elif item.get("reason") == "compiler-message":
             print(item.get("message", {}).get("rendered", ""))
     if len(executables) != 1 or executables[0].suffix != ".exe":
-        raise RuntimeError("Cargo did not report exactly one Windows lifecycle executable")
+        raise RuntimeError(f"Cargo did not report exactly one Windows {name} executable")
+    return executables[0]
+
+
+def stage_lifecycle(destination: Path) -> None:
+    """Read Cargo's exact executable path; ambiguous/missing artifacts fail instead of globbing."""
+    command = ["cargo", "test", "--locked", "--profile", "ci", "-p", "pcbcraft", "--test",
+               "native_window_lifecycle", "--no-run", "--message-format=json"]
+    executable = cargo_executable(command, "native_window_lifecycle")
     destination.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(executables[0], destination / "native_window_lifecycle.exe")
+    shutil.copy2(executable, destination / "native_window_lifecycle.exe")
     # Keep MSVC's optional line-table symbols under the name recorded in the executable.
-    symbols = executables[0].with_suffix(".pdb")
+    symbols = executable.with_suffix(".pdb")
     if symbols.is_file():
         shutil.copy2(symbols, destination / symbols.name)
     for source in (Path("LICENSE-MIT"), Path("LICENSE-APACHE"), Path("crates/geometry/SOLIDCORE-NOTICE")):
         shutil.copy2(source, destination / source.name)
+
+
+def stage_startup_launcher(destination: Path) -> None:
+    """Exercise release subsystem selection while reusing the CI dependency builds."""
+    command = ["cargo", "rustc", "--locked", "--profile", "ci", "-p", "pcbcraft", "--bin", "pcbcraft",
+               "--message-format=json", "--", "-C", "debug-assertions=off"]
+    executable = cargo_executable(command, "pcbcraft")
+    destination.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(executable, destination / "pcbcraft.exe")
 
 
 def main() -> None:
@@ -49,6 +64,7 @@ def main() -> None:
         print("Running: " + " ".join(command), flush=True)
         subprocess.run(command, check=True)
     stage_lifecycle(args.artifacts)
+    stage_startup_launcher(args.artifacts)
 
 
 if __name__ == "__main__":

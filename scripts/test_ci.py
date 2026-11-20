@@ -311,6 +311,18 @@ class WindowsTests(unittest.TestCase):
         self.assertTrue(any("performance::" in c for c in commands))
         self.assertTrue(any("performance-harness" in c and "clippy" in c for c in commands))
 
+    def test_startup_console_stages_the_real_gui_launcher(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            executable = root / "pcbcraft.exe"
+            executable.write_bytes(b"GUI executable")
+            artifact = {"reason": "compiler-artifact", "target": {"name": "pcbcraft"}, "executable": str(executable)}
+            result = subprocess.CompletedProcess([], 0, json.dumps(artifact), "")
+            with patch("ci.windows.subprocess.run", return_value=result) as run:
+                windows.stage_startup_launcher(root / "staged")
+            self.assertEqual((root / "staged/pcbcraft.exe").read_bytes(), b"GUI executable")
+            self.assertEqual(run.call_args.args[0][-3:], ["--", "-C", "debug-assertions=off"])
+
     def test_smoke_rejects_zero_tests_and_nonzero_exit(self):
         for code, output in ((0, "test result: ok. 0 passed; 0 failed;"), (1, "test result: ok. 1 passed; 0 failed;")):
             result = subprocess.CompletedProcess([], code, output, "")
