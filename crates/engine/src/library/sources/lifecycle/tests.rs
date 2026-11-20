@@ -341,7 +341,7 @@ fn designator_lock_and_assessment_share_project_52_and_read_historical_51() {
         let locked = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&locked[crate::persistence::ENTRY_POINT]).unwrap();
         assert_eq!(entry["format"], "pcbcraft-project/52");
-        assert_eq!(entry.get("layout_root").is_some(), board);
+        assert!(entry.get("layout_root").is_some());
         assert!(!locked.contains_key("library/lifecycle.json"));
         session.apply(ADOPT, &params(&session, &draft)).unwrap();
         let saved = encode_documents(session.snapshot().unwrap()).unwrap();

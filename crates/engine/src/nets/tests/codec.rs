@@ -140,7 +140,12 @@ fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
                 *registry(&mut value) = Value::Null;
             }
             missing.insert(path.clone(), serde_json::to_vec(&value).unwrap());
-            assert!(decode_documents(&missing).is_err());
+            if absent && !board {
+                // Project/52 makes the embedded registry optional; a board header still names it.
+                assert!(decode_documents(&missing).unwrap().net_registry.records.is_empty());
+            } else {
+                assert!(decode_documents(&missing).is_err());
+            }
         }
         if board {
             let mut bad = docs.clone();

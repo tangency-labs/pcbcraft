@@ -550,7 +550,8 @@ fn saved_record_edges_are_refused() {
             "must name existing part instances and groups",
             "UUID parsing failed",
             "sorted by part instance and group",
-            "Part-group catalog requires project format 24",
+            // Project/52 makes the catalog optional, so its memberships dangle.
+            "must name existing part instances and groups",
             "missing field `groups`",
             "unknown field `extra`",
             "Group IDs must be unique",

@@ -225,7 +225,15 @@ fn decoding_rejects_misplaced_or_invalid_lists() {
     assert!(mutate(ENTRY_POINT, &|v| v["format"] = json!("pcbcraft-project/21")).is_err());
     assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({})).is_err());
     assert!(mutate(ENTRY_POINT, &|v| v["parameters"] = json!({"bad name":"x"})).is_err());
-    assert!(mutate(ENTRY_POINT, &|v| drop(v.as_object_mut().unwrap().remove("parameters"))).is_err());
+    // Project/52 makes the list optional; project/22 cannot omit it.
+    assert!(mutate(ENTRY_POINT, &|v| drop(v.as_object_mut().unwrap().remove("parameters"))).unwrap().parameters().is_empty());
+    assert!(
+        mutate(ENTRY_POINT, &|v| {
+            v["format"] = json!("pcbcraft-project/22");
+            v.as_object_mut().unwrap().remove("parameters");
+        })
+        .is_err()
+    );
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title":"x".repeat(MAX_VALUE_LEN + 1)})).is_err());
     assert!(mutate(&sheet_file, &|v| v["parameters"] = json!({"Title": 3})).is_err());

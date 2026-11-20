@@ -1242,9 +1242,10 @@ fn saved_catalog_and_adoption_edges_are_refused() {
     let mut names = project.clone();
     names["assembly_profiles"]["revisions"][1]["content"]["name"] = json!("One");
     check("project.json", names, "names must be unique");
+    // Project/52 makes the catalog optional, so dropping it leaves the board adoptions unpinned.
     let mut no_catalog = project.clone();
     no_catalog.as_object_mut().unwrap().remove("assembly_profiles");
-    check("project.json", no_catalog, "assembly profiles require");
+    check("project.json", no_catalog, "reference pinned content revisions");
     for (adoptions, reason) in [(json!([]), "empty assembly_profiles"), (Value::Null, "null")] {
         let mut bad = board.clone();
         bad["assembly_profiles"] = adoptions;

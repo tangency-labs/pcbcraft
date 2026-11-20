@@ -315,8 +315,13 @@ fn native_format_boundary_rejects_invalid_catalogs_and_preserves_other_documents
         bad.insert(ENTRY_POINT.into(), serde_json::to_vec(&value).unwrap());
         assert!(decode_documents(&bad).is_err());
     }
+    // Project/52 makes the catalog optional; project/20 cannot omit it.
     let mut missing = entry.clone();
     missing.as_object_mut().unwrap().remove("net_classes");
+    let mut omitted = documents.clone();
+    omitted.insert(ENTRY_POINT.into(), serde_json::to_vec(&missing).unwrap());
+    assert!(decode_documents(&omitted).unwrap().net_classes().definitions.is_empty());
+    missing["format"] = json!("pcbcraft-project/20");
     let mut bad = documents.clone();
     bad.insert(ENTRY_POINT.into(), serde_json::to_vec(&missing).unwrap());
     assert!(decode_documents(&bad).is_err());

@@ -593,6 +593,7 @@ fn designator_lock_adopts_legacy_metadata_without_changing_an_unlocked_save() {
 
 /// A genuinely pre-watermark project gains allocation metadata on first lock. Undo restores
 /// authored content and the earlier storage home, but must retain that monotonic watermark.
+/// Every save, before and after the lock, writes project/52.
 #[test]
 fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     let mut session = fixture(true);
@@ -602,7 +603,7 @@ fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     Arc::make_mut(&mut historical.board).ownership = crate::board::identity::Ownership::Legacy;
     let historical_documents = persistence::encode_documents(Arc::new(historical)).unwrap();
     let entry: Value = serde_json::from_slice(&historical_documents[persistence::ENTRY_POINT]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/6");
+    assert_eq!(entry["format"], "pcbcraft-project/52");
     for field in ["layout_root", "numeric_id_high_water", "schematic_instances"] {
         assert!(entry.get(field).is_none(), "{field}");
     }
@@ -623,7 +624,7 @@ fn designator_lock_legacy_undo_retains_adopted_allocation_watermark() {
     assert!(restored.components().all(|part| !part.designator_locked()));
     crate::assert_same_content(&before, &restored);
     let restored_documents = documents(&session);
-    assert_eq!(serde_json::from_slice::<Value>(&restored_documents[persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/7");
+    assert_eq!(serde_json::from_slice::<Value>(&restored_documents[persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&restored_documents).unwrap()).unwrap(), restored_documents);
     edit(&mut session, "edit.redo", Value::Null);
     assert_eq!(documents(&session), locked);
