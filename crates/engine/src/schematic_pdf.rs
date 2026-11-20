@@ -16,6 +16,8 @@ use crate::{
 const PT_PER_NM: f64 = 72. / 25_400_000.;
 const STROKE_NM: i64 = 180_000;
 const LABEL_NM: i64 = GRID_NM;
+/// Vertical clearance between a turned body's centre line and its automatic Reference or Value.
+const FIELD_GAP_NM: i64 = GRID_NM / 10;
 
 /// An addressed sheet could not be encoded as a one-page PDF.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -162,15 +164,27 @@ fn draw_symbol(sheet: &Project, page: &mut Drawing, symbol: &SymbolPlacement) ->
         if !layout.visible || value.is_empty() {
             continue;
         }
-        let anchor = layout.offset.map_or_else(
-            || Point {
-                x_nm: symbol.position.x_nm,
-                y_nm: if i == 0 { bounds[0] - layout.height_nm } else { bounds[1] + i as i64 * layout.height_nm * 2 },
-            },
-            |offset| posed(symbol, offset),
-        );
+        let (anchor, align) = match layout.offset {
+            Some(offset) => (posed(symbol, offset), layout.align),
+            // As on the canvas, a quarter-turned body keeps Reference and Value beside it,
+            // left-aligned, so they do not sit on the vertical pin axis where wires continue.
+            None if i < 2 && symbol.turns() % 2 == 1 => {
+                let [low, high] = body_bounds(symbol);
+                let middle = (low.y_nm + high.y_nm) / 2;
+                let rise = FIELD_GAP_NM + layout.height_nm / 2;
+                let y_nm = if i == 0 { middle - rise } else { middle + rise };
+                (Point { x_nm: high.x_nm + 2 * GRID_NM / 5, y_nm }, TextAlign::Start)
+            }
+            None => (
+                Point {
+                    x_nm: symbol.position.x_nm,
+                    y_nm: if i == 0 { bounds[0] - layout.height_nm } else { bounds[1] + i as i64 * layout.height_nm * 2 },
+                },
+                layout.align,
+            ),
+        };
         let shown = if layout.show_name { format!("{name}: {value}") } else { value.to_owned() };
-        page.text(anchor, layout.height_nm, layout.rotation, layout.align, &shown)?;
+        page.text(anchor, layout.height_nm, layout.rotation, align, &shown)?;
     }
     for (terminal, at) in symbol.terminals().into_iter().zip(symbol.pins()) {
         if part.no_connects.contains_key(terminal.number()) {
@@ -178,6 +192,28 @@ fn draw_symbol(sheet: &Project, page: &mut Drawing, symbol: &SymbolPlacement) ->
         }
     }
     Ok(())
+}
+
+/// Bound the posed body drawing without generated pin ink, as the canvas does for automatic
+/// field placement. A unit without body drawing uses a two-grid square around its center.
+fn body_bounds(symbol: &SymbolPlacement) -> [Point; 2] {
+    let mut points = Vec::new();
+    for shape in &symbol.unit_definition().drawing {
+        match shape {
+            Shape::Line(a, b) | Shape::Rect(a, b) => points.extend([*a, *b]),
+            Shape::Polyline(line) => points.extend_from_slice(line),
+            Shape::Circle(center, radius) => points.extend([add(*center, -radius, -radius), add(*center, *radius, *radius)]),
+            Shape::Text(at, _, _) => points.push(*at),
+            Shape::Graphic(graphic) => points.extend(graphic.paths().into_iter().flatten()),
+        }
+    }
+    let mut points = points.into_iter().map(|p| posed(symbol, p));
+    let Some(first) = points.next() else {
+        return [add(symbol.position, -GRID_NM, -GRID_NM), add(symbol.position, GRID_NM, GRID_NM)];
+    };
+    points.fold([first; 2], |[low, high], p| {
+        [Point { x_nm: low.x_nm.min(p.x_nm), y_nm: low.y_nm.min(p.y_nm) }, Point { x_nm: high.x_nm.max(p.x_nm), y_nm: high.y_nm.max(p.y_nm) }]
+    })
 }
 
 /// Reuse physical graphics polylines, but keep all lettering as PDF text rather than outlining it.

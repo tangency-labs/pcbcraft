@@ -66,6 +66,11 @@ fn objects(bytes: &[u8]) -> Vec<&str> {
 /// Extract shown strings using page font resources and their ToUnicode maps, not by looking
 /// for metadata or expected string literals in the output. Each PDF text object starts a line.
 fn extract(objects: &[&str]) -> String {
+    runs(objects).into_iter().map(|(text, _)| text + "\n").collect()
+}
+
+/// Decode each PDF text object with the translation of its text matrix, in points.
+fn runs(objects: &[&str]) -> Vec<(String, [f64; 2])> {
     let resources = objects[2].split_once("/Font << ").unwrap().1.split_once(">>").unwrap().0;
     let resources: Vec<_> = resources.split_whitespace().collect();
     let mut encodings = BTreeMap::new();
@@ -91,10 +96,15 @@ fn extract(objects: &[&str]) -> String {
         }
         encodings.insert(resource[0], encoding);
     }
+    let mut runs = Vec::new();
     let mut text = String::new();
+    let mut at = [f64::NAN; 2];
     for line in objects[3].lines() {
         if line == "ET" {
-            text.push('\n');
+            runs.push((std::mem::take(&mut text), at));
+        } else if let Some(matrix) = line.strip_suffix(" Tm") {
+            let matrix: Vec<f64> = matrix.split_whitespace().map(|n| n.parse().unwrap()).collect();
+            at = [matrix[4], matrix[5]];
         } else if let Some((font, run)) = line.split_once(" Tf <") {
             let font = font.split_whitespace().next().unwrap();
             let run = run.strip_suffix("> Tj").unwrap();
@@ -106,7 +116,7 @@ fn extract(objects: &[&str]) -> String {
             }
         }
     }
-    text
+    runs
 }
 
 /// One vector page uses the addressed sheet's paper and resolves its frame text. Reopening
@@ -140,6 +150,35 @@ fn addressed_sheet_has_searchable_text_and_its_saved_media_box() {
         assert!(text.lines().any(|line| line == expected), "missing {expected}: {text}");
     }
     assert!(!text.contains("OTHER_SHEET_ONLY"));
+}
+
+/// A quarter-turned two-pin part keeps automatic Reference and Value to the right of its body,
+/// left-aligned above and below its centre line, as the canvas does. Centring them on the
+/// symbol would put them on the vertical pin axis, where the connecting wires continue.
+#[test]
+fn quarter_turned_fields_sit_beside_the_body() {
+    let (mut session, target) = fixture();
+    let id = target.id();
+    let (x, y) = (80 * GRID_NM, 40 * GRID_NM);
+    apply(&mut session, crate::PLACE_SYMBOL, json!({"sheet":id,"definition":"resistor","x_nm":x,"y_nm":y,"rotation":90}));
+    let view = session.project().unwrap().for_sheet(target).unwrap();
+    let turned = view.symbols().iter().find(|s| s.turns() == 1).unwrap().id();
+    apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"sheet":id,"symbol":turned,"reference":"R9","value":"4k7"}));
+    let bytes = export(session.project().unwrap(), target).unwrap();
+    let runs = runs(&objects(&bytes));
+    let find = |shown: &str| runs.iter().find(|(text, _)| text == shown).unwrap().1;
+    let (reference, value) = (find("R9"), find("4k7"));
+    // The A4 paper's top-left is the sheet origin. Upright Start-aligned text begins at its anchor.
+    let axis = x as f64 * PT_PER_NM;
+    let middle = (210_000_000 - y) as f64 * PT_PER_NM;
+    let height = Layout::default().height_nm as f64 * PT_PER_NM;
+    assert_eq!(reference[0], value[0]);
+    assert!(reference[0] > axis + 0.4 * GRID_NM as f64 * PT_PER_NM, "{reference:?} on the pin axis {axis}");
+    assert!(reference[1] > middle, "{reference:?} not above {middle}");
+    assert!(value[1] + height < middle, "{value:?} not below {middle}");
+    // Unturned parts keep their centred placement on the symbol's vertical axis.
+    let unturned = find("R1");
+    assert!(unturned[0] < 20. * GRID_NM as f64 * PT_PER_NM);
 }
 
 /// An independent viewer's text extractor can read the exact same command-built fixture.

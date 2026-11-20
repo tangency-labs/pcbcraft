@@ -14,7 +14,9 @@ sheet or making up a paper size.
 
 Symbols, wires and frame strokes are vector paths. Visible text, including
 reference designators and named net labels, is PDF text mapped to the original
-Unicode for searching and copying. The regular stroke face is already bundled
+Unicode for searching and copying. As on the canvas, a quarter-turned symbol's
+unmoved Reference and Value sit to the right of its body, not on its pin axis.
+The regular stroke face is already bundled
 with the engine; characters it cannot draw appear as `?` while retaining their
 original search text. This slice uses fixed black ink. Multi-page output,
 bookmarks, links, additional font faces, PDF/A, styles and variants are not
