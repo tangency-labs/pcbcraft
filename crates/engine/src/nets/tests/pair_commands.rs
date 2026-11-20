@@ -410,7 +410,7 @@ fn large_pair_draft_respects_the_poll_budget() {
 /// arbitrary project Arc with the same IDs. A changed net record is checked anew on a miss.
 #[test]
 fn pair_capacity_reuses_only_exact_net_record_proof() {
-    let (mut session, [p, n, _]) = pair_fixture(false);
+    let (mut session, [p, n, spare]) = pair_fixture(false);
     let pair = new_pair_id().unwrap();
     session.open_snapshot(decode_documents(&bytes(&session)).unwrap());
     let original = session.snapshot().unwrap();
@@ -419,7 +419,10 @@ fn pair_capacity_reuses_only_exact_net_record_proof() {
     let candidate = session.snapshot().unwrap();
     assert!(candidate.net_registry.has_records_proof(&candidate));
     let mut invalid = Project::clone(&candidate);
-    Arc::make_mut(&mut Arc::make_mut(&mut invalid.net_registry).records)[0].id = Uuid::nil();
+    // Corrupt the record outside the pair so record validation, not pair validation, refuses it.
+    // Net IDs are random, so the first record may be a pair member.
+    let records = Arc::make_mut(&mut Arc::make_mut(&mut invalid.net_registry).records);
+    records.iter_mut().find(|record| record.id == spare).unwrap().id = Uuid::nil();
     assert!(!invalid.net_registry.has_records_proof(&invalid));
     assert!(invalid.net_registry.require_records_proof(&invalid).unwrap_err().contains("validated source"));
     assert!(invalid.net_registry.validate(&invalid).unwrap_err().contains("non-nil UUIDs"));
