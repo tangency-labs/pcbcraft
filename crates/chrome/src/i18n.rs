@@ -65,10 +65,9 @@ fn parse_language_choice(raw: &str) -> LanguageChoice {
     }
 }
 
-/// Whether Hebrew glyphs can render in this build (always on desktop; on `wasm32` only when
-/// `CRAFT_FONTS_DIR` supplied `NotoSansHebrew-Regular.ttf` at compile time).
-pub const fn hebrew_font_available() -> bool {
-    cfg!(any(not(target_arch = "wasm32"), has_hebrew_craft_font))
+/// Whether the chrome font setup has a Hebrew fallback it can register for this process.
+pub fn hebrew_font_available() -> bool {
+    crate::fonts::hebrew_fallback().is_some()
 }
 
 /// Strip POSIX encoding/modifier suffixes, normalize separators to `-`, lowercase, reject `x-*`
@@ -112,33 +111,27 @@ pub fn is_rtl_code(code: &str) -> bool {
     matches!(primary, "ar" | "ckb" | "dv" | "fa" | "he" | "iw" | "ps" | "sd" | "syr" | "ug" | "ur" | "yi")
 }
 
-/// Resolve `choice` to an installed catalog identifier (`"en"` or `"he"`).
+/// Resolve the preference to a catalog that the current font stack can display.
 pub fn resolve_preference(choice: LanguageChoice) -> &'static str {
     match choice {
         LanguageChoice::English => ENGLISH,
-        LanguageChoice::Hebrew => {
-            if hebrew_font_available() {
-                HEBREW
-            } else {
-                ENGLISH
-            }
-        }
+        _ if !hebrew_font_available() => ENGLISH,
+        LanguageChoice::Hebrew => HEBREW,
         LanguageChoice::System => resolve_system_language(),
     }
 }
 
-/// Resolve the system locale to `"he"` when Hebrew fonts are available, falling back to POSIX
-/// environment variables for legacy `iw` desktop locales that `sys_locale` skips.
+/// Detect Hebrew from the system locale or legacy POSIX tags after confirming font availability.
 fn resolve_system_language() -> &'static str {
     if cfg!(test) {
         return ENGLISH;
     }
     let detected = solidcraft_ui_text::system_language();
-    if detected == HEBREW && hebrew_font_available() {
+    if detected == HEBREW {
         return HEBREW;
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if detected == ENGLISH && hebrew_font_available() && resolve_posix_env_hebrew(|name| std::env::var(name).ok()) {
+    if detected == ENGLISH && resolve_posix_env_hebrew(|name| std::env::var(name).ok()) {
         return HEBREW;
     }
     ENGLISH
@@ -184,8 +177,8 @@ fn language_options_with(current: LanguageChoice, hebrew_available: bool) -> Vec
     if hebrew_available {
         options.push((LanguageChoice::Hebrew, solidcraft_ui_text::Locale::for_language(HEBREW).display_name().into_owned()));
     } else if current == LanguageChoice::Hebrew {
-        // ASCII label on font-less builds because Hebrew glyphs are absent from the embedded font.
-        options.push((LanguageChoice::Hebrew, "Hebrew (unavailable in this build)".into()));
+        // Use an English label when Hebrew glyphs are unavailable.
+        options.push((LanguageChoice::Hebrew, "Hebrew (font unavailable)".into()));
     }
     options
 }
@@ -252,9 +245,8 @@ mod tests {
     fn scoped_hebrew_translation_and_rtl_state() {
         crate::install_text();
         assert!(!is_rtl());
-        assert_eq!(resolve_preference(LanguageChoice::Hebrew), HEBREW);
         {
-            let _guard = scope(LanguageChoice::Hebrew);
+            let _guard = solidcraft_ui_text::scope(HEBREW);
             assert!(is_rtl());
             assert_eq!(solidcraft_ui_text::language(), HEBREW);
             assert_ne!(solidcraft_ui_text::tr("ui.copy"), "Copy");
@@ -296,7 +288,7 @@ mod tests {
         assert_eq!(unavailable[0].0, LanguageChoice::System);
         assert_eq!(unavailable[1].0, LanguageChoice::English);
         assert_eq!(unavailable[2].0, LanguageChoice::Hebrew);
-        assert_eq!(unavailable[2].1, "Hebrew (unavailable in this build)");
+        assert_eq!(unavailable[2].1, "Hebrew (font unavailable)");
 
         let available = language_options_with(LanguageChoice::System, true);
         assert_eq!(available.len(), 3);

@@ -246,7 +246,7 @@ mod tests {
         let ctx = egui::Context::default();
         ctx.enable_accesskit();
         crate::install(&ctx);
-        let _guard = crate::i18n::scope(crate::i18n::LanguageChoice::Hebrew);
+        let _guard = solidcraft_ui_text::scope(crate::i18n::HEBREW);
         let mut output = ctx.run_ui(
             egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 200.0))), ..Default::default() },
             |ui| {

@@ -1,6 +1,6 @@
 //! Shared Craft interface faces behind PCBcraft's existing chrome API.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use egui::{FontData, FontId};
 
@@ -10,23 +10,27 @@ const EMOJI: &[u8] = include_bytes!("../assets/fonts/noto-emoji/NotoEmoji-Regula
 /// Install the pinned shared look's Plex faces in this egui context, preserving symbol fallbacks.
 pub fn install(ctx: &egui::Context) {
     let mut fonts = solidcraft_look::fonts::definitions();
-    install_hebrew_fallback_fonts(&mut fonts);
-    let fallback = "pcbcraft-emoji";
-    fonts.font_data.insert(fallback.into(), Arc::new(FontData::from_static(EMOJI)));
+    let hebrew = "pcbcraft-hebrew";
+    let emoji = "pcbcraft-emoji";
+    let fallback = hebrew_fallback();
+    if let Some(font) = fallback {
+        fonts.font_data.insert(hebrew.into(), Arc::clone(font));
+    }
+    fonts.font_data.insert(emoji.into(), Arc::new(FontData::from_static(EMOJI)));
     for family in fonts.families.values_mut() {
-        family.push(fallback.into());
+        if fallback.is_some() {
+            family.push(hebrew.into());
+        }
+        family.push(emoji.into());
     }
     solidcraft_look::fonts::apply(ctx, fonts);
 }
 
-/// Insert `name` as a font fallback before the symbol fallback across interface font families.
-#[cfg(any(has_hebrew_craft_font, not(target_arch = "wasm32")))]
-fn append_hebrew_fallback(fonts: &mut egui::FontDefinitions, name: &str) {
-    for family in fonts.families.values_mut() {
-        if !family.iter().any(|existing| existing == name) {
-            family.push(name.to_owned());
-        }
-    }
+/// Share the selected font with locale selection and reuse it for every egui context.
+/// Probe once so resolving the interface language never rereads system fonts per frame.
+pub(crate) fn hebrew_fallback() -> Option<&'static Arc<FontData>> {
+    static FALLBACK: OnceLock<Option<Arc<FontData>>> = OnceLock::new();
+    FALLBACK.get_or_init(load_hebrew_fallback).as_ref()
 }
 
 /// Return whether `bytes` parses as a font whose primary face covers Hebrew letters.
@@ -35,49 +39,40 @@ fn covers_hebrew(bytes: &[u8]) -> bool {
     ttf_parser::Face::parse(bytes, 0).is_ok_and(|face| face.glyph_index('א').is_some() && face.glyph_index('ע').is_some())
 }
 
-/// Register a bundled (`CRAFT_FONTS_DIR`) or desktop system Hebrew fallback font without
-/// committing binary font assets.
-fn install_hebrew_fallback_fonts(fonts: &mut egui::FontDefinitions) {
+/// Load the bundled fallback when configured, or use the first desktop font that covers Hebrew.
+fn load_hebrew_fallback() -> Option<Arc<FontData>> {
     #[cfg(has_hebrew_craft_font)]
     {
-        const BUNDLED_HEBREW: &str = "noto-sans-hebrew";
-        let bytes = include_bytes!(env!("HEBREW_CRAFT_FONT_PATH"));
-        fonts.font_data.insert(BUNDLED_HEBREW.to_owned(), Arc::new(FontData::from_static(bytes)));
-        append_hebrew_fallback(fonts, BUNDLED_HEBREW);
+        Some(Arc::new(FontData::from_static(include_bytes!(env!("HEBREW_CRAFT_FONT_PATH")))))
     }
 
     #[cfg(all(not(has_hebrew_craft_font), not(target_arch = "wasm32")))]
     {
-        const CANDIDATES: [(&str, &str); 13] = [
+        const CANDIDATES: [&str; 13] = [
             // Windows
-            ("segoe-ui", "C:\\Windows\\Fonts\\segoeui.ttf"),
-            ("arial", "C:\\Windows\\Fonts\\arial.ttf"),
+            r"C:\Windows\Fonts\segoeui.ttf",
+            r"C:\Windows\Fonts\arial.ttf",
             // macOS
-            ("arial-hebrew", "/System/Library/Fonts/ArialHB.ttc"),
-            ("sf-hebrew", "/System/Library/Fonts/SFHebrew.ttf"),
-            ("arial-macos", "/System/Library/Fonts/Supplemental/Arial.ttf"),
+            "/System/Library/Fonts/ArialHB.ttc",
+            "/System/Library/Fonts/SFHebrew.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
             // Linux
-            ("noto-sans-hebrew-arch", "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf"),
-            ("noto-sans-hebrew", "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf"),
-            ("noto-sans-hebrew-fedora", "/usr/share/fonts/google-noto/NotoSansHebrew-Regular.ttf"),
-            ("noto-sans-hebrew-fedora-vf", "/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf"),
-            ("noto-sans-hebrew-otf", "/usr/share/fonts/opentype/noto/NotoSansHebrew-Regular.ttf"),
-            ("dejavu-sans", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
-            ("dejavu-sans-arch", "/usr/share/fonts/TTF/DejaVuSans.ttf"),
-            ("dejavu-sans-fedora", "/usr/share/fonts/dejavu/DejaVuSans.ttf"),
+            "/usr/share/fonts/noto/NotoSansHebrew-Regular.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSansHebrew-Regular.ttf",
+            "/usr/share/fonts/google-noto/NotoSansHebrew-Regular.ttf",
+            "/usr/share/fonts/google-noto-vf/NotoSansHebrew[wght].ttf",
+            "/usr/share/fonts/opentype/noto/NotoSansHebrew-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
         ];
-        for (name, path) in CANDIDATES {
-            if let Ok(bytes) = std::fs::read(path)
-                && covers_hebrew(&bytes)
-            {
-                fonts.font_data.insert(name.to_owned(), Arc::new(FontData::from_owned(bytes)));
-                append_hebrew_fallback(fonts, name);
-                break;
-            }
-        }
+        CANDIDATES.into_iter().filter_map(|path| std::fs::read(path).ok()).find(|bytes| covers_hebrew(bytes)).map(FontData::from_owned).map(Arc::new)
     }
-    #[cfg(all(target_arch = "wasm32", not(has_hebrew_craft_font)))]
-    let _ = fonts;
+
+    #[cfg(all(not(has_hebrew_craft_font), target_arch = "wasm32"))]
+    {
+        None
+    }
 }
 
 /// Semibold interface text at this size.
@@ -111,22 +106,20 @@ pub(crate) fn interface_heading(ui: &egui::Ui, size: f32) -> FontId {
 mod tests {
     use super::*;
 
-    /// Applying the chrome font setup registers a Hebrew fallback font when bundled or installed.
+    /// Preferences and locale activation agree with the glyphs registered by the real font setup.
     #[test]
-    fn hebrew_fallback_font_renders_hebrew_text() {
+    fn hebrew_locale_availability_matches_installed_glyphs() {
+        use crate::i18n::{ENGLISH, HEBREW, LanguageChoice, hebrew_font_available, language_options, resolve_preference};
+
         let ctx = egui::Context::default();
         install(&ctx);
-        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let galley = ui.painter().layout_no_wrap("עברית".into(), FontId::proportional(14.0), egui::Color32::WHITE);
-            assert!(galley.size().x > 0.0);
-        });
+        let mut out = ctx.run_ui(egui::RawInput::default(), |_| {});
         out.textures_delta.clear();
-        #[cfg(any(target_os = "macos", target_os = "linux"))]
-        {
-            let has_hebrew =
-                ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::proportional(14.0), 'ע') && fonts.has_glyph(&FontId::proportional(14.0), 'א'));
-            assert!(has_hebrew, "expected system Hebrew fallback font to cover Hebrew glyphs on {}", std::env::consts::OS);
-        }
+        let has_glyphs =
+            ctx.fonts_mut(|fonts| fonts.has_glyph(&FontId::proportional(14.0), 'ע') && fonts.has_glyph(&FontId::proportional(14.0), 'א'));
+        assert_eq!(hebrew_font_available(), has_glyphs);
+        assert_eq!(resolve_preference(LanguageChoice::Hebrew), if has_glyphs { HEBREW } else { ENGLISH });
+        assert_eq!(language_options(LanguageChoice::System).iter().any(|(choice, _)| *choice == LanguageChoice::Hebrew), has_glyphs);
     }
 
     /// Reject invalid bytes and valid fonts that lack Hebrew glyphs before registering a fallback.
