@@ -1620,7 +1620,10 @@ pub struct DocumentsEncoder {
     membership_index: usize,
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
-    generated_legs: Vec<GeneratedLegRecord<'static>>,
+    sheet_fields: bool,
+    sheet_mirrored: bool,
+    sheet_wire_index: BTreeMap<u64, usize>,
+    live_generated_legs: Vec<usize>,
 }
 
 /// Identical shared pins are reusable, but one immutable address cannot discard a different body.
@@ -1658,7 +1661,10 @@ impl DocumentsEncoder {
             membership_index: 0,
             use_compact_memberships,
             size_limit_exceeded: false,
-            generated_legs: Vec::new(),
+            sheet_fields: false,
+            sheet_mirrored: false,
+            sheet_wire_index: BTreeMap::new(),
+            live_generated_legs: Vec::new(),
         }
     }
 
@@ -2009,6 +2015,47 @@ impl DocumentsEncoder {
                         self.finish_instance_document(InstanceTail::Memberships)?;
                     }
                 }
+                22 => {
+                    let sheet = &self.project.sheets[self.sheet_cursor];
+                    if let Some(symbol) = sheet.symbols.get(self.cursor as usize) {
+                        self.sheet_fields |= !symbol.field_layout.is_empty();
+                        self.sheet_mirrored |= symbol.mirrored;
+                        self.cursor += 1;
+                    } else {
+                        self.cursor = 0;
+                        if sheet.generated_legs.is_empty() {
+                            self.write_sheet_header()?;
+                        } else {
+                            self.phase = 23;
+                        }
+                    }
+                }
+                23 => {
+                    let sheet = &self.project.sheets[self.sheet_cursor];
+                    if let Some(wire) = sheet.wires.get(self.cursor as usize) {
+                        self.sheet_wire_index.insert(wire.ordinal, self.cursor as usize);
+                        self.cursor += 1;
+                    } else {
+                        self.cursor = 0;
+                        self.phase = 24;
+                    }
+                }
+                24 => {
+                    let sheet = &self.project.sheets[self.sheet_cursor];
+                    if let Some(leg) = sheet.generated_legs.get(self.cursor as usize) {
+                        if self.sheet_wire_index.get(&leg.wire).is_some_and(|&index| leg.matches(&sheet.wires[index])) {
+                            self.live_generated_legs.push(self.cursor as usize);
+                        }
+                        self.cursor += 1;
+                    } else {
+                        self.phase = 25;
+                    }
+                }
+                25 => {
+                    if self.sheet_wire_index.pop_first().is_none() {
+                        self.write_sheet_header()?;
+                    }
+                }
                 12 => {
                     if let Some(label) = self.project.sheets[self.sheet_cursor].net_labels.get(self.cursor as usize) {
                         record(&mut self.bytes, &mut self.first, label)?;
@@ -2083,17 +2130,7 @@ impl DocumentsEncoder {
                         )?;
                         self.cursor += 1;
                     } else {
-                        let generated = {
-                            let sheet = &self.project.sheets[self.sheet_cursor];
-                            sheet
-                                .generated_legs
-                                .iter()
-                                .filter(|leg| sheet.wires.iter().any(|wire| leg.matches(wire)))
-                                .map(GeneratedLegRecord::from)
-                                .collect::<Vec<_>>()
-                        };
-                        self.generated_legs = generated;
-                        if self.generated_legs.is_empty() {
+                        if self.live_generated_legs.is_empty() {
                             self.finish_sheet_routes()?;
                         } else {
                             self.bytes.extend_from_slice(b"  ],\n  \"generated_legs\": [\n");
@@ -2104,8 +2141,9 @@ impl DocumentsEncoder {
                     }
                 }
                 17 => {
-                    if let Some(leg) = self.generated_legs.get(self.cursor as usize) {
-                        record(&mut self.bytes, &mut self.first, leg)?;
+                    if let Some(&index) = self.live_generated_legs.get(self.cursor as usize) {
+                        let leg = GeneratedLegRecord::from(&self.project.sheets[self.sheet_cursor].generated_legs[index]);
+                        record(&mut self.bytes, &mut self.first, &leg)?;
                         self.cursor += 1;
                     } else {
                         self.finish_sheet_routes()?;
@@ -2241,8 +2279,7 @@ impl DocumentsEncoder {
             return Ok(());
         }
         self.finish_document(ENTRY_POINT.to_owned())?;
-        self.next();
-        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        self.start_sheet();
         Ok(())
     }
 
@@ -2294,8 +2331,7 @@ impl DocumentsEncoder {
             return Err("Encoded instance document exceeds its size limit.".into());
         }
         self.documents.insert(path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
-        self.next();
-        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        self.start_sheet();
         Ok(())
     }
 
@@ -2305,9 +2341,7 @@ impl DocumentsEncoder {
         self.finish_document(format!("sheets/{}.json", self.project.sheets[self.sheet_cursor].sheet_id))?;
         self.sheet_cursor += 1;
         if self.sheet_cursor < self.project.sheets.len() {
-            self.cursor = 0;
-            self.first = true;
-            self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+            self.start_sheet();
         } else if self.project.board_target().is_some() {
             self.phase = 7;
             self.cursor = 0;
@@ -2318,6 +2352,29 @@ impl DocumentsEncoder {
             self.cursor = 0;
             self.first = true;
         }
+        Ok(())
+    }
+
+    /// Start selecting the sheet envelope without scanning placements or generated legs at once.
+    fn start_sheet(&mut self) {
+        self.phase = 22;
+        self.cursor = 0;
+        self.first = true;
+        self.sheet_fields = false;
+        self.sheet_mirrored = false;
+        self.live_generated_legs.clear();
+    }
+
+    /// Write the native header using the flags computed by the preceding metered passes.
+    fn write_sheet_header(&mut self) -> Result<(), String> {
+        self.cursor = 0;
+        self.phase = sheet_header(
+            &mut self.bytes,
+            &self.project.sheets[self.sheet_cursor],
+            self.sheet_fields,
+            self.sheet_mirrored,
+            !self.live_generated_legs.is_empty(),
+        )?;
         Ok(())
     }
 
@@ -2708,12 +2765,9 @@ fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Paramet
     Ok(())
 }
 
-fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
+fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet, fields: bool, mirrored: bool, generated: bool) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
-    let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
     let text = sheet.net_labels.iter().any(|l| l.text.is_some());
-    let mirrored = sheet.symbols.iter().any(|s| s.mirrored);
-    let generated = sheet.has_live_generated_legs();
     let ends = !sheet.no_connect_ends.is_empty();
     let format = if sheet.page.is_some() {
         PAGE_SHEET_FORMAT
