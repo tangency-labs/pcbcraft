@@ -128,6 +128,8 @@ struct ReadRounded {
     circles: Vec<(i64, Point)>,
     strips: Vec<(i64, Point, Point)>,
     outline: Vec<Point>,
+    // Width and height in nanometers, center coordinates in half-nanometer units.
+    rectangle: Option<(i64, i64, i64, i64)>,
     function: Option<&'static str>,
 }
 
@@ -158,8 +160,18 @@ fn read_macro_coordinate(value: &str) -> Result<i64, &'static str> {
     if let Some(magnitude) = value.strip_prefix('-') { read_mm(magnitude).map(|n| -n) } else { read_mm(value) }
 }
 
-/// Decode only the emitted fixed-parameter macro subset (Ucamco Gerber 2026.05 §§4.5.1.3,
-/// 4.5.1.4, 4.5.1.6). Exposure must be on; zero rotation means coordinates are already
+/// Parse a center-line coordinate without losing an exact half-grid rectangle center.
+fn read_macro_half_nm(value: &str) -> Result<i64, &'static str> {
+    let (sign, magnitude) = value.strip_prefix('-').map_or((1, value), |s| (-1, s));
+    if magnitude.split_once('.').is_some_and(|(_, fraction)| fraction.len() == 7) {
+        let whole_nm = magnitude.strip_suffix('5').ok_or("invalid half-nanometer coordinate")?;
+        return Ok(sign * (2 * read_macro_coordinate(whole_nm)? + 1));
+    }
+    Ok(2 * read_macro_coordinate(value)?)
+}
+
+/// Decode only the emitted fixed-parameter macro subset (Ucamco Gerber 2026.05 §§4.5.1.3–4.5.1.6).
+/// Exposure must be on; zero rotation means coordinates are already
 /// in the aperture's axes. Refuse unsupported primitive parameters rather than ignoring them.
 fn read_rounded_macro(lines: &mut std::str::Lines<'_>) -> Result<ReadRounded, &'static str> {
     let mut read = ReadRounded::default();
@@ -178,7 +190,10 @@ fn read_rounded_macro(lines: &mut std::str::Lines<'_>) -> Result<ReadRounded, &'
                 }
                 read.strips.push((read_mm(width)?, start, end));
             }
-            ["4", "1", "4", xy @ .., "0"] if read.outline.is_empty() && xy.len() == 10 => {
+            ["21", "1", width, height, x, y, "0"] if read.rectangle.is_none() && read.outline.is_empty() => {
+                read.rectangle = Some((read_mm(width)?, read_mm(height)?, read_macro_half_nm(x)?, read_macro_half_nm(y)?));
+            }
+            ["4", "1", "4", xy @ .., "0"] if read.rectangle.is_none() && read.outline.is_empty() && xy.len() == 10 => {
                 for &[x, y] in xy.as_chunks::<2>().0 {
                     read.outline.push(point(x, y)?);
                 }
@@ -953,6 +968,51 @@ fn rounded_pad_macros_omit_the_outline_of_a_core_narrower_than_the_diameter() {
         assert!(aperture.circles.iter().all(|&(d, _)| d == 399_998));
         assert!(aperture.strips.iter().all(|&(d, _, _)| d == 399_998));
     }
+}
+
+/// A 900 nm core is wider than the 600 nm strips, but too narrow for an outline under
+/// the Gerber §4.14.2 perturbation rule. A center line fills it exactly (§4.5.1.5).
+#[test]
+fn rounded_pad_macro_fills_a_900_nm_core_without_an_outline() {
+    for height in [1_500, 1_501] {
+        let pads = [(PadShape::RoundedRectangle, 600_000, height, 0, 300); 2];
+        let s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
+        let outputs = view(&s).fabrication_outputs().unwrap();
+        for output in surface_files(false) {
+            let read = read_gerber(&outputs, output);
+            assert!(read.regions.is_empty() && read.strokes.is_empty() && read.flashes.is_empty());
+            assert_eq!(read.rounded_flashes.len(), 2);
+            for &(_, code) in &read.rounded_flashes {
+                let aperture = &read.rounded[&code];
+                assert!(aperture.outline.is_empty());
+                let (width, core_height, x, y) = aperture.rectangle.unwrap();
+                assert_eq!(width, 599_400);
+                assert_eq!(core_height, height - 600);
+                assert_eq!(x, 0);
+                assert_eq!((aperture.circles.len(), aperture.strips.len()), (4, 4));
+                for &(diameter, corner) in &aperture.circles {
+                    assert_eq!(diameter, 600);
+                    assert_eq!((2 * corner.x_nm - x).abs(), width);
+                    assert_eq!((2 * corner.y_nm - y).abs(), core_height);
+                }
+            }
+        }
+    }
+}
+
+/// A rotated narrow core whose opposite edges can meet under Gerber perturbation must not
+/// produce a partial file set or an archive if no exact fill is available.
+#[test]
+fn fabrication_refuses_a_narrow_core_without_an_exact_gerber_fill() {
+    let pads = [(PadShape::RoundedRectangle, 600_000, 1_500, 37, 300); 2];
+    let mut s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
+    let before = s.revision();
+    let error = view(&s).fabrication_outputs().unwrap_err();
+    assert!(error.starts_with("Cannot export rounded pad at ("), "{error}");
+    assert!(error.ends_with("its core has no supported exact Gerber fill and its outline can self-intersect."), "{error}");
+    assert!(matches!(s.execute(EXPORT_FABRICATION, &json!({})), Err(CommandError::Unavailable(message)) if message == error));
+    assert!(matches!(s.export_fabrication_archive(&json!({})), Err(CommandError::Unavailable(message)) if message == error));
+    assert_eq!(s.revision(), before);
 }
 
 /// Two rotations can snap a tiny inner box onto three edges without clamping its radius.
