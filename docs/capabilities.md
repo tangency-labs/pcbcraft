@@ -183,10 +183,10 @@ round pads. R/O flashes require individually quarter-turn library and placement 
 and nondegenerate resolved axis rectangles; R also requires a midpoint at the integer pad
 center, and O requires matching width/height parity for integral capsule endpoints. Other
 rectangles retain resolved regions; other obrounds retain approximate round-ended strokes
-or equal-sided C flashes. Rounded rectangles use polygon regions with chorded corners only
-when the resolved radius is positive. A collapsed tiny rectangle can emit a retraced path
-with zero area. Mask uses outer-layer pads without process expansion; paste excludes
-through-hole pads. Persistent layer/width/via controls stay visible across PCB tabs, with
+or equal-sided C flashes. Rounded rectangles use flashed aperture macros with circular
+corners when their resolved geometry permits, otherwise polygon regions. A collapsed tiny
+rectangle can emit a retraced path with zero area. Mask uses outer-layer pads without process
+expansion; paste excludes through-hole pads. Persistent layer/width/via controls stay visible across PCB tabs, with
 routing in Layout and alignment in its Modify menu.
 
 Typed primary quantities captured in accepted board history remain SI-formatted
