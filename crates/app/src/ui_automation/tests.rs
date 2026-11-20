@@ -646,3 +646,25 @@ fn a_canvas_moving_after_admission_cancels_a_coordinate_click() {
     assert_eq!(status["state"], "cancelled", "{status}");
     assert!(h.state().views.active.schematic.selection.single_symbol().is_none());
 }
+
+/// A clear canvas point beside a floating card, outside the largest clear rectangle that the
+/// `canvas:` handle publishes, is still uncovered; a point on a card is not.
+#[test]
+fn coverage_uses_the_actual_cards_not_the_largest_clear_rectangle() {
+    let mut h = ready();
+    let view = h.state().views.active.id();
+    let snapshot = &h.state().automation.snapshots[&HostId::ROOT];
+    let region = snapshot.targets.iter().find(|t| t.name == format!("canvas:{}", view.0)).unwrap().rect;
+    let canvas = snapshot.canvases.iter().find(|c| c.view == view).unwrap().clone();
+    let covers: Vec<Rect> = canvas.cards.iter().chain(&snapshot.overlays).copied().collect();
+    let grid = (0..64).flat_map(|i| (0..64).map(move |j| (i, j)));
+    let points: Vec<Pos2> = grid.map(|(i, j)| canvas.rect.lerp_inside(egui::vec2(i as f32 / 63.0, j as f32 / 63.0))).collect();
+    let clear = *points.iter().find(|p| !region.contains(**p) && !covers.iter().any(|c| c.contains(**p))).expect("a clear point beside a card");
+    let carded = *points.iter().find(|p| canvas.cards.iter().any(|c| c.contains(**p))).expect("a point on a card");
+    for (point, expected) in [(clear, true), (carded, false)] {
+        let camera = &h.state().views.active.camera;
+        let at = camera.unsnapped(point, canvas.rect);
+        let projected = project(&mut h, view.0, at.x_nm, at.y_nm).unwrap();
+        assert_eq!(projected["uncovered"], expected, "{point:?} {projected}");
+    }
+}

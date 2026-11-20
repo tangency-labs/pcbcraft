@@ -48,6 +48,8 @@ struct Canvas {
     origin: Pos2,
     unit: f32,
     mirrored: bool,
+    /// Floating cards over the canvas; definition panes have none.
+    cards: Vec<Rect>,
 }
 
 #[derive(Debug)]
@@ -317,12 +319,15 @@ impl PcbApp {
             .filter_map(|view| {
                 let camera = self.automation_camera(view)?;
                 let rect = camera.painted_rect()?;
+                let pane = self.views.view(view)?;
+                let cards = if pane.definition.is_some() { Vec::new() } else { pane.canvas_cards.clone() };
                 Some(Canvas {
                     view,
                     rect,
                     origin: camera.screen(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 }, rect),
                     unit: camera.unit_step(),
                     mirrored: camera.mirrored(),
+                    cards,
                 })
             })
             .collect()
@@ -367,16 +372,11 @@ impl PcbApp {
             .ok_or("The addressed view has not painted its canvas yet; wait for a paint and retry")?;
         let camera = self.automation_camera(view).ok_or("The addressed view has no model canvas")?;
         let at = camera.screen(pcbcraft_engine::schematic::Point { x_nm: query.at.x_nm, y_nm: query.at.y_nm }, canvas.rect);
-        // Definition panes publish no named region, so their whole painted canvas is the area.
-        // A project canvas whose region is missing was covered at its center when painted.
-        let region = format!("canvas:{}", view.0);
-        let area = if self.views.view(view).is_some_and(|pane| pane.definition.is_some()) {
-            Some(canvas.rect)
-        } else {
-            snapshot.targets.iter().find(|target| target.name == region && target.enabled).map(|target| target.rect)
-        };
+        // Coverage is checked against the actual cards and overlays, not the largest clear
+        // rectangle that the `canvas:` handle publishes, so clear corners beside a card count.
         let on_canvas = canvas.rect.contains(at);
-        let uncovered = area.is_some_and(|area| area.contains(at)) && !snapshot.overlays.iter().any(|overlay| overlay.contains(at));
+        let enabled = snapshot.authority.dialog == std::mem::discriminant(&crate::Dialog::None);
+        let uncovered = enabled && on_canvas && !canvas.cards.iter().chain(&snapshot.overlays).any(|cover| cover.contains(at));
         Ok(json!({"schema":SCHEMA,"window":host.0,"layout":snapshot.layout,"view":view.0,"x":at.x,"y":at.y,
             "on_canvas":on_canvas,"uncovered":uncovered,"scale":snapshot.scale}))
     }
