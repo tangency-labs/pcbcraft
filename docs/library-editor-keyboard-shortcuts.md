@@ -111,10 +111,16 @@ the same internal clipboard and deletes it as a single undoable edit.
 Adding a second modifier escapes the translation: **Ctrl+Shift+C**,
 **Ctrl+Shift+X** and **Ctrl+Shift+V** emit their `Key` events, and the canvas
 accepts those too — each press produces exactly one of the two event forms, so
-a chord runs copy, cut or paste once. The Paste preview behaves the same as
-Ctrl+D's. Copy and paste are gated to a selection of the same document kind:
-pasting a symbol's objects into a footprint document reports "Paste into a
-definition of the same kind."
+a chord runs copy, cut or paste once. Copy and paste are gated to a selection
+of the same document kind: pasting a symbol's objects into a footprint
+document reports "Paste into a definition of the same kind."
+
+All canvas command chords — **Ctrl+A**, **Ctrl+D** and the clipboard chords —
+match the pressed `Event::Key`'s own modifiers rather than the batch's ending
+state: a command released before batch end still fires, a command arriving
+after the letter cannot, and none fires without window focus. **Ctrl+D** arms
+the same cancellable preview as paste and resolves against a same-frame
+Escape in event order — a later Escape cancels it, an earlier one does not.
 
 ## Pending fields gate
 
@@ -141,8 +147,8 @@ so canvas keys do not fire while a field is focused.
 | E | `canvas` → `details_requested` (single selection) | — |
 | Delete | `canvas` → `delete` → `Action::Delete` | — |
 | Enter | `canvas` → `Action::Insert` for `Tool::Polyline` only | — |
-| Ctrl+A | `canvas` → `select_many(all)` | — (the Ctrl+A presses in `library_editors/tests.rs` are field-scoped select-all, not canvas) |
-| Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | — |
+| Ctrl+A | `canvas` → `select_many(all)` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss) |
+| Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss), `normalized_clipboard_events_drive_library_copy_and_paste` (same-frame Escape ordering) |
 | Ctrl+C / Ctrl+X / Ctrl+V | `canvas` → `copy` / `cut` (copy + one `Action::Delete`) / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Cut`/`Event::Paste`/`Event::PasteImage`, or the raw key matched at its own modifiers when another modifier bypasses translation) | `native_paste_translation_reaches_the_internal_library_paste` (empty + image-only clipboards, both kinds, single undoable commit), `native_paste_chord_only_arms_the_focused_library_view` (detached-view ownership), `normalized_clipboard_events_drive_library_copy_and_paste` (gates, same-frame Escape ordering, cut + undo, pending refusal), `library_cut_uses_the_pressed_event_modifiers` + `library_copy_uses_the_pressed_event_modifiers` (batched modifier changes, focus loss), `clipboard_translation_tests` in `vendor/egui-winit` (emission) |
 | Workspace boundary | `PcbApp::shortcuts` not invoked; `library_frame` key block | `home_has_no_editor_shortcuts_and_selected_copy_enters_the_workspace` |
 | Parts Library | `library_workspace.rs` — `COMMAND_COMMA` only | `library_workspaces_share_the_picker_with_schematic_and_pcb` |
