@@ -36,7 +36,9 @@ fn fixture() -> Result<Fixture, String> {
         app.run(nets::PROMOTE, &json!({"sheet":sheet,"anchor":pair[0],"expected_revision":app.session.revision()}));
         assert!(app.message.is_none(), "{:?}", app.message);
     }
-    let mut h = Harness::builder().with_size(egui::vec2(1200., 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    // A published pair repaints every editor window and the main window, which can take more
+    // than the default four steps to settle; other whole-app harnesses use the same bound.
+    let mut h = Harness::builder().with_max_steps(64).with_size(egui::vec2(1200., 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
     h.run();
     let registry = h.state().session.project().ok_or("project stays open")?.inspect_net_registry()?;
     let choices: Vec<_> =
