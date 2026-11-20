@@ -7,6 +7,7 @@ use std::{
     sync::Arc,
 };
 
+pub mod arc;
 pub mod assembly_profile;
 pub mod assignment;
 pub mod class_rules;
@@ -26,6 +27,7 @@ pub mod materials;
 pub mod movement;
 pub mod origin;
 pub mod outline;
+mod pair_index;
 pub mod ratsnest;
 pub mod reference;
 pub mod route;
@@ -34,6 +36,7 @@ pub mod setup;
 #[cfg(test)]
 mod side_tests;
 pub mod silkscreen;
+pub mod teardrop;
 pub mod track;
 pub(crate) mod transform;
 pub mod update;
@@ -230,6 +233,11 @@ impl Footprint {
         };
         Some(self.point(local))
     }
+    /// Resolve mechanical openings using the same mirror-then-rotate placement transform as pads.
+    fn non_plated_holes<'a>(&'a self, definition: &'a definition::FootprintDefinition) -> impl Iterator<Item = definition::CircularNpth> + 'a {
+        definition.non_plated_holes.iter().map(move |hole| definition::CircularNpth { center: self.point(hole.center), ..*hole })
+    }
+
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
     /// Always include the storage-only `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
@@ -263,6 +271,12 @@ impl Footprint {
             value["reference_text"] = json!(text);
         }
         if let Some(definition) = project.board.definition_for(self) {
+            if !definition.non_plated_holes.is_empty() {
+                value["non_plated_holes"] =
+                    json!(self.non_plated_holes(definition).map(|hole| json!({
+                    "center":hole.center,"diameter_nm":hole.diameter_nm,"shape":"circle","span":"through","plating":"non_plated","net":null
+                })).collect::<Vec<_>>());
+            }
             let name = project
                 .components
                 .get(&self.component)
@@ -314,6 +328,8 @@ pub(crate) struct Board {
     pub(crate) tracks: Vec<track::Track>,
     /// Through vias in stable ID order, saved beside tracks.
     pub(crate) vias: Vec<track::Via>,
+    /// Exact circular tracks; unsupported conductive consumers must refuse this board.
+    pub(crate) arcs: Vec<arc::ArcTrack>,
     pub(crate) definitions: BTreeMap<definition::Key, Arc<definition::FootprintDefinition>>,
     footprints: Vec<Footprint>,
     by_component: BTreeMap<u64, usize>,
@@ -367,14 +383,14 @@ impl Board {
     }
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
-    /// Format-3/4 history also retains the last visible typed quantity; older history
+    /// Format 3 and later also retain the last visible typed quantity; older history
     /// stays text-only until a real board update accepts the newer vocabulary.
     pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let assigned = self.assignments.remove(&component).is_some();
         let changed_display = display.and_then(|part| {
             let baseline = self.baseline.as_ref()?;
             let historical = baseline.components.get(&component)?;
-            let quantity = if matches!(baseline.format.as_str(), update::QUANTITY_FORMAT | update::DISPLAY_FORMAT) {
+            let quantity = if matches!(baseline.format.as_str(), update::QUANTITY_FORMAT | update::DISPLAY_FORMAT | update::NET_ORIGIN_FORMAT) {
                 update::PartInstanceState::quantity_for(part)
             } else {
                 None

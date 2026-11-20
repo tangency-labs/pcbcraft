@@ -13,9 +13,18 @@ tool, Ctrl+A selected all objects, Ctrl+D armed a paste preview that R rotated,
 E opened the selected object's properties, M started a move, the pending-fields
 refusal message appeared, Delete removed the selected object, Ctrl+Z restored
 it, Ctrl+S opened the publish dialog, Ctrl+Q opened the unsaved-items prompt,
-and Ctrl+, opened Preferences in all three workspaces. The clipboard-chord gap
-described below was verified by exercising both the swallowed and the passing
-modifier combinations. macOS and Windows have not been tested; for command
+and Ctrl+, opened Preferences in all three workspaces. The earlier raw-key copy
+and paste paths (Ctrl+Shift+C/V) were exercised live. A subsequent native
+X11/Xvnc check for [PR #443](https://github.com/tangency-labs/pcbcraft/pull/443)
+exercised Ctrl+X, Ctrl+Shift+X, Ctrl+V placement and one-step Undo in both library
+editors on the `586a39f` ci-profile build. The automated test
+`normalized_clipboard_events_drive_library_copy_and_paste` covers these clipboard
+operations separately. Plain Ctrl+C/X/V use the real `egui_winit` translation boundary —
+`native_paste_translation_reaches_the_internal_library_paste` feeds the events
+the vendored translator emits for empty and image-only clipboards into the
+harness, and `clipboard_translation_tests` inside `vendor/egui-winit` checks
+the emission itself.
+macOS and Windows have not been tested; for command
 chords, macOS uses **⌘** where **Ctrl** is shown. The browser build differs in
 three rows — **Ctrl+S** uses the save/export path, and **Ctrl+Q** and
 **Ctrl+Shift+A** are desktop-only — and has not been separately verified.
@@ -36,7 +45,9 @@ consumes its editing keys in `library_editors/canvas.rs`. Consequences:
   **N**/**Shift+N** are dead here. Opening another library document uses the
   Library tab instead.
 - Losing window focus resets the canvas tool to Select; switching the active
-  document does the same to the document losing focus.
+  document does the same to the document losing focus. A paste chord only arms
+  while the window is focused, and a later Escape inside the same input batch
+  cancels it (events resolve in order).
 - While the Assistant owns input, the editing chords (Ctrl+S, Ctrl+Z, Ctrl+Y,
   Ctrl+Q) are withheld; Ctrl+, still opens Preferences.
 
@@ -75,34 +86,42 @@ area, not covered by a panel or floating layer.
 | **Enter** | Commits the in-progress polyline as a graphic object; does nothing under any other tool. |
 | **Ctrl+A** | Selects all objects in the definition. |
 | **Ctrl+D** | Duplicates the selection into a cancellable Paste preview. Refuses while property fields are pending. |
-| **Ctrl+C** | Dispatched, but unreachable on desktop — see the clipboard gap below. |
-| **Ctrl+V** | Dispatched, but unreachable on desktop — see the clipboard gap below. |
+| **Ctrl+C** | Copies the selection to the internal library clipboard via the normalized Copy event; the raw key is also accepted when another modifier bypasses native translation. |
+| **Ctrl+X** | Cuts the selection — copies it to the internal clipboard and deletes it as one undoable edit — via the normalized Cut event (same raw-key fallback); refuses while property fields are pending. |
+| **Ctrl+V** | Arms the cancellable paste preview via the normalized Paste or PasteImage event (same raw-key fallback); the chord completes even when the OS clipboard holds nothing usable; refuses while property fields are pending. |
 
 Tools with ribbon buttons but **no** key binding: Rectangle, Circle, Arc,
 Polyline, Mirror X and Array. Polyline is armed from the ribbon and committed
 with Enter.
 
-### The clipboard chord gap
+### Clipboard chords
 
-On desktop, **Ctrl+C** and **Ctrl+V** never reach the canvas handler.
-`egui-winit` translates command-only **C**/**V**/**X** presses into
+On desktop, `egui-winit` translates command-only **C**/**V**/**X** presses into
 `Event::Copy`, `Event::Paste` and `Event::Cut` and does not emit the
-corresponding `Event::Key`, while the canvas waits for the key press. The
-emitted Copy/Paste events have no consumer in the library editor, so the
-chords are dead.
+corresponding `Event::Key`. A plain **Ctrl+V** press is a completed clipboard
+read even when the OS clipboard holds nothing usable: the vendored
+`egui-winit` (`vendor/egui-winit/PATCH.md`) emits `Event::Paste("")` when the
+read comes back empty or unsupported — a no-op for text fields — and keeps
+upstream's `Event::PasteImage` for image-only clipboards. The canvas consumes
+`Paste` (text or empty) and `PasteImage` as paste intent, so plain
+**Ctrl+C**/**Ctrl+V** reach the internal clipboard operations whatever the OS
+clipboard contains. `Event::Cut` drives **Ctrl+X**: it stores the selection on
+the same internal clipboard and deletes it as a single undoable edit.
 
-Adding a second modifier escapes the translation: **Ctrl+Shift+C** and
-**Ctrl+Shift+V** do emit their `Key` events, and the canvas checks only
-`modifiers.command` — so those combinations actually run copy and paste. The
-Paste preview behaves the same as Ctrl+D's. Copy and paste are gated to a
-selection of the same document kind: pasting a symbol's objects into a
-footprint document reports "Paste into a definition of the same kind."
+Adding a second modifier escapes the translation: **Ctrl+Shift+C**,
+**Ctrl+Shift+X** and **Ctrl+Shift+V** emit their `Key` events, and the canvas
+accepts those too — each press produces exactly one of the two event forms, so
+a chord runs copy, cut or paste once. The Paste preview behaves the same as
+Ctrl+D's. Copy and paste are gated to a selection of the same document kind:
+pasting a symbol's objects into a footprint document reports "Paste into a
+definition of the same kind."
 
 ## Pending fields gate
 
 Property fields (name, number, orientation, dimensions) apply atomically.
-While unapplied input exists, **M**, **Ctrl+D**, paste and tool changes via
-**P**/**L**/**T** are refused with "Apply or reset the property fields …"
+While unapplied input exists, **M**, **Ctrl+D**, **Ctrl+X**, paste and tool
+changes via **P**/**L**/**T** are refused with "Apply or reset the property
+fields …"
 rather than silently dropping the draft. Typing in a field owns keyboard input,
 so canvas keys do not fire while a field is focused.
 
@@ -124,7 +143,7 @@ so canvas keys do not fire while a field is focused.
 | Enter | `canvas` → `Action::Insert` for `Tool::Polyline` only | — |
 | Ctrl+A | `canvas` → `select_many(all)` | — (the Ctrl+A presses in `library_editors/tests.rs` are field-scoped select-all, not canvas) |
 | Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | — |
-| Ctrl+C / Ctrl+V | `canvas` → `copy` / `paste` → `Tool::Paste` — unreachable on desktop via the plain chord; reachable via Ctrl+Shift | — |
+| Ctrl+C / Ctrl+X / Ctrl+V | `canvas` → `copy` / `cut` (copy + one `Action::Delete`) / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Cut`/`Event::Paste`/`Event::PasteImage`, or the raw key when another modifier bypasses translation) | `native_paste_translation_reaches_the_internal_library_paste` (empty + image-only clipboards, both kinds, single undoable commit), `native_paste_chord_only_arms_the_focused_library_view` (detached-view ownership), `normalized_clipboard_events_drive_library_copy_and_paste` (gates, same-frame Escape ordering, cut + undo, pending refusal), `clipboard_translation_tests` in `vendor/egui-winit` (emission) |
 | Workspace boundary | `PcbApp::shortcuts` not invoked; `library_frame` key block | `home_has_no_editor_shortcuts_and_selected_copy_enters_the_workspace` |
 | Parts Library | `library_workspace.rs` — `COMMAND_COMMA` only | `library_workspaces_share_the_picker_with_schematic_and_pcb` |
 

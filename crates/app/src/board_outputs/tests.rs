@@ -1,30 +1,82 @@
 use super::*;
 use std::fs;
 
+/// Build an immutable export capture, returning any archive error to the test.
+fn capture(text: &str) -> Result<Archive, String> {
+    Archive::new(&[pcbcraft_engine::board::fabrication::Output { name: "board.gbr".into(), contents: text.into() }])
+}
+
+/// Ordinary re-export replaces the same selected ZIP with the complete new capture and leaves
+/// no companion or staging file. An old sidecar neither blocks the replacement nor changes.
+#[test]
+fn publish_one_zip_and_reexport_at_the_same_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("chosen.zip");
+    let first = capture("first\n").unwrap();
+    let replacement = capture("replacement\n").unwrap();
+    assert_ne!(first.bytes(), replacement.bytes());
+    for archive in [&first, &replacement] {
+        publish_archive_with_sync(&path, archive.bytes(), sync_directory).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), archive.bytes());
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+    let legacy = dir.path().join("chosen.zip.manifest.json");
+    fs::write(&legacy, b"old companion").unwrap();
+    publish_archive_with_sync(&path, first.bytes(), sync_directory).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), first.bytes());
+    assert_eq!(fs::read(&legacy).unwrap(), b"old companion");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+}
+
+/// The browser request passes the entire capture once, with its suggested name and ZIP MIME
+/// type. Bridge errors are reported, not promoted to success; no browser runs in this test.
+#[test]
+fn browser_requests_one_zip_and_propagates_failure() {
+    let archive = capture("one download\n").unwrap();
+    for response in [Ok(()), Err("bridge refused")] {
+        let mut calls = 0;
+        let result = request_zip_download("board.zip", &archive, |bytes, name, media_type| {
+            calls += 1;
+            assert_eq!(bytes, archive.bytes());
+            assert_eq!(name, "board.zip");
+            assert_eq!(media_type, "application/zip");
+            response
+        });
+        assert_eq!(calls, 1);
+        if response.is_ok() {
+            assert!(matches!(result, Ok(Outcome::DownloadRequested)));
+        } else {
+            assert!(result.unwrap_err().contains("bridge refused"));
+        }
+    }
+}
+
 /// Captured tests use the real one-slot completion queue, including cancellation, failure and
 /// disconnection. Every completed outcome releases the slot for another export.
 #[test]
 fn completion_releases_the_export_slot_on_every_outcome() {
     let ctx = egui::Context::default();
     let mut exports = Exports::default();
-    for result in [Ok(Outcome::Saved), Ok(Outcome::Cancelled), Err("save failed".into())] {
-        exports.start(&ctx, "board.zip".into(), b"archive".to_vec()).unwrap();
+    for result in [Ok(Outcome::Saved), Ok(Outcome::DownloadRequested), Ok(Outcome::Cancelled), Err("save failed".into())] {
+        exports.start(&ctx, "board.zip".into(), capture("archive").unwrap()).unwrap();
         assert!(exports.busy());
         assert!(exports.poll().is_none());
-        assert!(exports.start(&ctx, "overlap.zip".into(), vec![]).is_err());
+        assert_eq!(exports.start(&ctx, "overlap.zip".into(), capture("").unwrap()).unwrap_err(), "Finish the current fabrication export first.");
         let saved = matches!(&result, Ok(Outcome::Saved));
         let cancelled = matches!(&result, Ok(Outcome::Cancelled));
+        let requested = matches!(&result, Ok(Outcome::DownloadRequested));
         exports.complete_captured(result).unwrap();
         let completed = exports.poll().unwrap();
         assert_eq!(matches!(&completed, Ok(Outcome::Saved)), saved);
         assert_eq!(matches!(&completed, Ok(Outcome::Cancelled)), cancelled);
-        if !saved && !cancelled {
+        assert_eq!(matches!(&completed, Ok(Outcome::DownloadRequested)), requested);
+        if !saved && !cancelled && !requested {
             assert_eq!(completed.unwrap_err(), "save failed");
         }
         assert!(!exports.busy());
         assert!(exports.poll().is_none());
     }
-    exports.start(&ctx, "board.zip".into(), vec![]).unwrap();
+    exports.start(&ctx, "board.zip".into(), capture("").unwrap()).unwrap();
     drop(exports.completion.take());
     assert!(exports.poll().unwrap().unwrap_err().contains("stopped before reporting"));
     assert!(!exports.busy());
@@ -47,7 +99,7 @@ fn publish_reports_post_rename_sync_errors_and_preserves_invalid_destinations() 
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
     let folder = dir.path().join("folder.zip");
     fs::create_dir(&folder).unwrap();
-    assert!(publish_archive(&folder, b"refused").unwrap_err().contains("not a regular file"));
+    assert!(publish_archive_with_sync(&folder, b"refused", sync_directory).unwrap_err().contains("not a regular file"));
     assert!(folder.is_dir());
     assert_eq!(fs::read(&path).unwrap(), b"complete replacement");
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
@@ -92,10 +144,10 @@ fn archive_permission_probe() {
     let ordinary = root.join("ordinary.zip");
     fs::write(&ordinary, b"ordinary").unwrap();
     let archive = root.join("fabrication.zip");
-    publish_archive(&archive, b"new archive").unwrap();
+    publish_archive_with_sync(&archive, b"new archive", sync_directory).unwrap();
     assert_eq!(fs::metadata(&archive).unwrap().permissions().mode() & 0o777, fs::metadata(&ordinary).unwrap().permissions().mode() & 0o777);
     fs::set_permissions(&archive, fs::Permissions::from_mode(0o664)).unwrap();
-    publish_archive(&archive, b"replacement").unwrap();
+    publish_archive_with_sync(&archive, b"replacement", sync_directory).unwrap();
     assert_eq!(fs::metadata(&archive).unwrap().permissions().mode() & 0o777, 0o664);
     assert_eq!(fs::read(&archive).unwrap(), b"replacement");
 }

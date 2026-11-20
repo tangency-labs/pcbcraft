@@ -5,6 +5,7 @@ use super::{
     drawing::{Drawing, Drawings},
     setup::{Layer, LayerPurpose},
     track::{Track, Via},
+    view::BoardTarget,
 };
 use crate::{
     CommandError, Project, Session,
@@ -21,6 +22,21 @@ use std::{
 use uuid::Uuid;
 
 mod connectivity;
+
+const NPTH_FORMAT: &str = "pcbcraft-clipboard/7";
+
+/// Keep the released format ladder when no newer embedded dependency is present.
+fn legacy_format(assigned: bool, locked: bool, stroked: bool) -> &'static str {
+    if assigned {
+        "pcbcraft-clipboard/4"
+    } else if locked {
+        "pcbcraft-clipboard/3"
+    } else if stroked {
+        "pcbcraft-clipboard/2"
+    } else {
+        "pcbcraft-clipboard/1"
+    }
+}
 
 /// Export a board selection without changing the project or system clipboard.
 pub const COPY: &str = "pcb.copy";
@@ -335,8 +351,12 @@ fn circuit_selection(project: &Project, components: &BTreeSet<u64>) -> Selection
 impl BoardFragment {
     /// Capture selected physical objects plus their exact placed packages and closed logical
     /// component scope. Circuit fragments retain source sheet identities; no flattening is implicit.
-    /// Selections containing zones are refused in full until their clipboard format is supported.
+    /// Selections containing zones and boards containing circular copper are refused in full
+    /// until their clipboard formats and geometry are supported.
     pub fn capture(project: &Project, selection: &BoardSelection, cut: bool) -> Result<Self, CommandError> {
+        if !project.board.arcs.is_empty() {
+            return Err(CommandError::Unavailable(super::arc::UNSUPPORTED.into()));
+        }
         if !selection.zones.is_empty() {
             return Err(invalid("Zone clipboard copying is not supported yet. Deselect zones before copying or cutting."));
         }
@@ -423,12 +443,8 @@ impl BoardFragment {
         }
         let assigned = envelope.vias.iter().any(|v| v.net_assignment.is_some());
         let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
-        if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2" | "pcbcraft-clipboard/3" | "pcbcraft-clipboard/4")
-            || (envelope.format == "pcbcraft-clipboard/4") != assigned
-            || (!assigned && (envelope.format == "pcbcraft-clipboard/3") != locked)
-            || (!assigned
-                && !locked
-                && (envelope.format == "pcbcraft-clipboard/2") != envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()))
+        let npth_format = envelope.format == NPTH_FORMAT;
+        if (!npth_format && envelope.format != legacy_format(assigned, locked, envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some())))
             || envelope.kind != "board"
             || envelope.source_project.is_nil()
             || envelope.source_board.is_nil()
@@ -470,6 +486,9 @@ impl BoardFragment {
                 }
             }
             circuits.push(Circuit { source_sheet: circuit.sheet, name: circuit.name, fragment });
+        }
+        if npth_format != circuits.iter().any(|c| c.fragment.has_npth()) {
+            return Err(invalid("board clipboard format does not match its pinned non-plated holes"));
         }
         let mut owners = BTreeSet::new();
         for footprint in &envelope.footprints {
@@ -582,14 +601,14 @@ impl BoardFragment {
             .map(|c| Ok(CircuitEnvelope { sheet: c.source_sheet, name: c.name.clone(), text: c.fragment.to_text()? }))
             .collect::<Result<_, CommandError>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.vias.iter().any(|via| via.net_assignment.is_some()) {
-                "pcbcraft-clipboard/4"
-            } else if self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked) {
-                "pcbcraft-clipboard/3"
-            } else if self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()) {
-                "pcbcraft-clipboard/2"
+            format: if self.circuits.iter().any(|c| c.fragment.has_npth()) {
+                NPTH_FORMAT
             } else {
-                "pcbcraft-clipboard/1"
+                legacy_format(
+                    self.vias.iter().any(|via| via.net_assignment.is_some()),
+                    self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked),
+                    self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()),
+                )
             }
             .into(),
             kind: "board".into(),
@@ -694,6 +713,9 @@ impl BoardFragment {
         check_copper: bool,
     ) -> Result<(Project, BoardSelection), CommandError> {
         let target = destination.resolve_board(None)?;
+        if !destination.board.arcs.is_empty() {
+            return Err(CommandError::Unavailable(super::arc::UNSUPPORTED.into()));
+        }
         let mapping = self.layer_mapping(destination, &options.layers)?;
         let mut next = destination.clone();
         let mut components = BTreeMap::new();
@@ -855,27 +877,40 @@ impl BoardFragment {
 }
 
 impl Session {
-    /// Export a revision-bound, explicitly addressed physical selection through GUI/MCP commands.
-    pub(crate) fn copy_board(&self, params: &Value, cut: bool) -> Result<String, CommandError> {
-        crate::check_params(crate::command(COPY).ok_or_else(|| invalid("copy command unavailable"))?, params)?;
-        self.check_revision(params)?;
-        let project = self.open_project()?;
-        project.resolve_board(params.get("board").and_then(Value::as_str))?;
-        let selection = BoardSelection::parse(&params["items"]).ok_or_else(|| invalid("invalid board selection"))?;
-        BoardFragment::capture(project, &selection, cut)?.to_text()
-    }
-    /// Remove a mixed physical selection atomically, leaving its logical components and accepted
-    /// package history available for relocation. Inner command histories are never published.
-    pub(crate) fn delete_board_items(&mut self, params: &Value, cut: bool) -> Result<(), CommandError> {
+    /// Read the addressed physical selection only at the requested session revision.
+    fn board_clipboard_selection(&self, params: &Value) -> Result<(&Project, BoardTarget, BoardSelection), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let selection = BoardSelection::parse(&params["items"]).ok_or_else(|| invalid("invalid board selection"))?;
+        Ok((project, target, selection))
+    }
+    /// Export a revision-bound, explicitly addressed physical selection without an edit.
+    pub(crate) fn copy_board(&self, params: &Value) -> Result<String, CommandError> {
+        crate::check_params(crate::command(COPY).ok_or_else(|| invalid("copy command unavailable"))?, params)?;
+        let (project, _, selection) = self.board_clipboard_selection(params)?;
+        BoardFragment::capture(project, &selection, false)?.to_text()
+    }
+    /// Encode and check the clipboard text before deleting anything, even for callers that only
+    /// ask for the revision. Report the single edit only after the deletion is adopted.
+    pub(crate) fn cut_board(&mut self, params: &Value) -> Result<String, CommandError> {
+        self.validate_project_command(CUT, params)?;
+        let (project, target, selection) = self.board_clipboard_selection(params)?;
+        let text = BoardFragment::capture(project, &selection, true)?.to_text()?;
+        self.publish_board_deletion(target, selection)?;
+        self.report_committed(CUT, params);
+        Ok(text)
+    }
+    /// Remove a selection without producing clipboard text or applying the clipboard byte limit.
+    pub(crate) fn delete_board_items(&mut self, params: &Value) -> Result<(), CommandError> {
+        let (_, target, selection) = self.board_clipboard_selection(params)?;
+        self.publish_board_deletion(target, selection)
+    }
+    /// Remove a nonempty physical selection atomically, leaving its logical components and
+    /// accepted package history available for relocation. Inner command histories stay private.
+    fn publish_board_deletion(&mut self, target: BoardTarget, selection: BoardSelection) -> Result<(), CommandError> {
         if selection.is_empty() {
             return Err(invalid("select physical objects to delete"));
-        }
-        if cut {
-            BoardFragment::capture(project, &selection, true)?;
         }
         let mut transaction = Self {
             libraries: self.libraries.clone(),

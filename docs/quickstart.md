@@ -57,6 +57,9 @@ instances/2 for a board; opening or inspecting an older project does not promote
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.
 The folder contains two wired resistors and their pinned symbol definition.
+On desktop you can also name the project on the command line:
+`cargo run --locked -p pcbcraft -- crates/app/tests/fixtures/split/two-resistors`
+opens it as the app starts.
 Use **File → Save As… → Project folder…** to save your own copy in a new or empty
 folder outside the checkout before making changes. This keeps the tracked test
 fixture intact. **View → Fit** brings the circuit into view. On desktop, use the
@@ -527,6 +530,14 @@ Saving retains drawing and layer identities without moving footprints or creatin
 a copper stackup. Open paths are editing geometry, and this slice does not check
 closure across drawings, edge clearance or manufacturing validity.
 
+The interactive route tool supports straight segments only. `pcb.set_arc_tracks`
+replaces the board's complete list of exact circular records in the open project.
+Save the project separately to write those changes to disk. Boards containing
+arcs display an unsupported-geometry explanation instead of an incomplete PCB
+view; DRC, queries, clipboard and fabrication refuse them.
+See [circular copper records](circular-copper-records.md) before trying that
+storage command. Undo or remove the records to resume ordinary PCB editing.
+
 To route a track, activate a copper layer and press **X**. The crosshair follows
 the pointer, and the target marker shows nearby grid points and copper contacts.
 The preview keeps a lighter shade of the layer color while background preparation
@@ -616,7 +627,9 @@ launch `target/debug/pcbcraft-cli` with arguments
 repository as its working directory. Use `.exe` on Windows. Running that command
 in a terminal waits for MCP input; it is not an interactive command prompt.
 Headless edits change only that process's in-memory session. They do not edit an
-open GUI window or save back to the file.
+open GUI window or save back to the file. For a review that must not edit even
+that snapshot, add `--read-only` to the headless arguments. See
+[headless MCP](mcp.md#headless-mcp) for scope discovery and refusal details.
 
 For the new layer/stackup foundation, use `describe_command` with
 `pcb.initialize_board_setup` and `pcb.set_board_setup`. On a project with no
@@ -735,6 +748,19 @@ For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
 To make a plated hole, set Layers to All copper and enter a positive drill smaller
 than the land. Corner radius is zero for rectangular/circular pads.
 
+For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
+pins, enter each other's numbers and choose **Preview current nets** before
+**Apply remap**. The table separates the draft's unchanged name from the pinned
+before-number name, current nets and native package pads; these are not predicted
+reconnections or proof of primitive lineage across prior draft renumbering.
+**Unconnected** is a known placed terminal without a net. Actual net names start
+with **Net:**, so a net named Unconnected reads **Net: Unconnected**. **Unknown**
+means missing association or evidence (for example, no open project or no matching
+placed copy), not a known no-net/no-package result. Only the library draft
+changes, in one Undo step. Cancel leaves both documents alone. To associate nets,
+edit the same published identity/revision used by the project; **Edit copy** does
+not infer that association. See [pin renumbering](properties-and-library-editors.md#review-pin-renumbering).
+
 On desktop, **Parts Library → New → Library** creates a writable native folder.
 Create a symbol or footprint and publish it to that collection first, or choose an
 existing populated writable collection. Select a published item and choose **Edit**, then change its
@@ -790,9 +816,13 @@ non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
 With a configured board, a closed Board Outline and a resolvable placement origin,
-**Manufacture → Fabrication → Outputs** generates a fabrication ZIP to save/download
-without editing the design; cancellation, a busy output worker or destination errors
-can prevent a successful save. For pads exported on a layer, round pads retain C flashes.
+**Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
+The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
+Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
+destination errors can prevent a successful save. In the browser, Outputs requests
+one download; check that your browser saved it.
+
+For pads exported on a layer, round pads retain C flashes.
 R/O flashes require individually quarter-turn library and placement rotations and a
 nondegenerate resolved axis rectangle. Rectangles also need an integral centered midpoint;
 obrounds need matching width/height parity. Other rectangles retain resolved regions;
@@ -800,9 +830,9 @@ other obrounds retain approximate round-ended strokes or equal-sided C flashes.
 Rounded rectangles use regions with chorded corners only if a positive radius survives
 resolution. A collapsed tiny rectangle can emit a retraced path with no area. Mask uses
 outer-layer pads without process expansion; paste excludes through-hole pads.
-Output names remain unique when layer names
-collide after sanitization; the [editor guide](editor-guide.md) describes the eligibility,
-shape approximations and desktop save behavior.
+Output names remain unique when layer names collide after sanitization; the
+[editor guide](editor-guide.md) describes the eligibility, shape approximations,
+file contents and save behavior.
 
 ### Browse libraries
 

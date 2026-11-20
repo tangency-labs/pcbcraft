@@ -7,7 +7,7 @@ use egui::Context;
 
 use crate::PcbApp;
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) use live::{check_command, inspect_editor, window_catalog};
+pub(super) use live::{check_command, inspect_editor, inspect_editor_with_remap, window_catalog};
 
 /// A contextual panel that a window shows or hides.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,6 +132,9 @@ mod live {
         View,
         /// A typed engine authoring transaction.
         LibraryAction,
+        PinRemaps,
+        RemapRuntime,
+        RemapToken,
         PartRecord,
         PlacementFilter,
         PartReference,
@@ -181,6 +184,9 @@ mod live {
             let coordinate = json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM});
             let ids = json!({"type": "array", "uniqueItems": true, "items": {"type": "string"}});
             match self {
+                Self::PinRemaps => pcbcraft_engine::authoring::remap::schema(),
+                Self::RemapRuntime => pcbcraft_engine::authoring::remap::Scalar::Runtime.schema(),
+                Self::RemapToken => pcbcraft_engine::authoring::remap::Scalar::Token.schema(),
                 Self::PrimitiveIds => json!({"type":"array","items":{"type":"integer","minimum":1},"maxItems":512,"uniqueItems":true}),
                 Self::PartReferenceField => {
                     json!({"oneOf":[{"type":"object","properties":{"field":{"enum":["symbol","category","part"]}},"required":["field"],"additionalProperties":false},{"type":"object","properties":{"field":{"enum":["footprint","new_package"]},"package":{"type":"string","maxLength":64}},"required":["field","package"],"additionalProperties":false}]})
@@ -227,6 +233,9 @@ mod live {
         fn validate(self, value: &Value) -> Result<(), String> {
             let fits = match self {
                 Self::PlacementFilter => return crate::placement_filters::filter_from_value(value).map(|_| ()),
+                Self::PinRemaps => return pcbcraft_engine::authoring::remap::decode(value).map(|_| ()),
+                Self::RemapRuntime => return pcbcraft_engine::authoring::remap::Scalar::Runtime.parse(value).map(|_| ()),
+                Self::RemapToken => return pcbcraft_engine::authoring::remap::Scalar::Token.parse(value).map(|_| ()),
                 Self::PrimitiveIds => value.as_array().is_some_and(|items| {
                     items.len() <= 512
                         && items.iter().all(|item| item.as_u64().is_some_and(|id| id > 0))
@@ -267,6 +276,8 @@ mod live {
                 return Ok(());
             }
             Err(match self {
+                Self::PinRemaps => "must contain explicit valid pin correspondences".into(),
+                Self::RemapRuntime | Self::RemapToken => "must be a canonical decimal remap identity string".into(),
                 Self::PrimitiveIds => "must be a bounded list of distinct positive primitive IDs".into(),
                 Self::PartReferenceField => "must identify symbol, category, part or a footprint's stable package".into(),
                 Self::PartReference => "must contain an exact native library reference".into(),
@@ -341,12 +352,16 @@ mod live {
                 })
                 .collect();
             let required: Vec<&str> = self.params.iter().filter(|param| param.required).map(|param| param.name).collect();
+            let mut params = json!({"type": "object", "properties": properties, "required": required, "additionalProperties": false});
+            if self.id == "app.library_pin_remap" {
+                params["oneOf"] = crate::library_editors::remap::phase_schema();
+            }
             json!({
                 "id": self.id,
                 "title": self.title,
                 "summary": self.summary,
                 "scope": "window",
-                "params": {"type": "object", "properties": properties, "required": required, "additionalProperties": false},
+                "params": params,
             })
         }
 
@@ -367,6 +382,9 @@ mod live {
                     None if param.required => return Err(format!("`{}` needs `{}`", self.id, param.name)),
                     None => {}
                 }
+            }
+            if self.id == "app.library_pin_remap" {
+                crate::library_editors::remap::check_phase(params)?;
             }
             Ok(())
         }
@@ -636,6 +654,38 @@ mod live {
                     kind: Kind::LibraryRevision,
                 },
                 Param { name: "action", summary: "Typed authoring Action", required: true, kind: Kind::LibraryAction },
+            ],
+        },
+        WindowCommand {
+            id: "app.library_pin_remap",
+            title: "Review Symbol Pin Remap",
+            summary: "Preview current placed nets, then apply an effective remap in one library-only undo step using the captured token; an unchanged map is a no-op and cancel changes neither document.",
+            params: &[
+                Param { name: "document", summary: "Canonical decimal runtime symbol document ID string", required: true, kind: Kind::RemapRuntime },
+                Param {
+                    name: "expected_revision",
+                    summary: "Canonical decimal library runtime revision string captured by the review",
+                    required: true,
+                    kind: Kind::RemapRuntime,
+                },
+                Param {
+                    name: "phase",
+                    summary: "Preview explicit correspondences, apply the reviewed token, or cancel it",
+                    required: true,
+                    kind: Kind::Choice(&["preview", "apply", "cancel"]),
+                },
+                Param {
+                    name: "pins",
+                    summary: "Explicit unit/object to new terminal correspondences; preview only",
+                    required: false,
+                    kind: Kind::PinRemaps,
+                },
+                Param {
+                    name: "token",
+                    summary: "Positive canonical decimal review token string; apply/cancel only",
+                    required: false,
+                    kind: Kind::RemapToken,
+                },
             ],
         },
         WindowCommand {
@@ -1290,6 +1340,12 @@ mod live {
     /// take. Parked views of a collapsed split are not listed; they return when it reopens.
     /// Report inline text editing, dialogs and file operations that can hold live commands.
     pub(crate) fn inspect_editor(app: &PcbApp) -> Value {
+        inspect_editor_with_remap(app, None, !matches!(app.dialog, Dialog::None))
+    }
+
+    /// Use the normal reply emitter with a proposed capture/dialog state, or current capture
+    /// when none is supplied. Preview preserves the other inspected fields; Apply can edit them.
+    pub(crate) fn inspect_editor_with_remap(app: &PcbApp, pin_remap: Option<Value>, dialog_open: bool) -> Value {
         let windows: Vec<Value> = app
             .views
             .hosts
@@ -1369,13 +1425,13 @@ mod live {
             "unsaved": app.files.dirty(&app.session),
             "file_operation": app.files.busy(),
             "file": app.files.inspect(&app.session),
-            "dialog_open": !matches!(app.dialog, Dialog::None),
+            "dialog_open": dialog_open,
             "text_editing": app.views.editing_text(),
             "home": app.home,
             "workspace": app.workspace_key(),
             "message": app.message,
             "windows": windows,
-            "library_editors":app.library_editors.inspect(),
+            "library_editors":pin_remap.map_or_else(|| app.library_editors.inspect(), |review| app.library_editors.inspect_with_remap(review)),
             "library_destinations":app.inspect_library_destinations(),
             "library_item_deletion":app.inspect_library_item_deletion(),
             "part_dependency_updates":app.part_updates,
@@ -1454,8 +1510,9 @@ mod live {
         }
 
         /// Validate and run one window command through the handler its control uses. Call it on
-        /// the editor thread with the main window bound and no dialog or file operation pending;
-        /// the live connection's refusal enforces that. A refused command changes nothing.
+        /// the editor thread with the main window bound. The live refusal normally requires no
+        /// dialog/file operation; addressed remap and item-deletion phases are modal exceptions.
+        /// A refused command changes nothing.
         pub(crate) fn run_window_command(&mut self, ctx: &Context, id: &str, params: &Value) -> Result<(), String> {
             let command = CATALOG.iter().find(|command| command.id == id).ok_or_else(|| format!("unknown command `{id}`"))?;
             command.check(params)?;
@@ -2071,8 +2128,8 @@ mod live {
             assert!(select.check(&json!({"view":0,"items":{"symbols":[],"wires":[],"net_labels":labels}})).is_err());
         }
 
-        /// Invalid library identifiers must direct recovery to library inspection, with the
-        /// existing nonnegative-integer schema retained for every library command parameter.
+        /// Published library commands retain their nonnegative-integer inspection identifiers;
+        /// remap routing alone takes exact decimal strings with its own refusal guidance.
         #[test]
         fn library_parameter_refusals_identify_the_correct_inspection_state() {
             for command in CATALOG.iter().filter(|c| c.id.starts_with("app.library_")) {
@@ -2083,6 +2140,16 @@ mod live {
                         "selected" => "must be a primitive ID from library inspection",
                         _ => continue,
                     };
+                    if command.id == "app.library_pin_remap" {
+                        assert!(matches!(param.kind, Kind::RemapRuntime));
+                        assert_eq!(param.kind.schema(), pcbcraft_engine::authoring::remap::Scalar::Runtime.schema());
+                        assert!(param.kind.validate(&json!("0")).is_ok());
+                        assert!(param.kind.validate(&json!(u64::MAX.to_string())).is_ok());
+                        for bad in [json!(0), json!(u64::MAX), json!(true), json!(1.5), Value::Null] {
+                            assert!(param.kind.validate(&bad).unwrap_err().contains("canonical decimal string"));
+                        }
+                        continue;
+                    }
                     assert_eq!(param.kind.schema(), json!({"type":"integer","minimum":0}));
                     assert!(param.kind.validate(&json!(0)).is_ok());
                     assert!(param.kind.validate(&json!(u64::MAX)).is_ok());
@@ -2090,6 +2157,179 @@ mod live {
                         assert_eq!(param.kind.validate(&bad).unwrap_err(), expected, "{} {}", command.id, param.name);
                     }
                 }
+            }
+        }
+
+        /// Exercise production routing/phase checks and emit cases for independent schema validation.
+        /// Structural expectations are separate from row-identity/destination semantic refusals.
+        #[test]
+        fn pin_remap_live_schema_cases_cover_phases_and_exact_scalars() {
+            let command = *CATALOG.iter().find(|command| command.id == "app.library_pin_remap").unwrap();
+            let pins = json!([{"unit":"main","object":"1","number":"2"},{"unit":"main","object":"3","number":"1"}]);
+            let check = |request: &Value, accepted: bool, reason: &str| {
+                let read = command.check(request);
+                assert_eq!(read.is_ok(), accepted, "{request}: {read:?}");
+                if let Err(error) = read {
+                    assert!(error.contains(reason), "{request}: {error}");
+                }
+                eprintln!("pin_remap_schema_case {}", json!({"schema":command.to_json()["params"],"value":request,"reader_accepts":accepted}));
+            };
+            for phase in ["preview", "apply", "cancel"] {
+                let mut request = json!({"document":"0","expected_revision":"0","phase":phase});
+                if phase == "preview" {
+                    request["pins"] = pins.clone();
+                } else {
+                    request["token"] = json!("1");
+                }
+                check(&request, true, "");
+                let fields =
+                    if phase == "preview" { vec!["document", "expected_revision", "object"] } else { vec!["document", "expected_revision", "token"] };
+                for field in fields {
+                    for value in
+                        ["0", "1", "9007199254740993", "9223372036854775806", "9223372036854775807", "18446744073709551614", "18446744073709551615"]
+                    {
+                        let mut row = request.clone();
+                        if field == "object" {
+                            row["pins"][0][field] = json!(value);
+                        } else {
+                            row[field] = json!(value);
+                        }
+                        let valid = value != "0" || matches!(field, "document" | "expected_revision");
+                        check(&row, valid, "canonical decimal string");
+                    }
+                    for value in [
+                        Value::Null,
+                        json!(true),
+                        json!({}),
+                        json!([]),
+                        json!(0),
+                        json!(1),
+                        json!(1.0),
+                        json!(u64::MAX),
+                        json!(""),
+                        json!("01"),
+                        json!("-0"),
+                        json!("-1"),
+                        json!("+1"),
+                        json!("1e0"),
+                        json!("1.0"),
+                        json!("1\n"),
+                        json!("１"),
+                        json!("18446744073709551616"),
+                    ] {
+                        let mut row = request.clone();
+                        if field == "object" {
+                            row["pins"][0][field] = value;
+                        } else {
+                            row[field] = value;
+                        }
+                        check(&row, false, "canonical decimal string");
+                    }
+                    for raw in ["1e0", "-0", "1.0000000000000001", "9007199254740993.0", "18446744073709551615.0"] {
+                        let mut row = request.clone();
+                        let value = serde_json::from_str(raw).unwrap();
+                        if field == "object" {
+                            row["pins"][0][field] = value;
+                        } else {
+                            row[field] = value;
+                        }
+                        check(&row, false, "canonical decimal string");
+                    }
+                    let mut missing = request.clone();
+                    if field == "object" {
+                        missing["pins"][0].as_object_mut().unwrap().remove(field);
+                    } else {
+                        missing.as_object_mut().unwrap().remove(field);
+                    }
+                    let reason = match field {
+                        "object" => "`pins` Each pin remap row requires only unit, object and number.",
+                        "document" => "`app.library_pin_remap` needs `document`",
+                        "token" => "A pin remap review token is required.",
+                        _ => "`app.library_pin_remap` needs `expected_revision`",
+                    };
+                    check(&missing, false, reason);
+                }
+                for (field, reason) in [
+                    ("phase", "needs `phase`"),
+                    (if phase == "preview" { "pins" } else { "token" }, if phase == "preview" { "requires pins" } else { "token is required" }),
+                ] {
+                    let mut missing = request.clone();
+                    missing.as_object_mut().unwrap().remove(field);
+                    check(&missing, false, reason);
+                }
+                for value in [Value::Null, json!(0), json!(""), json!("commit")] {
+                    let mut invalid = request.clone();
+                    invalid["phase"] = value;
+                    check(&invalid, false, "phase");
+                }
+                if phase == "preview" {
+                    for (value, reason) in
+                        [(Value::Null, "`pins` Pin remap must be an array."), (json!([]), "`pins` Choose 1 to 128 logical pins to remap.")]
+                    {
+                        let mut invalid = request.clone();
+                        invalid["pins"] = value;
+                        check(&invalid, false, reason);
+                    }
+                    for value in [Value::Null, json!(false), json!(["main", "1", "2"])] {
+                        let mut invalid = request.clone();
+                        invalid["pins"][0] = value;
+                        check(&invalid, false, "`pins` Each pin remap row must be an object.");
+                    }
+                    for (field, values, reason) in [
+                        ("unit", vec!["", "main\n", "Main", "-main", "main-", "１"], "`pins` Invalid pin remap unit."),
+                        ("number", vec!["", "1\n", "123456789", " 1", "1 ", "é", "1.0"], "`pins` Invalid destination terminal number."),
+                    ] {
+                        for value in values {
+                            let mut invalid = request.clone();
+                            invalid["pins"][0][field] = json!(value);
+                            check(&invalid, false, reason);
+                        }
+                    }
+                    for field in ["unit", "number"] {
+                        let mut missing = request.clone();
+                        missing["pins"][0].as_object_mut().unwrap().remove(field);
+                        check(&missing, false, "`pins` Each pin remap row requires only unit, object and number.");
+                    }
+                    let mut exact = request.clone();
+                    exact["pins"][1] = exact["pins"][0].clone();
+                    let mut identity = request.clone();
+                    identity["pins"][1]["object"] = json!("1");
+                    let mut destination = request.clone();
+                    destination["pins"][1]["number"] = json!("2");
+                    for (row, expected_schema_accepts, reason) in [
+                        (exact, false, "duplicate or invalid pin identity"),
+                        (identity, true, "duplicate or invalid pin identity"),
+                        (destination, true, "duplicate destination"),
+                    ] {
+                        let error = command.check(&row).unwrap_err();
+                        assert!(error.contains(reason), "{row}: {error}");
+                        eprintln!(
+                            "pin_remap_schema_case {}",
+                            json!({"schema":command.to_json()["params"],"value":row,"reader_accepts":false,"reader_refusal":error,"expected_schema_accepts":expected_schema_accepts})
+                        );
+                    }
+                    let mut unknown = request.clone();
+                    unknown["pins"][0]["guess"] = json!(true);
+                    check(&unknown, false, "`pins` Each pin remap row requires only unit, object and number.");
+                    let mut single = request.clone();
+                    single["pins"].as_array_mut().unwrap().pop();
+                    check(&single, true, "");
+                    let mut large = request.clone();
+                    large["pins"] = (1..=128).map(|id| json!({"unit":"main","object":id.to_string(),"number":format!("n{id}")})).collect();
+                    check(&large, true, "");
+                    large["pins"].as_array_mut().unwrap().push(json!({"unit":"main","object":"129","number":"n129"}));
+                    check(&large, false, "1 to 128");
+                }
+                let mut substitution = request.clone();
+                if phase == "preview" {
+                    substitution["token"] = json!("1");
+                } else {
+                    substitution["pins"] = pins.clone();
+                }
+                check(&substitution, false, if phase == "preview" { "not a review token" } else { "replacement pins" });
+                let mut unknown = request.clone();
+                unknown["path"] = json!("not-an-input");
+                check(&unknown, false, "has no parameter `path`");
             }
         }
 

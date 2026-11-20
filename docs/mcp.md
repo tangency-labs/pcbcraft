@@ -142,10 +142,14 @@ The live connection runs every project command in `list_commands`, such as
 `schematic.delete_wire` or `edit.undo`, in the window's own session, so the
 editor and the agent share one undo history and the status bar names each edit
 (for example **Delete Wire through MCP**). `project.new` waits until the open
-project's unsaved changes are saved or discarded in the editor, and every
-command waits while an inline text edit, dialog or file operation is open.
+project's unsaved changes are saved or discarded in the editor. Commands normally
+wait while an inline text edit, dialog or file operation is open. Addressed
+`app.library_pin_remap` apply/cancel may resolve its own remap dialog; a new live
+preview and other gated document/presentation commands still refuse that dialog.
+Inspection remains available; separate `ui.*` automation uses its own input lifecycle.
+`file.abandon` can release a stalled open without waiting for the file job.
 `inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
-clients can identify the state holding command input. Its `file` object gives
+clients can identify the state holding input. Its `file` object gives
 the open project's saved `location` (`path` and `format`), the
 running `operation` (`id`, `kind` and known `destination`) and the `last`
 result (`id`, `operation`, `status` `succeeded`/`failed`/`cancelled`/`abandoned`, `path`,
@@ -154,6 +158,35 @@ means a later job replaced its result. `location` is null until the project has 
 opened from or saved to a location, whatever its name: a renamed project that was
 never saved has none, while a saved `Untitled.pc` has one. Use `file.save` when
 `location` is present and `file.save_as` when it is null.
+
+For pin remapping, normal live execution/`inspect_editor` exposes the captured
+token and report at `library_editors.pin_remap`; apply/cancel uses its string
+`document`, `expected_revision` and `token`. The token is runtime correlation,
+not an authentication secret. `inspect:false` on this window command returns only
+an acknowledgement/project revision, not the capture. Native preview counts the
+complete prospective inspection reply against the existing 16 MiB JSON limit
+before publishing a new capture/modal; oversize refusal preserves the previous
+capture. No report rows are silently truncated. This bounds encoded reply bytes,
+not peak heap. All report routes enforce the common 4 MiB report budget. The
+[editor guide](properties-and-library-editors.md#review-pin-renumbering) describes
+conservative graph-input and path-text admission, which runs only for a
+connectivity lookup on an associated, placed terminal.
+A failed form refresh keeps its old token/map owned by the form, so its visible Cancel
+or dismissal can retire it. Refresh can adopt a changed project snapshot while the
+library revision is still current; if the library revision changed, cancel and reopen
+the form at the current library revision. A project-close decision that displaces the form retires
+its review even if closing is cancelled. Addressed apply/cancel cannot close another form;
+changing typed numbers
+withdraws the old capture. Unrelated later editor changes can affect inspection
+size, so this is a capture-time check, not permanent transport availability.
+Headless `library.preview_pin_remap` is a focused read-only query and preserves
+its report even with `inspect:false`; it does not host the live editor documents.
+Preparation is synchronous and can outlast a request deadline. After a lost/timed-out
+reply, inspect both library revision and capture state before retrying. A successful
+unchanged Apply consumes the token without advancing the library revision. If full
+inspection is too large, use visible Cancel or send an addressed Cancel with known
+routing fields and `inspect:false`. Disconnect does not roll back a captured review
+or an applied edit, and cannot guarantee delivery of a returned error.
 
 It also lists presentation commands, marked `"scope": "window"`, which run through
 the same handlers as the editor's own controls without editing the project, its
@@ -174,6 +207,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `app.set_workspace` | Choose Schematic, PCB layout, Symbol Editor or Footprint Editor in an addressed pane, here/beside/in a native window; definition workspaces resume their last document |
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
+| `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
 | `pcb.align_footprints` | Align two or more `footprints` by their physical bounds (`mode` `left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute three or more with equal gaps to nanometer precision (`distribute_x`, `distribute_y`), in one undo step; distribution keeps physical outermost footprints and the span fixed, refusing overlapping selections that cannot retain those anchors. Track ends follow moving pads, as for a transform |
 | `pcb.set_footprint_transform` | Set a footprint center, whole-degree orientation and optional `side` (`front` or `back`) through the same atomic command used by the PCB canvas; inspection reports each footprint's `side`. Track ends follow the pads that move on their layer. Edits that join two nets are refused |
 | `pcb.set_footprint_reference_offset` | Move the reference of a placed footprint. `offset` is a local `{x_nm, y_nm}` displacement from the library default. A zero offset restores that default |
@@ -202,7 +236,7 @@ edits or reach file controls. Headless sessions cannot run them.
 
 `list_commands` keeps returning the command array as its first text part. A
 second text part, also given as the result's `structuredContent`, reads
-`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes"]}`.
+`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
 
 - `command_api_version` is one number for the whole public command contract,
@@ -231,8 +265,8 @@ and none is saved in projects.
 snapshot of every command's contract: `command_api_version`, then one line per
 command in `commands` (project commands) and `window_commands` (window and
 `ui.` commands), each the description without its `id` and without the
-`title`, `summary` and `description` of the command and its schemas, with
-object keys sorted (values of `const`, `default`, `enum` and `examples` are
+`title`, `summary`, `description` and deprecation annotations of the command
+and its schemas, with object keys sorted (values of `const`, `default`, `enum` and `examples` are
 kept whole). The engine and app tests compare the described commands with it
 and label detected differences. If either parameter schema contains `$ref`,
 `$dynamicRef` or `$recursiveRef`, every difference in it is conservatively
@@ -297,6 +331,60 @@ meaning still needs review, and it cannot tell whether a raise was the right
 decision; a review must still read
 every change to `command-contracts.json`.
 
+### Stating a version
+
+Pass optional `version` to `execute` to pin the `command_api_version` from
+`list_commands`. There is no per-command version. Omitting `version` runs
+against the session’s current API. The MCP tool accepts a positive JSON
+integer (for example `1`, not `1.0`, `"1"` or `null`). Check the serving
+session’s `version_check` capability before pinning. Legacy MCP backends that
+do not implement pinning refuse a pin without dispatching; unpinned calls
+still work.
+
+The MCP bridge and raw live clients that need a guarantee across editor versions
+use `engine.execute_versioned` with a required non-null `params.version` beside
+`params.command`. For example:
+
+```json
+{"method":"engine.execute_versioned","params":{"command":"edit.undo","version":1}}
+```
+
+A missing or null pin on that method is `invalid_request`; an older editor
+rejects the method rather than executing the command. Use plain `engine.execute`
+for unpinned requests. A current editor also checks a non-null `version` on
+plain `engine.execute` (omitted or `null` means unpinned), but a legacy editor
+ignores it and may execute the command. A malformed pin on a known command
+that reaches the version check returns `invalid_params` on the live endpoint.
+
+A known, routable project, window or `ui.` command with a different API version
+returns `version_mismatch` without running. Refresh the catalog and adapt the
+call. Unknown commands and a missing live editor keep their existing refusals.
+Outer admission checks still run first, including assistant approval, ordinary
+project/window editor refusal and deferred-job expiry, busy and editor refusal.
+The `ui.` handler's own checks, such as busy or native focus, run only after a
+matching or omitted pin.
+
+### Deprecated commands and parameters
+
+Mark a command or top-level parameter deprecated for at least one release
+before removing it. Discovery annotates the command or its schema under
+`params.properties` with `"deprecated": true` and
+`"x-deprecation": {"since": "0.2.0", "replacement": "new_name"}`. The
+replacement is a command id or parameter name, or `null` when there is none.
+Marking a deprecation changes discovery and its catalog revision, not the
+command contract snapshot or the API version.
+
+A successful call that uses something deprecated still returns its ordinary
+result as the first MCP text part. A second text part, also given as
+`structuredContent`, carries `{"warnings": [...]}`. Each entry has `code`
+(`deprecated`), `command`, `parameter` (`null` for a whole command), `since`,
+`replacement` and a human-readable `message`. Passing a deprecated parameter
+explicitly counts as use even when its value is `null` and the command accepts
+it. The live endpoint puts `warnings` beside `result`; failures and successes
+without warnings keep their previous execution reply shape. The
+`deprecation_warnings` capability indicates support. No production command or
+parameter is deprecated yet.
+
 ## Error codes
 
 A tool call that fails after its arguments were accepted is still a result with
@@ -329,11 +417,15 @@ a malformed reply from another editor may omit the facts it describes.
 | `busy` | The editor is already running a request of the same kind, such as a design check, or has reached a worker or request capacity limit; retry later. |
 | `no_reply` | No usable reply came back from the editor, so the command may have run; inspect before retrying an edit. |
 | `connection_failed` | Connecting or sending the request failed. A failed send may still have delivered a complete request; inspect before retrying an edit. |
-| `invalid_request` | The request to the live editor is malformed: an unknown method or a missing command id. |
+| `invalid_request` | The request to the live editor is malformed: an unknown method, a missing command id or a missing required version pin. |
+| `version_mismatch` | The stated command API version is older or newer than the one this session serves; the command did not run. `details` gives `command`, `stated_version` and `current_version`. |
+| `out_of_scope` | A known command is not allowed in the read-only session. `details.command` names it and `details.scope` is `read_only`. The check precedes revision and command parameter validation. |
 
-Project commands that take `expected_revision` check it first, so a stale edit
-reports `stale_revision` whatever else is wrong with its parameters; a malformed
-revision is `invalid_params`. The read-only [`pcb.plan_route`](route-planning.md#command)
+A version pin is checked before the command’s parameters, including
+`expected_revision`. Once that pin matches or is omitted, the read-only scope is checked.
+After that, project commands that take `expected_revision` check it before
+their other parameters. A stale
+edit reports `stale_revision`; a malformed revision is `invalid_params`. The read-only [`pcb.plan_route`](route-planning.md#command)
 query keeps its existing `stale` plan outcome for otherwise valid requests. The
 part and library document revisions that some window commands take are reported
 as `unavailable` when stale, for now.
@@ -427,11 +519,22 @@ editing it; `execute` returns `fabrication.files`, each with a `name` and text `
 and `fabrication.origin`, the placement origin every coordinate is measured from:
 Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
 plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
-resolvable placement origin.
+resolvable placement origin. It refuses boards containing placed circular non-plated holes
+until separate non-plated drill export is available; no partial set is returned.
 File names are deterministic and unique after portable-name sanitization,
-including case-insensitive collisions with fixed-purpose output names. One
-`execute` request generates the file contents once; `apply` still validates
-exportability without changing the project or revision.
+including case-insensitive collisions with fixed-purpose output names. `apply`
+validates board and file generation, not ZIP construction; `execute` also returns
+`fabrication.manifest` for the same captured files. Neither operation writes files
+or changes the project or revision; `execute` does not build or return a ZIP.
+
+The manifest matches the `manifest.json` embedded in the fabrication ZIP for the
+same capture: `generator_version` and ordered `files` records with `name`,
+`size_bytes` and lowercase hexadecimal `sha256` of the uncompressed UTF-8 bytes.
+It lists only the generated files, not itself. Clients that used
+`fabrication.manifest.archive` must adapt: the outer ZIP name, size and digest are
+no longer reported. Member records are independent of the ZIP filename. They
+support byte checks, not source identity, configuration or check freshness. See
+[desktop/browser publication limits](editor-guide.md).
 
 `project.export_netlist` generates the project's netlist without editing it;
 `execute` returns `netlist.files`, one `<project name>-netlist.json` (the project name made portable as for the
@@ -441,6 +544,17 @@ persistent ID. `dry_run: true` returns only the file name and the findings. The
 document lists every component with its logical terminals and every net across all
 sheets with its persistent UUID and joined terminals; see the
 [netlist format](netlist-format.md). Exporting an unchanged project gives the same bytes.
+
+`pcb.export_netlist` takes `board` and `dry_run` and returns the same shape for
+one board: `<project name>-<board name>-netlist.json`, format `pcbcraft-netlist/2` with `basis: accepted`, the
+components, packages, terminal pads and nets the board accepted at its last
+reviewed update. Findings report nets and components the schematic has changed
+since (`pending_net`, `pending_removal`) and a `pending_update` summary matching
+`pcb.preview_update` when comparison is available, or `update_unavailable` otherwise.
+It fails for a board with footprints but no accepted baseline. `dry_run: true`
+returns the filename and findings without rendering the file text. If the full
+reply exceeds the live editor's 16 MiB frame limit, save the project and use the
+headless command for the full export.
 
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks
@@ -513,6 +627,27 @@ read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
 unavailable states at a captured revision; see [pin/pad correspondence](pin-pad-correspondence.md)
 for qualified addresses and the versioned response. `cross_probe` retains its
 singular compatibility response.
+
+To give a reviewer only command-level read access, start a separate headless process:
+
+```sh
+pcbcraft-cli mcp --read-only --project path/to/project.pc
+```
+
+The host sets this scope at startup; no MCP request can widen it. `inspect_project`
+reports `scope: "read_only"`. `describe_command` and `list_commands` report it
+in `structuredContent` and the second text part. The first text part keeps the
+unchanged command descriptor or catalog list.
+Queries, data exports and transient previews remain available; project edits,
+Undo/Redo, Cut and library-source changes return `out_of_scope` without changing
+the snapshot or the file. Startup does not recover an interrupted folder save;
+if recovery is needed, have the owner open the project normally first. A command
+added to the catalog must be explicitly classified as a read before a read-only
+session can run it.
+
+This setting confines the command interface of that process, not the client's
+filesystem permissions. It does not grant read-only access to a live editor:
+`--read-only` cannot be combined with `--connect`.
 
 An MCP client can use `schematic.connect_pins` to join two terminals from
 `inspect_project`. Describe the command for its input shape, and send the current

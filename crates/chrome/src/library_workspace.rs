@@ -287,7 +287,8 @@ pub fn table_with_reveal(ui: &mut Ui, headers: &[&str], rows: &[TableEntry], rev
                             ui.add(
                                 egui::Label::new(if entry.selected && column == 0 { RichText::new(cell).strong() } else { RichText::new(cell) })
                                     .selectable(false)
-                                    .truncate(),
+                                    .truncate()
+                                    .show_tooltip_when_elided(false),
                             )
                             .on_hover_text(cell);
                         });

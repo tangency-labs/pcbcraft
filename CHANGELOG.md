@@ -14,7 +14,11 @@ project edits and reopened documents do not restore stale inspection selections.
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
 data is out of date. Existing replies keep their fields; see
-[command API version](docs/mcp.md#command-api-version).
+[command API version](docs/mcp.md#command-api-version). MCP `execute` now
+accepts an optional pin to that API version, refusing a different version with
+`version_mismatch`. Discovery can mark deprecated commands and parameters;
+successful calls that use them add warnings without changing the ordinary result.
+See [stating a version](docs/mcp.md#stating-a-version).
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,
@@ -93,9 +97,9 @@ and browser batches use the same checker. Edits, rule changes and project/view
 transitions discard unfinished reports; live MCP checks wait without blocking
 editor input. Completed findings retain their source revision.
 
-- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Issued profile revisions remain reserved after Undo and Save/Open, so a branching edit cannot replace their content. Project format 36 pins the revisions; adoptions require at least board format 22, stack fields 23, explicit via assignments 24, material reports 25 and footprint locks 34, with the highest requirement taking precedence. Generic rows and other profiles are unchanged. No placement file is written yet.
-- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon coordinates shift exactly with the origin, Y up, and the export result names the origin used. Boards with an origin require at least board format 21; profile adoptions require 22, stack fields 23, explicit via assignments 24, material reports 25 and footprint locks 34, with the highest requirement taking precedence. Clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
-- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin, profile adoptions, stack fields, via intent, material reports or footprint locks select their later format.
+- Pin immutable assembly output profile revisions with `pcb.set_assembly_profile`, then review changed corrections and actual placement values with `pcb.preview_assembly_profile` before explicitly accepting them with `pcb.adopt_assembly_profile`. Profiles hold bottom-side conventions and per-definition rotation and centroid corrections; vendor identity is optional metadata, not a behaviour selector. Pinning a revision does not change existing board adoptions, and retirement preserves adopted content and Undo/Redo. Issued profile revisions remain reserved after Undo and Save/Open, so a branching edit cannot replace their content. Project format 36 pins the revisions; adoptions require at least board format 22, stack fields 23, explicit via assignments 24, material reports 25, arcs 26 and footprint locks 34 (35 when both arcs and locks are present). Generic rows and other profiles are unchanged. No placement file is written yet.
+- Measure fabrication outputs from a named placement origin with `pcb.set_placement_origin`: board zero, the Board Outline's lower-left corner or a fixed point. Gerber and Excellon use the resolved placement-origin frame, Y up; Excellon coordinates are rounded to 0.001 mm, and the export result names the origin used. Arc-bearing boards do not yet support fabrication output. Boards with an origin require at least board format 21; profile adoptions require 22, stack fields 23, explicit via assignments 24, material reports 25, arcs 26 and footprint locks 34 (35 when both arcs and locks are present). Clearing the origin selects the format required by the remaining board data. Excellon millimetres are now rounded from integer nanometres with halves going up, so a value ending in exactly half a micrometre may be written 0.001 mm higher than before, and values just below zero are written `0.000` instead of `-0.000`; all other output bytes are unchanged.
+- Save board dimensional limits and routing preferences through Analyze → Rules and `pcb.set_rules`; routing, DRC and captured clearance queries share effective values and provenance. Authored rules require at least board format 19; a placement origin, profile adoptions, stack fields, via intent, material reports, arcs or footprint locks select the required format without dropping rules. Boards without rules keep the format required by their other content.
 
 Board setup stores an optional role and base copper for each copper layer, a
 tolerance and basis for its finished thickness, and the declared finished board
@@ -103,16 +107,15 @@ thickness, through `pcb.set_board_setup`. Embedded setup with these fields requi
 at least board format 23. Standalone setup profiles use version 2 for these
 extensions without material reports, or version 3 with reports. Older builds
 that do not support these formats refuse them. Explicit via assignments require
-at least board format 24, material reports at least 25, and footprint locks 34.
-The highest applicable board-format requirement takes precedence.
+at least board format 24, material reports at least 25, and arcs or footprint locks
+select 26 or 34, respectively (35 when both are present).
 
 Materials take sourced thermal conductivity, thermal expansion, dielectric
 strength and CTI reports, each with its unit in the field name, its test
 conditions and a required source; a CTI given with a material group must lie in
-that group's IEC 60664-1 band. Boards with reports use format 25, or 34 if a
-placed footprint has an active lock. Standalone setup profiles with reports
-use version 3. A board without reports still uses format 34 if a placed
-footprint has an active lock.
+that group's IEC 60664-1 band. Reports require at least board format 25, and
+formats 26, 34 and 35 can retain them. Standalone setup profiles with reports
+use version 3. Removing reports leaves the format required by the remaining data.
 
 Overlapping schematic symbol drawings show a placement warning and compact amber
 count badges, with affected references on hover. Placement remains allowed.
@@ -150,11 +153,11 @@ fields determine the board format. Undo/redo preserves geometry and copper lock
 intent.
 
 Placed-footprint lock metadata survives native split-document and packed-archive
-round trips and is visible in inspection and typed board views. Active footprint locks require board
-format 34, which can also carry material reports and compatible earlier extensions
-under their existing validation rules. Without active footprint locks, reports
-select format 25 and boards without reports use the format required by their
-remaining content. Fresh canonical encoding omits false; Native Save can retain
+round trips and is visible in inspection and typed board views. Active footprint
+locks use board format 34 without arcs, or format 35 when both are present. Both
+formats can carry reports and compatible earlier extensions. Removing locks
+restores the format required by the remaining content. Fresh canonical encoding
+omits false; Native Save can retain
 an unchanged board document verbatim.
 This is storage only: no footprint lock command, GUI toggle or edit protection yet.
 Clipboard and diagnostic single-file codecs explicitly refuse active footprint locks.
@@ -224,3 +227,11 @@ or live MCP. Undo, reopen and first-board creation preserve the decisions. The
 first record selects project/17 and board instances/2 in the existing folder/ZIP
 layout; reading an older project does not promote its nets. There is no new UI,
 and net classes and zones remain separate work.
+
+On desktop, `pcbcraft <path>` opens a project folder, its `project.json` or a
+`.pc` archive as the app starts, without a picker; the opened project enters the
+workspace and joins recent projects. A startup open that fails reports the error
+in the status bar, keeps Home usable and writes the same line once to stderr
+when available. Windows GUI release builds need stderr redirection to capture
+diagnostics. The launcher takes no options and at most one path, so a
+usage error prints one line and exits before any window opens.

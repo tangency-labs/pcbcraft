@@ -124,7 +124,8 @@ fn an_unconnected_pad_route_cannot_join_a_named_terminal() {
         h.key_press(Key::Enter);
         h.run_steps(30);
         // Enter may finish the already fixed, legal prefix, never the rejected connection.
-        assert!(h.state().session.project().unwrap().boards().next().unwrap().copper_nets().is_empty());
+        let board = h.state().session.project().unwrap().boards().next().unwrap();
+        assert!(board.copper_nets().expect("arc-free test board has a copper net map").is_empty());
         assert_eq!(h.state().session.revision(), revision + u64::from(vertex));
         if vertex {
             h.state_mut().run("edit.undo", &json!({}));
@@ -174,6 +175,136 @@ fn routable_with<'a>(definition: &str) -> Harness<'a, PcbApp> {
     h.run();
     click(&mut h, "Activate layer Top");
     h
+}
+
+/// Unsupported curved copper is visibly refused; opening and cancelling Board Setup still preserves the board.
+#[test]
+fn circular_copper_keeps_native_bytes_and_explains_the_unavailable_canvas() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    let board = h.state().session.project().unwrap().board_target().unwrap().board;
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board,"arcs":[{
+        "id":"00000000-0000-0000-0000-000000000001","layer":top,"width_nm":250000,
+        "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}],"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.run();
+    assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    let revision = h.state().session.revision();
+    click(&mut h, "Board setup…");
+    assert!(matches!(h.state().dialog, Dialog::BoardSetup(_)));
+    click(&mut h, "Cancel");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().arc_tracks().is_empty());
+}
+
+/// Browser selection remains view-local on arc-bearing boards even though the canvas is unavailable.
+#[test]
+fn circular_copper_keeps_browser_footprint_picks_available() {
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        let mut h = routable();
+        h.state_mut().preferences.theme = theme;
+        h.state_mut().browser.open = true;
+        let top = layer_named(&h, "Top");
+        let revision = h.state().session.revision();
+        let board = h.state().session.project().unwrap().board_target().unwrap().board;
+        h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board,"arcs":[{
+            "id":"00000000-0000-0000-0000-000000000001","layer":top,"width_nm":250000,
+            "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}],"expected_revision":revision}));
+        assert_eq!(h.state().message, None);
+        let footprints: Vec<_> =
+            h.state().session.project().unwrap().boards().next().unwrap().footprints().map(|footprint| footprint.id.clone()).collect();
+        let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        h.run();
+        for (label, footprint) in ["Footprint R1  R", "Footprint R2  R"].into_iter().zip(footprints) {
+            click(&mut h, label);
+            assert_eq!(h.state().views.active.board.selection, BTreeSet::from([footprint]));
+            assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+            assert_eq!(h.state().session.revision(), revision);
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+        }
+    }
+}
+
+/// A Delete pressed while measurement owns the arc-bearing canvas must not delete a
+/// previously selected object when the measurement ends on the first linear frame.
+fn arc_board_measure_does_not_replay_delete(zone: bool) {
+    let mut h = routable();
+    let board_target = h.state().session.project().unwrap().board_target().unwrap();
+    let top = layer_named(&h, "Top");
+    let revision = h.state().session.revision();
+    let project = h.state().session.project().unwrap();
+    let outline = project
+        .board_view(board_target)
+        .unwrap()
+        .layers()
+        .into_iter()
+        .find(|layer| layer.purpose == pcbcraft_engine::board::setup::LayerPurpose::Outline)
+        .unwrap()
+        .id
+        .to_string();
+    let net = project.inspect_net_registry().unwrap()["nets"][0]["id"].clone();
+    let mut params = json!({"board":board_target.board,"layer":if zone {&top} else {&outline},"points":[
+        {"x_nm":-5_080_000,"y_nm":5_080_000},{"x_nm":5_080_000,"y_nm":5_080_000},{"x_nm":5_080_000,"y_nm":10_160_000}],"expected_revision":revision});
+    if zone {
+        params["net"] = net;
+    } else {
+        params["closed"] = json!(true);
+    }
+    h.state_mut().run(if zone { pcbcraft_engine::board::zones::ADD_ZONE } else { pcbcraft_engine::ADD_DRAWING }, &params);
+    assert_eq!(h.state().message, None);
+    h.run();
+    let board = h.state().session.project().unwrap().board_view(board_target).unwrap();
+    let mut items = pcbcraft_engine::board::clipboard::BoardSelection::default();
+    if zone {
+        items.zones.insert(board.zones()[0].id);
+    } else {
+        items.drawings.insert(board.drawings()[0].id);
+    }
+    h.state_mut().select_board_items(items);
+    h.state_mut().start_measure();
+    h.run();
+    assert!(h.state().views.active.board.measure.tool);
+
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board_target.board,"arcs":[{
+        "id":"00000000-0000-0000-0000-000000000001","layer":top,"width_nm":250000,
+        "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}],"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+    h.key_press(Key::Delete);
+    h.run();
+    assert!(h.state().views.active.board.measure.tool);
+    assert_eq!(h.state().session.revision(), revision + 1);
+
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board_target.board,"arcs":[],"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(!h.state().views.active.board.measure.tool);
+    assert_eq!(h.state().session.revision(), revision, "leaving measurement must not replay Delete");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
+#[test]
+fn unsupported_copper_does_not_replay_zone_delete_after_measurement() {
+    arc_board_measure_does_not_replay_delete(true);
+}
+
+#[test]
+fn unsupported_copper_does_not_replay_drawing_delete_after_measurement() {
+    arc_board_measure_does_not_replay_delete(false);
 }
 
 pub(super) fn tracks(h: &Harness<'_, PcbApp>) -> Vec<Track> {
@@ -686,6 +817,39 @@ fn clicking_a_track_selects_it_and_delete_removes_it() {
     assert!(h.state().views.active.board.tracks.selected.is_empty(), "clicking empty space clears the track selection");
 }
 
+/// An unsupported-copper frame discards a queued Delete instead of replaying it once arcs are removed.
+#[test]
+fn unsupported_copper_discards_pending_track_delete() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let board = h.state().session.project().unwrap().board_target().unwrap().board;
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":2_540_000},{"x_nm":7_620_000,"y_nm":2_540_000}],"expected_revision":revision}),
+    );
+    let id = tracks(&h)[0].id;
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board,"arcs":[{
+        "id":"00000000-0000-0000-0000-000000000001","layer":top,"width_nm":250000,
+        "center":{"x_nm":0,"y_nm":0},"start":{"x_nm":5000000,"y_nm":0},"end":{"x_nm":0,"y_nm":5000000},"direction":"clockwise"}],"expected_revision":revision}));
+    h.run();
+    assert!(h.query_all_by_label(pcbcraft_engine::board::arc::UNSUPPORTED).next().is_some());
+    let state = &mut h.state_mut().views.active.board.tracks;
+    state.selected.insert(id);
+    state.delete_requested = true; // Already queued by input dispatch, before canvas interaction.
+    h.run();
+    assert!(!h.state().views.active.board.tracks.delete_requested);
+    assert_eq!(tracks(&h)[0].id, id);
+
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::board::arc::SET_ARCS, &json!({"board":board,"arcs":[],"expected_revision":revision}));
+    h.state_mut().views.active.board.tracks.selected.insert(id);
+    h.run();
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().arc_tracks().is_empty());
+    assert_eq!(tracks(&h)[0].id, id);
+}
+
 /// The route tool is only available on visible copper: X does nothing on Board Outline, and hiding
 /// the routing layer drops the tool and any unfinished route.
 #[test]
@@ -1174,9 +1338,8 @@ fn mixed_via_sizes_are_read_only_in_properties() {
     assert!(h.query_by_label("Selected via pad").is_some() && h.query_by_label("Mixed").is_none());
 }
 
-/// Design › Outputs explains a missing outline, then saves one deterministic archive of Gerber
-/// and drill files without editing the project. A subsequent cancelled export clears the old
-/// success notice without replacing it with another message.
+/// Outputs explains a missing outline, then captures the engine's complete ZIP without editing.
+/// Injected outcomes exercise the notices, not the native dialog or browser runtime.
 #[test]
 fn outputs_export_one_archive_of_fabrication_files() {
     let mut h = routable();
@@ -1196,27 +1359,41 @@ fn outputs_export_one_archive_of_fabrication_files() {
     click(&mut h, "Generate fabrication outputs");
     assert_eq!(h.state().message, None);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "exporting edits nothing");
-    let (name, bytes) = h.state().fabrication_exports.captured.clone().expect("an archive was handed to the save worker");
+    let (name, archive) = h.state().fabrication_exports.captured.clone().expect("an archive was handed to the save worker");
     assert!(name.ends_with("-fabrication.zip"), "{name}");
     let outputs = h.state().session.export_fabrication(&json!({})).unwrap();
     assert!(outputs.iter().any(|o| o.name.ends_with("-Top.gbr")) && outputs.iter().any(|o| o.name.ends_with("-PTH.drl")));
-    assert_eq!(bytes, pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
+    assert_eq!(archive.bytes(), pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
     assert!(h.state().fabrication_exports.busy());
     h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved)).unwrap();
     h.run();
     assert!(!h.state().fabrication_exports.busy());
-    assert!(h.query_by_label("Saved fabrication outputs").is_some(), "the board status bar shows file results");
+    let writes_notice = "Saved fabrication ZIP";
+    assert!(h.query_by_label(writes_notice).is_some(), "the board status bar shows file results");
     click(&mut h, "Manufacture");
     click(&mut h, "Generate fabrication outputs");
     assert!(h.state().fabrication_exports.busy());
     assert!(h.state().file_notice.is_none(), "a new attempt clears the previous success notice");
-    assert!(h.query_by_label("Saved fabrication outputs").is_none());
+    assert!(h.query_by_label(writes_notice).is_none());
     h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Cancelled)).unwrap();
     h.run();
     assert!(!h.state().fabrication_exports.busy());
     assert!(h.state().file_notice.is_none() && h.state().message.is_none(), "cancellation is quiet");
-    assert!(h.query_by_label("Saved fabrication outputs").is_none());
+    assert!(h.query_by_label(writes_notice).is_none());
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "cancelling edits nothing");
+    click(&mut h, "Manufacture");
+    click(&mut h, "Generate fabrication outputs");
+    h.state_mut().fabrication_exports.complete_captured(Err("Archive published, but syncing its directory failed".into())).unwrap();
+    h.run();
+    assert!(h.state().message.as_deref().unwrap().contains("syncing its directory failed"));
+    assert!(h.state().file_notice.is_none());
+    assert!(h.query_by_label(writes_notice).is_none());
+    click(&mut h, "Manufacture");
+    click(&mut h, "Generate fabrication outputs");
+    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::DownloadRequested)).unwrap();
+    h.run();
+    assert_eq!(h.state().file_notice.as_deref(), Some("Requested fabrication ZIP download; check your browser"));
+    assert!(h.query_by_label(writes_notice).is_none());
 }
 
 /// Right-click cancels a copper move without editing, and the ribbon's Move starts one when only
@@ -1827,7 +2004,7 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
         let source = h.state().views.active.input(&h.state().session);
         let project = h.state().session.snapshot().unwrap();
         let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-        h.state_mut().views.active.board.copper_connectivity(board, source)
+        h.state_mut().views.active.board.copper_connectivity(board, source).unwrap()
     }
     let mut h = routable();
     let line = airwires(&h)[0].clone();
@@ -1863,8 +2040,8 @@ fn copper_net_cache_reuses_frames_and_refreshes_after_changes() {
 
     let project = h.state().session.snapshot().unwrap();
     let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
-    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None);
-    let another = h.state_mut().views.active.board.copper_connectivity(board, None);
+    let uncached = h.state_mut().views.active.board.copper_connectivity(board, None).unwrap();
+    let another = h.state_mut().views.active.board.copper_connectivity(board, None).unwrap();
     assert_eq!(uncached, first);
     assert!(!std::sync::Arc::ptr_eq(&uncached, &another), "missing authority never caches a preview");
     let before_open = cached(&mut h);

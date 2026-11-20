@@ -188,7 +188,7 @@ impl Driver {
         app.views.active.camera.center_on(Point { x_nm: 10_160_000, y_nm: 0 });
         let contacts =
             if artifact.trace.iter().any(|step| matches!(step.action, Action::Contact { .. } | Action::ContactPreview | Action::HistoryCheck)) {
-                let lines = board.ratsnest().ok_or("missing replay airwires")?.lines;
+                let lines = board.ratsnest()?.lines;
                 // Legacy center-only pad markers are not conductive copper. Choose the first saved
                 // airwire with physical copper at both ends, without consulting solve results.
                 let physical: Vec<_> = board.footprints().flat_map(|f| f.pads).filter(|p| p.copper.is_some()).map(|p| p.center).collect();
@@ -241,7 +241,7 @@ impl Driver {
                 let board = source.board_view(artifact.board).ok_or("missing committed board")?;
                 let added: std::collections::BTreeSet<_> =
                     board.tracks().iter().filter(|t| !contacts.original_tracks.contains(&t.id)).map(|t| t.id.to_string()).collect();
-                if added.is_empty() || board.ratsnest().ok_or("missing routed airwires")?.lines.len() >= contacts.airwires {
+                if added.is_empty() || board.ratsnest()?.lines.len() >= contacts.airwires {
                     return Err("commit did not connect the saved airwire".into());
                 }
                 let report = board.check_design(board.effective_rules().values);
@@ -450,7 +450,8 @@ mod tests {
             json!({"board":target.board,"layer":layer,"width_nm":250000,"points":[{"x_nm":50000000,"y_nm":0},{"x_nm":51000000,"y_nm":0}]}),
         )
         .unwrap();
-        assert!(session.project().unwrap().board_view(target).unwrap().ratsnest().is_none_or(|r| r.lines.is_empty()));
+        let board = session.project().unwrap().board_view(target).unwrap();
+        assert_eq!(board.ratsnest().unwrap_err(), "board has no accepted connectivity");
         let mut artifact = super::super::load_artifact(include_str!("../../../../tools/performance/fixtures/reference-v1.json")).unwrap();
         artifact.board = target;
         artifact.project = encode_packed(session.snapshot().unwrap()).unwrap();
@@ -464,7 +465,7 @@ mod tests {
         }];
         run(&artifact, &mut BTreeMap::new()).unwrap();
         artifact.trace = Step::commit();
-        assert!(Driver::prepare(&artifact).is_err(), "contact replay still needs a supported connection");
+        assert_eq!(Driver::prepare(&artifact).err().as_deref(), Some("board has no accepted connectivity"));
     }
 
     /// Real renderers can take longer than a click threshold between passes. Deliver paired

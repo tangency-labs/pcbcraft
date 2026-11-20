@@ -73,20 +73,31 @@ impl BoardView<'_> {
     }
 
     /// Inspect authored intent independently of resolved island membership and physical pad contact.
+    /// Unsupported circular geometry leaves derived fields null and reports its error, while
+    /// retaining the authored assignment and its registry state.
     pub fn inspect_vias(self) -> Vec<Value> {
         if self.vias().is_empty() {
             return Vec::new();
         }
-        let (copper, nets) = self.copper_with_nets();
-        let pad_islands: BTreeSet<_> = copper.pads.values().copied().collect();
+        let membership = self.copper_with_nets();
+        let pad_islands: BTreeSet<_> = membership.as_ref().map(|(copper, _)| copper.pads.values().copied().collect()).unwrap_or_default();
         self.vias()
             .iter()
             .map(|via| {
                 let mut value = via.inspect();
                 value["assignment_mode"] = json!(if via.net_assignment.is_some() { "explicit" } else { "automatic" });
                 value["net_state"] = json!(via.net_assignment.map(|a| self.project().via_net_state(a)).unwrap_or("automatic"));
-                value["net"] = json!(nets.get(&via.id));
-                value["connected_to_pad"] = json!(copper.vias.get(&via.id).is_some_and(|island| pad_islands.contains(island)));
+                match &membership {
+                    Ok((copper, nets)) => {
+                        value["net"] = json!(nets.get(&via.id));
+                        value["connected_to_pad"] = json!(copper.vias.get(&via.id).is_some_and(|island| pad_islands.contains(island)));
+                    }
+                    Err(error) => {
+                        value["net"] = Value::Null;
+                        value["connected_to_pad"] = Value::Null;
+                        value["geometry_error"] = json!(error);
+                    }
+                }
                 value
             })
             .collect()

@@ -94,6 +94,30 @@ Unrelated or documentation-only changes do not need fresh performance baselines.
 
 ## Choose a bounded change
 
+### Claim the issue before starting
+
+Before starting work on an issue, read its discussion and check
+[open PRs](https://github.com/tangency-labs/pcbcraft/pulls) for an existing
+implementation. If it is available, leave a **`claimed`** comment on the issue
+before you begin. For part of a larger issue, state the scope you are claiming.
+Link your PR in the issue when it is ready for review.
+
+The first person to claim a scope gets merge priority: once their PR meets the
+project's review and verification requirements, it is the contribution we will
+merge for that scope. Finishing a competing PR sooner does not take that priority
+away. If someone has already claimed the work, coordinate with them in the issue
+before starting a separate implementation; agree on collaboration or a distinct
+scope instead.
+
+A claim does not waive review requirements or reserve an issue indefinitely.
+If the contribution has unresolved problems and its author is not responding to
+requests for fixes or a progress update, a maintainer may release the claim and
+accept another contribution. Maintainers should record that decision in the
+issue before someone else takes over. If you stop working on a claimed issue,
+leave a comment releasing it so someone else can pick it up.
+
+### Keep the change focused
+
 Check the issue discussion, [open PRs](https://github.com/tangency-labs/pcbcraft/pulls)
 and any shared local worktrees before starting. A branch name or uncommitted work
 may reveal an active task even when no PR exists. Use your own topic branch or

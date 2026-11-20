@@ -809,8 +809,9 @@ These rule values are fixed defaults until net classes and board rules arrive (#
 zones, hole spacing, silkscreen and solder mask are not checked, so a clean result is
 not a manufacturing sign-off.
 
-**Manufacture → Fabrication → Outputs** generates a `<project>-fabrication.zip` to save or download, with Gerber X2
-files for each copper layer, the top and bottom solder mask, paste and silkscreen,
+**Manufacture → Fabrication → Outputs** generates a ZIP to save or download
+(suggested name `<project>-fabrication.zip`), with Gerber X2 files for each
+copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
 through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
@@ -827,6 +828,15 @@ exporter build produces the same archive; project names affect filenames and exp
 versions appear in the Gerber header. Saving can be cancelled, busy or fail at the
 destination; generation alone is not a successful save. Run DRC first: outputs do not
 check the design.
+
+Gerber X2 `.AperFunction` distinguishes copper-defined surface-mount pad flashes,
+through-hole pad flashes, via pads and tracks, even when their apertures have the
+same shape and size. Pad regions carry a descriptive aperture attribute but are
+not pad flashes. Copper obrounds emitted as strokes are not tagged as pads. Mask,
+paste and silkscreen artwork use `Material`. Closed Board Outline drawings are
+tagged `Profile`; open outline artwork is still plotted but untagged. Remove stray
+open artwork before sending the profile to fabrication. The attributes do not
+change plotted geometry or add net and pin information.
 
 For pads exported on a layer, round pads use standard circular (`C`) flashes.
 Rectangular (`R`) and obround (`O`) flashes require library-pad and placement rotations
@@ -850,6 +860,21 @@ preserve the existing file's permission bits and new archives follow the process
 umask. The archive is flushed before replacement and its directory is flushed
 afterward on Unix. If that last flush fails, the error states that the complete
 archive was published but its directory sync failed.
+
+The ZIP contains `manifest.json` alongside the Gerber and drill members. Its
+`generator_version` and ordered `files` list describe the same capture. Each
+record contains the member `name`, `size_bytes` and lowercase hexadecimal
+`sha256` of its uncompressed UTF-8 bytes, including line endings. To check a
+member, compare its extracted byte length and SHA-256 with that record. The
+manifest lists neither itself nor the outer ZIP and does not depend on the save
+name. It checks file integrity, not source identity, configuration or DRC/ERC
+freshness, and cannot authorize a synchronized release.
+
+Desktop re-export can replace the same ZIP without moving any old companion
+file. Cancelling the save dialog writes nothing. One editor limits its own
+active export requests, not other writers to the destination. The browser
+requests one ZIP download and cannot confirm completion or cancellation; check
+your browser for the saved ZIP.
 
 Press **Backtick** over a visible pad, track or via to highlight its net. Visible
 pads, tracks and vias on that net brighten in their own colors while the rest
@@ -929,7 +954,16 @@ arrangement retained while definition panes are open.
 
 ## Opening and saving projects
 
-Open `project.json`, its project folder, or a `.pc` archive from **File → Open…**. Opening from PCB layout binds the incoming project's board before restoring
+Open `project.json`, its project folder, or a `.pc` archive from **File → Open…**.
+On desktop, `pcbcraft <path>` opens one such target as the app starts; a failed
+open reports in the status bar and leaves Home usable. `pcbcraft` takes no
+options and at most one path, and a usage error exits before the window opens.
+Quote paths containing spaces, for example `pcbcraft "C:\boards\my board\project.json"`
+on Windows. Startup errors also go to stderr when a handle is available. Windows
+release builds use the GUI subsystem and do not attach to the launching console;
+redirect stderr with `2>startup-error.txt` to capture diagnostics. A failed open
+still appears in the status bar.
+Opening from PCB layout binds the incoming project's board before restoring
 its saved views, including split panes and detached windows.
 Desktop projects default to a folder containing separate project, schematic,
 board and saved symbol documents. **Save** keeps the opened form, and

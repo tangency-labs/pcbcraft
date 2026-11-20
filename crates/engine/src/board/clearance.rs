@@ -2,6 +2,7 @@
 //! contact/separation predicates; the exhaustive path is a reference for later spatial indexes.
 use super::{
     geometry::Contour,
+    pair_index::{PairStep, PairWalk},
     track::{Land, islands, lands, with_pad_contacts},
     view::{BoardTarget, BoardView},
 };
@@ -84,7 +85,7 @@ impl Authority {
     }
 }
 
-/// An addressed copper object in this query's source snapshot. Membership indices are sorted,
+/// An addressed copper or mechanical obstacle in the query's source snapshot. Membership indices are sorted,
 /// snapshot-local intended nets, never display names. Empty membership stays unknown; a set
 /// with several entries preserves a conflicting-net island rather than choosing its first net.
 #[derive(Clone, Debug)]
@@ -96,6 +97,8 @@ pub struct Object {
     pub at: Point,
     pub(crate) island: usize,
     pub(crate) net: Option<String>,
+    /// An opening is an obstacle but never a conductor or a member of any island.
+    pub mechanical: bool,
 }
 
 /// Exact represented-contour decision after candidate enumeration. Contact is independent of
@@ -143,6 +146,7 @@ impl Session {
     pub fn clearance_query_with_rules(&self, target: BoardTarget, overrides: &serde_json::Value) -> Result<ClearanceQuery, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
+        view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let rules = view.resolve_rules(overrides)?;
         let geometry = self.clearance_cache.try_lock().ok().and_then(|cache| {
             cache.as_ref().filter(|c| c.target == target && Weak::ptr_eq(&c.snapshot, &Arc::downgrade(&snapshot))).map(|c| c.geometry.clone())
@@ -305,15 +309,10 @@ impl ClearanceQuery {
         let decisions = gaps
             .into_iter()
             .map(|(index, gap)| {
-                decision(
-                    None,
-                    index,
-                    gap,
-                    &connected,
-                    &self.geometry.items[index].intended_nets,
-                    false,
-                    self.membership_clearance(&connected, &self.geometry.items[index].intended_nets),
-                )
+                let item = &self.geometry.items[index];
+                let decision =
+                    decision(None, index, gap, &connected, &item.intended_nets, false, self.membership_clearance(&connected, &item.intended_nets));
+                if item.mechanical { decision.mechanical_clearance() } else { decision }
             })
             .collect();
         Ok(Results { authority: self.authority.clone(), decisions, probe_rules: self.probe_policy(&connected)? })
@@ -326,6 +325,13 @@ pub(super) struct BoardGeometry {
     pub(super) lands: Vec<Land>,
     pub(crate) members: Vec<Vec<usize>>,
     index: OnceLock<Arc<index::Index>>,
+}
+
+// Used by the capacity regression to fail immediately if a doomed command starts
+// synchronous connectivity work. The guard applies only to that test thread.
+#[cfg(test)]
+thread_local! {
+    pub(in crate::board) static FORBID_SYNCHRONOUS_GEOMETRY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 impl BoardGeometry {
@@ -342,6 +348,8 @@ impl BoardGeometry {
     /// Resolve supported contours and the complete intended membership of every routed island.
     /// Keep legacy clearance islands separate from direct-pad contact traversal used for shorts.
     pub(crate) fn new(view: BoardView<'_>) -> Self {
+        #[cfg(test)]
+        assert!(!FORBID_SYNCHRONOUS_GEOMETRY.get(), "an over-capacity command started synchronous board geometry");
         let lands = lands(view);
         let (copper, members) = islands(&lands, view.tracks(), view.vias());
         Self::from_islands(view, lands, copper, members)
@@ -397,6 +405,7 @@ impl BoardGeometry {
                 island,
                 intended_nets: intrinsic[index].map(|net| vec![net]).unwrap_or_else(|| node_nets[index].clone()),
                 net: land.net.clone().or_else(|| names[island].clone()),
+                mechanical: false,
                 at,
             });
         }
@@ -409,6 +418,7 @@ impl BoardGeometry {
                 island,
                 intended_nets: node_nets[lands.len() + index].clone(),
                 net: names[island].clone(),
+                mechanical: false,
                 at: Point { x_nm: track.start.x_nm / 2 + track.end.x_nm / 2, y_nm: track.start.y_nm / 2 + track.end.y_nm / 2 },
             });
         }
@@ -423,7 +433,27 @@ impl BoardGeometry {
                 intended_nets: node_nets[lands.len() + view.tracks().len() + index].clone(),
                 net: names[island].clone(),
                 at: via.at,
+                mechanical: false,
             });
+        }
+        // Preserve copper-node indexing for the shorts and rules consumers. Only boards with
+        // relevant definitions need a second walk over placements; this does not build views.
+        if project.board.definitions.values().any(|definition| !definition.non_plated_holes.is_empty()) {
+            for footprint in project.board.footprints() {
+                let Some(definition) = project.board.definition_for(footprint) else { continue };
+                for (index, hole) in footprint.non_plated_holes(definition).enumerate() {
+                    items.push(Object {
+                        name: format!("footprint-{}:npth:{}", footprint.id, index + 1),
+                        contour: Contour::capsule(hole.center, hole.center, hole.diameter_nm as f64 / 2.),
+                        layers: layers.clone(),
+                        island: usize::MAX,
+                        intended_nets: Vec::new(),
+                        net: None,
+                        at: hole.center,
+                        mechanical: true,
+                    });
+                }
+            }
         }
         Self { items, lands, members, index: OnceLock::new() }
     }
@@ -460,28 +490,76 @@ impl BoardGeometry {
     fn pairs(&self, clearance_nm: i64) -> impl Iterator<Item = Decision> + '_ {
         self.candidate_pairs(clearance_nm).filter_map(move |(i, j)| self.evaluate(i, j, clearance_nm))
     }
-    /// DRC needs only clearance decisions; skip its existing exemptions before narrow-phase
-    /// work, while the general query continues to expose contact independently for shorts.
-    /// Across different islands, unresolved membership remains a clearance obstacle even when
-    /// display names match: only one equal, resolved intended net proves a same-net exemption.
+    /// Build a conservative clearance cursor using the greatest applicable rule. Public
+    /// `pairs()` still returns its legacy AABB candidates, even when they do not violate.
+    pub(super) fn clearance_walk(&self, clearance_nm: i64, context: Option<&super::class_rules::Context>) -> PairWalk {
+        let maximum = context.map_or(clearance_nm, |context| context.max_clearance(clearance_nm));
+        PairWalk::new(self.items.iter().map(|item| &item.contour), maximum)
+    }
+
+    /// Apply the checker’s exemptions and exact spacing predicate to one canonical pair.
+    /// Only one equal, resolved intended net proves a same-net exemption; equal display names
+    /// do not exempt unresolved islands.
+    pub(super) fn clearance_decision(
+        &self,
+        i: usize,
+        j: usize,
+        clearance_nm: i64,
+        context: Option<&super::class_rules::Context>,
+    ) -> Option<Decision> {
+        let (a, b) = (&self.items[i], &self.items[j]);
+        if a.island == b.island || (a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets) {
+            return None;
+        }
+        self.evaluate(i, j, context.map_or(clearance_nm, |context| context.clearance(Some(i), j, clearance_nm)))
+    }
+
+    /// Stream conservative candidates for synchronous DRC without retaining an all-pairs table.
     pub(super) fn clearance_pairs<'a>(
         &'a self,
         clearance_nm: i64,
         context: Option<&'a super::class_rules::Context>,
     ) -> impl Iterator<Item = Decision> + 'a {
-        let maximum = context.map_or(clearance_nm, |context| context.max_clearance(clearance_nm));
-        self.candidate_pairs(maximum)
-            .filter(move |(i, j)| {
-                let (a, b) = (&self.items[*i], &self.items[*j]);
-                a.island != b.island && !(a.intended_nets.len() == 1 && a.intended_nets == b.intended_nets)
-            })
-            .filter_map(move |(i, j)| self.evaluate(i, j, context.map_or(clearance_nm, |context| context.clearance(Some(i), j, clearance_nm))))
+        let mut walk = self.clearance_walk(clearance_nm, context);
+        std::iter::from_fn(move || {
+            loop {
+                match walk.step() {
+                    PairStep::Pending => (),
+                    PairStep::Done => return None,
+                    PairStep::Pair(i, j) => {
+                        if let Some(decision) = self.clearance_decision(i, j, clearance_nm, context) {
+                            return Some(decision);
+                        }
+                    }
+                }
+            }
+        })
     }
+    /// Inspect only the local mechanical neighbors of an already resolved copper contour.
+    pub(super) fn mechanical_violation(&self, index: usize, clearance_nm: i64) -> bool {
+        let item = &self.items[index];
+        self.index().candidates(item.contour.bounds(), clearance_nm as f64, &item.layers).into_iter().any(|other| {
+            self.items[other].mechanical && self.evaluate(index, other, clearance_nm).is_some_and(|decision| decision.clearance_violation)
+        })
+    }
+
     /// Evaluate shape separation independently of the candidate-enumeration strategy.
     pub(super) fn evaluate(&self, i: usize, j: usize, clearance_nm: i64) -> Option<Decision> {
         let (a, b) = (&self.items[i], &self.items[j]);
-        share_layers(&a.layers, &b.layers)
-            .then(|| decision(Some(i), j, a.contour.gap(&b.contour), &a.intended_nets, &b.intended_nets, a.island == b.island, clearance_nm))
+        (share_layers(&a.layers, &b.layers) && !(a.mechanical && b.mechanical)).then(|| {
+            let decision = decision(Some(i), j, a.contour.gap(&b.contour), &a.intended_nets, &b.intended_nets, a.island == b.island, clearance_nm);
+            if a.mechanical || b.mechanical { decision.mechanical_clearance() } else { decision }
+        })
+    }
+}
+
+impl Decision {
+    /// A mechanical opening remains blocked on contact even at zero configured copper clearance.
+    /// Contact with an opening cannot be reported as electrical conflict.
+    fn mechanical_clearance(mut self) -> Self {
+        self.clearance_violation |= self.touches;
+        self.conflicting_nets = false;
+        self
     }
 }
 
