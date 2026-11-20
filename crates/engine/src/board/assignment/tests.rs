@@ -232,16 +232,17 @@ fn alphanumeric_pad_ids_roundtrip_through_assignment_and_board_views() {
     assert!(crate::board::Pad::parse(&f.id, "bad pad").is_none());
 }
 
-/// The 128-pad authoring limit is supported by mappings too; numeric-looking identifiers
+/// Mappings hold one entry per symbol terminal up to the terminal limit; numeric-looking identifiers
 /// retain their spelling instead of aliasing each other through integer conversion.
 #[test]
 fn mapping_capacity_and_numeric_looking_pad_names_are_preserved() {
+    let limit = crate::library::MAX_TERMINALS;
     let mut mapping = serde_json::Map::new();
-    for n in 0..128 {
+    for n in 0..limit {
         mapping.insert(format!("P{n}"), json!(format!("A{n}")));
     }
-    assert_eq!(crate::board::parse_mapping(&Value::Object(mapping.clone())).unwrap().len(), 128);
-    mapping.insert("P128".into(), json!("A128"));
+    assert_eq!(crate::board::parse_mapping(&Value::Object(mapping.clone())).unwrap().len(), limit);
+    mapping.insert(format!("P{limit}"), json!(format!("A{limit}")));
     assert!(crate::board::parse_mapping(&Value::Object(mapping)).is_none());
     let a = crate::board::Pad::parse("footprint-1", "01").unwrap();
     let b = crate::board::Pad::parse("footprint-1", "1").unwrap();

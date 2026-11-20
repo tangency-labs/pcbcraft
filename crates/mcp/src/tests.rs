@@ -128,6 +128,84 @@ fn pin_remap_wire_refuses_duplicate_unit_names() {
     }
 }
 
+/// Designator preview data survives inspect:false, while applying the same shared command
+/// changes the instance lock and participates in ordinary Undo.
+#[test]
+fn designator_lock_preview_and_apply_share_mcp_dispatch() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let revision = session.revision();
+    let before = session.snapshot().unwrap();
+    let mut params = json!({"command":pcbcraft_engine::SET_SYMBOL_FIELDS,"params":{"symbol":"symbol-2","reference":"R1","value":"R","designator_locked":true,"dry_run":true,"expected_revision":revision},"inspect":false});
+    let preview = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap();
+    assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+    assert_eq!(preview["provisional"], true);
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    params["params"]["dry_run"] = json!(false);
+    crate::backend::call_session(&mut session, "engine.execute", &params).unwrap();
+    assert!(session.project().unwrap().components().next().unwrap().designator_locked());
+    params["params"]["dry_run"] = json!(true);
+    let stale = crate::backend::call_session(&mut session, "engine.execute", &params).unwrap_err();
+    assert_eq!(stale.code(), "stale_revision");
+    assert_eq!(stale.details(), &json!({"current_revision":session.revision()}));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
+/// Annotation previews stay identical across headless and live dispatch with inspection omitted.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn annotation_preview_survives_suppressed_inspection_in_live_and_headless_mcp() {
+    use crate::{
+        Backend, Failure,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::annotation::PREVIEW;
+
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn inspect(&self) -> Value {
+            Value::Null
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Err("not a window command".into())
+        }
+    }
+
+    let mut editor = OpenEditor(Session::default());
+    editor.0.apply("project.new", &json!({})).unwrap();
+    editor.0.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":editor.0.revision()})).unwrap();
+    editor
+        .0
+        .apply(pcbcraft_engine::SET_SYMBOL_FIELDS, &json!({"symbol":"symbol-2","reference":"R?","value":"R","expected_revision":editor.0.revision()}))
+        .unwrap();
+    let snapshot = editor.0.snapshot().unwrap();
+    editor.0.open_snapshot(snapshot.clone());
+    let mut headless = Headless::with_project(snapshot.clone());
+    let revision = headless.call("project.inspect", json!({})).unwrap()["revision"].clone();
+    let request = json!({"command":PREVIEW,"params":{},"inspect":false});
+    let before = editor.0.inspect();
+    let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+    let report = headless.call("engine.execute", request).unwrap();
+    assert_eq!(report["annotation_preview"], live["annotation_preview"]);
+    assert_eq!(report["annotation_preview"]["rows"][0]["proposed"], "R1");
+    assert_eq!(report["revision"], revision);
+    assert_eq!(live["revision"], before["revision"]);
+    assert!(report.get("project").is_none());
+    assert_eq!(editor.0.inspect(), before);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
@@ -708,6 +786,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
             "library.parse_quantity",
             "library.prepare_part_publication",
             "library.prepare_publication",
+            "library.preview_footprint_revision",
             "library.preview_pin_remap",
             "library.remove_source",
             "library.resolve_part",
@@ -2156,6 +2235,28 @@ fn netlist_file_survives_suppressed_project_inspection() {
     assert_eq!(files.len(), 1);
     assert!(files[0]["name"].as_str().unwrap().ends_with("-netlist.json"));
     assert!(files[0]["contents"].as_str().unwrap().contains("\"components\""));
+    assert_eq!(result["revision"], before["revision"]);
+    assert!(result.get("project").is_none());
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
+/// A netlist comparison with inspect:false still returns its result and leaves the project unchanged.
+#[test]
+fn netlist_comparison_survives_suppressed_project_inspection() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({})).unwrap();
+    setup.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let exported = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::netlist::EXPORT_NETLIST,"params":{},"inspect":false})));
+    let text = exported["netlist"]["files"][0]["contents"].clone();
+    let params = json!({"netlist":text});
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::netlist::COMPARE_NETLIST,"params":params,"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["comparison"]["matches"], true);
+    assert_eq!(result["comparison"]["identical"], true);
+    assert_eq!(result["comparison"]["found"]["components"], 1);
     assert_eq!(result["revision"], before["revision"]);
     assert!(result.get("project").is_none());
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);

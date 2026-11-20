@@ -8,6 +8,7 @@ use crate::{
 };
 use serde_json::json;
 
+mod capacity;
 mod retained;
 mod voltage_rating;
 

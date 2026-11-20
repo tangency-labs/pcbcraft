@@ -162,10 +162,10 @@ struct Job {
 enum Outcome {
     Cancelled,
     Opened(Saved),
-    /// A completed desktop save, with the snapshot it started from when the save also named an
-    /// Untitled project. The saved snapshot is then that one's renamed copy.
+    /// A completed desktop save and its captured snapshot. Even when the saved snapshot is
+    /// unchanged, the capture lets the session adopt its saved metadata into older history.
     #[cfg(not(target_arch = "wasm32"))]
-    Saved(Saved, Option<Arc<Project>>),
+    Saved(Saved, Arc<Project>),
     #[cfg(target_arch = "wasm32")]
     Downloaded,
 }
@@ -201,6 +201,21 @@ impl ProjectFiles {
     /// or disk access runs on the editor thread; an existing job retains its receiver.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn open_path(&mut self, path: std::path::PathBuf, revision: u64, ctx: &egui::Context) -> Result<(), String> {
+        self.start_open(path, false, revision, ctx)
+    }
+
+    /// Open a target named on the desktop command line. The worker first canonicalizes the whole
+    /// target, so a final component that is a symlink to a project folder or `.pc` archive opens
+    /// as its target would; the ordinary loader resolves only the parent of a named target. A
+    /// target that can't be canonicalized loads as given and reports the ordinary error.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn open_startup_path(&mut self, path: std::path::PathBuf, revision: u64, ctx: &egui::Context) -> Result<(), String> {
+        self.start_open(path, true, revision, ctx)
+    }
+
+    /// Start the shared open worker; `resolve` canonicalizes the target there, off the editor thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_open(&mut self, path: std::path::PathBuf, resolve: bool, revision: u64, ctx: &egui::Context) -> Result<(), String> {
         if self.busy() {
             return Err("A project file operation is already running".to_owned());
         }
@@ -214,6 +229,7 @@ impl ProjectFiles {
         std::thread::Builder::new()
             .name("pcbcraft-open-recent".to_owned())
             .spawn(move || {
+                let path = if resolve { std::fs::canonicalize(&path).unwrap_or(path) } else { path };
                 let result = native::load(&path).map(Outcome::Opened).map_err(|error| format!("Could not open {}: {error}", path.display()));
                 let _ = send.send(result);
                 ctx.request_repaint();
@@ -387,8 +403,8 @@ impl ProjectFiles {
 
     /// Accept completed jobs on the editor thread. Keep edits made after the saved revision.
     /// Record desktop history only for accepted opens and successful saves.
-    /// A save that named an Untitled project renames it in the session too, history included,
-    /// without changing the revision; cancelled and failed saves leave the session as it was.
+    /// Successful desktop saves adopt saved names and storage metadata across history without
+    /// changing the revision; cancelled and failed saves leave the session as it was.
     pub(super) fn poll(&mut self, session: &mut Session, ctx: &egui::Context) -> Option<Update> {
         self.release_stalled();
         let job = self.job.as_mut()?;
@@ -427,10 +443,8 @@ impl ProjectFiles {
                 Some(Update::Error("Project changed while opening the file. Open it again to replace the current project.".to_owned()))
             }
             #[cfg(not(target_arch = "wasm32"))]
-            Ok(Outcome::Saved(saved, renamed)) => {
-                if let Some(original) = renamed {
-                    session.adopt_saved_metadata(&original, &saved.snapshot);
-                }
+            Ok(Outcome::Saved(saved, original)) => {
+                session.adopt_saved_metadata(&original, &saved.snapshot);
                 self.recent.remember_project(Arc::clone(&saved.snapshot), saved.target.path().to_owned());
                 finished.path = Some(saved.target.path().display().to_string());
                 let current = session.snapshot().is_some_and(|project| Arc::ptr_eq(&project, &saved.snapshot));

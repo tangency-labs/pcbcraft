@@ -122,6 +122,13 @@ impl Headless {
         Self { session, ..Self::default() }
     }
 
+    /// Install a trusted in-memory fixture source without granting MCP catalog mutation.
+    #[cfg(test)]
+    pub(crate) fn install_fixture_source(&mut self, id: &str, documents: &pcbcraft_engine::library::sources::Documents) {
+        use pcbcraft_engine::library::sources::NativeSource;
+        self.session.install_library_source(id, std::sync::Arc::new(NativeSource::load(documents).unwrap())).unwrap();
+    }
+
     #[cfg(test)]
     pub(crate) fn with_command_api(api_version: u32, deprecations: &'static [Deprecation]) -> Self {
         Self { api_version, deprecations, ..Self::default() }
@@ -162,14 +169,15 @@ impl Backend for Headless {
 
 /// Run an operation against the supplied session. Its owner controls execution policy.
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
-/// because a bare session has no window to act on. Clipboard/export queries retain their
-/// requested data even when project inspection is suppressed.
+/// because a bare session has no window to act on. Clipboard/export queries and provisional
+/// property and annotation previews retain their data even when inspection is suppressed.
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, Failure> {
     serve_session(session, method, params, COMMAND_API_VERSION)
 }
 
 /// Dispatch with the serving backend's version before invoking engine handlers.
+/// Symbol-field previews return the engine result even when inspection is disabled.
 fn serve_session(session: &mut Session, method: &str, params: &Value, api_version: u32) -> Result<Value, Failure> {
     match method {
         "engine.commands" => Ok(Value::Array(describe_engine_commands(DEPRECATIONS))),
@@ -182,6 +190,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                 command_api::check_version(id, &params["version"], api_version)?;
             }
             if params["inspect"].as_bool() == Some(false)
+                && !(id == pcbcraft_engine::SET_SYMBOL_FIELDS && params["params"]["dry_run"].as_bool() == Some(true))
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES
@@ -192,6 +201,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::part_groups::INSPECT
                         | pcbcraft_engine::part_groups::INSPECT_GROUPS
                         | pcbcraft_engine::PREVIEW_UPDATE
+                        | pcbcraft_engine::annotation::PREVIEW
                         | pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE
                         | pcbcraft_engine::PREVIEW_BOARD_SETUP
                         | pcbcraft_engine::INSPECT_LAYER_GROUPS
@@ -199,8 +209,10 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::CHECK_DESIGN
                         | pcbcraft_engine::EXPORT_FABRICATION
                         | pcbcraft_engine::board::arc::SET_ARCS
+                        | pcbcraft_engine::board::teardrop::EDIT_TEARDROPS
                         | pcbcraft_engine::netlist::EXPORT_NETLIST
                         | pcbcraft_engine::netlist::EXPORT_BOARD_NETLIST
+                        | pcbcraft_engine::netlist::COMPARE_NETLIST
                         | pcbcraft_engine::clipboard::COPY
                         | pcbcraft_engine::clipboard::CUT
                         | pcbcraft_engine::board::clipboard::COPY
@@ -208,6 +220,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::clipboard_text::LABELS
                         | pcbcraft_engine::clipboard_text::OUTLINE
                         | pcbcraft_engine::library::sources::AVAILABLE_REVISIONS
+                        | pcbcraft_engine::library::sources::PREVIEW_FOOTPRINT_REVISION
                         | pcbcraft_engine::library::sources::RESOLVE_PART
                         | pcbcraft_engine::library::sources::PARSE_QUANTITY
                         | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION

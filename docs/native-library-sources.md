@@ -175,8 +175,49 @@ An unresolvable latest part is `Unresolved` even when it equals or is older than
 the project pin, unless an immutable-address conflict takes precedence.
 A valid newer revision means available, **not compatible or adopted**. Geometry,
 pins, project revision, dirty state, source registrations and Undo/Redo are unchanged.
-Reviewed differences, compatibility decisions and revision-checked adoption remain
-separate work.
+The pad preview below is read-only. Compatibility decisions, pad map resolution
+and revision-checked adoption remain separate work.
+
+## Preview footprint pad changes
+
+`library.preview_footprint_revision` takes the explicit `board` UUID and one
+`part_instance` ID from `library.available_revisions`. It works through the same
+engine command in live and headless MCP and returns the report with `inspect: false`.
+It compares the currently placed native footprint with its latest available
+update. A standalone footprint follows its exact library/item identity. A native
+part follows its owning part revision and retains its chosen package ID; a removed
+package is not silently replaced. A conflicting or unresolved latest revision
+is refused. Unplaced parts and placements whose current package choice differs
+from the placed footprint cannot be previewed.
+
+The result identifies the project, board, instance, placed footprint, project
+revision, catalog generation, exact pinned and candidate roots, candidate root
+digest and both footprint addresses. `delta.pads` lists changed pad numbers in
+lexical order, with `before` and `after` land geometry and board positions, their
+change flags, and `center_shift_nm` for a same-number pair. An added or removed
+land has one absent side. Renumbering appears as an addition and removal; the
+query does not pair them or resolve the pad map. `delta.pad_numbers_changed`
+reports whether the complete number sets differ. The mask/paste fields describe
+nominal pad openings (native lands have no independent process expansions), not
+separate technical-layer artwork. A geometry-identical revision has no pad rows.
+
+A `loose_ends` row means an existing straight track cap or through via touches
+the old pad on shared copper but would no longer touch its same-number
+counterpart. Standalone circular track ends are not evaluated. Each row labels
+the copper ID and end (`track_start`, `track_end` or `via`), its existing board
+position and its track layer, if applicable. `gap_nm` measures separation between
+filled outer contours, not pad center displacement. It is null if the pad is
+removed or no longer shares a copper layer. This native approximation ignores
+bores in pads and vias: a cap inside a bore may count as old contact without
+touching the annular copper. A drill-only change does not trigger a contact
+check. This is not a net connectivity or DRC report.
+On an unconfigured board no copper contact is evaluated. Each reply can report
+up to 10,240 loose-end rows, independent of board capacity. An over-limit request
+returns `cap_exceeded`, not a partial list. If the full report exceeds the limit,
+try an exact string pad number in `pad`. If that pad also exceeds the limit,
+inspect its copper in the board editor; the query cannot split one pad's list.
+The query does not move copper or alter pins, saved bytes, project revision or
+Undo/Redo.
 
 ## Edit and publish native items
 

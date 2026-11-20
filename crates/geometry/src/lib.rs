@@ -28,6 +28,7 @@ mod kernel;
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm-kernel")))]
 #[path = "kernel_unavailable.rs"]
 mod kernel;
+pub mod substrate;
 
 use std::fmt;
 
