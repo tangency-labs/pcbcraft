@@ -325,7 +325,26 @@ fn alignment_uses_the_outer_edge_of_a_non_plated_hole() {
     footprint.non_plated_holes.push(CircularNpth { center, diameter_nm: 600_001 });
     let mechanical = super::bounds(&footprint);
     assert_eq!(mechanical[2], center.x_nm + 300_001);
-    assert_eq!(super::alignment(AlignMode::Right, &[plain, mechanical]).unwrap(), vec![(1_300_001, 0), (0, 0)]);
+    assert_eq!(super::alignment(AlignMode::Right, &[plain, mechanical], None).unwrap(), vec![(1_300_001, 0), (0, 0)]);
+}
+
+/// A reference whose only geometry is a non-plated opening, such as a bare mounting hole,
+/// still has a fixed-reference box: the whole opening, not the placement origin.
+#[test]
+fn reference_bounds_of_a_bare_non_plated_hole_contain_the_opening() {
+    use crate::board::{
+        definition::CircularNpth,
+        track::tests::{routed_fixture, view},
+    };
+    let session = routed_fixture();
+    let board = view(&session);
+    let mut footprint = board.footprints().next().unwrap();
+    footprint.pads.clear();
+    footprint.graphics.clear();
+    let center = Point { x_nm: footprint.position.x_nm + 2_000_000, y_nm: footprint.position.y_nm - 1_000_000 };
+    footprint.non_plated_holes.push(CircularNpth { center, diameter_nm: 3_200_001 });
+    let r = 1_600_001;
+    assert_eq!(super::contour_bounds(&footprint), [center.x_nm - r, center.y_nm - r, center.x_nm + r, center.y_nm + r]);
 }
 
 /// The command aligns real footprints in one undoable edit, is a no-op when already aligned,
