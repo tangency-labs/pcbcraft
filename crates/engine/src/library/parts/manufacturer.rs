@@ -69,11 +69,11 @@ impl ManufacturerPart {
             if !super::field_id(id) {
                 return Err(format!("Invalid specification field {id}."));
             }
-            value.validate()?;
+            value.validate_entry(id)?;
         }
         Ok(())
     }
-    /// Verify the exact part, package and category meanings without claiming suitability for a design.
+    /// Verify the exact part, package and category meanings, identifying mismatched specification fields.
     pub fn validate_part(&self, part: &ResolvedPart) -> Result<(), String> {
         self.validate()?;
         if self.part != part.definition.reference() || !part.definition.packages.contains_key(&self.package) {
@@ -85,7 +85,7 @@ impl ManufacturerPart {
                 .as_ref()
                 .and_then(|category| category.fields.get(id))
                 .ok_or_else(|| format!("Unknown manufacturer specification field {id}."))?;
-            value.validate_field(field)?;
+            value.validate_field(field).map_err(|error| format!("{id}: {error}"))?;
         }
         Ok(())
     }
