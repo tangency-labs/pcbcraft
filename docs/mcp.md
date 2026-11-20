@@ -9,7 +9,8 @@ with affected object IDs, consent/refusal and a session-local token, even with
 `inspect: false`. `pcb.set_board_setup` optionally consumes that token;
 `pcb.cancel_board_setup_preview` revokes it without an authored edit.
 `pcb.inspect_layer_groups` returns derived outer/inner/plane/signal and user groups
-with layer IDs and names, including with `inspect: false`. It is read-only. User
+with layer IDs and names, including with `inspect: false`. It is read-only and also
+runs in a `--read-only` session. User
 memberships are edited in the complete setup candidate, not a separate mutation.
 Include the existing `stackup.layer_groups` list in the complete setup candidate
 to keep it. Omission and `[]` both clear it. Mixed copper belongs to plane and

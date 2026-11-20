@@ -942,6 +942,25 @@ fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
 }
 
+/// A read-only headless session runs the layer-group query without changing the revision,
+/// the project or its Undo history.
+#[test]
+fn headless_read_only_inspects_layer_groups() {
+    let mut editor = Session::default();
+    editor.apply("project.new", &json!({"create_board":true})).unwrap();
+    editor.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":editor.revision()})).unwrap();
+    let mut s = Server::new(Box::new(Headless::with_scope(pcbcraft_engine::SessionScope::ReadOnly, editor.snapshot())));
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    assert_eq!(before["scope"], "read_only");
+    let result = call(&mut s, "execute", json!({"command":pcbcraft_engine::INSPECT_LAYER_GROUPS,"inspect":false}));
+    assert_ne!(result["isError"], true, "{result}");
+    let query = body(&result);
+    assert_eq!(query["revision"], before["revision"]);
+    assert_eq!(query["layer_groups"]["outer"].as_array().unwrap().len(), 2);
+    assert_eq!(query["layer_groups"]["inner"].as_array().unwrap().len(), 2);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+}
+
 /// A failed headless tool call keeps its message as the first text part and adds the published
 /// code and details, as a second text part and as the structured result.
 #[test]
