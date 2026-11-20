@@ -40,6 +40,7 @@ impl Registry {
         let graph = Graph::build(project)?;
         let mut assigned = BTreeSet::new();
         for record in &self.records {
+            record.authored_intent.validate_reference(Some(record.id), |id| ids.contains(&id))?;
             if record.fallbacks.len() > 3
                 || record.lineage.len() > MAX_RECORDS
                 || record.anchors().collect::<BTreeSet<_>>().len() != record.fallbacks.len() + 1
@@ -102,6 +103,11 @@ impl Registry {
             }
         }
         super::numbering::plan(self, &graph.networks)?;
+        self.validate_encoded_size()
+    }
+
+    /// Check the registry byte bound without rebuilding connectivity for a metadata-only edit.
+    pub(super) fn validate_encoded_size(&self) -> Result<(), String> {
         if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_REGISTRY_BYTES {
             return Err("Net registry exceeds its byte limit.".into());
         }

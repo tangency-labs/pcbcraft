@@ -36,6 +36,7 @@ impl Network {
             lineage: Vec::new(),
             class_bindings: Vec::new(),
             state: State::Active {},
+            authored_intent: Default::default(),
         })
     }
 
@@ -51,6 +52,7 @@ impl Network {
                 generated_number: record.generated_number,
                 lineage: record.lineage.clone(),
                 class_bindings: record.class_bindings.clone(),
+                authored_intent: record.authored_intent.clone(),
                 ..next
             })
         }

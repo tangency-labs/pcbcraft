@@ -105,7 +105,9 @@ is storage and inspection only, not pair authoring or routing.
 can be authored through shared commands, with retained origins, split inheritance,
 merge conflicts and protected class removal. [Class-aware routing, clearance
 queries and DRC](net-class-consumers.md) consume those bindings with effective
-dimensions and per-object provenance. [Editor controls](net-class-editor.md) use the same commands and scoped identities. Zones,
+dimensions and per-object provenance. [Authored electrical intent](electrical-intent.md)
+can be saved on persistent nets or classes through shared commands. These values do
+not affect routing or checks. [Editor controls](net-class-editor.md) use the same commands and scoped identities. Zones,
 repeated instances and system registries remain separate work.
 [Part groups](part-groups.md) collect part instances by stable part-instance
 ID through shared headless/live MCP commands, with a project-wide catalog,

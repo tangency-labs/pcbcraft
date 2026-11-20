@@ -10,7 +10,9 @@ and inspects them from schematic and PCB views.
 
 ## Authored definitions
 
-The catalog has `format: "pcbcraft-net-classes/1"` and a `definitions` array.
+The dimensional catalog has `format: "pcbcraft-net-classes/1"` and a `definitions` array.
+A catalog carrying [authored electrical intent](electrical-intent.md) uses
+`pcbcraft-net-classes/4`; that optional intent remains separate from `rules`.
 Each definition has a non-nil UUID `id`, positive `revision`, editable `name` and
 sparse `rules` object. A class ID also identifies its dimensional rule set;
 individual contributions are qualified by that ID, definition revision and
@@ -133,7 +135,8 @@ When no other content requires a later project format, classes without bindings
 use `pcbcraft-project/20` and bindings select project/21. Parameters, generated
 numbers select project/22 and /23. Project/24, /36 and /39 can carry classes
 alongside part groups or assembly profiles; project/45 can carry them alongside
-pairs, and project/51 alongside an active lock. Board-owned bindings use
+pairs, project/51 alongside an active lock, and project/54 alongside an active
+lock and authored electrical intent. Board-owned bindings use
 instances/3, instances/4 with generated numbers, instances/5 or /7 with group
 memberships, or instances/8 with pairs. The nonempty `net_classes` record is stored in `project.json`,
 with definitions sorted by UUID

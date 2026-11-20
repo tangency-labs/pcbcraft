@@ -85,10 +85,12 @@ impl Session {
                 }
                 previous.revision.checked_add(1).ok_or_else(|| CommandError::CapExceeded("Class revision exhausted.".into()))?
             };
+            let authored_intent = catalog.get(id).map(|class| class.authored_intent.clone()).unwrap_or_default();
             catalog.definitions.retain(|class| class.id != id);
-            catalog.definitions.push(Definition { id, revision, name, rules });
+            catalog.definitions.push(Definition { id, revision, name, rules, authored_intent });
         }
         catalog.definitions.sort_by_key(|class| class.id);
+        catalog.sync_format();
         catalog.validate().map_err(CommandError::InvalidParams)?;
         let mut candidate =
             if original.layout.is_none() { original.with_board_folders(".").map_err(CommandError::InvalidParams)? } else { original.clone() };

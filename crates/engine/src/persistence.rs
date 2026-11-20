@@ -362,7 +362,7 @@ fn migrate_from_1(legacy: LegacyDocument) -> Result<Document2, String> {
 
 /// Optional geometry may be omitted, but an explicit null is malformed rather than absent.
 /// This keeps old format tags from accepting newer fields by spelling their value as null.
-fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+pub(crate) fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
     T::deserialize(deserializer).map(Some)
 }
 
@@ -508,6 +508,9 @@ impl Encoder {
         }
         if !project.net_classes.definitions.is_empty() {
             return Err("Net classes require split documents or a packed archive.".into());
+        }
+        if project.net_registry.has_authored_intent() {
+            return Err("Authored electrical intent requires split documents or a packed archive.".into());
         }
         if !project.part_groups.groups.is_empty() {
             return Err("Part groups require split documents or a packed archive.".into());

@@ -16,7 +16,8 @@ instance homes, without changing the working-folder or `.pc` container layout.
 Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
 in the entry point; only projects with authored classes select that version.
 Active [designator locks](#designator-locks) select project/51, retaining the
-optional records and membership representations of the earlier envelopes.
+optional records and membership representations of the earlier envelopes;
+together with [authored electrical intent](#authored-electrical-intent) they select project/54.
 Project/22 adds [project parameters](#parameter-records); project/23 adds generated
 net numbers and can also store project parameters.
 Project/24 adds the [part-group catalog](part-groups.md); its expanded
@@ -26,7 +27,9 @@ dictionary when expanded membership exceeds the existing document-size limits;
 older files keep their representation while it still fits. Project/45 adds
 [explicit differential pair records](net-registry-storage.md#differential-pair-records)
 to the existing net registry. A board-owned pair list requires instances/8,
-which supports either part-group membership encoding. Byte-identical
+which supports either part-group membership encoding. Project/49 and
+instances/10 also carry pairs when [authored electrical intent](#authored-electrical-intent)
+is present. Byte-identical
 unchanged saves preserve canonical encoder output; accepted noncanonical input
 may normalize when saved.
 
@@ -157,14 +160,46 @@ these headers rather than discard identity, lineage or unresolved decisions.
 When no other content requires a later project format, a nonempty class catalog
 selects project/20; saved [net-class bindings](net-class-assignments.md) select
 project/21. Parameters and generated numbers select project/22 and /23 unless
-other records require a later format. In precedence order, active designator
-locks select project/51, differential pairs /45, an assembly profile catalog /36,
+other records require a later format. In precedence order, authored electrical
+intent and active designator locks together select project/54, intent alone /49,
+locks alone /51, differential pairs /45, an assembly profile catalog /36,
 and part groups /39 with compact memberships or /24 otherwise. Board-owned
 bindings use instances/3, instances/4 with generated numbers, instances/5 or /7
-with expanded or compact memberships, or instances/8 with pairs. Bindings
+with expanded or compact memberships, instances/8 with pairs, or instances/10
+with net intent. Bindings
 remain inside the same logical registry and carry class and origin net UUIDs,
 while physical board and sheet formats stay unchanged. Older headers refuse the new vocabulary, and project/21
 requires actual bindings.
+
+### Authored electrical intent
+
+[Electrical intent](electrical-intent.md) is optional on a net registry record or
+net-class definition. The first nonempty `authored_intent` selects
+`pcbcraft-project/49`. Board-owned `instances.json` selects `pcbcraft-instances/10`
+only for net intent; a class-only edit keeps the existing instance header.
+`pcbcraft-net-classes/4` is selected only for class intent. Schematic-only net
+intent stays under `schematic_instances.net_registry`; there is no extra file.
+The physical board, sheets and archive container keep their own versions.
+
+The payload contains only set fields: `voltage` (`magnitude_volts`, `basis`, and
+`reference`), `current_amperes`, `rise_kelvin`, and `isolation_group`. Numeric
+fields are exact canonical decimal strings, including `"0"`. A `reference` is
+`{"kind":"earth"}` or `{"kind":"net","net":UUID}` in the same persistent net
+registry. An existing historical reference is retained, not resolved to a new
+net. Null, empty objects, dangling references and header/payload mismatches are
+refused. Older readers refuse the new envelope instead of dropping intent.
+
+Project/49 accepts all earlier project-level capabilities, including optional
+assembly profiles, differential pairs, parameters, dimensional classes,
+no-connect flags, numbered and legacy net registries, and either part-group
+membership encoding. Instances/10 follows instances/8: it retains differential
+pairs and either membership encoding without changing their data. Files
+with no authored electrical intent still use their ordinary versions. Clearing
+the last value selects the older versions required by the remaining content;
+class definition revisions still advance on authored class edits. A project
+holding both authored electrical intent and an active designator lock selects
+`pcbcraft-project/54`, which accepts exactly the union of project/49 and
+project/51; removing either feature returns to the other's own header.
 
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
 at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,
@@ -368,8 +403,9 @@ identities without invalidating adoptions; cleanup discards only unused
 superseded or retired payloads in that transaction. Watermarks prevent reuse of
 cleaned revisions. Undo/Redo preserve the greatest issued revision in this project
 history without retaining undone payloads or changing restored board adoptions.
-A retained catalog, even with only watermarks, uses project/51 with an active
-designator lock, otherwise project/45 with differential pairs, otherwise
+A retained catalog, even with only watermarks, uses project/54 with authored
+electrical intent and an active designator lock, project/49 with intent alone,
+otherwise project/51 with an active designator lock, otherwise project/45 with differential pairs, otherwise
 project/36. The catalog takes precedence over the project/39 header for compact
 memberships but does not change their representation. All three formats apply
 the same validation rules and retain folder and occurrence metadata, even after
@@ -434,8 +470,8 @@ registry's retained identities.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45` or `/51` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 51 requires an active designator lock and can also carry differential pairs |
-| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45`, `/49`, `/51` or `/54` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 49 adds authored electrical intent and may also carry differential pairs; version 51 requires an active designator lock and can also carry differential pairs; version 54 requires both authored electrical intent and an active designator lock |
+| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7`, `/8` or `/10` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; version 10 adds authored net intent, may also carry differential pairs and carries either membership representation; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35` or `/37` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; versions 27–33 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
@@ -613,7 +649,8 @@ changes nothing. Inspection reports each sheet's `page` in the same shape.
 Project/51 stores optional `designator_locked: true` on each locked part-instance
 record in the existing `components` array. The missing field means false;
 explicit false, null, other types and unknown fields are refused. Project/51
-requires at least one true flag, and earlier headers reject lock fields. Older
+requires at least one true flag, and earlier headers reject lock fields.
+Project/54 stores the same flags alongside authored electrical intent. Older
 readers reject project/51 rather than silently dropping intent. The diagnostic
 single-file codec refuses locks; folder and `.pc` codecs retain them.
 
@@ -665,9 +702,11 @@ A sheet/9 document may carry a nonempty `parameters` object directly after
 `page`. A project/22 entry point requires a nonempty `parameters` object;
 project/23 accepts the same object optionally alongside generated net numbers;
 project/24 and project/39 accept it optionally alongside the part-group catalog;
-project/36 accepts it alongside the assembly profile catalog, and project/45
-alongside differential pairs. Project/51 accepts it alongside designator locks,
-with differential pairs optional. In each of these project formats, the object appears directly before `sheets`:
+project/36 accepts it alongside the assembly profile catalog, project/45
+alongside differential pairs, and project/49 alongside authored electrical intent.
+Project/51 accepts it alongside designator locks, with differential pairs optional,
+and project/54 alongside both.
+In each of these project formats, the object appears directly before `sheets`:
 
 ```json
 "parameters": {
@@ -684,8 +723,8 @@ name, or from a standard name of its list (`Revision`, `Date`, `Company`,
 `DrawnBy` for the project; those and `Title` for a sheet), only in case is
 rejected. Empty objects, null and other value types are rejected. Sheet parameter
 objects require sheet/9; project parameter objects require project/22, project/23,
-project/24, project/36, project/39, project/45 or project/51 and are rejected in
-other project versions. Project/22 is a superset
+project/24, project/36, project/39, project/45, project/49, project/51 or project/54 and are
+rejected in other project versions. Project/22 is a superset
 of project/21 whose net-class catalog, class assignments, net registry and
 no-connect intent are optional, each with its existing rules. Project/23 requires
 generated net numbers and permits those same optional fields, including project
@@ -718,8 +757,9 @@ are rejected. `N` is the part instance's number, as in `components` and
 `component-N`; see [part groups](part-groups.md).
 
 Compact memberships replace that list with `compact_part_group_memberships`.
-With compact memberships, the encoder selects project/51 if a designator lock
-is active, otherwise project/45 if pairs are present, otherwise project/36 if an
+With compact memberships, the encoder selects project/54 with authored electrical
+intent and an active designator lock, project/49 with intent alone, otherwise
+project/51 if a designator lock is active, otherwise project/45 if pairs are present, otherwise project/36 if an
 assembly profile catalog is retained, otherwise project/39. Board-owned compact
 memberships use instances/8 with pairs and instances/7 without pairs.
 Schematic-only memberships remain embedded in the entry point. The compact
