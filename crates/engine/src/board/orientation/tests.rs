@@ -170,6 +170,78 @@ fn zero_length_silkscreen_still_warns() {
     assert_eq!(found[0]["package"]["id"], "empty-silk");
 }
 
+/// Duplicating a silkscreen or artwork stroke in place, or splitting it into touching or
+/// overlapping collinear segments with the same layer and stroke style, keeps the warning;
+/// a genuinely asymmetric mark, different stroke width or different layer still clears it.
+#[test]
+fn duplicate_and_collinear_strokes_still_warn_while_asymmetric_marks_pass() {
+    let line = |purpose: &str, stroke_nm: i64, x1: i64, y1: i64, x2: i64, y2: i64| {
+        json!({
+            "purpose": purpose,
+            "graphic": {
+                "geometry": {"type":"line","from":{"x_nm":x1,"y_nm":y1},"to":{"x_nm":x2,"y_nm":y2}},
+                "stroke_nm": stroke_nm,
+                "fill": "none",
+            }
+        })
+    };
+
+    let mut duplicated = package("resistor-0402", "duplicate-silk", Some(json!({"polarized":true})));
+    let first = duplicated["silkscreen"][0].clone();
+    duplicated["silkscreen"].as_array_mut().unwrap().push(first);
+
+    let mut split = package("resistor-0402", "split-silk", Some(json!({"polarized":true})));
+    split["silkscreen"][0]["points"] = json!([
+        {"x_nm":-400_000,"y_nm":-650_000},
+        {"x_nm":0,"y_nm":-650_000},
+        {"x_nm":400_000,"y_nm":-650_000},
+    ]);
+
+    let mut overlapped = package("resistor-0402", "overlap-silk", Some(json!({"polarized":true})));
+    overlapped["silkscreen"][0]["points"] = json!([
+        {"x_nm":-400_000,"y_nm":-650_000},
+        {"x_nm":100_000,"y_nm":-650_000},
+    ]);
+    overlapped["silkscreen"].as_array_mut().unwrap().push(json!({
+        "points": [{"x_nm":400_000,"y_nm":-650_000}, {"x_nm":-100_000,"y_nm":-650_000}],
+        "closed": false,
+    }));
+
+    let mut artwork_equiv = package("resistor-0402", "artwork-equiv", Some(json!({"polarized":true})));
+    artwork_equiv.as_object_mut().unwrap().remove("silkscreen");
+    artwork_equiv["artwork"] = json!([
+        line("silkscreen", 150_000, -400_000, -650_000, 400_000, -650_000),
+        line("silkscreen", 150_000, 400_000, -650_000, -400_000, -650_000),
+        line("silkscreen", 150_000, -400_000, 650_000, 0, 650_000),
+        line("silkscreen", 150_000, 0, 650_000, 400_000, 650_000),
+    ]);
+
+    let mut asymmetric = package("resistor-0402", "asymmetric-bar", Some(json!({"polarized":true})));
+    asymmetric["silkscreen"].as_array_mut().unwrap().push(json!({
+        "points": [{"x_nm":-400_000,"y_nm":-650_000}, {"x_nm":-400_000,"y_nm":650_000}],
+        "closed": false,
+    }));
+
+    let mut different_stroke = package("resistor-0402", "different-stroke", Some(json!({"polarized":true})));
+    different_stroke.as_object_mut().unwrap().remove("silkscreen");
+    different_stroke["artwork"] =
+        json!(
+            [line("silkscreen", 150_000, -400_000, -650_000, 400_000, -650_000), line("silkscreen", 250_000, -400_000, 650_000, 400_000, 650_000),]
+        );
+
+    let mut different_layer = package("resistor-0402", "different-layer", Some(json!({"polarized":true})));
+    different_layer.as_object_mut().unwrap().remove("silkscreen");
+    different_layer["artwork"] = json!([
+        line("silkscreen", 150_000, -400_000, -650_000, 400_000, -650_000),
+        line("fabrication", 150_000, -400_000, 650_000, 400_000, 650_000),
+    ]);
+
+    let mut s = fixture(&[duplicated, split, overlapped, artwork_equiv, asymmetric, different_stroke, different_layer]);
+    let found = findings(&mut s);
+    let ids: Vec<_> = found.iter().map(|f| f["package"]["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, vec!["artwork-equiv", "duplicate-silk", "overlap-silk", "split-silk"], "{found:#?}");
+}
+
 /// A stated zero orientation, a silkscreen polarity mark or no polarity at all clears it.
 #[test]
 fn stated_zero_marks_and_unpolarized_packages_raise_nothing() {
