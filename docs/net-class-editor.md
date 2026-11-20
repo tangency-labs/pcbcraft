@@ -39,6 +39,18 @@ reconciliation. These are the same
 sources available through `nets.inspect_classes`, `net_classes.resolve` and the
 PCB contact query `pcb.route_rules`.
 
+**Working voltage** declares one [working-voltage requirement](electrical-intent.md)
+on a saved net or class. Choose the owner under **Declared on**; a selected net
+with a saved identity is chosen already. Check **Declare working voltage**, then
+enter the value in volts, a **DC** or **Peak AC** basis and an **Earth** or net
+reference, and choose **Save working voltage**. Clearing the check removes the
+requirement. **Status** reports where the value was entered and that nothing has
+verified it. When the net or its reference no longer exists, or was split or merged,
+a **Needs review** notice names the reason; the original value and reference stay
+selected until you change them. Each save is one Undo step and uses
+`electrical_intent.set`, and the page reads the same report as
+`electrical_intent.inspect`.
+
 Bare pins, free unnamed wire/copper groups and selections spanning distinct nets
 cannot provide one assignment target. Conflicting physical copper and accepted
 memberships spanning a pending logical split also refuse selection-based

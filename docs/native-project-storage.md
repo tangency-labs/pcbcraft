@@ -181,13 +181,13 @@ only for net intent; a class-only edit keeps the existing instance header.
 intent stays under `schematic_instances.net_registry`; there is no extra file.
 The physical board, sheets and archive container keep their own versions.
 
-The payload contains only set fields: `voltage` (`magnitude_volts`, `basis`, and
-`reference`), `current_amperes`, `rise_kelvin`, and `isolation_group`. Numeric
-fields are exact canonical decimal strings, including `"0"`. A `reference` is
+The payload contains one field, `voltage`, with `magnitude_volts`, `basis` and
+`reference`. The magnitude is an exact canonical decimal string, including `"0"`. A `reference` is
 `{"kind":"earth"}` or `{"kind":"net","net":UUID}` in the same persistent net
 registry. An existing historical reference is retained, not resolved to a new
 net. The payload, its `voltage` and its `reference` are objects with named
-fields; positional arrays, unknown or duplicate fields (including a `net` on an Earth reference),
+fields; positional arrays, unknown or duplicate fields (including a `net` on an Earth reference
+and any field other than `voltage`),
 null, empty objects, dangling references and header/payload mismatches are
 refused. Older readers refuse the new envelope instead of dropping intent.
 

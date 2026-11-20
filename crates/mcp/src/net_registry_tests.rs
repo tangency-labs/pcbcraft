@@ -301,9 +301,9 @@ fn authored_electrical_intent_uses_the_shared_mcp_session() {
         let catalogs = [headless.call("engine.commands", json!({})).unwrap(), call_editor(&mut live, &json!({"method":"engine.commands"})).unwrap()];
         assert!(catalogs.iter().all(|catalog| catalog.as_array().unwrap().iter().any(|command| command["id"] == id)));
     }
-    let current = json!({"value":"0","unit":"A"});
+    let voltage = json!({"magnitude":{"value":"0","unit":"V"},"basis":"dc","reference":{"kind":"earth"}});
     let edit = json!({"command":intent::SET,"version":COMMAND_API_VERSION,"inspect":false,"params":{"version":1,
-        "expected_revision":live.session.revision(),"target":target,"intent":{"maximum_continuous_current":current}}});
+        "expected_revision":live.session.revision(),"target":target,"intent":{"working_voltage":voltage}}});
     let initial = live.session.snapshot().unwrap();
     let mut wrong_pin = edit.clone();
     wrong_pin["version"] = json!(COMMAND_API_VERSION + 1);
@@ -322,10 +322,11 @@ fn authored_electrical_intent_uses_the_shared_mcp_session() {
     let query = json!({"command":intent::INSPECT,"version":COMMAND_API_VERSION,"inspect":false,"params":{"version":1,"target":target}});
     let read = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
     assert_eq!(headless.call("engine.execute", query.clone()).unwrap(), read);
-    assert_eq!(read["intent"]["maximum_continuous_current"], current);
+    assert_eq!(read["intent"]["working_voltage"], voltage);
+    assert_eq!(read["requirement"]["verification"], "unverified");
     call_editor(&mut live, &json!({"method":"engine.execute","params":{"command":"edit.undo","params":{}}})).unwrap();
     let undone = call_editor(&mut live, &json!({"method":"engine.execute","params":query})).unwrap();
-    assert_eq!(undone["intent"]["maximum_continuous_current"], Value::Null);
+    assert_eq!(undone["intent"]["working_voltage"], Value::Null);
 }
 
 /// Read-only discovery supplies typed derived anchors before any persistent ID exists. Both

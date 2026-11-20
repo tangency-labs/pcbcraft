@@ -33,6 +33,11 @@ fn inspect(session: &mut Session, target: &Value) -> Value {
     session.execute(INSPECT, &json!({"version":1,"target":target})).unwrap()["intent"].clone()
 }
 
+/// An Earth-referenced DC working voltage with the given exact magnitude.
+fn volts(value: &str) -> Value {
+    json!({"working_voltage":{"magnitude":{"value":value,"unit":"V"},"basis":"dc","reference":{"kind":"earth"}}})
+}
+
 /// A synthetic named net and existing catalog class retain exact values independently. Preview
 /// and repeated writes do not publish, while one Undo/Redo restores the complete changed intent.
 #[test]
@@ -45,14 +50,11 @@ fn authored_electrical_intent_set_read_clear_and_undo() {
     let class = session.project().unwrap().net_classes().definitions[0].id;
     let net_target = json!({"kind":"net","address":address});
     let class_target = json!({"kind":"net_class","project":address.project,"class":class});
-    let unset = json!({"working_voltage":null,"maximum_continuous_current":null,"allowed_temperature_rise":null,"isolation_group":null});
+    let unset = json!({"working_voltage":null});
     assert_eq!(inspect(&mut session, &net_target), unset);
     assert_eq!(inspect(&mut session, &class_target), unset);
     let values = json!({
-        "working_voltage":{"magnitude":{"value":"0","unit":"V"},"basis":"dc","reference":{"kind":"net","address":reference}},
-        "maximum_continuous_current":{"value":"0","unit":"A"},
-        "allowed_temperature_rise":{"value":"0.000000000000000001","unit":"K"},
-        "isolation_group":"Test primary"
+        "working_voltage":{"magnitude":{"value":"0.000000000000000001","unit":"V"},"basis":"dc","reference":{"kind":"net","address":reference}}
     });
     let before = session.snapshot().unwrap();
     let revision = session.revision();
@@ -78,8 +80,7 @@ fn authored_electrical_intent_set_read_clear_and_undo() {
     session.apply("edit.redo", &Value::Null).unwrap();
     assert_eq!(inspect(&mut session, &net_target), values);
 
-    let class_values = json!({"working_voltage":{"magnitude":{"value":"36.5","unit":"V"},"basis":"peak_ac","reference":{"kind":"earth"}},
-        "maximum_continuous_current":{"value":"3","unit":"A"},"allowed_temperature_rise":{"value":"10","unit":"K"},"isolation_group":"Test secondary"});
+    let class_values = json!({"working_voltage":{"magnitude":{"value":"36.5","unit":"V"},"basis":"peak_ac","reference":{"kind":"earth"}}});
     let args = request(&session, &class_target, &class_values);
     session.execute(SET, &args).unwrap();
     assert_eq!(inspect(&mut session, &class_target), class_values);
@@ -104,8 +105,7 @@ fn authored_electrical_intent_refuses_invalid_or_stale_edits_without_mutation() 
     session.apply("project.rename", &json!({"name":"Later name"})).unwrap();
     session.apply("edit.undo", &Value::Null).unwrap();
     let target = json!({"kind":"net","address":address});
-    let valid = json!({"working_voltage":{"magnitude":{"value":"-12","unit":"V"},"basis":"dc","reference":{"kind":"earth"}},
-        "maximum_continuous_current":{"value":"0","unit":"A"},"allowed_temperature_rise":{"value":"0","unit":"K"}});
+    let valid = volts("-12");
     let before = session.snapshot().unwrap();
     let revision = session.revision();
     let history = (session.undo.len(), session.redo.len());
@@ -122,17 +122,16 @@ fn authored_electrical_intent_refuses_invalid_or_stale_edits_without_mutation() 
     missing_revision.as_object_mut().unwrap().remove("expected_revision");
     assert!(matches!(session.apply(SET, &missing_revision), Err(CommandError::InvalidParams(_))));
     for invalid_intent in [
-        json!({"maximum_continuous_current":{"value":"1","unit":"V"}}),
-        json!({"maximum_continuous_current":{"value":"1"}}),
-        json!({"maximum_continuous_current":{"value":"-0.000000000000000001","unit":"A"}}),
-        json!({"allowed_temperature_rise":{"value":"-0.000000000000000001","unit":"K"}}),
-        json!({"allowed_temperature_rise":{"value":"0.0000000000000000001","unit":"K"}}),
+        json!({"maximum_continuous_current":{"value":"1","unit":"A"}}),
+        json!({"allowed_temperature_rise":{"value":"1","unit":"K"}}),
+        json!({"isolation_group":"Test primary"}),
+        json!({"working_voltage":{"magnitude":{"value":"1","unit":"A"},"basis":"dc","reference":{"kind":"earth"}}}),
+        json!({"working_voltage":{"magnitude":{"value":"1"},"basis":"dc","reference":{"kind":"earth"}}}),
+        json!({"working_voltage":{"magnitude":{"value":"0.0000000000000000001","unit":"V"},"basis":"dc","reference":{"kind":"earth"}}}),
         json!({"working_voltage":{"magnitude":{"value":"-1","unit":"V"},"basis":"peak_ac","reference":{"kind":"earth"}}}),
         json!({"working_voltage":{"magnitude":{"value":"1","unit":"V"},"basis":"dc"}}),
         json!({"working_voltage":{"magnitude":{"value":"1","unit":"V"},"basis":"dc","reference":{"kind":"net","address":address}}}),
         json!({"working_voltage":{"magnitude":{"value":"1","unit":"V"},"basis":"dc","reference":{"kind":"net","address":NetAddress { net: Uuid::from_u128(1), ..address }}}}),
-        json!({"isolation_group":" "}),
-        json!({"isolation_group":"\nprimary"}),
         json!({"derived_width":0}),
     ] {
         let bad = request(&session, &target, &invalid_intent);
@@ -143,7 +142,7 @@ fn authored_electrical_intent_refuses_invalid_or_stale_edits_without_mutation() 
     assert!(matches!(session.apply(SET, &foreign), Err(CommandError::InvalidParams(_))));
     let mut preview = good.clone();
     preview["dry_run"] = json!(true);
-    preview["intent"]["allowed_temperature_rise"]["unit"] = json!("A");
+    preview["intent"]["working_voltage"]["magnitude"]["unit"] = json!("A");
     assert!(matches!(session.apply(SET, &preview), Err(CommandError::InvalidParams(_))));
     assert_eq!(session.revision(), revision);
     assert_eq!((session.undo.len(), session.redo.len()), history);
@@ -174,14 +173,14 @@ fn authored_electrical_intent_reference_survives_rename_and_retirement() {
     assert_eq!(inspect(&mut session, &target)["working_voltage"], voltage);
     let args = request(&session, &json!({"kind":"net","address":other}), &requested);
     assert!(matches!(session.apply(SET, &args), Err(CommandError::InvalidParams(_))));
-    let args = request(&session, &reference_target, &json!({"isolation_group":"Retired"}));
+    let args = request(&session, &reference_target, &volts("1"));
     assert!(matches!(session.apply(SET, &args), Err(CommandError::Unavailable(_))));
 
     let mut keep = requested;
-    keep["maximum_continuous_current"] = json!({"value":"4","unit":"A"});
+    keep["working_voltage"]["magnitude"]["value"] = json!("4");
     let args = request(&session, &target, &keep);
     session.apply(SET, &args).unwrap();
-    assert_eq!(inspect(&mut session, &target)["working_voltage"], voltage);
+    assert_eq!(inspect(&mut session, &target)["working_voltage"], keep["working_voltage"]);
 }
 
 /// The same net references survive first-board adoption. Only their owner qualification changes;
@@ -249,7 +248,7 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
         assert_eq!(encode_documents(decode_documents(&old).unwrap()).unwrap(), old);
         assert_eq!(document(&old, ENTRY_POINT)["format"], "pcbcraft-project/23");
         refused(&altered(&old, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/49")), "may not be empty");
-        let values = json!({"maximum_continuous_current":{"value":"0","unit":"A"},"working_voltage":{
+        let values = json!({"working_voltage":{
             "magnitude":{"value":"0","unit":"V"},"basis":"dc","reference":{"kind":"net","address":reference}
         }});
         let args = request(&session, &net_target, &values);
@@ -271,8 +270,7 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
         session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), net_only);
 
-        let class_values = json!({"allowed_temperature_rise":{"value":"12.5","unit":"K"},"isolation_group":"Test primary",
-            "working_voltage":values["working_voltage"]});
+        let class_values = json!({"working_voltage":{"magnitude":{"value":"12.5","unit":"V"},"basis":"peak_ac","reference":{"kind":"earth"}}});
         let args = request(&session, &class_target, &class_values);
         session.apply(SET, &args).unwrap();
         let both = encode_documents(session.snapshot().unwrap()).unwrap();
@@ -286,7 +284,12 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
             }),
             "distinct reference",
         );
-        for (replacement, reason) in [(json!({}), "nonempty"), (Value::Null, "invalid type"), (json!({"current_amperes":"-1"}), "canonical")] {
+        for (replacement, reason) in [
+            (json!({}), "nonempty"),
+            (Value::Null, "invalid type"),
+            (json!({"voltage":{"magnitude_volts":"-1","basis":"peak_ac","reference":{"kind":"earth"}}}), "canonical"),
+            (json!({"current_amperes":"1"}), "unknown field `current_amperes`"),
+        ] {
             let malformed = altered(&both, &path, |v| {
                 let home = if board { v } else { &mut v["schematic_instances"] };
                 let net = home["net_registry"]["records"].as_array_mut().unwrap().iter_mut().find(|v| v["id"] == json!(source.net)).unwrap();
@@ -298,7 +301,7 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
         assert_eq!(archive.documents, both);
         assert_eq!(encode_documents(decode_documents(&archive.documents).unwrap()).unwrap(), both);
         session.open_snapshot(decode_documents(&archive.documents).unwrap());
-        assert_eq!(inspect(&mut session, &net_target)["maximum_continuous_current"], values["maximum_continuous_current"]);
+        assert_eq!(inspect(&mut session, &net_target)["working_voltage"], values["working_voltage"]);
         assert_eq!(inspect(&mut session, &class_target)["working_voltage"], class_values["working_voltage"]);
         let clear = request(&session, &net_target, &json!({}));
         session.apply(SET, &clear).unwrap();
@@ -331,7 +334,7 @@ fn authored_electrical_intent_on_legacy_net_does_not_adopt_numbers() {
     session.open_snapshot(decode_documents(&legacy).unwrap());
     let canonical = encode_documents(session.snapshot().unwrap()).unwrap();
     let target = json!({"kind":"net","address":net});
-    let auth = request(&session, &target, &json!({"maximum_continuous_current":{"value":"0","unit":"A"}}));
+    let auth = request(&session, &target, &volts("0"));
     session.apply(SET, &auth).unwrap();
     assert!(!session.project().unwrap().net_registry.has_generated_numbers());
     let encoded = encode_documents(session.snapshot().unwrap()).unwrap();
@@ -372,7 +375,7 @@ fn authored_electrical_intent_composes_with_profiles_and_memberships() {
             );
         }
         let target = json!({"kind":"net","address":net});
-        let intent = json!({"isolation_group":"Test group"});
+        let intent = volts("5");
         let expanded = session.snapshot().unwrap();
         let path = expanded.instances_document_path();
         for compact in [false, true] {
@@ -446,7 +449,7 @@ fn authored_electrical_intent_composes_with_differential_pairs() {
         assert!(pairs(&old).as_array().is_some_and(|items| items.len() == 1));
 
         let target = json!({"kind":"net","address":positive});
-        let args = request(&session, &target, &json!({"isolation_group":"Test pair"}));
+        let args = request(&session, &target, &volts("5"));
         session.apply(SET, &args).unwrap();
         let changed = encode_documents(session.snapshot().unwrap()).unwrap();
         assert_eq!(document(&changed, ENTRY_POINT)["format"], "pcbcraft-project/49");
@@ -465,7 +468,7 @@ fn authored_electrical_intent_composes_with_differential_pairs() {
         apply(&mut session, net_classes::CREATE, json!({"name":"Pair class","rules":{}}));
         let class = session.project().unwrap().net_classes().definitions[0].id;
         let class_target = json!({"kind":"net_class","project":positive.project,"class":class});
-        let args = request(&session, &class_target, &json!({"isolation_group":"Test pair"}));
+        let args = request(&session, &class_target, &volts("5"));
         session.apply(SET, &args).unwrap();
         let class_only = encode_documents(session.snapshot().unwrap()).unwrap();
         assert_eq!(document(&class_only, ENTRY_POINT)["format"], "pcbcraft-project/49");
@@ -500,7 +503,7 @@ fn authored_electrical_intent_composes_with_designator_locks() {
         assert_eq!(document(&locks_only, ENTRY_POINT)["format"], "pcbcraft-project/51");
 
         let target = json!({"kind":"net","address":address});
-        let args = request(&session, &target, &json!({"isolation_group":"Locked primary"}));
+        let args = request(&session, &target, &volts("24"));
         session.apply(SET, &args).unwrap();
         let both = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry = document(&both, ENTRY_POINT);
@@ -518,13 +521,13 @@ fn authored_electrical_intent_composes_with_designator_locks() {
         assert_eq!(encode_documents(decode_packed(&encode_packed(reopened.clone()).unwrap()).unwrap().project).unwrap(), both);
         let mut reader = Session::default();
         reader.open_snapshot(reopened);
-        assert_eq!(inspect(&mut reader, &target)["isolation_group"], "Locked primary");
+        assert_eq!(inspect(&mut reader, &target), volts("24"));
         assert!(reader.project().unwrap().components().next().unwrap().designator_locked());
 
         let clear = request(&session, &target, &json!({}));
         session.apply(SET, &clear).unwrap();
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), locks_only);
-        let args = request(&session, &target, &json!({"isolation_group":"Locked primary"}));
+        let args = request(&session, &target, &volts("24"));
         session.apply(SET, &args).unwrap();
         lock(&mut session, false);
         let intent_only = encode_documents(session.snapshot().unwrap()).unwrap();
@@ -533,7 +536,7 @@ fn authored_electrical_intent_composes_with_designator_locks() {
         assert_eq!(encode_documents(intent_project.clone()).unwrap(), intent_only);
         let mut reader = Session::default();
         reader.open_snapshot(intent_project);
-        assert_eq!(inspect(&mut reader, &target)["isolation_group"], "Locked primary");
+        assert_eq!(inspect(&mut reader, &target), volts("24"));
         assert!(reader.project().unwrap().components().all(|part| !part.designator_locked()));
     }
 }
@@ -603,14 +606,12 @@ fn set_earth_reference_refuses_leftover_address() {
 /// or a quantity are refused without clearing authored values, while `{}` and null properties still clear.
 #[test]
 fn set_intent_refuses_positional_arrays() {
-    let current = json!({"maximum_continuous_current":{"value":"3","unit":"A"}});
+    let current = volts("3");
     let (mut session, target, _) = class_with_intent(&current);
     let before = session.snapshot().unwrap();
     let history = (session.revision(), session.undo.len(), session.redo.len());
     for positional in [
-        json!([null, null, null, null]),
-        json!({"maximum_continuous_current":["3","A"]}),
-        json!({"allowed_temperature_rise":["1","K"]}),
+        json!([null]),
         json!({"working_voltage":[{"value":"5","unit":"V"},"dc",{"kind":"earth"}]}),
         json!({"working_voltage":{"magnitude":["5","V"],"basis":"dc","reference":{"kind":"earth"}}}),
         json!({"working_voltage":{"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":["earth"]}}),
@@ -625,9 +626,9 @@ fn set_intent_refuses_positional_arrays() {
     assert!(matches!(session.execute(INSPECT, &json!({"version":1,"target":positional_target})), Err(CommandError::InvalidParams(_))));
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     assert_eq!((session.revision(), session.undo.len(), session.redo.len()), history);
-    assert_eq!(inspect(&mut session, &target)["maximum_continuous_current"], current["maximum_continuous_current"]);
+    assert_eq!(inspect(&mut session, &target), current);
 
-    let nulls = json!({"working_voltage":null,"maximum_continuous_current":null,"allowed_temperature_rise":null,"isolation_group":null});
+    let nulls = json!({"working_voltage":null});
     let args = request(&session, &target, &nulls);
     session.apply(SET, &args).unwrap();
     assert_eq!(inspect(&mut session, &target), nulls);
@@ -642,21 +643,79 @@ fn set_intent_refuses_positional_arrays() {
 /// still round-trip exactly.
 #[test]
 fn saved_intent_refuses_positional_records() {
-    let values = json!({"working_voltage":{"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":{"kind":"earth"}},
-        "isolation_group":"Review group"});
-    let (_, _, saved) = class_with_intent(&values);
+    let (_, _, saved) = class_with_intent(&volts("5"));
     let stored = document(&saved, ENTRY_POINT)["net_classes"]["definitions"][0]["authored_intent"].clone();
-    assert_eq!(stored, json!({"voltage":{"magnitude_volts":"5","basis":"dc","reference":{"kind":"earth"}},"isolation_group":"Review group"}));
+    assert_eq!(stored, json!({"voltage":{"magnitude_volts":"5","basis":"dc","reference":{"kind":"earth"}}}));
     refused(&saved_intent(&saved, |intent| intent["voltage"] = json!(["5", "dc", {"kind":"earth"}])), "invalid type: sequence");
-    refused(&saved_intent(&saved, |intent| *intent = json!([null, null, null, "Review group"])), "invalid type: sequence");
+    refused(&saved_intent(&saved, |intent| *intent = json!([stored["voltage"]])), "invalid type: sequence");
     for reference in [json!(["earth"]), json!(["net", Uuid::from_u128(7)])] {
         refused(&saved_intent(&saved, |intent| intent["voltage"]["reference"] = reference), "invalid type: sequence");
     }
 
     let entry = String::from_utf8(saved[ENTRY_POINT].clone()).unwrap();
-    let key = "\"isolation_group\"";
+    let key = "\"basis\"";
     assert_eq!(entry.matches(key).count(), 1);
     let mut duplicate = saved.clone();
-    duplicate.insert(ENTRY_POINT.into(), entry.replacen(key, &format!("{key}:\"Other group\",{key}"), 1).into_bytes());
-    refused(&duplicate, "duplicate field `isolation_group`");
+    duplicate.insert(ENTRY_POINT.into(), entry.replacen(key, &format!("{key}:\"peak_ac\",{key}"), 1).into_bytes());
+    refused(&duplicate, "duplicate field `basis`");
+}
+
+/// Inspect reports where a working voltage came from and that nothing has verified it. When an
+/// owner or reference net retires, the original declaration and reference are retained and
+/// flagged for review; Undo, Redo and save/reopen restore the same report, and choosing a
+/// current reference clears the flag.
+#[test]
+fn working_voltage_requirement_reports_source_verification_and_review() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":false})).unwrap();
+    let (address, source_label) = named_net(&mut session, "TEST_SOURCE", 0);
+    let (reference, label) = named_net(&mut session, "TEST_REF", 25_400_000);
+    let (other, _) = named_net(&mut session, "TEST_OTHER", 50_800_000);
+    apply(&mut session, net_classes::CREATE, json!({"name":"Supply class","rules":{}}));
+    let class = session.project().unwrap().net_classes().definitions[0].id;
+    let target = json!({"kind":"net","address":address});
+    let class_target = json!({"kind":"net_class","project":address.project,"class":class});
+    let report = |session: &mut Session, target: &Value| session.execute(INSPECT, &json!({"version":1,"target":target})).unwrap();
+    let unset = report(&mut session, &target);
+    assert_eq!(unset["intent"], json!({"working_voltage":null}));
+    assert_eq!(unset["requirement"], Value::Null);
+    let declared = json!({"working_voltage":{"magnitude":{"value":"48","unit":"V"},"basis":"dc","reference":{"kind":"net","address":reference}}});
+    let args = request(&session, &target, &declared);
+    session.apply(SET, &args).unwrap();
+    let current = json!({"source":"authored_on_net","verification":"unverified","review":"current","reasons":[]});
+    assert_eq!(report(&mut session, &target)["requirement"], current);
+    let args = request(&session, &class_target, &volts("48"));
+    session.apply(SET, &args).unwrap();
+    let class_report = report(&mut session, &class_target)["requirement"].clone();
+    assert_eq!(class_report, json!({"source":"authored_on_net_class","verification":"unverified","review":"current","reasons":[]}));
+
+    apply(&mut session, net_labels::DELETE, json!({"id":label}));
+    let flagged = report(&mut session, &target);
+    assert_eq!(flagged["intent"], declared);
+    let review = json!({"source":"authored_on_net","verification":"unverified","review":"needs_review","reasons":["reference_retired"]});
+    assert_eq!(flagged["requirement"], review);
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut reader = Session::default();
+    reader.open_snapshot(decode_documents(&saved).unwrap());
+    let reopened = report(&mut reader, &target);
+    assert_eq!((&reopened["intent"], &reopened["requirement"]), (&declared, &review));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(report(&mut session, &target)["requirement"], current);
+    session.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(report(&mut session, &target)["requirement"], review);
+
+    let mut replaced = declared.clone();
+    replaced["working_voltage"]["reference"]["address"] = json!(other);
+    let args = request(&session, &target, &replaced);
+    session.apply(SET, &args).unwrap();
+    assert_eq!(report(&mut session, &target)["requirement"], current);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(report(&mut session, &target)["intent"], declared);
+
+    apply(&mut session, net_labels::DELETE, json!({"id":source_label}));
+    let orphaned = report(&mut session, &target);
+    assert_eq!(orphaned["intent"], declared);
+    assert_eq!(orphaned["requirement"]["reasons"], json!(["net_retired", "reference_retired"]));
+    let args = request(&session, &target, &json!({}));
+    assert!(matches!(session.apply(SET, &args), Err(CommandError::Unavailable(_))));
 }

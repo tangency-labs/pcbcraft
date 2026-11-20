@@ -2591,7 +2591,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: nets::intent::SET,
         title: "Set Authored Electrical Intent",
-        summary: "Replace sparse electrical intent on one existing record in one undo step, or validate without changing it.",
+        summary: "Replace the working-voltage requirement on one existing net or class in one undo step, or validate without changing it.",
         params: &[
             INTENT_VERSION,
             EXPECTED_REVISION,
@@ -2608,7 +2608,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: nets::intent::INSPECT,
         title: "Inspect Authored Electrical Intent",
-        summary: "Read only authored electrical values on the addressed record; unset fields are null.",
+        summary: "Read the authored working voltage, its source, unverified status and review state on one net or class; unset is null.",
         params: &[INTENT_VERSION, INTENT_TARGET],
     },
     Command {

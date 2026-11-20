@@ -1,8 +1,9 @@
-//! Sparse authored electrical values. Ownership and transaction policy stay separate from
-//! future rule resolution; neither class membership nor connectivity derives values here.
+//! One authored working-voltage requirement per net or net class. Ownership and transaction
+//! policy stay separate from future rule resolution; neither class membership nor connectivity
+//! derives values here, and no checker verifies them yet.
 
 use super::{NetAddress, State, graph::Graph};
-use crate::{CommandError, Project, Session, named_catalog};
+use crate::{CommandError, Project, Session};
 use pcbcraft_units::quantity::{Quantity, decimal};
 use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Serialize};
@@ -10,26 +11,21 @@ use serde_json::{Value, json};
 use std::{fmt, marker::PhantomData, sync::Arc};
 use uuid::Uuid;
 
-/// Replace authored electrical intent on one existing net or net-class record.
+/// Replace the authored working voltage on one existing net or net-class record.
 pub const SET: &str = "electrical_intent.set";
-/// Read only the authored electrical intent, not effective or inherited values.
+/// Read the authored working voltage with its source, verification and review state, not
+/// effective or inherited values.
 pub const INSPECT: &str = "electrical_intent.inspect";
 /// Revision of the authored-value contract, not a native document format number.
-pub(crate) const CONTRACT_VERSION: u8 = 1;
+pub const CONTRACT_VERSION: u8 = 1;
 
-/// Sparse authored values. Nothing here denotes a board default or an effective rule.
+/// The authored requirement. Nothing here denotes a board default or an effective rule.
 /// Saved records are read through `stored`, which accepts named fields only.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntentV1 {
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_named")]
     voltage: Option<WorkingVoltage>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::persistence::present")]
-    current_amperes: Option<ExactDecimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::persistence::present")]
-    rise_kelvin: Option<ExactDecimal>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::persistence::present")]
-    isolation_group: Option<String>,
 }
 
 /// Validated exact decimal; the containing field supplies the dimension.
@@ -80,7 +76,7 @@ enum ReferenceInput {
     Net { address: NetAddress },
 }
 
-/// Decoded only through [`named`] or [`named_or_null`]; positional arrays are refused.
+/// Decoded only through [`named`]; positional arrays are refused.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct QuantityInput {
@@ -99,17 +95,13 @@ struct VoltageInput {
     reference: ReferenceInput,
 }
 
-/// Decoded only through [`named`]; positional arrays are refused. Absent and null fields are unset.
+/// Decoded only through [`named`]; positional arrays are refused. An absent or null working
+/// voltage is unset; any other field is refused.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IntentInput {
     #[serde(default, deserialize_with = "named_or_null")]
     working_voltage: Option<VoltageInput>,
-    #[serde(default, deserialize_with = "named_or_null")]
-    maximum_continuous_current: Option<QuantityInput>,
-    #[serde(default, deserialize_with = "named_or_null")]
-    allowed_temperature_rise: Option<QuantityInput>,
-    isolation_group: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -197,7 +189,7 @@ pub(crate) fn target_schema() -> Value {
     ]})
 }
 
-/// Publish exact decimal inputs with explicit units and nullable sparse fields.
+/// Publish the exact decimal working voltage with its explicit unit, basis and reference.
 pub(crate) fn intent_schema() -> Value {
     let quantity = |unit| object(json!({"value":{"type":"string","maxLength":38},"unit":{"const":unit}}), &["value", "unit"]);
     let optional = |field| json!({"oneOf":[field,{"type":"null"}]});
@@ -207,11 +199,7 @@ pub(crate) fn intent_schema() -> Value {
     ]});
     let voltage =
         object(json!({"magnitude":quantity("V"),"basis":{"enum":["dc","peak_ac"]},"reference":reference}), &["magnitude", "basis", "reference"]);
-    object(
-        json!({"working_voltage":optional(voltage),"maximum_continuous_current":optional(quantity("A")),
-        "allowed_temperature_rise":optional(quantity("K")),"isolation_group":{"type":["string","null"],"minLength":1,"maxLength":200}}),
-        &[],
-    )
+    object(json!({"working_voltage":optional(voltage)}), &[])
 }
 
 /// Validate the target shape independently of any current project.
@@ -219,14 +207,14 @@ pub(crate) fn validate_target(value: &Value) -> Result<(), &'static str> {
     named::<_, Target>(value.clone()).map(|_| ()).map_err(|_| "requires a scoped net or net-class target")
 }
 
-/// Validate the sparse input shape. Units, canonical decimals and ownership are checked by the edit.
+/// Validate the input shape. Units, canonical decimals and ownership are checked by the edit.
 pub(crate) fn validate_intent(value: &Value) -> Result<(), &'static str> {
-    named::<_, IntentInput>(value.clone()).map(|_| ()).map_err(|_| "requires a sparse authored electrical intent object")
+    named::<_, IntentInput>(value.clone()).map(|_| ()).map_err(|_| "requires an object with only an optional working_voltage")
 }
 
 impl ExactDecimal {
     /// Accept only the field's explicit canonical unit and an exact, in-range decimal spelling.
-    /// Current, temperature rise and peak magnitude cannot be negative; DC may be signed.
+    /// A peak magnitude cannot be negative; DC may be signed.
     fn checked(input: QuantityInput, quantity: Quantity, signed: bool) -> Result<Self, CommandError> {
         let value = Self(input.value);
         if input.unit != quantity.unit() || !value.valid(signed) {
@@ -253,7 +241,7 @@ impl ExactDecimal {
 impl IntentV1 {
     /// Empty intent selects the old native vocabulary; explicit zero is not empty.
     pub(crate) fn is_empty(&self) -> bool {
-        self.voltage.is_none() && self.current_amperes.is_none() && self.rise_kelvin.is_none() && self.isolation_group.is_none()
+        self.voltage.is_none()
     }
 
     /// Validate saved references using the local registry, retaining historical IDs but refusing
@@ -280,18 +268,10 @@ impl IntentV1 {
                 Ok::<_, CommandError>(WorkingVoltage { magnitude_volts, basis: input.basis, reference })
             })
             .transpose()?;
-        if let Some(name) = &input.isolation_group {
-            named_catalog::validate_name("isolation group", name).map_err(CommandError::InvalidParams)?;
-        }
-        Ok(Self {
-            voltage,
-            current_amperes: input.maximum_continuous_current.map(|q| ExactDecimal::checked(q, Quantity::Current, false)).transpose()?,
-            rise_kelvin: input.allowed_temperature_rise.map(|q| ExactDecimal::checked(q, Quantity::Temperature, false)).transpose()?,
-            isolation_group: input.isolation_group,
-        })
+        Ok(Self { voltage })
     }
 
-    /// Read only authored intent. Null fields are explicitly unset, including on a historical net.
+    /// Read only authored intent. Null is explicitly unset, including on a historical net.
     /// The address of a reference is qualified for the current registry without following lineage.
     fn inspect(&self, project: &Project) -> Value {
         let voltage = self.voltage.as_ref().map(|voltage| {
@@ -301,11 +281,35 @@ impl IntentV1 {
             };
             json!({"magnitude": voltage.magnitude_volts.inspect(Quantity::Voltage), "basis": voltage.basis, "reference": reference})
         });
+        json!({"working_voltage": voltage})
+    }
+
+    /// Report where an authored requirement came from and whether it still describes current
+    /// nets. Nothing verifies the value yet. A retired or ambiguous owner or reference keeps
+    /// the original declaration and reference but flags it for review; nothing is redirected.
+    fn requirement(&self, project: &Project, target: Target) -> Value {
+        let Some(voltage) = &self.voltage else { return Value::Null };
+        let mut reasons = Vec::new();
+        let mut check = |net: Uuid, role: &str| match project.net_registry.record(net).map(|record| &record.state) {
+            Some(State::Active {}) => {}
+            Some(State::Ambiguous { .. }) => reasons.push(format!("{role}_ambiguous")),
+            _ => reasons.push(format!("{role}_retired")),
+        };
+        let source = match target {
+            Target::Net { address } => {
+                check(address.net, "net");
+                "authored_on_net"
+            }
+            Target::NetClass { .. } => "authored_on_net_class",
+        };
+        if let Reference::Net { net } = voltage.reference {
+            check(net, "reference");
+        }
         json!({
-            "working_voltage": voltage,
-            "maximum_continuous_current": self.current_amperes.as_ref().map(|q| q.inspect(Quantity::Current)),
-            "allowed_temperature_rise": self.rise_kelvin.as_ref().map(|q| q.inspect(Quantity::Temperature)),
-            "isolation_group": self.isolation_group,
+            "source": source,
+            "verification": "unverified",
+            "review": if reasons.is_empty() { "current" } else { "needs_review" },
+            "reasons": reasons,
         })
     }
 
@@ -432,8 +436,25 @@ impl Session {
         let request: InspectInput = serde_json::from_value(params.clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
         check_version(request.version)?;
         let project = self.open_project()?;
-        let intent = request.target.existing(project, false)?;
-        Ok(json!({"version": CONTRACT_VERSION, "revision": self.revision(), "intent": intent.inspect(project)}))
+        let mut result = project.electrical_intent(request.target)?;
+        result["version"] = json!(CONTRACT_VERSION);
+        result["revision"] = json!(self.revision());
+        Ok(result)
+    }
+}
+
+impl Project {
+    /// Read one record's authored working voltage and requirement state exactly as
+    /// `electrical_intent.inspect` reports them, for in-process editors that hold a snapshot.
+    pub fn inspect_electrical_intent(&self, target: &Value) -> Result<Value, CommandError> {
+        let target: Target = named(target.clone()).map_err(|error: serde_json::Error| CommandError::InvalidParams(error.to_string()))?;
+        self.electrical_intent(target)
+    }
+
+    /// Share one read path between the command adapter and in-process editors.
+    fn electrical_intent(&self, target: Target) -> Result<Value, CommandError> {
+        let intent = target.existing(self, false)?;
+        Ok(json!({"intent": intent.inspect(self), "requirement": intent.requirement(self, target)}))
     }
 }
 
@@ -441,15 +462,8 @@ impl Session {
 /// additionally refuse its presence, regardless of whether a newer reader knows its vocabulary.
 pub(crate) fn stored<'de, D: serde::Deserializer<'de>>(de: D) -> Result<IntentV1, D::Error> {
     let intent: IntentV1 = named(de)?;
-    if intent.is_empty()
-        || intent.voltage.as_ref().is_some_and(|v| !v.magnitude_volts.valid(v.basis == VoltageBasis::Dc))
-        || intent.current_amperes.as_ref().is_some_and(|v| !v.valid(false))
-        || intent.rise_kelvin.as_ref().is_some_and(|v| !v.valid(false))
-    {
+    if intent.is_empty() || intent.voltage.as_ref().is_some_and(|v| !v.magnitude_volts.valid(v.basis == VoltageBasis::Dc)) {
         return Err(serde::de::Error::custom("Saved electrical intent must be nonempty and contain canonical values."));
-    }
-    if let Some(group) = &intent.isolation_group {
-        named_catalog::validate_name("isolation group", group).map_err(serde::de::Error::custom)?;
     }
     Ok(intent)
 }
