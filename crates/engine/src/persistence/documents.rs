@@ -1,6 +1,6 @@
 //! The Git working format: an entry point and independently editable documents.
 
-use super::part_group_storage::{CompactMemberships, StoredInstances};
+use super::part_group_storage::{CompactMemberships, CompactPartInstance, StoredInstances};
 use super::*;
 
 /// The fixed, plain-text entry point inside a project folder.
@@ -847,6 +847,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         layout: None,
         circuit_use: None,
         net_registry: Arc::default(),
+        net_records_proof: Default::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
@@ -1565,12 +1566,18 @@ pub(super) fn check_documents(documents: &Documents) -> Result<(), String> {
         return Err("project exceeds the document count or total size limit".to_owned());
     }
     for (path, bytes) in documents {
-        if !is_document_path(path) {
-            return Err(format!("{path}: unexpected project path"));
-        }
-        if bytes.len() > MAX_DOCUMENT_BYTES {
-            return Err(format!("{path}: document exceeds its size limit"));
-        }
+        check_document_entry(path, bytes)?;
+    }
+    Ok(())
+}
+
+/// Apply the same native path and per-file limit when reading or finishing a document.
+fn check_document_entry(path: &str, bytes: &[u8]) -> Result<(), String> {
+    if !is_document_path(path) {
+        return Err(format!("{path}: unexpected project path"));
+    }
+    if bytes.len() > MAX_DOCUMENT_BYTES {
+        return Err(format!("{path}: document exceeds its size limit"));
     }
     Ok(())
 }
@@ -1600,12 +1607,28 @@ enum InstanceTail {
     CompactMemberships,
 }
 
+/// Facts selected before opening the native project header; scan their owning rows once.
+#[derive(Default)]
+struct ProjectHeaderFacts {
+    part_validation: crate::part_instances::storage::PartValidation,
+    has_metadata: bool,
+    has_parts: bool,
+    has_locks: bool,
+    extended_choices: bool,
+    has_bindings: bool,
+    has_numbers: bool,
+    missing_numbers: bool,
+    marker_count: usize,
+}
+
 /// Incremental split-document writer. Each step bounds work by editable records so browser
 /// downloads can yield between frames, without constructing a legacy monolithic document.
 pub struct DocumentsEncoder {
     project: Arc<Project>,
     documents: Documents,
     bytes: Vec<u8>,
+    folder_bytes: usize,
+    document_cursor: Option<String>,
     phase: u8,
     sheet_cursor: usize,
     cursor: u64,
@@ -1613,10 +1636,24 @@ pub struct DocumentsEncoder {
     definitions: BTreeMap<(String, String, u32), Arc<crate::schematic::SymbolDefinition>>,
     footprint_definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
     instance_records: Option<crate::instances::Instances>,
-    compact_memberships: Option<CompactMemberships>,
+    membership_catalog_ids: BTreeSet<uuid::Uuid>,
+    membership_groups: BTreeSet<uuid::Uuid>,
+    membership_dictionary: Vec<uuid::Uuid>,
+    membership_index: usize,
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
-    generated_legs: Vec<GeneratedLegRecord<'static>>,
+    header: ProjectHeaderFacts,
+    sheet_fields: bool,
+    sheet_mirrored: bool,
+    sheet_wire_index: BTreeMap<u64, usize>,
+    live_generated_legs: Vec<usize>,
+    board_facts: BoardFacts,
+    baseline_encoding: crate::board::update::BaselineEncoding,
+    net_record_encoding: crate::nets::RecordEncoding,
+    dependency_encoding: crate::part_instances::storage::DependencyEncoding,
+    profile_validation: crate::board::assembly_profile::CatalogValidation,
+    profile_encoding: crate::board::assembly_profile::CatalogEncoding,
+    board_rows: BoardRows,
 }
 
 /// Identical shared pins are reusable, but one immutable address cannot discard a different body.
@@ -1626,7 +1663,7 @@ fn collect_definition<T: PartialEq>(
     definition: &Arc<T>,
     kind: &str,
 ) -> Result<(), String> {
-    if definitions.get(&key).is_some_and(|existing| existing != definition) {
+    if definitions.get(&key).is_some_and(|existing| !Arc::ptr_eq(existing, definition) && existing != definition) {
         return Err(format!("Conflicting pinned {kind} {}/{}.r{} during save", key.0, key.1, key.2));
     }
     definitions.insert(key, definition.clone());
@@ -1641,24 +1678,39 @@ impl DocumentsEncoder {
             project,
             documents: Documents::new(),
             bytes: Vec::new(),
-            phase: 0,
+            folder_bytes: 0,
+            document_cursor: None,
+            phase: 26,
             sheet_cursor: 0,
             cursor: 0,
             first: true,
             definitions: BTreeMap::new(),
             footprint_definitions: BTreeMap::new(),
             instance_records: None,
-            compact_memberships: None,
+            membership_catalog_ids: BTreeSet::new(),
+            membership_groups: BTreeSet::new(),
+            membership_dictionary: Vec::new(),
+            membership_index: 0,
             use_compact_memberships,
             size_limit_exceeded: false,
-            generated_legs: Vec::new(),
+            header: ProjectHeaderFacts::default(),
+            sheet_fields: false,
+            sheet_mirrored: false,
+            sheet_wire_index: BTreeMap::new(),
+            live_generated_legs: Vec::new(),
+            board_facts: BoardFacts::default(),
+            baseline_encoding: crate::board::update::BaselineEncoding::default(),
+            net_record_encoding: crate::nets::RecordEncoding::default(),
+            dependency_encoding: crate::part_instances::storage::DependencyEncoding::default(),
+            profile_validation: crate::board::assembly_profile::CatalogValidation::default(),
+            profile_encoding: crate::board::assembly_profile::CatalogEncoding::default(),
+            board_rows: BoardRows::default(),
         }
     }
 
-    /// Write at most `records` records or phase transitions. The board-header transition also
-    /// writes its bounded setup (at most 64 material revisions, 128 layers, 127 strata and
-    /// 256 nested prepreg plies) and an enabled baseline within its 16 MiB bound.
-    /// Net and pair records each consume one record budget in their shared instance home.
+    /// Advance at most `records` row, nested-row or phase-transition units. The board header
+    /// includes its independently bounded stackup; large accepted nets and history lists yield
+    /// between their members rather than counting their entire collection as a single unit.
     /// A legacy membership home that exceeds a byte limit restarts once in the compact
     /// envelope. Only disposable encoding state changes; no project edit or Save refusal is
     /// introduced. Valid legacy documents retain their encoding while it fits the limits.
@@ -1674,68 +1726,130 @@ impl DocumentsEncoder {
         }
     }
 
+    /// Number of grouped rows checked before writing the first component.
+    #[cfg(test)]
+    pub(crate) fn grouped_rows_checked(&self) -> Option<usize> {
+        (self.phase == 21).then_some(self.cursor as usize)
+    }
+
+    /// Designator-lock fact accumulated by the component scan (phase 26), exposed only while
+    /// the remaining header scans (27, 28, 29, 36) run and before phase 0 consumes it.
+    #[cfg(test)]
+    pub(crate) fn scanned_designator_locks(&mut self) -> Option<&mut bool> {
+        matches!(self.phase, 27 | 28 | 29 | 36).then_some(&mut self.header.has_locks)
+    }
+
     /// Advance the current representation within the caller's incremental record budget.
     fn step_records(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
             match self.phase {
+                26 => {
+                    let p = &self.project;
+                    if let Some((&id, part)) = p.components.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next() {
+                        self.header.part_validation.row(p, part)?;
+                        self.header.has_metadata |= !part.metadata.is_empty();
+                        self.header.has_parts |= part.part.is_some();
+                        self.header.has_locks |= part.designator_locked;
+                        if !crate::no_connect::valid_terminal_markers(part) {
+                            return Err("No-connect intent exceeds its terminal or project limits.".into());
+                        }
+                        self.header.marker_count += part.no_connects.len();
+                        if self.header.marker_count > crate::no_connect::MAX_MARKERS {
+                            return Err("No-connect intent exceeds its terminal or project limits.".into());
+                        }
+                        self.cursor = id;
+                    } else {
+                        self.next();
+                    }
+                }
+                27 => {
+                    let p = &self.project;
+                    if let Some((&id, choice)) =
+                        p.schematic_packages.assignments.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
+                    {
+                        self.header.extended_choices |= crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads);
+                        self.cursor = id;
+                    } else {
+                        self.next();
+                    }
+                }
+                28 => {
+                    if let Some(row) = self.project.net_registry.records.get(self.cursor as usize) {
+                        self.header.has_bindings |= !row.class_bindings.is_empty();
+                        self.header.has_numbers |= row.generated_number.is_some();
+                        self.header.missing_numbers |= row.generated_number.is_none();
+                        self.cursor += 1;
+                    } else {
+                        self.next();
+                    }
+                }
+                29 => {
+                    if let Some(sheet) = self.project.sheets.get(self.sheet_cursor) {
+                        if let Some(&id) = sheet.no_connect_ends.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next() {
+                            self.header.marker_count += 1;
+                            if self.header.marker_count > crate::no_connect::MAX_MARKERS || !sheet.junctions.contains_key(&id) {
+                                return Err("No-connect intent exceeds its terminal or project limits.".into());
+                            }
+                            self.cursor = id;
+                        } else {
+                            self.sheet_cursor += 1;
+                            self.cursor = 0;
+                        }
+                    } else {
+                        self.sheet_cursor = 0;
+                        self.phase = 36;
+                    }
+                }
+                36 => {
+                    let p = &self.project;
+                    if self.profile_validation.step(&p.assembly_profiles, &p.board.assembly_profiles)? {
+                        self.phase = 0;
+                    }
+                }
                 0 => {
                     let p = &self.project;
-                    p.validate_no_connects()?;
-                    crate::part_instances::storage::validate_project(p)?;
                     if p.has_sheet_occurrences() {
-                        let records = p.sheet_instances();
+                        let records = p.occurrence_instances();
                         Project::clone(p).install_sheet_instances(records.clone())?;
-                        self.instance_records = Some(records);
-                        if self.use_compact_memberships {
-                            self.compact_memberships = Some(CompactMemberships::from_memberships(&p.part_group_memberships)?);
+                        if !p.net_registry.records.is_empty() {
+                            self.validate_registry()?;
                         }
+                        self.instance_records = Some(records);
                         if p.layout.is_none() {
                             return Err("Occurrence records require the current project folder layout.".into());
                         }
                     }
                     let format = if p.numeric_id_high_water.is_some() { WATERMARK_PROJECT_FORMAT } else { PROJECT_FORMAT };
-                    let sheets = p
-                        .sheets
-                        .iter()
-                        .map(|sheet| SheetReference {
-                            id: sheet.sheet_id,
-                            name: sheet.sheet_name.clone(),
-                            file: format!("sheets/{}.json", sheet.sheet_id),
-                        })
-                        .collect::<Vec<_>>();
                     let registrations = p.board.ownership.records();
-                    let has_metadata = p.components.values().any(|component| !component.metadata.is_empty());
+                    let has_metadata = self.header.has_metadata;
                     let has_packages = !p.schematic_packages.assignments.is_empty();
                     if has_packages && (p.board_target().is_some() || p.numeric_id_high_water.is_none()) {
                         return Err("schematic package choices require no board and an allocation watermark".into());
                     }
-                    let has_parts = p.components.values().any(|part| part.part.is_some());
-                    let extended_choices = p
-                        .schematic_packages
-                        .assignments
-                        .values()
-                        .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
+                    let has_parts = self.header.has_parts;
+                    let extended_choices = self.header.extended_choices;
                     p.net_classes.validate()?;
                     let has_classes = !p.net_classes.definitions.is_empty();
                     if has_classes && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Net classes require adopted storage/occurrence metadata.".into());
                     }
-                    let has_no_connects = p.no_connect_count() != 0;
+                    let has_no_connects = self.header.marker_count != 0;
                     if has_no_connects && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("No-connect intent requires adopted storage/occurrence metadata.".into());
                     }
-                    let has_bindings = p.net_registry.has_class_bindings();
+                    let has_bindings = self.header.has_bindings;
                     if has_bindings && !has_classes {
                         return Err("Net class assignments require their class catalog.".into());
                     }
-                    if has_bindings {
-                        p.net_registry.validate(p)?;
+                    let registry_validated = p.has_sheet_occurrences() && !p.net_registry.records.is_empty();
+                    if has_bindings && !registry_validated {
+                        self.validate_registry()?;
                     }
                     let has_parameters = !p.parameters.is_empty();
                     if has_parameters && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Project parameters require adopted storage/occurrence metadata.".into());
                     }
-                    let has_locks = p.components.values().any(|part| part.designator_locked);
+                    let has_locks = self.header.has_locks;
                     if has_locks && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Designator locks require adopted storage/occurrence metadata.".into());
                     }
@@ -1744,22 +1858,19 @@ impl DocumentsEncoder {
                     if has_part_groups && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Part groups require adopted storage/occurrence metadata.".into());
                     }
-                    if !p.part_group_memberships.is_empty() {
-                        if !has_part_groups {
-                            return Err("Part-group memberships require their group catalog.".into());
-                        }
-                        p.validate_part_group_memberships(p.part_group_memberships.iter())?;
+                    if !p.part_group_memberships.is_empty() && !has_part_groups {
+                        return Err("Part-group memberships require their group catalog.".into());
                     }
-                    let has_numbers = p.net_registry.has_generated_numbers();
+                    let has_numbers = self.header.has_numbers;
                     let has_pairs = p.net_registry.has_pairs();
-                    if has_numbers && p.net_registry.records.iter().any(|record| record.generated_number.is_none()) {
+                    if has_numbers && self.header.missing_numbers {
                         return Err("Numbered net registries require a number on every record.".into());
                     }
                     if has_pairs && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Differential pairs require adopted storage/occurrence metadata.".into());
                     }
-                    if (has_numbers || has_pairs) && !has_bindings {
-                        p.net_registry.validate(p)?;
+                    if (has_numbers || has_pairs) && !has_bindings && !registry_validated {
+                        self.validate_registry()?;
                     }
                     let format = if has_pairs {
                         PAIR_PROJECT_FORMAT
@@ -1793,7 +1904,6 @@ impl DocumentsEncoder {
                             (false, false) => format,
                         }
                     };
-                    p.assembly_profiles.validate(&p.board.assembly_profiles)?;
                     let has_profiles = !p.assembly_profiles.is_empty();
                     if has_profiles && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Assembly profiles require adopted storage/occurrence metadata.".into());
@@ -1849,11 +1959,68 @@ impl DocumentsEncoder {
                         self.bytes.extend_from_slice(b"    ]\n  },\n");
                     }
                     if has_profiles {
-                        writeln!(self.bytes, "  \"assembly_profiles\": {},", json(p.assembly_profiles.as_ref())?).map_err(|e| e.to_string())?;
+                        self.bytes.extend_from_slice(b"  \"assembly_profiles\": ");
+                        self.phase = 37;
+                    } else {
+                        self.phase = 38;
                     }
+                }
+                37 => {
+                    if self.profile_encoding.step(&mut self.bytes, &self.project.assembly_profiles)? {
+                        self.bytes.extend_from_slice(b",\n");
+                        self.phase = 38;
+                    }
+                }
+                38 => {
+                    let p = &self.project;
+                    let sheets = p
+                        .sheets
+                        .iter()
+                        .map(|sheet| SheetReference {
+                            id: sheet.sheet_id,
+                            name: sheet.sheet_name.clone(),
+                            file: format!("sheets/{}.json", sheet.sheet_id),
+                        })
+                        .collect::<Vec<_>>();
                     write_parameters(&mut self.bytes, &p.parameters)?;
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
-                    self.next();
+                    if p.part_group_memberships.is_empty() {
+                        self.phase = 1;
+                    } else {
+                        self.membership_catalog_ids = p.part_groups.groups.iter().map(|group| group.id).collect();
+                        self.phase = 21;
+                    }
+                }
+                21 => {
+                    // Memberships internally hold canonical nonempty sorted sets per key. Check
+                    // their relationships and expansion limit without materializing the flat list.
+                    let p = &self.project;
+                    if let Some((part_instance, groups)) = p.part_group_memberships.grouped_row(self.cursor as usize) {
+                        self.membership_index += groups.len();
+                        if self.membership_index > crate::part_groups::MAX_MEMBERSHIPS
+                            || groups.is_empty()
+                            || groups.windows(2).any(|pair| pair[0] >= pair[1])
+                            || self
+                                .cursor
+                                .checked_sub(1)
+                                .and_then(|previous| p.part_group_memberships.grouped_row(previous as usize))
+                                .is_some_and(|(previous, _)| previous >= part_instance)
+                        {
+                            return Err("Part-group memberships must be bounded, unique and sorted by part instance and group.".into());
+                        }
+                        if !p.has_part_instance(part_instance) || groups.iter().any(|group| !self.membership_catalog_ids.contains(group)) {
+                            return Err("Part-group memberships must name existing part instances and groups.".into());
+                        }
+                        if self.use_compact_memberships {
+                            self.membership_groups.extend(groups.iter().copied());
+                        }
+                        self.cursor += 1;
+                    } else {
+                        self.membership_dictionary = std::mem::take(&mut self.membership_groups).into_iter().collect();
+                        self.cursor = 0;
+                        self.membership_index = 0;
+                        self.phase = 1;
+                    }
                 }
                 1 => {
                     if let Some((&id, c)) = self.project.components.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
@@ -1875,8 +2042,8 @@ impl DocumentsEncoder {
                                 designator_locked: c.designator_locked.then_some(true),
                             },
                         )?;
-                        if let Some(part) = &c.part {
-                            crate::part_instances::storage::collect(part, &mut self.documents)?;
+                        if c.part.is_some() {
+                            self.phase = 35;
                         }
                         collect_definition(
                             &mut self.definitions,
@@ -1894,6 +2061,13 @@ impl DocumentsEncoder {
                             self.first = true;
                             self.phase = 14;
                         }
+                    }
+                }
+                35 => {
+                    let part =
+                        self.project.components.get(&self.cursor).and_then(|component| component.part.as_ref()).ok_or("missing part during save")?;
+                    if self.dependency_encoding.step(part, &mut self.documents)? {
+                        self.phase = 1;
                     }
                 }
                 14 => {
@@ -1916,12 +2090,12 @@ impl DocumentsEncoder {
                         record(&mut self.bytes, &mut self.first, occurrence)?;
                         self.cursor += 1;
                     } else {
-                        if records.net_registry.is_some() {
+                        if !self.project.net_registry.records.is_empty() {
                             self.bytes.extend_from_slice(b"  ],\n  \"net_registry\": {\n    \"records\": [\n");
                             self.cursor = 0;
                             self.first = true;
                             self.phase = 16;
-                        } else if records.part_group_memberships.is_some() {
+                        } else if !self.project.part_group_memberships.is_empty() {
                             self.start_part_group_memberships(b"  ],\n")?;
                         } else {
                             self.finish_instance_document(InstanceTail::Occurrences)?;
@@ -1929,11 +2103,15 @@ impl DocumentsEncoder {
                     }
                 }
                 16 => {
-                    let registry =
-                        self.instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).ok_or("Missing registry encoding state.")?;
+                    let registry = &self.project.net_registry;
                     if let Some(net) = registry.records.get(self.cursor as usize) {
-                        record(&mut self.bytes, &mut self.first, net)?;
-                        self.cursor += 1;
+                        if self.net_record_encoding.at_start() {
+                            start_record(&mut self.bytes, &mut self.first)?;
+                        }
+                        if self.net_record_encoding.step(&mut self.bytes, net)? {
+                            self.bytes.write_all(RECORD_END).map_err(|e| e.to_string())?;
+                            self.cursor += 1;
+                        }
                     } else if registry.has_pairs() {
                         self.bytes.extend_from_slice(b"    ],\n    \"pairs\": [\n");
                         self.cursor = 0;
@@ -1944,8 +2122,7 @@ impl DocumentsEncoder {
                     }
                 }
                 20 => {
-                    let registry =
-                        self.instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).ok_or("Missing pair encoding state.")?;
+                    let registry = &self.project.net_registry;
                     if let Some(pair) = registry.pairs.get(self.cursor as usize) {
                         record(&mut self.bytes, &mut self.first, pair)?;
                         self.cursor += 1;
@@ -1954,25 +2131,66 @@ impl DocumentsEncoder {
                     }
                 }
                 19 if self.use_compact_memberships => {
-                    let memberships = self.compact_memberships.as_ref().ok_or("Missing compact part-group membership encoding state.")?;
-                    if let Some(row) = memberships.part_instances.get(self.cursor as usize) {
-                        record(&mut self.bytes, &mut self.first, row)?;
+                    if let Some((part_instance, groups)) = self.project.part_group_memberships.grouped_row(self.cursor as usize) {
+                        let row = CompactPartInstance::from_groups(part_instance, groups, &self.membership_dictionary)?;
+                        record(&mut self.bytes, &mut self.first, &row)?;
                         self.cursor += 1;
                     } else {
                         self.finish_instance_document(InstanceTail::CompactMemberships)?;
                     }
                 }
                 19 => {
-                    let memberships = self
-                        .instance_records
-                        .as_ref()
-                        .and_then(|records| records.part_group_memberships.as_ref())
-                        .ok_or("Missing part-group membership encoding state.")?;
-                    if let Some(membership) = memberships.get(self.cursor as usize) {
-                        record(&mut self.bytes, &mut self.first, membership)?;
-                        self.cursor += 1;
+                    if let Some((part_instance, groups)) = self.project.part_group_memberships.grouped_row(self.cursor as usize) {
+                        let membership = crate::part_groups::Membership { part_instance, group: groups[self.membership_index] };
+                        record(&mut self.bytes, &mut self.first, &membership)?;
+                        self.membership_index += 1;
+                        if self.membership_index == groups.len() {
+                            self.membership_index = 0;
+                            self.cursor += 1;
+                        }
                     } else {
                         self.finish_instance_document(InstanceTail::Memberships)?;
+                    }
+                }
+                22 => {
+                    let sheet = &self.project.sheets[self.sheet_cursor];
+                    if let Some(symbol) = sheet.symbols.get(self.cursor as usize) {
+                        self.sheet_fields |= !symbol.field_layout.is_empty();
+                        self.sheet_mirrored |= symbol.mirrored;
+                        self.cursor += 1;
+                    } else {
+                        self.cursor = 0;
+                        if sheet.generated_legs.is_empty() {
+                            self.write_sheet_header()?;
+                        } else {
+                            self.phase = 23;
+                        }
+                    }
+                }
+                23 => {
+                    let sheet = &self.project.sheets[self.sheet_cursor];
+                    if let Some(wire) = sheet.wires.get(self.cursor as usize) {
+                        self.sheet_wire_index.insert(wire.ordinal, self.cursor as usize);
+                        self.cursor += 1;
+                    } else {
+                        self.cursor = 0;
+                        self.phase = 24;
+                    }
+                }
+                24 => {
+                    let sheet = &self.project.sheets[self.sheet_cursor];
+                    if let Some(leg) = sheet.generated_legs.get(self.cursor as usize) {
+                        if self.sheet_wire_index.get(&leg.wire).is_some_and(|&index| leg.matches(&sheet.wires[index])) {
+                            self.live_generated_legs.push(self.cursor as usize);
+                        }
+                        self.cursor += 1;
+                    } else {
+                        self.phase = 25;
+                    }
+                }
+                25 => {
+                    if self.sheet_wire_index.pop_first().is_none() {
+                        self.write_sheet_header()?;
                     }
                 }
                 12 => {
@@ -2049,17 +2267,7 @@ impl DocumentsEncoder {
                         )?;
                         self.cursor += 1;
                     } else {
-                        let generated = {
-                            let sheet = &self.project.sheets[self.sheet_cursor];
-                            sheet
-                                .generated_legs
-                                .iter()
-                                .filter(|leg| sheet.wires.iter().any(|wire| leg.matches(wire)))
-                                .map(GeneratedLegRecord::from)
-                                .collect::<Vec<_>>()
-                        };
-                        self.generated_legs = generated;
-                        if self.generated_legs.is_empty() {
+                        if self.live_generated_legs.is_empty() {
                             self.finish_sheet_routes()?;
                         } else {
                             self.bytes.extend_from_slice(b"  ],\n  \"generated_legs\": [\n");
@@ -2070,8 +2278,9 @@ impl DocumentsEncoder {
                     }
                 }
                 17 => {
-                    if let Some(leg) = self.generated_legs.get(self.cursor as usize) {
-                        record(&mut self.bytes, &mut self.first, leg)?;
+                    if let Some(&index) = self.live_generated_legs.get(self.cursor as usize) {
+                        let leg = GeneratedLegRecord::from(&self.project.sheets[self.sheet_cursor].generated_legs[index]);
+                        record(&mut self.bytes, &mut self.first, &leg)?;
                         self.cursor += 1;
                     } else {
                         self.finish_sheet_routes()?;
@@ -2087,6 +2296,30 @@ impl DocumentsEncoder {
                         self.cursor = id;
                     } else {
                         self.finish_sheet()?;
+                    }
+                }
+                31 => {
+                    if self.board_facts.step(&self.project)? {
+                        board_metadata_header(&mut self.bytes, &self.project, &self.board_facts)?;
+                        if self.project.board.baseline.is_some() {
+                            self.bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
+                        }
+                        self.phase = 34;
+                    }
+                }
+                34 => {
+                    if let Some(baseline) = &self.project.board.baseline {
+                        if !self.baseline_encoding.step(baseline, &mut self.bytes, true)? {
+                            continue;
+                        }
+                        self.bytes.write_all(b",\n").map_err(|error| error.to_string())?;
+                    }
+                    board_metadata_tail(&mut self.bytes, &self.project)?;
+                    self.phase = 30;
+                }
+                30 => {
+                    if self.board_rows.step(&mut self.bytes, &self.project.board)? {
+                        self.phase = 7;
                     }
                 }
                 7 => {
@@ -2153,8 +2386,29 @@ impl DocumentsEncoder {
                             crate::board::definition::write_saved(&definition)?,
                         )?;
                     } else {
-                        self.size_limit_exceeded = self.documents.values().map(Vec::len).sum::<usize>() > MAX_DOCUMENTS_BYTES;
-                        check_documents(&self.documents)?;
+                        self.phase = 32;
+                    }
+                }
+                32 | 33 => {
+                    let next = self.document_cursor.as_ref().map_or_else(
+                        || self.documents.first_key_value(),
+                        |path| self.documents.range((std::ops::Bound::Excluded(path.clone()), std::ops::Bound::Unbounded)).next(),
+                    );
+                    if let Some((path, bytes)) = next {
+                        if self.phase == 32 {
+                            self.folder_bytes += bytes.len();
+                        } else {
+                            check_document_entry(path, bytes)?;
+                        }
+                        self.document_cursor = Some(path.clone());
+                    } else if self.phase == 32 {
+                        self.size_limit_exceeded = self.folder_bytes > MAX_DOCUMENTS_BYTES;
+                        if self.size_limit_exceeded || self.documents.len() > MAX_DOCUMENTS {
+                            return Err("project exceeds the document count or total size limit".into());
+                        }
+                        self.document_cursor = None;
+                        self.phase = 33;
+                    } else {
                         self.phase = 13;
                         return Ok(Some(std::mem::take(&mut self.documents)));
                     }
@@ -2167,6 +2421,12 @@ impl DocumentsEncoder {
             }
         }
         Ok(None)
+    }
+
+    /// Validate the net registry before writing an instance home.
+    fn validate_registry(&self) -> Result<(), String> {
+        let project = &self.project;
+        project.net_registry.validate(project)
     }
 
     /// Finish components/package choices, writing adopted instances in their single storage home
@@ -2183,9 +2443,9 @@ impl DocumentsEncoder {
                     COMPACT_PART_GROUP_INSTANCES_FORMAT
                 } else if !self.project.part_group_memberships.is_empty() {
                     PART_GROUP_INSTANCES_FORMAT
-                } else if self.project.net_registry.has_generated_numbers() {
+                } else if self.header.has_numbers {
                     GENERATED_NET_INSTANCES_FORMAT
-                } else if self.project.net_registry.has_class_bindings() {
+                } else if self.header.has_bindings {
                     BINDING_INSTANCES_FORMAT
                 } else if self.project.net_registry.records.is_empty() {
                     INSTANCES_FORMAT
@@ -2205,14 +2465,13 @@ impl DocumentsEncoder {
             return Ok(());
         }
         self.finish_document(ENTRY_POINT.to_owned())?;
-        self.next();
-        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        self.start_sheet();
         Ok(())
     }
 
     /// Close the net registry after its last list and advance to memberships or the next document.
     fn finish_registry(&mut self) -> Result<(), String> {
-        if self.instance_records.as_ref().is_some_and(|records| records.part_group_memberships.is_some()) {
+        if !self.project.part_group_memberships.is_empty() {
             self.start_part_group_memberships(b"    ]\n  },\n")
         } else {
             self.finish_instance_document(InstanceTail::Registry)
@@ -2223,11 +2482,10 @@ impl DocumentsEncoder {
     fn start_part_group_memberships(&mut self, close: &[u8]) -> Result<(), String> {
         self.bytes.extend_from_slice(close);
         if self.use_compact_memberships {
-            let memberships = self.compact_memberships.as_ref().ok_or("Missing compact part-group membership encoding state.")?;
             write!(
                 self.bytes,
                 "  \"compact_part_group_memberships\": {{\n    \"groups\": {},\n    \"part_instances\": [\n",
-                json(&memberships.groups())?
+                json(&self.membership_dictionary)?
             )
             .map_err(|error| error.to_string())?;
         } else {
@@ -2259,8 +2517,7 @@ impl DocumentsEncoder {
             return Err("Encoded instance document exceeds its size limit.".into());
         }
         self.documents.insert(path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
-        self.next();
-        self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        self.start_sheet();
         Ok(())
     }
 
@@ -2270,19 +2527,39 @@ impl DocumentsEncoder {
         self.finish_document(format!("sheets/{}.json", self.project.sheets[self.sheet_cursor].sheet_id))?;
         self.sheet_cursor += 1;
         if self.sheet_cursor < self.project.sheets.len() {
-            self.cursor = 0;
-            self.first = true;
-            self.phase = sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+            self.start_sheet();
         } else if self.project.board_target().is_some() {
-            self.phase = 7;
+            self.phase = 31;
             self.cursor = 0;
             self.first = true;
-            board_header(&mut self.bytes, &self.project)?;
         } else {
             self.phase = 9;
             self.cursor = 0;
             self.first = true;
         }
+        Ok(())
+    }
+
+    /// Start selecting the sheet envelope without scanning placements or generated legs at once.
+    fn start_sheet(&mut self) {
+        self.phase = 22;
+        self.cursor = 0;
+        self.first = true;
+        self.sheet_fields = false;
+        self.sheet_mirrored = false;
+        self.live_generated_legs.clear();
+    }
+
+    /// Write the native header using the flags computed by the preceding metered passes.
+    fn write_sheet_header(&mut self) -> Result<(), String> {
+        self.cursor = 0;
+        self.phase = sheet_header(
+            &mut self.bytes,
+            &self.project.sheets[self.sheet_cursor],
+            self.sheet_fields,
+            self.sheet_mirrored,
+            !self.live_generated_legs.is_empty(),
+        )?;
         Ok(())
     }
 
@@ -2345,7 +2622,21 @@ impl Write for BoardByteCounter {
 /// maps. Use the native writer's header, record framing, serialized fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
     let mut bytes = BoardByteCounter::default();
-    board_header(&mut bytes, project)?;
+    let mut facts = BoardFacts::default();
+    while !facts.step(project)? {}
+    board_metadata_header(&mut bytes, project, &facts)?;
+    if let Some(baseline) = &project.board.baseline {
+        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
+        let mut encoding = crate::board::update::BaselineEncoding::default();
+        while !encoding.step(baseline, &mut bytes, true)? {}
+        bytes.write_all(b",\n").map_err(|error| error.to_string())?;
+    }
+    if !project.board.assembly_profiles.is_empty() {
+        project.assembly_profiles.validate(&project.board.assembly_profiles)?;
+    }
+    board_metadata_tail(&mut bytes, project)?;
+    let mut rows = BoardRows::default();
+    while !rows.step(&mut bytes, &project.board)? {}
     let mut first = true;
     for assignment in project.board.assignments.values() {
         record(&mut bytes, &mut first, assignment)?;
@@ -2362,6 +2653,7 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
 
 /// Preserve canonical legacy encodings until authored content requires a newer format. Arcs
 /// alone select 26, active footprint locks alone select 34, and both together select 35.
+/// Teardrop intents select 37, which retains active footprint locks.
 /// These formats retain earlier physical fields. Material reports require at least 25;
 /// explicit via intent at least 24; copper roles, base copper, copper thickness qualifiers
 /// or finished board thickness at least 23; assembly profile adoptions at least 22;
@@ -2374,87 +2666,73 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
 /// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
-fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
-    crate::board::zones::validate(project)?;
-    crate::board::arc::validate(project, &project.board.arcs)?;
-    crate::board::teardrop::validate(project)?;
+fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &BoardFacts) -> Result<(), String> {
     let board = &project.board;
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
     let outline = board.outline.as_ref();
     let assignments = !board.assignments.is_empty();
-    let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
-    let references = board.footprints().iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some());
-    let extended = board.footprints().iter().any(|footprint| {
-        footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
-    }) || board
-        .assignments
-        .values()
-        .any(|assignment| crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads))
-        || board.baseline.as_ref().is_some_and(|baseline| {
-            baseline.components.values().any(|component| component.package.as_ref().is_some_and(|package| package.extended()))
-        });
-
-    let arc_or_lock_format = match (!board.arcs.is_empty(), board.footprints().iter().any(|footprint| footprint.locked)) {
+    let arc_or_lock_format = match (!board.arcs.is_empty(), facts.footprint_lock) {
         (true, true) => Some(ARC_LOCKED_FOOTPRINT_BOARD_FORMAT),
         (true, false) => Some(ARC_BOARD_FORMAT),
         (false, true) => Some(LOCKED_FOOTPRINT_BOARD_FORMAT),
         (false, false) => None,
     };
-    let arc_or_lock_format = if board.teardrops.is_empty() { arc_or_lock_format } else { Some(TEARDROP_BOARD_FORMAT) };
+    let format = if !board.teardrops.is_empty() {
+        TEARDROP_BOARD_FORMAT
+    } else if let Some(format) = arc_or_lock_format {
+        format
+    } else if setup.is_some_and(|setup| setup.requires_report_format()) {
+        REPORT_BOARD_FORMAT
+    } else if facts.assigned_via {
+        ASSIGNED_VIA_BOARD_FORMAT
+    } else if setup.is_some_and(|setup| setup.requires_stack_format()) {
+        STACK_BOARD_FORMAT
+    } else if !board.assembly_profiles.is_empty() {
+        PROFILE_BOARD_FORMAT
+    } else if board.placement_origin.is_some() {
+        ORIGIN_BOARD_FORMAT
+    } else if !board.zones.is_empty() {
+        ZONE_BOARD_FORMAT
+    } else if board.rules.is_some() {
+        RULES_BOARD_FORMAT
+    } else if facts.copper_lock {
+        LOCKED_COPPER_BOARD_FORMAT
+    } else if facts.extended {
+        MULTIPAD_BOARD_FORMAT
+    } else if facts.stroked {
+        STROKED_BOARD_FORMAT
+    } else if facts.references {
+        REFERENCE_BOARD_FORMAT
+    } else if facts.bottom {
+        SIDE_BOARD_FORMAT
+    } else if !board.vias.is_empty() {
+        VIA_BOARD_FORMAT
+    } else if !board.tracks.is_empty() {
+        TRACK_BOARD_FORMAT
+    } else if facts.pending {
+        INTENT_BOARD_FORMAT
+    } else if board.baseline.is_some() {
+        BASELINE_BOARD_FORMAT
+    } else if board.drawings.is_some() {
+        DRAWING_BOARD_FORMAT
+    } else if outline.is_some() {
+        OUTLINE_BOARD_FORMAT
+    } else if assignments {
+        ASSIGNED_BOARD_FORMAT
+    } else if silkscreen.is_some() {
+        SILKSCREEN_BOARD_FORMAT
+    } else if physical {
+        PHYSICAL_BOARD_FORMAT
+    } else if facts.rotated {
+        ROTATED_BOARD_FORMAT
+    } else if let Some(setup) = setup {
+        if setup.requires_material_format() { MATERIAL_BOARD_FORMAT } else { CONFIGURED_BOARD_FORMAT }
+    } else {
+        BOARD_FORMAT
+    };
     if let Some(setup) = setup {
-        let format = if let Some(format) = arc_or_lock_format {
-            format
-        } else if setup.requires_report_format() {
-            REPORT_BOARD_FORMAT
-        } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
-            ASSIGNED_VIA_BOARD_FORMAT
-        } else if setup.requires_stack_format() {
-            STACK_BOARD_FORMAT
-        } else if !board.assembly_profiles.is_empty() {
-            PROFILE_BOARD_FORMAT
-        } else if board.placement_origin.is_some() {
-            ORIGIN_BOARD_FORMAT
-        } else if !board.zones.is_empty() {
-            ZONE_BOARD_FORMAT
-        } else if board.rules.is_some() {
-            RULES_BOARD_FORMAT
-        } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
-            LOCKED_COPPER_BOARD_FORMAT
-        } else if extended {
-            MULTIPAD_BOARD_FORMAT
-        } else if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
-            STROKED_BOARD_FORMAT
-        } else if references {
-            REFERENCE_BOARD_FORMAT
-        } else if board.footprints().iter().any(|footprint| footprint.bottom) {
-            SIDE_BOARD_FORMAT
-        } else if !board.vias.is_empty() {
-            VIA_BOARD_FORMAT
-        } else if !board.tracks.is_empty() {
-            TRACK_BOARD_FORMAT
-        } else if board.has_pending_package_intent(project) {
-            INTENT_BOARD_FORMAT
-        } else if board.baseline.is_some() {
-            BASELINE_BOARD_FORMAT
-        } else if board.drawings.is_some() {
-            DRAWING_BOARD_FORMAT
-        } else if outline.is_some() {
-            OUTLINE_BOARD_FORMAT
-        } else if assignments {
-            ASSIGNED_BOARD_FORMAT
-        } else if silkscreen.is_some() {
-            SILKSCREEN_BOARD_FORMAT
-        } else if physical {
-            PHYSICAL_BOARD_FORMAT
-        } else if rotated {
-            ROTATED_BOARD_FORMAT
-        } else if setup.requires_material_format() {
-            MATERIAL_BOARD_FORMAT
-        } else {
-            CONFIGURED_BOARD_FORMAT
-        };
         bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes()).map_err(|error| error.to_string())?;
         if !setup.materials().is_empty() {
             bytes.write_all(b"    \"materials\": [\n").map_err(|error| error.to_string())?;
@@ -2487,64 +2765,14 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         }
         bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
     } else {
-        let format = if let Some(format) = arc_or_lock_format {
-            format
-        } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
-            ASSIGNED_VIA_BOARD_FORMAT
-        } else if !board.assembly_profiles.is_empty() {
-            PROFILE_BOARD_FORMAT
-        } else if board.placement_origin.is_some() {
-            ORIGIN_BOARD_FORMAT
-        } else if !board.zones.is_empty() {
-            ZONE_BOARD_FORMAT
-        } else if board.rules.is_some() {
-            RULES_BOARD_FORMAT
-        } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
-            LOCKED_COPPER_BOARD_FORMAT
-        } else if extended {
-            MULTIPAD_BOARD_FORMAT
-        } else if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
-            STROKED_BOARD_FORMAT
-        } else if references {
-            REFERENCE_BOARD_FORMAT
-        } else if board.footprints().iter().any(|footprint| footprint.bottom) {
-            SIDE_BOARD_FORMAT
-        } else if !board.vias.is_empty() {
-            VIA_BOARD_FORMAT
-        } else if !board.tracks.is_empty() {
-            TRACK_BOARD_FORMAT
-        } else if board.has_pending_package_intent(project) {
-            INTENT_BOARD_FORMAT
-        } else if board.baseline.is_some() {
-            BASELINE_BOARD_FORMAT
-        } else if board.drawings.is_some() {
-            DRAWING_BOARD_FORMAT
-        } else if outline.is_some() {
-            OUTLINE_BOARD_FORMAT
-        } else if assignments {
-            ASSIGNED_BOARD_FORMAT
-        } else if silkscreen.is_some() {
-            SILKSCREEN_BOARD_FORMAT
-        } else if physical {
-            PHYSICAL_BOARD_FORMAT
-        } else if rotated {
-            ROTATED_BOARD_FORMAT
-        } else {
-            BOARD_FORMAT
-        };
         bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
-    if let Some(baseline) = &board.baseline {
-        let encoded = baseline.encode()?;
-        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
-        for (index, line) in encoded.split(|byte| *byte == b'\n').enumerate() {
-            if index != 0 {
-                bytes.write_all(b"\n  ").map_err(|error| error.to_string())?;
-            }
-            bytes.write_all(line).map_err(|error| error.to_string())?;
-        }
-        bytes.write_all(b",\n").map_err(|error| error.to_string())?;
-    }
+    Ok(())
+}
+
+/// Emit the optional board fields after accepted history and before the streamed arrays.
+fn board_metadata_tail(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
+    let board = &project.board;
     if let Some(rules) = &board.rules {
         rules.validate()?;
         writeln!(bytes, "  \"rules\": {},", serde_json::to_string(rules).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -2554,81 +2782,272 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         writeln!(bytes, "  \"placement_origin\": {},", serde_json::to_string(origin).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     if !board.assembly_profiles.is_empty() {
-        project.assembly_profiles.validate(&board.assembly_profiles)?;
         writeln!(bytes, "  \"assembly_profiles\": {},", json(&board.assembly_profiles)?).map_err(|e| e.to_string())?;
     }
-    if let Some(settings) = silkscreen {
+    if let Some(settings) = &board.silkscreen {
         writeln!(bytes, "  \"silkscreen\": {},", serde_json::to_string(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    if let Some(outline) = outline {
+    if let Some(outline) = &board.outline {
         writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    if let Some(graphics) = &board.drawings {
-        bytes.write_all(b"  \"graphics\": {\n    \"layers\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for layer in &graphics.layers {
-            record(bytes, &mut first, layer)?;
-        }
-        bytes.write_all(b"    ],\n    \"items\": [\n").map_err(|error| error.to_string())?;
-        first = true;
-        for item in &graphics.items {
-            record(bytes, &mut first, item)?;
-        }
-        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
-    }
-    if !board.zones.is_empty() {
-        bytes.write_all(b"  \"zones\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for zone in &board.zones {
-            record(bytes, &mut first, zone)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.arcs.is_empty() {
-        bytes.write_all(b"  \"arcs\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for arc in &board.arcs {
-            record(bytes, &mut first, arc)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.teardrops.is_empty() {
-        bytes.write_all(b"  \"teardrops\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for intent in &board.teardrops {
-            record(bytes, &mut first, intent)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.tracks.is_empty() {
-        bytes.write_all(b"  \"tracks\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for track in &board.tracks {
-            record(bytes, &mut first, track)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.vias.is_empty() {
-        bytes.write_all(b"  \"vias\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for via in &board.vias {
-            record(bytes, &mut first, via)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    bytes.write_all(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" }).map_err(|error| error.to_string())?;
     Ok(())
 }
 
+/// Select the native header without visiting all board records in one encoder step. The
+/// membership sets also validate zone and arc ownership before emitting their native rows.
+#[derive(Default)]
+struct BoardFacts {
+    phase: u8,
+    index: usize,
+    key: u64,
+    zones: crate::board::zones::ZoneValidation,
+    copper_ids: BTreeSet<uuid::Uuid>,
+    teardrop_sites: BTreeSet<(uuid::Uuid, uuid::Uuid)>,
+    assigned_via: bool,
+    footprint_lock: bool,
+    copper_lock: bool,
+    extended: bool,
+    references: bool,
+    rotated: bool,
+    bottom: bool,
+    pending: bool,
+    stroked: bool,
+}
+
+impl BoardFacts {
+    /// Collect one authored format flag or check one row's board ownership and validity.
+    fn step(&mut self, project: &Project) -> Result<bool, String> {
+        let board = &project.board;
+        match self.phase {
+            0 => {
+                self.zones.check_count(project)?;
+                self.advance();
+            }
+            1 => {
+                if let Some(zone) = board.zones.get(self.index) {
+                    self.zones.row(project, zone)?;
+                    self.index += 1;
+                } else {
+                    if board.arcs.len() > crate::board::arc::MAX_ARCS {
+                        return Err(format!("a board can hold at most {} circular arcs", crate::board::arc::MAX_ARCS));
+                    }
+                    self.advance();
+                }
+            }
+            2 => {
+                if let Some(track) = board.tracks.get(self.index) {
+                    self.copper_lock |= track.locked;
+                    if !board.arcs.is_empty() || !board.teardrops.is_empty() {
+                        self.copper_ids.insert(track.id);
+                    }
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            3 => {
+                if let Some(via) = board.vias.get(self.index) {
+                    self.copper_lock |= via.locked;
+                    self.assigned_via |= via.net_assignment.is_some();
+                    if !board.arcs.is_empty() || !board.teardrops.is_empty() {
+                        self.copper_ids.insert(via.id);
+                    }
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            4 => {
+                if let Some(arc) = board.arcs.get(self.index) {
+                    crate::board::arc::validate_row(project, arc, &mut self.copper_ids)?;
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            5 => {
+                if let Some(intent) = board.teardrops.get(self.index) {
+                    if self.index == 0 {
+                        if board.teardrops.len() > crate::board::teardrop::edit::MAX_INTENTS {
+                            return Err("too many or non-unique teardrop identities".into());
+                        }
+                        if !board.arcs.is_empty() {
+                            return Err("teardrop checking does not support boards with circular copper arcs".into());
+                        }
+                    } else if board.teardrops.get(self.index - 1).is_none_or(|previous| previous.id >= intent.id) {
+                        return Err("too many or non-unique teardrop identities".into());
+                    }
+                    let view = project.board_target().and_then(|target| project.board_view(target)).ok_or("teardrops require a physical board")?;
+                    if view.setup().is_none() {
+                        return Err("teardrops require a copper board setup".into());
+                    }
+                    if self.copper_ids.contains(&intent.id) || !self.teardrop_sites.insert((intent.via, intent.track)) {
+                        return Err("duplicate teardrop attachment or copper identity".into());
+                    }
+                    intent.on(view.target).derive(view).map_err(|error| format!("invalid teardrop {}: {error:?}", intent.id))?;
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            6 => {
+                if self.copper_ids.pop_first().is_none() && self.teardrop_sites.pop_first().is_none() {
+                    self.advance();
+                }
+            }
+            7 => {
+                if let Some(footprint) = board.footprints().get(self.index) {
+                    self.rotated |= footprint.rotation != 0;
+                    self.references |= footprint.reference_offset.is_some() || footprint.reference_text.is_some();
+                    self.extended |= footprint
+                        .mapping
+                        .as_ref()
+                        .is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads));
+                    self.footprint_lock |= footprint.locked;
+                    self.bottom |= footprint.bottom;
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            8 => {
+                if let Some((&id, assignment)) = board.assignments.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next() {
+                    self.extended |= crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads);
+                    self.pending |= board.has_pending_assignment(project, assignment);
+                    self.key = id;
+                } else {
+                    self.advance();
+                }
+            }
+            9 => {
+                let next = board
+                    .baseline
+                    .as_ref()
+                    .and_then(|baseline| baseline.components.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next());
+                if let Some((&id, component)) = next {
+                    self.extended |= component.package.as_ref().is_some_and(|package| package.extended());
+                    self.key = id;
+                } else {
+                    self.advance();
+                }
+            }
+            10 => {
+                if let Some(item) = board.drawings.as_ref().and_then(|drawing| drawing.items.get(self.index)) {
+                    self.stroked |= item.stroke_nm.is_some();
+                    self.index += 1;
+                } else {
+                    return Ok(true);
+                }
+            }
+            _ => return Err("Unexpected board format phase.".into()),
+        }
+        Ok(false)
+    }
+
+    fn advance(&mut self) {
+        self.phase += 1;
+        self.index = 0;
+        self.key = 0;
+    }
+}
+
+/// The native drawing and copper arrays are used both by Save and by the board byte meter.
+#[derive(Default)]
+struct BoardRows {
+    phase: u8,
+    index: usize,
+}
+
+impl BoardRows {
+    /// Advance by a single item or delimiter, maintaining the original field order.
+    fn step(&mut self, bytes: &mut impl Write, board: &crate::board::Board) -> Result<bool, String> {
+        match self.phase {
+            0 => {
+                if board.drawings.is_some() {
+                    bytes.write_all(b"  \"graphics\": {\n    \"layers\": [\n").map_err(|error| error.to_string())?;
+                    self.phase = 1;
+                } else {
+                    self.phase = 3;
+                }
+            }
+            1 => {
+                let graphics = board.drawings.as_ref().ok_or("Missing board graphics during encoding.")?;
+                if self.row(bytes, &graphics.layers)? {
+                    bytes.write_all(b"    ],\n    \"items\": [\n").map_err(|error| error.to_string())?;
+                    self.advance();
+                }
+            }
+            2 => {
+                let graphics = board.drawings.as_ref().ok_or("Missing board graphics during encoding.")?;
+                if self.row(bytes, &graphics.items)? {
+                    bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
+                    self.advance();
+                }
+            }
+            3 => self.optional_rows(bytes, b"  \"zones\": [\n", &board.zones)?,
+            4 => self.optional_rows(bytes, b"  \"arcs\": [\n", &board.arcs)?,
+            5 => self.optional_rows(bytes, b"  \"teardrops\": [\n", &board.teardrops)?,
+            6 => self.optional_rows(bytes, b"  \"tracks\": [\n", &board.tracks)?,
+            7 => self.optional_rows(bytes, b"  \"vias\": [\n", &board.vias)?,
+            8 => {
+                let open: &[u8] = if board.assignments.is_empty() { b"  \"footprints\": [\n" } else { b"  \"assignments\": [\n" };
+                bytes.write_all(open).map_err(|error| error.to_string())?;
+                return Ok(true);
+            }
+            _ => return Err("Unexpected board array phase.".into()),
+        }
+        Ok(false)
+    }
+
+    /// A row in an always-present list; report when its closing delimiter is next.
+    fn row<T: Serialize>(&mut self, bytes: &mut impl Write, values: &[T]) -> Result<bool, String> {
+        let Some(row) = values.get(self.index) else { return Ok(true) };
+        record(bytes, &mut (self.index == 0), row)?;
+        self.index += 1;
+        Ok(false)
+    }
+
+    /// An optional list adds its native opening delimiter before doing any item work.
+    fn optional_rows<T: Serialize>(&mut self, bytes: &mut impl Write, prefix: &[u8], values: &[T]) -> Result<(), String> {
+        if values.is_empty() {
+            self.advance();
+        } else if self.index == 0 {
+            bytes.write_all(prefix).map_err(|error| error.to_string())?;
+            self.index = 1;
+        } else if let Some(row) = values.get(self.index - 1) {
+            record(bytes, &mut (self.index == 1), row)?;
+            self.index += 1;
+        } else {
+            bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            self.advance();
+        }
+        Ok(())
+    }
+
+    fn advance(&mut self) {
+        self.phase += 1;
+        self.index = 0;
+    }
+}
+
+const RECORD_INDENT: &[u8] = b"    ";
+const RECORD_END: &[u8] = b"\n";
+const RECORD_SEPARATOR: &[u8] = b"\n    ,\n";
+
 /// Keep commas on their own lines so adding a record never rewrites the previous record.
-fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+fn start_record(bytes: &mut impl Write, first: &mut bool) -> Result<(), String> {
     if !*first {
-        bytes.write_all(b"\n    ,\n").map_err(|error| error.to_string())?;
+        bytes.write_all(RECORD_SEPARATOR).map_err(|error| error.to_string())?;
     }
     *first = false;
-    bytes.write_all(b"    ").map_err(|error| error.to_string())?;
+    bytes.write_all(RECORD_INDENT).map_err(|error| error.to_string())
+}
+
+/// Emit one compact native row between the standard indentation and newline.
+fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+    start_record(bytes, first)?;
     serde_json::to_writer(&mut *bytes, value).map_err(|e| e.to_string())?;
-    bytes.write_all(b"\n").map_err(|error| error.to_string())
+    bytes.write_all(RECORD_END).map_err(|error| error.to_string())
 }
 
 /// Serialize a small header field without introducing unstable object ordering.
@@ -2679,12 +3098,10 @@ fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Paramet
     Ok(())
 }
 
-fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
+/// Select the exact native sheet vocabulary from its authored fields and streamed facts.
+fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet, fields: bool, mirrored: bool, generated: bool) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
-    let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
     let text = sheet.net_labels.iter().any(|l| l.text.is_some());
-    let mirrored = sheet.symbols.iter().any(|s| s.mirrored);
-    let generated = sheet.has_live_generated_legs();
     let ends = !sheet.no_connect_ends.is_empty();
     let format = if sheet.page.is_some() {
         PAGE_SHEET_FORMAT
