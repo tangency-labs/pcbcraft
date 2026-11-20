@@ -39,6 +39,17 @@ struct Authority {
     dialog: std::mem::Discriminant<crate::Dialog>,
 }
 
+/// One visible canvas's model-to-window mapping. Pan, zoom, flipping or a pane resize
+/// changes it, which makes coordinates projected from an older paint stale.
+#[derive(Clone, Debug, PartialEq)]
+struct Canvas {
+    view: ViewId,
+    rect: Rect,
+    origin: Pos2,
+    unit: f32,
+    mirrored: bool,
+}
+
 #[derive(Debug)]
 struct Snapshot {
     layout: u64,
@@ -48,6 +59,9 @@ struct Snapshot {
     scale: f32,
     targets: Vec<Target>,
     authority: Authority,
+    canvases: Vec<Canvas>,
+    /// Popup, menu, window and tooltip areas painted over the editor background.
+    overlays: Vec<Rect>,
 }
 
 #[derive(Debug)]
@@ -92,6 +106,19 @@ struct Query {
     #[serde(default)]
     prefix: String,
     handle: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Projection {
+    view: u64,
+    at: ModelPoint,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ModelPoint {
+    x_nm: i64,
+    y_nm: i64,
 }
 
 #[derive(Deserialize)]
@@ -268,6 +295,85 @@ impl PcbApp {
         })
     }
 
+    /// The camera that paints `view`: its own for schematic and PCB panes, or its definition
+    /// presentation's. Library browsing panes have no model canvas.
+    fn automation_camera(&self, view: ViewId) -> Option<&crate::canvas_camera::Camera> {
+        let pane = self.views.view(view).filter(|pane| pane.library.is_none())?;
+        match pane.definition {
+            Some(definition) => self.library_editors.view_camera(definition, view),
+            None => Some(&pane.camera),
+        }
+    }
+
+    /// The model-to-window mapping of every painted canvas visible in this host.
+    fn automation_canvases(&self, host: HostId) -> Vec<Canvas> {
+        let Some(host) = self.views.hosts.get(&host) else { return Vec::new() };
+        host.layout
+            .visible_views()
+            .into_iter()
+            .filter_map(|view| {
+                let camera = self.automation_camera(view)?;
+                let rect = camera.painted_rect()?;
+                Some(Canvas {
+                    view,
+                    rect,
+                    origin: camera.screen(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 }, rect),
+                    unit: camera.unit_step(),
+                    mirrored: camera.mirrored(),
+                })
+            })
+            .collect()
+    }
+
+    /// Whether this host still matches its last snapshot: the same input destination and the
+    /// same canvas mappings. Navigation since the paint makes its coordinates stale.
+    fn automation_current(&self, host: HostId, snapshot: &Snapshot) -> bool {
+        self.automation_authority(host).as_ref() == Some(&snapshot.authority) && self.automation_canvases(host) == snapshot.canvases
+    }
+
+    /// Project a model point in an explicitly addressed view to window-local logical points
+    /// from the last accepted paint, without changing navigation, selection or the project.
+    /// `uncovered` means the point lies in the view's uncovered canvas and no popup, menu or
+    /// window area covers it; covered and off-canvas points still return their coordinates.
+    fn automation_project(&mut self, ctx: &egui::Context, params: &Value) -> Result<Value, String> {
+        let query: Projection = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
+        let max = pcbcraft_engine::schematic::MAX_CENTER_NM;
+        if query.at.x_nm.abs() > max || query.at.y_nm.abs() > max {
+            return Err(format!("Model coordinates must be within ±{max} nm"));
+        }
+        let view = ViewId(query.view);
+        let pane = self.views.view(view).ok_or("Unknown view; it may have been closed")?;
+        if pane.library.is_some() {
+            return Err("The addressed view shows Parts Library browsing, which has no model canvas".into());
+        }
+        let (&host, _) =
+            self.views.hosts.iter().find(|(_, host)| host.layout.visible_views().contains(&view)).ok_or("The addressed view is not visible")?;
+        self.repaint_editors(ctx);
+        let snapshot = self.automation.snapshots.get(&host).ok_or("UI geometry is not ready; wait for a paint and retry")?;
+        if !self.automation_current(host, snapshot) {
+            return Err("UI geometry is stale; wait for a paint and retry".into());
+        }
+        let canvas = snapshot
+            .canvases
+            .iter()
+            .find(|canvas| canvas.view == view)
+            .ok_or("The addressed view has not painted its canvas yet; wait for a paint and retry")?;
+        let camera = self.automation_camera(view).ok_or("The addressed view has no model canvas")?;
+        let at = camera.screen(pcbcraft_engine::schematic::Point { x_nm: query.at.x_nm, y_nm: query.at.y_nm }, canvas.rect);
+        // Definition panes publish no named region, so their whole painted canvas is the area.
+        // A project canvas whose region is missing was covered at its center when painted.
+        let region = format!("canvas:{}", view.0);
+        let area = if self.views.view(view).is_some_and(|pane| pane.definition.is_some()) {
+            Some(canvas.rect)
+        } else {
+            snapshot.targets.iter().find(|target| target.name == region && target.enabled).map(|target| target.rect)
+        };
+        let on_canvas = canvas.rect.contains(at);
+        let uncovered = area.is_some_and(|area| area.contains(at)) && !snapshot.overlays.iter().any(|overlay| overlay.contains(at));
+        Ok(json!({"schema":SCHEMA,"window":host.0,"layout":snapshot.layout,"view":view.0,"x":at.x,"y":at.y,
+            "on_canvas":on_canvas,"uncovered":uncovered,"scale":snapshot.scale}))
+    }
+
     /// Snapshot each native host separately after its accepted UI pass, including definition views.
     /// Logical coordinates belong to this window; another window can publish identical names.
     /// Retire injected button ownership only after its release frame has been accepted.
@@ -293,7 +399,18 @@ impl PcbApp {
         let Some(authority) = self.automation_authority(host) else { return };
         let targets = pcbcraft_chrome::automation::targets(ctx);
         let rect = ctx.content_rect();
-        let changed = self.automation.snapshots.get(&host).is_none_or(|s| s.rect != rect || s.targets != targets || s.authority != authority);
+        let canvases = self.automation_canvases(host);
+        let overlays: Vec<Rect> = ctx.memory(|memory| {
+            memory
+                .layer_ids()
+                .filter(|layer| layer.order != egui::Order::Background && memory.areas().is_visible(layer))
+                .filter_map(|layer| memory.area_rect(layer.id))
+                .collect()
+        });
+        let changed =
+            self.automation.snapshots.get(&host).is_none_or(|s| {
+                s.rect != rect || s.targets != targets || s.authority != authority || s.canvases != canvases || s.overlays != overlays
+            });
         if changed {
             self.automation.next_layout = self.automation.next_layout.saturating_add(1);
         }
@@ -308,6 +425,8 @@ impl PcbApp {
                 scale: ctx.pixels_per_point(),
                 targets,
                 authority: authority.clone(),
+                canvases,
+                overlays,
             },
         );
         if let Some(job) = &mut self.automation.job
@@ -359,6 +478,9 @@ impl PcbApp {
                 json!({"schema":SCHEMA,"operation":self.automation.status(),"coordinates":"window-local logical points","ready_windows":self.automation.snapshots.keys().map(|h|h.0).collect::<Vec<_>>()}),
             );
         }
+        if id == "ui.project" {
+            return self.automation_project(ctx, params);
+        }
         if matches!(id, "ui.handles" | "ui.at") {
             let allowed: &[&str] = if id == "ui.at" { &["window", "handle"] } else { &["window", "prefix"] };
             if params.as_object().is_none_or(|object| object.keys().any(|key| !allowed.contains(&key.as_str()))) {
@@ -371,7 +493,7 @@ impl PcbApp {
             }
             self.repaint_editors(ctx);
             let snapshot = self.automation.snapshots.get(&host).ok_or("UI geometry is not ready; wait for a paint and retry")?;
-            if self.automation_authority(host).as_ref() != Some(&snapshot.authority) {
+            if !self.automation_current(host, snapshot) {
                 return Err("UI geometry is stale; wait for a paint and retry".into());
             }
             if id == "ui.at" {
@@ -411,7 +533,7 @@ impl PcbApp {
         if !self.views.hosts.contains_key(&host) {
             return Err("Unknown editor window".into());
         }
-        if self.automation_authority(host).as_ref() != Some(&snapshot.authority) || layout.is_some_and(|layout| layout != snapshot.layout) {
+        if !self.automation_current(host, snapshot) || layout.is_some_and(|layout| layout != snapshot.layout) {
             return Err("UI geometry is stale; inspect handles again".into());
         }
         if !snapshot.focused {
@@ -682,6 +804,7 @@ pub(super) fn catalog() -> Vec<Value> {
         ("cancel","Cancel queued UI input",json!({}),vec![]),
         ("handles","List visible named controls in one window",json!({"window":{"type":"integer"},"prefix":{"type":"string"}}),vec!["window"]),
         ("at","Locate one unique enabled control",json!({"window":{"type":"integer"},"handle":{"type":"string"}}),vec!["window","handle"]),
+        ("project","Project a model point in a view to window coordinates",json!({"view":{"type":"integer"},"at":{"type":"object","properties":{"x_nm":{"type":"integer"},"y_nm":{"type":"integer"}},"required":["x_nm","y_nm"],"additionalProperties":false}}),vec!["view","at"]),
         ("move","Move the pointer through ordinary UI input",json!({"target":point}),vec!["target"]),
         ("click","Click through ordinary UI input",json!({"target":point,"button":button,"modifiers":keys}),vec!["target"]),
         ("drag","Drag over successive UI frames",json!({"from":point,"to":point,"steps":{"type":"integer","minimum":2,"maximum":120},"button":button,"modifiers":keys}),vec!["from","to","steps"]),
@@ -689,7 +812,7 @@ pub(super) fn catalog() -> Vec<Value> {
         ("text","Type text into the focused field",json!({"text":{"type":"string","minLength":1,"maxLength":4096}}),vec!["text"]),
         ("scroll","Scroll at a named target or logical point",json!({"target":point,"delta_x":{"type":"number"},"delta_y":{"type":"number"},"modifiers":keys}),vec!["target","delta_x","delta_y"]),
     ].into_iter().map(|(name,title,mut properties,mut required)| {
-        if !matches!(name,"inspect"|"cancel"|"handles"|"at") { properties["window"]=json!({"type":"integer"});properties["layout"]=json!({"type":"integer"});required.push("window"); }
+        if !matches!(name,"inspect"|"cancel"|"handles"|"at"|"project") { properties["window"]=json!({"type":"integer"});properties["layout"]=json!({"type":"integer"});required.push("window"); }
         json!({"id":format!("ui.{name}"),"title":title,"summary":format!("{title}. Native live editor only. Input returns a ticket; poll ui.inspect until completed before sending more input. Coordinates are window-local logical points."),
             "scope":"window","params":{"type":"object","properties":properties,"required":required,"additionalProperties":false}})
     }).collect()

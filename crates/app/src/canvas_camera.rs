@@ -58,6 +58,9 @@ pub(crate) struct Camera {
     wheel_zoom: Option<WheelZoom>,
     navigation_frame: Option<(egui::ViewportId, u64)>,
     schematic_rect: Option<Rect>,
+    /// Last painted canvas of any kind: schematic, board or definition.
+    #[cfg(not(target_arch = "wasm32"))]
+    painted_rect: Option<Rect>,
     #[cfg(feature = "performance-harness")]
     pub(super) performance_rect: Option<Rect>,
     offset: Vec2,
@@ -81,6 +84,8 @@ impl Default for Camera {
             wheel_zoom: None,
             navigation_frame: None,
             schematic_rect: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            painted_rect: None,
             #[cfg(feature = "performance-harness")]
             performance_rect: None,
             offset: Vec2::ZERO,
@@ -104,6 +109,13 @@ impl Camera {
     /// This disposable rectangle never enters saved camera state or document identity.
     pub(crate) fn schematic_rect(&self) -> Option<Rect> {
         self.schematic_rect
+    }
+
+    /// Last painted canvas bounds for any workspace, which `screen` maps model points into.
+    /// Like `schematic_rect`, this disposable rectangle is never saved.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn painted_rect(&self) -> Option<Rect> {
+        self.painted_rect
     }
 
     /// Capture world-space navigation independently of pane size and transient fit requests.
@@ -335,6 +347,11 @@ impl Camera {
         if std::mem::take(&mut self.fit_requested) {
             self.fit(project, rect);
         }
+        // After Fit, which resets the camera.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.painted_rect = Some(rect);
+        }
         self.interact(response, rect, enabled, navigation);
     }
 
@@ -373,6 +390,11 @@ impl Camera {
                 self.offset = self.uncovered_center();
             }
         }
+        // After Fit, which resets the camera.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.painted_rect = Some(rect);
+        }
         self.interact(response, rect, enabled, navigation);
     }
 
@@ -394,6 +416,11 @@ impl Camera {
             let bounds =
                 points.fold(Rect::NOTHING, |bounds, point| bounds.union(Rect::from_pos((self.screen(point, rect) - rect.center()).to_pos2())));
             self.fit_bounds(bounds, rect, MAX_ZOOM);
+        }
+        // After Fit, which resets the camera.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.painted_rect = Some(rect);
         }
         self.interact(response, rect, enabled, navigation);
     }

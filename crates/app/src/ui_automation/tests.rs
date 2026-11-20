@@ -402,3 +402,201 @@ fn synthetic_input_cannot_enable_or_export_a_local_connection() {
     h.step();
     assert!(h.state().live_control.is_none());
 }
+
+/// Project a model point through the production dispatcher.
+fn project(h: &mut Harness<'_, PcbApp>, view: u64, x_nm: i64, y_nm: i64) -> Result<Value, String> {
+    command(h, "ui.project", json!({"view":view,"at":{"x_nm":x_nm,"y_nm":y_nm}}))
+}
+
+/// Clicking the projection of a known symbol selects it; the query itself changes no camera,
+/// selection or project data, and its layout guards the click.
+#[test]
+fn projected_symbol_click_selects_it_without_the_query_changing_state() {
+    let mut h = ready();
+    let view = h.state().views.active.id().0;
+    let at = h.state().session.project().unwrap().symbols()[0].position;
+    let (before, camera) = (h.state().session.inspect(), h.state().views.active.camera.saved_state());
+    let projected = project(&mut h, view, at.x_nm, at.y_nm).unwrap();
+    assert_eq!((projected["window"].clone(), projected["view"].clone()), (json!(0), json!(view)));
+    assert_eq!((projected["on_canvas"].clone(), projected["uncovered"].clone()), (json!(true), json!(true)), "{projected}");
+    let expected = symbol(&h);
+    assert!(
+        (projected["x"].as_f64().unwrap() as f32 - expected.x).abs() < 1e-3 && (projected["y"].as_f64().unwrap() as f32 - expected.y).abs() < 1e-3
+    );
+    assert_eq!(h.state().session.inspect(), before);
+    assert_eq!(h.state().views.active.camera.saved_state(), camera);
+    assert!(h.state().views.active.schematic.selection.single_symbol().is_none());
+    let target = json!({"x":projected["x"],"y":projected["y"]});
+    command(&mut h, "ui.click", json!({"window":0,"layout":projected["layout"],"target":target})).unwrap();
+    assert_eq!(finish(&mut h)["state"], "completed");
+    assert!(h.state().views.active.schematic.selection.single_symbol().is_some());
+}
+
+/// Pan and zoom change the projection; coordinates from before the navigation are refused
+/// both before and after the next paint.
+#[test]
+fn navigation_makes_projected_coordinates_stale() {
+    let mut h = ready();
+    let view = h.state().views.active.id().0;
+    let first = project(&mut h, view, 0, 0).unwrap();
+    let click = |p: &Value| json!({"window":0,"layout":p["layout"],"target":{"x":p["x"],"y":p["y"]}});
+    for navigate in [0, 1] {
+        let camera = &mut h.state_mut().views.active.camera;
+        if navigate == 0 {
+            camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 2_540_000, y_nm: 0 })
+        } else {
+            camera.set_zoom(2.0)
+        }
+        assert!(command(&mut h, "ui.click", click(&first)).unwrap_err().contains("stale"));
+        assert!(project(&mut h, view, 0, 0).unwrap_err().contains("stale"));
+        h.run();
+        assert!(command(&mut h, "ui.click", click(&first)).unwrap_err().contains("stale"));
+        let moved = project(&mut h, view, 0, 0).unwrap();
+        assert_ne!(
+            (moved["x"].clone(), moved["y"].clone(), moved["layout"].clone()),
+            (first["x"].clone(), first["y"].clone(), first["layout"].clone())
+        );
+    }
+}
+
+/// Each split pane projects through its own camera into its own canvas; a closed view is refused.
+#[test]
+fn split_panes_project_into_their_own_canvas_and_closed_views_are_refused() {
+    let mut h = ready();
+    let ctx = h.ctx.clone();
+    let first = h.state().views.active.id();
+    h.state_mut().run_window_command(&ctx, "view.split", &json!({"view":first.0,"split":true})).unwrap();
+    h.run();
+    h.run();
+    let views = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+    assert_eq!(views.len(), 2);
+    let mut points = Vec::new();
+    for view in &views {
+        let projected = project(&mut h, view.0, 0, 0).unwrap();
+        let rect = h.state().views.view(*view).unwrap().camera.schematic_rect().unwrap();
+        let at = egui::pos2(projected["x"].as_f64().unwrap() as f32, projected["y"].as_f64().unwrap() as f32);
+        assert!(rect.contains(at) && projected["uncovered"] == true, "{projected}");
+        points.push(at);
+    }
+    assert_ne!(points[0], points[1]);
+    let second = *views.iter().find(|view| **view != first).unwrap();
+    h.state_mut().run_window_command(&ctx, "view.close", &json!({"view":second.0})).unwrap();
+    h.run();
+    assert!(project(&mut h, second.0, 0, 0).unwrap_err().contains("view"));
+    assert!(project(&mut h, 999, 0, 0).unwrap_err().contains("Unknown view"));
+}
+
+/// A flipped board mirrors the projection, and clicking a projected pad selects its footprint.
+#[test]
+fn flipped_board_projection_reaches_the_pad() {
+    for flipped in [false, true] {
+        let mut h = ready_board();
+        let ctx = h.ctx.clone();
+        let view = h.state().views.active.id().0;
+        h.state_mut().run_window_command(&ctx, "view.set_board_flipped", &json!({"view":view,"flipped":flipped})).unwrap();
+        h.run();
+        let pad = {
+            let project = h.state().session.project().unwrap();
+            let board = project.board_view(h.state().views.active.board.target.unwrap()).unwrap();
+            board.footprints().next().unwrap().pads[0].center
+        };
+        let projected = project(&mut h, view, pad.x_nm, pad.y_nm).unwrap();
+        let mirrored = project(&mut h, view, -pad.x_nm, pad.y_nm).unwrap();
+        let center = project(&mut h, view, 0, pad.y_nm).unwrap();
+        let (x, left) = (projected["x"].as_f64().unwrap(), center["x"].as_f64().unwrap());
+        assert_eq!(x > left, (pad.x_nm > 0) != flipped, "flipped={flipped} {projected}");
+        assert!((x - left + mirrored["x"].as_f64().unwrap() - left).abs() < 1e-3);
+        assert_eq!(projected["uncovered"], true, "{projected}");
+        command(&mut h, "ui.click", json!({"window":0,"layout":projected["layout"],"target":{"x":projected["x"],"y":projected["y"]}})).unwrap();
+        assert_eq!(finish(&mut h)["state"], "completed");
+        assert!(!h.state().views.active.board.selection.is_empty(), "flipped={flipped}");
+    }
+}
+
+/// Display scaling changes physical pixels, not the logical coordinates input uses.
+#[test]
+fn projection_uses_logical_points_at_every_ui_scale() {
+    for scale in [1.0, 1.5, 2.0] {
+        let mut h = ready();
+        h.ctx.set_pixels_per_point(scale);
+        h.run();
+        h.run();
+        let view = h.state().views.active.id().0;
+        let at = h.state().session.project().unwrap().symbols()[0].position;
+        let projected = project(&mut h, view, at.x_nm, at.y_nm).unwrap();
+        assert_eq!(projected["scale"], json!(scale));
+        let expected = symbol(&h);
+        assert!((projected["x"].as_f64().unwrap() as f32 - expected.x).abs() < 1e-3, "scale={scale} {projected}");
+        command(&mut h, "ui.click", json!({"window":0,"layout":projected["layout"],"target":{"x":projected["x"],"y":projected["y"]}})).unwrap();
+        assert_eq!(finish(&mut h)["state"], "completed");
+        assert!(h.state().views.active.schematic.selection.single_symbol().is_some(), "scale={scale}");
+    }
+}
+
+/// A point under an open menu still projects, but is reported as covered; one off the canvas
+/// is reported as off-canvas.
+#[test]
+fn covered_and_off_canvas_points_are_identified() {
+    let mut h = ready();
+    let view = h.state().views.active.id().0;
+    crate::tests::click(&mut h, "File");
+    h.run();
+    let menu = egui::Popup::is_any_open(&h.ctx);
+    assert!(menu);
+    let rect = h.state().views.active.camera.schematic_rect().unwrap();
+    let region = h.state().automation.snapshots[&HostId::ROOT].targets.iter().find(|t| t.name == format!("canvas:{view}")).unwrap().rect;
+    // The lowest menu rows reach over the canvas, partly clear of its floating cards.
+    let popup = ["Quit", "Keyboard Shortcuts…", "Preferences…"]
+        .into_iter()
+        .map(|label| h.get_by_label(label).rect().intersect(region))
+        .find(|overlap| overlap.is_positive())
+        .expect("a File menu row over the uncovered canvas")
+        .center();
+    let under = h.state().views.active.camera.unsnapped(popup, rect);
+    let covered = project(&mut h, view, under.x_nm, under.y_nm).unwrap();
+    assert_eq!((covered["on_canvas"].clone(), covered["uncovered"].clone()), (json!(true), json!(false)), "{covered}");
+    let far = project(&mut h, view, pcbcraft_engine::schematic::MAX_CENTER_NM, 0).unwrap();
+    assert_eq!((far["on_canvas"].clone(), far["uncovered"].clone()), (json!(false), json!(false)));
+}
+
+/// Open the board workspace of a project with one placed footprint at the origin.
+fn ready_board() -> Harness<'static, PcbApp> {
+    let mut h = crate::tests::harness();
+    h.set_size(egui::vec2(1600.0, 1000.0));
+    crate::tests::resistor_with_board_at_origin(&mut h);
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    app.browser.open = false;
+    app.run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":2}),
+    );
+    let view = app.views.active.id().0;
+    app.run_window_command(&ctx, "view.set_workspace", &json!({"view":view,"workspace":"board"})).unwrap();
+    h.run();
+    h.state_mut().views.active.camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 });
+    h.state_mut().live_control = Some(crate::live_control::LiveControl::start(&ctx).unwrap());
+    h.state_mut().automation.observing = true;
+    h.run();
+    h
+}
+
+/// A definition view projects through its own presentation camera; Parts Library browsing
+/// has no model canvas and is refused.
+#[test]
+fn definition_views_project_and_library_browsing_is_refused() {
+    let mut h = ready();
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id();
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"view":view.0,"workspace":"symbol_editor"})).unwrap();
+    h.run_steps(3);
+    let projected = project(&mut h, view.0, 0, 0).unwrap();
+    let definition = h.state().views.view(view).unwrap().definition.unwrap();
+    let camera = h.state().library_editors.view_camera(definition, view).unwrap();
+    let expected = camera.screen(pcbcraft_engine::schematic::Point { x_nm: 0, y_nm: 0 }, camera.painted_rect().unwrap());
+    assert!((projected["x"].as_f64().unwrap() as f32 - expected.x).abs() < 1e-3, "{projected}");
+    assert_eq!(projected["on_canvas"], true, "{projected}");
+    h.state_mut().run_window_command(&ctx, "app.set_workspace", &json!({"view":view.0,"workspace":"library"})).unwrap();
+    h.run_steps(3);
+    assert!(project(&mut h, view.0, 0, 0).unwrap_err().contains("no model canvas"));
+}

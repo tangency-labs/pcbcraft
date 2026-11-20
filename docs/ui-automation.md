@@ -36,7 +36,8 @@ on an input call rejects coordinates obtained from an older layout.
 Names currently cover ribbon actions (`toolbar:Connect:Wire`), ribbon tabs
 (`tab:View`), menu triggers/rows (`menu:File`), common button and checkbox adapters
 (`button:OK`, `checkbox:…`), named search/property fields (`field:…`) and the
-uncovered region of each project canvas (`canvas:VIEW_ID`). Names are explicit
+uncovered region of each project canvas (`canvas:VIEW_ID`); use `ui.project` for
+points inside a canvas. Names are explicit
 host aliases, not image recognition or persisted electronics identities. Some
 specialized controls do not yet publish names; use the returned list rather than
 assuming every visible widget has one. Closed popups and scrolled-out controls
@@ -46,6 +47,30 @@ inspectable but cannot be selected by name.
 `ui.at` takes `window` and `handle`, returning the enabled target's `x`, `y` and
 `layout`. Missing or duplicate names produce errors. Identical names in separate
 windows are independent; duplicate names within one window are ambiguous.
+
+## Project a model point
+
+```json
+{"name":"execute","arguments":{"command":"ui.project","params":{"view":1,"at":{"x_nm":2540000,"y_nm":0}}}}
+```
+
+`ui.project` converts an integer-nanometre point in a schematic, PCB or symbol/footprint
+definition view into a pointer target. Take the view ID from `inspect_editor`. The
+response names the owning `window`, the window-local logical `x` and `y`, the
+current `layout` and the display `scale` (physical pixels per logical point).
+It uses the view's camera from its last paint, including pan, zoom, a flipped
+board and split-pane placement. Pass `x`, `y` and `layout` straight to `ui.move`
+or `ui.click`.
+
+`on_canvas` says whether the point falls inside the view's canvas. `uncovered`
+additionally requires that no floating card, menu, popup or dialog covers it, so
+a click there reaches the canvas. Covered and off-canvas points still return
+their coordinates. Panning, zooming, flipping or resizing a pane changes `layout`,
+so input carrying an older `layout`, or sent after navigation that has not been
+painted yet, is refused as stale; project again. A closed or hidden view, or a
+Parts Library browsing pane, is refused. Projection is read-only: it changes no
+camera, selection, project data or Undo history. It is geometry only, not image
+recognition or object picking; use project inspection to find object positions.
 
 ## Perform input
 
