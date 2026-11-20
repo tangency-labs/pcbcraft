@@ -781,6 +781,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
         command_ids,
         [
             "library.available_revisions",
+            "library.check",
             "library.list_sources",
             "library.load_source",
             "library.parse_quantity",
@@ -1011,6 +1012,45 @@ fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
     let query = body(&call(&mut s, "execute", json!({"command":"project.export_netlist","inspect":false})));
     assert_eq!(query["revision"], before["revision"]);
     assert!(query["netlist"].is_object());
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+}
+
+/// A read-only MCP session runs the library check in both return modes. The report is the
+/// engine checker's report for the same capture, and the project is unchanged afterwards.
+#[test]
+fn library_check_is_read_only_and_matches_engine_report() {
+    use pcbcraft_engine::library::{
+        check::{self, Capture},
+        parts::{Package, Reference},
+        sources::{Catalog, Documents},
+    };
+    let mut editor = Session::default();
+    editor.apply("project.new", &json!({"name":"Review fixture"})).unwrap();
+    let mut s = Server::new(Box::new(Headless::with_scope(pcbcraft_engine::SessionScope::ReadOnly, editor.snapshot())));
+    let reference = |id: &str, revision| Reference { library: "basic-components".into(), id: id.into(), revision };
+    let mut record = pcbcraft_engine::part_authoring::Record::new_part(reference("connector", 4)).unwrap();
+    if let pcbcraft_engine::part_authoring::Record::Part(part) = &mut record {
+        part.packages.insert(
+            "header".into(),
+            Package {
+                name: "Header".into(),
+                footprint: reference("header-1x02-254", 3),
+                mapping: [("1".into(), vec!["1".into()])].into(),
+                unconnected_pads: Vec::new(),
+            },
+        );
+    }
+    let manifest = pcbcraft_engine::authoring::publishing::new_library("check-workshop", "Check workshop", "MIT OR Apache-2.0").unwrap();
+    let documents = Documents::from([("library.json".into(), manifest)]);
+    let expected = check::check(&Capture::from_part_record(&record, &documents, &Catalog::bundled()).unwrap());
+    assert_eq!(expected.findings().len(), 2, "terminal 2 is unmapped and pad 2 is unaccounted");
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    for inspect in [false, true] {
+        let params = json!({"documents":documents,"record":record});
+        let result = call(&mut s, "execute", json!({"command":check::CHECK,"params":params,"inspect":inspect}));
+        assert_ne!(result["isError"], true, "{result}");
+        assert_eq!(body(&result), serde_json::to_value(&expected).unwrap(), "inspect {inspect}");
+    }
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
 }
 

@@ -185,6 +185,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             }
             sources::PREPARE_PART_PUBLICATION => part_publication.clone(),
             sources::PREPARE_PUBLICATION => item_publication.clone(),
+            check::CHECK => json!({"documents":part_publication["documents"],"record":part_publication["record"]}),
             _ => {
                 let invalid = json!({"expected_revision":revision + 1,"extra":true});
                 let executed = reader.execute(id, &invalid).unwrap_err();
@@ -250,6 +251,35 @@ fn read_only_sessions_compare_a_netlist_without_changing_the_project() {
     assert!(result["comparison"].get("files").is_none());
     assert_eq!(reader.apply(netlist::COMPARE_NETLIST, &params).unwrap(), revision);
 
+    assert_eq!(reader.revision(), revision);
+    assert_eq!(reader.inspect(), before);
+    assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
+    assert_eq!(encode_documents(reader.snapshot().unwrap()).unwrap(), documents);
+}
+
+/// Library checks only report findings, so a read-only session runs them like an unrestricted
+/// one: the report agrees, carries no documents to write and leaves the project untouched.
+#[test]
+fn library_check_runs_read_only_without_changing_the_session() {
+    let project = fixture().snapshot().unwrap();
+    let mut reader = Session::with_scope(SessionScope::ReadOnly);
+    reader.open_snapshot(project.clone());
+    let mut control = Session::default();
+    control.open_snapshot(project.clone());
+    let (_, mut publication) = publication_requests();
+    let mapping = publication["record"]["packages"]["header"]["mapping"].as_object_mut().unwrap();
+    assert!(mapping.remove("2").is_some());
+    let params = json!({"documents":publication["documents"],"record":publication["record"]});
+    let before = reader.inspect();
+    let documents = encode_documents(project.clone()).unwrap();
+    let revision = reader.revision();
+
+    let report = reader.execute(check::CHECK, &params).unwrap();
+    assert_eq!(report, control.execute(check::CHECK, &params).unwrap());
+    let rules: Vec<_> = report["findings"].as_array().unwrap().iter().map(|finding| finding["rule"].as_str().unwrap()).collect();
+    assert_eq!(rules, ["package.terminal.unmapped", "package.pad.unaccounted"]);
+    assert!(report.get("documents").is_none(), "a check never returns documents to write");
+    assert_eq!(reader.apply(check::CHECK, &params).unwrap(), revision);
     assert_eq!(reader.revision(), revision);
     assert_eq!(reader.inspect(), before);
     assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));

@@ -80,7 +80,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 11] = [
+pub(crate) const COMMANDS: [Command; 12] = [
     Command {
         id: PREVIEW_PIN_REMAP,
         title: "Preview symbol pin remap",
@@ -244,6 +244,21 @@ pub(crate) const COMMANDS: [Command; 11] = [
             },
             Param { name: "allow_older", summary: "Confirm publication without merging a newer revision", required: false, kind: ParamKind::Flag },
             Param { name: "copy", summary: "Publish a derivative under a fresh item identity", required: false, kind: ParamKind::Flag },
+        ],
+    },
+    Command {
+        id: super::check::CHECK,
+        title: "Check library items",
+        summary: "Report typed pad-number and package-map findings for transported documents and optional drafts. No files, project edit or history step.",
+        params: &[
+            Param {
+                name: "documents",
+                summary: "Transported native documents including library.json; no filesystem paths",
+                required: true,
+                kind: ParamKind::LibraryDocuments,
+            },
+            Param { name: "item", summary: "Captured footprint authoring envelope", required: false, kind: ParamKind::AuthoringItem },
+            Param { name: "record", summary: "Captured native generic part draft", required: false, kind: ParamKind::PartDraft },
         ],
     },
 ];
@@ -1181,6 +1196,7 @@ impl Session {
                     .collect();
                 Ok(json!(items))
             }
+            super::check::CHECK => super::check::execute(params, &self.libraries).map_err(CommandError::InvalidParams),
             _ => Err(CommandError::Unknown(id.into())),
         }
     }

@@ -1989,6 +1989,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[8],
     library::sources::COMMANDS[9],
     library::sources::COMMANDS[10],
+    library::sources::COMMANDS[11],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -3235,7 +3236,8 @@ impl Session {
             | library::sources::PARSE_QUANTITY
             | library::sources::PREPARE_PART_PUBLICATION
             | library::sources::PREPARE_PUBLICATION
-            | library::sources::PREVIEW_PIN_REMAP => true,
+            | library::sources::PREVIEW_PIN_REMAP
+            | library::check::CHECK => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),

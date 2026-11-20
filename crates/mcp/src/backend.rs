@@ -225,6 +225,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION
                         | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
                         | pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
+                        | pcbcraft_engine::library::check::CHECK
                 )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(Failure::from)

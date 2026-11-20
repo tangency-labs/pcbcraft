@@ -244,6 +244,13 @@ sources explicitly, and makes no compatibility or adoption decision; see
 reports altered pads and lost contact for straight track ends and through vias
 on one placed instance. It does not check standalone circular track ends, move
 copper, resolve pad maps or adopt revisions.
+The shared read-only `library.check` command reports repeated footprint pad
+numbers and incomplete or inconsistent package maps in transported library
+documents, a footprint draft or a part draft. Each finding names its rule, exact
+subject, authored pad occurrences, measured count, limit and basis. It runs in
+read-only sessions and through MCP with `inspect: false`, changes nothing, and
+does not relax loading or publication; see
+[check library items](native-library-sources.md#check-library-items).
 Schematic, PCB layout, symbol and footprint editors share manual zoom up to
 102400%, with pointer-anchored wheel/pinch navigation and content-specific Fit.
 

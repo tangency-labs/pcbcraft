@@ -21,6 +21,7 @@ use crate::schematic::{
 
 #[cfg(test)]
 mod bundled_tests;
+pub mod check;
 pub(crate) mod compatibility;
 pub mod filter;
 pub mod parts;

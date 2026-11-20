@@ -219,6 +219,46 @@ inspect its copper in the board editor; the query cannot split one pad's list.
 The query does not move copper or alter pins, saved bytes, project revision or
 Undo/Redo.
 
+## Check library items
+
+`library.check` explains footprint and package-map defects that strict loading,
+the editors and publication refuse. It takes transported `documents` (the same
+relative-path map as `library.load_source`), an optional footprint authoring
+`item` and an optional generic part draft `record`. It needs no open project,
+writes no file, changes no project, source registration or history, and runs in
+read-only sessions and through MCP with `inspect: false`.
+
+The check decodes footprint, symbol and part documents structurally, so a
+document that strict loading rejects for a semantic defect can still be
+explained. Every authored pad is kept in its authored order, with no
+deduplication; non-plated holes are not pads. Exact symbol and footprint
+references resolve in the transported documents first and then in the loaded
+catalog. Invalid JSON, unknown fields, repeated keys, an unsupported or
+mismatched format, an unresolved reference, more than 1024 pads in one footprint,
+more than 64 packages in one part or 1024 terminals or pads in one package, and
+documents over the 1 MiB file limit are `invalid_params` errors, never a clean
+report.
+
+The result has `capture_digest`, the SHA-256 of the canonical capture, and
+`findings`. An empty list is clean. Findings are sorted by rule and exact
+identity, independent of document or authored order. Each finding has `rule`, a
+`subject` (`kind` is `pad`, `terminal` or `package_pad`, with its exact
+footprint or part reference and a `source` whose `kind` is `document` with its
+`path`, `draft` or `catalog`),
+the authored pad `occurrences` it involves (`index` and 1-based `ordinal`), the
+`measured` count, the `limit` and its `basis` in these documents.
+
+| Rule | Reports |
+| --- | --- |
+| `pad.number.repeated` | A footprint has more than one pad with the same number; one finding per number lists every occurrence. |
+| `package.terminal.unmapped` | A symbol terminal has no pad in a package map. |
+| `package.pad.unaccounted` | A footprint pad is neither mapped nor listed as unconnected. |
+| `package.pad.not_in_footprint` | A package names a pad number its footprint does not have. |
+| `package.pad.repeated` | A package assigns the same pad number more than once. |
+
+The check reports defects; it does not relax validation, repair a document or
+make a refused one loadable.
+
 ## Edit and publish native items
 
 On desktop, **New → Library** creates a native library in an unused folder and

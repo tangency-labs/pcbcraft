@@ -294,7 +294,9 @@ JSON Schema checks object shapes, required fields, enumerations and numeric
 bounds. Implementations must additionally check relationships that depend on
 other fields or project state.
 
-- Pad numbers are distinct. A rounded corner is at most half the shorter land
+- Pad numbers are distinct; `library.check` reports each repeated number with
+  its authored occurrences (see
+  [check library items](native-library-sources.md#check-library-items)). A rounded corner is at most half the shorter land
   dimension, a circular land has equal dimensions, and a plated drill is smaller
   than both land dimensions.
 - Drawing extents after tessellation stay within definition bounds. Lines have
