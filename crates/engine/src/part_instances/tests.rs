@@ -184,7 +184,9 @@ fn a_nest_native_part_placement_and_package_edit_prepare_only_outer() {
     s.observe_edits(Some(observer.clone()));
     let history = s.undo.len();
     let (_, ops) = trace(|| run(&mut s, PLACE_PART, params).unwrap());
-    assert_stage(&ops, 2, 1, 1);
+    // Part placement is a sheet command: its symbol and package steps and the sheet
+    // transaction each stage raw once, and only the project change prepares the outer stage.
+    assert_stage(&ops, 3, 1, 1);
     assert_eq!(s.undo.len(), history + 1);
     run(&mut s, update::INITIALIZE_BASELINE, json!({})).unwrap();
     observer.0.lock().unwrap().clear();
