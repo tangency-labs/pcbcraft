@@ -153,6 +153,26 @@ fn designator_lock_preview_and_apply_share_mcp_dispatch() {
     assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
+/// An opt-in package dry run returns its report even when broad project inspection is suppressed.
+#[test]
+fn package_completion_report_survives_inspect_false() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let result = crate::backend::call_session(
+        &mut session,
+        "engine.execute",
+        &json!({
+            "command":pcbcraft_engine::COMPLETE_PACKAGES,"inspect":false,
+            "params":{"scope":"project","dry_run":true,"expected_revision":revision}
+        }),
+    )
+    .unwrap();
+    assert_eq!(result, json!({"revision":revision,"changes":[],"skipped":[]}));
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {

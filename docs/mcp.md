@@ -718,6 +718,19 @@ base `reference` stays shared by the part. The library authoring transaction
 accepts `select_unit` and `add_unit` actions. See the
 [multi-unit contract](symbol-schema.md#multiple-schematic-units).
 
+`schematic.complete_packages` requires `expected_revision`. Set `scope` to
+`"sheet"` (include the addressed `sheet` UUID when several sheets exist) or
+`"project"` to opt in; omission or `"none"` does nothing. Set `dry_run: true` to
+validate the same plan without editing. Both modes return `{revision, changes,
+skipped}`, even with `inspect: false`. Each change names `sheet`, `symbol`,
+`from_part`, `from_unit`, `to_part`, `to_unit` and `remapped_terminals` (changed
+pin numbers as an old-to-new map). A source part in `changes` is retired; its
+symbol is retained. Skipped entries name `part` and `reason`. A read-only
+session refuses the command with `out_of_scope`, even for a dry run, because the
+same command applies the transfer. See
+[package completion](symbol-schema.md#complete-loose-packages) for the matching
+and electrical restrictions.
+
 ## Placement origin
 
 `pcb.set_placement_origin` requires an explicit `board`, `expected_revision` and

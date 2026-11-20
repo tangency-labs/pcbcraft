@@ -236,3 +236,12 @@ in the status bar, keeps Home usable and writes the same line once to stderr
 when available. Windows GUI release builds need stderr redirection to capture
 diagnostics. The launcher takes no options and at most one path, so a
 usage error prints one line and exits before any window opens.
+
+Equivalent loose units of a multi-unit part can now be fitted into open slots of
+one package with `schematic.complete_packages` through headless or live MCP. It
+changes nothing unless `scope` is `sheet` or `project`, and `dry_run` reports the
+same transfers without editing. Connectivity, saved net and sheet identities and
+authored wire routes are kept. Parts with a locked designator, no-connect intent
+or a footprint that board review cannot yet retire are skipped. Applying is one
+undo step. Read-only sessions refuse the command. Placement does not complete
+packages, and automatic annotation remains in #45.
