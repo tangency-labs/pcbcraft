@@ -871,6 +871,8 @@ mapping; Windows Shift+Delete remains Cut.
 With a configured board, a closed Board Outline and a resolvable placement origin,
 **Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
 The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
+If the board has circular non-plated holes, the ZIP includes `-NPTH.drl`
+separately from the plated `-PTH.drl` file.
 Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
 destination errors can prevent a successful save. In the browser, Outputs requests
 one download; check that your browser saved it.

@@ -430,16 +430,13 @@ impl BoardView<'_> {
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
     /// Circular copper is refused before generating any straight-only output.
-    /// Refuses projects with placed NPTH until their separate drill output is supported.
+    /// Outputs include an independent non-plated drill file only when the board has such holes.
+    /// Refuses a non-plated diameter that rounds to zero at the drill output's resolution.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     /// X2 attributes describe pad, track and via functions and intended copper membership.
     /// Ambiguous routed copper does not acquire an arbitrary net name.
     pub fn fabrication(self) -> Result<Fabrication, String> {
         self.require_linear_copper()?;
-        let board = &self.project().board;
-        if board.footprints().iter().any(|footprint| board.definition_for(footprint).is_some_and(|d| !d.non_plated_holes.is_empty())) {
-            return Err("Fabrication output does not yet support non-plated holes; no drill data was generated.".into());
-        }
         let setup = self.setup().ok_or("Initialize the board setup before generating fabrication outputs.")?;
         let copper: Vec<_> = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).collect();
         // Copper layers in physical stack order, top first.
@@ -460,6 +457,7 @@ impl BoardView<'_> {
         }
         let origin = self.placement_origin()?;
         let frame = origin.frame();
+        let non_plated = self.non_plated_drill_hits()?;
         let base = file_part(&self.project().name);
         let routed_nets = RoutedNets::new(self);
         let nets = &routed_nets;
@@ -573,14 +571,16 @@ impl BoardView<'_> {
         }
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive") });
 
-        files.push(Output { name: format!("{base}-PTH.drl"), contents: self.drill_file(frame) });
+        files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, DrillPlating::Plated, self.plated_drill_hits()) });
+        if !non_plated.is_empty() {
+            files.push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, DrillPlating::NonPlated, non_plated) });
+        }
         unique_file_names(&mut files, copper_count);
         Ok(Fabrication { origin, files })
     }
 
-    /// One Excellon file for every plated hole: vias and through-hole pads, grouped by tool.
-    /// Holes are sorted in board coordinates, so moving the origin never reorders them.
-    fn drill_file(self, frame: Frame) -> String {
+    /// Keep vias and plated pad bores out of the mechanical drill file.
+    fn plated_drill_hits(self) -> BTreeMap<i64, Vec<Point>> {
         let mut holes: BTreeMap<i64, Vec<Point>> = BTreeMap::new();
         for via in self.vias() {
             holes.entry(via.drill_nm).or_default().push(via.at);
@@ -590,21 +590,59 @@ impl BoardView<'_> {
                 holes.entry(drill).or_default().push(pad.center);
             }
         }
-        let mut text = String::from("M48\n; PCBcraft plated drill file\n; TYPE=PLATED\nFMAT,2\nMETRIC\n");
-        for (index, diameter) in holes.keys().enumerate() {
-            let _ = writeln!(text, "T{}C{}", index + 1, mm(*diameter, 3));
-        }
-        text.push_str("%\nG90\nG05\n");
-        for (index, points) in holes.values_mut().enumerate() {
-            points.sort_by_key(|point| (point.x_nm, point.y_nm));
-            let _ = writeln!(text, "T{}", index + 1);
-            for point in points.iter().map(|point| frame.to_output(*point)) {
-                let _ = writeln!(text, "X{}Y{}", mm(point.x_nm, 3), mm(point.y_nm, 3));
+        holes
+    }
+
+    /// Resolve mechanical openings from the pinned footprint with no copper or pad projection.
+    /// A diameter below half the output unit would write an unusable zero tool size.
+    fn non_plated_drill_hits(self) -> Result<BTreeMap<i64, Vec<Point>>, String> {
+        let board = &self.project().board;
+        let mut holes: BTreeMap<i64, Vec<Point>> = BTreeMap::new();
+        for footprint in board.footprints() {
+            let Some(definition) = board.definition_for(footprint) else { continue };
+            for hole in footprint.non_plated_holes(definition) {
+                if hole.diameter_nm < DRILL_UNIT_NM / 2 {
+                    return Err(format!(
+                        "Non-plated drill diameter {} nm in footprint-{} rounds to zero at the 0.001 mm output resolution.",
+                        hole.diameter_nm, footprint.id
+                    ));
+                }
+                holes.entry(hole.diameter_nm).or_default().push(hole.center);
             }
         }
-        text.push_str("M30\n");
-        text
+        Ok(holes)
     }
+}
+
+const DRILL_DECIMALS: usize = 3;
+const DRILL_UNIT_NM: i64 = 10_i64.pow(6 - DRILL_DECIMALS as u32);
+
+enum DrillPlating {
+    Plated,
+    NonPlated,
+}
+
+/// Write one Excellon file from resolved through hits using absolute metric coordinates.
+/// Tools are sorted by diameter and hits in board coordinates, independent of the output origin.
+fn drill_file(frame: Frame, plating: DrillPlating, mut holes: BTreeMap<i64, Vec<Point>>) -> String {
+    let (description, kind) = match plating {
+        DrillPlating::Plated => ("plated", "PLATED"),
+        DrillPlating::NonPlated => ("non-plated", "NON_PLATED"),
+    };
+    let mut text = format!("M48\n; PCBcraft {description} drill file\n; TYPE={kind}\nFMAT,2\nMETRIC\n");
+    for (index, diameter) in holes.keys().enumerate() {
+        let _ = writeln!(text, "T{}C{}", index + 1, mm(*diameter, DRILL_DECIMALS));
+    }
+    text.push_str("%\nG90\nG05\n");
+    for (index, points) in holes.values_mut().enumerate() {
+        points.sort_by_key(|point| (point.x_nm, point.y_nm));
+        let _ = writeln!(text, "T{}", index + 1);
+        for point in points.iter().map(|point| frame.to_output(*point)) {
+            let _ = writeln!(text, "X{}Y{}", mm(point.x_nm, DRILL_DECIMALS), mm(point.y_nm, DRILL_DECIMALS));
+        }
+    }
+    text.push_str("M30\n");
+    text
 }
 
 /// Pack the outputs and their `manifest.json` with fixed timestamps and Unix file metadata.

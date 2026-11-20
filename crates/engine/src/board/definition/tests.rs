@@ -280,7 +280,7 @@ fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
     let board = original.board_view(target).unwrap();
     assert!(board.ratsnest().unwrap().lines.is_empty());
     assert_eq!(board.footprints().next().unwrap().pads.len(), 2);
-    assert!(board.fabrication_outputs().unwrap_err().contains("does not yet support non-plated holes"));
+    assert!(board.fabrication_outputs().unwrap_err().contains("Draw a closed Board Outline"));
     let query = s.clearance_query(target, 0).unwrap();
     let obstacles: Vec<_> = query.objects().iter().enumerate().filter(|(_, item)| item.mechanical).collect();
     assert_eq!(obstacles.len(), 2);

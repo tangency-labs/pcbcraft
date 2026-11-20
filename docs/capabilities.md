@@ -30,9 +30,9 @@ guides, format references, design plans and verification records.
 
 [Footprint definitions can include circular non-plated through holes](footprint-library.md#definition-and-placement-contract),
 with editor controls, placement transforms, offline storage, and mechanical
-obstacles for routing and design checks. They have no copper or net. Boards
-containing them cannot yet produce fabrication outputs; a separate non-plated
-drill file remains future work.
+obstacles for routing and design checks. They have no copper or net, and
+fabrication exports a [separate non-plated drill file](pcb-layout-workflow.md#fabrication-drill-files)
+when a board contains them.
 
 Setup edits can be reviewed through `pcb.preview_board_setup` before the shared
 Apply command: layer removals/renumbering, affected objects and consent/refusal
