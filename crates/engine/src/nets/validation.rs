@@ -125,6 +125,11 @@ impl Registry {
     /// Validate the complete graph and every non-pair record against it. Pair relationships
     /// cannot change the record anchors, number allocation, scope or owning catalogs.
     fn validate_records(&self, project: &Project) -> Result<(), String> {
+        self.validate_records_against(project, None)
+    }
+
+    /// Retain exact validation from a graph already built by a transaction on this snapshot.
+    pub(super) fn validate_records_against(&self, project: &Project, graph: Option<&Graph>) -> Result<(), String> {
         let ids: BTreeSet<_> = self.records.iter().map(|r| r.id).collect();
         if ids.len() != self.records.len() || ids.contains(&uuid::Uuid::nil()) || self.records.windows(2).any(|p| p[0].id >= p[1].id) {
             return Err("Net records require unique non-nil UUIDs in canonical order.".into());
@@ -133,7 +138,13 @@ impl Registry {
         if self.records.iter().filter_map(|record| record.generated_number).any(|number| number == 0 || !numbers.insert(number)) {
             return Err("Generated net numbers must be positive and unique, including historical records.".into());
         }
-        let graph = Graph::build(project)?;
+        let owned_graph;
+        let graph = if let Some(graph) = graph {
+            graph
+        } else {
+            owned_graph = Graph::build(project)?;
+            &owned_graph
+        };
         let mut assigned = BTreeSet::new();
         for record in self.records.as_slice() {
             if record.fallbacks.len() > 3

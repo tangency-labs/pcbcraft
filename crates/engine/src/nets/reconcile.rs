@@ -117,9 +117,13 @@ impl Project {
             && Arc::ptr_eq(&before.sheets, &self.sheets)
             && Arc::ptr_eq(&before.units, &self.units)
             && Arc::ptr_eq(&before.components, &self.components)
+            && Arc::ptr_eq(&before.net_classes, &self.net_classes)
             && Arc::ptr_eq(&before.net_registry, &self.net_registry)
         {
-            return Ok(());
+            if self.net_registry.records.is_empty() || self.net_registry.has_records_proof(self) {
+                return Ok(());
+            }
+            return self.net_registry.validate(self).map_err(CommandError::InvalidParams);
         }
         let mut old = Graph::build(before).map_err(CommandError::InvalidParams)?;
         let after = Graph::build(self).map_err(CommandError::InvalidParams)?;
@@ -277,6 +281,11 @@ impl Project {
         }
         let next = Registry { records: Arc::new(result.into_values().collect()), pairs: registry.pairs };
         if next == *self.net_registry {
+            if !next.records.is_empty() {
+                // Geometry can change while every authored identity survives. Reuse the
+                // already constructed graph to prove the new immutable inputs at publication.
+                self.net_registry.validate_records_against(self, Some(&after)).map_err(CommandError::InvalidParams)?;
+            }
             return Ok(());
         }
         self.net_registry = Arc::new(next);
