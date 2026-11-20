@@ -42,9 +42,8 @@ pub(super) async fn walk(query: &ClearanceQuery, request: &Request, budget: usiz
     }
 }
 
-/// Select a solver only after validating the captured inputs; both remain read-only.
+/// Select a read-only solver for inputs already validated by the caller.
 async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
-    super::validate(query, request, budget)?;
     match request.mode {
         Mode::Walkaround => walk(query, request, budget, progress).await,
         Mode::Shove => shove::run(query, request, budget, progress).await,
@@ -86,7 +85,11 @@ impl Search {
     pub(super) fn new(query: Arc<ClearanceQuery>, request: Request, budget: usize) -> Self {
         let progress = Arc::new(AtomicUsize::new(0));
         let counter = progress.clone();
-        Self { future: Box::pin(async move { run(&query, &request, budget, counter).await }), progress }
+        let future = Box::pin(async move {
+            super::validate(&query, &request, budget)?;
+            run(&query, &request, budget, counter).await
+        });
+        Self { future, progress }
     }
     /// Exact probes completed so far, independent of host scheduling frequency.
     pub(super) fn probes(&self) -> usize {

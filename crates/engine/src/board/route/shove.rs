@@ -98,7 +98,6 @@ impl ShoveStats {
 
 /// Bound both speculative propagation and connected source anchors independently of probes.
 const MAX_SHOVES: usize = 96;
-const MAX_ANCHORS: usize = 128;
 
 /// Validate fixed geometry before starting a continuation; bounded count and explicit layers
 /// prevent callers from growing work outside ordinary gesture/model limits.
@@ -175,14 +174,14 @@ impl Propagation<'_> {
             if !charge(self.progress, self.budget).await {
                 return Ok(false);
             }
-            let result = query.probe_membership(contour, layers, nets, None)?;
+            let result = query.probe_membership_excluding(contour, layers, nets, |i| self.replaced.contains(&self.chains.owner[i]))?;
             self.stats.candidate_hits += result.decisions.len();
             for hit in result.decisions {
                 let owner = self.chains.owner[hit.second];
-                if self.replaced.contains(&owner) {
-                    continue;
-                }
                 let object = &query.objects()[hit.second];
+                if object.mechanical && hit.clearance_violation {
+                    return Ok(false);
+                }
                 let exempt = self.contact_exemptions.map_or_else(
                     || islands.contains(&object.island) || (nets.len() == 1 && object.intended_nets == nets),
                     |contacts| contacts.contains(&object.name),
@@ -440,12 +439,22 @@ async fn attempt(
     reverse_displacements: bool,
 ) -> Result<Plan, CommandError> {
     let Pickup { source: origin, nets, islands } = pickup(query, request)?;
-    let movable: BTreeSet<_> =
-        chains.tracks.iter().filter(|(i, t)| !t.locked && !islands.contains(&query.objects()[**i].island)).map(|(i, _)| *i).collect();
+    let fixed: Vec<_> = request.fixed.iter().map(|p| p.geometry(query)).collect::<Result<_, _>>()?;
+    let relevant_layers: BTreeSet<_> = std::iter::once(request.layer).chain(fixed.iter().flat_map(|(_, layers)| layers.iter().copied())).collect();
+    let movable: BTreeSet<_> = chains
+        .tracks
+        .iter()
+        .filter(|(i, t)| {
+            !t.locked
+                && relevant_layers.contains(&t.layer)
+                && !islands.contains(&query.objects()[**i].island)
+                && chains.units.contains_key(&chains.owner[**i])
+        })
+        .map(|(i, _)| *i)
+        .collect();
     let units: BTreeSet<_> = movable.iter().map(|i| chains.owner[*i]).collect();
     let mut next = 1u128;
     let mut stats = ShoveStats { attempts: 1, ..ShoveStats::default() };
-    let fixed: Vec<_> = request.fixed.iter().map(|p| p.geometry(query)).collect::<Result<_, _>>()?;
     // Free ends and protected contacts are fixed graph anchors. Ordinary degree-two
     // bends remain soft hints, so an earlier displacement may move them later.
     let mut items = query.objects().to_vec();
@@ -453,18 +462,6 @@ async fn attempt(
         super::search::yield_unit().await;
         let chain = &chains.units[root];
         let protected: Vec<_> = chain.anchors.iter().filter(|a| a.protected).collect();
-        if protected.len() > MAX_ANCHORS {
-            return Ok(Plan {
-                adjusted_target: None,
-                start_blocked: false,
-                replacements: Vec::new(),
-                shove: Some(stats),
-                points: vec![request.head],
-                outcome: Outcome::Incomplete,
-                blocker: None,
-                probes: progress.load(Ordering::Relaxed),
-            });
-        }
         let Some(first) = protected.first() else { continue };
         for (source, _) in &chain.members {
             items[*source].contour = Contour::capsule(first.point, first.point, query.objects()[*source].contour.radius);
@@ -491,6 +488,7 @@ async fn attempt(
         let pieces: Vec<_> =
             plan.points.windows(2).map(|p| (Contour::capsule(p[0], p[1], request.width_nm as f64 / 2.), vec![request.layer])).collect();
         add_path(&mut overlay, &pieces, origin, &mut next, &mut stats)?;
+        let fixed_count = fixed.len();
         let mut route = fixed;
         route.extend(pieces);
         let mut queue = BTreeSet::new();
@@ -654,6 +652,26 @@ async fn attempt(
             .await?;
             replacements.extend(parts);
             stats.displaced_tracks = replacements.len();
+        }
+        if legal && fixed_count != 0 {
+            let view = query.authority().view().ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+            let outline = view.outline_edges();
+            if !outline.polygons.is_empty() {
+                let baseline = query.authority().rules().values;
+                for (contour, layers) in &route[..fixed_count] {
+                    if !charge(&progress, budget).await {
+                        incomplete = true;
+                        legal = false;
+                        break;
+                    }
+                    let result = query.probe_membership_excluding(contour, layers, &nets, |i| replaced.contains(&chains.owner[i]))?;
+                    let rules = result.probe_rules.as_ref().map_or(baseline, |p| p.hard_values(baseline));
+                    if !outline.allows_copper(contour, rules.edge_clearance_nm) {
+                        legal = false;
+                        break;
+                    }
+                }
+            }
         }
         if legal {
             replacements.sort_by_key(|r| r.track);

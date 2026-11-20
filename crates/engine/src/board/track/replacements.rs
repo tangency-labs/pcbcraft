@@ -2,7 +2,6 @@
 use super::*;
 use crate::board::{
     clearance::{self, BoardGeometry, ClearanceQuery},
-    drc,
     work::Source,
 };
 use std::sync::{Arc, Mutex, TryLockError};
@@ -217,7 +216,10 @@ impl Validation {
                 } else {
                     same_net || same_island
                 };
-                if decision.conflicting_nets || (!exempt && decision.gap_nm < decision.clearance_nm as f64) {
+                if decision.conflicting_nets
+                    || (other.mechanical && decision.clearance_violation)
+                    || (!exempt && decision.gap_nm < decision.clearance_nm as f64)
+                {
                     return Err(CommandError::InvalidParams("The compound route violates copper clearance or intended net membership.".into()));
                 }
             }
@@ -226,11 +228,8 @@ impl Validation {
             if object.contour.radius * 2. < rules.min_track_width_nm as f64 {
                 return Err(CommandError::InvalidParams("The compound route violates a minimum track width.".into()));
             }
-            if !outline.polygons.is_empty() {
-                let (gap, crosses) = drc::edge_gap(&outline.edges, &object.contour);
-                if !drc::contains(&outline.polygons, &object.contour) || crosses || gap < rules.edge_clearance_nm as f64 {
-                    return Err(CommandError::InvalidParams("The compound route violates the Board Outline clearance.".into()));
-                }
+            if !outline.allows_copper(&object.contour, rules.edge_clearance_nm) {
+                return Err(CommandError::InvalidParams("The compound route violates the Board Outline clearance.".into()));
             }
         }
         self.cursor = self.cursor.saturating_add(budget.min(8));

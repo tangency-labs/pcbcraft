@@ -272,7 +272,8 @@ impl State {
     /// Source-addressed paths currently replacing live copper in this view's preview. The
     /// retained final candidate uses its captured draft after planning ownership is released.
     pub(super) fn replacements(&self) -> &[Replacement] {
-        self.draft.as_ref().or(self.retry_route.as_ref()).map_or(&[], |draft| self.planning.replacements(draft, self.width_nm))
+        let publishing = self.retry_route.as_ref().filter(|_| self.preparation.committing());
+        self.draft.as_ref().or(publishing).map_or(&[], |draft| self.planning.replacements(draft, self.width_nm))
     }
     /// Expose only complete displayed displacement geometry to opt-in replay assertions.
     #[cfg(any(test, feature = "performance-harness"))]
@@ -430,6 +431,12 @@ impl State {
     /// Whether a route is in progress, so layer keys should place a via instead.
     pub(super) fn routing(&self) -> bool {
         self.draft.is_some()
+    }
+
+    /// Fixed draft vertices, for regressions that distinguish placement from a guide preview.
+    #[cfg(test)]
+    pub(crate) fn fixed_route_points(&self) -> Option<&[Point]> {
+        self.draft.as_ref().map(|draft| draft.points.as_slice())
     }
 
     /// The contact at the start of the unfinished route, if it started on copper.
@@ -736,10 +743,10 @@ fn width_px(camera: &Camera, rect: Rect, width_nm: i64) -> f32 {
 /// A path without a single segment produces nothing.
 fn add(state: &mut State, draft: Draft) -> Option<Command> {
     state.planning.cancel();
-    state.retry_route = Some(draft.clone());
     if draft.points.len() < 2 {
         return None;
     }
+    state.retry_route = Some(draft.clone());
     let layers = segment_layers(&draft.start, &draft.changes, draft.points.len());
     state.committed = Some(Committed {
         width_nm: state.width_nm,
@@ -859,6 +866,7 @@ pub(super) fn interact(
         state.preparation.cancel();
         state.snap = None;
         state.draft = None;
+        state.retry_route = None;
     }
     if !route_available {
         state.cancel();

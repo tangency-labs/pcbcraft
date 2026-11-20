@@ -198,8 +198,9 @@ async fn build(query: ClearanceQuery) -> Result<Chains, CommandError> {
             for (i, _) in &members {
                 owner[*i] = root;
             }
-            let chain = contacts(&query, &tracks, members).await?;
-            units.insert(root, chain);
+            if let Some(chain) = contacts(&query, &tracks, members).await? {
+                units.insert(root, chain);
+            }
         }
     }
     let mut touching = BTreeSet::new();
@@ -234,8 +235,9 @@ async fn build(query: ClearanceQuery) -> Result<Chains, CommandError> {
     Ok(Chains { owner, units, tracks, touching })
 }
 
-/// Keep original contact stations fixed while retaining ordinary bends as soft hints.
-async fn contacts(query: &ClearanceQuery, tracks: &BTreeMap<usize, Track>, members: Vec<(usize, bool)>) -> Result<Chain, CommandError> {
+/// Keep contact stations fixed and retain ordinary bends as soft hints. Unrepresentable
+/// chains stay as fixed copper in the planner and cannot be replaced by a caller.
+async fn contacts(query: &ClearanceQuery, tracks: &BTreeMap<usize, Track>, members: Vec<(usize, bool)>) -> Result<Option<Chain>, CommandError> {
     let mut work = Work::default();
     let own: BTreeSet<_> = members.iter().map(|p| p.0).collect();
     let mut contacts = own.iter().map(|i| query.objects()[*i].name.clone()).collect::<BTreeSet<_>>();
@@ -261,30 +263,46 @@ async fn contacts(query: &ClearanceQuery, tracks: &BTreeMap<usize, Track>, membe
             }
             protected += 1;
             if protected > MAX_CONTACTS {
-                return Err(CommandError::CapExceeded("A trace has too many protected contacts for bounded displacement.".into()));
+                return Ok(None);
             }
             contacts.insert(other.name.clone());
-            let best = other
-                .contour
-                .core
-                .iter()
-                .copied()
-                .chain([other.at])
-                .map(|p| {
-                    let t = (((p.x_nm - a.x_nm) as f64 * dx + (p.y_nm - a.y_nm) as f64 * dy) / span).clamp(0., 1.);
-                    (t, Point { x_nm: (a.x_nm as f64 + t * dx).round() as i64, y_nm: (a.y_nm as f64 + t * dy).round() as i64 })
-                })
-                .filter(|(_, p)| other.contour.touches(&Contour::capsule(*p, *p, object.contour.radius)))
-                .min_by(|(a, _), (b, _)| a.total_cmp(b));
+            let on_source = |t: f64| (t, Point { x_nm: (a.x_nm as f64 + t * dx).round() as i64, y_nm: (a.y_nm as f64 + t * dy).round() as i64 });
+            let touches = |(_, p): &(f64, Point)| other.contour.touches(&Contour::capsule(*p, *p, object.contour.radius));
+            let core = other.contour.core.as_slice();
+            let crossing = match core {
+                [c, d, end, start] if c == start && d == end => interior_crossing(a, b, *c, *d).map(on_source).filter(touches),
+                _ => None,
+            };
+            let best = crossing.or_else(|| {
+                core.iter()
+                    .copied()
+                    .chain([other.at])
+                    .map(|p| on_source((((p.x_nm - a.x_nm) as f64 * dx + (p.y_nm - a.y_nm) as f64 * dy) / span).clamp(0., 1.)))
+                    .filter(touches)
+                    .min_by(|(a, _), (b, _)| a.total_cmp(b))
+            });
+            let best = best.or_else(|| other.contour.edges().filter_map(|(c, d)| interior_crossing(a, b, c, d)).map(on_source).find(touches));
             let Some((t, point)) = best else {
-                return Err(CommandError::Unavailable("Cannot resolve a trace contact anchor.".into()));
+                return Ok(None);
             };
             anchors.push(Anchor { order: position as f64 + t, point, protected: true });
         }
     }
     anchors.sort_by(|a, b| a.order.total_cmp(&b.order).then(b.protected.cmp(&a.protected)));
     anchors.dedup_by(|a, b| a.point == b.point);
-    Ok(Chain { members, anchors, contacts })
+    Ok(Some(Chain { members, anchors, contacts }))
+}
+
+/// Find a proper centerline crossing using integer predicates even for off-angle segments.
+/// Endpoint and collinear contacts continue through the ordinary station projection.
+fn interior_crossing(a: Point, b: Point, c: Point, d: Point) -> Option<f64> {
+    let delta = |a: Point, b: Point| (i128::from(b.x_nm) - i128::from(a.x_nm), i128::from(b.y_nm) - i128::from(a.y_nm));
+    let cross = |(ax, ay), (bx, by)| ax * by - ay * bx;
+    let (u, v, w) = (delta(a, b), delta(c, d), delta(a, c));
+    let denominator = cross(u, v);
+    let sign = denominator.signum();
+    let (t, s, total) = (cross(w, v) * sign, cross(w, u) * sign, denominator.abs());
+    (0 < t && t < total && 0 < s && s < total).then(|| t as f64 / total as f64)
 }
 
 impl Chains {
@@ -299,6 +317,13 @@ impl Chains {
     /// protected stations and refusing crossings or folded runs that lose spacing.
     async fn validate_paths(&self, query: &ClearanceQuery, replacements: &[Replacement], merge: bool) -> Result<(), CommandError> {
         let paths: BTreeMap<_, _> = replacements.iter().map(|r| (r.track, &r.points)).collect();
+        let mut work = Work::default();
+        for (index, track) in &self.tracks {
+            work.tick().await;
+            if paths.contains_key(&track.id) && !self.units.contains_key(&self.owner[*index]) {
+                return Err(invalid("A replacement trace has contacts that cannot be preserved by bounded displacement."));
+            }
+        }
         for chain in self.units.values() {
             yield_unit().await;
             if !chain.members.iter().any(|(i, _)| paths.contains_key(&self.tracks[i].id)) {

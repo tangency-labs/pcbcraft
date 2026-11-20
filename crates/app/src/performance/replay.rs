@@ -406,7 +406,18 @@ impl Driver {
         samples: &mut BTreeMap<String, Vec<f64>>,
     ) -> Result<()> {
         let id = &artifact.trace[index].id;
-        if !matches!(id.as_str(), "layer.down" | "layer.up" | "contact.preview" | "contact.commit.up") {
+        if !matches!(
+            id.as_str(),
+            "layer.down"
+                | "layer.up"
+                | "contact.preview"
+                | "contact.commit.up"
+                | "shove.cancel.preview"
+                | "shove.commit.preview"
+                | "shove.vertex.up"
+                | "shove.finish.down"
+                | "shove.finish.up"
+        ) {
             return Ok(());
         }
         let started = super::clock_ms();

@@ -17,9 +17,12 @@ impl Walker<'_> {
             let object = &objects[index];
             self.own_islands.contains(&object.island) || (self.route_nets.len() == 1 && object.intended_nets == self.route_nets)
         };
-        let mut guides = nearby.into_iter().filter(|i| !exempt(*i)).collect::<BTreeSet<_>>();
-        if guides.len() > MAX_OBJECTS {
-            return Ok(None);
+        let mut guides = BTreeSet::new();
+        for index in nearby.into_iter().filter(|i| !exempt(*i)) {
+            guides.insert(index);
+            if guides.len() > MAX_OBJECTS {
+                return Ok(None);
+            }
         }
         // Include one ring of neighbors along each blocking body's full extent. A nearby
         // long trace can terminate in a pad outside the head/goal region; its pad corners

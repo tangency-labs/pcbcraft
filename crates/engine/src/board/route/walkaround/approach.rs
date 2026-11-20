@@ -48,6 +48,7 @@ impl Walker<'_> {
             };
             (approach, distance(*point, request.target), distance(*point, previous), point.x_nm, point.y_nm, *index)
         });
+        candidates.retain(|(point, _)| *point != request.head);
         candidates.dedup_by_key(|(point, _)| (point.x_nm, point.y_nm));
         let mut searches = 0;
         for (point, blocker) in candidates.into_iter().take(MAX_CHECKS) {
