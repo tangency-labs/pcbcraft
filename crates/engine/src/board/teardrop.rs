@@ -106,7 +106,7 @@ impl<'a> BoardView<'a> {
     }
 }
 
-/// Refuse over-cap, unsorted, duplicate, dangling, and unrepresentable records.
+/// Require a configured board and refuse over-cap, unsorted, duplicate, dangling or unrepresentable records.
 pub(crate) fn validate(project: &Project) -> Result<(), String> {
     let records = &project.board.teardrops;
     if records.is_empty() {
@@ -119,6 +119,9 @@ pub(crate) fn validate(project: &Project) -> Result<(), String> {
         return Err("teardrop checking does not support boards with circular copper arcs".into());
     }
     let board = project.board_target().and_then(|target| project.board_view(target)).ok_or("teardrops require a physical board")?;
+    if board.setup().is_none() {
+        return Err("teardrops require a copper board setup".into());
+    }
     let occupied: BTreeSet<_> = board.tracks().iter().map(|track| track.id).chain(board.vias().iter().map(|via| via.id)).collect();
     let mut sites = BTreeSet::new();
     for record in records {

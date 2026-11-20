@@ -283,9 +283,9 @@ authored data.
 
 ### Straight-via teardrop intents
 
-Board format `pcbcraft-board/37` requires a nonempty `teardrops` array and
-accepts existing straight-board fields, including footprint locks. Each record
-stores a stable UUID, the attached via and track UUIDs, and their sizing
+Board format `pcbcraft-board/37` requires a copper board setup and a nonempty
+`teardrops` array. It accepts existing straight-board fields, including footprint
+locks. Each record stores a stable UUID, the attached via and track UUIDs, and their sizing
 parameters. Vertices, net membership and rule reports are never written to the
 board. Encoding orders the records by UUID; decoding rejects duplicate
 identities/sites, dangling attachments and unrepresentable parameters or shapes.

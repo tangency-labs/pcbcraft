@@ -154,10 +154,19 @@ fn command_adds_eight_reports_two_and_round_trips_intent() {
     assert!(std::sync::Arc::ptr_eq(&current, &session.snapshot().unwrap()));
     assert_eq!(session.revision(), applied_revision);
     let path = current.board_document_path().unwrap();
+    // Stage a missing setup only in a private copy to exercise the native writer's guard.
+    let mut missing_setup = current.as_ref().clone();
+    std::sync::Arc::make_mut(&mut missing_setup.board).setup = None;
+    assert!(matches!(encode_documents(std::sync::Arc::new(missing_setup)), Err(error) if error.contains("teardrops require a copper board setup")));
     let saved = encode_documents(current).unwrap();
     let mut board_json: serde_json::Value = serde_json::from_slice(saved.get(&path).unwrap()).unwrap();
     assert_eq!(board_json["format"], "pcbcraft-board/37");
     assert_eq!(board_json["teardrops"], json!(expected));
+    let mut without_setup = saved.clone();
+    let mut unconfigured = board_json.clone();
+    assert!(unconfigured.as_object_mut().unwrap().remove("setup").is_some());
+    without_setup.insert(path.clone(), serde_json::to_vec(&unconfigured).unwrap());
+    assert!(decode_documents(&without_setup).is_err());
     let mut wrong_version = saved.clone();
     board_json["format"] = json!("pcbcraft-board/19");
     wrong_version.insert(path, serde_json::to_vec(&board_json).unwrap());
