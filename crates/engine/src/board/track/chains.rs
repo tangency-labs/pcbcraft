@@ -198,12 +198,14 @@ async fn build(query: ClearanceQuery) -> Result<Chains, CommandError> {
             vec![members]
         };
         for members in groups {
-            let Some(root) = members.iter().map(|p| p.0).min() else { continue };
-            for (i, _) in &members {
-                owner[*i] = root;
-            }
-            if let Some(chain) = contacts(&query, &tracks, members).await? {
-                units.insert(root, chain);
+            for members in split_at_junctions(&query, &tracks, members, &mut work).await? {
+                let Some(root) = members.iter().map(|p| p.0).min() else { continue };
+                for (i, _) in &members {
+                    owner[*i] = root;
+                }
+                if let Some(chain) = contacts(&query, &tracks, members).await? {
+                    units.insert(root, chain);
+                }
             }
         }
     }
@@ -237,6 +239,62 @@ async fn build(query: ClearanceQuery) -> Result<Chains, CommandError> {
         }
     }
     Ok(Chains { owner, units, tracks, touching })
+}
+
+/// An endpoint walk can come back into contact with its own copper. Isolate both
+/// incident legs, so a returning trace contact turns into protected stations of
+/// separate runs. Overlapping copper across an ordinary corner is still one stroke.
+async fn split_at_junctions(
+    query: &ClearanceQuery,
+    tracks: &BTreeMap<usize, Track>,
+    members: Vec<(usize, bool)>,
+    work: &mut Work,
+) -> Result<Vec<Vec<(usize, bool)>>, CommandError> {
+    if members.len() < 3 {
+        return Ok(vec![members]);
+    }
+    let positions: BTreeMap<_, _> = members.iter().enumerate().map(|(position, &(index, _))| (index, position)).collect();
+    let directed = |(index, reverse): (usize, bool)| {
+        let track = &tracks[&index];
+        if reverse { (track.end, track.start) } else { (track.start, track.end) }
+    };
+    let mut cuts = BTreeSet::new();
+    for (position, &member) in members.iter().enumerate() {
+        work.tick().await;
+        let object = &query.objects()[member.0];
+        let (a, b) = directed(member);
+        for other in query.candidates(&object.contour, &object.layers)? {
+            work.tick().await;
+            let Some(&later) = positions.get(&other).filter(|&&later| later > position + 1) else { continue };
+            if !object.contour.touches(&query.objects()[other].contour) {
+                continue;
+            }
+            let (c, d) = directed(members[later]);
+            let meet = interior_crossing(a, b, c, d).is_some() || on_leg(a, c, d) || on_leg(b, c, d) || on_leg(c, a, b) || on_leg(d, a, b);
+            let mut cone = Cone::new(a, b);
+            for &part in &members[position + 1..=later] {
+                work.tick().await;
+                let (c, d) = directed(part);
+                cone.extend(c, d);
+                if !cone.corner {
+                    break;
+                }
+            }
+            if meet || !cone.corner {
+                cuts.extend([position, position + 1, later, later + 1]);
+            }
+        }
+    }
+    cuts.insert(members.len());
+    let mut start = 0;
+    Ok(cuts
+        .into_iter()
+        .filter_map(|end| {
+            let next = &members[start..end];
+            start = end;
+            (!next.is_empty()).then(|| next.to_vec())
+        })
+        .collect())
 }
 
 /// Keep contact stations fixed and retain ordinary bends as soft hints. Unrepresentable

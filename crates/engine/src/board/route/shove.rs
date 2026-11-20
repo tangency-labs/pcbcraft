@@ -68,7 +68,7 @@ impl FixedCopper {
 /// allocator overhead and the source query/index; process-resource measurements remain separate.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ShoveStats {
-    /// Source-displacement passes, at most two under the shared gesture budget.
+    /// Incoming-route and displacement attempts charged to the shared gesture budget.
     pub attempts: usize,
     pub displaced_tracks: usize,
     pub queued_tracks: usize,
@@ -349,10 +349,8 @@ async fn displace(
     }
 }
 
-/// Validate the original pickup before removing movable bodies, then reuse captured
-/// topology and try one alternate return direction after a blocked cascade. Both attempts
-/// share the source/probe budget; cancellation drops only disposable work. Explicit search
-/// exhaustion stays incomplete, and an invalid pickup cannot become a placement authority.
+/// Validate the original pickup before making any speculative copper movable. All
+/// candidates share the same captured source and probe budget; cancellation drops the search.
 pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
     // A free pickup inside existing clearance is invalid even when that copper
     // could later move. Validate the original contact before removing any bodies.
@@ -411,85 +409,216 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
         }
         Err(error) => return Err(error),
     };
-    let first = attempt(query, &chains, request, budget, progress.clone(), false).await?;
-    if !matches!(first.outcome, Outcome::Blocked { .. })
-        || first.start_blocked
-        || !first.shove.as_ref().is_some_and(|stats| stats.queued_tracks > 0)
-        || progress.load(Ordering::Relaxed) >= budget
-    {
-        return Ok(first);
-    }
-    let mut second = attempt(query, &chains, request, budget, progress, true).await?;
-    if let (Some(stats), Some(previous)) = (&mut second.shove, &first.shove) {
-        stats.include_previous(previous);
-    }
-    Ok(second)
+    Search::prepare(query, &chains, request, budget, progress).await?.solve(request).await
 }
 
-/// Plan around fixed obstacles first, then propagate each obstructing unlocked track through
-/// a finite queue ordered along the push direction. Processed replacements become fixed obstacles for later work,
-/// preventing displacement cycles. A failed cascade discards its overlay and reports a stop;
-/// it never changes to walking around the original movable tracks.
-async fn attempt(
-    query: &ClearanceQuery,
-    chains: &Chains,
-    request: &Request,
+/// A previously certified guide is one candidate for the new cursor. The whole
+/// continuation must be certified again and never becomes part of the fixed gesture.
+enum Approach {
+    Walk(bool),
+    Continue(Vec<Point>),
+}
+
+/// Preserve earlier turns when possible, trying both ways to connect the last corner
+/// to the cursor. Try joining before or after the last leg and keep the path bound.
+fn continuations(request: &Request) -> Vec<Approach> {
+    let previous = &request.previous;
+    if previous.len() < 2 || previous.first() != Some(&request.head) || previous.last() == Some(&request.target) {
+        return Vec::new();
+    }
+    let mut options = Vec::new();
+    for length in [previous.len() - 1, previous.len()] {
+        let shared = &previous[..length];
+        for flipped in [request.flipped, !request.flipped] {
+            let tail = super::posture::elbow(shared[length - 1], request.target, request.posture, flipped);
+            let mut path = shared.to_vec();
+            path.extend(tail.into_iter().skip(1));
+            let path = super::walkaround::simplify(&path);
+            if path.len() <= super::super::track::MAX_PATH_POINTS {
+                options.push(Approach::Continue(path));
+            }
+        }
+    }
+    options
+}
+
+/// Use the same frozen pickup, protected contacts and fixed copper for every incoming
+/// candidate. A failed cascade drops its own overlay before the next candidate is tried.
+struct Search<'a> {
+    query: &'a ClearanceQuery,
+    chains: &'a Chains,
+    geometry: ClearanceQuery,
+    incoming: ClearanceQuery,
+    pickup: Pickup,
+    fixed: Vec<(Contour, Vec<Uuid>)>,
+    movable: BTreeSet<usize>,
+    stats: ShoveStats,
     budget: usize,
     progress: Arc<AtomicUsize>,
-    reverse_displacements: bool,
-) -> Result<Plan, CommandError> {
-    let Pickup { source: origin, nets, islands } = pickup(query, request)?;
-    let fixed: Vec<_> = request.fixed.iter().map(|p| p.geometry(query)).collect::<Result<_, _>>()?;
-    let relevant_layers: BTreeSet<_> = std::iter::once(request.layer).chain(fixed.iter().flat_map(|(_, layers)| layers.iter().copied())).collect();
-    let movable: BTreeSet<_> = chains
-        .tracks
-        .iter()
-        .filter(|(i, t)| {
-            !t.locked
-                && relevant_layers.contains(&t.layer)
-                && !islands.contains(&query.objects()[**i].island)
-                && chains.units.contains_key(&chains.owner[**i])
-        })
-        .map(|(i, _)| *i)
-        .collect();
-    let units: BTreeSet<_> = movable.iter().map(|i| chains.owner[*i]).collect();
-    let mut next = 1u128;
-    let mut stats = ShoveStats { attempts: 1, ..ShoveStats::default() };
-    // Free ends and protected contacts are fixed graph anchors. Ordinary degree-two
-    // bends remain soft hints, so an earlier displacement may move them later.
-    let mut items = query.objects().to_vec();
-    for root in &units {
-        super::search::yield_unit().await;
-        let chain = &chains.units[root];
-        let protected: Vec<_> = chain.anchors.iter().filter(|a| a.protected).collect();
-        let Some(first) = protected.first() else { continue };
-        for (source, _) in &chain.members {
-            items[*source].contour = Contour::capsule(first.point, first.point, query.objects()[*source].contour.radius);
+}
+
+impl<'a> Search<'a> {
+    /// Capture immovable geometry once for the route search and all its cascades.
+    async fn prepare(
+        query: &'a ClearanceQuery,
+        chains: &'a Chains,
+        request: &Request,
+        budget: usize,
+        progress: Arc<AtomicUsize>,
+    ) -> Result<Self, CommandError> {
+        let pickup = pickup(query, request)?;
+        let fixed: Vec<_> = request.fixed.iter().map(|p| p.geometry(query)).collect::<Result<_, _>>()?;
+        let relevant_layers: BTreeSet<_> =
+            std::iter::once(request.layer).chain(fixed.iter().flat_map(|(_, layers)| layers.iter().copied())).collect();
+        let movable: BTreeSet<_> = chains
+            .tracks
+            .iter()
+            .filter(|(i, t)| {
+                !t.locked
+                    && relevant_layers.contains(&t.layer)
+                    && !pickup.islands.contains(&query.objects()[**i].island)
+                    && chains.units.contains_key(&chains.owner[**i])
+            })
+            .map(|(i, _)| *i)
+            .collect();
+        let units: BTreeSet<_> = movable.iter().map(|i| chains.owner[*i]).collect();
+        let mut stats = ShoveStats::default();
+        // Free ends and protected contacts are fixed graph anchors. Ordinary degree-two
+        // bends remain soft hints, so an earlier displacement may move them later.
+        let mut items = query.objects().to_vec();
+        for root in &units {
+            super::search::yield_unit().await;
+            let chain = &chains.units[root];
+            let protected: Vec<_> = chain.anchors.iter().filter(|a| a.protected).collect();
+            let Some(first) = protected.first() else { continue };
+            for (source, _) in &chain.members {
+                items[*source].contour = Contour::capsule(first.point, first.point, query.objects()[*source].contour.radius);
+            }
+            for point in protected.iter().skip(1) {
+                let mut anchor = query.objects()[*root].clone();
+                anchor.contour = Contour::capsule(point.point, point.point, anchor.contour.radius);
+                items.push(anchor);
+            }
+            let caps = chain.members.len() + protected.len() - 1;
+            stats.fixed_anchor_objects += caps;
+            stats.overlay_geometry_bytes += caps * (std::mem::size_of::<Contour>() + std::mem::size_of::<Uuid>());
         }
-        for point in protected.iter().skip(1) {
-            let mut anchor = query.objects()[*root].clone();
-            anchor.contour = Contour::capsule(point.point, point.point, anchor.contour.radius);
-            items.push(anchor);
-        }
-        let caps = chain.members.len() + protected.len() - 1;
-        stats.fixed_anchor_objects += caps;
-        stats.overlay_geometry_bytes += caps * (std::mem::size_of::<Contour>() + std::mem::size_of::<Uuid>());
+        let geometry = query.with_objects(items)?;
+        let incoming = {
+            let mut overlay = geometry.overlay();
+            let mut next = 1;
+            add_path(&mut overlay, &fixed, pickup.source, &mut next, &mut ShoveStats::default())?;
+            super::search::yield_unit().await;
+            overlay.routing_query(pickup.source)?
+        };
+        Ok(Self { query, chains, geometry, incoming, pickup, fixed, movable, stats, budget, progress })
     }
-    let fixed_query = query.with_objects(items)?;
-    let mut overlay = fixed_query.overlay();
-    add_path(&mut overlay, &fixed, origin, &mut next, &mut stats)?;
-    super::search::yield_unit().await;
-    let initial = overlay.routing_query(origin)?;
-    let mut plan = super::search::walk(&initial, request, budget, progress.clone()).await?;
-    stats.used_walkaround =
-        plan.outcome == Outcome::Reached && plan.points != super::posture::elbow(request.head, request.target, request.posture, request.flipped);
-    let mut incomplete = plan.outcome == Outcome::Incomplete;
-    if plan.outcome == Outcome::Reached {
+
+    /// Try the requested posture first. If its cascade fails, allow a distinct
+    /// incoming geometry to succeed under the same exact clearance and contact rules.
+    async fn solve(&self, request: &Request) -> Result<Plan, CommandError> {
+        let guides = std::iter::once(Approach::Walk(request.flipped))
+            .chain(std::iter::once_with(|| continuations(request)).flatten())
+            .chain([Approach::Walk(!request.flipped)]);
+        let mut tested = Vec::new();
+        let mut stats = self.stats.clone();
+        let mut blocker = None;
+        let mut incomplete = false;
+        for guide in guides {
+            if self.progress.load(Ordering::Relaxed) >= self.budget {
+                incomplete = true;
+                break;
+            }
+            let mut route = request.clone();
+            let proposed = match guide {
+                Approach::Walk(flipped) => {
+                    route.flipped = flipped;
+                    super::search::walk(&self.incoming, &route, self.budget, self.progress.clone()).await?
+                }
+                Approach::Continue(points) => {
+                    if tested.contains(&points) {
+                        continue;
+                    }
+                    let mut walker = super::walkaround::Walker::new(&self.incoming, &route, self.budget, self.progress.clone())?;
+                    match walker.certify_candidate(&points).await {
+                        Ok(Some(plan)) => plan,
+                        Ok(None) => {
+                            tested.push(points);
+                            continue;
+                        }
+                        Err(super::walkaround::Stop::Exhausted) => {
+                            incomplete = true;
+                            continue;
+                        }
+                        Err(super::walkaround::Stop::Failed(error)) => return Err(error),
+                    }
+                }
+            };
+            if proposed.outcome != Outcome::Reached {
+                if proposed.start_blocked {
+                    let mut refused = proposed;
+                    refused.shove = Some(stats);
+                    return Ok(refused);
+                }
+                incomplete |= proposed.outcome == Outcome::Incomplete;
+                blocker = proposed.blocker.or(blocker);
+                continue;
+            }
+            if tested.contains(&proposed.points) {
+                continue;
+            }
+            tested.push(proposed.points.clone());
+            for reverse in [false, true] {
+                let mut attempt = self.propagate(&route, proposed.clone(), reverse).await?;
+                let mut attempt_stats = attempt.shove.take().unwrap_or_default();
+                let could_reverse = attempt_stats.queued_tracks > 0 && self.progress.load(Ordering::Relaxed) < self.budget;
+                attempt_stats.include_previous(&stats);
+                stats = attempt_stats;
+                if attempt.outcome == Outcome::Reached {
+                    attempt.shove = Some(stats);
+                    return Ok(attempt);
+                }
+                incomplete |= attempt.outcome == Outcome::Incomplete;
+                blocker = attempt.blocker.or(blocker);
+                if !could_reverse {
+                    break;
+                }
+            }
+        }
+        let probes = self.progress.load(Ordering::Relaxed);
+        let incomplete = incomplete || probes >= self.budget;
+        Ok(Plan {
+            adjusted_target: None,
+            start_blocked: false,
+            replacements: Vec::new(),
+            shove: Some(stats),
+            points: vec![request.head],
+            outcome: if incomplete { Outcome::Incomplete } else { Outcome::Blocked { last_legal: request.head } },
+            blocker: if incomplete { None } else { blocker },
+            probes,
+        })
+    }
+
+    /// Displace a finite queue around one certified incoming path. A failed cascade cannot
+    /// publish partial geometry. The return pass walks displaced intervals from their other ends.
+    async fn propagate(&self, request: &Request, mut plan: Plan, reverse_displacements: bool) -> Result<Plan, CommandError> {
+        let (query, chains, budget, progress) = (self.query, self.chains, self.budget, &self.progress);
+        let Pickup { source: origin, nets, islands } = &self.pickup;
+        let origin = *origin;
+        let movable = &self.movable;
+        let mut stats = self.stats.clone();
+        stats.attempts = 1;
+        stats.used_walkaround = plan.points != super::posture::elbow(request.head, request.target, request.posture, request.flipped);
+        let mut next = 1;
+        let fixed = &self.fixed;
+        let mut overlay = self.geometry.overlay();
+        add_path(&mut overlay, fixed, origin, &mut next, &mut stats)?;
+        let mut incomplete = false;
         let pieces: Vec<_> =
             plan.points.windows(2).map(|p| (Contour::capsule(p[0], p[1], request.width_nm as f64 / 2.), vec![request.layer])).collect();
         add_path(&mut overlay, &pieces, origin, &mut next, &mut stats)?;
         let fixed_count = fixed.len();
-        let mut route = fixed;
+        let mut route = fixed.clone();
         route.extend(pieces);
         let mut queue = BTreeSet::new();
         let mut pushes = BTreeMap::new();
@@ -497,17 +626,17 @@ async fn attempt(
         let mut replacements = Vec::new();
         let mut legal = Propagation {
             chains,
-            movable: &movable,
+            movable,
             replaced: &replaced,
             queue: &mut queue,
             pushes: &mut pushes,
             incoming: None,
             contact_exemptions: None,
             stats: &mut stats,
-            progress: &progress,
+            progress,
             budget,
         }
-        .enqueue(query, &route, &nets, &islands)
+        .enqueue(query, &route, nets, islands)
         .await?;
         while legal && !queue.is_empty() {
             super::search::yield_unit().await;
@@ -638,14 +767,14 @@ async fn attempt(
             add_path(&mut overlay, &pieces, Some(source), &mut next, &mut stats)?;
             legal = Propagation {
                 chains,
-                movable: &movable,
+                movable,
                 replaced: &replaced,
                 queue: &mut queue,
                 pushes: &mut pushes,
                 incoming: Some(incoming),
                 contact_exemptions: contacts.as_ref(),
                 stats: &mut stats,
-                progress: &progress,
+                progress,
                 budget,
             }
             .enqueue(query, &pieces, &object.intended_nets, &[object.island].into_iter().collect())
@@ -659,12 +788,12 @@ async fn attempt(
             if !outline.polygons.is_empty() {
                 let baseline = query.authority().rules().values;
                 for (contour, layers) in &route[..fixed_count] {
-                    if !charge(&progress, budget).await {
+                    if !charge(progress, budget).await {
                         incomplete = true;
                         legal = false;
                         break;
                     }
-                    let result = query.probe_membership_excluding(contour, layers, &nets, |i| replaced.contains(&chains.owner[i]))?;
+                    let result = query.probe_membership_excluding(contour, layers, nets, |i| replaced.contains(&chains.owner[i]))?;
                     let rules = result.probe_rules.as_ref().map_or(baseline, |p| p.hard_values(baseline));
                     if !outline.allows_copper(contour, rules.edge_clearance_nm) {
                         legal = false;
@@ -680,17 +809,17 @@ async fn attempt(
             plan.shove = Some(stats);
             return Ok(plan);
         }
+        // A head-only refusal lets interactive clients retain their last valid shove preview.
+        // No unvalidated prefix or partial replacement can become placement authority.
+        plan.points = vec![request.head];
+        plan.probes = progress.load(Ordering::Relaxed);
+        plan.outcome = if incomplete || plan.probes >= budget { Outcome::Incomplete } else { Outcome::Blocked { last_legal: request.head } };
+        if incomplete || plan.probes >= budget {
+            plan.blocker = None;
+        }
+        plan.shove = Some(stats);
+        Ok(plan)
     }
-    // A head-only refusal lets interactive clients retain their last valid shove preview.
-    // No unvalidated prefix or partial replacement can become placement authority.
-    plan.points = vec![request.head];
-    plan.probes = progress.load(Ordering::Relaxed);
-    plan.outcome = if incomplete || plan.probes >= budget { Outcome::Incomplete } else { Outcome::Blocked { last_legal: request.head } };
-    if incomplete || plan.probes >= budget {
-        plan.blocker = None;
-    }
-    plan.shove = Some(stats);
-    Ok(plan)
 }
 
 /// Command schemas expose bounded primitive geometry rather than captured source indices.
