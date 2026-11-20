@@ -1573,6 +1573,7 @@ pub(crate) struct PairDocumentProbe {
     has_pairs: bool,
     row_bytes: usize,
     encoder: DocumentsEncoder,
+    finished: Option<(PairDocumentBudget, Documents)>,
 }
 
 impl PairDocumentProbe {
@@ -1582,7 +1583,7 @@ impl PairDocumentProbe {
         let has_pairs = project.net_registry.has_pairs();
         let mut encoder = DocumentsEncoder::new(project);
         encoder.pair_capacity_only = true;
-        Self { home, has_pairs, row_bytes, encoder }
+        Self { home, has_pairs, row_bytes, encoder, finished: None }
     }
 
     /// Completed native writer units, including work in a discarded legacy envelope.
@@ -1590,15 +1591,27 @@ impl PairDocumentProbe {
         self.encoder.work_done
     }
 
-    /// Count headroom once the native document batches complete; retain only the byte budget.
+    /// Count headroom after the native writer completes and release temporary document buffers
+    /// piecemeal, rather than dropping the entire project's output in a single successful poll.
     pub(crate) fn step(&mut self, records: usize) -> Result<Option<PairDocumentBudget>, crate::CommandError> {
+        if let Some((budget, documents)) = &mut self.finished {
+            for _ in 0..records {
+                self.encoder.work_done += 1;
+                if documents.pop_first().is_none() {
+                    return Ok(Some(*budget));
+                }
+            }
+            return Ok(None);
+        }
         match self.encoder.step(records) {
             Ok(None) => Ok(None),
             Ok(Some(documents)) => {
                 let bytes = documents.get(&self.home).ok_or_else(|| crate::CommandError::InvalidParams("Missing encoded pair document.".into()))?;
                 let file_headroom = MAX_DOCUMENT_BYTES - bytes.len();
                 let folder_headroom = MAX_DOCUMENTS_BYTES - self.encoder.folder_bytes;
-                Ok(Some(PairDocumentBudget { has_pairs: self.has_pairs, pair_rows: self.row_bytes + file_headroom.min(folder_headroom) }))
+                let budget = PairDocumentBudget { has_pairs: self.has_pairs, pair_rows: self.row_bytes + file_headroom.min(folder_headroom) };
+                self.finished = Some((budget, documents));
+                Ok(None)
             }
             Err(error) if self.encoder.size_limit_exceeded => Err(crate::CommandError::CapExceeded(error)),
             Err(error) => Err(crate::CommandError::InvalidParams(error)),
