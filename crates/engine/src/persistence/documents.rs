@@ -1521,12 +1521,18 @@ pub(super) fn check_documents(documents: &Documents) -> Result<(), String> {
         return Err("project exceeds the document count or total size limit".to_owned());
     }
     for (path, bytes) in documents {
-        if !is_document_path(path) {
-            return Err(format!("{path}: unexpected project path"));
-        }
-        if bytes.len() > MAX_DOCUMENT_BYTES {
-            return Err(format!("{path}: document exceeds its size limit"));
-        }
+        check_document_entry(path, bytes)?;
+    }
+    Ok(())
+}
+
+/// Apply the same native path and per-file limit when reading or finishing a document.
+fn check_document_entry(path: &str, bytes: &[u8]) -> Result<(), String> {
+    if !is_document_path(path) {
+        return Err(format!("{path}: unexpected project path"));
+    }
+    if bytes.len() > MAX_DOCUMENT_BYTES {
+        return Err(format!("{path}: document exceeds its size limit"));
     }
     Ok(())
 }
@@ -1591,7 +1597,7 @@ impl PairDocumentProbe {
             Ok(Some(documents)) => {
                 let bytes = documents.get(&self.home).ok_or_else(|| crate::CommandError::InvalidParams("Missing encoded pair document.".into()))?;
                 let file_headroom = MAX_DOCUMENT_BYTES - bytes.len();
-                let folder_headroom = MAX_DOCUMENTS_BYTES - documents.values().map(Vec::len).sum::<usize>();
+                let folder_headroom = MAX_DOCUMENTS_BYTES - self.encoder.folder_bytes;
                 Ok(Some(PairDocumentBudget { has_pairs: self.has_pairs, pair_rows: self.row_bytes + file_headroom.min(folder_headroom) }))
             }
             Err(error) if self.encoder.size_limit_exceeded => Err(crate::CommandError::CapExceeded(error)),
@@ -1629,6 +1635,8 @@ pub struct DocumentsEncoder {
     documents: Documents,
     bytes: Vec<u8>,
     work_done: usize,
+    folder_bytes: usize,
+    document_cursor: Option<String>,
     phase: u8,
     sheet_cursor: usize,
     cursor: u64,
@@ -1675,6 +1683,8 @@ impl DocumentsEncoder {
             documents: Documents::new(),
             bytes: Vec::new(),
             work_done: 0,
+            folder_bytes: 0,
+            document_cursor: None,
             phase: 26,
             sheet_cursor: 0,
             cursor: 0,
@@ -2324,8 +2334,29 @@ impl DocumentsEncoder {
                             bytes,
                         )?;
                     } else {
-                        self.size_limit_exceeded = self.documents.values().map(Vec::len).sum::<usize>() > MAX_DOCUMENTS_BYTES;
-                        check_documents(&self.documents)?;
+                        self.phase = 32;
+                    }
+                }
+                32 | 33 => {
+                    let next = self.document_cursor.as_ref().map_or_else(
+                        || self.documents.first_key_value(),
+                        |path| self.documents.range((std::ops::Bound::Excluded(path.clone()), std::ops::Bound::Unbounded)).next(),
+                    );
+                    if let Some((path, bytes)) = next {
+                        if self.phase == 32 {
+                            self.folder_bytes += bytes.len();
+                        } else {
+                            check_document_entry(path, bytes)?;
+                        }
+                        self.document_cursor = Some(path.clone());
+                    } else if self.phase == 32 {
+                        self.size_limit_exceeded = self.folder_bytes > MAX_DOCUMENTS_BYTES;
+                        if self.size_limit_exceeded || self.documents.len() > MAX_DOCUMENTS {
+                            return Err("project exceeds the document count or total size limit".into());
+                        }
+                        self.document_cursor = None;
+                        self.phase = 33;
+                    } else {
                         self.phase = 13;
                         return Ok(Some(std::mem::take(&mut self.documents)));
                     }
