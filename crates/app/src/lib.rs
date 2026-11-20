@@ -98,6 +98,7 @@ use pcbcraft_engine::{
 use serde_json::{Value, json};
 
 pub use editor_windows::APP_TITLE;
+pub use pcbcraft_chrome::i18n::LanguageChoice;
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
 use project_files::SaveFormat;
 
@@ -2589,6 +2590,7 @@ impl PcbApp {
         self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
         self.sync_style(&ctx);
+        let _language_scope = pcbcraft_chrome::i18n::scope(self.preferences.language);
         self.checkpoint_arrangements();
         self.handle_close_request(&ctx);
         self.library_editors.poll();
