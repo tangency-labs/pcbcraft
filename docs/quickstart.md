@@ -868,12 +868,12 @@ Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
-With a configured board, a closed Board Outline and a resolvable placement origin,
-**Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
-The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
-Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
-destination errors can prevent a successful save. In the browser, Outputs requests
-one download; check that your browser saved it.
+With a configured board, at least one closed Board Outline loop and a resolvable
+placement origin, **Manufacture → Fabrication → Outputs** generates one ZIP without
+editing the design. The embedded `manifest.json` lists Gerber
+and drill member byte sizes and SHA-256. Desktop can replace the same ZIP on re-export;
+cancellation, a busy output worker or destination errors can prevent a successful save.
+In the browser, Outputs requests one download; check that your browser saved it.
 
 For pads exported on a layer, round pads retain C flashes.
 R/O flashes require individually quarter-turn library and placement rotations and a

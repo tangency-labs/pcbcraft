@@ -841,9 +841,10 @@ so both shift exactly when the origin moves by a whole micrometre. Mask openings
 pads on the corresponding outer copper layer; paste includes only surface-mount pads,
 not through-hole pads. Neither adds process expansion. Vias receive no automatic mask
 opening, but authored mask artwork can open them. The shape approximations below also
-apply to these openings. Generation needs a board setup, a
-closed Board Outline and a resolvable placement origin, and reports missing prerequisites.
-It does not edit the project. Repeated generation from the same captured inputs and
+apply to these openings. Generation needs a board setup, at least one closed
+Board Outline loop and a resolvable placement origin. Each closed path, including a
+cut-out, gets its own loop in the profile file. An open path on a Board Outline
+layer does not count as a loop and is plotted as drawn. Generation does not edit the project. Repeated generation from the same captured inputs and
 exporter build produces the same archive; project names affect filenames and exporter
 versions appear in the Gerber header. Saving can be cancelled, busy or fail at the
 destination; generation alone is not a successful save. Run DRC first: outputs do not
