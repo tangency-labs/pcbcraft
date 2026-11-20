@@ -548,7 +548,7 @@ fn format_guide_lists_every_kind() {
         Kind::TerminalChanged,
     ];
     let (_, kinds) = guide.split_once("The difference kinds are ").unwrap();
-    let (differences, notes) = kinds.split_once("The note kinds\nare ").unwrap();
+    let (differences, notes) = kinds.split_once("The note kinds").unwrap();
     let (notes, _) = notes.split_once("A file whose nets").unwrap();
     for kind in all {
         let section = match kind {
