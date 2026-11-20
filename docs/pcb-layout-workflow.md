@@ -250,9 +250,10 @@ ribbon's planned entries and the editor guide have a stated destination.
 - **Differential pairs and length tuning** (Layout › Route › Pair, Layout › Route › Tune) need
   net-registry pairs and length rules from slice 2. Pairs reference two net IDs,
   never name suffixes.
-- **Arcs and teardrops** need a curved track segment in the board format. DRC,
-  the clearance query and Gerber output (arcs are native in the specification)
-  must support it in the same slice.
+- **Circular tracks and teardrops:** native [circular track records](circular-copper-records.md)
+  and [straight via teardrop intents](teardrop-records.md) are available through
+  shared commands. Rendering and manufacturing support, DRC and automatic
+  teardrop regeneration remain separate work.
 - **Blind, buried and micro vias** need layer spans checked against the stackup
   and drill pairs in the Excellon output.
 - **Board text** on copper and silkscreen needs independently

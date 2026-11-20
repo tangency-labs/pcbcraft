@@ -40,7 +40,7 @@ impl Selection {
             requirements: self.requirements.clone(),
         }
     }
-    /// Validate native closure and instance requirements; an edited MPN may remain recorded as incompatible.
+    /// Validate native closure and name any invalid requirement field; an edited MPN may remain incompatible.
     pub fn validate(&self) -> Result<(), String> {
         let part = &self.resolved.definition;
         part.validate_category(self.resolved.category.as_deref())?;
@@ -61,7 +61,7 @@ impl Selection {
                 .as_ref()
                 .and_then(|category| category.fields.get(id))
                 .ok_or_else(|| format!("Unknown requirement field {id}."))?;
-            requirement.validate(field)?;
+            requirement.validate(field).map_err(|error| format!("Invalid requirement {id}: {error}"))?;
             if let Some(fixed) = part.fixed_parameters.get(id)
                 && requirement != &(Requirement::Exact { value: fixed.clone() })
             {
@@ -134,7 +134,7 @@ impl Selection {
         let crate::library::parts::FieldType::Quantity { quantity, .. } = &field.value_type else {
             return Err("Primary value must be a quantity.".into());
         };
-        let value = quantity.parse(input).map(Value::from)?;
+        let value = quantity.parse(input).map(Value::from).map_err(|error| format!("{id}: {error}"))?;
         if let Some(fixed) = self.resolved.definition.fixed_parameters.get(&id) {
             if fixed != &value {
                 return Err(format!("{id} is fixed by the reusable part."));
