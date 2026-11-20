@@ -301,9 +301,10 @@ impl PcbApp {
     }
 
     /// The camera that paints `view`: its own for schematic and PCB panes, or its definition
-    /// presentation's. Library browsing panes have no model canvas.
+    /// presentation's. Library browsing panes and unavailable-document placeholders, which keep
+    /// their last camera, have no model canvas.
     fn automation_camera(&self, view: ViewId) -> Option<&crate::canvas_camera::Camera> {
-        let pane = self.views.view(view).filter(|pane| pane.library.is_none())?;
+        let pane = self.views.view(view).filter(|pane| pane.library.is_none() && !pane.unavailable())?;
         match pane.definition {
             Some(definition) => self.library_editors.view_camera(definition, view),
             None => Some(&pane.camera),
@@ -354,6 +355,9 @@ impl PcbApp {
         let pane = self.views.view(view).ok_or("Unknown view; it may have been closed")?;
         if pane.library.is_some() {
             return Err("The addressed view shows Parts Library browsing, which has no model canvas".into());
+        }
+        if pane.unavailable() {
+            return Err("The addressed view's document is unavailable, so it has no model canvas".into());
         }
         let (&host, _) =
             self.views.hosts.iter().find(|(_, host)| host.layout.visible_views().contains(&view)).ok_or("The addressed view is not visible")?;

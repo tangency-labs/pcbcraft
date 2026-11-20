@@ -668,3 +668,23 @@ fn coverage_uses_the_actual_cards_not_the_largest_clear_rectangle() {
         assert_eq!(projected["uncovered"], expected, "{point:?} {projected}");
     }
 }
+
+/// Deleting a sheet that has already painted leaves an unavailable placeholder with its old
+/// camera; projecting into it is refused rather than reported as an uncovered canvas.
+#[test]
+fn an_unavailable_sheet_view_is_not_projected() {
+    let mut h = ready();
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"Power","expected_revision":revision}));
+    h.run();
+    let power = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+    crate::tests::click(&mut h, "Power");
+    h.run();
+    let view = h.state().views.active.id().0;
+    project(&mut h, view, 0, 0).unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().session.apply(pcbcraft_engine::sheets::DELETE_SHEET, &json!({"sheet":power.id(),"expected_revision":revision})).unwrap();
+    h.run();
+    assert!(h.state().views.active.unavailable());
+    assert!(project(&mut h, view, 0, 0).unwrap_err().contains("unavailable"));
+}
