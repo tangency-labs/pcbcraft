@@ -43,7 +43,7 @@ pub struct Terminal {
 
 impl Terminal {
     /// Return a placed symbol's terminals, one per pin of its definition, in pin order.
-    pub(super) fn for_symbol(symbol: u64, definition: &SymbolUnit) -> Vec<Self> {
+    pub(crate) fn for_symbol(symbol: u64, definition: &SymbolUnit) -> Vec<Self> {
         definition.pins.iter().filter_map(|pin| Some(Self { symbol, number: PinNumber::new(&pin.number)? })).collect()
     }
 
