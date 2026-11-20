@@ -1031,10 +1031,21 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
     }
 }
 
-/// Distinct pad-only identities can share the same display name. Each keeps one Gerber
-/// name across all its pads and attached copper, before and after routing.
+/// Distinct accepted pad-only identities can share the same display name without merging.
 #[test]
 fn gerber_distinguishes_unwired_multi_pad_terminal_groups() {
+    check_unwired_multi_pad_terminal_groups(true);
+}
+
+/// Fabrication also accepts a board that has not initialized reviewed board updates.
+#[test]
+fn gerber_distinguishes_unwired_multi_pad_groups_without_baseline() {
+    check_unwired_multi_pad_terminal_groups(false);
+}
+
+/// Check separate pad groups in read-back both before routing and after connecting
+/// one group through the back layer. The baseline toggle changes where intent is sourced.
+fn check_unwired_multi_pad_terminal_groups(accept_baseline: bool) {
     let mut s = aperture_fixture_at(
         &[(PadShape::Circle, 400_000, 400_000, 0); 4],
         0,
@@ -1044,10 +1055,14 @@ fn gerber_distinguishes_unwired_multi_pad_terminal_groups() {
         None,
         Some(json!({"1":["1","2"],"2":["3","4"]})),
     );
-    s.apply(crate::board::update::INITIALIZE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
+    if accept_baseline {
+        s.apply(crate::board::update::INITIALIZE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
+    }
+    assert_eq!(view(&s).project().board.baseline.is_some(), accept_baseline);
     let pads = view(&s).footprints().next().unwrap().pads;
     assert_eq!(pads.len(), 4);
-    assert!(pads.iter().all(|pad| pad.net.as_deref() == Some("Unconnected")));
+    let display_name = accept_baseline.then_some("Unconnected");
+    assert!(pads.iter().all(|pad| pad.net.as_deref() == display_name));
     let pad_names = |read: &ReadGerber| {
         read.objects.iter().filter_map(|(_, object)| Some((object.pin.as_ref()?.1.clone(), object.net.clone().unwrap()))).collect::<BTreeMap<_, _>>()
     };

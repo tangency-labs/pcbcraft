@@ -1,12 +1,16 @@
 //! Copper object metadata. Net identity comes from board intent; names are only presentation.
 
 use super::BoardView;
-use crate::board::{
-    track::{IslandBuilder, lands},
-    via_nets::node_membership,
+use crate::{
+    Project,
+    board::{
+        Pad,
+        track::{IslandBuilder, Land, lands},
+        via_nets::{Memberships, node_membership},
+    },
 };
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     fmt::Write as _,
 };
 use uuid::Uuid;
@@ -105,24 +109,51 @@ fn distinct_names(names: BTreeMap<usize, String>) -> BTreeMap<usize, String> {
     let mut next_suffix = BTreeMap::new();
     names
         .into_iter()
-        .map(|(id, name)| {
-            use std::collections::btree_map::Entry;
-            match next_suffix.entry(name.clone()) {
-                Entry::Vacant(entry) => {
-                    entry.insert(2usize);
-                    (id, name)
-                }
-                Entry::Occupied(mut entry) => loop {
-                    let suffix = entry.get_mut();
-                    let candidate = format!("{name} ({suffix})");
-                    *suffix += 1;
-                    if reserved.insert(candidate.clone()) {
-                        break (id, candidate);
-                    }
-                },
+        .map(|(id, name)| match next_suffix.entry(name.clone()) {
+            Entry::Vacant(entry) => {
+                entry.insert(2usize);
+                (id, name)
             }
+            Entry::Occupied(mut entry) => loop {
+                let suffix = entry.get_mut();
+                let candidate = format!("{name} ({suffix})");
+                *suffix += 1;
+                if reserved.insert(candidate.clone()) {
+                    break (id, candidate);
+                }
+            },
         })
         .collect()
+}
+
+/// Without an accepted baseline, unwired terminals are absent from the schematic graph.
+/// Multiple copper lands mapped to one such terminal still share board intent. Add export-local
+/// memberships beyond all schematic/via IDs; leave single lands and unmapped lands unconnected.
+fn add_unaccepted_pad_groups(project: &Project, lands: &[Land], intrinsic: &mut [Option<usize>], memberships: &mut Memberships) {
+    let mut next = intrinsic.iter().flatten().copied().chain(memberships.names.keys().copied()).max().map_or(0, |id| id + 1);
+    let mut terminals = BTreeMap::new();
+    for (node, land) in lands.iter().enumerate() {
+        if intrinsic[node].is_some() {
+            continue;
+        }
+        let Some(terminal) = Pad::parse(&land.key.0, &land.key.1).and_then(|pad| project.board.component_pin_for(pad)) else { continue };
+        match terminals.entry(terminal) {
+            Entry::Vacant(entry) => {
+                entry.insert((node, None));
+            }
+            Entry::Occupied(mut entry) => {
+                let (first, assigned) = entry.get_mut();
+                let id = *assigned.get_or_insert_with(|| {
+                    let id = next;
+                    next += 1;
+                    intrinsic[*first] = Some(id);
+                    memberships.names.insert(id, "Unconnected".into());
+                    id
+                });
+                intrinsic[node] = Some(id);
+            }
+        }
+    }
 }
 
 impl RoutedNets {
@@ -132,8 +163,11 @@ impl RoutedNets {
         let (tracks, vias) = (view.tracks(), view.vias());
         let lands = lands(view);
         let project = view.project();
-        let memberships = project.board_intent_memberships();
-        let intrinsic = node_membership(project, &lands, tracks.len(), vias, &memberships);
+        let mut memberships = project.board_intent_memberships();
+        let mut intrinsic = node_membership(project, &lands, tracks.len(), vias, &memberships);
+        if project.board.baseline.is_none() {
+            add_unaccepted_pad_groups(project, &lands, &mut intrinsic, &mut memberships);
+        }
         let land_count = lands.len();
         let mut names = BTreeMap::new();
         let objects = if tracks.is_empty() && vias.is_empty() {
