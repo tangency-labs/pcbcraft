@@ -1657,6 +1657,7 @@ pub struct DocumentsEncoder {
     sheet_wire_index: BTreeMap<u64, usize>,
     live_generated_legs: Vec<usize>,
     board_facts: BoardFacts,
+    baseline_encoding: crate::board::update::BaselineEncoding,
     board_rows: BoardRows,
 }
 
@@ -1705,6 +1706,7 @@ impl DocumentsEncoder {
             sheet_wire_index: BTreeMap::new(),
             live_generated_legs: Vec::new(),
             board_facts: BoardFacts::default(),
+            baseline_encoding: crate::board::update::BaselineEncoding::default(),
             board_rows: BoardRows::default(),
         }
     }
@@ -2260,8 +2262,21 @@ impl DocumentsEncoder {
                 31 => {
                     if self.board_facts.step(&self.project)? {
                         board_metadata_header(&mut self.bytes, &self.project, &self.board_facts)?;
-                        self.phase = 30;
+                        if self.project.board.baseline.is_some() {
+                            self.bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
+                        }
+                        self.phase = 34;
                     }
+                }
+                34 => {
+                    if let Some(baseline) = &self.project.board.baseline {
+                        if !self.baseline_encoding.step(baseline, &mut self.bytes, true)? {
+                            continue;
+                        }
+                        self.bytes.write_all(b",\n").map_err(|error| error.to_string())?;
+                    }
+                    board_metadata_tail(&mut self.bytes, &self.project)?;
+                    self.phase = 30;
                 }
                 30 => {
                     if self.board_rows.step(&mut self.bytes, &self.project.board)? {
@@ -2575,6 +2590,13 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
     let mut facts = BoardFacts::default();
     while !facts.step(project)? {}
     board_metadata_header(&mut bytes, project, &facts)?;
+    if let Some(baseline) = &project.board.baseline {
+        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
+        let mut encoding = crate::board::update::BaselineEncoding::default();
+        while !encoding.step(baseline, &mut bytes, true)? {}
+        bytes.write_all(b",\n").map_err(|error| error.to_string())?;
+    }
+    board_metadata_tail(&mut bytes, project)?;
     let mut rows = BoardRows::default();
     while !rows.step(&mut bytes, &project.board)? {}
     let mut first = true;
@@ -2704,17 +2726,11 @@ fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &Boar
     } else {
         bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
-    if let Some(baseline) = &board.baseline {
-        let encoded = baseline.encode()?;
-        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
-        for (index, line) in encoded.split(|byte| *byte == b'\n').enumerate() {
-            if index != 0 {
-                bytes.write_all(b"\n  ").map_err(|error| error.to_string())?;
-            }
-            bytes.write_all(line).map_err(|error| error.to_string())?;
-        }
-        bytes.write_all(b",\n").map_err(|error| error.to_string())?;
-    }
+    Ok(())
+}
+
+fn board_metadata_tail(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
+    let board = &project.board;
     if let Some(rules) = &board.rules {
         rules.validate()?;
         writeln!(bytes, "  \"rules\": {},", serde_json::to_string(rules).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
@@ -2727,10 +2743,10 @@ fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &Boar
         project.assembly_profiles.validate(&board.assembly_profiles)?;
         writeln!(bytes, "  \"assembly_profiles\": {},", json(&board.assembly_profiles)?).map_err(|e| e.to_string())?;
     }
-    if let Some(settings) = silkscreen {
+    if let Some(settings) = &board.silkscreen {
         writeln!(bytes, "  \"silkscreen\": {},", serde_json::to_string(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    if let Some(outline) = outline {
+    if let Some(outline) = &board.outline {
         writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     Ok(())
