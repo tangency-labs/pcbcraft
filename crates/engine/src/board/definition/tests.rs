@@ -115,6 +115,39 @@ fn mounting_route_fixture(connected: bool) -> Session {
     place_mounting_fixture(editor.snapshot().as_ref(), connected)
 }
 
+/// The NPTH envelope takes precedence when the same schematic fragment carries a designator
+/// lock. Round-trip both properties, and reject a downgrade that would hide the hole capability.
+#[test]
+fn schematic_clipboard_roundtrips_npth_with_a_designator_lock() {
+    let mut source = mounting_route_fixture(false);
+    let project = source.project().unwrap();
+    let symbol = &project.symbols()[0];
+    let part = project.component(symbol).unwrap();
+    let id = symbol.id();
+    let sheet = project.sheet_target().id();
+    let fields = json!({"symbol":id,"reference":part.reference(),"value":part.value(),
+        "designator_locked":true,"expected_revision":source.revision()});
+    source.apply(crate::SET_SYMBOL_FIELDS, &fields).unwrap();
+    let copied = source
+        .execute(crate::clipboard::COPY, &json!({"sheet":sheet,"items":{"symbols":[id],"wires":[]},"expected_revision":source.revision()}))
+        .unwrap();
+    let text = copied["clipboard"].as_str().unwrap();
+    let mut envelope: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(envelope["format"], "pcbcraft-clipboard/6");
+    let fragment = crate::clipboard::Fragment::from_text(text).unwrap();
+    assert!(fragment.hole_content() == crate::clipboard::HoleContent::Npth);
+    assert!(fragment.project.components().any(|part| part.designator_locked()));
+    let mut target = Session::default();
+    target.apply("project.new", &json!({"create_board":false})).unwrap();
+    target.apply(crate::clipboard::PASTE, &json!({"text":text,"x_nm":0,"y_nm":0,"expected_revision":target.revision()})).unwrap();
+    let pasted = target.project().unwrap();
+    assert!(pasted.components().any(|part| part.designator_locked()));
+    assert!(pasted.schematic_packages.definitions.values().any(|definition| !definition.non_plated_holes.is_empty()));
+    envelope["format"] = json!("pcbcraft-clipboard/3");
+    assert!(matches!(crate::clipboard::Fragment::from_text(&envelope.to_string()),
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+}
+
 /// Make a legal thin track to a via on the right side of the opening. Optionally continue
 /// after that first transition and return to the initial layer at a distant second via.
 fn mounting_route(s: &Session, distance_nm: i64, two_transitions: bool) -> Value {
