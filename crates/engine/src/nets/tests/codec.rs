@@ -143,6 +143,13 @@ fn registry_vocabulary_is_versioned_and_has_exactly_one_home() {
             if absent && !board {
                 // Project/52 makes the embedded registry optional; a board header still names it.
                 assert!(decode_documents(&missing).unwrap().net_registry.records.is_empty());
+                // Project/17 cannot omit it.
+                let mut older = value.clone();
+                older["format"] = json!("pcbcraft-project/17");
+                let mut refused = docs.clone();
+                refused.insert(path.clone(), serde_json::to_vec(&older).unwrap());
+                let error = decode_documents(&refused).unwrap_err();
+                assert!(error.contains("Net registry records require project format 17"), "{error}");
             } else {
                 assert!(decode_documents(&missing).is_err());
             }
