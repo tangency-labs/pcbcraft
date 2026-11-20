@@ -350,10 +350,13 @@ fn versioned_storage_round_trips_without_silent_loss() {
     let mut b = board.clone();
     b["format"] = json!("pcbcraft-board/7");
     invalid.push(b);
+    // Board/41 may omit the setup; board/2 requires one.
     let mut b = board.clone();
+    b["format"] = json!("pcbcraft-board/2");
     b.as_object_mut().unwrap().remove("setup");
     invalid.push(b);
     let mut b = board.clone();
+    b["format"] = json!("pcbcraft-board/2");
     b["setup"] = Value::Null;
     invalid.push(b);
     let mut b = board;

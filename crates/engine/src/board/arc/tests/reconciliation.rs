@@ -214,6 +214,7 @@ fn arc_report_superset_retains_header_and_material_validation() {
     candidate["format"] = json!("pcbcraft-board/25");
     invalid.push((candidate, "arcs require format 26"));
     let mut candidate = board.clone();
+    candidate["format"] = json!("pcbcraft-board/26");
     candidate.as_object_mut().unwrap().remove("arcs");
     invalid.push((candidate, "format 26 requires arcs"));
     for (mut candidate, reason) in invalid_reports {

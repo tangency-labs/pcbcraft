@@ -222,12 +222,13 @@ fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
 #[test]
 fn current_board_round_trips_named_groups_with_arcs_and_locks() {
     let mut session = track::tests::routed_fixture();
-    let arc = add_arc(&mut session);
     let layer = track::tests::copper_layers(&session)[0];
     let group = json!({"id":crate::fresh_id().unwrap(),"name":"Return","layers":[layer]});
     let mut setup = json!(session.project().unwrap().board_setup().unwrap());
     setup["stackup"]["layer_groups"] = json!([group]);
+    // Setup edits refuse boards that already carry arcs, so stage the group first.
     session.apply(crate::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":session.revision()})).unwrap();
+    let arc = add_arc(&mut session);
     let saved = encode_documents(with_lock(&session.snapshot().unwrap(), true)).unwrap();
     let path = test_board_path(&saved);
     let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
@@ -367,6 +368,7 @@ fn locked_board_requires_valid_placement_records() {
     let mut invalid = good.clone();
     invalid.as_object_mut().unwrap().remove("footprints");
     assert_invalid_board_record(&documents, &invalid, "missing field `footprints`");
+    invalid["format"] = json!("pcbcraft-board/34");
     invalid["footprints"] = json!([]);
     assert_invalid_board_record(&documents, &invalid, "requires an authored footprint lock");
     invalid = good.clone();

@@ -199,7 +199,8 @@ fn board_format_12_and_tracks_require_each_other() {
     let start = text.find("  \"tracks\": [").unwrap();
     let end = start + text[start..].find("  ],\n").unwrap() + "  ],\n".len();
     let mut untracked = saved.clone();
-    untracked.insert(crate::persistence::test_board_path(&untracked), format!("{}{}", &text[..start], &text[end..]).into_bytes());
+    let untracked_text = format!("{}{}", &text[..start], &text[end..]).replace("pcbcraft-board/41", "pcbcraft-board/12");
+    untracked.insert(crate::persistence::test_board_path(&untracked), untracked_text.into_bytes());
     assert!(decode_documents(&untracked).is_err(), "format 12 requires tracks");
     let mut bad_layer = saved;
     let front = front.to_string();
@@ -498,7 +499,8 @@ fn vias_use_board_format_13_and_format_12_stays_tracks_only() {
     let start = text.find("  \"vias\": [").unwrap();
     let end = start + text[start..].find("  ],\n").unwrap() + "  ],\n".len();
     let mut no_vias = vias_only.clone();
-    no_vias.insert(crate::persistence::test_board_path(&no_vias), format!("{}{}", &text[..start], &text[end..]).into_bytes());
+    let no_vias_text = format!("{}{}", &text[..start], &text[end..]).replace("pcbcraft-board/41", "pcbcraft-board/13");
+    no_vias.insert(crate::persistence::test_board_path(&no_vias), no_vias_text.into_bytes());
     assert!(decode_documents(&no_vias).is_err(), "format 13 requires vias");
 }
 

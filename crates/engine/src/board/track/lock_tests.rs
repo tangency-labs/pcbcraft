@@ -132,7 +132,7 @@ fn copper_locks_round_trip_and_old_format_headers_refuse_them() {
     apply(&mut session, SET_COPPER_LOCKED, json!({"tracks":tracks,"vias":[via],"locked":false}));
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
     let mut bad = original;
-    let text = String::from_utf8(bad[&path].clone()).unwrap().replace("pcbcraft-board/13", "pcbcraft-board/18");
+    let text = String::from_utf8(bad[&path].clone()).unwrap().replace("pcbcraft-board/41", "pcbcraft-board/18");
     bad.insert(path, text.into_bytes());
     assert!(decode_documents(&bad).is_err(), "format 18 requires at least one authored lock");
 }

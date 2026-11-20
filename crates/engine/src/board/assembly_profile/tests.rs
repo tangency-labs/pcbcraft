@@ -1251,6 +1251,7 @@ fn saved_catalog_and_adoption_edges_are_refused() {
     older["format"] = json!("pcbcraft-board/21");
     check(&path, older, "adoptions require format 22");
     let mut omitted = board.clone();
+    omitted["format"] = json!("pcbcraft-board/22");
     omitted.as_object_mut().unwrap().remove("assembly_profiles");
     check(&path, omitted, "adoptions require format 22");
     let mut duplicates = board;

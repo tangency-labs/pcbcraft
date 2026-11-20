@@ -75,7 +75,8 @@ fn board_format_14_and_bottom_footprints_require_each_other() {
     older.insert(crate::persistence::test_board_path(&older), text.replace("pcbcraft-board/41", "pcbcraft-board/11").into_bytes());
     assert!(decode_documents(&older).is_err());
     let mut unflipped = saved;
-    unflipped.insert(crate::persistence::test_board_path(&unflipped), text.replace(",\"bottom\":true", "").into_bytes());
+    let unflipped_text = text.replace("pcbcraft-board/41", "pcbcraft-board/14").replace(",\"bottom\":true", "");
+    unflipped.insert(crate::persistence::test_board_path(&unflipped), unflipped_text.into_bytes());
     assert!(decode_documents(&unflipped).is_err());
 }
 

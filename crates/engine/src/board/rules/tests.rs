@@ -90,6 +90,7 @@ fn malformed_rules_never_adopt_and_old_boards_keep_their_encoding() {
         assert!(decode_documents(&bad).is_err());
     }
     let mut missing = value.clone();
+    missing["format"] = json!("pcbcraft-board/19");
     missing.as_object_mut().unwrap().remove("rules");
     let mut bad = docs.clone();
     bad.insert(path, serde_json::to_vec(&missing).unwrap());

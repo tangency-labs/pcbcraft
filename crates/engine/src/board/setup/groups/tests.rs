@@ -357,7 +357,7 @@ fn profile_groups_rebase_members_and_require_the_group_header() {
     );
     let mut query = session(4);
     let error = query.execute(INSPECT_LAYER_GROUPS, &json!({"board":crate::fresh_id().unwrap()})).unwrap_err();
-    assert!(matches!(error, CommandError::InvalidParams(_)));
+    assert!(matches!(error, CommandError::NotFound(_)), "{error:?}");
     assert!(error.to_string().contains("unknown board ID"));
 }
 

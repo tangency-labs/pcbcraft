@@ -255,6 +255,7 @@ fn format26_rejects_missing_null_empty_and_older_headers() {
     assert_eq!(board["format"], "pcbcraft-board/41");
     for replacement in [None, Some(Value::Null), Some(json!([]))] {
         let mut b = board.clone();
+        b["format"] = json!("pcbcraft-board/26");
         if let Some(value) = replacement {
             b["arcs"] = value;
         } else {
