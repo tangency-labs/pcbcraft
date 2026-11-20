@@ -626,22 +626,52 @@ mod tests {
         assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev);
         assert!(!h.state().library_editors.documents[&id].selection.contains(&cy_id));
 
-        // Marquee box select across the uncovered canvas center excludes hidden courtyard.
+        // Compute a marquee box that strictly encloses the entire courtyard outline and pads.
         let area = h.get_by_label("Library canvas").rect();
-        drag_at(&mut h, area.center() - vec2(180.0, 180.0), area.center() + vec2(180.0, 180.0));
-        assert!(!h.state().library_editors.documents[&id].selection.contains(&cy_id));
+        let box_rect = {
+            let doc = &h.state().library_editors.documents[&id];
+            let snap = doc.session.snapshot();
+            let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+            pts.iter().fold(Rect::NOTHING, |r, p| r.union(Rect::from_pos(doc.camera.screen(*p, area)))).expand(20.0)
+        };
 
-        // Select All (Cmd+A) over the canvas also excludes hidden courtyard.
+        // Marquee box select over the outline selects the pads (positive control) and excludes hidden courtyard.
+        drag_at(&mut h, box_rect.left_top(), box_rect.right_bottom());
+        let marquee_hidden = &h.state().library_editors.documents[&id].selection;
+        assert!(marquee_hidden.contains(&1) && marquee_hidden.contains(&2));
+        assert!(!marquee_hidden.contains(&cy_id));
+
+        // Select All (Cmd+A) over the canvas selects the pads and excludes hidden courtyard.
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select_many(Default::default()).unwrap();
+        h.run();
         h.hover_at(area.center());
         h.run();
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.run();
-        assert!(!h.state().library_editors.documents[&id].selection.contains(&cy_id));
+        let all_hidden = &h.state().library_editors.documents[&id].selection;
+        assert!(all_hidden.contains(&1) && all_hidden.contains(&2));
+        assert!(!all_hidden.contains(&cy_id));
 
-        // Re-enable via Properties checkbox.
+        // Re-enable via Properties checkbox (clear selection first so Footprint summary is shown).
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select_many(Default::default()).unwrap();
+        h.run();
         crate::tests::click(&mut h, "Show courtyard layer");
         assert!(h.state().library_editors.documents[&id].show_courtyard);
         assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev);
+
+        // Positive control with the layer visible: the exact same marquee and Cmd+A select cy_id.
+        drag_at(&mut h, box_rect.left_top(), box_rect.right_bottom());
+        let marquee_visible = &h.state().library_editors.documents[&id].selection;
+        assert!(marquee_visible.contains(&1) && marquee_visible.contains(&2) && marquee_visible.contains(&cy_id));
+
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select_many(Default::default()).unwrap();
+        h.run();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run();
+        let all_visible = &h.state().library_editors.documents[&id].selection;
+        assert!(all_visible.contains(&1) && all_visible.contains(&2) && all_visible.contains(&cy_id));
     }
 
     /// Pending property edits refuse switching vertices or activating C (without turning the
