@@ -21,12 +21,18 @@ pub const MAX_ROWS: usize = 4096;
 pub const MAX_COLUMNS: usize = 64;
 /// Maximum distinct units supported by native multi-unit symbol definitions.
 pub const MAX_UNITS: usize = 32;
-/// Maximum UTF-8 length of a terminal display name, matching native symbol validation.
-pub const MAX_PIN_NAME_BYTES: usize = 32;
+/// Maximum character count of a terminal display name, matching native symbol validation.
+pub const MAX_PIN_NAME_CHARS: usize = 32;
 /// Standard schematic pin pitch (2.54 mm = 2 x 1.27 mm grid) used for body-size estimation.
 pub const PIN_PITCH_NM: i64 = GRID_NM * 2;
 /// Minimum symbol body span along either axis (10.16 mm = 4 pin pitches).
 pub const MIN_BODY_SPAN_NM: i64 = PIN_PITCH_NM * 4;
+/// Native symbol drawing half-extent bound (±100 mm), matching `library::MAX_DRAWING_NM`.
+pub const MAX_DRAWING_NM: i64 = 100_000_000;
+/// Maximum symbol body span along either axis so leads still fit inside ±100 mm.
+pub const MAX_BODY_SPAN_NM: i64 = (MAX_DRAWING_NM - PIN_PITCH_NM) * 2;
+/// Maximum terminals one unit can hold on the native symbol grid (`library::MAX_TERMINALS` docs).
+pub const MAX_PINS_PER_UNIT: usize = 441;
 /// Default unit identifier when no unit column is mapped or a row leaves unit blank.
 pub const DEFAULT_UNIT: &str = "main";
 
@@ -60,7 +66,7 @@ impl Delimiter {
         match self {
             Self::Auto => "Auto",
             Self::Comma => "Comma (,)",
-            Self::Tab => "Tab (\\t)",
+            Self::Tab => "Tab",
             Self::Semicolon => "Semicolon (;)",
         }
     }
@@ -257,6 +263,8 @@ pub enum FindingKind {
     MissingNumberColumn,
     TooManyPins,
     TooManyUnits,
+    UnitTooLarge,
+    UnitNameCollision,
     MissingPinNumber,
     InvalidPinNumber,
     DuplicatePinNumber,
@@ -264,6 +272,29 @@ pub enum FindingKind {
     UnknownElectricalType,
     InvalidUnitName,
     UnknownSide,
+}
+
+impl FindingKind {
+    /// Short scannable badge label for compact preview-table status cells.
+    pub const fn short_label(self) -> &'static str {
+        match self {
+            Self::EmptyTable => "Empty",
+            Self::InputTooLarge => "Too large",
+            Self::UnclosedQuote => "Quote error",
+            Self::MissingNumberColumn => "No number col",
+            Self::TooManyPins => "Too many pins",
+            Self::TooManyUnits => "Too many units",
+            Self::UnitTooLarge => "Unit too large",
+            Self::UnitNameCollision => "Unit collision",
+            Self::MissingPinNumber => "Missing number",
+            Self::InvalidPinNumber => "Bad number",
+            Self::DuplicatePinNumber => "Duplicate",
+            Self::InvalidPinName => "Bad name",
+            Self::UnknownElectricalType => "Bad type",
+            Self::InvalidUnitName => "Bad unit",
+            Self::UnknownSide => "Bad side",
+        }
+    }
 }
 
 /// One validation finding tied to either the whole table or a specific data row and source line.
@@ -337,19 +368,30 @@ pub struct Preview {
 }
 
 impl Preview {
-    /// Whether the table has at least one row and zero findings, permitting acceptance.
+    /// Whether the table has at least one row and zero findings, permitting staging.
     pub fn can_accept(&self) -> bool {
         !self.rows.is_empty() && self.findings.is_empty()
     }
 
-    /// Build a validated, immutable [`ImportPlan`] for downstream symbol generation or diffing.
-    /// Returns an error if any finding remains or no pins were parsed.
-    pub fn into_import_plan(&self) -> Result<ImportPlan, String> {
+    /// Number of table-level findings not tied to a single row.
+    pub fn table_finding_count(&self) -> usize {
+        self.findings.iter().filter(|finding| finding.row.is_none()).count()
+    }
+
+    /// Number of parsed rows that carry at least one row-level finding.
+    pub fn rows_with_findings_count(&self) -> usize {
+        self.rows.iter().filter(|row| !row.is_valid()).count()
+    }
+
+    /// Build a validated, immutable [`ImportPlan`] bound to `base_revision` for downstream symbol
+    /// generation or diffing. Returns an error if any finding remains or no pins were parsed.
+    pub fn into_import_plan(&self, base_revision: u64) -> Result<ImportPlan, String> {
         if !self.can_accept() {
             return Err(if self.rows.is_empty() {
                 "Pin table has no rows to import.".into()
             } else {
-                format!("Resolve {} finding(s) before confirming the pin table.", self.findings.len())
+                let count = self.findings.len();
+                format!("Resolve {count} {} before staging the pin table.", plural(count, "finding", "findings"))
             });
         }
         let mut pins = Vec::with_capacity(self.rows.len());
@@ -359,7 +401,7 @@ impl Preview {
             let side = row.side.unwrap_or(PinSide::Left);
             pins.push(PlannedPin { number, name: row.name.clone(), electrical_type, unit: row.unit.clone(), side });
         }
-        Ok(ImportPlan { pins, units: self.units.clone() })
+        Ok(ImportPlan { base_revision, pins, units: self.units.clone() })
     }
 
     /// Serialize the preview as the canonical JSON reply for `library.preview_pin_table`.
@@ -391,14 +433,16 @@ pub struct PlannedPin {
     pub side: PinSide,
 }
 
-/// Validated, immutable hand-off produced when a user confirms a clean pin-table preview.
+/// Validated, immutable hand-off produced when a user stages a clean pin-table preview.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportPlan {
+    /// Owning symbol document revision when the plan was staged, for staleness checks in P2/P3.
+    pub base_revision: u64,
     pub pins: Vec<PlannedPin>,
     pub units: Vec<UnitSummary>,
 }
 
-/// Match an electrical type string case-insensitively against the fixed AQ-077 spelling list.
+/// Match an electrical type string case-insensitively against the fixed spelling list.
 /// `I/O`, `IO` and `bidirectional` map to [`ElectricalType::Bidirectional`]. Unknown spellings
 /// return `None` so callers record a finding instead of guessing.
 pub fn parse_electrical_type(raw: &str) -> Option<ElectricalType> {
@@ -525,17 +569,18 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
             line: None,
             column: Some(ColumnRole::Number),
             kind: FindingKind::MissingNumberColumn,
-            message: "Map a Pin number column before importing.".into(),
+            message: "Map a Pin number column before staging.".into(),
         });
     }
 
-    if data_records.len() > MAX_TERMINALS {
+    if parsed.truncated || data_records.len() > MAX_TERMINALS {
+        let count_text = if parsed.truncated { format!("more than {MAX_ROWS} rows") } else { format!("{} rows", data_records.len()) };
         findings.push(Finding {
             row: None,
             line: None,
             column: None,
             kind: FindingKind::TooManyPins,
-            message: format!("Pin table has {} rows; a symbol supports at most {MAX_TERMINALS} pins.", data_records.len()),
+            message: format!("Pin table has {count_text}; a symbol supports at most {MAX_TERMINALS} pins."),
         });
     }
 
@@ -548,6 +593,7 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
     }
 
     let mut seen_numbers: BTreeMap<String, usize> = BTreeMap::new();
+    let mut unit_spellings: BTreeMap<String, (String, usize)> = BTreeMap::new();
     let mut unit_counts: BTreeMap<String, SideCounts> = BTreeMap::new();
     let mut distinct_units: BTreeSet<String> = BTreeSet::new();
     let mut rows = Vec::with_capacity(data_records.len().min(MAX_ROWS));
@@ -602,11 +648,11 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
             Some(raw_number.clone())
         };
 
-        // Pin name (AQ-077: never split at '/')
+        // Pin name (never split at '/'; native symbol validation counts characters, max 32)
         let raw_name = cell(mapping.name);
         let name = if raw_name.is_empty() {
             None
-        } else if raw_name.len() > MAX_PIN_NAME_BYTES || raw_name.chars().any(char::is_control) {
+        } else if raw_name.chars().count() > MAX_PIN_NAME_CHARS || raw_name.chars().any(char::is_control) {
             let idx = findings.len();
             findings.push(Finding {
                 row: Some(row_index),
@@ -614,7 +660,7 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
                 column: Some(ColumnRole::Name),
                 kind: FindingKind::InvalidPinName,
                 message: format!(
-                    "Row {row_index} (line {line_number}): pin name must be at most {MAX_PIN_NAME_BYTES} bytes with no control characters."
+                    "Row {row_index} (line {line_number}): pin name must be at most {MAX_PIN_NAME_CHARS} characters with no control characters."
                 ),
             });
             row_findings.push(idx);
@@ -623,7 +669,7 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
             Some(raw_name.to_owned())
         };
 
-        // Electrical type (AQ-077: fixed case-insensitive spelling list; unmapped value is a finding)
+        // Electrical type (fixed case-insensitive spelling list; unmapped value is a finding)
         let raw_type = cell(mapping.electrical_type).to_owned();
         let electrical_type = if mapping.electrical_type.is_none() {
             Some(ElectricalType::Unspecified)
@@ -662,6 +708,23 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
         let unit = if raw_unit.is_empty() {
             DEFAULT_UNIT.to_owned()
         } else if let Some(normalized) = normalize_unit_id(&raw_unit) {
+            if let Some((first_spelling, first_row)) = unit_spellings.get(&normalized) {
+                if first_spelling != &raw_unit {
+                    let idx = findings.len();
+                    findings.push(Finding {
+                        row: Some(row_index),
+                        line: Some(line_number),
+                        column: Some(ColumnRole::Unit),
+                        kind: FindingKind::UnitNameCollision,
+                        message: format!(
+                            "Row {row_index} (line {line_number}): unit '{raw_unit}' normalizes to '{normalized}', colliding with '{first_spelling}' on row {first_row}."
+                        ),
+                    });
+                    row_findings.push(idx);
+                }
+            } else {
+                unit_spellings.insert(normalized.clone(), (raw_unit.clone(), row_index));
+            }
             normalized
         } else {
             let idx = findings.len();
@@ -732,8 +795,7 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
         });
     }
 
-    let valid_row_count = rows.iter().filter(|row| row.is_valid()).count();
-    let units = unit_counts
+    let units: Vec<UnitSummary> = unit_counts
         .into_iter()
         .map(|(unit, counts)| {
             let pin_count = counts.left.saturating_add(counts.right).saturating_add(counts.top).saturating_add(counts.bottom);
@@ -751,6 +813,27 @@ pub fn preview(text: &str, delimiter: Delimiter, has_header: bool, mapping_overr
         })
         .collect();
 
+    for unit in &units {
+        if unit.pin_count > MAX_PINS_PER_UNIT || unit.estimated_width_nm > MAX_BODY_SPAN_NM || unit.estimated_height_nm > MAX_BODY_SPAN_NM {
+            findings.push(Finding {
+                row: None,
+                line: None,
+                column: Some(ColumnRole::Unit),
+                kind: FindingKind::UnitTooLarge,
+                message: format!(
+                    "Unit '{}' ({} pins, {:.1} × {:.1} mm) exceeds the native ±100 mm symbol drawing bound (max {MAX_PINS_PER_UNIT} pins per unit, max {:.1} mm per side); split pins across multiple units or sides.",
+                    unit.unit,
+                    unit.pin_count,
+                    unit.estimated_width_nm as f64 / 1_000_000.0,
+                    unit.estimated_height_nm as f64 / 1_000_000.0,
+                    MAX_BODY_SPAN_NM as f64 / 1_000_000.0,
+                ),
+            });
+        }
+    }
+
+    let valid_row_count = rows.iter().filter(|row| row.is_valid()).count();
+
     Preview { delimiter: resolved, has_header, headers, column_count, mapping, rows, findings, units, valid_row_count }
 }
 
@@ -763,6 +846,11 @@ pub fn estimate_unit_body_nm(left: usize, right: usize, top: usize, bottom: usiz
         slots.saturating_mul(PIN_PITCH_NM).max(MIN_BODY_SPAN_NM)
     };
     (span(top.max(bottom)), span(left.max(right)))
+}
+
+/// Choose singular or plural noun form for a count.
+fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
+    if count == 1 { singular } else { plural }
 }
 
 /// JSON Schema for the optional `delimiter` parameter of `library.preview_pin_table`.
@@ -870,11 +958,13 @@ fn normalize_header(raw: &str) -> String {
 }
 
 /// Detect the most likely field delimiter from the first non-empty lines of `text`, ignoring
-/// characters inside double-quoted strings. Prefers tab over comma over semicolon on ties.
+/// characters inside double-quoted strings. Prefers Tab whenever every sampled non-empty line
+/// contains at least one unquoted tab, so TSV tables whose names contain commas stay Tab-delimited.
 fn detect_delimiter(text: &str) -> Delimiter {
     let mut tab_count: usize = 0;
     let mut comma_count: usize = 0;
     let mut semi_count: usize = 0;
+    let mut lines_with_tab: usize = 0;
     let mut in_quotes = false;
     let mut lines_checked: usize = 0;
 
@@ -882,14 +972,21 @@ fn detect_delimiter(text: &str) -> Delimiter {
         if line.trim().is_empty() {
             continue;
         }
+        let mut line_has_tab = false;
         for byte in line.bytes() {
             match byte {
                 b'"' => in_quotes = !in_quotes,
-                b'\t' if !in_quotes => tab_count = tab_count.saturating_add(1),
+                b'\t' if !in_quotes => {
+                    tab_count = tab_count.saturating_add(1);
+                    line_has_tab = true;
+                }
                 b',' if !in_quotes => comma_count = comma_count.saturating_add(1),
                 b';' if !in_quotes => semi_count = semi_count.saturating_add(1),
                 _ => {}
             }
+        }
+        if line_has_tab {
+            lines_with_tab = lines_with_tab.saturating_add(1);
         }
         lines_checked = lines_checked.saturating_add(1);
         if lines_checked >= 8 {
@@ -897,7 +994,9 @@ fn detect_delimiter(text: &str) -> Delimiter {
         }
     }
 
-    if tab_count >= comma_count && tab_count >= semi_count && tab_count > 0 {
+    if lines_checked > 0 && lines_with_tab == lines_checked {
+        Delimiter::Tab
+    } else if tab_count >= comma_count && tab_count >= semi_count && tab_count > 0 {
         Delimiter::Tab
     } else if semi_count > comma_count {
         Delimiter::Semicolon
@@ -914,6 +1013,7 @@ struct ParsedRecord {
 struct ParsedTable {
     records: Vec<ParsedRecord>,
     unclosed_quote_line: Option<usize>,
+    truncated: bool,
 }
 
 /// Parse RFC 4180 delimited records with `""` escape handling and 1-based line tracking.
@@ -928,6 +1028,7 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
     let mut line_number = 1usize;
     let mut record_start_line = 1usize;
     let mut index = 0usize;
+    let mut truncated = false;
 
     while let Some(&byte) = bytes.get(index) {
         if in_quotes {
@@ -979,6 +1080,9 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
             line_number = line_number.saturating_add(1);
             record_start_line = line_number;
             if records.len() > MAX_ROWS {
+                if bytes.get(index..).is_some_and(|rest| rest.iter().any(|b| !b.is_ascii_whitespace())) {
+                    truncated = true;
+                }
                 break;
             }
             continue;
@@ -988,14 +1092,14 @@ fn parse_records(text: &str, separator: u8) -> ParsedTable {
         index += 1;
     }
 
-    if !field.is_empty() || !fields.is_empty() {
+    if !truncated && (!field.is_empty() || !fields.is_empty()) {
         fields.push(String::from_utf8_lossy(&field).into_owned());
         if fields.iter().any(|cell| !cell.trim().is_empty()) {
             records.push(ParsedRecord { line_number: record_start_line, fields });
         }
     }
 
-    ParsedTable { records, unclosed_quote_line: in_quotes.then_some(quote_start_line) }
+    ParsedTable { records, unclosed_quote_line: in_quotes.then_some(quote_start_line), truncated }
 }
 
 #[cfg(test)]
@@ -1003,8 +1107,8 @@ mod tests {
     use super::*;
     use crate::{Session, library::sources};
 
-    /// Done test (library-24-p1): a synthetic 256-pin CSV with 2 duplicate pin numbers previews
-    /// 256 rows and 2 findings through the shared engine command, and creates nothing.
+    /// Done test: a synthetic 256-pin CSV with 2 duplicate pin numbers previews 256 rows and 2
+    /// findings through the shared engine command, and creates nothing.
     #[test]
     fn synthetic_256_pin_csv_with_two_duplicates_previews_256_rows_and_2_findings() {
         let mut csv = String::from("Number,Name,Type,Unit,Side\n");
@@ -1041,13 +1145,12 @@ mod tests {
         assert_eq!(reply["findings"][0]["row"], 100);
         assert_eq!(reply["findings"][1]["kind"], "duplicate_pin_number");
         assert_eq!(reply["findings"][1]["row"], 200);
-        // AQ-077: pin names containing '/' are preserved verbatim without splitting.
         assert_eq!(reply["rows"][0]["name"], "SIG_1/ALT_1");
         assert_eq!(reply["rows"][2]["electrical_type"], "bidirectional");
     }
 
-    /// AQ-077 electrical type spellings are matched case-insensitively and unmapped values
-    /// produce clear findings while blocking acceptance.
+    /// Electrical type spellings are matched case-insensitively and unmapped values produce
+    /// clear findings while blocking staging. Pin names containing `/` stay intact.
     #[test]
     fn electrical_type_matching_and_slash_pin_names() {
         for spelling in ["I/O", "IO", "io", "Bidirectional", "bidir", "input-output", "IN/OUT"] {
@@ -1068,13 +1171,14 @@ mod tests {
         assert_eq!(result.findings[0].kind, FindingKind::UnknownElectricalType);
         assert!(result.findings[0].message.contains("analog_magic"));
         assert!(!result.can_accept());
-        assert!(result.into_import_plan().is_err());
+        assert!(result.into_import_plan(0).is_err());
     }
 
-    /// TSV input, quoted fields, BOM and manual column remapping produce exact rows and plans.
+    /// TSV input (including commas inside unquoted names), quoted fields, BOM and manual column
+    /// remapping produce exact rows and plans.
     #[test]
     fn tsv_auto_detect_quoted_fields_and_manual_column_mapping() {
-        let tsv = "\u{feff}Signal\tPin\tDir\tEdge\n\"TXD, \"\"alt\"\"\"\tA1\tOutput\tRight\nRXD/UART\tA2\tInput\tLeft\n";
+        let tsv = "\u{feff}Signal\tPin\tDir\tEdge\n\"TXD, \"\"alt\"\"\"\tA1\tOutput\tRight\nRXD, A, B, C\tA2\tInput\tLeft\n";
         let auto = preview(tsv, Delimiter::Auto, true, None);
         assert_eq!(auto.delimiter, Delimiter::Tab);
         assert_eq!(auto.mapping.number, Some(1));
@@ -1085,15 +1189,17 @@ mod tests {
         assert_eq!(auto.rows[0].number.as_deref(), Some("A1"));
         assert_eq!(auto.rows[0].name.as_deref(), Some("TXD, \"alt\""));
         assert_eq!(auto.rows[0].side, Some(PinSide::Right));
-        assert_eq!(auto.rows[1].name.as_deref(), Some("RXD/UART"));
+        assert_eq!(auto.rows[1].name.as_deref(), Some("RXD, A, B, C"));
 
         // Overriding mapping to drop the number column produces MissingNumberColumn.
         let no_num = preview(tsv, Delimiter::Tab, true, Some(ColumnMapping { number: None, ..auto.mapping }));
         assert!(!no_num.can_accept());
+        assert_eq!(no_num.table_finding_count(), 1);
         assert!(no_num.findings.iter().any(|finding| finding.kind == FindingKind::MissingNumberColumn));
     }
 
-    /// Unit body geometry estimates stay aligned to the 1.27 mm schematic grid and grow with pin count.
+    /// Unit body geometry estimates stay aligned to the 1.27 mm schematic grid, enforce native
+    /// ±100 mm / 441-pin unit bounds, and record `base_revision` in the staged `ImportPlan`.
     #[test]
     fn unit_geometry_estimation_and_import_plan_seam() {
         let mut csv = String::from("Number,Name,Type,Unit,Side\n");
@@ -1114,29 +1220,65 @@ mod tests {
             assert_eq!(unit.estimated_width_nm % GRID_NM, 0);
             assert_eq!(unit.estimated_height_nm % GRID_NM, 0);
         }
-        let plan = result.into_import_plan().unwrap();
+        let plan = result.into_import_plan(7).unwrap();
+        assert_eq!(plan.base_revision, 7);
         assert_eq!(plan.pins.len(), 256);
         assert_eq!(plan.units.len(), 4);
         assert_eq!(plan.pins[0].unit, "unit-1");
         assert_eq!(plan.pins[0].side.lead_orientation(), PinOrientation::Right);
         assert_eq!(plan.pins[1].side.lead_orientation(), PinOrientation::Left);
+
+        // A single unit with 1024 pins on the Left side exceeds native ±100 mm drawing bounds and
+        // 441 pins per unit, so it must be refused with UnitTooLarge.
+        let mut single_unit = String::from("Number,Name,Type,Unit,Side\n");
+        for i in 1..=1024 {
+            single_unit.push_str(&format!("{i},P{i},passive,main,left\n"));
+        }
+        let oversized = preview(&single_unit, Delimiter::Comma, true, None);
+        assert!(!oversized.can_accept());
+        assert!(oversized.findings.iter().any(|finding| finding.kind == FindingKind::UnitTooLarge));
     }
 
-    /// Validation catches invalid pin numbers, bad sides, bad unit IDs, >32 units, unclosed quotes
-    /// and oversized inputs without panicking.
+    /// Validation catches empty tables, missing pin numbers, invalid pin names (counting Unicode
+    /// characters rather than bytes), unit spelling collisions, >1024 pins, >32 units, unclosed
+    /// quotes, oversized inputs, and command parameter validation errors.
     #[test]
     fn validation_catches_malformed_rows_and_limits() {
-        let bad = "Number,Name,Type,Unit,Side\nbad pin!,OK,input,main,diagonal\n1,OK,input,bad/unit,top\n";
-        let result = preview(bad, Delimiter::Comma, true, None);
+        let empty = preview("   \n\n", Delimiter::Auto, true, None);
+        assert!(!empty.can_accept());
+        assert_eq!(empty.findings[0].kind, FindingKind::EmptyTable);
+
+        // 20 non-ASCII characters (40 UTF-8 bytes) is valid; 33 characters is refused.
+        let valid_utf8_name = "Ω".repeat(20);
+        let long_name = "A".repeat(33);
+        let rows = format!(
+            "Number,Name,Type,Unit,Side\n\
+             ,{valid_utf8_name},input,main,left\n\
+             2,{long_name},input,Bank 1,top\n\
+             3,OK,input,bank_1,bottom\n\
+             bad pin!,OK,input,bad/unit,diagonal\n"
+        );
+        let result = preview(&rows, Delimiter::Comma, true, None);
         assert!(!result.can_accept());
         let kinds: Vec<_> = result.findings.iter().map(|finding| finding.kind).collect();
+        assert!(kinds.contains(&FindingKind::MissingPinNumber));
+        assert!(kinds.contains(&FindingKind::InvalidPinName));
+        assert!(kinds.contains(&FindingKind::UnitNameCollision));
         assert!(kinds.contains(&FindingKind::InvalidPinNumber));
-        assert!(kinds.contains(&FindingKind::UnknownSide));
         assert!(kinds.contains(&FindingKind::InvalidUnitName));
+        assert!(kinds.contains(&FindingKind::UnknownSide));
+        assert_eq!(result.rows[0].name.as_deref(), Some(valid_utf8_name.as_str()));
 
         let unclosed = "Number,Name\n1,\"unclosed\n";
         let unclosed_preview = preview(unclosed, Delimiter::Comma, true, None);
         assert!(unclosed_preview.findings.iter().any(|finding| finding.kind == FindingKind::UnclosedQuote));
+
+        let mut too_many_pins = String::from("Number,Name,Type\n");
+        for i in 1..=1025 {
+            too_many_pins.push_str(&format!("{i},P{i},passive\n"));
+        }
+        let pins_preview = preview(&too_many_pins, Delimiter::Comma, true, None);
+        assert!(pins_preview.findings.iter().any(|finding| finding.kind == FindingKind::TooManyPins));
 
         let mut too_many_units = String::from("Number,Name,Type,Unit\n");
         for i in 1..=33 {
@@ -1149,5 +1291,25 @@ mod tests {
         let huge_preview = preview(&huge, Delimiter::Comma, true, None);
         assert_eq!(huge_preview.findings.len(), 1);
         assert_eq!(huge_preview.findings[0].kind, FindingKind::InputTooLarge);
+
+        // Command parameter handling: has_header: false, explicit mapping, bad delimiter, bad mapping.
+        let mut session = Session::default();
+        let custom = session
+            .execute(
+                sources::PREVIEW_PIN_TABLE,
+                &json!({
+                    "text": "VCC;1;power_in\nGND;2;power_in\n",
+                    "delimiter": "semicolon",
+                    "has_header": false,
+                    "mapping": {"name": 0, "number": 1, "electrical_type": 2}
+                }),
+            )
+            .unwrap();
+        assert_eq!(custom["can_accept"], true);
+        assert_eq!(custom["rows"][0]["number"], "1");
+        assert_eq!(custom["rows"][0]["name"], "VCC");
+        assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "delimiter": "pipe"})).is_err());
+        assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "mapping": {"unknown": 0}})).is_err());
+        assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "mapping": {"number": 99}})).is_err());
     }
 }

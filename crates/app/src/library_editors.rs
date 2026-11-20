@@ -57,8 +57,8 @@ struct Document {
     array_requested: bool,
     details_requested: bool,
     draft: Option<form::Draft>,
-    /// Validated pin-table plan staged by the import dialog for symbol generation (P2) or diffing (P3).
-    staged_pin_table: Option<pcbcraft_engine::authoring::pin_table::ImportPlan>,
+    /// Validated pin-table plan and source state staged by the import dialog for P2/P3.
+    staged_pin_table: Option<pin_table::StagedPinTable>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
     tool: canvas::Tool,
@@ -240,7 +240,7 @@ impl Editors {
     /// clone a displaced report merely to overwrite it; all other fields share the normal emitter.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn inspect_with_remap(&self, pin_remap: Value) -> Value {
-        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"pin_remap":pin_remap,"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
+        json!({"part_documents":self.parts.iter().map(|(id, doc)|json!({"document":id,"state":doc.session.inspect(),"pending_fields":doc.pending,"source":doc.source})).collect::<Vec<_>>(),"active":self.active,"file_operation":self.busy(),"publication":self.publisher.inspect(),"pin_remap":pin_remap,"notice":self.notice,"documents":self.documents.iter().map(|(id,doc)|json!({"document":id,"publish_source":doc.publish_source,"state":doc.session.inspect(),"staged_pin_table":doc.staged_pin_table.as_ref().map(|staged|json!({"base_revision":staged.plan.base_revision,"pin_count":staged.plan.pins.len(),"unit_count":staged.plan.units.len()})),"selected":doc.selected,"selection":doc.selection,"pending_fields":doc.pending(),"view":{"ribbon_tab":(["draw","library","view"][doc.ribbon_tab]),"browser":!doc.collapsed[0],"properties":!doc.collapsed[1],"zoom_percent":(doc.camera.zoom()*100.0).round(),"center":doc.camera.center(),"grid_spacing_nm":doc.camera.snap_nm()}})).collect::<Vec<_>>()})
     }
     /// Admit a validated item with fresh runtime identity; duplicate portable IDs never replace
     /// unsaved open documents. Opening files and forks use this same ownership boundary.

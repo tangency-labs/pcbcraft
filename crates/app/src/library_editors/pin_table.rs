@@ -1,8 +1,8 @@
 //! Symbol Editor dialog for importing, mapping, validating and previewing a CSV/TSV pin table.
 //!
-//! Confirming a valid preview stages an immutable [`ImportPlan`] on the active symbol document
-//! without creating pins or altering document/project history. Multi-unit symbol generation (P2)
-//! and re-import diffing (P3) consume that staged plan directly.
+//! Staging a valid preview stores an immutable [`ImportPlan`] (with its source text and base
+//! revision) on the active symbol document without creating pins or altering document/project
+//! history. Multi-unit symbol generation (P2) and re-import diffing (P3) consume that staged plan.
 
 use super::*;
 use pcbcraft_chrome::{
@@ -10,15 +10,28 @@ use pcbcraft_chrome::{
     library_workspace::{self, TableEntry},
     shell,
 };
-use pcbcraft_engine::authoring::pin_table::{self, ColumnMapping, ColumnRole, Delimiter, ImportPlan, MAX_BYTES, PinSide, Preview, PreviewRow};
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+#[cfg(not(target_arch = "wasm32"))]
+use pcbcraft_engine::authoring::pin_table::MAX_BYTES;
+use pcbcraft_engine::authoring::pin_table::{self, ColumnMapping, ColumnRole, Delimiter, ImportPlan, PinSide, Preview, PreviewRow};
+#[cfg(not(target_arch = "wasm32"))]
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, TryRecvError};
 
 /// Number of preview rows displayed per table page to keep large 256+ pin tables responsive.
 const ROWS_PER_PAGE: usize = 25;
-/// Maximum number of inline findings listed below the preview table before summarizing overflow.
-const MAX_INLINE_FINDINGS: usize = 20;
 /// Dialog width in logical points, giving all seven preview columns room without horizontal cramping.
 const DIALOG_WIDTH: f32 = 880.0;
+
+/// Validated pin-table plan and source state retained on an open symbol document after staging.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct StagedPinTable {
+    pub(super) plan: ImportPlan,
+    pub(super) raw_text: String,
+    pub(super) delimiter: Delimiter,
+    pub(super) has_header: bool,
+    pub(super) mapping: ColumnMapping,
+    pub(super) manual_mapping: bool,
+}
 
 #[derive(Debug)]
 struct LoadedFile {
@@ -42,27 +55,36 @@ pub(crate) struct Draft {
     page: usize,
     file_job: Option<Receiver<Result<Option<LoadedFile>, String>>>,
     io_error: Option<String>,
+    confirm_error: Option<String>,
+    revision_stale: bool,
 }
 
 impl Draft {
-    /// Start an empty pin-table import draft bound to one open symbol document revision.
-    pub(super) fn new(document: u64, revision: u64) -> Self {
-        let preview = pin_table::preview("", Delimiter::Auto, true, None);
+    /// Start a pin-table import draft bound to one open symbol document revision, restoring any
+    /// previously staged source text and mapping so staging stays visible and editable.
+    pub(super) fn new(document: u64, revision: u64, staged: Option<&StagedPinTable>) -> Self {
+        let (raw_text, delimiter, has_header, manual_mapping, mapping_override) = match staged {
+            Some(prev) => (prev.raw_text.clone(), prev.delimiter, prev.has_header, prev.manual_mapping, prev.manual_mapping.then_some(prev.mapping)),
+            None => (String::new(), Delimiter::Auto, true, false, None),
+        };
+        let preview = pin_table::preview(&raw_text, delimiter, has_header, mapping_override);
         let mapping = preview.mapping;
         Self {
             document,
             revision,
-            raw_text: String::new(),
+            raw_text,
             source_name: None,
-            delimiter: Delimiter::Auto,
-            has_header: true,
+            delimiter,
+            has_header,
             mapping,
-            manual_mapping: false,
+            manual_mapping,
             preview,
             findings_only: false,
             page: 0,
             file_job: None,
             io_error: None,
+            confirm_error: None,
+            revision_stale: false,
         }
     }
 
@@ -71,17 +93,19 @@ impl Draft {
         let override_map = self.manual_mapping.then_some(self.mapping);
         self.preview = pin_table::preview(&self.raw_text, self.delimiter, self.has_header, override_map);
         self.mapping = self.preview.mapping;
-        if self.preview.findings.is_empty() {
+        if self.preview.rows_with_findings_count() == 0 {
             self.findings_only = false;
         }
         let filtered_len = self.visible_row_count();
         let pages = filtered_len.div_ceil(ROWS_PER_PAGE).max(1);
         self.page = self.page.min(pages.saturating_sub(1));
+        self.confirm_error = None;
+        self.revision_stale = false;
     }
 
     /// Count rows matching the active All / Findings-only filter.
     fn visible_row_count(&self) -> usize {
-        if self.findings_only { self.preview.rows.iter().filter(|row| !row.is_valid()).count() } else { self.preview.rows.len() }
+        if self.findings_only { self.preview.rows_with_findings_count() } else { self.preview.rows.len() }
     }
 
     /// Poll a pending background file picker without blocking the UI thread.
@@ -163,6 +187,11 @@ fn pick_pin_table_file() -> Result<Option<LoadedFile>, String> {
     Ok(Some(LoadedFile { name, text }))
 }
 
+/// Choose singular or plural noun form for a count.
+fn plural<'a>(count: usize, singular: &'a str, plural: &'a str) -> &'a str {
+    if count == 1 { singular } else { plural }
+}
+
 /// Format a nanometre span as millimetres with one decimal place for unit body size previews.
 fn format_mm(nm: i64) -> String {
     format!("{:.1} mm", nm as f64 / 1_000_000.0)
@@ -171,8 +200,8 @@ fn format_mm(nm: i64) -> String {
 /// Describe a column option in the mapping dropdowns using its 1-based column index and header text.
 fn column_option_label(headers: &[String], index: usize) -> String {
     match headers.get(index).map(|text| text.trim()).filter(|text| !text.is_empty()) {
-        Some(header) => format!("Col {}: {header}", index + 1),
-        None => format!("Col {}", index + 1),
+        Some(header) => format!("Column {}: {header}", index + 1),
+        None => format!("Column {}", index + 1),
     }
 }
 
@@ -184,7 +213,7 @@ fn column_selector(ui: &mut Ui, role: ColumnRole, headers: &[String], column_cou
         None => "Not mapped".to_owned(),
     };
     let mut changed = false;
-    controls::Choice::from_label(role.label()).selected_text(selected_text).width(180.0).show_ui(ui, |ui| {
+    controls::Choice::from_label(role.label()).selected_text(selected_text).width(184.0).show_ui(ui, |ui| {
         let none_label = if required { "Unmapped (required)" } else { "Not mapped" };
         if ui.selectable_label(value.is_none(), none_label).clicked() && value.is_some() {
             *value = None;
@@ -201,16 +230,22 @@ fn column_selector(ui: &mut Ui, role: ColumnRole, headers: &[String], column_cou
     changed
 }
 
-/// Build one page of preview table rows with inline status text (never color- or hover-only).
-fn preview_table_entries(preview: &Preview, findings_only: bool, page: usize) -> Vec<TableEntry> {
-    let filtered = preview.rows.iter().filter(|row| !findings_only || !row.is_valid());
-    filtered.skip(page.saturating_mul(ROWS_PER_PAGE)).take(ROWS_PER_PAGE).map(|row| row_to_table_entry(preview, row)).collect()
+/// Collect the rows visible on the current page under the active filter.
+fn visible_page_rows(preview: &Preview, findings_only: bool, page: usize) -> Vec<&PreviewRow> {
+    preview.rows.iter().filter(|row| !findings_only || !row.is_valid()).skip(page.saturating_mul(ROWS_PER_PAGE)).take(ROWS_PER_PAGE).collect()
 }
 
-/// Convert one [`PreviewRow`] into a shared chrome [`TableEntry`].
+/// Build one page of preview table entries. Pin name occupies column 0 (the widest flex column)
+/// and Status uses compact short labels so cells stay readable without hover-only truncation.
+fn preview_table_entries(preview: &Preview, page_rows: &[&PreviewRow]) -> Vec<TableEntry> {
+    page_rows.iter().map(|row| row_to_table_entry(preview, row)).collect()
+}
+
+/// Convert one [`PreviewRow`] into a shared chrome [`TableEntry`] without marking invalid rows
+/// as selected (which would announce them as selected to screen readers).
 fn row_to_table_entry(preview: &Preview, row: &PreviewRow) -> TableEntry {
-    let number = row.number.as_deref().unwrap_or(row.raw_number.as_str());
     let name = row.name.as_deref().unwrap_or("—");
+    let number = row.number.as_deref().unwrap_or(row.raw_number.as_str());
     let etype = match row.electrical_type {
         Some(kind) => pin_table::electrical_type_label(kind).to_owned(),
         None if row.raw_type.is_empty() => "(missing)".to_owned(),
@@ -229,16 +264,16 @@ fn row_to_table_entry(preview: &Preview, row: &PreviewRow) -> TableEntry {
         row.finding_indices
             .iter()
             .filter_map(|&idx| preview.findings.get(idx))
-            .map(|finding| finding.message.as_str())
+            .map(|finding| finding.kind.short_label())
             .collect::<Vec<_>>()
-            .join(" | ")
+            .join(", ")
     };
     TableEntry {
         key: format!("row-{}", row.row_index),
-        selected: !row.is_valid(),
+        selected: false,
         branch: None,
         nested: false,
-        cells: vec![row.row_index.to_string(), number.to_owned(), name.to_owned(), etype, row.unit.clone(), side, status],
+        cells: vec![name.to_owned(), row.row_index.to_string(), number.to_owned(), etype, row.unit.clone(), side, status],
     }
 }
 
@@ -250,54 +285,72 @@ impl PcbApp {
             return Err("Pin-table import applies only to symbol definitions.".into());
         }
         let revision = doc.session.revision();
-        self.dialog = Dialog::LibraryPinTable(Box::new(Draft::new(document, revision)));
+        let staged = doc.staged_pin_table.as_ref();
+        self.dialog = Dialog::LibraryPinTable(Box::new(Draft::new(document, revision, staged)));
         Ok(())
     }
 
     /// Stage a validated [`ImportPlan`] on the owning symbol document as the P2/P3 hand-off seam.
     /// Never mutates symbol geometry or project undo history.
-    pub(super) fn confirm_library_pin_table(&mut self, document: u64, revision: u64, plan: ImportPlan) -> Result<(), String> {
-        let doc = self.library_editors.documents.get_mut(&document).ok_or("Symbol document was closed before import was confirmed.")?;
+    pub(super) fn stage_library_pin_table(&mut self, draft: &Draft, plan: ImportPlan) -> Result<(), String> {
+        let doc = self.library_editors.documents.get_mut(&draft.document).ok_or("Symbol document was closed before staging.")?;
         if doc.session.snapshot().kind != Kind::Symbol {
             return Err("Pin-table import applies only to symbol definitions.".into());
         }
-        if doc.session.revision() != revision {
-            return Err("Symbol changed while the pin-table dialog was open; reopen Import pin table to confirm.".into());
+        if doc.session.revision() != draft.revision {
+            return Err("Symbol changed while the pin-table dialog was open; click Refresh revision to stage on the current revision.".into());
         }
         let pin_count = plan.pins.len();
         let unit_count = plan.units.len();
-        doc.staged_pin_table = Some(plan);
+        doc.staged_pin_table = Some(StagedPinTable {
+            plan,
+            raw_text: draft.raw_text.clone(),
+            delimiter: draft.delimiter,
+            has_header: draft.has_header,
+            mapping: draft.mapping,
+            manual_mapping: draft.manual_mapping,
+        });
         self.library_editors.notice = Some(format!(
-            "Pin table staged ({pin_count} pin{} across {unit_count} unit{}). Symbol generation is not yet enabled; no pins were created.",
-            if pin_count == 1 { "" } else { "s" },
-            if unit_count == 1 { "" } else { "s" },
+            "Pin table staged ({pin_count} {} across {unit_count} {}). Symbol generation is not yet enabled; no pins were created.",
+            plural(pin_count, "pin", "pins"),
+            plural(unit_count, "unit", "units"),
         ));
         Ok(())
+    }
+
+    /// Clear any staged pin-table plan on the owning symbol document.
+    pub(super) fn clear_staged_pin_table(&mut self, document: u64) {
+        if let Some(doc) = self.library_editors.documents.get_mut(&document) {
+            doc.staged_pin_table = None;
+            self.library_editors.notice = Some("Cleared staged pin table.".into());
+        }
     }
 
     /// Render the modal pin-table import and preview dialog in the Symbol Editor.
     pub(crate) fn library_pin_table_dialog(&mut self, ctx: &Context, mut draft: Box<Draft>) {
         draft.poll_file_job();
         let tokens = Tokens::get();
+        let has_staged = self.library_editors.documents.get(&draft.document).is_some_and(|doc| doc.staged_pin_table.is_some());
         let mut load_file = false;
         let mut clear_text = false;
         let mut auto_map = false;
         let mut changed = false;
-        let mut confirm = false;
+        let mut stage = false;
+        let mut clear_staged = false;
+        let mut refresh_revision = false;
         let mut cancel = false;
         let loading = draft.file_job.is_some();
-        let can_confirm = draft.preview.can_accept() && !loading;
-
-        // Allow Cmd/Ctrl+Enter to confirm when the preview is valid, no popup is open and no file job is in flight.
-        let shortcut_confirm =
-            !egui::Popup::is_any_open(ctx) && can_confirm && ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter));
+        let is_empty = draft.raw_text.trim().is_empty();
+        let can_stage = !is_empty && draft.preview.can_accept() && !loading;
 
         let dismissed = shell::scrolling_dialog_width(ctx, "library_pin_table", "Import pin table", DIALOG_WIDTH, |ui| {
-            ui.label(shell::dim("Paste a CSV or TSV pin table or load a UTF-8 file. Preview validates every row before anything is staged."));
-            ui.add_space(tokens.space_sm);
+            ui.label(shell::dim(
+                "Paste a CSV or TSV pin table or load a UTF-8 file. Staging validates and saves the plan on this symbol without creating pins yet.",
+            ));
+            ui.add_space(tokens.space_8);
 
-            // Section 1: Source table
-            library_workspace::heading(ui, "1. Source table");
+            // Source table
+            library_workspace::heading(ui, "Source table");
             ui.horizontal_wrapped(|ui| {
                 let load_label = if loading { "Loading file…" } else { "Load file…" };
                 if controls::enabled_button(ui, !loading && !IN_BROWSER, load_label).clicked() {
@@ -306,8 +359,8 @@ impl PcbApp {
                 if controls::enabled_button(ui, !draft.raw_text.is_empty() && !loading, "Clear").clicked() {
                     clear_text = true;
                 }
-                ui.add_space(tokens.space_sm);
-                let detected_suffix = if draft.delimiter == Delimiter::Auto && !draft.raw_text.is_empty() {
+                ui.add_space(tokens.space_8);
+                let detected_suffix = if draft.delimiter == Delimiter::Auto && !is_empty {
                     format!("Auto ({})", draft.preview.delimiter.label())
                 } else {
                     draft.delimiter.label().to_owned()
@@ -332,7 +385,7 @@ impl PcbApp {
             if let Some(io_error) = &draft.io_error {
                 ui.label(shell::error(io_error));
             }
-            ui.add_space(tokens.space_xs);
+            ui.add_space(tokens.space_4);
             let source_label = ui.label(shell::dim("Pin table text (CSV or TSV, up to 256 KiB):"));
             egui::ScrollArea::vertical().id_salt("pin_table_source_scroll").max_height(132.0).show(ui, |ui| {
                 let editor = egui::TextEdit::multiline(&mut draft.raw_text)
@@ -350,12 +403,12 @@ impl PcbApp {
                 }
             });
 
-            ui.add_space(tokens.space_md);
+            ui.add_space(tokens.space_12);
 
-            // Section 2: Column mapping
+            // Column mapping
             ui.horizontal(|ui| {
-                library_workspace::heading(ui, "2. Column mapping");
-                ui.add_space(tokens.space_sm);
+                library_workspace::heading(ui, "Column mapping");
+                ui.add_space(tokens.space_8);
                 if controls::enabled_button(ui, draft.preview.column_count > 0, "Auto-map columns").clicked() {
                     auto_map = true;
                 }
@@ -394,125 +447,174 @@ impl PcbApp {
                 });
             }
 
-            ui.add_space(tokens.space_md);
+            ui.add_space(tokens.space_12);
 
-            // Section 3: Live preview
-            library_workspace::heading(ui, "3. Live preview");
+            // Live preview
+            library_workspace::heading(ui, "Live preview");
             let total_rows = draft.preview.rows.len();
-            let valid_rows = draft.preview.valid_row_count;
             let finding_count = draft.preview.findings.len();
             let unit_count = draft.preview.units.len();
-            ui.label(format!(
-                "{total_rows} row{} · {valid_rows} valid · {finding_count} finding{} · {unit_count} unit{}",
-                if total_rows == 1 { "" } else { "s" },
-                if finding_count == 1 { "" } else { "s" },
-                if unit_count == 1 { "" } else { "s" },
-            ));
-            if !draft.preview.units.is_empty() {
-                let unit_line = draft
-                    .preview
-                    .units
-                    .iter()
-                    .take(6)
-                    .map(|unit| {
-                        format!(
-                            "{} ({} pin{}, {} × {})",
-                            unit.unit,
-                            unit.pin_count,
-                            if unit.pin_count == 1 { "" } else { "s" },
-                            format_mm(unit.estimated_width_nm),
-                            format_mm(unit.estimated_height_nm),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" · ");
-                let suffix = if draft.preview.units.len() > 6 { format!(" · +{} more", draft.preview.units.len() - 6) } else { String::new() };
-                ui.label(shell::dim(format!("Units: {unit_line}{suffix}")));
-            }
+            if is_empty {
+                ui.label(shell::dim("Paste or load a pin table to preview."));
+            } else {
+                let table_findings = draft.preview.table_finding_count();
+                let row_issue_count = draft.preview.rows_with_findings_count();
+                let ready_rows = if table_findings > 0 { 0 } else { draft.preview.valid_row_count };
+                ui.label(format!(
+                    "{total_rows} {} parsed · {ready_rows} ready · {finding_count} {} · {unit_count} {}",
+                    plural(total_rows, "row", "rows"),
+                    plural(finding_count, "finding", "findings"),
+                    plural(unit_count, "unit", "units"),
+                ));
 
-            let visible_count = draft.visible_row_count();
-            let pages = visible_count.div_ceil(ROWS_PER_PAGE).max(1);
-            draft.page = draft.page.min(pages.saturating_sub(1));
-
-            ui.horizontal_wrapped(|ui| {
-                let filter_label = format!("Show findings only ({finding_count})");
-                ui.add_enabled_ui(finding_count > 0, |ui| {
-                    if controls::checkbox(ui, &mut draft.findings_only, filter_label).changed() {
-                        draft.page = 0;
-                    }
-                });
-                ui.add_space(tokens.space_sm);
-                if controls::enabled_button(ui, draft.page > 0, "Previous").clicked() {
-                    draft.page = draft.page.saturating_sub(1);
-                }
-                ui.label(shell::dim(format!("Page {} of {} · {} shown", draft.page + 1, pages, visible_count)));
-                if controls::enabled_button(ui, draft.page + 1 < pages, "Next").clicked() {
-                    draft.page = draft.page.saturating_add(1);
-                }
-            });
-
-            if total_rows > 0 {
-                let table_rows = preview_table_entries(&draft.preview, draft.findings_only, draft.page);
-                ui.allocate_ui(egui::vec2(ui.available_width(), 240.0), |ui| {
-                    ui.push_id(("pin_table_preview_rows", draft.findings_only, draft.page), |ui| {
-                        library_workspace::table(ui, &["Row", "Number", "Name", "Electrical type", "Unit", "Side", "Status"], &table_rows, |_| {});
-                    });
-                });
-            }
-
-            if !draft.preview.findings.is_empty() {
-                ui.add_space(tokens.space_xs);
-                ui.label(shell::error(format!("Validation findings ({finding_count}) — fix these before confirming:")));
-                for finding in draft.preview.findings.iter().take(MAX_INLINE_FINDINGS) {
-                    ui.label(shell::error(format!("• {}", finding.message)));
-                }
-                if draft.preview.findings.len() > MAX_INLINE_FINDINGS {
-                    ui.label(shell::dim(format!(
-                        "… and {} more finding(s). Filter to findings only or edit the source table to inspect all.",
-                        draft.preview.findings.len() - MAX_INLINE_FINDINGS
+                if table_findings > 0 {
+                    ui.add_space(tokens.space_4);
+                    ui.label(shell::error(format!(
+                        "Table {} ({table_findings}) — fix before staging:",
+                        plural(table_findings, "finding", "findings"),
                     )));
+                    for finding in draft.preview.findings.iter().filter(|finding| finding.row.is_none()) {
+                        ui.label(shell::error(format!("• {}", finding.message)));
+                    }
+                }
+
+                if !draft.preview.units.is_empty() {
+                    let unit_line = draft
+                        .preview
+                        .units
+                        .iter()
+                        .take(6)
+                        .map(|unit| {
+                            format!(
+                                "{} ({} {}, {} × {})",
+                                unit.unit,
+                                unit.pin_count,
+                                plural(unit.pin_count, "pin", "pins"),
+                                format_mm(unit.estimated_width_nm),
+                                format_mm(unit.estimated_height_nm),
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" · ");
+                    let suffix = if draft.preview.units.len() > 6 { format!(" · +{} more", draft.preview.units.len() - 6) } else { String::new() };
+                    ui.label(shell::dim(format!("Units: {unit_line}{suffix}")));
+                }
+
+                let visible_count = draft.visible_row_count();
+                let pages = visible_count.div_ceil(ROWS_PER_PAGE).max(1);
+                draft.page = draft.page.min(pages.saturating_sub(1));
+
+                if total_rows > 0 {
+                    ui.horizontal_wrapped(|ui| {
+                        let filter_label = format!("Show findings only ({row_issue_count})");
+                        ui.add_enabled_ui(row_issue_count > 0, |ui| {
+                            if controls::checkbox(ui, &mut draft.findings_only, filter_label).changed() {
+                                draft.page = 0;
+                            }
+                        });
+                        ui.add_space(tokens.space_8);
+                        if controls::enabled_button(ui, draft.page > 0, "Previous").clicked() {
+                            draft.page = draft.page.saturating_sub(1);
+                        }
+                        ui.label(shell::dim(format!("Page {} of {} · {} shown", draft.page + 1, pages, visible_count)));
+                        if controls::enabled_button(ui, draft.page + 1 < pages, "Next").clicked() {
+                            draft.page = draft.page.saturating_add(1);
+                        }
+                    });
+
+                    let page_rows = visible_page_rows(&draft.preview, draft.findings_only, draft.page);
+                    let table_rows = preview_table_entries(&draft.preview, &page_rows);
+                    ui.allocate_ui(egui::vec2(ui.available_width(), 240.0), |ui| {
+                        ui.push_id(("pin_table_preview_rows", draft.findings_only, draft.page), |ui| {
+                            library_workspace::table(
+                                ui,
+                                &["Pin name", "Row", "Number", "Electrical type", "Unit", "Side", "Status"],
+                                &table_rows,
+                                |_| {},
+                            );
+                        });
+                    });
+
+                    let page_findings: Vec<_> =
+                        page_rows.iter().flat_map(|row| row.finding_indices.iter().filter_map(|&idx| draft.preview.findings.get(idx))).collect();
+                    if !page_findings.is_empty() {
+                        ui.add_space(tokens.space_4);
+                        ui.label(shell::error(format!(
+                            "Row {} on this page ({} of {} total):",
+                            plural(page_findings.len(), "finding", "findings"),
+                            page_findings.len(),
+                            finding_count.saturating_sub(table_findings),
+                        )));
+                        for finding in page_findings {
+                            ui.label(shell::error(format!("• {}", finding.message)));
+                        }
+                    }
                 }
             }
 
-            ui.add_space(tokens.space_md);
+            ui.add_space(tokens.space_12);
             ui.separator();
-            ui.horizontal(|ui| {
-                let readiness = if loading {
-                    "Loading pin-table file…".to_owned()
-                } else if can_confirm {
-                    format!(
-                        "Ready to stage {total_rows} pin{} across {unit_count} unit{}.",
-                        if total_rows == 1 { "" } else { "s" },
-                        if unit_count == 1 { "" } else { "s" },
-                    )
-                } else if total_rows == 0 {
-                    "Paste or load a pin table to preview.".to_owned()
-                } else {
-                    format!("Resolve {finding_count} finding{} before confirming.", if finding_count == 1 { "" } else { "s" },)
-                };
-                ui.label(shell::dim(readiness));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if controls::button(ui, "Cancel").clicked() {
-                        cancel = true;
-                    }
-                    let confirm_response = ui.add_enabled(can_confirm, controls::action("Confirm import", true));
-                    if confirm_response.clicked() {
-                        confirm = true;
+
+            if let Some(confirm_error) = &draft.confirm_error {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(shell::error(confirm_error));
+                    if draft.revision_stale && controls::button(ui, "Refresh revision").clicked() {
+                        refresh_revision = true;
                     }
                 });
+                ui.add_space(tokens.space_4);
+            }
+
+            let readiness = if loading {
+                "Loading pin-table file…".to_owned()
+            } else if can_stage {
+                format!(
+                    "Ready to stage {total_rows} {} across {unit_count} {}.",
+                    plural(total_rows, "pin", "pins"),
+                    plural(unit_count, "unit", "units"),
+                )
+            } else if is_empty {
+                "Paste or load a pin table to preview.".to_owned()
+            } else {
+                format!("Resolve {finding_count} {} before staging.", plural(finding_count, "finding", "findings"))
+            };
+            ui.label(shell::dim(readiness));
+            ui.add_space(tokens.space_4);
+            ui.horizontal(|ui| {
+                if controls::enabled_button(ui, can_stage, "Stage pin table").clicked() {
+                    stage = true;
+                }
+                if has_staged && controls::enabled_button(ui, !loading, "Clear staged plan").clicked() {
+                    clear_staged = true;
+                }
+                if controls::enabled_button(ui, !loading, "Cancel").clicked() {
+                    cancel = true;
+                }
             });
         });
 
-        if cancel || dismissed {
+        if (cancel || dismissed) && !loading {
             return;
         }
         if load_file {
             draft.start_file_load(ctx);
         }
+        if refresh_revision && let Some(doc) = self.library_editors.documents.get(&draft.document) {
+            draft.revision = doc.session.revision();
+            draft.confirm_error = None;
+            draft.revision_stale = false;
+        }
+        if clear_staged {
+            self.clear_staged_pin_table(draft.document);
+            draft.confirm_error = None;
+            draft.revision_stale = false;
+        }
         if clear_text {
             draft.raw_text.clear();
             draft.source_name = None;
             draft.io_error = None;
+            draft.confirm_error = None;
+            draft.revision_stale = false;
             draft.manual_mapping = false;
             draft.page = 0;
             draft.recompute();
@@ -523,10 +625,14 @@ impl PcbApp {
             draft.recompute();
         }
 
-        if (confirm || shortcut_confirm) && draft.preview.can_accept() && draft.file_job.is_none() {
-            match draft.preview.into_import_plan().and_then(|plan| self.confirm_library_pin_table(draft.document, draft.revision, plan)) {
+        if stage && can_stage {
+            match draft.preview.into_import_plan(draft.revision).and_then(|plan| self.stage_library_pin_table(&draft, plan)) {
                 Ok(()) => return,
-                Err(error) => draft.io_error = Some(error),
+                Err(error) => {
+                    draft.revision_stale =
+                        self.library_editors.documents.get(&draft.document).is_some_and(|doc| doc.session.revision() != draft.revision);
+                    draft.confirm_error = Some(error);
+                }
             }
         }
 
@@ -537,6 +643,11 @@ impl PcbApp {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+    use crate::tests::click;
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
 
     fn synthetic_256_csv(with_duplicates: bool) -> String {
         let mut csv = String::from("Number,Name,Type,Unit,Side\n");
@@ -563,129 +674,187 @@ mod tests {
         csv
     }
 
-    /// Opening the dialog on a symbol document, pasting a 256-pin CSV with 2 duplicates,
-    /// filtering to findings, fixing the duplicates and confirming stages an `ImportPlan`
-    /// without mutating symbol revision or creating pins.
-    #[test]
-    fn dialog_256_pin_csv_with_two_duplicates_filter_fix_and_confirm() {
+    fn symbol_harness(size: egui::Vec2) -> (Harness<'static, PcbApp>, u64) {
         let mut app = PcbApp::default();
         app.new_library_item(Kind::Symbol);
         let doc_id = app.library_editors.active.unwrap();
-        let revision_before = app.library_editors.documents.get(&doc_id).unwrap().session.revision();
-
         app.begin_library_pin_table(doc_id).unwrap();
+        let mut h =
+            Harness::builder().with_size(size).with_context_setup(pcbcraft_chrome::install).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        (h, doc_id)
+    }
+
+    /// Empty dialog opens without any red validation error; pasting a 256-pin CSV with 2
+    /// duplicates disables staging, lets the user toggle the findings-only filter, and after
+    /// fixing duplicates clicking "Stage pin table" stages an `ImportPlan` without mutating
+    /// symbol revision, exposes it in `inspect()`, and restores it on reopen.
+    #[test]
+    fn dialog_256_pin_csv_with_two_duplicates_filter_fix_and_stage() {
+        let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        let revision_before = h.state().library_editors.documents.get(&doc_id).unwrap().session.revision();
+
+        // Empty state suppresses validation findings and pager.
+        assert!(h.query_by_label("Show findings only (1)").is_none());
+        assert!(h.query_by_label("Previous").is_none());
+
+        // Paste 256-pin CSV with 2 duplicates.
         {
-            let Dialog::LibraryPinTable(draft) = &mut app.dialog else {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
                 panic!("expected pin table dialog");
             };
             draft.raw_text = synthetic_256_csv(true);
             draft.recompute();
-            assert_eq!(draft.preview.rows.len(), 256);
-            assert_eq!(draft.preview.findings.len(), 2);
-            assert!(!draft.preview.can_accept());
+        }
+        h.run();
 
-            draft.findings_only = true;
+        // Clicking Stage pin table while invalid does not close or stage.
+        h.get_by_label("Stage pin table").scroll_to_me();
+        h.run();
+        click(&mut h, "Stage pin table");
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+        assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
+
+        // Toggle findings-only filter through the real checkbox control.
+        h.get_by_label("Show findings only (2)").scroll_to_me();
+        h.run();
+        click(&mut h, "Show findings only (2)");
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert!(draft.findings_only);
             assert_eq!(draft.visible_row_count(), 2);
-            let entries = preview_table_entries(&draft.preview, true, 0);
-            assert_eq!(entries.len(), 2);
-            assert!(entries[0].cells[6].contains("duplicate pin number '10'"));
-            assert!(entries[1].cells[6].contains("duplicate pin number '20'"));
         }
 
-        // Render one frame with shared chrome tokens to verify layout and table rendering.
-        let mut harness = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(1024.0, 760.0))
-            .with_context_setup(pcbcraft_chrome::install)
-            .build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
-        harness.run();
-        assert!(matches!(harness.state().dialog, Dialog::LibraryPinTable(_)));
-
-        // Fix the duplicates and confirm.
+        // Fix the duplicates and click "Stage pin table".
         {
-            let app = harness.state_mut();
-            let Dialog::LibraryPinTable(draft) = &mut app.dialog else {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
                 panic!("expected pin table dialog");
             };
             draft.raw_text = synthetic_256_csv(false);
             draft.recompute();
-            assert!(draft.preview.can_accept());
-            assert!(!draft.findings_only);
-            let plan = draft.preview.into_import_plan().unwrap();
-            let revision = draft.revision;
-            app.confirm_library_pin_table(doc_id, revision, plan).unwrap();
-            app.dialog = Dialog::None;
         }
+        h.run();
+        h.get_by_label("Stage pin table").scroll_to_me();
+        h.run();
+        click(&mut h, "Stage pin table");
 
-        let app = harness.state();
-        let doc = app.library_editors.documents.get(&doc_id).unwrap();
+        assert!(matches!(h.state().dialog, Dialog::None));
+        let doc = h.state().library_editors.documents.get(&doc_id).unwrap();
         assert_eq!(doc.session.revision(), revision_before);
-        let staged = doc.staged_pin_table.as_ref().expect("staged ImportPlan");
-        assert_eq!(staged.pins.len(), 256);
-        assert_eq!(staged.units.len(), 4);
-        assert_eq!(staged.pins[0].name.as_deref(), Some("SIG_1/ALT_1"));
-        assert!(app.library_editors.notice.as_deref().unwrap_or_default().contains("256 pins across 4 units"));
+        let staged = doc.staged_pin_table.as_ref().expect("staged pin table");
+        assert_eq!(staged.plan.base_revision, revision_before);
+        assert_eq!(staged.plan.pins.len(), 256);
+        assert_eq!(staged.plan.units.len(), 4);
+        assert_eq!(staged.plan.pins[0].name.as_deref(), Some("SIG_1/ALT_1"));
+        assert!(h.state().library_editors.notice.as_deref().unwrap_or_default().contains("256 pins across 4 units"));
+        let inspected = h.state().library_editors.inspect();
+        assert_eq!(inspected["documents"][0]["staged_pin_table"]["pin_count"], 256);
+        assert_eq!(inspected["documents"][0]["staged_pin_table"]["unit_count"], 4);
+
+        // Reopening restores the staged source text and exposes Clear staged plan.
+        h.state_mut().begin_library_pin_table(doc_id).unwrap();
+        h.run();
+        h.get_by_label("Clear staged plan").scroll_to_me();
+        h.run();
+        click(&mut h, "Clear staged plan");
+        assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
     }
 
-    /// Manual column remapping updates the preview immediately, Auto-map restores header mapping,
-    /// and Escape dismisses the dialog without staging a plan.
+    /// Column remapping via the labelled ComboBox updates the preview live; Escape closes an open
+    /// ComboBox popup before dismissing the modal, and Cancel/Escape discards cleanly.
     #[test]
-    fn dialog_column_remapping_and_escape_cancel() {
-        let mut app = PcbApp::default();
-        app.new_library_item(Kind::Symbol);
-        let doc_id = app.library_editors.active.unwrap();
-        app.begin_library_pin_table(doc_id).unwrap();
-
+    fn dialog_column_remapping_choice_escape_and_cancel() {
+        let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 760.0));
         {
-            let Dialog::LibraryPinTable(draft) = &mut app.dialog else {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
                 panic!("expected pin table dialog");
             };
             draft.raw_text = "Signal\tPin\tType\nTXD\t1\toutput\nRXD\t2\tinput\n".into();
             draft.recompute();
             assert_eq!(draft.mapping.number, Some(1));
-            assert_eq!(draft.mapping.name, Some(0));
-            assert!(draft.preview.can_accept());
+        }
+        h.run();
 
-            // Simulate user unmapping pin number.
-            draft.mapping.number = None;
-            draft.manual_mapping = true;
-            draft.recompute();
+        // Open the labelled Pin number ComboBox, choose "Unmapped (required)", and verify preview blocks staging.
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").click();
+        h.run();
+        click(&mut h, "Unmapped (required)");
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert_eq!(draft.mapping.number, None);
             assert!(!draft.preview.can_accept());
-
-            // Auto-map restores valid mapping.
-            draft.manual_mapping = false;
-            draft.recompute();
-            assert!(draft.preview.can_accept());
-            assert_eq!(draft.mapping.number, Some(1));
         }
 
-        let mut harness = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(1024.0, 720.0))
-            .with_context_setup(pcbcraft_chrome::install)
-            .build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
-        harness.run();
-        harness.key_press(egui::Key::Escape);
-        harness.run();
-        assert!(matches!(harness.state().dialog, Dialog::None));
-        assert!(harness.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
+        // Click Auto-map columns to restore valid header mapping.
+        click(&mut h, "Auto-map columns");
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert_eq!(draft.mapping.number, Some(1));
+            assert!(draft.preview.can_accept());
+        }
+
+        // Open Pin number ComboBox again: first Escape closes popup only, second Escape closes dialog.
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").click();
+        h.run();
+        h.get_by_label("Unmapped (required)");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+        assert!(h.query_by_label("Unmapped (required)").is_none());
+
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
     }
 
-    /// Short-host viewport (L7): scrolling_dialog_width keeps the dialog scrollable without clipping
-    /// or panicking even when host height is small (420 px).
+    /// Short-host viewport (L7): scrolling the modal brings footer buttons cleanly inside the
+    /// viewport; revision mismatch reports inline beside the footer with a Refresh revision button,
+    /// and non-symbol documents refuse pin-table import.
     #[test]
-    fn dialog_short_host_scroll_keeps_footer_reachable() {
+    fn dialog_short_host_footer_reachable_revision_refresh_and_non_symbol_refusal() {
         let mut app = PcbApp::default();
-        app.new_library_item(Kind::Symbol);
-        let doc_id = app.library_editors.active.unwrap();
-        app.begin_library_pin_table(doc_id).unwrap();
-        if let Dialog::LibraryPinTable(draft) = &mut app.dialog {
-            draft.raw_text = synthetic_256_csv(false);
+        app.new_library_item(Kind::Footprint);
+        let fp_id = app.library_editors.active.unwrap();
+        assert!(app.begin_library_pin_table(fp_id).is_err());
+
+        let viewport_size = egui::vec2(960.0, 420.0);
+        let (mut h, doc_id) = symbol_harness(viewport_size);
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type\n1,VCC,power_in\n".into();
             draft.recompute();
         }
-        let mut harness = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(960.0, 420.0))
-            .with_context_setup(pcbcraft_chrome::install)
-            .build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
-        harness.run();
-        assert!(matches!(harness.state().dialog, Dialog::LibraryPinTable(_)));
+        h.run();
+
+        // Scroll footer controls into view and assert both lie inside the 960x420 viewport.
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, viewport_size);
+        h.get_by_label("Cancel").scroll_to_me();
+        h.run();
+        assert!(viewport.contains_rect(h.get_by_label("Cancel").rect()));
+        assert!(viewport.contains_rect(h.get_by_label("Stage pin table").rect()));
+
+        // Advance the underlying symbol revision behind the dialog's back.
+        h.state_mut().library_editors.edit(doc_id, 0, Action::AddUnit { unit: "aux".into() }).unwrap();
+        click(&mut h, "Stage pin table");
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+
+        // Refresh revision clears the error and lets Stage pin table succeed without losing the paste.
+        h.get_by_label("Refresh revision").scroll_to_me();
+        h.run();
+        click(&mut h, "Refresh revision");
+        h.get_by_label("Stage pin table").scroll_to_me();
+        h.run();
+        click(&mut h, "Stage pin table");
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert_eq!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.as_ref().unwrap().plan.base_revision, 1);
     }
 }
