@@ -13,7 +13,7 @@ use std::{
 };
 use uuid::Uuid;
 
-mod index;
+pub(super) mod index;
 mod overlay;
 pub(crate) mod preparation;
 pub use overlay::{ObstacleId, Overlay, OverlayDecision, OverlayResults};
