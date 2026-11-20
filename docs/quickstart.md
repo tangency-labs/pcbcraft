@@ -881,9 +881,11 @@ nondegenerate resolved axis rectangle. Rectangles also need an integral centered
 obrounds need matching width/height parity. Other rectangles retain resolved regions;
 other obrounds retain approximate round-ended strokes or equal-sided C flashes.
 Rounded rectangles can flash with circular corners, including at non-quarter-turn angles.
-Other rounded rectangles retain polygon regions. A collapsed tiny rectangle can emit a
-retraced path with no area. Mask uses outer-layer pads without process expansion; paste
-excludes through-hole pads.
+Rounded rectangles that do not qualify for the macro use polygon regions. If a macro
+core needs a fill but its outline could self-intersect and no exact fill is supported,
+export stops without a file set. A collapsed tiny rectangle can emit a retraced path with
+no area. Mask uses outer-layer pads without process expansion; paste excludes through-hole
+pads.
 Output names remain unique when layer names collide after sanitization; the
 [editor guide](editor-guide.md) describes the eligibility, shape approximations,
 file contents and save behavior.
