@@ -1,6 +1,6 @@
 //! The Git working format: an entry point and independently editable documents.
 
-use super::part_group_storage::{CompactMemberships, StoredInstances};
+use super::part_group_storage::{CompactMemberships, CompactPartInstance, StoredInstances};
 use super::*;
 
 /// The fixed, plain-text entry point inside a project folder.
@@ -1614,7 +1614,10 @@ pub struct DocumentsEncoder {
     definitions: BTreeMap<(String, String, u32), Arc<crate::schematic::SymbolDefinition>>,
     footprint_definitions: BTreeMap<crate::board::definition::Key, Arc<crate::board::definition::FootprintDefinition>>,
     instance_records: Option<crate::instances::Instances>,
-    compact_memberships: Option<CompactMemberships>,
+    membership_catalog_ids: BTreeSet<uuid::Uuid>,
+    membership_groups: BTreeSet<uuid::Uuid>,
+    membership_dictionary: Vec<uuid::Uuid>,
+    membership_index: usize,
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
     generated_legs: Vec<GeneratedLegRecord<'static>>,
@@ -1649,7 +1652,10 @@ impl DocumentsEncoder {
             definitions: BTreeMap::new(),
             footprint_definitions: BTreeMap::new(),
             instance_records: None,
-            compact_memberships: None,
+            membership_catalog_ids: BTreeSet::new(),
+            membership_groups: BTreeSet::new(),
+            membership_dictionary: Vec::new(),
+            membership_index: 0,
             use_compact_memberships,
             size_limit_exceeded: false,
             generated_legs: Vec::new(),
@@ -1675,6 +1681,12 @@ impl DocumentsEncoder {
         }
     }
 
+    /// Number of grouped rows checked before writing the first component.
+    #[cfg(test)]
+    pub(crate) fn grouped_rows_checked(&self) -> Option<usize> {
+        (self.phase == 21).then_some(self.cursor as usize)
+    }
+
     /// Advance the current representation within the caller's incremental record budget.
     fn step_records(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
@@ -1684,12 +1696,12 @@ impl DocumentsEncoder {
                     p.validate_no_connects()?;
                     crate::part_instances::storage::validate_project(p)?;
                     if p.has_sheet_occurrences() {
-                        let records = p.sheet_instances();
+                        let records = p.occurrence_instances();
                         Project::clone(p).install_sheet_instances(records.clone())?;
-                        self.instance_records = Some(records);
-                        if self.use_compact_memberships {
-                            self.compact_memberships = Some(CompactMemberships::from_memberships(&p.part_group_memberships)?);
+                        if !p.net_registry.records.is_empty() {
+                            p.net_registry.validate(p)?;
                         }
+                        self.instance_records = Some(records);
                         if p.layout.is_none() {
                             return Err("Occurrence records require the current project folder layout.".into());
                         }
@@ -1729,7 +1741,8 @@ impl DocumentsEncoder {
                     if has_bindings && !has_classes {
                         return Err("Net class assignments require their class catalog.".into());
                     }
-                    if has_bindings {
+                    let registry_validated = p.has_sheet_occurrences() && !p.net_registry.records.is_empty();
+                    if has_bindings && !registry_validated {
                         p.net_registry.validate(p)?;
                     }
                     let has_parameters = !p.parameters.is_empty();
@@ -1741,11 +1754,8 @@ impl DocumentsEncoder {
                     if has_part_groups && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Part groups require adopted storage/occurrence metadata.".into());
                     }
-                    if !p.part_group_memberships.is_empty() {
-                        if !has_part_groups {
-                            return Err("Part-group memberships require their group catalog.".into());
-                        }
-                        p.validate_part_group_memberships(p.part_group_memberships.iter())?;
+                    if !p.part_group_memberships.is_empty() && !has_part_groups {
+                        return Err("Part-group memberships require their group catalog.".into());
                     }
                     let has_numbers = p.net_registry.has_generated_numbers();
                     let has_pairs = p.net_registry.has_pairs();
@@ -1755,7 +1765,7 @@ impl DocumentsEncoder {
                     if has_pairs && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Differential pairs require adopted storage/occurrence metadata.".into());
                     }
-                    if (has_numbers || has_pairs) && !has_bindings {
+                    if (has_numbers || has_pairs) && !has_bindings && !registry_validated {
                         p.net_registry.validate(p)?;
                     }
                     let format = if has_pairs {
@@ -1844,7 +1854,43 @@ impl DocumentsEncoder {
                     }
                     write_parameters(&mut self.bytes, &p.parameters)?;
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
-                    self.next();
+                    if p.part_group_memberships.is_empty() {
+                        self.phase = 1;
+                    } else {
+                        self.membership_catalog_ids = p.part_groups.groups.iter().map(|group| group.id).collect();
+                        self.phase = 21;
+                    }
+                }
+                21 => {
+                    // Memberships internally hold canonical nonempty sorted sets per key. Check
+                    // their relationships and expansion limit without materializing the flat list.
+                    let p = &self.project;
+                    if let Some((part_instance, groups)) = p.part_group_memberships.grouped_row(self.cursor as usize) {
+                        self.membership_index += groups.len();
+                        if self.membership_index > crate::part_groups::MAX_MEMBERSHIPS
+                            || groups.is_empty()
+                            || groups.windows(2).any(|pair| pair[0] >= pair[1])
+                            || self
+                                .cursor
+                                .checked_sub(1)
+                                .and_then(|previous| p.part_group_memberships.grouped_row(previous as usize))
+                                .is_some_and(|(previous, _)| previous >= part_instance)
+                        {
+                            return Err("Part-group memberships must be bounded, unique and sorted by part instance and group.".into());
+                        }
+                        if !p.has_part_instance(part_instance) || groups.iter().any(|group| !self.membership_catalog_ids.contains(group)) {
+                            return Err("Part-group memberships must name existing part instances and groups.".into());
+                        }
+                        if self.use_compact_memberships {
+                            self.membership_groups.extend(groups.iter().copied());
+                        }
+                        self.cursor += 1;
+                    } else {
+                        self.membership_dictionary = std::mem::take(&mut self.membership_groups).into_iter().collect();
+                        self.cursor = 0;
+                        self.membership_index = 0;
+                        self.phase = 1;
+                    }
                 }
                 1 => {
                     if let Some((&id, c)) = self.project.components.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
@@ -1906,12 +1952,12 @@ impl DocumentsEncoder {
                         record(&mut self.bytes, &mut self.first, occurrence)?;
                         self.cursor += 1;
                     } else {
-                        if records.net_registry.is_some() {
+                        if !self.project.net_registry.records.is_empty() {
                             self.bytes.extend_from_slice(b"  ],\n  \"net_registry\": {\n    \"records\": [\n");
                             self.cursor = 0;
                             self.first = true;
                             self.phase = 16;
-                        } else if records.part_group_memberships.is_some() {
+                        } else if !self.project.part_group_memberships.is_empty() {
                             self.start_part_group_memberships(b"  ],\n")?;
                         } else {
                             self.finish_instance_document(InstanceTail::Occurrences)?;
@@ -1919,8 +1965,7 @@ impl DocumentsEncoder {
                     }
                 }
                 16 => {
-                    let registry =
-                        self.instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).ok_or("Missing registry encoding state.")?;
+                    let registry = &self.project.net_registry;
                     if let Some(net) = registry.records.get(self.cursor as usize) {
                         record(&mut self.bytes, &mut self.first, net)?;
                         self.cursor += 1;
@@ -1934,8 +1979,7 @@ impl DocumentsEncoder {
                     }
                 }
                 20 => {
-                    let registry =
-                        self.instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).ok_or("Missing pair encoding state.")?;
+                    let registry = &self.project.net_registry;
                     if let Some(pair) = registry.pairs.get(self.cursor as usize) {
                         record(&mut self.bytes, &mut self.first, pair)?;
                         self.cursor += 1;
@@ -1944,23 +1988,23 @@ impl DocumentsEncoder {
                     }
                 }
                 19 if self.use_compact_memberships => {
-                    let memberships = self.compact_memberships.as_ref().ok_or("Missing compact part-group membership encoding state.")?;
-                    if let Some(row) = memberships.part_instances.get(self.cursor as usize) {
-                        record(&mut self.bytes, &mut self.first, row)?;
+                    if let Some((part_instance, groups)) = self.project.part_group_memberships.grouped_row(self.cursor as usize) {
+                        let row = CompactPartInstance::from_groups(part_instance, groups, &self.membership_dictionary)?;
+                        record(&mut self.bytes, &mut self.first, &row)?;
                         self.cursor += 1;
                     } else {
                         self.finish_instance_document(InstanceTail::CompactMemberships)?;
                     }
                 }
                 19 => {
-                    let memberships = self
-                        .instance_records
-                        .as_ref()
-                        .and_then(|records| records.part_group_memberships.as_ref())
-                        .ok_or("Missing part-group membership encoding state.")?;
-                    if let Some(membership) = memberships.get(self.cursor as usize) {
-                        record(&mut self.bytes, &mut self.first, membership)?;
-                        self.cursor += 1;
+                    if let Some((part_instance, groups)) = self.project.part_group_memberships.grouped_row(self.cursor as usize) {
+                        let membership = crate::part_groups::Membership { part_instance, group: groups[self.membership_index] };
+                        record(&mut self.bytes, &mut self.first, &membership)?;
+                        self.membership_index += 1;
+                        if self.membership_index == groups.len() {
+                            self.membership_index = 0;
+                            self.cursor += 1;
+                        }
                     } else {
                         self.finish_instance_document(InstanceTail::Memberships)?;
                     }
@@ -2204,7 +2248,7 @@ impl DocumentsEncoder {
 
     /// Close the net registry after its last list and advance to memberships or the next document.
     fn finish_registry(&mut self) -> Result<(), String> {
-        if self.instance_records.as_ref().is_some_and(|records| records.part_group_memberships.is_some()) {
+        if !self.project.part_group_memberships.is_empty() {
             self.start_part_group_memberships(b"    ]\n  },\n")
         } else {
             self.finish_instance_document(InstanceTail::Registry)
@@ -2215,11 +2259,10 @@ impl DocumentsEncoder {
     fn start_part_group_memberships(&mut self, close: &[u8]) -> Result<(), String> {
         self.bytes.extend_from_slice(close);
         if self.use_compact_memberships {
-            let memberships = self.compact_memberships.as_ref().ok_or("Missing compact part-group membership encoding state.")?;
             write!(
                 self.bytes,
                 "  \"compact_part_group_memberships\": {{\n    \"groups\": {},\n    \"part_instances\": [\n",
-                json(&memberships.groups())?
+                json(&self.membership_dictionary)?
             )
             .map_err(|error| error.to_string())?;
         } else {
