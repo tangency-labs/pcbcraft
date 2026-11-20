@@ -11,8 +11,11 @@ use pcbcraft_engine::{
     persistence::{Documents, encode_documents},
 };
 
+/// The board harness and its persistent net choices as (ID, chooser label).
+type Fixture = (Harness<'static, PcbApp>, Vec<(Uuid, String)>);
+
 /// Create a board with three independent, command-authored persistent nets for the two clients.
-fn fixture() -> Result<(Harness<'static, PcbApp>, Vec<(Uuid, String)>), String> {
+fn fixture() -> Result<Fixture, String> {
     let mut app = PcbApp::default();
     app.start_new_project_in(crate::Workspace::Board);
     let sheet = app.session.project().ok_or("new project is open")?.sheet_target().id();
