@@ -9,6 +9,7 @@
 //! - two locating holes of diameter 0.65, 5.78 apart and 3.68 behind the front slot centres;
 //! - the A1/B12 land 0.60 by 1.15 at X -3.20 (6.40 between the outer lands), whose front edge
 //!   is on the rear slot centre line.
+//!
 //! The remaining eleven signal lands are omitted because the test exercises slots, not USB pins.
 use super::{fixture::place, *};
 use crate::{
