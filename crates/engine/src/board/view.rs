@@ -158,6 +158,8 @@ pub struct FootprintView<'a> {
     /// Counterclockwise whole degrees around the footprint origin, from 0 through 359.
     pub rotation: u16,
     pub pads: Vec<PadView>,
+    /// Circular through openings in board coordinates, with no copper or net membership.
+    pub non_plated_holes: Vec<super::definition::CircularNpth>,
     pub graphics: Vec<GraphicView>,
     /// Use generated silk rather than an editor-only label. A definition-owned reference
     /// retains this mode while hidden; definitions without one require explicitly enabled local ink.
@@ -350,6 +352,7 @@ impl<'a> BoardView<'a> {
                         })
                     })
                     .collect(),
+                non_plated_holes: self.project.board.definition_for(footprint).into_iter().flat_map(|d| footprint.non_plated_holes(d)).collect(),
                 graphics: graphics(self.project, footprint, reference),
                 physical_reference: self
                     .project

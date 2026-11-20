@@ -24,6 +24,334 @@ fn assign(s: &mut Session, symbol: &str, definition: &str, mapping: Value) -> St
     s.inspect()["project"]["board"]["footprints"].as_array().unwrap().last().unwrap()["id"].as_str().unwrap().into()
 }
 
+/// Isolate footprint codec boundaries from the editor and project integration.
+#[test]
+fn circular_npth_native_codec_is_lazy_and_closed() {
+    let mut definition = (*basic_components("resistor-0402").unwrap()).clone();
+    let legacy = write_saved(&definition).unwrap();
+    let old_writer = serde_json::to_string_pretty(&definition).unwrap() + "\n";
+    assert_eq!(legacy, old_writer.as_bytes());
+    let legacy_value: Value = serde_json::from_slice(&legacy).unwrap();
+    assert_eq!(legacy_value["format"], "pcbcraft-footprint/1");
+    assert!(legacy_value.get("non_plated_holes").is_none());
+
+    definition.non_plated_holes.push(CircularNpth { center: Point { x_nm: MAX_OFFSET_NM, y_nm: -MAX_OFFSET_NM }, diameter_nm: MAX_OFFSET_NM });
+    assert_eq!(write_saved(&definition).unwrap_err(), "footprint format does not match its non-plated hole content");
+    definition.format = FootprintDefinition::format_for(true).into();
+    let bytes = write_saved(&definition).unwrap();
+    assert_eq!(*read_saved(&bytes).unwrap(), definition);
+    let value: Value = serde_json::from_slice(&bytes).unwrap();
+    let invalid_geometry = "invalid circular non-plated hole count, centre or finished diameter";
+    for (invalid, expected) in [
+        (json!([]), "expected 1–128 non-plated holes"),
+        (Value::Null, "expected a sequence"),
+        (json!(vec![value["non_plated_holes"][0].clone(); MAX_MECHANICAL_HOLES + 1]), "expected 1–128 non-plated holes"),
+        (json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":0}]), invalid_geometry),
+        (json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":MAX_OFFSET_NM + 1}]), invalid_geometry),
+        (json!([{"center":{"x_nm":i64::MIN,"y_nm":0},"diameter_nm":1}]), invalid_geometry),
+        (json!([{"center":{"x_nm":0,"y_nm":0},"diameter_nm":1,"number":"1"}]), "unknown field `number`"),
+    ] {
+        let mut changed = value.clone();
+        changed["non_plated_holes"] = invalid;
+        let error = read_saved(&serde_json::to_vec(&changed).unwrap()).unwrap_err();
+        assert!(error.contains(expected), "unexpected error: {error}");
+    }
+    let mut downgraded = value.clone();
+    downgraded["format"] = json!(LEGACY_FORMAT);
+    let mut empty = legacy_value;
+    empty["format"] = json!(NPTH_FORMAT);
+    for invalid in [downgraded, empty] {
+        assert_eq!(read_saved(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(), "footprint format does not match its non-plated hole content");
+    }
+    definition.non_plated_holes.clear();
+    definition.format = FootprintDefinition::format_for(false).into();
+    assert_eq!(write_saved(&definition).unwrap(), legacy);
+}
+
+/// Load an authored fixture and place its mapped component. Route tests optionally connect
+/// terminal 1 to a real schematic net before accepting the board's source.
+fn place_mounting_fixture(item: &crate::authoring::Item, connected: bool) -> Session {
+    let definition = item.footprint().unwrap();
+    let mut s = session();
+    let manifest =
+        json!({"format":crate::library::LIBRARY_FORMAT,"id":definition.library,"name":"Synthetic mounting fixture","license":definition.license})
+            .to_string();
+    let native = item.export_native().unwrap().to_string();
+    s.execute("library.load_source", &json!({"source":"mounting-fixture","documents":{"library.json":manifest,"footprints/mounting.json":native}}))
+        .unwrap();
+    let first = symbol(&mut s, "resistor");
+    let component = s.project().unwrap().components().next().unwrap().id();
+    if connected {
+        s.apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":12_700_000,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+        let second = s.project().unwrap().symbols().last().unwrap();
+        let second_component = format!("component-{}", second.component);
+        let second = second.id();
+        s.apply(
+            crate::CONNECT_PINS,
+            &json!({"from":{"symbol":first,"terminal":"1"},"to":{"symbol":second,"terminal":"1"},"expected_revision":s.revision()}),
+        )
+        .unwrap();
+        // The reviewed baseline requires assignments even for components left unplaced.
+        let package = basic_components("resistor-0402").unwrap();
+        s.apply(
+            crate::ASSIGN_FOOTPRINT,
+            &json!({"component":second_component,"library":package.library,"definition":package.id,
+                "definition_revision":package.revision,"mapping":{"1":"1","2":"2"},"expected_revision":s.revision()}),
+        )
+        .unwrap();
+    }
+    s.apply(crate::ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"2","2":"1"},"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
+    s.apply(crate::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
+    s
+}
+
+/// Board and pad anchor for an interactive route to one non-plated opening.
+fn mounting_route_fixture(connected: bool) -> Session {
+    use crate::authoring::{Action, Item, Kind, Primitive};
+    let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    let hole = CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 };
+    editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
+    place_mounting_fixture(editor.snapshot().as_ref(), connected)
+}
+
+/// Make a legal thin track to a via on the right side of the opening. Optionally continue
+/// after that first transition and return to the initial layer at a distant second via.
+fn mounting_route(s: &Session, distance_nm: i64, two_transitions: bool) -> Value {
+    use crate::board::track::tests::{copper_layers, view};
+    let board = view(s);
+    let layers = copper_layers(s);
+    let footprint = board.footprints().next().unwrap();
+    let start = footprint.pads.iter().find(|pad| pad.number == "2").unwrap().center;
+    let hole = footprint.non_plated_holes[0];
+    let end = Point { x_nm: hole.center.x_nm + distance_nm, y_nm: hole.center.y_nm };
+    let mut points = vec![start, Point { x_nm: start.x_nm, y_nm: -3_000_000 }, Point { x_nm: end.x_nm, y_nm: -3_000_000 }, end];
+    let mut changes = vec![json!({"at":3,"layer":layers[1]})];
+    if two_transitions {
+        points.push(Point { x_nm: end.x_nm + 4_000_000, y_nm: end.y_nm });
+        changes.push(json!({"at":4,"layer":layers[0]}));
+    }
+    json!({"board":board.target.board,"layer":layers[0],"points":points,"layer_changes":changes,
+        "width_nm":200_000,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()})
+}
+
+/// Use the same resumed candidate validation as interactive Finish, without adopting the edit.
+fn prepare_mounting_route(s: &Session, params: &Value) -> Result<crate::board::track::preparation::PreparedCopperEdit, crate::CommandError> {
+    let target = crate::board::track::tests::view(s).target;
+    let source = s.copper_preparation(target).unwrap();
+    let mut job = s.prepare_interactive_route_with(&source, params)?;
+    assert!((0..256).any(|_| job.step(32)), "synthetic route preparation finishes");
+    job.take_result().map(|result| result.expect("completed job has a verdict"))
+}
+
+/// Finish checks earlier transitions again after the route's global via size grows.
+#[test]
+fn interactive_finish_rechecks_earlier_vias_at_final_diameter() {
+    let mut s = mounting_route_fixture(false);
+    let first = mounting_route(&s, 2_200_000, false);
+    assert!(prepare_mounting_route(&s, &first).is_ok(), "first via fits at the adopted diameter");
+    let mut full = mounting_route(&s, 2_200_000, true);
+    assert!(prepare_mounting_route(&s, &full).is_ok(), "both transitions fit the original size");
+    full["via_diameter_nm"] = json!(1_400_000);
+    let before = s.snapshot().unwrap();
+    let revision = s.revision();
+    let error = prepare_mounting_route(&s, &full).err().expect("growing the first via intersects the opening");
+    assert!(error.to_string().contains("Via land at (5200000, 5000000)"), "{error}");
+    assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &before));
+    assert_eq!(s.revision(), revision);
+    s.apply(crate::ADD_TRACKS, &full).unwrap();
+    assert_eq!(crate::board::track::tests::view(&s).vias().len(), 2, "direct DRC fixture edits are still available");
+}
+
+/// A via touching no saved copper still inherits the stricter class of its candidate track.
+#[test]
+fn interactive_via_uses_the_connected_route_clearance() {
+    use crate::nets::{Anchor, AnchorKind, ClassTarget};
+    use uuid::Uuid;
+    let mut s = mounting_route_fixture(true);
+    let initial = mounting_route(&s, 2_350_000, false);
+    assert!(prepare_mounting_route(&s, &initial).is_ok(), "0.45 mm clears the board default");
+    s.apply(crate::net_classes::CREATE, &json!({"name":"Mounting clearance","rules":{"clearance_nm":500_000},"expected_revision":s.revision()}))
+        .unwrap();
+    let project = s.project().unwrap();
+    let placed = crate::board::track::tests::view(&s).footprints().next().unwrap();
+    let object = *project.components.iter().find(|(_, component)| component.id() == placed.component).unwrap().0;
+    let anchor =
+        Anchor { kind: AnchorKind::Terminal, project: project.id, scope: project.net_scope(), occurrence: Uuid::nil(), object, terminal: "1".into() };
+    let class = project.net_classes().definitions[0].id;
+    s.apply(crate::nets::SET_CLASSES, &json!({"target":ClassTarget::Derived{anchor},"classes":[class],"expected_revision":s.revision()})).unwrap();
+    let classified = mounting_route(&s, 2_350_000, false);
+    let error = prepare_mounting_route(&s, &classified).err().expect("0.45 mm does not satisfy the route's 0.50 mm rule");
+    assert!(error.to_string().contains("Via land at (5350000, 5000000)"), "{error}");
+    let farther = mounting_route(&s, 2_410_000, false);
+    assert!(prepare_mounting_route(&s, &farther).is_ok(), "0.51 mm satisfies that same rule");
+}
+
+/// Author two physical holes next to two mapped electrical pads, then place the
+/// package using the same native authoring and board transactions as clients.
+#[test]
+fn circular_npth_is_mechanical_through_transform_copy_history_and_reopen() {
+    use crate::authoring::{Action, Item, Kind, Primitive};
+    use crate::board::{clearance::ObstacleId, clipboard, geometry::Contour};
+    let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    let legacy = editor.snapshot().encode().unwrap();
+    let centers = [Point { x_nm: 3_000_000, y_nm: 5_000_000 }, Point { x_nm: -4_000_000, y_nm: 6_000_000 }];
+    for center in centers {
+        editor
+            .execute(
+                editor.revision(),
+                Action::Insert { primitive: Primitive::NonPlatedHole { hole: CircularNpth { center, diameter_nm: 3_200_000 } } },
+            )
+            .unwrap();
+    }
+    let before = editor.snapshot();
+    let draft = before.encode().unwrap();
+    assert_eq!(Item::decode(&draft).unwrap(), *before);
+    assert_eq!(serde_json::from_slice::<Value>(&legacy).unwrap()["format"], "pcbcraft-library-item/1");
+    let mut wrong_envelope = serde_json::from_slice::<Value>(&draft).unwrap();
+    assert_eq!(wrong_envelope["format"], "pcbcraft-library-item/3");
+    wrong_envelope["format"] = json!("pcbcraft-library-item/1");
+    assert_eq!(Item::decode(&serde_json::to_vec(&wrong_envelope).unwrap()).unwrap_err(), "Invalid or oversized native library item.");
+    let current = editor.revision();
+    let invalid = Action::Insert { primitive: Primitive::NonPlatedHole { hole: CircularNpth { center: centers[0], diameter_nm: 0 } } };
+    for (revision, expected) in [
+        (current - 1, "Library document changed; inspect it before editing."),
+        (current, "invalid circular non-plated hole count, centre or finished diameter"),
+    ] {
+        assert_eq!(editor.execute(revision, invalid.clone()).unwrap_err(), expected);
+        assert_eq!(editor.revision(), current);
+        assert!(Arc::ptr_eq(&editor.snapshot(), &before));
+    }
+    editor.execute(current, Action::Undo).unwrap();
+    assert_eq!(editor.snapshot().footprint().unwrap().non_plated_holes.len(), 1);
+    editor.execute(editor.revision(), Action::Redo).unwrap();
+    let definition = editor.snapshot().footprint().unwrap();
+    assert_eq!(definition.non_plated_holes.len(), 2);
+    assert_eq!(Item::edit_footprint(&definition).unwrap().footprint().unwrap().non_plated_holes, definition.non_plated_holes);
+
+    let mut s = place_mounting_fixture(editor.snapshot().as_ref(), false);
+    let target = s.project().unwrap().board_target().unwrap();
+    let view = |p: &crate::Project| p.board_view(target).unwrap().footprints().next().unwrap().non_plated_holes;
+    assert_eq!(view(s.project().unwrap()), definition.non_plated_holes);
+    let original = s.snapshot().unwrap();
+    let id = original.board_view(target).unwrap().footprints().next().unwrap().id;
+    let project = s.inspect();
+    let inspected = &project["project"]["board"]["footprints"][0];
+    assert_eq!(inspected["pins"].as_array().unwrap().len(), 2);
+    for hole in inspected["non_plated_holes"].as_array().unwrap() {
+        assert_eq!(hole["span"], "through");
+        assert_eq!(hole["plating"], "non_plated");
+        assert_eq!(hole.get("net"), Some(&Value::Null));
+        assert!(hole.get("number").is_none());
+    }
+    let board = original.board_view(target).unwrap();
+    assert!(board.ratsnest().unwrap().lines.is_empty());
+    assert_eq!(board.footprints().next().unwrap().pads.len(), 2);
+    assert!(board.fabrication_outputs().unwrap_err().contains("does not yet support non-plated holes"));
+    let query = s.clearance_query(target, 0).unwrap();
+    let obstacles: Vec<_> = query.objects().iter().enumerate().filter(|(_, item)| item.mechanical).collect();
+    assert_eq!(obstacles.len(), 2);
+    for (index, item) in obstacles {
+        assert!(item.intended_nets.is_empty());
+        assert_eq!(item.layers.len(), 2);
+        let at = item.at;
+        // 1.6 mm finished radius and 0.1 mm probe radius give exact tangency.
+        let at = Point { x_nm: at.x_nm + 1_700_000, y_nm: at.y_nm };
+        let probe = Contour::capsule(at, at, 100_000.);
+        for &layer in &item.layers {
+            let results = query.probe(&probe, &[layer], None).unwrap();
+            assert!(results.decisions.iter().any(|d| d.second == index && d.touches && d.clearance_violation && !d.conflicting_nets));
+            let overlay = query.overlay().probe(&probe, &[layer], None).unwrap();
+            assert!(
+                overlay
+                    .decisions
+                    .iter()
+                    .any(|d| { d.obstacle == ObstacleId::Source(index) && d.touches && d.clearance_violation && !d.conflicting_nets })
+            );
+            let err = query.probe(&probe, &[layer], Some(query.objects().len())).unwrap_err();
+            assert_eq!(err.code(), crate::error_codes::ErrorCode::NotFound);
+        }
+        let request = crate::board::route::Request {
+            head: item.at,
+            target: Point { x_nm: item.at.x_nm + 10_000_000, y_nm: item.at.y_nm },
+            layer: item.layers[0],
+            origin: None,
+            width_nm: 200_000,
+            posture: crate::board::route::Posture::default(),
+            flipped: false,
+            previous: Vec::new(),
+        };
+        let plan = s.plan_route(&query, &request, 128, &|| false).unwrap();
+        assert_eq!(plan.outcome, crate::board::route::Outcome::Blocked { last_legal: item.at });
+        assert_eq!(plan.blocker.as_deref(), Some(item.name.as_str()));
+    }
+
+    s.apply(SET_FOOTPRINT_TRANSFORM, &json!({"footprint":id,"x_nm":0,"y_nm":0,"rotation":90,"side":"back","expected_revision":s.revision()}))
+        .unwrap();
+    let transformed = view(s.project().unwrap());
+    assert_eq!(transformed.iter().map(|h| h.center).collect::<Vec<_>>(), centers.map(|c| Point { x_nm: c.y_nm, y_nm: c.x_nm }));
+    let before_copy = s.snapshot().unwrap();
+    let result = s.execute(clipboard::COPY, &json!({"items":{"footprints":[id]},"expected_revision":s.revision()})).unwrap();
+    let text = result["clipboard"].as_str().unwrap();
+    let mut envelope: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(envelope["format"], "pcbcraft-clipboard/7");
+    let nested = envelope["circuits"][0]["text"].as_str().unwrap();
+    let mut nested_envelope: Value = serde_json::from_str(nested).unwrap();
+    assert_eq!(nested_envelope["format"], "pcbcraft-clipboard/6");
+    nested_envelope["format"] = json!("pcbcraft-clipboard/1");
+    assert!(matches!(crate::clipboard::Fragment::from_text(&nested_envelope.to_string()),
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+    envelope["format"] = json!("pcbcraft-clipboard/1");
+    assert!(matches!(clipboard::BoardFragment::from_text(&envelope.to_string()),
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+    let fragment = clipboard::BoardFragment::from_text(text).unwrap();
+    assert_eq!(fragment.to_text().unwrap(), text);
+    let sheet = s.project().unwrap().sheet_target().id();
+    let sources: std::collections::BTreeMap<_, _> = fragment
+        .circuits()
+        .iter()
+        .map(|c| (c.source_sheet, clipboard::SchematicDestination { sheet, at: Point { x_nm: 0, y_nm: 100_000_000 } }))
+        .collect();
+    s.apply(clipboard::PASTE, &json!({"text":text,"x_nm":30_000_000,"y_nm":10_000_000,"schematic_targets":sources,"expected_revision":s.revision()}))
+        .unwrap();
+    let after_copy = s.snapshot().unwrap();
+    let pasted = after_copy.board_view(target).unwrap().footprints().last().unwrap();
+    assert!(pasted.bottom);
+    assert_eq!(pasted.rotation, 90);
+    assert_eq!(
+        pasted.non_plated_holes,
+        transformed
+            .iter()
+            .map(|hole| CircularNpth { center: Point { x_nm: hole.center.x_nm + 30_000_000, y_nm: hole.center.y_nm + 10_000_000 }, ..*hole })
+            .collect::<Vec<_>>()
+    );
+    let bytes = encode_documents(after_copy.clone()).unwrap();
+    for reopened in [decode_documents(&bytes).unwrap(), decode_packed(&encode_packed(after_copy.clone()).unwrap()).unwrap().project] {
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), bytes);
+        assert_eq!(reopened.board_view(target).unwrap().footprints().last().unwrap().non_plated_holes, pasted.non_plated_holes);
+    }
+    s.apply("edit.undo", &json!({})).unwrap();
+    crate::assert_same_content(&before_copy, &s.snapshot().unwrap());
+    s.apply("edit.redo", &json!({})).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), bytes);
+
+    // Let the shared direct edit create a DRC case without relying on the interactive walker.
+    s.apply(crate::ADD_VIA, &json!({"at":transformed[0].center,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()}))
+        .unwrap();
+    use crate::board::drc;
+    let params = json!({"board":target.board});
+    let sync = s.check_design(&params).unwrap();
+    let mut job = s.design_check_job(&params).unwrap();
+    for _ in 0..128 {
+        if job.step(16) {
+            break;
+        }
+    }
+    let report = job.take_report().unwrap();
+    assert!(report.violations.iter().any(|v| v.kind == drc::Kind::Clearance && v.message == "Non-plated hole touches copper" && v.nets.is_empty()));
+    assert_eq!(json!(report), sync);
+}
+
 /// Library defaults and board adjustments compose before clipping, while authoring preserves pads.
 #[test]
 fn library_and_board_reference_offsets_are_additive() {

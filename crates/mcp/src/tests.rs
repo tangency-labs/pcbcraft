@@ -877,14 +877,19 @@ fn discovery_reports_the_api_version_and_catalog_revision() {
     let about: Value = serde_json::from_str(listed["content"][1]["text"].as_str().unwrap()).unwrap();
     assert_eq!(about, listed["structuredContent"]);
     let revision = catalog_revision(commands.as_array().unwrap());
-    assert_eq!(about, json!({"command_api_version": COMMAND_API_VERSION, "catalog_revision": revision, "capabilities": CAPABILITIES}));
+    assert_eq!(
+        about,
+        json!({"command_api_version": COMMAND_API_VERSION, "catalog_revision": revision, "capabilities": CAPABILITIES, "scope":"edit"})
+    );
     assert!(about["capabilities"].as_array().unwrap().contains(&json!("command_api")));
     let filtered = call(&mut s, "list_commands", json!({"filter": "undo"}));
     assert!(body(&filtered).as_array().unwrap().len() < commands.as_array().unwrap().len());
     assert_eq!(filtered["structuredContent"]["catalog_revision"], json!(revision));
     for command in commands.as_array().unwrap() {
         assert!(command.get("version").is_none(), "{command}");
-        assert_eq!(&body(&call(&mut s, "describe_command", json!({"command": command["id"]}))), command);
+        let described = call(&mut s, "describe_command", json!({"command": command["id"]}));
+        assert_eq!(&body(&described), command);
+        assert_eq!(described["structuredContent"], json!({"scope":"edit"}));
     }
     let snapshot: Value = serde_json::from_str(include_str!("../../../docs/schemas/command-contracts.json")).unwrap();
     assert_eq!(check_snapshot(&snapshot, "commands", commands.as_array().unwrap(), COMMAND_API_VERSION), Ok(()));
@@ -894,6 +899,41 @@ fn discovery_reports_the_api_version_and_catalog_revision() {
     let failed = call(&mut s, "describe_command", json!({"command": "schematic.nothing"}));
     assert_eq!(failed["isError"], true);
     assert_eq!(failed["structuredContent"]["error"]["code"], "unknown_command");
+}
+
+/// Discovery and inspection expose the same immutable scope. Both return modes refuse the
+/// edit as a coded tool failure, and the same connection remains able to read afterwards.
+#[test]
+fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
+    let mut editor = Session::default();
+    editor.apply("project.new", &json!({"name":"Review fixture"})).unwrap();
+    let mut s = Server::new(Box::new(Headless::with_scope(pcbcraft_engine::SessionScope::ReadOnly, editor.snapshot())));
+    let listed = call(&mut s, "list_commands", json!({"filter":"project.rename"}));
+    assert_eq!(listed["structuredContent"]["scope"], "read_only");
+    let described = call(&mut s, "describe_command", json!({"command":"project.rename"}));
+    assert_eq!(body(&described), body(&listed)[0]);
+    let scope = json!({"scope":"read_only"});
+    assert_eq!(described["structuredContent"], scope);
+    assert_eq!(described["content"][1]["text"], scope.to_string());
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    assert_eq!(before["scope"], "read_only");
+    let version = pcbcraft_engine::command_api::COMMAND_API_VERSION;
+    for inspect in [true, false] {
+        let mut args = json!({"command":"project.rename","params":{"name":"Refuse this"},"inspect":inspect,"version":version + 1});
+        let mismatch = call(&mut s, "execute", args.clone());
+        assert_eq!(mismatch["isError"], true);
+        assert_eq!(mismatch["structuredContent"]["error"]["code"], "version_mismatch");
+        args["version"] = json!(version);
+        let result = call(&mut s, "execute", args);
+        let error = &result["structuredContent"]["error"];
+        assert_eq!(result["isError"], true);
+        assert_eq!(error["code"], "out_of_scope");
+        assert_eq!(error["details"], json!({"command":"project.rename","scope":"read_only"}));
+    }
+    let query = body(&call(&mut s, "execute", json!({"command":"project.export_netlist","inspect":false})));
+    assert_eq!(query["revision"], before["revision"]);
+    assert!(query["netlist"].is_object());
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
 }
 
 /// A failed headless tool call keeps its message as the first text part and adds the published

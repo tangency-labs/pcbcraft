@@ -124,6 +124,7 @@ mod tests {
                     at: start,
                     island: i,
                     net: None,
+                    mechanical: false,
                 }
             })
             .collect();
