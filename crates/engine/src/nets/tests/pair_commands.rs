@@ -3,7 +3,7 @@ use super::*;
 /// Author independent nets through ordinary commands, not hand-edited native files.
 fn pair_fixture(board: bool) -> (Session, [Uuid; 3]) {
     let (mut session, pins) = circuit(6, board);
-    for pair in pins.chunks_exact(2) {
+    for pair in pins.as_chunks::<2>().0 {
         connect(&mut session, &pair[0], &pair[1]);
     }
     let ids = [0, 2, 4].map(|index| promote(&mut session, &pins[index]));
