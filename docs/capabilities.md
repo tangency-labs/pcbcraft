@@ -162,6 +162,8 @@ local MCP listener are not available in the browser build.
 Native live MCP also provides [named UI targets and queued input](ui-automation.md)
 for demonstrations and interaction automation. Common chrome adapters and project
 canvases publish targets; specialized widgets may still require coordinates.
+`ui.project` turns a model point in a schematic, PCB or definition view into
+window coordinates for a click.
 Pointer, key, text and scroll operations use normal UI handling and report
 completion or cancellation through a bounded ticket. Input supports the original
 native window and its split panes; detached windows currently support lookup
