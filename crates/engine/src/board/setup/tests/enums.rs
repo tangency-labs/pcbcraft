@@ -34,7 +34,7 @@ fn copper_role_and_thickness_basis_strings_round_trip_on_all_paths() {
             candidate["stackup"]["strata"][0]["thickness_nm"] = json!(s.revision() + 47_900);
             apply(&mut s, SET_BOARD_SETUP, json!({"setup":candidate}));
             assert_eq!(setup(&s), candidate);
-            let documents = saved_board(&s, "pcbcraft-board/41");
+            let documents = saved_board(&s, "pcbcraft-board/23");
             let reopened = persistence::decode_documents(&documents).unwrap();
             assert_eq!(serde_json::to_value(reopened.board_setup().unwrap()).unwrap(), candidate);
             let profile =
@@ -57,7 +57,7 @@ fn copper_role_and_thickness_basis_strings_round_trip_on_all_paths() {
 fn copper_role_and_thickness_basis_maps_are_refused_on_all_paths() {
     let mut s = specified();
     let base = setup(&s);
-    let documents = saved_board(&s, "pcbcraft-board/41");
+    let documents = saved_board(&s, "pcbcraft-board/23");
     let board_path = persistence::test_board_path(&documents);
     let board: Value = serde_json::from_slice(&documents[&board_path]).unwrap();
     let profile = SetupProfile::new("Copper strings".into(), s.project().unwrap().board_setup().unwrap().clone(), Settings::default()).unwrap();

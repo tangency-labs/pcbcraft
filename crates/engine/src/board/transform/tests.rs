@@ -71,7 +71,7 @@ fn transforms_are_atomic_revision_checked_and_persistent() {
     assert!(session.apply(SET_FOOTPRINT_TRANSFORM, &transform).is_err());
     assert_eq!(session.inspect(), changed);
     let bytes = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/41"));
+    assert!(std::str::from_utf8(&bytes[&crate::persistence::test_board_path(&bytes)]).unwrap().contains("pcbcraft-board/4"));
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
     assert_eq!(
         bytes.iter().filter(|(path, _)| !path.ends_with("board.json")).collect::<Vec<_>>(),

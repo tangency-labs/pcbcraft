@@ -181,7 +181,7 @@ fn offline_codecs_preserve_materials_and_legacy_unknowns() {
     legacy["stackup"]["strata"][1]["thickness_nm"] = json!(2540000);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":legacy}));
     let old = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(std::str::from_utf8(&old[&crate::persistence::test_board_path(&old)]).unwrap().contains("pcbcraft-board/41"));
+    assert!(std::str::from_utf8(&old[&crate::persistence::test_board_path(&old)]).unwrap().contains("pcbcraft-board/2"));
     s.open_snapshot(persistence::decode_documents(&old).unwrap());
     assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), old);
     assert!(setup(&s).get("materials").is_none());
@@ -190,7 +190,7 @@ fn offline_codecs_preserve_materials_and_legacy_unknowns() {
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
     let snapshot = s.snapshot().unwrap();
     let docs = persistence::encode_documents(snapshot.clone()).unwrap();
-    assert!(std::str::from_utf8(&docs[&crate::persistence::test_board_path(&docs)]).unwrap().contains("pcbcraft-board/41"));
+    assert!(std::str::from_utf8(&docs[&crate::persistence::test_board_path(&docs)]).unwrap().contains("pcbcraft-board/3"));
     let packed = persistence::encode_packed(snapshot.clone()).unwrap();
     assert_eq!(persistence::encode_packed(persistence::decode_packed(&packed).unwrap().project).unwrap(), packed);
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&docs).unwrap()).unwrap(), docs);

@@ -330,13 +330,14 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 | 3. Clearance while routing | none | — |
 | 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
-| Placed-footprint lock metadata | [board/41](native-project-storage.md#placed-footprint-lock-metadata); historical /34 and /35 readable | Optional footprint lock flag |
-| Named layer groups | [board/41](native-project-storage.md#current-board-format) | Named groups and copper UUIDs; derived groups are not stored |
+| Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
+| Named layer groups | [board/41](native-project-storage.md#named-layer-groups) | Written only when named groups exist; derived groups are not stored |
 
-These are selected storage formats, not a consecutive version list. Every board
-Save uses board/41; historical board readers retain their original field requirements.
-Accepted noncanonical lock spellings may be normalized, for example by omitting
-an explicit `locked: false` when the board is rewritten.
+These are selected layout formats, not a consecutive version list. Canonical
+saves use the highest supported format required by the authored data; compatible
+extensions keep their validation rules. Older readers refuse unsupported formats.
+Canonical no-op saves preserve encoding; accepted noncanonical input can be
+normalized, for example by omitting an explicit `locked: false`.
 
 Standalone vias can retain an explicit net through placement and Properties; see
 [via net assignments](via-net-assignments.md) for automatic inheritance, physical

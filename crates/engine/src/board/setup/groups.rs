@@ -137,8 +137,9 @@ fn prune_removed_members(layers: &mut Vec<Uuid>, removed: &BTreeSet<Uuid>) -> Re
     Ok(submitted.intersection(removed).copied().collect())
 }
 
-/// Preview and Apply validate the complete candidate before pruning removed copper.
-/// The separate pruning list includes submitted memberships of new groups as well.
+/// Preview and Apply preserve existing named groups when `stackup.layer_groups` is omitted,
+/// treat an explicit `[]` as clearing them, and validate submitted memberships before pruning
+/// removed copper. The separate pruning list includes submitted memberships of new groups as well.
 pub(super) fn candidate(project: &crate::Project, value: &Value) -> Result<(BoardSetup, Vec<PrunedGroupMembership>), crate::CommandError> {
     let mut value = value.clone();
     let mut pruned = Vec::new();
@@ -152,23 +153,27 @@ pub(super) fn candidate(project: &crate::Project, value: &Value) -> Result<(Boar
             .collect();
         let removed: BTreeSet<_> =
             before.layers.iter().filter(|l| l.purpose == LayerPurpose::Copper && !current.contains(&l.id)).map(|l| l.id).collect();
-        if let Some(stackup) = value.get_mut("stackup").and_then(Value::as_object_mut)
-            && !removed.is_empty()
-            && let Some(raw) = stackup.get_mut("layer_groups")
-        {
-            if raw.as_array().is_some_and(|groups| groups.len() > MAX_GROUPS) {
-                return Err(crate::CommandError::InvalidParams(format!("a stack supports at most {MAX_GROUPS} user layer groups")));
+        if let Some(stackup) = value.get_mut("stackup").and_then(Value::as_object_mut) {
+            if !stackup.contains_key("layer_groups") && !before.stackup.layer_groups.is_empty() {
+                stackup.insert("layer_groups".into(), json!(before.stackup.layer_groups));
             }
-            let mut groups: Vec<UserLayerGroup> =
-                serde_json::from_value(std::mem::take(raw)).map_err(|error| crate::CommandError::InvalidParams(error.to_string()))?;
-            for group in &mut groups {
-                let layers = prune_removed_members(&mut group.layers, &removed)?;
-                if !layers.is_empty() {
-                    pruned.push(PrunedGroupMembership { group: group.id, layers });
+            if !removed.is_empty()
+                && let Some(raw) = stackup.get_mut("layer_groups")
+            {
+                if raw.as_array().is_some_and(|groups| groups.len() > MAX_GROUPS) {
+                    return Err(crate::CommandError::InvalidParams(format!("a stack supports at most {MAX_GROUPS} user layer groups")));
                 }
+                let mut groups: Vec<UserLayerGroup> =
+                    serde_json::from_value(std::mem::take(raw)).map_err(|error| crate::CommandError::InvalidParams(error.to_string()))?;
+                for group in &mut groups {
+                    let layers = prune_removed_members(&mut group.layers, &removed)?;
+                    if !layers.is_empty() {
+                        pruned.push(PrunedGroupMembership { group: group.id, layers });
+                    }
+                }
+                *raw = json!(groups);
+                pruned.sort_unstable_by_key(|entry| entry.group);
             }
-            *raw = json!(groups);
-            pruned.sort_unstable_by_key(|entry| entry.group);
         }
     }
     let setup = serde_json::from_value(value).map_err(|e| crate::CommandError::InvalidParams(e.to_string()))?;

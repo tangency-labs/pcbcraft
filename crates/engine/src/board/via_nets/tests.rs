@@ -54,7 +54,7 @@ fn explicit_via_isolated_intent_persistence_and_history() {
     let reopened = decode_documents(&saved).unwrap();
     assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
     assert_eq!(reopened.board.vias[0].net_assignment, Some(assigned));
-    assert!(saved.values().any(|b| String::from_utf8_lossy(b).contains("pcbcraft-board/41")));
+    assert!(saved.values().any(|b| String::from_utf8_lossy(b).contains("pcbcraft-board/24")));
     run(&mut s, crate::MOVE_TRACKS, json!({"vias":[id],"dx_nm":3_000_000,"dy_nm":0})).unwrap();
     assert_eq!(view(&s).vias()[0].net_assignment, Some(assigned));
     s.apply("edit.undo", &Value::Null).unwrap();
@@ -163,10 +163,10 @@ fn native_assignment_version_and_null_guards_preserve_legacy_bytes() {
     let target = targets(&s).remove(0);
     run(&mut s, SET_VIA_NET, json!({"vias":[id],"target":target})).unwrap();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
-    let key = saved.iter().find(|(_, b)| String::from_utf8_lossy(b).contains("pcbcraft-board/41")).unwrap().0.clone();
+    let key = saved.iter().find(|(_, b)| String::from_utf8_lossy(b).contains("pcbcraft-board/24")).unwrap().0.clone();
     for format in ["pcbcraft-board/13", "pcbcraft-board/19", "pcbcraft-board/21", "pcbcraft-board/22", "pcbcraft-board/23", "pcbcraft-board/25"] {
         let mut bad = saved.clone();
-        bad.insert(key.clone(), String::from_utf8(saved[&key].clone()).unwrap().replace("pcbcraft-board/41", format).into_bytes());
+        bad.insert(key.clone(), String::from_utf8(saved[&key].clone()).unwrap().replace("pcbcraft-board/24", format).into_bytes());
         assert!(decode_documents(&bad).is_err());
     }
     let mut value: Value = serde_json::from_slice(&saved[&key]).unwrap();
@@ -189,23 +189,23 @@ fn native_assignment_accepts_optional_extended_stack_in_format_24() {
     stack["stackup"]["finished_thickness_nm"] = json!(1_600_000);
     run(&mut s, crate::SET_BOARD_SETUP, json!({"setup":stack})).unwrap();
     let combined = encode_documents(s.snapshot().unwrap()).unwrap();
-    let key = combined.iter().find(|(_, b)| String::from_utf8_lossy(b).contains("pcbcraft-board/41")).unwrap().0.clone();
+    let key = combined.iter().find(|(_, b)| String::from_utf8_lossy(b).contains("pcbcraft-board/24")).unwrap().0.clone();
     let reopened = decode_documents(&combined).unwrap();
     assert_eq!(reopened.board_setup().unwrap().stackup().finished_thickness_nm, Some(1_600_000));
     assert_eq!(reopened.board.vias[0].net_assignment, view(&s).vias()[0].net_assignment);
     assert_eq!(encode_documents(reopened).unwrap(), combined);
     for format in ["pcbcraft-board/21", "pcbcraft-board/22", "pcbcraft-board/23"] {
         let mut bad = combined.clone();
-        bad.insert(key.clone(), String::from_utf8(combined[&key].clone()).unwrap().replace("pcbcraft-board/41", format).into_bytes());
+        bad.insert(key.clone(), String::from_utf8(combined[&key].clone()).unwrap().replace("pcbcraft-board/24", format).into_bytes());
         assert!(decode_documents(&bad).is_err(), "{format} must not accept both vocabularies");
     }
     run(&mut s, SET_VIA_NET, json!({"vias":[id],"automatic":true})).unwrap();
     let stacked = encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(String::from_utf8_lossy(&stacked[&key]).contains("pcbcraft-board/41"));
+    assert!(String::from_utf8_lossy(&stacked[&key]).contains("pcbcraft-board/23"));
     assert_eq!(encode_documents(decode_documents(&stacked).unwrap()).unwrap(), stacked);
     let mut missing_assignment = stacked.clone();
     missing_assignment
-        .insert(key.clone(), String::from_utf8(stacked[&key].clone()).unwrap().replace("pcbcraft-board/41", "pcbcraft-board/24").into_bytes());
+        .insert(key.clone(), String::from_utf8(stacked[&key].clone()).unwrap().replace("pcbcraft-board/23", "pcbcraft-board/24").into_bytes());
     assert!(decode_documents(&missing_assignment).is_err());
     s.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), combined);
@@ -235,17 +235,17 @@ fn native_assignment_retains_profiles_and_optional_stack_in_format_24() {
         run(&mut s, ADOPT_ASSEMBLY_PROFILE, adoption).unwrap();
         let legacy = encode_documents(s.snapshot().unwrap()).unwrap();
         let format = if extended_stack { "pcbcraft-board/23" } else { "pcbcraft-board/22" };
-        let key = crate::persistence::test_board_path(&legacy);
+        let key = legacy.iter().find(|(_, b)| String::from_utf8_lossy(b).contains(format)).unwrap().0.clone();
         assert_eq!(encode_documents(decode_documents(&legacy).unwrap()).unwrap(), legacy);
         run(&mut s, SET_VIA_NET, json!({"vias":[id],"target":target})).unwrap();
         let assigned = encode_documents(s.snapshot().unwrap()).unwrap();
-        assert!(String::from_utf8_lossy(&assigned[&key]).contains("pcbcraft-board/41"));
+        assert!(String::from_utf8_lossy(&assigned[&key]).contains("pcbcraft-board/24"));
         let reopened = decode_documents(&assigned).unwrap();
         assert_eq!(reopened.board.assembly_profiles, s.project().unwrap().board.assembly_profiles);
         assert_eq!(reopened.assembly_profiles(), s.project().unwrap().assembly_profiles());
         assert_eq!(encode_documents(reopened).unwrap(), assigned);
         let mut old_header = assigned.clone();
-        old_header.insert(key.clone(), String::from_utf8(assigned[&key].clone()).unwrap().replace("pcbcraft-board/41", format).into_bytes());
+        old_header.insert(key.clone(), String::from_utf8(assigned[&key].clone()).unwrap().replace("pcbcraft-board/24", format).into_bytes());
         assert!(decode_documents(&old_header).is_err());
         run(&mut s, SET_VIA_NET, json!({"vias":[id],"automatic":true})).unwrap();
         let cleared = encode_documents(s.snapshot().unwrap()).unwrap();

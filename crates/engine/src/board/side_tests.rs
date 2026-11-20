@@ -49,7 +49,7 @@ fn flipping_mirrors_geometry_onto_back_layers_and_round_trips() {
     assert!(flipped.graphics.iter().all(|graphic| graphic.side == Side::Back));
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
-    assert!(text.contains("\"format\": \"pcbcraft-board/41\"") && text.contains("\"bottom\":true"), "{text}");
+    assert!(text.contains("\"format\": \"pcbcraft-board/14\"") && text.contains("\"bottom\":true"), "{text}");
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     assert_eq!(s.inspect()["project"]["board"]["footprints"][0]["side"], "back");
 
@@ -72,11 +72,10 @@ fn board_format_14_and_bottom_footprints_require_each_other() {
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
     let mut older = saved.clone();
-    older.insert(crate::persistence::test_board_path(&older), text.replace("pcbcraft-board/41", "pcbcraft-board/11").into_bytes());
+    older.insert(crate::persistence::test_board_path(&older), text.replace("pcbcraft-board/14", "pcbcraft-board/11").into_bytes());
     assert!(decode_documents(&older).is_err());
     let mut unflipped = saved;
-    let unflipped_text = text.replace("pcbcraft-board/41", "pcbcraft-board/14").replace(",\"bottom\":true", "");
-    unflipped.insert(crate::persistence::test_board_path(&unflipped), unflipped_text.into_bytes());
+    unflipped.insert(crate::persistence::test_board_path(&unflipped), text.replace(",\"bottom\":true", "").into_bytes());
     assert!(decode_documents(&unflipped).is_err());
 }
 

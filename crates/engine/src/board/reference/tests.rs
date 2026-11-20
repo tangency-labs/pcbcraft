@@ -67,7 +67,7 @@ fn printed_words_and_style_are_local_and_reset_restores_inheritance() {
     assert_eq!(changed_files.len(), 1);
     assert!(changed_files[0].ends_with("-Silkscreen_Top.gbr"));
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&saved[&crate::persistence::test_board_path(&saved)]).unwrap()["format"], "pcbcraft-board/41");
+    assert_eq!(serde_json::from_slice::<Value>(&saved[&crate::persistence::test_board_path(&saved)]).unwrap()["format"], "pcbcraft-board/15");
     assert_eq!(
         saved.iter().filter(|(path, bytes)| original.get(*path) != Some(*bytes)).map(|(path, _)| path.as_str()).collect::<Vec<_>>(),
         [crate::persistence::test_board_path(&saved)]

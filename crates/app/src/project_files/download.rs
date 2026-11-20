@@ -1,7 +1,7 @@
 //! Incremental browser download preparation, testable without a browser or a download side effect.
 use pcbcraft_engine::{
     Project,
-    persistence::{Documents, DocumentsEncoder, has_current_board_header},
+    persistence::{Documents, DocumentsEncoder},
 };
 use std::sync::Arc;
 
@@ -15,11 +15,9 @@ impl Original {
     pub(super) fn for_project(snapshot: Arc<Project>, documents: Arc<Documents>, current: &Project) -> Option<Self> {
         snapshot.same_document(current).then_some(Self { snapshot, documents })
     }
-    /// Reuse raw documents or archive bytes only for the unmodified source with a current board header.
+    /// Raw documents can bypass encoding only for the actual unmodified source snapshot.
     pub(super) fn unchanged(&self, snapshot: &Arc<Project>) -> Option<Arc<Documents>> {
-        (Arc::ptr_eq(&self.snapshot, snapshot)
-            && snapshot.board_document_path().is_none_or(|path| self.documents.get(&path).is_some_and(|bytes| has_current_board_header(bytes))))
-        .then(|| self.documents.clone())
+        Arc::ptr_eq(&self.snapshot, snapshot).then(|| self.documents.clone())
     }
 }
 
@@ -69,11 +67,9 @@ impl Encoder {
         let Some(mut documents) = self.current.step(records)? else { return Ok(None) };
         if let (Some(canonical), Some(original)) = (&self.canonical, &self.original) {
             for (path, bytes) in &mut documents {
-                let is_board = Some(path.as_str()) == self.new_board.as_deref();
-                let source = if is_board { self.old_board.as_deref().unwrap_or(path) } else { path };
+                let source = if Some(path.as_str()) == self.new_board.as_deref() { self.old_board.as_deref().unwrap_or(path) } else { path };
                 if canonical.get(source) == Some(bytes)
                     && let Some(retained) = original.get(source)
-                    && (!is_board || has_current_board_header(retained))
                 {
                     bytes.clone_from(retained);
                 }

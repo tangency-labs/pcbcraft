@@ -541,6 +541,14 @@ impl BoardSetup {
         &self.materials
     }
 
+    /// Whether saving needs the material-aware board format instead of the legacy layer-only format.
+    pub(crate) fn requires_material_format(&self) -> bool {
+        !self.materials.is_empty()
+            || self.stackup.strata.iter().any(|stratum| {
+                matches!(stratum, Stratum::Dielectric { construction: Some(_), .. } | Stratum::Dielectric { thickness_tolerance_nm: Some(_), .. })
+            })
+    }
+
     /// Whether saving needs the board format that carries thermal conductivity, thermal
     /// expansion, dielectric strength or tracking reports on a material.
     pub(crate) fn requires_report_format(&self) -> bool {

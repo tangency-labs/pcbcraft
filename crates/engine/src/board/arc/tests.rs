@@ -252,10 +252,9 @@ fn format26_rejects_missing_null_empty_and_older_headers() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = s.project().unwrap().board_document_path().unwrap();
     let board: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/41");
+    assert_eq!(board["format"], "pcbcraft-board/26");
     for replacement in [None, Some(Value::Null), Some(json!([]))] {
         let mut b = board.clone();
-        b["format"] = json!("pcbcraft-board/26");
         if let Some(value) = replacement {
             b["arcs"] = value;
         } else {

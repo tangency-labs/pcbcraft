@@ -23,8 +23,8 @@ pub mod layout;
 mod part_group_storage;
 pub use documents::{
     Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
-    encode_documents, has_current_board_header, is_document_path, migrate_board_layout, project_board_path, project_instances_path,
-    project_layout_root, project_registered_board_id,
+    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
+    project_registered_board_id,
 };
 mod packed;
 mod power_migration;

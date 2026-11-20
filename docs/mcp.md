@@ -12,9 +12,9 @@ with affected object IDs, consent/refusal and a session-local token, even with
 with layer IDs and names, including with `inspect: false`. It is read-only and also
 runs in a `--read-only` session. User
 memberships are edited in the complete setup candidate, not a separate mutation.
-Include the existing `stackup.layer_groups` list in the complete setup candidate
-to keep it. Omission and `[]` both clear it. Mixed copper belongs to plane and
-signal. Preview reports
+Omitting `stackup.layer_groups` in a setup request preserves existing named groups
+(pruning memberships only for removed copper); pass an explicit `[]` to clear them.
+Mixed copper belongs to plane and signal. Preview reports
 members of removed copper by proposed group UUID, even for newly added groups.
 See [layer groups](board-materials.md#layer-groups).
 
@@ -251,7 +251,7 @@ edits or reach file controls. Headless sessions cannot run them.
 
 `list_commands` keeps returning the command array as its first text part. A
 second text part, also given as the result's `structuredContent`, reads
-`{"command_api_version": 2, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
+`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
 
 - `command_api_version` is one number for the whole public command contract,

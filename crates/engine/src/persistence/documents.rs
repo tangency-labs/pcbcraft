@@ -89,15 +89,6 @@ const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/34";
 const ARC_LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/35";
 const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
 const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
-
-/// Whether a saved board already has the canonical writer's header and may be reused by Save.
-/// Other spellings, including noncanonical instances of the current format, are re-encoded.
-pub fn has_current_board_header(bytes: &[u8]) -> bool {
-    bytes
-        .strip_prefix(b"{\n  \"format\": \"")
-        .and_then(|rest| rest.strip_prefix(GROUP_BOARD_FORMAT.as_bytes()))
-        .is_some_and(|rest| rest.starts_with(b"\",\n"))
-}
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
@@ -969,21 +960,21 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
     // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
     // earlier field. Empty arrays are never written, so they are refused.
-    let current_board_format = board.format == GROUP_BOARD_FORMAT;
+    let grouped = board.format == GROUP_BOARD_FORMAT;
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
-    if (!current_board_format && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
+    if (!grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: teardrops require board format 37 or 41 and a nonempty array".into());
     }
     let arc_and_footprint_lock_format = board.format == ARC_LOCKED_FOOTPRINT_BOARD_FORMAT;
     let curved = board.format == ARC_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if (!current_board_format && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
+    if (!grouped && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: arcs require format 26 or 35 and a nonempty array; format 26 requires arcs, as does format 35.".into());
     }
     let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if !current_board_format && !with_teardrops && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
+    if !grouped && !with_teardrops && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
         return Err("board.json: footprint locks require board format 34 or 35; each requires an authored footprint lock.".into());
     }
-    let extended_board_format = current_board_format || curved || footprint_locks || with_teardrops;
+    let extended_board_format = grouped || curved || footprint_locks || with_teardrops;
     let reported = board.format == REPORT_BOARD_FORMAT;
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
@@ -1254,7 +1245,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     {
         return Err("board.json: layer graphics require board format 9".into());
     }
-    if !current_board_format && let Some(raw) = &board.setup {
+    if !grouped && let Some(raw) = &board.setup {
         let value: serde_json::Value = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
         if value["stackup"].get("layer_groups").is_some() {
             return Err("board.json: the layer_groups field requires board format 41.".into());
@@ -1262,7 +1253,6 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let setup = match (board.format.as_str(), board.setup) {
         (GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
-        (GROUP_BOARD_FORMAT, None) => None,
         (
             ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
@@ -1323,6 +1313,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         (MATERIAL_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
+    let has_groups = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_group_format);
+    if grouped != has_groups {
+        return Err("board.json: named layer groups require board format 41, which requires at least one group.".into());
+    }
     let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
     if (reported && !material_reports) || (!extended_board_format && !reported && material_reports) {
         return Err("board.json: thermal conductivity, thermal expansion, dielectric strength and tracking reports require board format 25, 26, 34 or 35; format 25 requires at least one of them.".into());
@@ -2382,7 +2376,20 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
     bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
 }
 
-/// Write board/41 for every board; optional authored fields do not select legacy formats.
+/// Preserve canonical legacy encodings until authored content requires a newer format. Named
+/// layer groups select 41; straight-via teardrop intents select 37; arcs alone select 26, active
+/// footprint locks alone select 34, and both together select 35. These formats retain earlier
+/// physical fields. Material reports require at least 25; explicit via intent at least 24; copper
+/// roles, base copper, copper thickness qualifiers or finished board thickness at least 23;
+/// assembly profile adoptions at least 22; a placement origin at least 21; zone outlines at least
+/// 20; validated board rules at least 19; and authored copper locks at least 18. Earlier extensions
+/// remain subject to their own prerequisites. Independent assignments use version 7, earlier local
+/// rectangles version 8, layer graphics version 9, explicitly enabled accepted baselines version 10,
+/// pending desired package choices version 11, copper tracks version 12, vias version 13,
+/// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions
+/// 12 to 15 are supersets: each may carry any earlier field, so routing or flipping never drops
+/// baseline or intent data. Version 12 stays tracks-only and 13 has no bottom-side parts, so their
+/// released readers keep working.
 fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     crate::board::zones::validate(project)?;
     crate::board::arc::validate(project, &project.board.arcs)?;
@@ -2391,9 +2398,82 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
     let outline = board.outline.as_ref();
-    write!(bytes, "{{\n  \"format\": \"{GROUP_BOARD_FORMAT}\",\n").map_err(|error| error.to_string())?;
+    let assignments = !board.assignments.is_empty();
+    let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
+    let physical = !board.definitions.is_empty();
+    let references = board.footprints().iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some());
+    let extended = board.footprints().iter().any(|footprint| {
+        footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
+    }) || board
+        .assignments
+        .values()
+        .any(|assignment| crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads))
+        || board.baseline.as_ref().is_some_and(|baseline| {
+            baseline.components.values().any(|component| component.package.as_ref().is_some_and(|package| package.extended()))
+        });
+
+    let arc_or_lock_format = match (!board.arcs.is_empty(), board.footprints().iter().any(|footprint| footprint.locked)) {
+        (true, true) => Some(ARC_LOCKED_FOOTPRINT_BOARD_FORMAT),
+        (true, false) => Some(ARC_BOARD_FORMAT),
+        (false, true) => Some(LOCKED_FOOTPRINT_BOARD_FORMAT),
+        (false, false) => None,
+    };
+    let arc_or_lock_format = if board.teardrops.is_empty() { arc_or_lock_format } else { Some(TEARDROP_BOARD_FORMAT) };
     if let Some(setup) = setup {
-        bytes.write_all(b"  \"setup\": {\n").map_err(|error| error.to_string())?;
+        let format = if setup.requires_group_format() {
+            GROUP_BOARD_FORMAT
+        } else if let Some(format) = arc_or_lock_format {
+            format
+        } else if setup.requires_report_format() {
+            REPORT_BOARD_FORMAT
+        } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
+            ASSIGNED_VIA_BOARD_FORMAT
+        } else if setup.requires_stack_format() {
+            STACK_BOARD_FORMAT
+        } else if !board.assembly_profiles.is_empty() {
+            PROFILE_BOARD_FORMAT
+        } else if board.placement_origin.is_some() {
+            ORIGIN_BOARD_FORMAT
+        } else if !board.zones.is_empty() {
+            ZONE_BOARD_FORMAT
+        } else if board.rules.is_some() {
+            RULES_BOARD_FORMAT
+        } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
+            LOCKED_COPPER_BOARD_FORMAT
+        } else if extended {
+            MULTIPAD_BOARD_FORMAT
+        } else if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
+            STROKED_BOARD_FORMAT
+        } else if references {
+            REFERENCE_BOARD_FORMAT
+        } else if board.footprints().iter().any(|footprint| footprint.bottom) {
+            SIDE_BOARD_FORMAT
+        } else if !board.vias.is_empty() {
+            VIA_BOARD_FORMAT
+        } else if !board.tracks.is_empty() {
+            TRACK_BOARD_FORMAT
+        } else if board.has_pending_package_intent(project) {
+            INTENT_BOARD_FORMAT
+        } else if board.baseline.is_some() {
+            BASELINE_BOARD_FORMAT
+        } else if board.drawings.is_some() {
+            DRAWING_BOARD_FORMAT
+        } else if outline.is_some() {
+            OUTLINE_BOARD_FORMAT
+        } else if assignments {
+            ASSIGNED_BOARD_FORMAT
+        } else if silkscreen.is_some() {
+            SILKSCREEN_BOARD_FORMAT
+        } else if physical {
+            PHYSICAL_BOARD_FORMAT
+        } else if rotated {
+            ROTATED_BOARD_FORMAT
+        } else if setup.requires_material_format() {
+            MATERIAL_BOARD_FORMAT
+        } else {
+            CONFIGURED_BOARD_FORMAT
+        };
+        bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes()).map_err(|error| error.to_string())?;
         if !setup.materials().is_empty() {
             bytes.write_all(b"    \"materials\": [\n").map_err(|error| error.to_string())?;
             let mut first = true;
@@ -2432,6 +2512,53 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
             }
         }
         bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
+    } else {
+        let format = if let Some(format) = arc_or_lock_format {
+            format
+        } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
+            ASSIGNED_VIA_BOARD_FORMAT
+        } else if !board.assembly_profiles.is_empty() {
+            PROFILE_BOARD_FORMAT
+        } else if board.placement_origin.is_some() {
+            ORIGIN_BOARD_FORMAT
+        } else if !board.zones.is_empty() {
+            ZONE_BOARD_FORMAT
+        } else if board.rules.is_some() {
+            RULES_BOARD_FORMAT
+        } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
+            LOCKED_COPPER_BOARD_FORMAT
+        } else if extended {
+            MULTIPAD_BOARD_FORMAT
+        } else if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
+            STROKED_BOARD_FORMAT
+        } else if references {
+            REFERENCE_BOARD_FORMAT
+        } else if board.footprints().iter().any(|footprint| footprint.bottom) {
+            SIDE_BOARD_FORMAT
+        } else if !board.vias.is_empty() {
+            VIA_BOARD_FORMAT
+        } else if !board.tracks.is_empty() {
+            TRACK_BOARD_FORMAT
+        } else if board.has_pending_package_intent(project) {
+            INTENT_BOARD_FORMAT
+        } else if board.baseline.is_some() {
+            BASELINE_BOARD_FORMAT
+        } else if board.drawings.is_some() {
+            DRAWING_BOARD_FORMAT
+        } else if outline.is_some() {
+            OUTLINE_BOARD_FORMAT
+        } else if assignments {
+            ASSIGNED_BOARD_FORMAT
+        } else if silkscreen.is_some() {
+            SILKSCREEN_BOARD_FORMAT
+        } else if physical {
+            PHYSICAL_BOARD_FORMAT
+        } else if rotated {
+            ROTATED_BOARD_FORMAT
+        } else {
+            BOARD_FORMAT
+        };
+        bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
     if let Some(baseline) = &board.baseline {
         let encoded = baseline.encode()?;

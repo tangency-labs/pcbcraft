@@ -44,14 +44,14 @@ fn assigned_via(s: &mut Session) {
 /// Every nonempty combination of released profile, stack and via intent survives arcs and removal.
 #[test]
 fn arcs_preserve_released_22_23_24_records_and_exact_lower_bytes() {
-    for (profile, stack, via) in [
-        (true, false, false),
-        (false, true, false),
-        (false, false, true),
-        (true, true, false),
-        (true, false, true),
-        (false, true, true),
-        (true, true, true),
+    for (profile, stack, via, format) in [
+        (true, false, false, "pcbcraft-board/22"),
+        (false, true, false, "pcbcraft-board/23"),
+        (false, false, true, "pcbcraft-board/24"),
+        (true, true, false, "pcbcraft-board/23"),
+        (true, false, true, "pcbcraft-board/24"),
+        (false, true, true, "pcbcraft-board/24"),
+        (true, true, true, "pcbcraft-board/24"),
     ] {
         let (mut s, arc) = fixture();
         if profile {
@@ -66,11 +66,11 @@ fn arcs_preserve_released_22_23_24_records_and_exact_lower_bytes() {
         let before = encode_documents(s.snapshot().unwrap()).unwrap();
         let path = s.project().unwrap().board_document_path().unwrap();
         let previous: Value = serde_json::from_slice(&before[&path]).unwrap();
-        assert_eq!(previous["format"], "pcbcraft-board/41");
+        assert_eq!(previous["format"], format);
         s.apply(SET_ARCS, &params(&s, &[arc])).unwrap();
         let saved = encode_documents(s.snapshot().unwrap()).unwrap();
         let mut current: Value = serde_json::from_slice(&saved[&path]).unwrap();
-        assert_eq!(current["format"], "pcbcraft-board/41");
+        assert_eq!(current["format"], "pcbcraft-board/26");
         current.as_object_mut().unwrap().remove("arcs");
         current["format"] = previous["format"].clone();
         assert_eq!(current, previous, "all non-arc board fields retained");
@@ -135,12 +135,12 @@ fn arcs_preserve_released_25_reports_and_exact_lower_bytes() {
         let before = encode_documents(s.snapshot().unwrap()).unwrap();
         let path = s.project().unwrap().board_document_path().unwrap();
         let previous: Value = serde_json::from_slice(&before[&path]).unwrap();
-        assert_eq!(previous["format"], "pcbcraft-board/41");
+        assert_eq!(previous["format"], "pcbcraft-board/25");
         assert_eq!(encode_documents(decode_documents(&before).unwrap()).unwrap(), before);
         s.apply(SET_ARCS, &params(&s, &[arc])).unwrap();
         let saved = encode_documents(s.snapshot().unwrap()).unwrap();
         let mut current: Value = serde_json::from_slice(&saved[&path]).unwrap();
-        assert_eq!(current["format"], "pcbcraft-board/41");
+        assert_eq!(current["format"], "pcbcraft-board/26");
         current.as_object_mut().unwrap().remove("arcs");
         current["format"] = previous["format"].clone();
         assert_eq!(current, previous, "all non-arc board fields, including reports, retained");
@@ -170,11 +170,11 @@ fn arc_report_superset_retains_header_and_material_validation() {
     let plain = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = s.project().unwrap().board_document_path().unwrap();
     let mut plain_board: Value = serde_json::from_slice(&plain[&path]).unwrap();
-    assert_eq!(plain_board["format"], "pcbcraft-board/41");
+    assert_eq!(plain_board["format"], "pcbcraft-board/24");
     add_material_reports(&mut s);
     let reported = encode_documents(s.snapshot().unwrap()).unwrap();
     let mut reported_board: Value = serde_json::from_slice(&reported[&path]).unwrap();
-    assert_eq!(reported_board["format"], "pcbcraft-board/41");
+    assert_eq!(reported_board["format"], "pcbcraft-board/25");
     let reported_snapshot = s.snapshot().unwrap();
     let reported_state = s.inspect();
     let mut invalid_reports = Vec::new();
@@ -204,7 +204,7 @@ fn arc_report_superset_retains_header_and_material_validation() {
     let state = s.inspect();
     let saved = encode_documents(snapshot.clone()).unwrap();
     let board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/41");
+    assert_eq!(board["format"], "pcbcraft-board/26");
     let mut invalid = Vec::new();
     plain_board["format"] = json!("pcbcraft-board/25");
     invalid.push((plain_board, "format 25 requires at least one of them"));
@@ -214,7 +214,6 @@ fn arc_report_superset_retains_header_and_material_validation() {
     candidate["format"] = json!("pcbcraft-board/25");
     invalid.push((candidate, "arcs require format 26"));
     let mut candidate = board.clone();
-    candidate["format"] = json!("pcbcraft-board/26");
     candidate.as_object_mut().unwrap().remove("arcs");
     invalid.push((candidate, "format 26 requires arcs"));
     for (mut candidate, reason) in invalid_reports {

@@ -160,13 +160,8 @@ fn command_adds_eight_reports_two_and_round_trips_intent() {
     assert!(matches!(encode_documents(std::sync::Arc::new(missing_setup)), Err(error) if error.contains("teardrops require a copper board setup")));
     let saved = encode_documents(current).unwrap();
     let mut board_json: serde_json::Value = serde_json::from_slice(saved.get(&path).unwrap()).unwrap();
-    assert_eq!(board_json["format"], "pcbcraft-board/41");
+    assert_eq!(board_json["format"], "pcbcraft-board/37");
     assert_eq!(board_json["teardrops"], json!(expected));
-    let mut legacy = saved.clone();
-    let mut legacy_board = board_json.clone();
-    legacy_board["format"] = json!("pcbcraft-board/37");
-    legacy.insert(path.clone(), serde_json::to_vec(&legacy_board).unwrap());
-    assert_eq!(encode_documents(decode_documents(&legacy).unwrap()).unwrap(), saved);
     let mut without_setup = saved.clone();
     let mut unconfigured = board_json.clone();
     assert!(unconfigured.as_object_mut().unwrap().remove("setup").is_some());
@@ -175,7 +170,7 @@ fn command_adds_eight_reports_two_and_round_trips_intent() {
     let mut wrong_version = saved.clone();
     board_json["format"] = json!("pcbcraft-board/19");
     wrong_version.insert(path, serde_json::to_vec(&board_json).unwrap());
-    assert!(matches!(decode_documents(&wrong_version), Err(error) if error.contains("teardrops require board format 37 or 41")));
+    assert!(matches!(decode_documents(&wrong_version), Err(error) if error.contains("teardrops require board format 37")));
     assert_eq!(view(&session).require_linear_copper().unwrap_err(), crate::board::teardrop::UNSUPPORTED);
     session.execute("edit.undo", &serde_json::Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_docs);

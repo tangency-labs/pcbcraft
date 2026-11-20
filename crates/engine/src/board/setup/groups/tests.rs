@@ -69,18 +69,19 @@ fn mixed_and_unknown_roles_have_explicit_memberships() {
     assert_eq!(groups.signal.iter().map(|l| l.id).collect::<Vec<_>>(), vec![ids[1]]);
 }
 
-/// Saved membership uses stable IDs, canonical physical order and the sole board format.
+/// Saved membership uses stable IDs, canonical physical order and board format 41 only when present.
 #[test]
 fn named_memberships_round_trip_and_old_headers_refuse_the_field() {
     let mut s = session(4);
     let before = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let board_path = persistence::test_board_path(&before);
+    assert_eq!(serde_json::from_slice::<Value>(&before[&board_path]).unwrap()["format"], "pcbcraft-board/2");
     let ids = copper(&s);
     let group = crate::fresh_id().unwrap();
     let mut setup = candidate(&s);
     setup["stackup"]["layer_groups"] = json!([{"id":group,"name":"Return layers","layers":[ids[3],ids[1]]}]);
     apply(&mut s, setup);
     let saved = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
-    let board_path = persistence::test_board_path(&saved);
     let board: Value = serde_json::from_slice(&saved[&board_path]).unwrap();
     assert_eq!(board["format"], "pcbcraft-board/41");
     assert_eq!(board["setup"]["stackup"]["layer_groups"][0]["layers"], json!([ids[1], ids[3]]));
@@ -96,13 +97,17 @@ fn named_memberships_round_trip_and_old_headers_refuse_the_field() {
         old.insert(board_path.clone(), serde_json::to_vec(&wrong).unwrap());
         assert!(persistence::decode_documents(&old).unwrap_err().contains("layer_groups field requires board format 41"));
     }
-    let mut empty = board;
+    let mut empty = board.clone();
     empty["setup"]["stackup"]["layer_groups"] = json!([]);
     old.insert(board_path.clone(), serde_json::to_vec(&empty).unwrap());
-    assert_eq!(persistence::encode_documents(persistence::decode_documents(&old).unwrap()).unwrap(), before);
+    assert!(persistence::decode_documents(&old).unwrap_err().contains("requires at least one group"));
     empty["setup"]["stackup"].as_object_mut().unwrap().remove("layer_groups");
     old.insert(board_path.clone(), serde_json::to_vec(&empty).unwrap());
-    assert_eq!(persistence::encode_documents(persistence::decode_documents(&old).unwrap()).unwrap(), before);
+    assert!(persistence::decode_documents(&old).unwrap_err().contains("requires at least one group"));
+    let mut unconfigured = board;
+    unconfigured.as_object_mut().unwrap().remove("setup");
+    old.insert(board_path.clone(), serde_json::to_vec(&unconfigured).unwrap());
+    assert!(persistence::decode_documents(&old).unwrap_err().contains("unsupported board format or incompatible setup"));
     empty["format"] = json!("pcbcraft-board/2");
     old.insert(board_path, serde_json::to_vec(&empty).unwrap());
     assert_eq!(persistence::encode_documents(persistence::decode_documents(&old).unwrap()).unwrap(), before);
@@ -133,31 +138,72 @@ fn removed_members_are_reported_and_pruned_by_the_shared_candidate() {
     assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
 }
 
-/// A complete setup candidate treats absent and explicit empty groups identically.
+/// Omitting `stackup.layer_groups` preserves existing named groups across Preview and Apply,
+/// pruning memberships only for removed copper layers.
 #[test]
-fn absent_and_explicit_empty_groups_clear_memberships() {
-    for explicit in [false, true] {
-        let mut s = session(4);
-        let ids = copper(&s);
-        let group = json!({"id":crate::fresh_id().unwrap(),"name":"Return","layers":[ids[0],ids[1]]});
-        let mut setup = candidate(&s);
-        setup["stackup"]["layer_groups"] = json!([group]);
-        apply(&mut s, setup);
-        let mut clear = candidate(&s);
-        if explicit {
-            clear["stackup"]["layer_groups"] = json!([]);
-        } else {
-            clear["stackup"].as_object_mut().unwrap().remove("layer_groups");
-        }
-        let mut params = json!({"setup":clear,"expected_revision":s.revision()});
-        let report = s.execute(PREVIEW_BOARD_SETUP, &params).unwrap()["board_setup_preview"].clone();
-        assert_eq!(report["changes"]["affected_groups"], json!([group]));
-        params["plan_token"] = report["plan_token"].clone();
-        s.apply(SET_BOARD_SETUP, &params).unwrap();
-        assert!(candidate(&s)["stackup"].get("layer_groups").is_none());
-        s.apply("edit.undo", &json!({})).unwrap();
-        assert_eq!(candidate(&s)["stackup"]["layer_groups"], json!([group]));
-    }
+fn omitting_layer_groups_preserves_memberships_and_prunes_removed_copper() {
+    let mut s = session(4);
+    let ids = copper(&s);
+    let group_id = crate::fresh_id().unwrap();
+    let group = json!({"id":group_id,"name":"Return","layers":[ids[0],ids[1]]});
+    let mut setup = candidate(&s);
+    setup["stackup"]["layer_groups"] = json!([group]);
+    apply(&mut s, setup);
+    let snapshot = s.snapshot().unwrap();
+
+    // An older client that omits `layer_groups` while renaming a layer keeps every named group.
+    let mut renamed = candidate(&s);
+    renamed["stackup"].as_object_mut().unwrap().remove("layer_groups");
+    renamed["layers"].as_array_mut().unwrap().iter_mut().find(|layer| layer["id"] == json!(ids[0])).unwrap()["name"] = json!("Top signal");
+    let mut params = json!({"setup":renamed,"expected_revision":s.revision()});
+    let report = s.execute(PREVIEW_BOARD_SETUP, &params).unwrap()["board_setup_preview"].clone();
+    assert_eq!(report["changes"]["affected_groups"], json!([]));
+    assert_eq!(report["changes"]["pruned_group_memberships"], json!([]));
+    assert_eq!(report["can_apply"], true);
+    params["plan_token"] = report["plan_token"].clone();
+    s.apply(SET_BOARD_SETUP, &params).unwrap();
+    assert_eq!(candidate(&s)["stackup"]["layer_groups"], json!([group]));
+    assert_eq!(s.project().unwrap().board_setup().unwrap().layers().iter().find(|l| l.id == ids[0]).unwrap().name, "Top signal");
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+
+    // Omitting `layer_groups` while removing copper preserves the group and prunes only removed copper.
+    let mut smaller = json!(snapshot.board_setup().unwrap().with_copper_count(2).unwrap());
+    smaller["stackup"].as_object_mut().unwrap().remove("layer_groups");
+    let mut params = json!({"setup":smaller,"expected_revision":s.revision()});
+    let report = s.execute(PREVIEW_BOARD_SETUP, &params).unwrap()["board_setup_preview"].clone();
+    assert_eq!(report["changes"]["affected_groups"], json!([group]));
+    assert_eq!(report["changes"]["pruned_group_memberships"], json!([{"group":group_id,"layers":[ids[1]]}]));
+    assert_eq!(report["can_apply"], true);
+    params["plan_token"] = report["plan_token"].clone();
+    s.apply(SET_BOARD_SETUP, &params).unwrap();
+    assert_eq!(candidate(&s)["stackup"]["layer_groups"], json!([{"id":group_id,"name":"Return","layers":[ids[0]]}]));
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert!(Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+}
+
+/// An explicit empty `stackup.layer_groups` clears all named groups and returns to the legacy format.
+#[test]
+fn explicit_empty_layer_groups_clears_memberships() {
+    let mut s = session(4);
+    let before = persistence::encode_documents(s.snapshot().unwrap()).unwrap();
+    let ids = copper(&s);
+    let group = json!({"id":crate::fresh_id().unwrap(),"name":"Return","layers":[ids[0],ids[1]]});
+    let mut setup = candidate(&s);
+    setup["stackup"]["layer_groups"] = json!([group]);
+    apply(&mut s, setup);
+    let mut clear = candidate(&s);
+    clear["stackup"]["layer_groups"] = json!([]);
+    let mut params = json!({"setup":clear,"expected_revision":s.revision()});
+    let report = s.execute(PREVIEW_BOARD_SETUP, &params).unwrap()["board_setup_preview"].clone();
+    assert_eq!(report["changes"]["affected_groups"], json!([group]));
+    assert_eq!(report["changes"]["pruned_group_memberships"], json!([]));
+    params["plan_token"] = report["plan_token"].clone();
+    s.apply(SET_BOARD_SETUP, &params).unwrap();
+    assert!(candidate(&s)["stackup"].get("layer_groups").is_none());
+    assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    s.apply("edit.undo", &json!({})).unwrap();
+    assert_eq!(candidate(&s)["stackup"]["layer_groups"], json!([group]));
 }
 
 /// Preview lists discarded references even for a new group or an unchanged effective membership.
@@ -378,13 +424,16 @@ fn group_free_profile_clears_target_memberships() {
     let before = target.snapshot().unwrap();
     let imported = before.board_setup().unwrap().with_profile(&profile).unwrap();
     assert!(imported.stackup().layer_groups.is_empty());
-    apply(&mut target, json!(imported));
+    let mut imported_value = json!(imported);
+    imported_value["stackup"]["layer_groups"] = json!([]);
+    apply(&mut target, imported_value);
+    assert!(target.project().unwrap().board_setup().unwrap().stackup().layer_groups.is_empty());
     target.apply("edit.undo", &json!({})).unwrap();
     assert!(Arc::ptr_eq(&before, &target.snapshot().unwrap()));
 }
 
 /// Groups preserve reports, stack fields, origins, rules, zones, assigned vias and profile adoptions;
-/// clearing groups restores the original bytes within the same format.
+/// clearing groups restores the original format and bytes.
 #[test]
 fn groups_preserve_reports_vias_and_profile_adoptions() {
     let mut s = Session::default();
@@ -446,7 +495,7 @@ fn groups_preserve_reports_vias_and_profile_adoptions() {
     let path = persistence::test_board_path(&saved);
     let grouped: Value = serde_json::from_slice(&saved[&path]).unwrap();
     let ungrouped: Value = serde_json::from_slice(&earlier[&path]).unwrap();
-    assert_eq!(ungrouped["format"], "pcbcraft-board/41");
+    assert_eq!(ungrouped["format"], "pcbcraft-board/25");
     assert_eq!(grouped["format"], "pcbcraft-board/41");
     assert_eq!(grouped["vias"].as_array().unwrap().len(), 1);
     assert!(grouped["vias"][0]["net_assignment"].is_object());

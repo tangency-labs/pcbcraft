@@ -89,19 +89,19 @@ fn reports_coexist_with_via_intent_profiles_and_stack_fields() {
                 c["stackup"]["finished_thickness_nm"] = json!(1_600_000);
                 apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
             }
-            let before = saved(&s, "pcbcraft-board/41");
+            let before = saved(&s, "pcbcraft-board/24");
             let c = reported(&s);
             apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
-            let documents = saved(&s, "pcbcraft-board/41");
+            let documents = saved(&s, "pcbcraft-board/25");
             let reopened = persistence::decode_documents(&documents).unwrap();
             assert_eq!(reopened.boards().next().unwrap().vias()[0].net_assignment, intent);
             assert_eq!(reopened.board.assembly_profiles, s.project().unwrap().board.assembly_profiles);
             assert_eq!(reopened.assembly_profiles(), s.project().unwrap().assembly_profiles());
             assert_eq!(reopened.board_setup().unwrap().stackup().finished_thickness_nm.is_some(), stacked);
-            refused(&with_header(&documents, "pcbcraft-board/41", "pcbcraft-board/24"), "reports require board format 25");
-            refused(&with_header(&before, "pcbcraft-board/41", "pcbcraft-board/25"), "requires at least one of them");
+            refused(&with_header(&documents, "pcbcraft-board/25", "pcbcraft-board/24"), "reports require board format 25");
+            refused(&with_header(&before, "pcbcraft-board/24", "pcbcraft-board/25"), "requires at least one of them");
             apply(&mut s, crate::SET_VIA_NET, json!({"vias":[via],"automatic":true}));
-            let cleared = saved(&s, "pcbcraft-board/41");
+            let cleared = saved(&s, "pcbcraft-board/25");
             assert!(persistence::decode_documents(&cleared).unwrap().boards().next().unwrap().vias()[0].net_assignment.is_none());
             s.apply("edit.undo", &json!({})).unwrap();
             assert_eq!(persistence::encode_documents(s.snapshot().unwrap()).unwrap(), documents);
@@ -149,7 +149,7 @@ fn thermal_and_insulation_reports_round_trip_in_board_format_25() {
     let c = candidate(&s);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
     let before = setup(&s);
-    let plain = saved(&s, "pcbcraft-board/41");
+    let plain = saved(&s, "pcbcraft-board/3");
     let snapshot = s.snapshot().unwrap();
     let mut c = before.clone();
     let mut revised = before["materials"][0].clone();
@@ -195,7 +195,7 @@ fn thermal_and_insulation_reports_round_trip_in_board_format_25() {
     assert_eq!(typed.tg, snapshot.board_setup().unwrap().materials()[0].tg);
     assert_eq!(typed.dielectric, snapshot.board_setup().unwrap().materials()[0].dielectric);
 
-    let documents = saved(&s, "pcbcraft-board/41");
+    let documents = saved(&s, "pcbcraft-board/25");
     let mut board = board_json(&documents);
     let old = board_json(&plain);
     let saved_materials = board["setup"]["materials"].as_array_mut().unwrap();
@@ -216,13 +216,13 @@ fn thermal_and_insulation_reports_round_trip_in_board_format_25() {
         ("pcbcraft-board/21", "format 21 requires a placement origin"),
         ("pcbcraft-board/23", "require board format 25"),
     ] {
-        refused(&with_header(&documents, "pcbcraft-board/41", older), reason);
+        refused(&with_header(&documents, "pcbcraft-board/25", older), reason);
     }
-    refused(&with_header(&plain, "pcbcraft-board/41", "pcbcraft-board/25"), "require board format 25");
+    refused(&with_header(&plain, "pcbcraft-board/3", "pcbcraft-board/25"), "require board format 25");
 
     s.apply("edit.undo", &json!({})).unwrap();
     assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &snapshot));
-    assert_eq!(saved(&s, "pcbcraft-board/41"), plain);
+    assert_eq!(saved(&s, "pcbcraft-board/3"), plain);
 }
 
 /// A report without its source, or with a bare value or a separate unit instead of the
@@ -554,30 +554,30 @@ fn board_format_25_carries_stack_fields_origin_and_rules() {
     let mut s = crate::board::track::tests::routed_fixture();
     let board = s.project().unwrap().board_target().unwrap().board;
     apply(&mut s, crate::board::rules::SET_RULES, json!({"board":board,"rules":crate::board::rules::Values::default()}));
-    let ruled = saved(&s, "pcbcraft-board/41");
+    let ruled = saved(&s, "pcbcraft-board/19");
     apply(&mut s, crate::board::origin::SET_PLACEMENT_ORIGIN, json!({"board":board,"origin":{"kind":"point","x_nm":1_000_000,"y_nm":2_000_000}}));
-    let originated = saved(&s, "pcbcraft-board/41");
+    let originated = saved(&s, "pcbcraft-board/21");
     let mut c = setup(&s);
     c["stackup"]["strata"][0]["role"] = json!("signal");
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c.clone()}));
-    let stacked = saved(&s, "pcbcraft-board/41");
+    let stacked = saved(&s, "pcbcraft-board/23");
     let mut material = json!({"id":Uuid::from_u128(301),"revision":1,"name":"Synthetic insulation"});
     for (field, value) in reports().as_object().unwrap() {
         material[field] = value.clone();
     }
     c["materials"] = json!([material]);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
-    let documents = saved(&s, "pcbcraft-board/41");
+    let documents = saved(&s, "pcbcraft-board/25");
     assert!(board_json(&documents)["rules"].is_object());
     assert_eq!(board_json(&documents)["placement_origin"]["anchor"], json!({"kind":"point","x_nm":1_000_000,"y_nm":2_000_000}));
     assert_eq!(setup(&s)["stackup"]["strata"][0]["role"], "signal");
-    refused(&with_header(&documents, "pcbcraft-board/41", "pcbcraft-board/23"), "require board format 25");
+    refused(&with_header(&documents, "pcbcraft-board/25", "pcbcraft-board/23"), "require board format 25");
     s.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(saved(&s, "pcbcraft-board/41"), stacked);
+    assert_eq!(saved(&s, "pcbcraft-board/23"), stacked);
     s.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(saved(&s, "pcbcraft-board/41"), originated);
+    assert_eq!(saved(&s, "pcbcraft-board/21"), originated);
     s.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(saved(&s, "pcbcraft-board/41"), ruled);
+    assert_eq!(saved(&s, "pcbcraft-board/19"), ruled);
 }
 
 /// Stack fields and reports preserve zone outlines, with or without a placement origin;
@@ -606,23 +606,23 @@ fn board_formats_23_and_24_carry_zone_outlines() {
             }),
         );
         let zone_format = if origin { "pcbcraft-board/21" } else { "pcbcraft-board/20" };
-        let zoned = saved(&s, "pcbcraft-board/41");
+        let zoned = saved(&s, zone_format);
         let zones = board_json(&zoned)["zones"].clone();
         assert_eq!(zones.as_array().unwrap().len(), 1);
         let mut c = setup(&s);
         c["stackup"]["strata"][0]["role"] = json!("signal");
         apply(&mut s, SET_BOARD_SETUP, json!({"setup":c.clone()}));
-        let stacked = saved(&s, "pcbcraft-board/41");
+        let stacked = saved(&s, "pcbcraft-board/23");
         assert_eq!(board_json(&stacked)["zones"], zones);
         c["materials"] = json!([{"id":Uuid::from_u128(303),"revision":1,"name":"Synthetic insulation","cti":reports()["cti"]}]);
         apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
-        let documents = saved(&s, "pcbcraft-board/41");
+        let documents = saved(&s, "pcbcraft-board/25");
         assert_eq!(board_json(&documents)["zones"], zones);
-        refused(&with_header(&documents, "pcbcraft-board/41", zone_format), "require board format 25");
+        refused(&with_header(&documents, "pcbcraft-board/25", zone_format), "require board format 25");
         s.apply("edit.undo", &json!({})).unwrap();
-        assert_eq!(saved(&s, "pcbcraft-board/41"), stacked);
+        assert_eq!(saved(&s, "pcbcraft-board/23"), stacked);
         s.apply("edit.undo", &json!({})).unwrap();
-        assert_eq!(saved(&s, "pcbcraft-board/41"), zoned);
+        assert_eq!(saved(&s, zone_format), zoned);
     }
 }
 
@@ -636,16 +636,16 @@ fn board_format_25_carries_locked_copper() {
     apply(&mut s, ADD_VIA, json!({"board":board,"at":{"x_nm":0,"y_nm":40_000_000}}));
     let via = s.project().unwrap().board.vias[0].id;
     apply(&mut s, SET_COPPER_LOCKED, json!({"board":board,"vias":[via],"locked":true}));
-    let locked = saved(&s, "pcbcraft-board/41");
+    let locked = saved(&s, "pcbcraft-board/18");
     let mut c = setup(&s);
     let mut material = json!({"id":Uuid::from_u128(302),"revision":1,"name":"Synthetic insulation"});
     material["cti"] = reports()["cti"].clone();
     c["materials"] = json!([material]);
     apply(&mut s, SET_BOARD_SETUP, json!({"setup":c}));
-    let documents = saved(&s, "pcbcraft-board/41");
+    let documents = saved(&s, "pcbcraft-board/25");
     let reopened = persistence::decode_documents(&documents).unwrap();
     assert!(reopened.board.vias.iter().any(|via| via.locked));
-    refused(&with_header(&documents, "pcbcraft-board/41", "pcbcraft-board/18"), "require board format 25");
+    refused(&with_header(&documents, "pcbcraft-board/25", "pcbcraft-board/18"), "require board format 25");
     s.apply("edit.undo", &json!({})).unwrap();
-    assert_eq!(saved(&s, "pcbcraft-board/41"), locked);
+    assert_eq!(saved(&s, "pcbcraft-board/18"), locked);
 }
