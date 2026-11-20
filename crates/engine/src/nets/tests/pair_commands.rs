@@ -277,26 +277,40 @@ fn large_net_history_row_retains_exact_serde_bytes() {
 }
 
 /// A large board registry cannot be serialized in one editor job step. A canceled sizing
-/// attempt leaves the original snapshot and history intact, while a fresh attempt still commits.
+/// attempt leaves history intact, and a cold commit checks a late zone net in logarithmic work.
 #[test]
 fn large_board_pair_registry_sizing_respects_the_poll_budget() {
     const RETIRED: usize = 512;
     const ROWS_PER_POLL: usize = 7;
     let (mut session, [p, n, _]) = pair_fixture(true);
+    apply(&mut session, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true}));
     let mut project = (*session.snapshot().unwrap()).clone();
     let capture = crate::board::update::capture_source(&project).unwrap();
+    let late = Uuid::from_u128(u128::MAX);
     let records = Arc::make_mut(&mut Arc::make_mut(&mut project.net_registry).records);
     let template = records[0].clone();
     let final_number = records.iter().filter_map(|r| r.generated_number).max().unwrap();
     records.extend((1..=RETIRED).map(|id| Record {
-        id: Uuid::from_u128(id as u128),
+        id: if id == RETIRED { late } else { Uuid::from_u128(id as u128) },
         generated_number: Some(final_number + id as u32),
         state: State::Retired { snapshot: capture.clone(), reason: Retirement::Removed, successors: Vec::new() },
         ..template.clone()
     }));
     records.sort_by_key(|r| r.id);
-    session.open_snapshot(decode_documents(&encode_documents(Arc::new(project)).unwrap()).unwrap());
+    let board = Arc::make_mut(&mut project.board);
+    let layer = board.setup.as_ref().unwrap().layers().iter().find(|layer| layer.purpose == crate::board::setup::LayerPurpose::Copper).unwrap().id;
+    board.zones.push(crate::board::zones::Zone {
+        id: crate::fresh_id().unwrap(),
+        layer,
+        net: late,
+        points: vec![crate::Point { x_nm: 0, y_nm: 0 }, crate::Point { x_nm: 10_000_000, y_nm: 0 }, crate::Point { x_nm: 0, y_nm: 10_000_000 }],
+        options: crate::board::zones::Options::default(),
+    });
+    let original_bytes = encode_documents(Arc::new(project)).unwrap();
+    session.open_snapshot(decode_documents(&original_bytes).unwrap());
     let snapshot = session.snapshot().unwrap();
+    assert_eq!(snapshot.net_registry.records.last().unwrap().id, late);
+    assert_eq!(snapshot.board.zones[0].net, late);
     let revision = session.revision();
     let undo = session.undo.len();
     let size = PairEditJob::final_registry_sizes(&snapshot.net_registry).unwrap();
@@ -316,9 +330,15 @@ fn large_board_pair_registry_sizing_respects_the_poll_budget() {
     drop(job);
     assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
     assert_eq!((session.revision(), session.undo.len()), (revision, undo));
+    CANONICAL_RECORD_COMPARISONS.with(|count| count.set(0));
     session.apply(CREATE_PAIR, &params).unwrap();
+    let comparisons = CANONICAL_RECORD_COMPARISONS.with(|count| count.get());
+    let logarithmic_bound = snapshot.net_registry.records.len().next_power_of_two().trailing_zeros() as usize + 1;
+    assert!((1..=logarithmic_bound).contains(&comparisons), "late zone net took {comparisons} comparisons");
     assert_eq!((session.revision(), session.undo.len()), (revision + 1, undo + 1));
     let current = session.snapshot().unwrap();
+    let board_path = current.board_document_path().unwrap();
+    assert_eq!(bytes(&session)[&board_path], original_bytes[&board_path]);
     assert_eq!(current.differential_pairs()[0].id, pair);
     let (compact, framed) = PairEditJob::final_registry_sizes(&current.net_registry).unwrap();
     assert_eq!(compact, serde_json::to_vec(&current.net_registry).unwrap().len());

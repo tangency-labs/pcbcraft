@@ -163,7 +163,7 @@ impl ZoneValidation {
         if self.points > MAX_TOTAL_POINTS {
             return Err("Zone resource limit exceeded.".into());
         }
-        if z.id.is_nil() || !self.ids.insert(z.id) || project.net_registry.record(z.net).is_none() {
+        if z.id.is_nil() || !self.ids.insert(z.id) || !project.net_registry.has_canonical_record(z.net) {
             return Err("Zone has a duplicate/nil identity or unregistered net.".into());
         }
         if !project
