@@ -113,6 +113,18 @@ fn islands(s: &Session) -> BTreeMap<String, usize> {
     q.objects().iter().filter(|o| !o.mechanical).map(|o| (o.name.clone(), o.island)).collect()
 }
 
+/// The connections a shove must keep: islands of the board without the `dragged` tracks, whose
+/// own joints the caller moves. Deleting them is undone, leaving the board as it was.
+fn connections(s: &mut Session, dragged: &[Value]) -> BTreeMap<String, usize> {
+    if dragged.is_empty() {
+        return islands(s);
+    }
+    s.apply(crate::board::track::DELETE_TRACKS, &json!({"tracks":dragged,"expected_revision":s.revision()})).unwrap();
+    let joined = islands(s);
+    s.apply("edit.undo", &json!({})).unwrap();
+    joined
+}
+
 /// The board the plan describes, built from the board before it independently of the solver:
 /// dragged and reshaped tracks take their new ends, removed tracks go, moved vias take their
 /// new centres, and new tracks are the route's legs (route width, unlocked) and each added
@@ -153,15 +165,17 @@ fn expected(planned: &Value, layer: Uuid, before: &Copper) -> (Copper, Vec<Track
 /// Commit through `pcb.shove_tracks` as one undo step and require the committed board to be
 /// exactly the planned one: every kept track and via (changed or not) equal to [`expected`], and
 /// the new tracks equal to the route's legs and the added segments, ignoring only their fresh
-/// identities. Every connection that existed before (two pads, tracks or vias in one island)
-/// must still exist, and the unrouted count may not grow. Full DRC and the exhaustive reference
+/// identities. Every connection that existed before (two pads, tracks or vias in one island,
+/// not counting joints made only through dragged tracks, which the caller moves) must still
+/// exist, and the unrouted count may not grow. Full DRC and the exhaustive reference
 /// must then report no clearance, short, edge or width finding about the changed copper. Undo
 /// restores the saved bytes exactly. Returns the changed copper's identities.
 fn commit_and_agree(s: &mut Session, params: &Value) -> BTreeSet<String> {
     let planned = plan(s, params);
     assert_eq!(kind(&planned), "reached", "{planned}");
     let before = copper(s);
-    let joined = islands(s);
+    let dragged: Vec<Value> = planned["dragged"].as_array().unwrap().iter().map(|ends| ends["track"].clone()).collect();
+    let joined = connections(s, &dragged);
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let unconnected = count(s, Kind::Unconnected);
     let revision = s.revision();
@@ -492,4 +506,101 @@ fn shove_contracts_publish_their_forms_drag_limit_and_revision() {
     assert!(error.to_string().contains("expected_revision"), "{error}");
     assert_eq!(kind(&plan(&mut s, &json!({"layer":layer,"tracks":ends}))), "reached");
     assert_eq!((s.revision(), encode_documents(s.snapshot().unwrap()).unwrap()), (revision, before), "refusals change nothing");
+}
+/// The centre of a fixture pad by query address.
+fn pad(s: &Session, name: &str) -> Point {
+    let q = s.clearance_query_with_rules(view(s).target, &json!({})).unwrap();
+    q.objects().iter().find(|o| o.name == name).unwrap().at
+}
+
+/// A route joins the copper it touches: from free space onto an isolated named pad it settles
+/// with that pad's net and is reached, as confirmation and DRC see it. Crossing a movable
+/// track of another net on the way pushes that track instead of exempting either. A route
+/// touching an unconnected pad never acquires a net, so it cannot reach a named pad.
+#[test]
+fn a_route_settles_with_the_nets_it_touches() {
+    let mut s = board();
+    let named = pad(&s, "footprint-8:1");
+    let line = [p(named.x_nm, 8 * MM), named];
+    let planned = plan_route_shove(&mut s, &line);
+    assert_eq!(kind(&planned), "reached", "{planned}");
+    commit_route(&mut s, &line);
+    assert_eq!(gap(&s, &line, "footprint-8:1"), 0.);
+
+    let mut s = board();
+    let other = pad(&s, "footprint-8:2");
+    let [crossed] = track(&mut s, &[other, p(other.x_nm, 10 * MM)])[..] else { panic!() };
+    let line = [p(10 * MM, 9 * MM), p(named.x_nm, 9 * MM), named];
+    let planned = plan_route_shove(&mut s, &line);
+    assert_eq!(kind(&planned), "reached", "{planned}");
+    let changed = commit_route(&mut s, &line);
+    assert!(changed.contains(&crossed.to_string()), "the other net's track is pushed");
+
+    let mut s = board();
+    let (unconnected, accepted) = (pad(&s, "footprint-6:1"), pad(&s, "footprint-6:2"));
+    for line in [
+        [unconnected, p(unconnected.x_nm, 8 * MM), p(accepted.x_nm, 8 * MM), accepted],
+        [accepted, p(accepted.x_nm, 8 * MM), p(unconnected.x_nm, 8 * MM), unconnected],
+    ] {
+        let planned = plan_route_shove(&mut s, &line);
+        assert_ne!(kind(&planned), "reached", "an unconnected terminal must not join a net: {planned}");
+    }
+}
+
+/// A route touching copper whose net class needs a wider track is not reached, as the commit
+/// would refuse it; the class's minimum width is reached and commits.
+#[test]
+fn a_route_meets_the_width_minimum_of_the_classes_it_touches() {
+    let mut s = board();
+    let named = pad(&s, "footprint-8:1");
+    let target = view(&s).net_class_target_for_copper("footprint-8:1").unwrap().unwrap();
+    s.apply(
+        crate::net_classes::CREATE,
+        &json!({"name":"Wide","rules":{"clearance_nm":200_000,"min_track_width_nm":300_000,"preferred_track_width_nm":300_000},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let class = s.project().unwrap().net_classes().definitions.iter().find(|c| c.name == "Wide").unwrap().id;
+    s.apply(crate::nets::SET_CLASSES, &json!({"target":target,"classes":[class],"expected_revision":s.revision()})).unwrap();
+    let line = [p(named.x_nm, 8 * MM), named];
+    let planned = plan_route_shove(&mut s, &line);
+    assert_ne!(kind(&planned), "reached", "{planned}");
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let mut refused = route(&s, &line);
+    refused["expected_revision"] = json!(s.revision());
+    assert!(s.apply(SHOVE_TRACKS, &refused).is_err());
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    let wide = json!({"layer":layer(&s),"width_nm":300_000,"points":line});
+    commit_and_agree(&mut s, &wide);
+}
+
+/// A drag that pulls a track apart from copper it was joined to is checked against the
+/// islands after the drag. Left 0.1 mm from its former neighbour (under the 0.2 mm rule) it is
+/// not reached and refused, where the same move by reshape gives a DRC clearance finding; left
+/// 0.3 mm away, the reached drag commits and DRC, rebuilt from the committed copper, agrees.
+#[test]
+fn a_drag_is_checked_against_the_connectivity_after_it() {
+    let mut s = board();
+    let [left] = track(&mut s, &[p(2 * MM, 10 * MM), p(10 * MM, 10 * MM)])[..] else { panic!() };
+    let [right] = track(&mut s, &[p(10 * MM, 10 * MM), p(18 * MM, 10 * MM)])[..] else { panic!() };
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[right],"locked":true,"expected_revision":s.revision()})).unwrap();
+    // Track ends are round: the gap is the end-to-end distance less the track width.
+    let front = layer(&s);
+    let apart = |gap: i64| json!({"layer":front,"tracks":[{"track":left,"start":p(2 * MM, 10 * MM),"end":p(10 * MM - WIDTH - gap, 10 * MM)}]});
+    let close = apart(100_000);
+    let planned = plan(&mut s, &close);
+    assert_ne!(kind(&planned), "reached", "{planned}");
+    assert_eq!(planned["blocker"], json!(right.to_string()), "{planned}");
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let mut refused = close.clone();
+    refused["expected_revision"] = json!(s.revision());
+    assert!(s.apply(SHOVE_TRACKS, &refused).is_err());
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    let clearance = count(&s, Kind::Clearance);
+    let reshape = json!({"tracks":close["tracks"],"expected_revision":s.revision()});
+    s.apply(crate::board::track::RESHAPE_TRACKS, &reshape).unwrap();
+    assert!(count(&s, Kind::Clearance) > clearance, "DRC sees the split island");
+    s.apply("edit.undo", &json!({})).unwrap();
+    let far = apart(300_000);
+    let changed = commit_and_agree(&mut s, &far);
+    assert!(changed.contains(&left.to_string()));
 }

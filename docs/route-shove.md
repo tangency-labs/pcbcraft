@@ -33,15 +33,25 @@ before tracks, then by query address).
 - **What never moves:** pads, locked tracks and vias, the shover itself, copper
   on other layers, the board edge, a chain joined in mid-span (a T or a via on the
   track), a closed loop, and a via joined to a pad, another via, another layer's
-  track or a track that does not end at its centre. Copper of the route's own net,
-  and of the islands its head touches, is exempt as in walkaround and DRC.
+  track or a track that does not end at its centre.
+- **What a route joins.** The route takes the nets of the copper it touches, so it
+  settles with the same membership confirmation and DRC give it: a route from free
+  space onto a pad of net N is a route of net N. When the touched copper carries
+  more than one net, only the head contact's nets and those of copper that cannot
+  move count, and movable copper of the other nets is pushed away. A route touching
+  a pad without a net never takes a net, as in walkaround. Copper of the route's
+  net, and of the islands its head touches, is exempt as in walkaround and DRC.
 
 Every probe is an exact overlay probe of the captured
 [snapshot copper query](copper-clearance-query.md) with per-pair, class-aware
 clearances, plus the Board Outline containment and edge-clearance predicates DRC
-uses. When nothing is left to push, the whole result is checked again: every
-route leg with the union of every net the route touches, and every dragged, pushed
-or moved item. Hulls only guide the search.
+uses. A track is also refused below the minimum width of the board and of the net
+classes its probe connects, by the rule the copper commit applies. When nothing is
+left to push, the whole result is checked again: every route leg with the union of
+every net the route touches, and every dragged, pushed or moved item. An island's
+exemption then holds only for copper still joined to the item in the result, so a
+drag that pulls a track off copper it touched is checked as DRC will check it once
+it rebuilds islands from the committed copper. Hulls only guide the search.
 
 ## Results
 

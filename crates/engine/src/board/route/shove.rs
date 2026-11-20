@@ -11,10 +11,11 @@
 //! pusher's hull; the tracks ending on it follow with an elbow.
 //!
 //! Pads, locked copper, copper on other layers, the board edge, the shover itself and copper
-//! that cannot move without detaching something (a chain joined in mid-span, a via joined to a
-//! pad, another via or another layer's track) never move. Every result is confirmed by the same
-//! exact overlay probes and outline predicates DRC uses; the propagation is bounded by depth,
-//! moved copper, pushes and a probe budget, and is deterministic.
+//! that cannot move without detaching something (a chain joined in mid-span, a via joined
+//! to a pad, another via or another layer's track) never move. Every result is confirmed by the
+//! same exact overlay probes and outline predicates DRC uses, with island exemptions only for
+//! copper still joined in the result; the propagation is bounded by depth, moved copper, pushes
+//! and a probe budget, and is deterministic.
 use super::{
     Outcome,
     hull::Hull,
@@ -239,6 +240,7 @@ struct Shape {
     ids: Vec<Uuid>,
     original: Vec<Point>,
     half: f64,
+    width_nm: i64,
     posture: Posture,
     nets: Vec<usize>,
     island: usize,
@@ -257,6 +259,10 @@ struct Verdict {
     offenders: Vec<(ObstacleId, i64)>,
     /// Breaks a rule even with no offender (a short through own copper, a width minimum).
     illegal: bool,
+    /// Copper closer than its clearance that is exempt only because it was in one of the item's
+    /// islands on the captured board, without touching the item now. Confirmation keeps the
+    /// exemption only while that copper is still joined to the item.
+    joined: Vec<ObstacleId>,
 }
 
 /// One try at shoving one shover: an overlay of moved copper over the captured board.
@@ -272,6 +278,8 @@ struct Attempt<'a> {
     pushes: usize,
     depth: usize,
     next_id: u128,
+    /// The route's settling membership, cleared whenever copper moves.
+    route_nets: Option<Vec<usize>>,
 }
 
 /// One shove: the captured query, the shover's copper and membership, the movable copper found
@@ -291,6 +299,7 @@ struct Solver<'a> {
     route_islands: Vec<usize>,
     route_from: Option<usize>,
     route_half: f64,
+    route_width_nm: i64,
     /// Query indices of dragged tracks with their new ends.
     dragged: Vec<(usize, Point, Point)>,
     chain_of: BTreeMap<usize, Option<usize>>,
@@ -315,7 +324,8 @@ impl<'a> Solver<'a> {
         }
         let layer = [request.layer];
         let objects = query.objects();
-        let (mut route_nets, mut route_islands, mut route_from, mut route_half, mut dragged) = (Vec::new(), Vec::new(), None, 0., Vec::new());
+        let (mut route_nets, mut route_islands, mut route_from, mut route_half, mut route_width_nm, mut dragged) =
+            (Vec::new(), Vec::new(), None, 0., 0, Vec::new());
         match &request.shover {
             Shover::Route { points, width_nm } => {
                 if !(2..=MAX_PATH_POINTS).contains(&points.len()) || points.windows(2).any(|leg| leg[0] == leg[1]) {
@@ -328,6 +338,7 @@ impl<'a> Solver<'a> {
                     return Err(CommandError::InvalidParams("Track width cannot weaken the board minimum.".into()));
                 }
                 route_half = *width_nm as f64 / 2.;
+                route_width_nm = *width_nm;
                 let at_head = Contour::capsule(points[0], points[0], route_half);
                 let contacts: Vec<usize> =
                     query.candidates(&at_head, &layer)?.into_iter().filter(|i| objects[*i].contour.gap(&at_head) <= 0.).collect();
@@ -371,6 +382,7 @@ impl<'a> Solver<'a> {
             route_islands,
             route_from,
             route_half,
+            route_width_nm,
             dragged,
             chain_of: BTreeMap::new(),
             shapes: Vec::new(),
@@ -464,6 +476,7 @@ impl<'a> Solver<'a> {
             pushes: 0,
             depth: 0,
             next_id: 0,
+            route_nets: None,
         };
         for leg in route.windows(2) {
             let id = attempt.fresh();
@@ -522,9 +535,10 @@ impl<'a> Solver<'a> {
         let nets = self.route_membership(attempt)?;
         let (layer, islands) = (self.layer.to_vec(), self.route_islands.clone());
         for item in items {
+            let mut component = None;
             for contour in self.contours(attempt, item) {
                 let verdict = if item == Item::Route {
-                    self.check_with(attempt, &contour, &layer, &nets, &islands)?
+                    self.check_with(attempt, &contour, &layer, &nets, &islands, Some(self.route_width_nm))?
                 } else {
                     self.check(attempt, item, &contour)?
                 };
@@ -537,9 +551,53 @@ impl<'a> Solver<'a> {
                 if verdict.illegal {
                     return Err(Halt::Blocked(None));
                 }
+                // Island exemptions hold only for copper the item is still joined to: a drag can
+                // split an island, and DRC rebuilds islands from the committed copper.
+                for obstacle in verdict.joined {
+                    let joined = match &component {
+                        Some(joined) => joined,
+                        None => component.insert(self.component(attempt, item)?),
+                    };
+                    if !joined.contains(&obstacle) {
+                        return Err(Halt::Blocked(self.name(attempt, obstacle)));
+                    }
+                }
             }
         }
         Ok(())
+    }
+
+    /// The copper joined to `item` as it stands in the attempt: a walk over touching copper of
+    /// the item's own captured islands, starting from the item's obstacles. Copper of other
+    /// islands is not walked, so a joint made only through another island does not count (a
+    /// contact between islands is itself refused unless the nets agree).
+    fn component(&self, attempt: &Attempt<'a>, item: Item) -> Result<BTreeSet<ObstacleId>, Halt> {
+        let (mut queue, islands): (Vec<ObstacleId>, Vec<usize>) = match item {
+            Item::Route => (attempt.route_ids.iter().map(|u| ObstacleId::Added(*u)).collect(), self.route_islands.clone()),
+            Item::Dragged(i) | Item::Via(i) => (vec![ObstacleId::Source(i)], vec![self.query.objects()[i].island]),
+            Item::Chain(c) => {
+                let extra = attempt.chains.get(&c).map(|(_, extra)| extra.clone()).unwrap_or_default();
+                let ids = self.shapes[c].tracks.iter().map(|t| ObstacleId::Source(*t)).chain(extra.into_iter().map(ObstacleId::Added));
+                (ids.filter(|id| attempt.overlay.object(*id).is_some()).collect(), vec![self.shapes[c].island])
+            }
+        };
+        let mut seen: BTreeSet<ObstacleId> = queue.iter().copied().collect();
+        while let Some(id) = queue.pop() {
+            let Some(object) = attempt.overlay.object(id) else { continue };
+            for next in attempt.overlay.candidates(&object.contour, &object.layers)? {
+                if seen.contains(&next) || !islands.contains(&self.island(attempt, next)) {
+                    continue;
+                }
+                if let Some(other) = attempt.overlay.object(next)
+                    && !other.mechanical
+                    && other.contour.gap(&object.contour) <= 0.
+                {
+                    seen.insert(next);
+                    queue.push(next);
+                }
+            }
+        }
+        Ok(seen)
     }
 
     /// The route's nets: its head contacts' and those of all copper its legs touch.
@@ -561,6 +619,49 @@ impl<'a> Solver<'a> {
             }
         }
         Ok(nets.into_iter().collect())
+    }
+
+    /// The membership a route settles with, cached until copper moves. The committed route joins
+    /// the copper it touches, so its membership is the nets of that copper, as confirmation and
+    /// DRC see it. When that copper carries more than one net, only the head's nets and those
+    /// of copper that cannot move count, and movable copper of other nets is pushed away rather
+    /// than letting one contact exempt the others. A route touching a pad without a net (an
+    /// unconnected terminal) keeps the head's nets alone: it never acquires a net, as in walkaround.
+    fn route_settle_nets(&mut self, attempt: &mut Attempt<'a>) -> Result<Vec<usize>, Halt> {
+        if let Some(nets) = &attempt.route_nets {
+            return Ok(nets.clone());
+        }
+        let mut contacts: BTreeMap<ObstacleId, Vec<usize>> = BTreeMap::new();
+        let mut unconnected_pad = false;
+        for leg in attempt.route.windows(2) {
+            let contour = Contour::capsule(leg[0], leg[1], self.route_half);
+            for id in attempt.overlay.candidates(&contour, &self.layer)? {
+                if matches!(id, ObstacleId::Added(u) if attempt.route_ids.contains(&u)) || contacts.contains_key(&id) {
+                    continue;
+                }
+                let Some(object) = attempt.overlay.object(id).filter(|o| !o.mechanical && o.contour.gap(&contour) <= 0.) else { continue };
+                unconnected_pad |= matches!(id, ObstacleId::Source(i) if i < self.lands) && object.intended_nets.is_empty();
+                contacts.insert(id, object.intended_nets.clone());
+            }
+        }
+        let head: BTreeSet<usize> = self.route_nets.iter().copied().collect();
+        let all: BTreeSet<usize> = head.iter().copied().chain(contacts.values().flatten().copied()).collect();
+        let nets = if unconnected_pad {
+            head
+        } else if all.len() <= 1 {
+            all
+        } else {
+            let mut fixed = head;
+            for (id, nets) in &contacts {
+                if !matches!(self.item_of(attempt, *id)?, Some(Item::Chain(_) | Item::Via(_))) {
+                    fixed.extend(nets.iter().copied());
+                }
+            }
+            fixed
+        };
+        let nets: Vec<usize> = nets.into_iter().collect();
+        attempt.route_nets = Some(nets.clone());
+        Ok(nets)
     }
 
     /// Push chain `c` out of the hull of `pusher` (part of `by`), trying the shorter side first.
@@ -691,7 +792,7 @@ impl<'a> Solver<'a> {
 
     /// Whether `item`'s current geometry is clear of the board edge, of `by` and of every copper
     /// that cannot move. `Err` names what refuses it (absent for the edge or a rule).
-    fn admits(&mut self, attempt: &Attempt<'a>, item: Item, by: Item) -> Result<Result<(), Option<String>>, Halt> {
+    fn admits(&mut self, attempt: &mut Attempt<'a>, item: Item, by: Item) -> Result<Result<(), Option<String>>, Halt> {
         for contour in self.contours(attempt, item) {
             let verdict = self.check(attempt, item, &contour)?;
             if verdict.edge {
@@ -724,22 +825,37 @@ impl<'a> Solver<'a> {
         }
     }
 
-    /// Probe one contour of `item` with the item's membership and own islands.
-    fn check(&mut self, attempt: &Attempt<'a>, item: Item, contour: &Contour) -> Result<Verdict, Halt> {
+    /// Probe one contour of `item` with the item's membership, own islands and track width.
+    /// The route uses its settling membership ([`Self::route_settle_nets`]).
+    fn check(&mut self, attempt: &mut Attempt<'a>, item: Item, contour: &Contour) -> Result<Verdict, Halt> {
         let query = self.query;
         let objects = query.objects();
-        let (nets, islands, layers) = match item {
-            Item::Route => (self.route_nets.clone(), self.route_islands.clone(), self.layer.to_vec()),
-            Item::Dragged(i) | Item::Via(i) => (objects[i].intended_nets.clone(), vec![objects[i].island], objects[i].layers.clone()),
-            Item::Chain(c) => (self.shapes[c].nets.clone(), vec![self.shapes[c].island], self.layer.to_vec()),
+        let (nets, islands, layers, width) = match item {
+            Item::Route => (self.route_settle_nets(attempt)?, self.route_islands.clone(), self.layer.to_vec(), Some(self.route_width_nm)),
+            Item::Dragged(i) => {
+                (objects[i].intended_nets.clone(), vec![objects[i].island], objects[i].layers.clone(), Some(self.tracks[i - self.lands].width_nm))
+            }
+            Item::Via(i) => (objects[i].intended_nets.clone(), vec![objects[i].island], objects[i].layers.clone(), None),
+            Item::Chain(c) => (self.shapes[c].nets.clone(), vec![self.shapes[c].island], self.layer.to_vec(), Some(self.shapes[c].width_nm)),
         };
-        self.check_with(attempt, contour, &layers, &nets, &islands)
+        self.check_with(attempt, contour, &layers, &nets, &islands, width)
     }
 
     /// Charge one exact probe: overlay clearance and short decisions, then the outline and
     /// edge-clearance predicates DRC uses. Copper of the same single net is exempt as in DRC;
-    /// copper of the item's own islands is exempt unless the contact joins distinct nets.
-    fn check_with(&mut self, attempt: &Attempt<'a>, contour: &Contour, layers: &[Uuid], nets: &[usize], islands: &[usize]) -> Result<Verdict, Halt> {
+    /// copper of the item's own islands is exempt unless the contact joins distinct nets, and
+    /// such copper that no longer touches the item is listed in [`Verdict::joined`]. A track
+    /// `width` is illegal below the board minimum or the minimum of the net classes the probe
+    /// connects, by the same rule the copper commit applies.
+    fn check_with(
+        &mut self,
+        attempt: &Attempt<'a>,
+        contour: &Contour,
+        layers: &[Uuid],
+        nets: &[usize],
+        islands: &[usize],
+        width: Option<i64>,
+    ) -> Result<Verdict, Halt> {
         if (self.cancel)() {
             return Err(Halt::Canceled);
         }
@@ -748,7 +864,7 @@ impl<'a> Solver<'a> {
         }
         self.probes += 1;
         let results = attempt.overlay.probe_membership(contour, layers, nets, None)?;
-        let mut verdict = Verdict { edge: false, offenders: Vec::new(), illegal: false };
+        let mut verdict = Verdict { edge: false, offenders: Vec::new(), illegal: false, joined: Vec::new() };
         for decision in &results.decisions {
             let Some(object) = attempt.overlay.object(decision.obstacle) else { continue };
             let same_net = nets.len() == 1 && object.intended_nets == nets;
@@ -757,6 +873,9 @@ impl<'a> Solver<'a> {
                 continue;
             }
             if !decision.conflicting_nets && islands.contains(&self.island(attempt, decision.obstacle)) {
+                if violation && decision.gap_nm > 0. {
+                    verdict.joined.push(decision.obstacle);
+                }
                 continue;
             }
             verdict.illegal = true;
@@ -766,6 +885,16 @@ impl<'a> Solver<'a> {
         }
         let baseline = self.query.authority().rules().values;
         let rules = results.probe_rules.as_ref().map_or(baseline, |rules| rules.hard_values(baseline));
+        if let Some(width) = width
+            && (width < rules.min_track_width_nm
+                || results
+                    .probe_rules
+                    .as_ref()
+                    .filter(|policy| policy.has_dimensions())
+                    .is_some_and(|policy| policy.track_width(Some(width)).is_err()))
+        {
+            verdict.illegal = true;
+        }
         if !self.outline.polygons.is_empty() {
             let (distance, crosses) = drc::edge_gap(&self.outline.edges, contour);
             if !drc::contains(&self.outline.polygons, contour) || crosses || distance < rules.edge_clearance_nm as f64 {
@@ -880,6 +1009,7 @@ impl<'a> Solver<'a> {
             tracks: run,
             original: points,
             half,
+            width_nm: track.width_nm,
             posture,
         }))
     }
@@ -972,6 +1102,7 @@ impl<'a> Solver<'a> {
             attempt.overlay.remove(source)?;
         }
         attempt.chains.insert(c, (points.to_vec(), extra));
+        attempt.route_nets = None;
         Ok(())
     }
 
@@ -980,6 +1111,7 @@ impl<'a> Solver<'a> {
         let object = &self.query.objects()[v];
         attempt.overlay.replace(v, Contour::capsule(at, at, object.contour.radius), object.layers.clone())?;
         attempt.vias.insert(v, at);
+        attempt.route_nets = None;
         Ok(())
     }
 
