@@ -67,7 +67,9 @@ additionally requires that no floating card, menu, popup or dialog covers it, so
 a click there reaches the canvas. Covered and off-canvas points still return
 their coordinates. Panning, zooming, flipping or resizing a pane changes `layout`,
 so input carrying an older `layout`, or sent after navigation that has not been
-painted yet, is refused as stale; project again. A closed or hidden view, or a
+painted yet, is refused as stale; project again. A coordinate click or drag whose
+canvas moves after it was accepted, for example while a wheel zoom is still
+easing, is cancelled before its button press. A closed or hidden view, or a
 Parts Library browsing pane, is refused. Projection is read-only: it changes no
 camera, selection, project data or Undo history. It is geometry only, not image
 recognition or object picking; use project inspection to find object positions.

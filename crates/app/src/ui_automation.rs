@@ -79,6 +79,9 @@ struct Job {
     scale: f32,
     restore: Modifiers,
     guards: Vec<(String, Pos2)>,
+    /// Canvas mappings a coordinate target was chosen against; a press refuses to land after
+    /// they change, as when an eased zoom continues after admission.
+    canvases: Option<Vec<Canvas>>,
 }
 
 /// At most one bounded input operation and one completion record per editor session.
@@ -338,7 +341,7 @@ impl PcbApp {
     fn automation_project(&mut self, ctx: &egui::Context, params: &Value) -> Result<Value, String> {
         let query: Projection = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
         let max = pcbcraft_engine::schematic::MAX_CENTER_NM;
-        if query.at.x_nm.abs() > max || query.at.y_nm.abs() > max {
+        if !(-max..=max).contains(&query.at.x_nm) || !(-max..=max).contains(&query.at.y_nm) {
             return Err(format!("Model coordinates must be within ±{max} nm"));
         }
         let view = ViewId(query.view);
@@ -546,6 +549,7 @@ impl PcbApp {
             return Err("Wait for the current file operation before sending UI input".into());
         }
         let guards = action.guards(snapshot)?;
+        let canvases = action.positional().then(|| snapshot.canvases.clone());
         let (frames, modifiers) = action.frames(snapshot)?;
         self.automation.next_ticket = self.automation.next_ticket.checked_add(1).ok_or("UI ticket limit reached")?;
         let ticket = self.automation.next_ticket;
@@ -563,6 +567,7 @@ impl PcbApp {
             scale: snapshot.scale,
             restore: snapshot.modifiers,
             guards,
+            canvases,
         });
         ctx.request_repaint_of(viewport(host));
         Ok(json!({"schema":SCHEMA,"ticket":ticket,"state":"queued"}))
@@ -613,6 +618,10 @@ impl PcbApp {
                 })
             {
                 Some("Named input target moved, became disabled or was covered")
+            } else if job.frames.front().is_some_and(|events| events.iter().any(|e| matches!(e, Event::PointerButton { pressed: true, .. })))
+                && job.canvases.as_ref().is_some_and(|canvases| *canvases != self.automation_canvases(job.host))
+            {
+                Some("A canvas moved under a coordinate target")
             } else if input.viewport_id == viewport(job.host) && input.events.iter().any(physical_input) {
                 Some("Physical input interrupted automation")
             } else if input.viewport_id == viewport(job.host) && job.held.is_none() && ctx.input(|input| input.pointer.any_down()) {
@@ -683,6 +692,15 @@ fn physical_input(event: &Event) -> bool {
 }
 
 impl Action {
+    /// Whether any pointer target is given as coordinates, which a moving canvas invalidates.
+    fn positional(&self) -> bool {
+        match self {
+            Self::Move { target } | Self::Click { target, .. } | Self::Scroll { target, .. } => matches!(target, Point::Position(_)),
+            Self::Drag { from, to, .. } => matches!(from, Point::Position(_)) || matches!(to, Point::Position(_)),
+            Self::Key { .. } | Self::Text { .. } => false,
+        }
+    }
+
     /// Preserve named destinations across hover/layout transitions before a button event.
     fn guards(&self, snapshot: &Snapshot) -> Result<Vec<(String, Pos2)>, String> {
         let points = match self {

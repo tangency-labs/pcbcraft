@@ -600,3 +600,29 @@ fn definition_views_project_and_library_browsing_is_refused() {
     h.run_steps(3);
     assert!(project(&mut h, view.0, 0, 0).unwrap_err().contains("no model canvas"));
 }
+
+/// Out-of-range model coordinates, including the extreme integers, are refused without overflow.
+#[test]
+fn projection_refuses_out_of_range_coordinates() {
+    let mut h = ready();
+    let view = h.state().views.active.id().0;
+    for (x, y) in [(i64::MIN, 0), (0, i64::MIN), (i64::MAX, 0), (0, pcbcraft_engine::schematic::MAX_CENTER_NM + 1)] {
+        assert!(project(&mut h, view, x, y).unwrap_err().contains("within"), "({x}, {y})");
+    }
+}
+
+/// A canvas that moves after a coordinate click was admitted, as an eased zoom does, cancels
+/// the click before its button press instead of landing on another model point.
+#[test]
+fn a_canvas_moving_after_admission_cancels_a_coordinate_click() {
+    let mut h = ready();
+    let view = h.state().views.active.id().0;
+    let at = h.state().session.project().unwrap().symbols()[0].position;
+    let projected = project(&mut h, view, at.x_nm, at.y_nm).unwrap();
+    command(&mut h, "ui.click", json!({"window":0,"layout":projected["layout"],"target":{"x":projected["x"],"y":projected["y"]}})).unwrap();
+    tick(&mut h);
+    h.state_mut().views.active.camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 2_540_000, y_nm: 0 });
+    let status = finish(&mut h);
+    assert_eq!(status["state"], "cancelled", "{status}");
+    assert!(h.state().views.active.schematic.selection.single_symbol().is_none());
+}
