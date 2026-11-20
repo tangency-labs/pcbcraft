@@ -171,7 +171,7 @@ enum RoundedCore {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RoundedFill {
     StripsOnly,
-    AxisAlignedRectangle,
+    AxisAlignedRectangles,
     Outline,
 }
 
@@ -392,17 +392,18 @@ impl Gerber {
 }
 
 /// Add a strip along each edge and a circle at each vertex, and fill the inner polygon unless
-/// the strips already cover it.
+/// the strips already cover it safely, or use two overlapping center-line rectangles when an
+/// axis-aligned core has no safe outline.
 /// Their union is the core expanded by half the emitted diameter, without chord approximations.
 /// Ucamco Gerber 2026.05 §§4.5.1.3–4.5.1.6 define these primitives. Their
 /// rotation is about the macro origin, not each primitive's center: use zero because
 /// the core already includes pad rotation, placement mirroring/rotation and the Y flip.
 fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: RoundedCore, fill: RoundedFill) {
     let _ = writeln!(text, "%AMRoundRect{code}*");
-    let diameter = mm(diameter, 6);
+    let diameter_mm = mm(diameter, 6);
     let pair = |(x, y)| format!("{},{}", mm(x, 6), mm(y, 6));
     let edge = |text: &mut String, a, b| {
-        let _ = writeln!(text, "20,1,{diameter},{},{},0*", pair(a), pair(b));
+        let _ = writeln!(text, "20,1,{diameter_mm},{},{},0*", pair(a), pair(b));
     };
     let vertices = match &core {
         RoundedCore::Dot(point) => std::slice::from_ref(point),
@@ -411,18 +412,25 @@ fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: Roun
             points.as_slice()
         }
         RoundedCore::Quad(points) => {
-            for (a, b) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)) {
-                edge(text, a, b);
-            }
             match fill {
-                RoundedFill::StripsOnly => {}
-                RoundedFill::AxisAlignedRectangle => {
-                    // Opposite corners give the exact extent and half-grid center (§4.5.1.5).
+                RoundedFill::AxisAlignedRectangles => {
+                    // Combine the core and opposite edge strips into two center-line rectangles
+                    // sharing the exact half-grid center, eliminating core-to-strip seams (§4.5.1.5).
                     let (a, c) = (points[0], points[2]);
                     let (width, height) = ((c.0 - a.0).abs(), (c.1 - a.1).abs());
-                    let _ = writeln!(text, "21,1,{},{},{},0*", mm(width, 6), mm(height, 6), half_nm_pair(a, c));
+                    let center = half_nm_pair(a, c);
+                    let _ = writeln!(text, "21,1,{},{},{center},0*", mm(width, 6), mm(height + diameter, 6));
+                    let _ = writeln!(text, "21,1,{},{},{center},0*", mm(width + diameter, 6), mm(height, 6));
+                }
+                RoundedFill::StripsOnly => {
+                    for (a, b) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)) {
+                        edge(text, a, b);
+                    }
                 }
                 RoundedFill::Outline => {
+                    for (a, b) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)) {
+                        edge(text, a, b);
+                    }
                     text.push_str("4,1,4");
                     for &point in points.iter().chain(&points[..1]) {
                         let _ = write!(text, ",{}", pair(point));
@@ -434,12 +442,13 @@ fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: Roun
         }
     };
     for &point in vertices {
-        let _ = writeln!(text, "1,1,{diameter},{},0*", pair(point));
+        let _ = writeln!(text, "1,1,{diameter_mm},{},0*", pair(point));
     }
     text.push_str("%\n");
 }
 
-/// Choose a fill before emitting any pad artwork. Keep the strip-coverage snapping margin.
+/// Choose a fill before emitting any pad artwork, keeping every primitive overlap and
+/// outline separation safe under Gerber §4.14.2 coordinate perturbations.
 fn rounded_quad_fill(points: &[MacroPoint; 4], diameter: i64) -> Option<RoundedFill> {
     if strips_cover_core(points, diameter) {
         return Some(RoundedFill::StripsOnly);
@@ -448,14 +457,19 @@ fn rounded_quad_fill(points: &[MacroPoint; 4], diameter: i64) -> Option<RoundedF
     if perturbed_edges_separate(a, b, c, d) && perturbed_edges_separate(b, c, d, a) {
         return Some(RoundedFill::Outline);
     }
-    // For a strictly convex axis-aligned quad, opposite corners give exact dimensions and
-    // twice the center. Other quads have no supported exact replacement for the outline.
-    (0..4)
-        .all(|i| {
-            let (a, b) = (points[i], points[(i + 1) % 4]);
-            (a.0 == b.0) != (a.1 == b.1)
-        })
-        .then_some(RoundedFill::AxisAlignedRectangle)
+    // For a strictly convex axis-aligned quad, two overlapping center-line rectangles replace
+    // the core and all four edge strips. Require strict overlap on both axes under ±0.5 µm shifts.
+    let axis_aligned = (0..4).all(|i| {
+        let (a, b) = (points[i], points[(i + 1) % 4]);
+        (a.0 == b.0) != (a.1 == b.1)
+    });
+    if !axis_aligned {
+        return None;
+    }
+    let (width, height) = ((c.0 - a.0).abs(), (c.1 - a.1).abs());
+    let min_overlap = 2 * i128::from(OUTLINE_CLEARANCE_NM);
+    (2 * i128::from(width) + i128::from(diameter) > min_overlap && 2 * i128::from(height) + i128::from(diameter) > min_overlap)
+        .then_some(RoundedFill::AxisAlignedRectangles)
 }
 
 /// Endpoints can move within ±0.5 µm boxes (§4.14.2). The swept segment is the segment
@@ -484,19 +498,22 @@ fn half_nm_mm(twice_nm: i64) -> String {
     format!("{sign}{}5", mm(magnitude / 2, 6))
 }
 
-/// Whether the diameter-wide strips along a strictly convex core's edges clearly cover all of it.
-/// They do when every vertex lies less than one diameter from some edge's line: the core is then
-/// narrower than the diameter, so each interior point is within half a diameter of the nearest
-/// edge, whose strip covers it. Require the core to be narrower by the diameter tolerance, so
-/// snapping a rotated full-width core a fraction of a nanometre narrower keeps its outline.
+/// Whether the diameter-wide strips along a strictly convex core's edges still cover all of it
+/// under Gerber §4.14.2 coordinate perturbations (±0.5 µm per coordinate).
+/// They do when every vertex stays strictly within one diameter of some edge's line even after
+/// opposite edges move apart by the full perturbation box projection: each interior point is then
+/// still within half a diameter of its nearest edge, with no gap between opposite strips.
 fn strips_cover_core(points: &[MacroPoint; 4], diameter: i64) -> bool {
-    let reach = diameter - ROUNDED_DIAMETER_TOLERANCE_NM as i64;
-    reach > 0
+    diameter > OUTLINE_CLEARANCE_NM
         && (0..4).any(|i| {
             let (a, b) = (points[i], points[(i + 1) % 4]);
             let (dx, dy) = (i128::from(b.0 - a.0), i128::from(b.1 - a.1));
-            let limit = i128::from(reach).pow(2) * (dx * dx + dy * dy);
-            points.iter().all(|&p| (dx * i128::from(p.1 - a.1) - dy * i128::from(p.0 - a.0)).pow(2) < limit)
+            let margin = i128::from(OUTLINE_CLEARANCE_NM) * (dx.abs() + dy.abs());
+            let limit = i128::from(diameter).pow(2) * (dx * dx + dy * dy);
+            points.iter().all(|&p| {
+                let cross = (dx * i128::from(p.1 - a.1) - dy * i128::from(p.0 - a.0)).abs();
+                (cross + margin).pow(2) < limit
+            })
         })
 }
 
