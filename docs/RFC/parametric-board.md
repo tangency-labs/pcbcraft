@@ -217,11 +217,15 @@ one reply. *Reason:* moving parts and leaving their tracks behind gives a board
 full of clearance errors and dangling copper to clean up by hand.
 
 **C7. Refuse rather than silently break copper.** After carry and re-route,
-compare explicit-copper connectivity before and after (pads, tracks, vias; not
-derived zone fill). A lost connection, a new short, a dangling track or via, or
-locked copper that would have to move refuses the whole change, naming the nets
-and the stage. *Reason:* an update that quietly turns routed nets back into
-airwires is found at DRC or at the fab, which is worse than a refusal.
+compare copper connectivity before and after: pads, tracks, vias and, once zone
+fill exists (#232), the fill of every zone the update affects, recomputed in the
+same snapshot (section 6.8). A lost connection, a new short, a dangling track or
+via, or locked copper that would have to move refuses the whole change, naming
+the nets and the stage. Today zones have no fill, so no connection can depend on
+one; fill joins the comparison in the same change that makes fill part of
+connectivity. *Reason:* an update that quietly turns routed nets back into
+airwires would only show up later, in DRC's unrouted-connections check or at the
+fab, which is worse than a refusal.
 
 **C8. Routing inside an update is deterministic and bounded.** The same board and
 the same change give the same copper, within a fixed work budget, with an explicit
@@ -414,9 +418,15 @@ follows that edge) is question 10.
 ### 6.8 Zones and keepouts
 
 A zone gets a `region`: `drawn` (today) or `board` (the accepted outline, inset
-by edge clearance at fill time). Fill stays derived (#232): an update makes it
-stale; the guard never compares fill (C7). Keepouts, once stored, get the same
-`region` and can be held like footprints.
+by edge clearance at fill time). Fill stays derived (#232). Because a pad can be
+connected only through a zone, the guard (C7) cannot ignore fill once fill
+exists: the update recomputes the fill of each zone whose region changed or whose
+area the moved copper crosses, with #232's fill rules, inside the same pure
+function (6.5), and compares connectivity including it. A connection that only
+the old fill made is refused like any other, naming the net and the zone. Whether
+that recomputed fill is then stored or recomputed again for display follows
+#232. Keepouts, once stored, get the same `region` and can be held like
+footprints.
 
 ## 7. Slices
 
