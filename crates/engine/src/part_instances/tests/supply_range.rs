@@ -3,7 +3,7 @@ use crate::{
     authoring::{Item, Kind, Primitive, publishing::new_library},
     board::clipboard::{BoardFragment, BoardSelection},
     clipboard::Fragment,
-    library::parts::{LEGACY_PART_FORMAT, PART_FORMAT, Package, PartDefinition, RATED_PART_FORMAT, SupplyRange},
+    library::parts::{LEGACY_PART_FORMAT, MAX_TERMINAL_RATINGS, PART_FORMAT, Package, PartDefinition, RATED_PART_FORMAT, SupplyRange},
     part_authoring::{Record as Draft, Session as DraftSession},
     schematic::ElectricalType,
 };
@@ -441,4 +441,104 @@ fn supply_range_board_clipboard_keeps_rated_and_unrated_footprints_separate() {
             crate::assert_same_content(&original, &session.snapshot().unwrap());
         }
     }
+}
+
+/// Draft editing, native encoding, native decoding and the part/4 schema all enforce the
+/// same [`MAX_TERMINAL_RATINGS`] limit: 128 publishes and reopens, 129 is rejected everywhere.
+#[test]
+fn supply_range_limit_matches_draft_writer_reader_and_schema() {
+    let schema: Json = serde_json::from_str(include_str!("../../../../../docs/schemas/part-v4.schema.json")).unwrap();
+    assert_eq!(schema["properties"]["terminal_ratings"]["maxProperties"], json!(MAX_TERMINAL_RATINGS));
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":false})).unwrap();
+    let mut documents = sources::Documents::from([("library.json".into(), new_library(LIBRARY, "Synthetic supply ranges", LICENSE).unwrap())]);
+    let mut symbol = Item::new(Kind::Symbol).unwrap();
+    symbol.id = "max-supply".into();
+    symbol.name = "Max supply symbol".into();
+    symbol.objects.retain(|_, primitive| !matches!(primitive, Primitive::Pin { .. }));
+    for index in 1..=MAX_TERMINAL_RATINGS {
+        symbol.objects.insert(
+            index as u64 + 10,
+            Primitive::Pin {
+                number: index.to_string(),
+                name: Some(format!("VIN{index}")),
+                electrical_type: ElectricalType::PowerIn,
+                at: crate::schematic::Point { x_nm: (index as i64 % 16) * 2_540_000, y_nm: (index as i64 / 16) * 2_540_000 },
+                appearance: None,
+            },
+        );
+    }
+    symbol.allocation.object = symbol.objects.keys().next_back().copied().unwrap_or(0);
+    let mut footprint = Item::new(Kind::Footprint).unwrap();
+    footprint.id = "max-supply-package".into();
+    let Primitive::Pad { pad: template } = footprint.objects[&1].clone() else { panic!("fixture needs a pad") };
+    footprint.objects.retain(|_, primitive| !matches!(primitive, Primitive::Pad { .. }));
+    for index in 1..=MAX_TERMINAL_RATINGS {
+        let mut pad = template.clone();
+        pad.number = index.to_string();
+        pad.center = crate::schematic::Point { x_nm: (index as i64 % 16) * 1_270_000, y_nm: (index as i64 / 16) * 1_270_000 };
+        footprint.objects.insert(index as u64 + 10, Primitive::Pad { pad });
+    }
+    footprint.allocation.object = footprint.objects.keys().next_back().copied().unwrap_or(0);
+    for item in [symbol, footprint] {
+        let prepared = session.execute(sources::PREPARE_PUBLICATION, &json!({"item":item,"documents":&documents})).unwrap();
+        documents.extend(serde_json::from_value::<sources::Documents>(prepared["documents"].clone()).unwrap());
+    }
+    load(&mut session, &documents);
+
+    let mut unrated = Draft::new_part(Reference { library: LIBRARY.into(), id: "max-supply".into(), revision: 1 }).unwrap();
+    let part = part_mut(&mut unrated);
+    part.id = "max-supply-device".into();
+    part.name = "Max supply device".into();
+    let mapping = (1..=MAX_TERMINAL_RATINGS).map(|index| (index.to_string(), vec![index.to_string()])).collect();
+    part.packages.insert(
+        "test".into(),
+        Package {
+            name: "Max supply package".into(),
+            footprint: Reference { library: LIBRARY.into(), id: "max-supply-package".into(), revision: 1 },
+            mapping,
+            unconnected_pads: Vec::new(),
+        },
+    );
+    let mut editor = DraftSession::new(unrated.clone(), false).unwrap();
+    let mut rated = unrated.clone();
+    for index in 1..=MAX_TERMINAL_RATINGS {
+        part_mut(&mut rated).set_supply_range(&index.to_string(), "4.5 V", "36 V").unwrap();
+    }
+    editor.replace(1, rated.clone()).unwrap();
+    let encoded = part_mut(&mut rated).encode().unwrap();
+    let reopened = PartDefinition::read(&encoded).unwrap();
+    assert_eq!(reopened.format, RATED_PART_FORMAT);
+    assert_eq!(reopened.terminal_ratings.len(), MAX_TERMINAL_RATINGS);
+    let prepared = prepare(&mut session, &documents, editor.record()).unwrap();
+    documents.extend(serde_json::from_value::<sources::Documents>(prepared["documents"].clone()).unwrap());
+    load(&mut session, &documents);
+    let resolved =
+        session.execute(sources::RESOLVE_PART, &json!({"library":LIBRARY,"definition":"max-supply-device","definition_revision":1})).unwrap();
+    assert_eq!(resolved["part"]["terminal_ratings"].as_object().unwrap().len(), MAX_TERMINAL_RATINGS);
+
+    // Updating an existing rating at the limit stays allowed.
+    let mut edited = editor.record().clone();
+    part_mut(&mut edited).set_supply_range("1", "3.3 V", "5.5 V").unwrap();
+    assert_eq!(part_mut(&mut edited).terminal_ratings.len(), MAX_TERMINAL_RATINGS);
+
+    // Adding a 129th rating fails in draft editing, encoding and native decoding, leaving history intact.
+    let extra = (MAX_TERMINAL_RATINGS + 1).to_string();
+    let mut over = editor.record().clone();
+    let error = part_mut(&mut over).set_supply_range(&extra, "4.5 V", "36 V").unwrap_err();
+    assert!(error.contains(&MAX_TERMINAL_RATINGS.to_string()), "{error}");
+    assert_eq!(part_mut(&mut over).terminal_ratings.len(), MAX_TERMINAL_RATINGS);
+    part_mut(&mut over).terminal_ratings.insert(extra.clone(), SupplyRange::parse(&extra, "4.5 V", "36 V").unwrap().unwrap());
+    let revision = editor.revision();
+    let before = editor.record().clone();
+    assert!(editor.replace(revision, over.clone()).unwrap_err().contains(&MAX_TERMINAL_RATINGS.to_string()));
+    assert_eq!(editor.record(), &before);
+    assert_eq!(editor.revision(), revision);
+    assert!(part_mut(&mut over).encode().unwrap_err().contains(&MAX_TERMINAL_RATINGS.to_string()));
+    let mut json_record: Json = serde_json::from_str(&encoded).unwrap();
+    json_record["terminal_ratings"][&extra] = json!({"supply_min":{"type":"quantity","value":"4.5","unit":"V"}});
+    assert!(PartDefinition::read(&json_record.to_string()).unwrap_err().contains(&MAX_TERMINAL_RATINGS.to_string()));
+    editor.history(revision, false).unwrap();
+    assert_eq!(editor.record(), &unrated);
 }

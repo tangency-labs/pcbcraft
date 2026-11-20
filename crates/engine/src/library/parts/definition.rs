@@ -1,6 +1,6 @@
 //! Reusable generic parts link schematic, category and physical package definitions.
 use super::{
-    Category, CategoryBinding, LEGACY_PART_FORMAT, PART_FORMAT, Package, RATED_PART_FORMAT, Reference, SupplyRange, Value,
+    Category, CategoryBinding, LEGACY_PART_FORMAT, MAX_TERMINAL_RATINGS, PART_FORMAT, Package, RATED_PART_FORMAT, Reference, SupplyRange, Value,
     codec::{decode, encode, header, unique_map},
     field_id,
 };
@@ -56,8 +56,8 @@ impl PartDefinition {
             return Err(format!("Invalid supply range terminal ID {terminal:?}."));
         }
         if let Some(range) = SupplyRange::parse(terminal, min, max)? {
-            if !self.terminal_ratings.contains_key(terminal) && self.terminal_ratings.len() >= crate::library::MAX_TERMINALS {
-                return Err(format!("A part supports at most {} terminal ratings.", crate::library::MAX_TERMINALS));
+            if !self.terminal_ratings.contains_key(terminal) && self.terminal_ratings.len() >= MAX_TERMINAL_RATINGS {
+                return Err(format!("A part supports at most {MAX_TERMINAL_RATINGS} terminal ratings."));
             }
             self.terminal_ratings.insert(terminal.into(), range);
         } else {
@@ -80,8 +80,8 @@ impl PartDefinition {
 
     /// Check bounds and map size without resolving the symbol or requiring other draft fields.
     pub(crate) fn validate_rating_values(&self) -> Result<(), String> {
-        if self.terminal_ratings.len() > crate::library::MAX_TERMINALS {
-            return Err(format!("A part supports at most {} terminal ratings.", crate::library::MAX_TERMINALS));
+        if self.terminal_ratings.len() > MAX_TERMINAL_RATINGS {
+            return Err(format!("A part supports at most {MAX_TERMINAL_RATINGS} terminal ratings."));
         }
         for (terminal, range) in &self.terminal_ratings {
             if PinNumber::new(terminal).is_none() {
@@ -195,13 +195,35 @@ impl PartDefinition {
     }
 }
 
-/// When present the rating map must have content and cannot repeat a terminal key.
+/// When present the rating map must have content, cannot repeat a terminal key, and enforces
+/// [`MAX_TERMINAL_RATINGS`].
 fn rating_map<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<String, SupplyRange>, D::Error> {
-    let ratings: BTreeMap<String, SupplyRange> = unique_map(deserializer)?;
-    if ratings.is_empty() {
-        return Err(serde::de::Error::custom("terminal_ratings must be omitted when empty"));
+    struct Visitor;
+    impl<'de> serde::de::Visitor<'de> for Visitor {
+        type Value = BTreeMap<String, SupplyRange>;
+        /// Describe the terminal rating map in malformed-input diagnostics.
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a nonempty map of distinct terminal supply ranges")
+        }
+        /// Bound allocation to [`MAX_TERMINAL_RATINGS`] and reject repeated keys.
+        fn visit_map<M: serde::de::MapAccess<'de>>(self, mut map: M) -> Result<Self::Value, M::Error> {
+            let mut ratings = BTreeMap::new();
+            while let Some(key) = map.next_key::<String>()? {
+                if ratings.contains_key(&key) {
+                    return Err(serde::de::Error::custom("Duplicate terminal_ratings key."));
+                }
+                if ratings.len() >= MAX_TERMINAL_RATINGS {
+                    return Err(serde::de::Error::custom(format!("A part supports at most {MAX_TERMINAL_RATINGS} terminal ratings.")));
+                }
+                ratings.insert(key, map.next_value()?);
+            }
+            if ratings.is_empty() {
+                return Err(serde::de::Error::custom("terminal_ratings must be omitted when empty"));
+            }
+            Ok(ratings)
+        }
     }
-    Ok(ratings)
+    deserializer.deserialize_map(Visitor)
 }
 
 /// An absent association is optional; explicit null is not an exact reference.

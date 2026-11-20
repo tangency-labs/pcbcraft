@@ -25,6 +25,8 @@ pub use value::Value;
 pub const PART_FORMAT: &str = "pcbcraft-part/2";
 /// Native part envelope reserved for records with an authored terminal supply range.
 pub const RATED_PART_FORMAT: &str = "pcbcraft-part/4";
+/// Maximum authored supply ranges per part, shared by draft editing, native decoding and the part/4 schema.
+pub const MAX_TERMINAL_RATINGS: usize = 128;
 /// Retained electrical-only records preserve their original encoding.
 pub const LEGACY_PART_FORMAT: &str = "pcbcraft-part/1";
 /// Published typed category record format.
