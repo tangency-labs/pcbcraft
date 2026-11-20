@@ -246,6 +246,36 @@ fn pair_commands_cold_preparation_is_batched_and_snapshot_bound() {
     assert!(session.project().unwrap().differential_pairs().is_empty());
 }
 
+/// Large history fields in even one record must advance independently, preserving
+/// the exact compact registry and native row bytes of the Serde representation.
+#[test]
+fn large_net_history_row_retains_exact_serde_bytes() {
+    let (session, _) = pair_fixture(true);
+    let project = session.snapshot().unwrap();
+    let mut row = project.net_registry.records[0].clone();
+    let snapshot = crate::board::update::capture_source(&project).unwrap();
+    let identities: Vec<_> = (1..=128).map(Uuid::from_u128).collect();
+    row.lineage = identities.iter().map(|&id| Lineage { snapshot: snapshot.clone(), net: Some(id), anchor: row.primary.clone() }).collect();
+    for state in [
+        State::Active {},
+        State::Ambiguous { snapshot: snapshot.clone(), branches: identities.clone() },
+        State::Retired { snapshot, reason: Retirement::Merged, successors: identities.clone() },
+    ] {
+        row.state = state;
+        let mut cursor = crate::nets::RecordEncoding::default();
+        let mut bytes = Vec::new();
+        let mut steps = 0;
+        while !cursor.step(&mut bytes, &row).unwrap() {
+            steps += 1;
+            assert!(steps < 512);
+        }
+        assert!(steps > identities.len());
+        assert_eq!(bytes, serde_json::to_vec(&row).unwrap());
+        let registry = Registry { records: Arc::new(vec![row.clone()]), pairs: Arc::default() };
+        assert_eq!(PairEditJob::final_registry_sizes(&registry).unwrap(), (serde_json::to_vec(&registry).unwrap().len(), 0));
+    }
+}
+
 /// A large board registry cannot be serialized in one editor job step. A canceled sizing
 /// attempt leaves the original snapshot and history intact, while a fresh attempt still commits.
 #[test]

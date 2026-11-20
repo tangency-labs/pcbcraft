@@ -1658,6 +1658,7 @@ pub struct DocumentsEncoder {
     live_generated_legs: Vec<usize>,
     board_facts: BoardFacts,
     baseline_encoding: crate::board::update::BaselineEncoding,
+    net_record_encoding: crate::nets::RecordEncoding,
     board_rows: BoardRows,
 }
 
@@ -1707,6 +1708,7 @@ impl DocumentsEncoder {
             live_generated_legs: Vec::new(),
             board_facts: BoardFacts::default(),
             baseline_encoding: crate::board::update::BaselineEncoding::default(),
+            net_record_encoding: crate::nets::RecordEncoding::default(),
             board_rows: BoardRows::default(),
         }
     }
@@ -2071,8 +2073,13 @@ impl DocumentsEncoder {
                 16 => {
                     let registry = &self.project.net_registry;
                     if let Some(net) = registry.records.get(self.cursor as usize) {
-                        record(&mut self.bytes, &mut self.first, net)?;
-                        self.cursor += 1;
+                        if self.net_record_encoding.at_start() {
+                            start_record(&mut self.bytes, &mut self.first)?;
+                        }
+                        if self.net_record_encoding.step(&mut self.bytes, net)? {
+                            self.bytes.write_all(RECORD_END).map_err(|e| e.to_string())?;
+                            self.cursor += 1;
+                        }
                     } else if registry.has_pairs() {
                         self.bytes.extend_from_slice(b"    ],\n    \"pairs\": [\n");
                         self.cursor = 0;
@@ -2966,12 +2973,16 @@ const RECORD_END: &[u8] = b"\n";
 const RECORD_SEPARATOR: &[u8] = b"\n    ,\n";
 
 /// Keep commas on their own lines so adding a record never rewrites the previous record.
-fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+fn start_record(bytes: &mut impl Write, first: &mut bool) -> Result<(), String> {
     if !*first {
         bytes.write_all(RECORD_SEPARATOR).map_err(|error| error.to_string())?;
     }
     *first = false;
-    bytes.write_all(RECORD_INDENT).map_err(|error| error.to_string())?;
+    bytes.write_all(RECORD_INDENT).map_err(|error| error.to_string())
+}
+
+fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+    start_record(bytes, first)?;
     serde_json::to_writer(&mut *bytes, value).map_err(|e| e.to_string())?;
     bytes.write_all(RECORD_END).map_err(|error| error.to_string())
 }

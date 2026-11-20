@@ -1,6 +1,6 @@
 //! Authored relationship edits leave net identity and connectivity untouched.
 
-use super::{MAX_PAIRS, MAX_REGISTRY_BYTES, Pair, Registry, pairs::PairValidation};
+use super::{MAX_PAIRS, MAX_REGISTRY_BYTES, Pair, RecordEncoding, Registry, pairs::PairValidation};
 use crate::{
     CommandError, Project, Session,
     persistence::{PairDocumentBudget, PairDocumentProbe, document_row_framing_bytes},
@@ -178,6 +178,7 @@ impl io::Write for ByteCounter {
 /// pass. Both envelopes use the same Serde representation for each individual row.
 struct RegistrySizeProbe {
     row: usize,
+    record: RecordEncoding,
     registry_bytes: usize,
     pair_rows: usize,
 }
@@ -186,7 +187,7 @@ impl RegistrySizeProbe {
     /// Count the fixed compact registry envelope; the optional pair array is omitted when empty.
     fn new(registry: &Registry) -> Self {
         let registry_bytes = b"{\"records\":[]}".len() + if registry.has_pairs() { b",\"pairs\":[]".len() } else { 0 };
-        Self { row: 0, registry_bytes, pair_rows: 0 }
+        Self { row: 0, record: RecordEncoding::default(), registry_bytes, pair_rows: 0 }
     }
 
     /// The actual compact payload size of one net or pair in either storage representation.
@@ -201,19 +202,29 @@ impl RegistrySizeProbe {
     fn step(&mut self, registry: &Registry, rows: usize) -> Result<Option<usize>, CommandError> {
         let net_count = registry.records.len();
         let total = net_count + registry.pairs.len();
-        for _ in 0..rows.min(total - self.row) {
-            if self.row < net_count {
-                self.registry_bytes += Self::row_bytes(&registry.records[self.row])? + usize::from(self.row != 0);
+        for _ in 0..rows {
+            if self.row == total {
+                break;
+            }
+            let finished = if self.row < net_count {
+                if self.record.at_start() && self.row != 0 {
+                    self.registry_bytes += 1;
+                }
+                let mut count = ByteCounter::default();
+                let finished = self.record.step(&mut count, &registry.records[self.row]).map_err(CommandError::InvalidParams)?;
+                self.registry_bytes += count.0;
+                finished
             } else {
                 let pair_index = self.row - net_count;
                 let size = Self::row_bytes(&registry.pairs[pair_index])?;
                 self.registry_bytes += size + usize::from(pair_index != 0);
                 self.pair_rows += size + document_row_framing_bytes(pair_index == 0);
-            }
+                true
+            };
             if self.registry_bytes > MAX_REGISTRY_BYTES {
                 return Err(CommandError::CapExceeded("Net registry exceeds its byte limit.".into()));
             }
-            self.row += 1;
+            self.row += usize::from(finished);
         }
         Ok((self.row == total).then_some(self.pair_rows))
     }
@@ -273,7 +284,7 @@ impl PairEditJob {
     #[cfg(test)]
     pub(super) fn final_registry_sizes(registry: &Registry) -> Result<(usize, usize), CommandError> {
         let mut size = RegistrySizeProbe::new(registry);
-        size.step(registry, registry.records.len() + registry.pairs.len())?;
+        while size.step(registry, 256)?.is_none() {}
         Ok((size.registry_bytes, size.pair_rows))
     }
 

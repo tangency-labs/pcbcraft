@@ -13,6 +13,8 @@ mod pairs;
 pub use pair_commands::{CREATE_PAIR, PairEditJob, PairEditSource, PreparedPairEdit, REMOVE_PAIR, UPDATE_PAIR, is_pair_edit, new_pair_id};
 pub use pairs::{MAX_PAIR_NAME_CHARS, MAX_PAIRS, Pair, PairState};
 mod reconcile;
+mod record_encoding;
+pub(crate) use record_encoding::RecordEncoding;
 mod selection;
 mod validation;
 pub(crate) use anchor::schema as anchor_schema;
