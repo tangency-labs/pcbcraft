@@ -242,8 +242,8 @@ fn recipe_command_schema_matches_runtime_validation() {
         let max = name_schema["maxLength"].as_u64().unwrap() as usize;
         (min..=max).contains(&count)
             && !value.chars().any(char::is_control)
-            && value.chars().next().is_some_and(|ch| !ch.is_whitespace())
-            && value.chars().next_back().is_some_and(|ch| !ch.is_whitespace())
+            && value.chars().next().is_some_and(|ch| !is_edge_whitespace(ch))
+            && value.chars().next_back().is_some_and(|ch| !is_edge_whitespace(ch))
     };
     let stem_matches_schema = |value: &str| {
         let len = value.len();
@@ -287,6 +287,8 @@ fn recipe_command_schema_matches_runtime_validation() {
         "Proto\u{007f}type",
         "Proto\u{0085}type",
         "\u{00a0}Prototype",
+        "\u{feff}Prototype",
+        "Prototype\u{feff}",
     ] {
         assert!(!name_matches_schema(name), "schema should reject name {name:?}");
         let mut invalid = content.clone();

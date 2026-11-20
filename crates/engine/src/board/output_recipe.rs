@@ -67,13 +67,18 @@ pub struct Content {
     pub assembly_profile: Option<Adoption>,
 }
 
+/// Leading or trailing characters rejected by both runtime validation and ECMA-262 `\s`.
+fn is_edge_whitespace(ch: char) -> bool {
+    ch.is_whitespace() || ch == '\u{feff}'
+}
+
 impl Content {
     /// Validate authored data without resolving layers or profile revisions at save time.
     /// A later design change may leave a selection unresolved; that is not a save error.
     fn validate(&self) -> Result<(), String> {
         if self.board.is_nil()
             || self.name.is_empty()
-            || self.name.trim() != self.name
+            || self.name.trim_matches(is_edge_whitespace) != self.name
             || self.name.chars().count() > MAX_RECIPE_NAME
             || self.name.chars().any(char::is_control)
         {
