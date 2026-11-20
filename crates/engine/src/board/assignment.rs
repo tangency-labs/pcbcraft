@@ -271,10 +271,8 @@ fn component_id(params: &Value, project: &Project) -> Result<u64, CommandError> 
 }
 
 impl Session {
-    /// Validate identity and complete mappings before pinning intent. Store project-owned
-    /// choices without a board, or stage desired choices independently of accepted geometry
-    /// under an existing baseline. Legacy placed
-    /// changes remain refused, and identical choices create no history.
+    /// Parse the public command's bounded map, then validate and pin the choice. Existing
+    /// accepted geometry is not changed, and an identical choice creates no history.
     pub(crate) fn assign_footprint(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -299,6 +297,22 @@ impl Session {
             .or_else(|| definition::basic_components(&assignment.definition).filter(|d| d.key() == key))
             .or_else(|| self.libraries.footprint(&key.0, &key.1, key.2))
             .ok_or_else(|| CommandError::InvalidParams("unavailable footprint identity/revision".into()))?;
+        self.assign_native_footprint(assignment, definition)
+    }
+
+    /// Validate a typed native assignment without imposing the public command-array cap.
+    /// Pin its exact definition and preflight storage before publishing a changed choice.
+    pub(crate) fn assign_native_footprint(
+        &mut self,
+        assignment: Assignment,
+        definition: Arc<definition::FootprintDefinition>,
+    ) -> Result<(), CommandError> {
+        let project = self.open_project()?;
+        let component = assignment.component;
+        let key = assignment.key();
+        if definition.key() != key || project.assignment_definition(&key).is_some_and(|pinned| pinned != &definition) {
+            return Err(CommandError::InvalidParams("Footprint conflicts with the project's pinned content at the same identity/revision.".into()));
+        }
         let mut next = project.clone();
         if project.board_target().is_some() {
             Arc::make_mut(&mut next.board).definitions.insert(key, definition);
@@ -333,7 +347,9 @@ impl Session {
             let used: std::collections::BTreeSet<_> = packages.assignments.values().map(Assignment::key).collect();
             packages.definitions.retain(|key, _| used.contains(key));
         }
-        if next.board.baseline.is_some() {
+        // Schematic-only choices are written into the project document. With an accepted
+        // baseline keep checking the full dependency closure and all document budgets.
+        if next.board_target().is_none() || next.board.baseline.is_some() {
             if next.numeric_id_high_water.is_some() {
                 next.numeric_id_high_water = Some(next.allocation_high_water());
             }

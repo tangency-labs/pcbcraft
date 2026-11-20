@@ -2,6 +2,7 @@
 use super::Selection;
 use crate::{
     Command, CommandError, Param, ParamKind, Session,
+    board::assignment::Assignment,
     library::{
         parts::Reference,
         sources::{manufacturer_digest, part_digest},
@@ -207,8 +208,8 @@ impl Session {
             .get(&id)
             .and_then(|part| part.part.clone())
             .ok_or_else(|| CommandError::InvalidParams("No reusable part selection.".into()))?;
-        let mut candidate = project.clone();
         let Some(package_id) = &selection.package else {
+            let mut candidate = project.clone();
             if candidate.board.footprints().iter().any(|footprint| footprint.component == id) {
                 return Err(CommandError::InvalidParams("Remove the physical footprint before clearing its package choice.".into()));
             }
@@ -228,17 +229,17 @@ impl Session {
             .get(package_id)
             .ok_or_else(|| CommandError::InvalidParams("Missing pinned package footprint.".into()))?
             .clone();
-        if candidate.assignment_definition(&footprint.key()).is_some_and(|existing| existing.as_ref() != footprint.as_ref()) {
-            return Err(CommandError::InvalidParams("Footprint conflicts with the project's pinned content at the same identity/revision.".into()));
-        }
-        if candidate.board_target().is_some() {
-            Arc::make_mut(&mut candidate.board).definitions.insert(footprint.key(), footprint);
-        } else {
-            Arc::make_mut(&mut candidate.schematic_packages).definitions.insert(footprint.key(), footprint);
-        }
-        self.project = Some(Arc::new(candidate));
-        self.assign_footprint(&json!({"component":format!("component-{id}"),"library":package.footprint.library,"definition":package.footprint.id,
-            "definition_revision":package.footprint.revision,"mapping":package.mapping,"unconnected_pads":package.unconnected_pads,"expected_revision":self.revision()}))
+        self.assign_native_footprint(
+            Assignment {
+                component: id,
+                library: package.footprint.library.clone(),
+                definition: package.footprint.id.clone(),
+                definition_revision: package.footprint.revision,
+                mapping: package.mapping.iter().map(|(terminal, pads)| (terminal.clone(), pads.clone().into())).collect(),
+                unconnected_pads: package.unconnected_pads.clone(),
+            },
+            footprint,
+        )
     }
     /// Retain stable part identity while editing selection data. Invalid edits leave project and history intact.
     pub(crate) fn edit_library_part(&mut self, params: &Value) -> Result<(), CommandError> {

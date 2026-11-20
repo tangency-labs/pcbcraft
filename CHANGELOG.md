@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+Pane headers support explicit up/down and left/right splits, with previews and
+saved orientation. Dragging between panes moves the existing view and collapses
+its old slot. Splitting a pane itself opens another view. Separate Split window
+up/down targets move the existing pane across the full window, and live commands
+expose both placement scopes.
+
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
@@ -231,7 +237,8 @@ and net classes and zones remain separate work.
 
 On desktop, `pcbcraft <path>` opens a project folder, its `project.json` or a
 `.pc` archive as the app starts, without a picker; the opened project enters the
-workspace and joins recent projects. A startup open that fails reports the error
+workspace and joins recent projects. The path may be a symlink to a project
+folder or archive; recent projects record its target. A startup open that fails reports the error
 in the status bar, keeps Home usable and writes the same line once to stderr
 when available. Windows GUI release builds need stderr redirection to capture
 diagnostics. The launcher takes no options and at most one path, so a
