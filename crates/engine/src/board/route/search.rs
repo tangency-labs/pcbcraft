@@ -13,7 +13,12 @@ use std::{
 pub(super) use crate::board::work::yield_unit;
 
 /// Retain the walk's own stack and local geometry across budget boundaries without replay.
-pub(super) async fn walk(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
+pub(super) async fn walk(
+    query: crate::board::clearance::RouteObstacles<'_>,
+    request: &Request,
+    budget: usize,
+    progress: Arc<AtomicUsize>,
+) -> Result<Plan, CommandError> {
     let mut walker = walkaround::Walker::new(query, request, budget, progress)?;
     match walker.run_target(request).await {
         Ok(mut plan) => {
@@ -45,7 +50,7 @@ pub(super) async fn walk(query: &ClearanceQuery, request: &Request, budget: usiz
 /// Select a read-only solver for inputs already validated by the caller.
 async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
     match request.mode {
-        Mode::Walkaround => walk(query, request, budget, progress).await,
+        Mode::Walkaround => walk(query.into(), request, budget, progress).await,
         Mode::Shove => shove::run(query, request, budget, progress).await,
     }
 }

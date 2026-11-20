@@ -264,6 +264,7 @@ impl PcbApp {
                         if let Some(mut draft) = tracks.draft.take().filter(|draft| Some(draft.source) == source) {
                             draft.points = points;
                             draft.replacements = replacements;
+                            draft.shove_prefix_dirty = false;
                             match action {
                                 planning::Action::Vertex { finish: true } => {
                                     if let Some(mut edit) = add(tracks, draft) {

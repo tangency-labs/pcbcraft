@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 const MAX_LOCAL_PROBES: usize = 128;
 
 /// A parallel run bounded by its first and last source-tangent projections.
+#[derive(Clone, Copy)]
 struct Band {
     first: (i128, Point),
     last: (i128, Point),
@@ -77,11 +78,11 @@ impl Walker<'_> {
         super::super::search::yield_unit().await;
         let region = Contour::capsule(start, end, (span2 as f64).sqrt() + self.half);
         let candidates = self.query.candidates(&region, &self.layers).map_err(Stop::Failed)?;
-        let mut bands = BTreeMap::<i128, Vec<Band>>::new();
+        let mut bands = BTreeMap::<i128, BTreeMap<i128, Band>>::new();
         let mut count = 0usize;
         let mut excess = false;
         for index in candidates {
-            let object = &self.query.objects()[index];
+            let object = &self.query[index];
             let exempt = self.displacement_contacts.as_ref().map_or_else(
                 || self.own_islands.contains(&object.island) || (self.route_nets.len() == 1 && object.intended_nets == self.route_nets),
                 |contacts| contacts.contains(&object.name),
@@ -117,31 +118,31 @@ impl Walker<'_> {
             // offset must not force a plateau across the space between them.
             for (offset, mut band) in local {
                 let group = bands.entry(offset).or_default();
-                let mut i = 0;
-                while i < group.len() {
-                    if band.first.0 <= group[i].last.0 && group[i].first.0 <= band.last.0 {
-                        let other = group.remove(i);
-                        count -= 1;
-                        if other.first.0 < band.first.0 {
-                            band.first = other.first;
-                        }
-                        if other.last.0 > band.last.0 {
-                            band.last = other.last;
-                        }
-                        i = 0;
-                    } else {
-                        i += 1;
+                if let Some((&start, &other)) = group.range(..=band.first.0).next_back()
+                    && other.last.0 >= band.first.0
+                {
+                    group.remove(&start);
+                    band.first = other.first;
+                    if other.last.0 > band.last.0 {
+                        band.last = other.last;
                     }
+                    count -= 1;
                 }
-                let slot = group.partition_point(|b| (b.first.0, b.last.0) <= (band.first.0, band.last.0));
-                group.insert(slot, band);
+                while let Some((&start, &other)) = group.range(band.first.0..=band.last.0).next() {
+                    group.remove(&start);
+                    if other.last.0 > band.last.0 {
+                        band.last = other.last;
+                    }
+                    count -= 1;
+                }
+                group.insert(band.first.0, band);
                 count += 1;
                 // Retain guides in proportion to the work available to confirm them.
                 // Exact obstacle checks still use every body.
                 if count > guide_limit {
                     excess = true;
                     if let Some(mut far) = bands.last_entry() {
-                        far.get_mut().pop();
+                        far.get_mut().pop_last();
                         if far.get().is_empty() {
                             far.remove_entry();
                         }
@@ -153,7 +154,7 @@ impl Walker<'_> {
         // Order candidates as they are generated. This avoids a single large sort
         // when there is enough probe budget for a wide search.
         let mut paths = BTreeMap::<_, Vec<_>>::new();
-        for band in bands.into_values().flatten() {
+        for band in bands.into_values().flat_map(BTreeMap::into_values) {
             super::super::search::yield_unit().await;
             for first_flip in [false, true] {
                 for last_flip in [false, true] {

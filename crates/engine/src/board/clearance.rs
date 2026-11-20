@@ -8,13 +8,15 @@ use super::{
 };
 use crate::{CommandError, Project, Session, schematic::Point};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     sync::{Arc, OnceLock, Weak},
 };
 use uuid::Uuid;
 
 mod index;
 mod overlay;
+mod routing;
+pub(super) use routing::{RouteFragments, RouteObstacles};
 pub(crate) mod preparation;
 pub use overlay::{ObstacleId, Overlay, OverlayDecision, OverlayResults};
 
@@ -130,8 +132,6 @@ pub struct Results {
 pub struct ClearanceQuery {
     authority: Authority,
     geometry: Arc<BoardGeometry>,
-    /// Private connected overlay fragments share a guide hull; exact probes remain separate.
-    pub(super) route_hulls: BTreeMap<usize, Arc<[usize]>>,
     copper_layers: Vec<Uuid>,
     net_rules: Option<super::class_rules::NetRules>,
     pub(super) trace_chains: std::sync::Mutex<super::track::chains::Cache>,
@@ -197,7 +197,6 @@ impl ClearanceQuery {
                 class_rules,
             },
             geometry,
-            route_hulls: BTreeMap::new(),
             trace_chains: std::sync::Mutex::new(super::track::chains::Cache::default()),
             copper_layers,
             net_rules,
@@ -227,7 +226,6 @@ impl ClearanceQuery {
             geometry: self.geometry.clone(),
             copper_layers: self.copper_layers.clone(),
             net_rules: self.net_rules.clone(),
-            route_hulls: BTreeMap::new(),
             trace_chains: std::sync::Mutex::new(super::track::chains::Cache::default()),
         }
     }
@@ -337,20 +335,28 @@ impl ClearanceQuery {
         nets: &[usize],
         excluded: impl Fn(usize) -> bool,
     ) -> Result<Results, CommandError> {
-        let candidates = self.candidates(contour, layers)?;
-        let gaps: Vec<_> =
-            candidates.into_iter().filter(|index| !excluded(*index)).map(|index| (index, contour.gap(&self.geometry.items[index].contour))).collect();
+        let objects = self.candidates(contour, layers)?.into_iter().filter(|i| !excluded(*i)).map(|i| (i, &self.objects()[i]));
+        self.evaluate_probe(contour, nets, objects)
+    }
+
+    /// Evaluate stable candidate identities against the same exact rules for base and route overlays.
+    fn evaluate_probe<'a>(
+        &self,
+        contour: &Contour,
+        nets: &[usize],
+        objects: impl Iterator<Item = (usize, &'a Object)>,
+    ) -> Result<Results, CommandError> {
+        let gaps: Vec<_> = objects.map(|(i, object)| (i, object, contour.gap(&object.contour))).collect();
         let connected: Vec<_> = nets
             .iter()
             .copied()
-            .chain(gaps.iter().filter(|(_, gap)| *gap <= 0.).flat_map(|(index, _)| self.geometry.items[*index].intended_nets.iter().copied()))
+            .chain(gaps.iter().filter(|(_, _, gap)| *gap <= 0.).flat_map(|(_, object, _)| object.intended_nets.iter().copied()))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         let decisions = gaps
             .into_iter()
-            .map(|(index, gap)| {
-                let item = &self.geometry.items[index];
+            .map(|(index, item, gap)| {
                 let decision =
                     decision(None, index, gap, &connected, &item.intended_nets, false, self.membership_clearance(&connected, &item.intended_nets));
                 if item.mechanical { decision.mechanical_clearance() } else { decision }

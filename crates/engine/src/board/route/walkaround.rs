@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     CommandError,
-    board::{clearance::ClearanceQuery, drc, geometry::Contour, track::MAX_PATH_POINTS},
+    board::{clearance::RouteObstacles, drc, geometry::Contour, track::MAX_PATH_POINTS},
     schematic::Point,
 };
 use std::collections::BTreeSet;
@@ -81,7 +81,7 @@ struct Walked {
 
 /// One planning run: the captured query, the route's copper and membership, and its budget.
 pub(super) struct Walker<'a> {
-    query: &'a ClearanceQuery,
+    query: RouteObstacles<'a>,
     layers: [Uuid; 1],
     half: f64,
     posture: Posture,
@@ -114,15 +114,16 @@ impl<'a> Walker<'a> {
     /// Capture the head's copper contacts and the board outline. The request was validated by
     /// the caller; an invalid layer still fails here before any probe is charged.
     pub(super) fn new(
-        query: &'a ClearanceQuery,
+        query: impl Into<RouteObstacles<'a>>,
         request: &Request,
         budget: usize,
         progress: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     ) -> Result<Self, CommandError> {
+        let query = query.into();
         let layers = [request.layer];
         let half = request.width_nm as f64 / 2.;
         let at_head = Contour::capsule(request.head, request.head, half);
-        let objects = query.objects();
+        let objects = query;
         let head_candidates = query.candidates(&at_head, &layers)?;
         let (origin, origin_layer) = request.origin.unwrap_or((request.head, request.layer));
         let at_origin = Contour::capsule(origin, origin, half);
@@ -310,8 +311,7 @@ impl<'a> Walker<'a> {
 
     /// Assemble a result, naming the blocking copper by its query address.
     fn plan(&self, points: Vec<Point>, outcome: Outcome, blocker: Option<usize>) -> Plan {
-        let blocker =
-            blocker.filter(|_| matches!(outcome, Outcome::Blocked { .. })).and_then(|i| self.query.objects().get(i)).map(|o| o.name.clone());
+        let blocker = blocker.filter(|_| matches!(outcome, Outcome::Blocked { .. })).and_then(|i| self.query.get(i)).map(|o| o.name.clone());
         Plan { adjusted_target: None, start_blocked: false, replacements: Vec::new(), shove: None, points, outcome, blocker, probes: self.probes }
     }
 
@@ -356,7 +356,7 @@ impl<'a> Walker<'a> {
             None => self.query.probe_membership(&contour, &self.layers, &self.route_nets, self.intended_from),
         }
         .map_err(Stop::Failed)?;
-        let objects = self.query.objects();
+        let objects = self.query;
         let mut legal = self.displacement_side.is_none_or(|(start, end, side)| {
             [a, b].iter().all(|p| {
                 side * ((end.x_nm as i128 - start.x_nm as i128) * (p.y_nm as i128 - start.y_nm as i128)
@@ -418,13 +418,13 @@ impl<'a> Walker<'a> {
 
     /// The hull of source copper `index` for this route, grown by its pair requirement.
     fn hull(&self, index: usize, clearance_nm: i64) -> Option<Hull> {
-        let object = self.query.objects().get(index)?;
+        let object = self.query.get(index)?;
         let mut hull = Hull::grown(&object.contour.core, object.contour.radius + self.half + clearance_nm as f64 + MARGIN_NM, self.posture)?;
         if self.displacement_side.is_some()
-            && let Some(group) = self.query.route_hulls.get(&index)
+            && let Some(group) = self.query.guide_group(index)
         {
-            for sibling in group.iter().copied().filter(|i| *i != index) {
-                let other = &self.query.objects()[sibling];
+            for sibling in group.filter(|i| *i != index) {
+                let other = &self.query[sibling];
                 if other.layers.iter().any(|l| self.layers.contains(l))
                     && let Some(grown) =
                         Hull::grown(&other.contour.core, other.contour.radius + self.half + clearance_nm as f64 + MARGIN_NM, self.posture)
@@ -573,12 +573,12 @@ impl<'a> Walker<'a> {
                 super::search::yield_unit().await;
                 let contour = Contour::capsule(leg[0], leg[1], self.half);
                 for index in self.query.candidates(&contour, &self.layers).map_err(Stop::Failed)? {
-                    if self.query.objects()[index].contour.gap(&contour) <= 0. {
+                    if self.query[index].contour.gap(&contour) <= 0. {
                         contacts.insert(index);
                     }
                 }
             }
-            let objects = self.query.objects();
+            let objects = self.query;
             let nets = self
                 .route_nets
                 .iter()

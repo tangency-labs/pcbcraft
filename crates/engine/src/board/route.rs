@@ -162,7 +162,9 @@ impl Session {
     /// Answer `pcb.plan_route` without changing revision, history or saved bytes. An omitted
     /// width uses the head contact's net-class preference or the board's preferred width; an
     /// explicit width must satisfy board and applicable class minimums. A given `expected_revision` that
-    /// is not current gives a stale outcome instead of a plan.
+    /// is not current gives a stale outcome instead of a plan. The default mode is walkaround;
+    /// the default budget is 4,096 for walkaround or 65,536 for shove. Same-net merging is off
+    /// by default. The first fixed segment in gesture order supplies the original pickup.
     pub(crate) fn route_plan_query(&self, params: &Value) -> Result<Value, CommandError> {
         let project = self.open_project()?;
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
@@ -180,7 +182,7 @@ impl Session {
         let budget = params.get("budget").map(|_| field(params, "budget")).transpose()?.unwrap_or_else(|| mode.default_probe_budget());
         let merge_same_net = params.get("merge_same_net").and_then(Value::as_bool).unwrap_or(false);
         let fixed: Vec<FixedCopper> = params.get("fixed").map(|_| field(params, "fixed")).transpose()?.unwrap_or_default();
-        let origin = fixed.first().and_then(FixedCopper::origin);
+        let origin = fixed.iter().find_map(FixedCopper::origin);
         let request = Request { mode, merge_same_net, fixed, head, target: goal, layer, origin, width_nm, posture, flipped, previous };
         let stale = params.get("expected_revision").is_some_and(|revision| revision.as_u64() != Some(self.revision()));
         let plan = if stale {
