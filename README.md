@@ -137,8 +137,10 @@ contributors and agents.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers the build, code map, required checks
 and source rules. Find a bounded task in
-[GitHub issues](https://github.com/tangency-labs/pcbcraft/issues) and check
-[open pull requests](https://github.com/tangency-labs/pcbcraft/pulls) for work already underway.
+[GitHub issues](https://github.com/tangency-labs/pcbcraft/issues), check for
+existing claims and open PRs, and leave a **`claimed`** comment on the issue
+before starting. The first claimant gets merge priority under the
+[issue claim policy](CONTRIBUTING.md#claim-the-issue-before-starting).
 
 PCBCraft is an independent application in the Craft family. Development follows
 the [clean-room contribution rules](AGENTS.md): published specifications and
