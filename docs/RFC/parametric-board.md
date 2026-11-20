@@ -178,9 +178,25 @@ rule ([AGENTS.md](../../AGENTS.md#extension-and-cross-application-boundaries)) a
 to a different edge moves a connector to the wrong side of the board.
 
 **C3. Holds measure to an edge's line and its virtual corners.** A distance from
-an edge is measured to the infinite line through it, and a position along an edge
-from the intersection with the neighbouring edge's line, not from the segment's
-end. *Reason:* otherwise rounding a corner in the enclosure moves every part
+an edge is measured to the infinite line through it. A position along an edge is
+measured from a **virtual corner**: the intersection of the edge's line with the
+line of another straight edge, not the segment's end. The hold stores both edges
+by identity (C2), so the corner is the same point however the outline between them
+changes. When a designer picks an end of an edge, the other edge is found by
+walking the outline from that end past arcs and past straight segments collinear
+with the picked edge, to the first straight edge that is not parallel to it:
+
+- a neighbour that is an arc (a rounded corner) is passed over, so the corner is
+  where the two straight edges would meet without the rounding;
+- a collinear neighbour (a straight edge split by an extra vertex) is passed
+  over, so splitting an edge does not move the origin;
+- if the walk reaches only parallel edges or arcs (a slot with semicircular ends,
+  a circular board), there is no virtual corner at that end, and the hold must
+  use a point datum instead.
+
+If an edit later makes the two stored edges parallel, or removes one of them, the
+corner no longer resolves and the hold stops driving (C4). *Reason:* otherwise
+rounding a corner in the enclosure, or inserting a vertex, moves every part
 dimensioned along that edge, which nobody expects.
 
 **C4. A reference that no longer resolves stops driving, keeps its last
@@ -317,7 +333,8 @@ A hold is a board record `{ id, footprint, axis, kind, from, value }`:
 - `kind`: `distance` (from a line, along its normal), `along` (from a virtual
   corner or point, along a line), `angle` (to a line; `parallel` is angle 0),
   `offset` (from another footprint's feature, in board or that part's axes).
-- `from`: a datum (6.2); for `offset`, a footprint feature.
+- `from`: a datum (6.2); for `along`, a virtual corner `{edge, other}` (C3) or a
+  point datum; for `offset`, a footprint feature.
 - `value`: a literal or a parameter expression.
 
 A footprint has at most one hold per degree of freedom; a second is refused,
