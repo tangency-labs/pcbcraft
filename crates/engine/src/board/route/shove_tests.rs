@@ -107,14 +107,61 @@ fn copper(s: &Session) -> Copper {
     (view(s).tracks().iter().map(|t| (t.id, t.clone())).collect(), view(s).vias().iter().map(|v| (v.id, v.clone())).collect())
 }
 
-/// Commit through `pcb.shove_tracks` as one undo step, require the board to change exactly as
-/// planned, then require full DRC and the exhaustive reference to report no clearance, short,
-/// edge or width finding about the changed copper, and no lost connection. Undo restores the
-/// saved bytes exactly. Returns the changed copper's identities.
+/// Islands of the board's copper by query name: pads by address, tracks and vias by UUID.
+fn islands(s: &Session) -> BTreeMap<String, usize> {
+    let q = s.clearance_query_with_rules(view(s).target, &json!({})).unwrap();
+    q.objects().iter().filter(|o| !o.mechanical).map(|o| (o.name.clone(), o.island)).collect()
+}
+
+/// The board the plan describes, built from the board before it independently of the solver:
+/// dragged and reshaped tracks take their new ends, removed tracks go, moved vias take their
+/// new centres, and new tracks are the route's legs (route width, unlocked) and each added
+/// segment (width and layer of the track `like`, unlocked). Returns the kept copper by identity
+/// and the new tracks with a nil identity, sorted.
+fn expected(planned: &Value, layer: Uuid, before: &Copper) -> (Copper, Vec<Track>) {
+    let (mut tracks, mut vias) = before.clone();
+    let uuid = |v: &Value| serde_json::from_value::<Uuid>(v.clone()).unwrap();
+    let point = |v: &Value| serde_json::from_value::<Point>(v.clone()).unwrap();
+    for ends in planned["dragged"].as_array().unwrap().iter().chain(planned["reshaped"].as_array().unwrap()) {
+        let track = tracks.get_mut(&uuid(&ends["track"])).expect("a planned track exists");
+        (track.start, track.end) = (point(&ends["start"]), point(&ends["end"]));
+    }
+    for removed in planned["removed"].as_array().unwrap() {
+        assert!(tracks.remove(&uuid(removed)).is_some(), "a removed track exists");
+    }
+    for moved in planned["vias"].as_array().unwrap() {
+        vias.get_mut(&uuid(&moved["via"])).expect("a moved via exists").at = point(&moved["at"]);
+    }
+    let mut new: Vec<Track> = planned["added"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|added| {
+            let like = &before.0[&uuid(&added["like"])];
+            Track { id: Uuid::nil(), locked: false, start: point(&added["start"]), end: point(&added["end"]), ..like.clone() }
+        })
+        .collect();
+    let points: Vec<Point> = serde_json::from_value(planned["points"].clone()).unwrap();
+    if points.len() >= 2 {
+        let width_nm = planned["width_nm"].as_i64().expect("a route plan reports its width");
+        new.extend(points.windows(2).map(|leg| Track { id: Uuid::nil(), locked: false, layer, width_nm, start: leg[0], end: leg[1] }));
+    }
+    new.sort_by_key(|t| (t.start.x_nm, t.start.y_nm, t.end.x_nm, t.end.y_nm, t.width_nm));
+    ((tracks, vias), new)
+}
+
+/// Commit through `pcb.shove_tracks` as one undo step and require the committed board to be
+/// exactly the planned one: every kept track and via (changed or not) equal to [`expected`], and
+/// the new tracks equal to the route's legs and the added segments, ignoring only their fresh
+/// identities. Every connection that existed before (two pads, tracks or vias in one island)
+/// must still exist, and the unrouted count may not grow. Full DRC and the exhaustive reference
+/// must then report no clearance, short, edge or width finding about the changed copper. Undo
+/// restores the saved bytes exactly. Returns the changed copper's identities.
 fn commit_and_agree(s: &mut Session, params: &Value) -> BTreeSet<String> {
     let planned = plan(s, params);
     assert_eq!(kind(&planned), "reached", "{planned}");
-    let (tracks, vias) = copper(s);
+    let before = copper(s);
+    let joined = islands(s);
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let unconnected = count(s, Kind::Unconnected);
     let revision = s.revision();
@@ -123,35 +170,37 @@ fn commit_and_agree(s: &mut Session, params: &Value) -> BTreeSet<String> {
     s.apply(SHOVE_TRACKS, &params).unwrap();
     assert_eq!(s.revision(), revision + 1, "one transaction");
     let (after, after_vias) = copper(s);
+    let ((kept, kept_vias), new) = expected(&planned, layer(s), &before);
+    assert_eq!(after_vias, kept_vias, "every via is where the plan puts it");
+    assert_eq!(after.iter().filter(|(id, _)| before.0.contains_key(*id)).map(|(id, t)| (*id, t.clone())).collect::<BTreeMap<_, _>>(), kept);
+    let mut fresh: Vec<Track> = after.values().filter(|t| !before.0.contains_key(&t.id)).map(|t| Track { id: Uuid::nil(), ..t.clone() }).collect();
+    fresh.sort_by_key(|t| (t.start.x_nm, t.start.y_nm, t.end.x_nm, t.end.y_nm, t.width_nm));
+    assert_eq!(fresh, new, "the new tracks are the route's legs and the added segments");
+    assert!(planned["moved"].as_u64().unwrap() as usize <= MAX_MOVED);
     let changed: BTreeSet<String> = after
         .values()
-        .filter(|t| tracks.get(&t.id) != Some(*t))
+        .filter(|t| before.0.get(&t.id) != Some(*t))
         .map(|t| t.id.to_string())
-        .chain(after_vias.values().filter(|v| vias.get(&v.id) != Some(*v)).map(|v| v.id.to_string()))
+        .chain(after_vias.values().filter(|v| before.1.get(&v.id) != Some(*v)).map(|v| v.id.to_string()))
         .collect();
-    // The board changed exactly as planned: reshaped and moved identities, added and removed counts.
-    for ends in planned["reshaped"].as_array().unwrap().iter().chain(planned["dragged"].as_array().unwrap()) {
-        let id: Uuid = serde_json::from_value(ends["track"].clone()).unwrap();
-        let t = &after[&id];
-        assert_eq!((json!(t.start), json!(t.end)), (ends["start"].clone(), ends["end"].clone()));
+    // Each connection that existed before still exists: copper that shared an island before and
+    // is still on the board shares one now.
+    let now = islands(s);
+    let mut groups: BTreeMap<usize, Vec<&String>> = BTreeMap::new();
+    for (name, island) in &joined {
+        groups.entry(*island).or_default().push(name);
     }
-    for moved in planned["vias"].as_array().unwrap() {
-        let id: Uuid = serde_json::from_value(moved["via"].clone()).unwrap();
-        assert_eq!(json!(after_vias[&id].at), moved["at"]);
+    for members in groups.values() {
+        let kept: BTreeSet<usize> = members.iter().filter_map(|name| now.get(*name).copied()).collect();
+        assert!(kept.len() <= 1, "a connection was lost among {members:?}");
     }
-    for removed in planned["removed"].as_array().unwrap() {
-        assert!(!after.contains_key(&serde_json::from_value::<Uuid>(removed.clone()).unwrap()));
-    }
-    let route_legs = planned["points"].as_array().unwrap().len().saturating_sub(1);
-    assert_eq!(after.len(), tracks.len() + route_legs + planned["added"].as_array().unwrap().len() - planned["removed"].as_array().unwrap().len());
-    assert!(planned["moved"].as_u64().unwrap() as usize <= MAX_MOVED);
+    assert!(count(s, Kind::Unconnected) <= unconnected, "no connection is lost");
     let report = view(s).check_design(view(s).effective_rules().values);
     for violation in &report.violations {
         if matches!(violation.kind, Kind::Clearance | Kind::Short | Kind::EdgeClearance | Kind::OutsideBoard | Kind::TrackWidth) {
             assert!(!violation.items.iter().any(|item| changed.contains(item)), "{violation:?}");
         }
     }
-    assert!(count(s, Kind::Unconnected) <= unconnected, "no connection is lost");
     let q = s.clearance_query_with_rules(view(s).target, &json!({})).unwrap();
     let objects = q.objects();
     for d in q.exhaustive_pairs().decisions.iter().filter(|d| d.clearance_violation || d.conflicting_nets) {
