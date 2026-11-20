@@ -562,14 +562,25 @@ impl<'a> Walker<'a> {
 }
 
 /// Where the polyline first enters `hull`: the leg and a whole-nanometre point on its lattice.
-/// A diagonal leg meeting a perpendicular diagonal edge between lattice points widens that
-/// edge by one unit so the entry is exact; otherwise the entry stays just outside.
+/// An axis or exact 45° leg meets the crossed edge at a lattice step; a diagonal leg meeting a
+/// perpendicular diagonal edge between lattice points widens that edge by one unit so the entry
+/// is exact, otherwise the entry stays just outside. Any other leg does not move along its
+/// lattice step, so its entry is the interpolated crossing rounded to the last point before it.
+///
+/// Returns `None` when no leg enters the hull's interior, either at once (the hull is then
+/// unchanged) or on the retry after a widening; a widening made before a `None` is kept.
 pub(super) fn entry(legs: &[Point], hull: &mut Hull) -> Option<(usize, Point)> {
     for attempt in 0..2 {
         let (i, a, b, through) =
             legs.windows(2).enumerate().find_map(|(i, leg)| hull.inside(leg[0], leg[1]).map(|(_, _, through)| (i, leg[0], leg[1], through)))?;
         let (steps, unit) = lattice(a, b);
         let Some(k) = through else { return Some((i, a)) };
+        let (dx, dy) = (b.x_nm - a.x_nm, b.y_nm - a.y_nm);
+        if dx != 0 && dy != 0 && dx.abs() != dy.abs() {
+            let (t, _, _) = hull.inside(a, b)?;
+            let m = ((t * steps as f64).floor() as i64).clamp(0, steps);
+            return Some((i, along(a, b, m, steps)));
+        }
         match hull.boundary_step(k, a, unit) {
             Some(m) if (0..=steps).contains(&m) => return Some((i, along(a, b, m, steps))),
             _ if attempt == 0 => hull.widen(k),

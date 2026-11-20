@@ -639,3 +639,21 @@ fn previous_route_goes_around_new_unconnected_copper() {
         commit_and_agree(&mut s, &replanned, r.layer, r.width_nm);
     }
 }
+
+/// A leg that is neither axis-aligned nor 45° enters a hull at its interpolated crossing of the
+/// crossed edge, not at the lattice step a 45° leg would take; the hull is not widened.
+#[test]
+fn an_off_lattice_leg_enters_a_hull_on_the_crossed_edge() {
+    let mut hull = hull::Hull::grown(&[p(3_000, 2_000), p(7_000, 2_000)], 1_000., Posture::Orthogonal).unwrap();
+    let before = hull.clone();
+    let legs = [p(0, 0), p(10_000, 3_000)];
+    let (leg, at) = walkaround::entry(&legs, &mut hull).unwrap();
+    assert_eq!(leg, 0);
+    assert_eq!(hull.corners(), before.corners());
+    // The leg crosses the bottom edge (y = 1000) at x = 3333⅓.
+    assert_eq!(at, p(3_333, 1_000));
+    assert!(!hull.contains(at), "the entry is not inside the hull");
+    // Exact lattice legs keep their exact boundary step.
+    let diagonal = [p(2_000, -1_000), p(8_000, 5_000)];
+    assert_eq!(walkaround::entry(&diagonal, &mut hull), Some((0, p(4_000, 1_000))));
+}
