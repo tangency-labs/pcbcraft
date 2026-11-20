@@ -187,15 +187,18 @@ The routing context menu offers **Shove tracks** alongside **Walk around
 obstacles**. Shove searches on a disposable overlay, displacing unlocked tracks
 while pads, vias and locked tracks stay fixed. Uniform-width, same-layer and
 same-membership tracks form open chains through unambiguous degree-two joins.
-Free ends, branch contacts, pad/via/lock contacts and width/layer transitions stay
-fixed. Ordinary bends are soft hints: legal ones remain in place, while obstructed
-ones can move with their neighbors. Closed or longer-than-255-segment components
-retain per-segment anchors in this slice. This conservative solver can refuse a
-channel that would require relocating a protected junction or free end. If a cascade blocks after choosing an earlier bend,
-one fresh attempt approaches displaced intervals from their return ends. This
-can keep the first moved trace from trapping a later neighbor near a fixed branch.
-Both attempts share the original pickup intent, forward push constraints and
-global probe budget. Exhausted searches do not start another attempt.
+The captured topology splits runs at contacts made when a trace returns to its
+own copper. Free ends, branch contacts, pad/via/lock contacts and width/layer
+transitions stay fixed. Ordinary bends are soft hints that can move with their
+neighbors when obstructed. Closed or longer-than-255-segment components retain
+per-segment anchors in this slice.
+
+The solver starts with the requested elbow. If its cascade blocks, it can try
+displaced intervals from their other ends, continue a previously displayed guide
+to the new cursor, or try the other elbow sense. Each candidate must run from the
+same head to the requested target. The original pickup, fixed gesture copper,
+forward push constraints, and probe budget apply to all candidates. A previously
+displayed guide must be certified again before it can influence placement.
 
 The original pickup is checked against the original copper before any movable
 bodies are hidden. A free start inside an existing clearance band is refused,
@@ -275,7 +278,7 @@ within the gesture budget.
 
 The solver replaces at most
 96 original segments with at most 256 points each and preserving at most 128
-anchors per source segment. Nested walks and propagation share the request's
+anchors per trace chain. Nested walks and propagation share the request's
 probe budget. Cancellation or stale ownership cannot publish partial work, and
 the preview hides displaced originals only while their replacement paths are
 displayed. A rejected first click inside clearance releases the draft while

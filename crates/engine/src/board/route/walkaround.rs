@@ -315,6 +315,12 @@ impl<'a> Walker<'a> {
         Plan { adjusted_target: None, start_blocked: false, replacements: Vec::new(), shove: None, points, outcome, blocker, probes: self.probes }
     }
 
+    /// Certify an incoming shove candidate against the same geometry and membership as
+    /// walkaround. A guide gains no authority if any leg clips a fixed object or edge.
+    pub(super) async fn certify_candidate(&mut self, points: &[Point]) -> Result<Option<Plan>, Stop> {
+        Ok(self.continues(points).await?.then(|| self.plan(points.to_vec(), Outcome::Reached, None)))
+    }
+
     /// Whether the previous result still applies unchanged: same ends, posture legs only, and
     /// every leg still legal. Reusing it keeps a stationary pointer's route from oscillating.
     async fn continues(&mut self, previous: &[Point]) -> Result<bool, Stop> {

@@ -863,3 +863,51 @@ fn a_distant_overlapping_return_does_not_block_a_rail_shove() {
     commit(&mut s, &request, &plan);
     assert_eq!(view(&s).tracks().iter().find(|t| t.id == overlap), Some(&original_overlap));
 }
+
+/// A long trace that crosses its own return has an interior junction. Moving a remote
+/// interval must preserve the junction, while the horizontal source is allowed to reach.
+#[test]
+fn a_self_crossing_trace_can_shove_away_from_its_junction() {
+    let mut s = board();
+    let ends = [p(-150, 180), p(-150, -250)];
+    let rail = vec![p(0, 0), p(-20, 0), p(-160, 140), p(-160, 170), ends[0], ends[1], p(-60, -340)];
+    add(&mut s, rail, 250_000);
+    let original = view(&s).tracks().iter().find(|t| [t.start, t.end] == ends).unwrap().id;
+    let request = Request { head: p(-130, -80), target: p(-180, -100), ..request(&s) };
+    let plan = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+    assert!(plan.replacements.iter().any(|path| path.track == original), "{plan:?}");
+    commit(&mut s, &request, &plan);
+}
+
+/// A cursor advance can reopen an earlier choice of approach. Retrying the last
+/// legal guide retains its turns when both direct elbow senses trap the cascade.
+#[test]
+fn continuing_a_guide_retries_the_incoming_path() {
+    for direction in [-1_i64, 1] {
+        let point = |x_nm, y_nm| Point { x_nm: direction * x_nm, y_nm };
+        let mut s = board();
+        add(&mut s, vec![point(6_604_000, 8_636_000), point(-12_446_000, 8_636_000)], 250_000);
+        add(&mut s, vec![point(761_422, 8_185_998), point(9_709_998, 8_185_998)], 250_000);
+        add(&mut s, vec![point(-10_092_398, 9_201_998), point(-7_941_602, 9_201_998)], 250_000);
+        add(&mut s, vec![point(-7_366_000, 12_446_000), point(-4_064_000, 9_144_000)], 250_000);
+        let head = point(10_922_000, 10_668_000);
+        let target = point(-8_128_000, 8_128_000);
+        let previous = vec![
+            head,
+            point(10_859_329, 10_730_671),
+            point(-953_329, 10_730_671),
+            point(-3_810_000, 7_874_000),
+            point(-5_080_000, 7_874_000),
+            point(-5_588_000, 8_382_000),
+        ];
+        let request = Request { head, target, previous, ..request(&s) };
+        let plan = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+        assert_eq!(plan.outcome, Outcome::Reached, "direction {direction}: {plan:?}");
+        assert_eq!(plan.points.first(), Some(&head));
+        assert_eq!(plan.points.last(), Some(&target));
+        assert!(!plan.replacements.is_empty(), "{plan:?}");
+        assert!(plan.probes <= DEFAULT_BUDGET);
+        commit(&mut s, &request, &plan);
+    }
+}
