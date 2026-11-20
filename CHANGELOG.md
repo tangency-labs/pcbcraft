@@ -2,6 +2,11 @@
 
 ## 0.1.0 (unreleased)
 
+Pane headers can be dragged to another pane's top, bottom, left or right edge to
+choose an explicit split direction. The preview shows the incoming half, and
+resizing or restoring a saved layout keeps that direction. Native window drop
+targets also offer Above and Below; live `view.dock` shares the placement options.
+
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,

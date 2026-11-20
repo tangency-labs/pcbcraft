@@ -806,10 +806,16 @@ mod live {
         WindowCommand {
             id: "view.dock",
             title: "Dock View",
-            summary: "Move a pane and its cached documents beside a pane in another window of this instance. Defaults to the main window's focused pane.",
+            summary: "Move a pane and its cached documents to another pane. An explicit side selects left/right/top/bottom within or across windows; otherwise docking uses adaptive placement in another window. Defaults to the main window's focused pane.",
             params: &[
                 VIEW,
-                Param { name: "beside", summary: "Destination view ID in another window of this instance", required: false, kind: Kind::View },
+                Param { name: "beside", summary: "Destination view ID in this application instance", required: false, kind: Kind::View },
+                Param {
+                    name: "side",
+                    summary: "Explicit split edge; requires beside",
+                    required: false,
+                    kind: Kind::Choice(&["left", "right", "top", "bottom"]),
+                },
             ],
         },
         WindowCommand {
@@ -1620,14 +1626,25 @@ mod live {
                 ("view.close", Some((view, host)), _) if host == self.views.main && !self.views.hosts.get(&host).is_some_and(|host| host.split()) => {
                     return Err(format!("View {} is the main window's only view, which stays open. Close another view or window instead.", view.0));
                 }
-                ("view.dock", Some((view, host)), _) if params.get("beside").is_some() => {
-                    let target = ViewId(params["beside"].as_u64().unwrap_or_default());
-                    if self.view_window(target)? == host {
+                ("view.dock", Some((view, host)), _) if params.get("beside").is_some() || params.get("side").is_some() => {
+                    use pcbcraft_chrome::editor::DockSide;
+                    let target = ViewId(params.get("beside").and_then(Value::as_u64).ok_or("Choose a destination pane with `beside`.")?);
+                    let side = match params.get("side").and_then(Value::as_str) {
+                        Some("left") => Some(DockSide::Left),
+                        Some("right") => Some(DockSide::Right),
+                        Some("top") => Some(DockSide::Top),
+                        Some("bottom") => Some(DockSide::Bottom),
+                        _ => None,
+                    };
+                    if self.view_window(target)? == host && side.is_none() {
                         return Err("Docking requires a destination pane in another window of this instance.".into());
+                    }
+                    if self.views.hosts.get(&host).and_then(|host| host.layout.group(view)).is_some_and(|group| group.views().contains(&target)) {
+                        return Err("Choose another pane as the split destination.".into());
                     }
                     let target =
                         self.views.view(target).and_then(|view| view.control_input(&self.session)).ok_or("The destination pane is unavailable.")?;
-                    self.apply_view_action(ctx, view, ViewAction::MoveBeside(target));
+                    self.apply_view_action(ctx, view, side.map_or(ViewAction::MoveBeside(target), |side| ViewAction::MoveTo(target, side)));
                 }
                 ("view.dock", Some((view, host)), _) if host == self.views.main => {
                     return Err(format!("View {} is already in the main window.", view.0));

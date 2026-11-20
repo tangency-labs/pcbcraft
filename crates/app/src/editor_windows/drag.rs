@@ -27,6 +27,7 @@ enum DropDestination {
     NewWindow,
     Beside(ViewInput),
     Reorder(ViewInput),
+    Split(ViewInput, pcbcraft_chrome::editor::DockSide),
 }
 
 #[cfg(test)]
@@ -67,8 +68,13 @@ impl HostGeometry {
 
     /// Resolve a desktop point into one of this instance's currently rendered panes.
     fn target(&self, desktop: Pos2) -> Option<(ViewId, Rect)> {
-        let local = desktop / self.scale - self.origin?.to_vec2();
+        let local = self.local(desktop)?;
         self.panes.iter().copied().find(|(_, rect)| rect.contains(local))
+    }
+
+    /// Convert captured desktop input to the receiving pane's logical coordinate space.
+    fn local(&self, desktop: Pos2) -> Option<Pos2> {
+        Some(desktop / self.scale - self.origin?.to_vec2())
     }
 }
 
@@ -196,32 +202,59 @@ impl PcbApp {
                 .panes
                 .iter()
                 .find(|(id, rect)| !source_group.contains(id) && rect.contains(drag.local))
-                .map(|(id, _)| *id)?;
-            return self.views.view(target)?.control_input(&self.session).map(DropDestination::Reorder);
+                .copied()?;
+            let input = self.views.view(target.0)?.control_input(&self.session)?;
+            return Some(match pcbcraft_chrome::editor::dock_side(target.1, drag.local) {
+                Some(side) => DropDestination::Split(input, side),
+                None => DropDestination::Reorder(input),
+            });
         }
         if !inside_source {
             let target = if let Some(desktop) = drag.desktop {
-                self.windows
-                    .drag_geometry
-                    .iter()
-                    .filter(|(host, _)| **host != drag.host)
-                    .find_map(|(_, geometry)| geometry.target(desktop).map(|(id, _)| id))
+                self.windows.drag_geometry.iter().filter(|(host, _)| **host != drag.host).find_map(|(_, geometry)| {
+                    let (id, rect) = geometry.target(desktop)?;
+                    Some((id, pcbcraft_chrome::editor::dock_side(rect, geometry.local(desktop)?)))
+                })
             } else if drag.receiver != drag.host {
-                self.windows
-                    .drag_geometry
-                    .get(&drag.receiver)
-                    .and_then(|geometry| geometry.panes.iter().find(|(_, rect)| rect.contains(drag.local)).map(|(id, _)| *id))
+                self.windows.drag_geometry.get(&drag.receiver).and_then(|geometry| {
+                    geometry
+                        .panes
+                        .iter()
+                        .find(|(_, rect)| rect.contains(drag.local))
+                        .map(|(id, rect)| (*id, pcbcraft_chrome::editor::dock_side(*rect, drag.local)))
+                })
             } else {
                 None
             };
-            if let Some(target) = target.and_then(|id| self.views.view(id)).and_then(|view| view.control_input(&self.session)) {
-                return Some(DropDestination::Beside(target));
+            if let Some((target, side)) = target {
+                let target = self.views.view(target)?.control_input(&self.session)?;
+                return Some(match side {
+                    Some(side) => DropDestination::Split(target, side),
+                    None => DropDestination::Beside(target),
+                });
             }
             if drag.receiver == drag.host && self.drag_can_detach(drag) {
                 return Some(DropDestination::NewWindow);
             }
         }
         None
+    }
+
+    /// Preview the destination after removing an in-window source pane and collapsing its
+    /// empty branch. Cross-window targets keep their current geometry.
+    fn projected_split_area(&self, target: ViewId, current: Rect) -> Rect {
+        let Some(drag) = &self.windows.drag else { return current };
+        if self.views.owner(target) != Some(drag.host) {
+            return current;
+        }
+        let Some(host) = self.views.hosts.get(&drag.host) else { return current };
+        let Some(group) = host.layout.group(drag.source.view()) else { return current };
+        let area = host.rects.iter().map(|(_, rect)| *rect).reduce(Rect::union).unwrap_or(current);
+        let mut remaining = Some(host.layout.clone());
+        for member in group.views() {
+            remaining = remaining.and_then(|layout| layout.remove(member));
+        }
+        remaining.and_then(|layout| layout.regions(area).into_iter().find(|(id, _)| *id == target).map(|(_, rect)| rect)).unwrap_or(current)
     }
 
     /// Cache each host's panes, show discoverable destinations in the source and animate the
@@ -260,6 +293,13 @@ impl PcbApp {
                     .and_then(|host| self.views.view(host.focused))
                     .and_then(|view| view.control_input(&self.session))
                     .map(DropDestination::Beside),
+                Some(pcbcraft_chrome::editor::WindowDrop::HostSide(id, side)) => self
+                    .views
+                    .hosts
+                    .get(&HostId(id))
+                    .and_then(|host| self.views.view(host.focused))
+                    .and_then(|view| view.control_input(&self.session))
+                    .map(|target| DropDestination::Split(target, side)),
                 None => None,
             };
             if let Some(drag) = &mut self.windows.drag {
@@ -272,6 +312,27 @@ impl PcbApp {
         }
         let destination = self.windows.drag.as_ref().and_then(|drag| self.drag_destination(drag));
         for (id, rect) in panes {
+            let split_area = if matches!(destination, Some(DropDestination::Split(target, _)) if target.view() == *id) {
+                self.projected_split_area(*id, *rect)
+            } else {
+                *rect
+            };
+            for side in [
+                pcbcraft_chrome::editor::DockSide::Top,
+                pcbcraft_chrome::editor::DockSide::Bottom,
+                pcbcraft_chrome::editor::DockSide::Left,
+                pcbcraft_chrome::editor::DockSide::Right,
+            ] {
+                let active = matches!(destination, Some(DropDestination::Split(target, selected)) if target.view() == *id && selected == side);
+                pcbcraft_chrome::editor::split_preview(
+                    ui,
+                    ui.scope_id().with(("split_destination", id, side)),
+                    split_area,
+                    side,
+                    active,
+                    self.windows.drag.is_some(),
+                );
+            }
             let active = matches!(destination, Some(DropDestination::Beside(target)) if target.view() == *id);
             pcbcraft_chrome::editor::dock_preview(ui, ui.scope_id().with(("dock_destination", id)), *rect, active, self.windows.drag.is_some());
             let reposition = matches!(destination, Some(DropDestination::Reorder(target)) if target.view() == *id);
@@ -307,6 +368,7 @@ impl PcbApp {
         let action = match destination {
             Some(DropDestination::Beside(target)) => Some(ViewAction::MoveBeside(target)),
             Some(DropDestination::Reorder(target)) => Some(ViewAction::Reorder(target)),
+            Some(DropDestination::Split(target, side)) => Some(ViewAction::MoveTo(target, side)),
             Some(DropDestination::NewWindow) => {
                 let position = drag.desktop.and_then(|desktop| self.windows.drag_geometry.get(&drag.host).map(|geometry| desktop / geometry.scale));
                 Some(ViewAction::DetachAt(position))

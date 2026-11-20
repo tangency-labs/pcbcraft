@@ -643,3 +643,142 @@ fn pane_reorder_commands_preserve_cached_documents_and_restored_order() {
     assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.visible_views(), vec![cached, root]);
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// Edge drops choose the indicated half and keep that direction across window resizing.
+#[test]
+fn pane_edge_drops_split_in_all_four_directions() {
+    for (side, caption) in [("top", "Split above"), ("bottom", "Split below"), ("left", "Split left"), ("right", "Split right")] {
+        for light in [false, true] {
+            let (mut h, _) = many_windows();
+            let ctx = h.ctx.clone();
+            h.state_mut().run_window_command(&ctx, "app.set_preferences", &json!({"theme":if light {"light"} else {"dark"}})).unwrap();
+            h.state_mut().split_editors(&ctx, true);
+            h.run();
+            let target = h.state().views.hosts[&HostId::ROOT].layout.visible_views()[0];
+            let moved = root_drag(&mut h, 1);
+            let rect = h.state().views.hosts[&HostId::ROOT].rects[0].1;
+            let host_area = h.state().views.hosts[&HostId::ROOT].rects.iter().map(|(_, rect)| *rect).reduce(Rect::union).unwrap();
+            let at = match side {
+                "top" => pos2(rect.center().x, rect.top() + 8.0),
+                "bottom" => pos2(rect.center().x, rect.bottom() - 8.0),
+                "left" => pos2(rect.left() + 8.0, rect.center().y),
+                _ => pos2(rect.right() - 8.0, rect.center().y),
+            };
+            let before = h.state().session.snapshot().unwrap();
+            let camera = h.state().views.view(moved).unwrap().camera.saved_state();
+            h.hover_at(at);
+            h.run();
+            let preview = h.get_by_label(caption).rect();
+            assert!(host_area.contains(preview.center()));
+            if side == "top" {
+                assert!(preview.bottom() < rect.center().y);
+            }
+            if side == "bottom" {
+                assert!(preview.top() > rect.center().y);
+            }
+            h.drop_at(at);
+            h.run();
+            let placed = h.state().views.hosts[&HostId::ROOT].rects.iter().find(|(id, _)| *id == moved).unwrap().1;
+            assert_eq!(preview, placed.shrink(pcbcraft_chrome::Tokens::get().space_4));
+            for size in [vec2(1400.0, 900.0), vec2(760.0, 650.0)] {
+                h.set_size(size);
+                h.run();
+                let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+                assert_eq!(panes.len(), 2);
+                let a = panes.iter().find(|(id, _)| *id == moved).unwrap().1;
+                let b = panes.iter().find(|(id, _)| *id == target).unwrap().1;
+                match side {
+                    "top" => assert!(a.bottom() < b.top()),
+                    "bottom" => assert!(a.top() > b.bottom()),
+                    "left" => assert!(a.right() < b.left()),
+                    _ => assert!(a.left() > b.right()),
+                }
+            }
+            assert_eq!(h.state().views.view(moved).unwrap().camera.saved_state(), camera);
+            assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}
+
+/// Directional docking shares command validation, cached-document movement and arrangement storage.
+#[test]
+fn directional_docking_retains_cached_documents_and_saved_axis() {
+    let (mut h, _) = many_windows();
+    let ctx = h.ctx.clone();
+    let root = h.state().views.active.id();
+    let source = h.state_mut().views.open_beside(root).unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().session.apply(pcbcraft_engine::sheets::CREATE_SHEET, &json!({"name":"Power","expected_revision":revision})).unwrap();
+    let power = h.state().session.project().unwrap().sheets().nth(1).unwrap().target;
+    let app = h.state_mut();
+    let cached = app.views.open_document(source, crate::editor_view::DocumentTarget::Sheet(power), &app.session).unwrap();
+    h.run();
+    for params in [
+        json!({"view":source.0,"side":"top"}),
+        json!({"view":source.0,"beside":cached.0,"side":"top"}),
+        json!({"view":source.0,"beside":root.0,"side":"diagonal"}),
+        json!({"view":source.0,"beside":999,"side":"top"}),
+    ] {
+        assert!(h.state_mut().run_window_command(&ctx, "view.dock", &params).is_err());
+    }
+    h.state_mut().run_window_command(&ctx, "view.dock", &json!({"view":source.0,"beside":root.0,"side":"bottom"})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.group(cached).unwrap().views(), vec![source, cached]);
+    h.state_mut().split_editors(&ctx, false);
+    h.state_mut().split_editors(&ctx, true);
+    h.run();
+    let app = h.state_mut();
+    let saved = app.views.saved_state(&app.session).unwrap();
+    let bytes = serde_json::to_vec(&saved).unwrap();
+    let saved: crate::arrangements::Snapshot = serde_json::from_slice(&bytes).unwrap();
+    assert!(saved.valid());
+    assert!(String::from_utf8(bytes).unwrap().contains("\"axis\":\"rows\""));
+    app.views.restore_state(&saved, &app.session).unwrap();
+    h.run();
+    let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+    assert!(panes[0].1.bottom() < panes[1].1.top());
+}
+
+/// Old arrangements omit orientation, and unknown future directions fail validation.
+#[test]
+fn split_axis_reads_legacy_arrangements_without_rewriting_them() {
+    let old = json!({"kind":"split","first":{"kind":"view","view":0},"second":{"kind":"view","view":1},"ratio":0.4});
+    let saved: crate::arrangements::SavedLayout = serde_json::from_value(old.clone()).unwrap();
+    let encoded = serde_json::to_string(&saved).unwrap();
+    assert_eq!(serde_json::from_str::<Value>(&encoded).unwrap(), old);
+    let mut bad = old;
+    bad["axis"] = json!("diagonal");
+    assert!(serde_json::from_value::<crate::arrangements::SavedLayout>(bad).is_err());
+}
+
+/// Explicit window targets can select a stacked split without global window coordinates.
+#[test]
+fn cross_window_split_targets_choose_above_and_below_without_native_positions() {
+    for (text, first) in [("above", true), ("below", false)] {
+        let (mut h, peers) = many_windows();
+        let root = h.state().views.active.id();
+        h.state_mut().views.open_window(root);
+        h.run();
+        let peer = peers.borrow()[&editor_windows::viewport(HostId(1))].clone();
+        let moved = child_drag(&mut h, &peer);
+        let above = child_rect(&peer, "Split above in window 0");
+        let below = child_rect(&peer, "Split below in window 0");
+        assert!(above.right() <= below.left(), "direction controls must not overlap");
+        let target = child_rect(&peer, &format!("Split {text} in window 0")).center();
+        peer.borrow_mut().events.push(Event::PointerMoved(target));
+        h.run();
+        h.get_by_label(if first { "Split above" } else { "Split below" });
+        peer.borrow_mut().events.push(Event::PointerButton {
+            pos: target,
+            button: PointerButton::Primary,
+            pressed: false,
+            modifiers: Modifiers::NONE,
+        });
+        h.run();
+        assert_eq!(h.state().views.hosts.len(), 1);
+        let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+        assert_eq!(panes.len(), 2);
+        assert!(panes[0].1.bottom() < panes[1].1.top());
+        assert_eq!(panes[usize::from(!first)].0, moved);
+    }
+}

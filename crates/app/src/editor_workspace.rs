@@ -321,11 +321,20 @@ impl EditorViews {
     /// split trees are retained. The replacement inherits no pending navigation from the moved view.
     /// Keep that replacement in the remembered split too, so reopening preserves focus and saving.
     pub(super) fn move_beside(&mut self, id: ViewId, target: ViewId) -> bool {
+        self.move_to(id, target, None)
+    }
+
+    /// Move a whole pane to the requested edge, within a host or across native hosts.
+    /// Validate distinct groups before removal; adaptive moves retain the cross-host policy.
+    pub(super) fn move_to(&mut self, id: ViewId, target: ViewId, side: Option<pcbcraft_chrome::editor::DockSide>) -> bool {
         let (Some(source), Some(destination)) = (self.owner(id), self.owner(target)) else { return false };
-        if source == destination {
+        if source == destination && side.is_none() {
             return false;
         }
         let Some(group) = self.hosts.get(&source).and_then(|host| host.layout.group(id)).cloned() else { return false };
+        if group.views().contains(&target) {
+            return false;
+        }
         if source == self.main && self.hosts.get(&source).is_some_and(|host| host.layout.visible_views().len() == 1) {
             let Some(replacement) = self.duplicate(id, true) else { return false };
             if let Some(host) = self.hosts.get_mut(&source) {
@@ -341,9 +350,9 @@ impl EditorViews {
             self.unplace(source, member);
         }
         if let Some(host) = self.hosts.get_mut(&destination) {
-            host.layout.insert_group(target, &group);
+            host.layout.insert_group_at(target, &group, side);
             if let Some(collapsed) = &mut host.collapsed {
-                collapsed.insert_group(target, &group);
+                collapsed.insert_group_at(target, &group, side);
             }
             host.focused = focused;
             host.rects.clear();

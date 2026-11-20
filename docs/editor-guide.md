@@ -542,8 +542,14 @@ view**, **Dock in main window** or **Close view**, as applicable. These actions
 target that pane, including its remembered document navigation. Dividers resize
 panes, with narrow areas stacking vertically.
 
+On desktop, drag a pane header to the top, bottom, left or right edge of another
+pane to split there. The highlighted half is labelled **Split above**, **Split below**, **Split
+left** or **Split right**. These explicit splits keep their direction when the
+window is resized, and saved layouts retain it. Existing adaptive splits still
+stack when their available width becomes narrow.
+
 On desktop, dragging a header shades its source pane and displays window
-destinations. Drop over another pane in the same window to move into that slot;
+destinations. Drop over the centre of another pane in the same window to move into that slot;
 intervening panes shift, so a two-pane layout exchanges its positions. The full
 slot highlights **Move pane here**, retaining divider ratios and cached documents.
 Release outside the window or over **Open in new window** to detach, retaining
@@ -557,7 +563,10 @@ window are also available where the compositor exposes window positions. Moving 
 client highlights **Open in new window**; the new OS window is created on release.
 There is no window preview outside the client. **Esc** cancels. Every target belongs
 to the same running instance and project session. Live MCP can address the same destination with `view.dock`, passing the
-source `view` and destination `beside` view IDs from `inspect_editor`.
+source `view` and destination `beside` view IDs from `inspect_editor`. An optional
+`side` of `top`, `bottom`, `left` or `right` selects an explicit split in the same
+window or another one. The window destination list also offers **Above** and
+**Below**, including on compositors that do not expose window positions.
 `view.reorder` takes source `view` and destination `target` IDs for in-window movement.
 Opening another view copies the source camera and grid without copying its edit
 selection. Turning Split off keeps the focused pane; turning it back on restores

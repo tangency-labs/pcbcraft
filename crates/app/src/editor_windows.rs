@@ -49,6 +49,7 @@ pub(super) enum ViewAction {
     OpenBeside,
     Close,
     MoveBeside(ViewInput),
+    MoveTo(ViewInput, pcbcraft_chrome::editor::DockSide),
     Reorder(ViewInput),
     DetachAt(Option<egui::Pos2>),
 }
@@ -278,6 +279,14 @@ impl PcbApp {
             ViewAction::MoveBeside(target) => {
                 if self.views.view(target.view()).is_some_and(|view| view.control_input(&self.session) == Some(target))
                     && self.views.move_beside(id, target.view())
+                    && let Some(host) = self.views.owner(id)
+                {
+                    ctx.send_viewport_cmd_to(viewport(host), ViewportCommand::Focus);
+                }
+            }
+            ViewAction::MoveTo(target, side) => {
+                if self.views.view(target.view()).is_some_and(|view| view.control_input(&self.session) == Some(target))
+                    && self.views.move_to(id, target.view(), Some(side))
                     && let Some(host) = self.views.owner(id)
                 {
                     ctx.send_viewport_cmd_to(viewport(host), ViewportCommand::Focus);

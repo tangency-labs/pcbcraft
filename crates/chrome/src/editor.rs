@@ -4,12 +4,53 @@ use egui::{FontId, Rect, Role, Sense, Stroke, Ui, WidgetInfo, pos2, vec2};
 
 use crate::Tokens;
 
+/// A split retains an explicit orientation; older arrangements keep adaptive layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SplitAxis {
+    #[default]
+    Auto,
+    Columns,
+    Rows,
+}
+
+impl SplitAxis {
+    /// Legacy automatic splits omit the optional saved orientation field.
+    pub fn is_auto(&self) -> bool {
+        *self == Self::Auto
+    }
+}
+
+/// The incoming pane's position relative to its destination pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DockSide {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+impl DockSide {
+    /// Explicit edge drops keep their chosen axis when the window is resized.
+    pub fn axis(self) -> SplitAxis {
+        match self {
+            Self::Left | Self::Right => SplitAxis::Columns,
+            Self::Top | Self::Bottom => SplitAxis::Rows,
+        }
+    }
+
+    /// Whether the incoming pane precedes the destination in the split tree.
+    pub fn first(self) -> bool {
+        matches!(self, Self::Left | Self::Top)
+    }
+}
+
 /// Lay out two panes with a draggable divider. Narrow windows stack them vertically so each
 /// retains usable width. The ratio is presentation state; dragging clamps it to 25–75 percent.
-pub fn split(ui: &mut Ui, ratio: &mut f32) -> [Rect; 2] {
+pub fn split(ui: &mut Ui, ratio: &mut f32, axis: SplitAxis) -> [Rect; 2] {
     let t = Tokens::get();
     let rect = ui.available_rect_before_wrap();
-    let horizontal = rect.width() >= 900.0;
+    let horizontal = axis == SplitAxis::Columns || (axis == SplitAxis::Auto && rect.width() >= 900.0);
     let extent = if horizontal { rect.width() } else { rect.height() };
     let gap = t.space_6.min(extent);
     let position = |ratio: f32| (extent - gap) * ratio;
@@ -30,10 +71,24 @@ pub fn split(ui: &mut Ui, ratio: &mut f32) -> [Rect; 2] {
     if horizontal {
         let x = rect.left() + at;
         ui.painter().rect_filled(Rect::from_min_max(pos2(x, rect.top()), pos2(x + gap, rect.bottom())), 0, t.border);
-        [Rect::from_min_max(rect.min, pos2(x, rect.bottom())), Rect::from_min_max(pos2(x + gap, rect.top()), rect.max)]
     } else {
         let y = rect.top() + at;
         ui.painter().rect_filled(Rect::from_min_max(pos2(rect.left(), y), pos2(rect.right(), y + gap)), 0, t.border);
+    }
+    split_rects(rect, *ratio, axis)
+}
+
+/// Pure pane geometry shared by rendered dividers and projected drop layouts.
+pub fn split_rects(rect: Rect, ratio: f32, axis: SplitAxis) -> [Rect; 2] {
+    let horizontal = axis == SplitAxis::Columns || (axis == SplitAxis::Auto && rect.width() >= 900.0);
+    let extent = if horizontal { rect.width() } else { rect.height() };
+    let gap = Tokens::get().space_6.min(extent);
+    let at = (extent - gap) * ratio;
+    if horizontal {
+        let x = rect.left() + at;
+        [Rect::from_min_max(rect.min, pos2(x, rect.bottom())), Rect::from_min_max(pos2(x + gap, rect.top()), rect.max)]
+    } else {
+        let y = rect.top() + at;
         [Rect::from_min_max(rect.min, pos2(rect.right(), y)), Rect::from_min_max(pos2(rect.left(), y + gap), rect.max)]
     }
 }
@@ -180,6 +235,41 @@ pub fn dock_region(rect: Rect) -> Rect {
     }
 }
 
+/// Edge bands select explicit split placement; the centre retains ordinary pane movement.
+/// Use physical edge distance so wide panes do not make top/bottom drops harder to reach.
+pub fn dock_side(rect: Rect, pointer: egui::Pos2) -> Option<DockSide> {
+    if !rect.contains(pointer) {
+        return None;
+    }
+    let band = (rect.width().min(rect.height()) * 0.22).clamp(20.0, 100.0);
+    [
+        (DockSide::Top, pointer.y - rect.top()),
+        (DockSide::Bottom, rect.bottom() - pointer.y),
+        (DockSide::Left, pointer.x - rect.left()),
+        (DockSide::Right, rect.right() - pointer.x),
+    ]
+    .into_iter()
+    .filter(|(_, distance)| *distance <= band)
+    .min_by(|a, b| a.1.total_cmp(&b.1))
+    .map(|(side, _)| side)
+}
+
+/// The incoming half of an explicit split, using the same divider gap as pane layout.
+pub fn split_region(rect: Rect, side: DockSide) -> Rect {
+    split_rects(rect, 0.5, side.axis())[usize::from(!side.first())]
+}
+
+/// Preview the exact half and direction selected by an edge drop.
+pub fn split_preview(ui: &Ui, id: egui::Id, rect: Rect, side: DockSide, active: bool, dragging: bool) {
+    let caption = match side {
+        DockSide::Top => "Split above",
+        DockSide::Bottom => "Split below",
+        DockSide::Left => "Split left",
+        DockSide::Right => "Split right",
+    };
+    placement_preview(ui, id, split_region(rect, side), caption, active, dragging);
+}
+
 /// Animate the area a pane will occupy after docking. The preview and label never take input;
 /// calling with `active = false` fades the previous highlight while dragging. Ending a drag
 /// clears it immediately so a changed split layout cannot retain an obsolete preview.
@@ -218,6 +308,7 @@ fn placement_preview(ui: &Ui, id: egui::Id, rect: Rect, caption: &str, active: b
 pub enum WindowDrop {
     NewWindow,
     Host(u64),
+    HostSide(u64, DockSide),
 }
 
 /// Current local pointer and new-window availability for a pane's destination list.
@@ -242,6 +333,11 @@ pub fn window_drop_targets(
 ) -> Option<WindowDrop> {
     let mut hovered = None;
     let t = Tokens::get();
+    let button_width = ["Above", "Below"]
+        .into_iter()
+        .map(|label| ui.painter().layout_no_wrap(label.to_owned(), FontId::proportional(t.font_label), t.text).size().x)
+        .fold(0.0_f32, f32::max)
+        + 2.0 * t.space_12;
     let width = (pane.width() - 2.0 * t.space_12).clamp(180.0, 280.0);
     let left = pane.left() + t.space_12;
     let right = (pane.right() - width - t.space_12).max(left);
@@ -262,8 +358,14 @@ pub fn window_drop_targets(
                     )
                 }));
                 for (destination, label) in choices {
-                    let (rect, response) = ui.allocate_exact_size(vec2(width, header_height()), Sense::hover());
-                    let under_pointer = state.pointer.is_some_and(|pointer| rect.contains(pointer));
+                    let (rect, _) = ui.allocate_exact_size(vec2(width, header_height()), Sense::hover());
+                    let label_rect = if matches!(destination, WindowDrop::Host(_)) {
+                        Rect::from_min_max(rect.min, pos2(rect.right() - 2.0 * button_width, rect.bottom()))
+                    } else {
+                        rect
+                    };
+                    let response = ui.interact(label_rect, ui.scope_id().with(("window_drop", label.as_str())), Sense::hover());
+                    let under_pointer = state.pointer.is_some_and(|pointer| label_rect.contains(pointer));
                     let selected = under_pointer || (destination == WindowDrop::NewWindow && state.detaching);
                     response.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, &label));
                     let amount = ui.ctx().animate_bool_with_time(response.id, selected, 0.12);
@@ -274,10 +376,32 @@ pub fn window_drop_targets(
                     if selected {
                         ui.painter().rect_stroke(rect, t.control_radius, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
                     }
-                    let mut job = egui::text::LayoutJob::simple(label, FontId::proportional(t.font_label), t.text, width - 2.0 * t.space_8);
+                    let mut job =
+                        egui::text::LayoutJob::simple(label, FontId::proportional(t.font_label), t.text, label_rect.width() - 2.0 * t.space_8);
                     job.wrap.max_rows = 1;
                     let galley = ui.painter().layout_job(job);
                     ui.painter().galley(pos2(rect.left() + t.space_8, rect.center().y - galley.size().y / 2.0), galley, t.text);
+                    if let WindowDrop::Host(host) = destination {
+                        for (index, (side, text)) in [(DockSide::Top, "Above"), (DockSide::Bottom, "Below")].into_iter().enumerate() {
+                            let bounds = Rect::from_min_size(
+                                pos2(label_rect.right() + index as f32 * button_width, rect.top()),
+                                vec2(button_width, rect.height()),
+                            );
+                            let selected = state.pointer.is_some_and(|pointer| bounds.contains(pointer));
+                            let name = format!("Split {} in window {host}", text.to_lowercase());
+                            let button = solidcraft_ui_kit::button_at(
+                                ui,
+                                &format!("window_drop_{host}_{index}"),
+                                bounds,
+                                egui::RichText::new(text).size(t.font_label),
+                                if selected { solidcraft_ui_kit::Button::Primary } else { solidcraft_ui_kit::Button::Normal },
+                            );
+                            button.widget_info(|| WidgetInfo::selected(Role::Button, true, selected, &name));
+                            if selected {
+                                hovered = Some(WindowDrop::HostSide(host, side));
+                            }
+                        }
+                    }
                 }
             });
         });
