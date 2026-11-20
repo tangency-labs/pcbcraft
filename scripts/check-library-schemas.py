@@ -26,6 +26,7 @@ FORMATS = {
     "pcbcraft-symbol/1": "urn:pcbcraft:schema:symbol:1",
     "pcbcraft-symbol/2": "urn:pcbcraft:schema:symbol:2",
     "pcbcraft-symbol/4": "urn:pcbcraft:schema:symbol:4",
+    "pcbcraft-symbol/5": "urn:pcbcraft:schema:symbol:5",
     "pcbcraft-symbol/3": "urn:pcbcraft:schema:symbol:3",
     "pcbcraft-footprint/1": "urn:pcbcraft:schema:footprint:1",
     "pcbcraft-footprint/4": "urn:pcbcraft:schema:footprint:4",
