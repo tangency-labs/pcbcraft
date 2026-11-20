@@ -194,6 +194,7 @@ impl PcbApp {
             let count = self.views.active.schematic.selection.len() + self.views.active.inspection.len();
             let enabled = matches!(self.dialog, Dialog::None);
             let mut net_rules = false;
+            let mut net_appearance = false;
             let inspection_labels = crate::inspection_selection::labels(&self.session, &self.views.active.inspection);
             let wires = !self.views.active.schematic.selection.wires.is_empty();
             let sheet = match self.views.active.target() {
@@ -230,6 +231,7 @@ impl PcbApp {
                     }
                     if wires {
                         net_rules = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, "Net rules…")).inner.clicked();
+                        net_appearance = ui.add_enabled_ui(enabled, |ui| pcbcraft_chrome::controls::button(ui, "Net appearance…")).inner.clicked();
                     }
                 },
             );
@@ -239,6 +241,9 @@ impl PcbApp {
             self.views.active.schematic.properties.rect = rect;
             if net_rules {
                 self.begin_net_rules();
+            }
+            if net_appearance {
+                self.begin_net_appearance();
             }
             if let (Some(change), Some(sheet)) = (parameter_change, sheet) {
                 self.run(pcbcraft_engine::parameters::SET, &change.params(sheet, revision));

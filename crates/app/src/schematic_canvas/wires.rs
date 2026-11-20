@@ -2,6 +2,7 @@ use egui::{Color32, Painter, PointerButton, Pos2, Rect, Response, Shape, Stroke}
 use pcbcraft_chrome::{Tokens, theme};
 use pcbcraft_engine::{
     Project,
+    nets::Appearance,
     schematic::{Point, SymbolPlacement, WireEndpoint, orthogonal_path},
     wire::{Anchor, Reshape},
 };
@@ -20,17 +21,55 @@ mod tests;
 pub(crate) struct Draft {
     corners: Vec<Vec<Point>>,
     target_cache: RefCell<targets::Cache>,
+    /// Last wire-appearance derivation, reused across camera-only repaints of the same snapshot.
+    appearance_cache: RefCell<AppearanceCache>,
     pub(crate) horizontal_first: bool,
     pub(crate) finish_requested: bool,
 }
 
+/// One view's derived wire appearances, tied to the immutable snapshot they came from. Keeping
+/// a cloned snapshot alive also keeps its wire collection address from being reused by a later
+/// snapshot, so identity cannot accidentally hit a stale result.
+#[derive(Debug, Default)]
+struct AppearanceCache {
+    snapshot: Option<Project>,
+    revision: u64,
+    appearances: std::collections::BTreeMap<String, Appearance>,
+}
+
 impl Default for Draft {
     fn default() -> Self {
-        Self { target_cache: RefCell::default(), corners: Vec::new(), horizontal_first: true, finish_requested: false }
+        Self {
+            target_cache: RefCell::default(),
+            appearance_cache: RefCell::default(),
+            corners: Vec::new(),
+            horizontal_first: true,
+            finish_requested: false,
+        }
     }
 }
 
 impl Draft {
+    /// Resolve wire appearance overrides for one paint. The last derivation is reused when
+    /// `project` is still the same immutable snapshot at the same revision, so camera-only
+    /// repaints skip rebuilding the electrical graph. A preview snapshot is computed fresh and
+    /// never cached, because its transformed geometry belongs only to that transient frame. The
+    /// engine's no-override fast path inside `wire_appearances()` is preserved on every miss.
+    pub(crate) fn appearances(&self, project: &Project, revision: u64, preview: bool) -> std::collections::BTreeMap<String, Appearance> {
+        if preview {
+            return project.wire_appearances().unwrap_or_default();
+        }
+        let mut cache = self.appearance_cache.borrow_mut();
+        if cache.revision == revision && cache.snapshot.as_ref().is_some_and(|snapshot| std::ptr::eq(snapshot.wires(), project.wires())) {
+            return cache.appearances.clone();
+        }
+        let appearances = project.wire_appearances().unwrap_or_default();
+        cache.snapshot = Some(project.clone());
+        cache.revision = revision;
+        cache.appearances = appearances.clone();
+        appearances
+    }
+
     /// Resolve the frozen corners and current leg, retracting self-overlap with the same
     /// normalization as commit when enabled. Invalid or overly complex previews are refused.
     pub(crate) fn path(&self, from: Point, to: Point, auto_heal: bool) -> Option<Vec<Point>> {
@@ -273,6 +312,7 @@ pub(super) fn paint_handles(
 /// wire ends meet the route reads as continuous, so nothing is drawn; three or more get a filled
 /// junction dot.
 /// Local selection takes precedence over a counterpart highlight; neither changes connectivity.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     painter: &Painter,
     rect: Rect,
@@ -281,6 +321,7 @@ pub(super) fn paint(
     moved: Option<(SymbolPlacement, Point)>,
     selected: &std::collections::BTreeSet<String>,
     highlighted: &std::collections::BTreeSet<String>,
+    appearances: &std::collections::BTreeMap<String, Appearance>,
 ) {
     let tokens = Tokens::get();
     let preview =
@@ -299,14 +340,20 @@ pub(super) fn paint(
         let [Some(from), Some(to)] = wire.endpoints().map(position) else {
             continue;
         };
+        let override_ = appearances.get(&wire.id());
         let color = if selected.contains(&wire.id()) {
             tokens.accent
         } else if highlighted.contains(&wire.id()) {
             tokens.schematic_highlight
+        } else if let Some(appearance) = override_.and_then(|appearance| appearance.color) {
+            Color32::from_rgb(appearance[0], appearance[1], appearance[2])
         } else {
             tokens.schematic_wire
         };
-        paint_route(painter, rect, camera, pcbcraft_engine::wire::wire_path(wire, from, to), color);
+        // A drawn width is a screen-space stroke, so it stays readable at every zoom level.
+        let width =
+            override_.and_then(|appearance| appearance.width_cp).map_or(theme::SCHEMATIC_SYMBOL_STROKE, |width_cp| f32::from(width_cp) / 100.0);
+        paint_stroked_route(painter, rect, camera, pcbcraft_engine::wire::wire_path(wire, from, to), color, width);
     }
     let mut ends = std::collections::BTreeMap::<u64, usize>::new();
     for endpoint in project.wires().iter().flat_map(|wire| wire.endpoints()) {
@@ -671,7 +718,12 @@ fn paint_pin(painter: &Painter, pos: Pos2, color: Color32) {
 
 /// Paint a model-space polyline through the canvas clip using shared wire styling.
 fn paint_route(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32) {
-    paint_stroke(painter, rect, camera, points, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+    paint_stroked_route(painter, rect, camera, points, color, theme::SCHEMATIC_SYMBOL_STROKE);
+}
+
+/// Paint a model-space polyline with an explicit screen-space stroke width.
+fn paint_stroked_route(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32, width: f32) {
+    paint_stroke(painter, rect, camera, points, Stroke::new(width, color));
 }
 
 /// Paint a model-space polyline with `stroke`; fewer than two points paints nothing.
