@@ -11,14 +11,12 @@ use std::sync::Arc;
 
 /// Use bounded display names in accepted history so the fixture needs very few live objects.
 /// Only the display length is adjusted; no board bytes or production limits are patched.
+/// The session must already have an accepted baseline: placed footprints are only valid
+/// on reopen when that baseline holds their component packages.
 pub(super) fn fill_board(s: &Session, slack: usize) -> Arc<Project> {
     let mut p = s.project().unwrap().clone();
-    let t = p.board_target().unwrap();
     let board = Arc::make_mut(&mut p.board);
-    let mut baseline = board.baseline.as_deref().cloned().unwrap_or_else(|| {
-        update::Baseline::empty(t.project, t.board, update::SourceCapture { capture_id: uuid::Uuid::from_u128(7), content_digest: "7".repeat(64) })
-            .unwrap()
-    });
+    let mut baseline = board.baseline.as_deref().cloned().expect("fill the board of a session with an accepted baseline");
     baseline.format = update::DISPLAY_FORMAT.into();
     for net in &mut baseline.nets {
         net.origin = None;
@@ -77,7 +75,7 @@ pub(super) fn fill_board(s: &Session, slack: usize) -> Arc<Project> {
 #[test]
 fn a_f1_board_size_fit_overflow_inactive_and_native_control() {
     for status in ["reference", "suppressed", "lost"] {
-        let mut s = fixture(false);
+        let mut s = fixture(true);
         let a = pick(&mut s, 0, "fp.origin", None);
         let row = add(&mut s, "horizontal", origin(), a);
         let ids: Vec<_> = s.project().unwrap().board.footprints().iter().map(|f| format!("footprint-{}", f.id)).collect();
