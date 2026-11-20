@@ -2452,7 +2452,9 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         }
         bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
-    bytes.write_all(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" }).map_err(|error| error.to_string())?;
+    bytes
+        .write_all(if board.assignments.is_empty() { b"  \"footprints\": [\n" } else { b"  \"assignments\": [\n" })
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
