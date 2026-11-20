@@ -32,27 +32,43 @@ impl Session {
     /// Plan and validate against the current revision, then optionally publish as one undo step.
     /// `scope` must explicitly enable completion. Preview and no-ops never publish an edit.
     pub(crate) fn complete_packages(&mut self, params: &Value) -> Result<Value, CommandError> {
+        self.complete_packages_with_commit(params, || Ok(()))
+    }
+
+    /// Run package completion with host authorization immediately before publication.
+    /// Only a prepared, effectful Apply invokes `authorize`; an error discards the candidate
+    /// without changing the snapshot, revision, history or the edit observer.
+    pub fn complete_packages_with_commit<E: From<CommandError>>(
+        &mut self,
+        params: &Value,
+        authorize: impl FnOnce() -> Result<(), E>,
+    ) -> Result<Value, E> {
+        self.authorize_command(COMPLETE_PACKAGES)?;
+        self.refuse_stale(COMPLETE_PACKAGES, params)?;
         self.validate_project_command(COMPLETE_PACKAGES, params)?;
         let before = self.open_project()?;
         let sheet_arg = params.get("sheet").and_then(Value::as_str);
         let sheet = match params["scope"].as_str().unwrap_or("none") {
             "sheet" => Some(before.resolve_sheet(sheet_arg)?.id()),
-            _ if sheet_arg.is_some() => return Err(CommandError::InvalidParams("`sheet` is only allowed with sheet scope.".into())),
+            _ if sheet_arg.is_some() => return Err(CommandError::InvalidParams("`sheet` is only allowed with sheet scope.".into()).into()),
             "none" => return Ok(json!({"revision":self.revision(), "changes":[], "skipped":[]})),
             _ => None,
         };
         let owners = owners(before);
         let (moves, skipped) = plan_moves(before, &owners, sheet)?;
         let changes: Vec<_> = moves.iter().map(Move::report).collect();
+        let mut report = json!({"revision":self.revision(), "changes":changes, "skipped":skipped});
         if !moves.is_empty() {
             let (candidate, terminals) = transfer(before, &moves);
             let (candidate, highest) = self.prepare_change_with_nets(candidate, |next, _| next.rekey_nets(before, &terminals))?;
             if params["dry_run"].as_bool() != Some(true) {
+                authorize()?;
                 self.publish_change(candidate, highest);
                 self.report_committed(COMPLETE_PACKAGES, params);
+                report["revision"] = json!(self.revision());
             }
         }
-        Ok(json!({"revision":self.revision(), "changes":changes, "skipped":skipped}))
+        Ok(report)
     }
 }
 

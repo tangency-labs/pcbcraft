@@ -408,6 +408,33 @@ fn package_completion_fills_an_existing_package_first() {
     assert_eq!(session.project().unwrap().available_units(&existing).len(), 0);
 }
 
+/// A host may refuse a prepared transfer without consuming revision or history; previews
+/// never ask for publication authority, and a granted transfer adds exactly one undo step.
+#[test]
+fn package_completion_authorizes_only_a_prepared_apply() {
+    let mut session = quad();
+    place_loose(&mut session, 1, None);
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let undo = session.undo.len();
+    let redo = session.redo.len();
+    let mut params = json!({"scope":"project","expected_revision":revision,"dry_run":true});
+    let refusal = CommandError::Unavailable("host withdrew publication authority".into());
+    let preview = session.complete_packages_with_commit(&params, || Err(refusal.clone())).unwrap();
+    assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+    params["dry_run"] = json!(false);
+    assert_eq!(session.complete_packages_with_commit(&params, || Err(refusal.clone())), Err(refusal));
+    assert_eq!((session.revision(), session.undo.len(), session.redo.len()), (revision, undo, redo));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+
+    let result = session.complete_packages_with_commit(&params, || Ok::<_, CommandError>(())).unwrap();
+    assert_eq!(result["changes"], preview["changes"]);
+    assert_eq!(result["revision"], revision + 1);
+    assert_eq!(session.undo.len(), undo + 1);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
 /// Unsafe aliasing, stale revision, and invalid scope leave the same snapshot and history.
 #[test]
 fn package_completion_refuses_new_shared_connections_atomically() {

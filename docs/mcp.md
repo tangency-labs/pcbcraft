@@ -737,9 +737,13 @@ skipped}`, even with `inspect: false`. Each change names `sheet`, `symbol`,
 pin numbers as an old-to-new map). A source part in `changes` is retired; its
 symbol is retained. Skipped entries name `part` and `reason`. A read-only
 session refuses the command with `out_of_scope`, even for a dry run, because the
-same command applies the transfer. See
-[package completion](symbol-schema.md#complete-loose-packages) for the matching
-and electrical restrictions.
+same command applies the transfer. For a live Apply, the editor checks its
+request deadline after preparing the transfer and does not publish if the deadline
+or an observed disconnect wins. Once publication is authorized, that server
+deadline no longer ends the reply wait. A client timeout or transport failure can
+still lose the reply to a committed edit; inspect before retrying. See [package
+completion](symbol-schema.md#complete-loose-packages) for the matching and
+electrical restrictions.
 
 ## Placement origin
 

@@ -231,6 +231,17 @@ fn check_window_version(editor: &dyn Editor, id: &str, stated: &Value) -> Result
 /// as in a headless session. A symbol-field preview that exceeds the live reply limit
 /// returns a tool error without applying the edit.
 pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Failure> {
+    call_editor_with_package_commit(editor, request, || Ok(()))
+}
+
+/// Dispatch through the same live policy, letting the host arbitrate an effectful package
+/// completion after preparation but before publication. Other commands, previews and no-ops
+/// do not invoke the supplied authorization.
+pub fn call_editor_with_package_commit(
+    editor: &mut dyn Editor,
+    request: &Value,
+    authorize: impl FnOnce() -> Result<(), Failure>,
+) -> Result<Value, Failure> {
     let method = request["method"].as_str().ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "missing control method"))?;
     let params = &request["params"];
     match method {
@@ -252,6 +263,10 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
             }
             if let Some(reason) = editor.refusal(id) {
                 return Err(Failure::new(ErrorCode::Unavailable, reason));
+            }
+            if id == pcbcraft_engine::COMPLETE_PACKAGES {
+                check_deferred_version(id, params)?;
+                return editor.session().complete_packages_with_commit(&params["params"], authorize);
             }
             if !is_window_command(id) {
                 let result = call_session(editor.session(), method, params)?;

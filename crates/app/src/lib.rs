@@ -2566,7 +2566,7 @@ impl PcbApp {
             return;
         }
         let revision = self.session.revision();
-        let result = pcbcraft_mcp::live::call_editor(&mut live_control::LiveEditor { app: self, ctx }, request.body());
+        let result = request.dispatch(self, ctx);
         if let Some(live) = &self.live_control {
             self.automation.authorize(live.automation_owner(false, request.generation()));
         }
