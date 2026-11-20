@@ -5,6 +5,7 @@ pub(super) mod editing;
 mod export_tests;
 mod form;
 mod io;
+pub(super) mod pin_table;
 pub(super) mod publishing;
 pub(super) mod remap;
 #[cfg(test)]
@@ -56,6 +57,8 @@ struct Document {
     array_requested: bool,
     details_requested: bool,
     draft: Option<form::Draft>,
+    /// Validated pin-table plan staged by the import dialog for symbol generation (P2) or diffing (P3).
+    staged_pin_table: Option<pcbcraft_engine::authoring::pin_table::ImportPlan>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
     tool: canvas::Tool,
@@ -273,6 +276,7 @@ impl Editors {
                 array_requested: false,
                 details_requested: false,
                 draft: None,
+                staged_pin_table: None,
                 camera,
                 collapsed: [false, false],
                 tool: canvas::Tool::Select,
@@ -650,6 +654,7 @@ impl PcbApp {
             Publish,
             Copy,
             Remap,
+            PinTable,
             Undo,
             Redo,
             Focus(u64),
@@ -693,6 +698,12 @@ impl PcbApp {
                     }
                 });
                 menu::library(ui, |ui| {
+                    if pcbcraft_chrome::MenuItem::new("Import pin table…")
+                        .enabled(can_save && self.library_editors.active_kind() == Some(Kind::Symbol))
+                        .show(ui)
+                    {
+                        intents.borrow_mut().push(Intent::PinTable);
+                    }
                     if pcbcraft_chrome::MenuItem::new("Remap pins…")
                         .enabled(can_save && self.library_editors.active_kind() == Some(Kind::Symbol))
                         .show(ui)
@@ -770,6 +781,7 @@ impl PcbApp {
                 Intent::Publish => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_publish(id)),
                 Intent::Copy => active.ok_or("No active library item.".into()).and_then(|id| self.copy_library_document(&ctx, id)),
                 Intent::Remap => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_pin_remap(id)),
+                Intent::PinTable => active.ok_or("No active library item.".into()).and_then(|id| self.begin_library_pin_table(id)),
                 Intent::Save(export) => active.ok_or("No active library item.".into()).and_then(|id| self.library_editors.save(&ctx, id, export)),
                 history @ (Intent::Undo | Intent::Redo) => active.ok_or("No active library item.".into()).and_then(|id| {
                     let revision = self.library_editors.documents.get(&id).ok_or("Unknown library document ID.")?.session.revision();
@@ -884,6 +896,7 @@ impl PcbApp {
                         (ToolIcon::Shared("copy"), "Edit copy", "Edit under a new item identity", can_save),
                         (ToolIcon::Sheet, "Save copy", "Save unfinished draft; does not publish to the catalog", can_save),
                         (ToolIcon::Sheet, "Export", "Export native definition", can_save),
+                        (ToolIcon::Sheet, "Pin table", "Import and preview a CSV or TSV pin table", can_save && kind == Kind::Symbol),
                     ]
                     .map(|(icon, label, description, enabled)| RibbonTool {
                         icon,
@@ -922,6 +935,7 @@ impl PcbApp {
                 1 => self.open_library_picker(ui.ctx()).err(),
                 2 => self.begin_library_publish(id).err(),
                 3 => self.copy_library_document(ui.ctx(), id).err(),
+                6 => self.begin_library_pin_table(id).err(),
                 _ => self.library_editors.save(ui.ctx(), id, action == 5).err(),
             };
         }

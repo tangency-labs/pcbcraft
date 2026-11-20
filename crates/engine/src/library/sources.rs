@@ -48,6 +48,8 @@ pub const PREPARE_PART_PUBLICATION: &str = "library.prepare_part_publication";
 pub const PREPARE_PUBLICATION: &str = "library.prepare_publication";
 /// Validate an explicit draft pin remap and inspect current placed nets without changing a project.
 pub const PREVIEW_PIN_REMAP: &str = "library.preview_pin_remap";
+/// Parse and validate a CSV/TSV pin table without creating pins or changing any document.
+pub const PREVIEW_PIN_TABLE: &str = "library.preview_pin_table";
 
 /// Accept missing legacy attribution only when every definition field otherwise matches.
 /// Complete source definitions still compare their full content, including provenance.
@@ -80,7 +82,33 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 11] = [
+pub(crate) const COMMANDS: [Command; 12] = [
+    Command {
+        id: PREVIEW_PIN_TABLE,
+        title: "Preview symbol pin table",
+        summary: "Parse and validate a CSV or TSV pin table and report per-row findings and unit layout estimates. Creates no pins and changes no document.",
+        params: &[
+            Param { name: "text", summary: "CSV or TSV pin table text", required: true, kind: ParamKind::PinTableText },
+            Param {
+                name: "delimiter",
+                summary: "Field delimiter: auto, comma, tab or semicolon",
+                required: false,
+                kind: ParamKind::PinTableDelimiter,
+            },
+            Param {
+                name: "has_header",
+                summary: "Whether the first non-empty row contains column headers (default true)",
+                required: false,
+                kind: ParamKind::Flag,
+            },
+            Param {
+                name: "mapping",
+                summary: "Optional zero-based column index overrides for number, name, electrical_type, unit and side",
+                required: false,
+                kind: ParamKind::PinTableMapping,
+            },
+        ],
+    },
     Command {
         id: PREVIEW_PIN_REMAP,
         title: "Preview symbol pin remap",
@@ -1035,6 +1063,7 @@ impl Session {
         let command = crate::command(id).ok_or_else(|| CommandError::Unknown(id.into()))?;
         crate::check_params(command, params)?;
         match id {
+            PREVIEW_PIN_TABLE => crate::authoring::pin_table::preview_from_params(params).map_err(CommandError::InvalidParams),
             PREVIEW_PIN_REMAP => {
                 let fail = CommandError::InvalidParams;
                 let item = crate::authoring::Item::decode(&serde_json::to_vec(&params["item"]).map_err(|e| fail(e.to_string()))?).map_err(fail)?;

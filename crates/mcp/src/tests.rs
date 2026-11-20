@@ -788,6 +788,7 @@ fn native_source_search_and_placement_share_the_mcp_session() {
             "library.prepare_publication",
             "library.preview_footprint_revision",
             "library.preview_pin_remap",
+            "library.preview_pin_table",
             "library.remove_source",
             "library.resolve_part",
             "library.search",

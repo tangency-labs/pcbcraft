@@ -171,6 +171,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
             sources::PARSE_QUANTITY => json!({"quantity":"resistance","value":"100 mΩ"}),
             sources::PREVIEW_PIN_REMAP => json!({"item":remap_item,"pins":[{"unit":"main","object":"1","number":"7"}]}),
+            sources::PREVIEW_PIN_TABLE => json!({"text":"Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n"}),
             sources::PREVIEW_FOOTPRINT_REVISION => {
                 // A read: this fixture has no library placement, so both hosts must give the same
                 // lookup failure, never a scope refusal. The successful read-only preview is in
@@ -213,6 +214,13 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             assert_eq!(actual["changes"][0]["after"], "7");
             assert_eq!(actual["saved"], false);
             assert_eq!(actual["placed_instances_changed"], false);
+        }
+        if id == sources::PREVIEW_PIN_TABLE {
+            assert_eq!(actual["rows"].as_array().map(Vec::len), Some(1));
+            assert_eq!(actual["findings"], json!([]));
+            assert_eq!(actual["can_accept"], true);
+            assert_eq!(actual["created"], false);
+            assert_eq!(actual["saved"], false);
         }
         // Assembly profile preview returns its data only via execute, including in MCP.
         if id != PREVIEW_ASSEMBLY_PROFILE {

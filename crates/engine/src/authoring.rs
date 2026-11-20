@@ -2,6 +2,7 @@
 #[cfg(test)]
 mod basics_tests;
 mod operations;
+pub mod pin_table;
 pub mod publishing;
 #[cfg(test)]
 mod publishing_tests;

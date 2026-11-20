@@ -211,6 +211,12 @@ enum ParamKind {
     RouteBudget,
     /// A bounded text whose references are resolved.
     ParameterText,
+    /// Bounded CSV/TSV pin-table text for preview.
+    PinTableText,
+    /// Delimiter spelling for pin-table parsing.
+    PinTableDelimiter,
+    /// Optional column-index mapping for pin-table preview.
+    PinTableMapping,
 }
 
 impl ParamKind {
@@ -270,6 +276,9 @@ impl ParamKind {
             }
             Self::PinRemaps => authoring::remap::schema(),
             Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision.schema(),
+            Self::PinTableText => json!({"type":"string","maxLength":authoring::pin_table::MAX_BYTES}),
+            Self::PinTableDelimiter => authoring::pin_table::delimiter_schema(),
+            Self::PinTableMapping => authoring::pin_table::mapping_schema(),
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
@@ -558,6 +567,11 @@ impl ParamKind {
                 .parse(value)
                 .map(|_| ())
                 .map_err(|_| "must be a canonical decimal string from 1 through 4294967295"),
+            Self::PinTableText if value.as_str().is_some_and(|text| text.len() <= authoring::pin_table::MAX_BYTES) => Ok(()),
+            Self::PinTableText => Err("must be UTF-8 text of at most 262144 bytes"),
+            Self::PinTableDelimiter if value.as_str().and_then(authoring::pin_table::Delimiter::parse).is_some() => Ok(()),
+            Self::PinTableDelimiter => Err("must be auto, comma, tab or semicolon"),
+            Self::PinTableMapping => authoring::pin_table::validate_mapping_value(value).map(|_| ()),
             Self::AuthoringItem => Err("must contain a valid bounded native authoring item"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol, footprint, category or part"),
@@ -3235,7 +3249,8 @@ impl Session {
             | library::sources::PARSE_QUANTITY
             | library::sources::PREPARE_PART_PUBLICATION
             | library::sources::PREPARE_PUBLICATION
-            | library::sources::PREVIEW_PIN_REMAP => true,
+            | library::sources::PREVIEW_PIN_REMAP
+            | library::sources::PREVIEW_PIN_TABLE => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
