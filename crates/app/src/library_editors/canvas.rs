@@ -751,7 +751,14 @@ impl Document {
                 // Paste resolves in event order and only while focused: a later Escape
                 // in the same batch cancels the chord, and a focus-loss batch must not
                 // arm a preview the reset at the top of this canvas just cleared.
-                let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
+                let copied = ui.input(|i| {
+                    i.focused
+                        && i.events.iter().any(|event| match event {
+                            egui::Event::Copy => true,
+                            egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } => modifiers.command,
+                            _ => false,
+                        })
+                });
                 let cut = ui.input(|i| {
                     i.focused
                         && i.events.iter().any(|event| match event {
@@ -769,7 +776,7 @@ impl Document {
                             _ => armed,
                         })
                 });
-                if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
+                if copied {
                     self.copy(ui.ctx());
                 }
                 if cut {
