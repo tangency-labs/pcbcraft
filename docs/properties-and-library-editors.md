@@ -49,8 +49,11 @@ hundredths of a point, with a reset to the theme default. The shared
 `nets.set_appearance` and `nets.inspect_appearance` commands back the form, so
 MCP sees the same fields, bounds, revision refusal and one-step undo. Stroke
 width is a screen-space width and stays readable at every zoom. Color is
-presentation only; selection, hover and error indicators keep their own colors
-and remain distinguishable.
+presentation only; selection, hover and error indicators keep their own colors,
+although a net color matching the active theme's selection accent can make a selected
+wire indistinguishable from an unselected one. Handles appear only for a single selected
+wire with an interior corner or a junction end, so straight wires and multi-wire
+selections may have no additional selection cue.
 
 Footprint selection includes a physical preview, explicit terminal-to-pad map
 and an expandable source/license section. Assignment pins a definition without

@@ -610,13 +610,7 @@ impl ParamKind {
             Self::ClassTarget => nets::ClassTarget::parse(value)
                 .map(|_| ())
                 .map_err(|_| "must contain a scoped persistent net address or current typed derived anchor"),
-            Self::NetAppearance
-                if value.is_null()
-                    || serde_json::from_value::<nets::Appearance>(value.clone()).is_ok_and(|appearance| appearance.validate().is_ok()) =>
-            {
-                Ok(())
-            }
-            Self::NetAppearance => Err("must be null or an appearance object with RGB color and bounded width_cp"),
+            Self::NetAppearance => nets::validate_appearance_patch(value),
             Self::ClassId => serde_json::from_value::<uuid::Uuid>(value.clone())
                 .ok()
                 .filter(|id| !id.is_nil())
@@ -942,7 +936,7 @@ const ITEMS: Param = Param { required: true, name: "items", summary: "Symbol and
 const APPEARANCE: Param = Param {
     required: true,
     name: "appearance",
-    summary: "Sparse drawing override: color RGB and/or width_cp in hundredths of a point; null or an empty object resets to theme defaults",
+    summary: "Sparse drawing patch: omit a channel to keep its saved value, set color RGB and/or width_cp in hundredths of a point, or remove one channel with {\"clear\":[\"color\"]} or {\"clear\":[\"width_cp\"]}; null or {} resets to theme defaults",
     kind: ParamKind::NetAppearance,
 };
 const WIRE: Param = Param { required: true, name: "wire", summary: "Wire ID from inspection", kind: ParamKind::WireId };

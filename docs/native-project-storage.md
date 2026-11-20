@@ -175,10 +175,14 @@ stroke width of every schematic wire on that logical net, across sheets. `color`
 is an RGB triple of integers 0–255 and `width_cp` is a stroke width in hundredths
 of a point from 50 to 800; each field is optional, and a record with neither
 field is invalid. Absent fields use the theme defaults. Removing the last
-override returns the project to the format required by its other data, with the
-same bytes as before, and older readers refuse project/52 and instances/9 rather
-than silently dropping presentation intent. The override never changes
-connectivity, electrical identity, net-class rules or PCB geometry.
+override clears the appearance and returns the project to the format required by
+its other data, but it does not undo a promotion the edit caused or drop metadata
+that promotion adopted. Exact-byte restoration therefore holds only when the net's
+identity and metadata were already registered before the appearance edit; a
+previously derived net keeps its promoted identity and adopted metadata after the
+reset. Older readers refuse project/52 and instances/9 rather than silently
+dropping presentation intent. The override never changes connectivity, electrical
+identity, net-class rules or PCB geometry.
 
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
 at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,

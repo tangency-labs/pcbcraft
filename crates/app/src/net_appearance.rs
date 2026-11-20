@@ -1,7 +1,9 @@
 //! Revision-bound net wire appearance form shared by schematic Properties and MCP.
 //!
-//! The form edits a sparse patch; it never writes project documents itself and closes on the
-//! first successful shared command. Selection and highlight colors stay in control of the canvas.
+//! The form authors both appearance channels together: a checked channel carries its value and an
+//! unchecked channel with a saved override is named in the patch's `clear` marker so the clear
+//! happens in the same command. It never writes project documents itself and closes on success.
+//! Selection and highlight colors stay in control of the canvas.
 
 use crate::{Dialog, PcbApp, ViewInput, Workspace};
 use pcbcraft_chrome::{catalog, controls, rule_form as form, settings, shell};
@@ -15,6 +17,10 @@ pub(super) struct Edit {
     net_name: String,
     use_color: bool,
     use_width: bool,
+    /// Whether the inspected net already saved each override, so an unchecked channel can be
+    /// named in the patch's `clear` marker instead of being silently inherited by a partial patch.
+    saved_color: bool,
+    saved_width: bool,
     color: [u8; 3],
     width_cp: u16,
     error: Option<String>,
@@ -26,9 +32,9 @@ impl Edit {
         let theme_color = pcbcraft_chrome::theme::Tokens::get().schematic_wire;
         let color = inspected.and_then(|appearance| appearance.color).unwrap_or([theme_color.r(), theme_color.g(), theme_color.b()]);
         let width_cp = inspected.and_then(|appearance| appearance.width_cp).unwrap_or(pcbcraft_engine::nets::DEFAULT_WIDTH_CP);
-        let use_color = inspected.is_some_and(|appearance| appearance.color.is_some());
-        let use_width = inspected.is_some_and(|appearance| appearance.width_cp.is_some());
-        Self { source, target, net_name, use_color, use_width, color, width_cp, error: None }
+        let saved_color = inspected.is_some_and(|appearance| appearance.color.is_some());
+        let saved_width = inspected.is_some_and(|appearance| appearance.width_cp.is_some());
+        Self { source, target, net_name, use_color: saved_color, use_width: saved_width, saved_color, saved_width, color, width_cp, error: None }
     }
 
     /// Render the form and return the user's action without touching the session.
@@ -61,17 +67,28 @@ impl Edit {
         action
     }
 
-    /// Build the sparse patch sent through the shared command. An empty patch resets all fields.
+    /// Build the patch sent through the one shared command. Checked channels carry their value;
+    /// unchecked channels that already have a saved override are named in `clear`, so the clear
+    /// happens alongside the update in one history step. A patch with neither values nor clears
+    /// is the null reset sent when nothing is checked and nothing was saved.
     fn patch(&self) -> serde_json::Value {
-        if !self.use_color && !self.use_width {
-            return serde_json::Value::Null;
-        }
         let mut patch = serde_json::Map::new();
+        let mut clear = Vec::new();
         if self.use_color {
             patch.insert("color".into(), serde_json::json!(self.color));
+        } else if self.saved_color {
+            clear.push("color");
         }
         if self.use_width {
             patch.insert("width_cp".into(), serde_json::json!(self.width_cp));
+        } else if self.saved_width {
+            clear.push("width_cp");
+        }
+        if patch.is_empty() && clear.is_empty() {
+            return serde_json::Value::Null;
+        }
+        if !clear.is_empty() {
+            patch.insert("clear".into(), serde_json::json!(clear));
         }
         serde_json::Value::Object(patch)
     }

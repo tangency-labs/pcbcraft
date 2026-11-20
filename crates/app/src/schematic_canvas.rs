@@ -327,6 +327,9 @@ pub(crate) fn show(
     editing: Option<&crate::inline_text::Target>,
 ) -> Option<Click> {
     let rect = ui.available_rect_before_wrap();
+    // Remember the committed snapshot before previews can shadow `project`, so a transient
+    // transformed snapshot never reuses or pollutes the appearance cache.
+    let base_project = project;
     // Keep the canvas from taking keyboard focus away from editor shortcuts.
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
@@ -454,7 +457,8 @@ pub(crate) fn show(
     // A transformed snapshot already contains the preview's pin positions and orientation.
     // Overriding them with the captured starting symbol would draw wires to its old rotation.
     let moved_wires = if group_preview.is_some() { None } else { moved.clone() };
-    wires::paint(&painter, rect, project, camera, moved_wires, &whole_wires, &highlighted.wires);
+    let appearances = draft.appearances(project, revision, !std::ptr::eq(project, base_project));
+    wires::paint(&painter, rect, project, camera, moved_wires, &whole_wires, &highlighted.wires, &appearances);
     if group_preview.is_some()
         && let Some(target) = reshape_target
         && !matches!(target, Anchor::Free(_))

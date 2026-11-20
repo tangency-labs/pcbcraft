@@ -434,14 +434,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
     let appearance_format = project.format == APPEARANCE_PROJECT_FORMAT;
-    if (!lock_format && !pair_format && profile_format != project.assembly_profiles.is_some())
+    if (!lock_format && !pair_format && !appearance_format && profile_format != project.assembly_profiles.is_some())
         || project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty())
     {
         return Err("project.json: assembly profiles require project format 36, 45, 51 or 52 and a nonempty identity catalog.".into());
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
-    if lock_format != project.components.iter().any(|part| part.designator_locked.is_some())
+    if (lock_format != project.components.iter().any(|part| part.designator_locked.is_some()) && !appearance_format)
         || project.components.iter().any(|part| part.designator_locked == Some(false))
     {
         return Err("Designator locks require project format 51 and at least one true designator_locked flag; omit unlocked flags.".into());
@@ -712,7 +712,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if !appearance_format && stored_registry.is_some_and(crate::nets::Registry::has_appearance) {
         return Err("Net wire appearance requires project format 52 and instances format 9 when board-owned.".into());
     }
-    if !lock_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
+    let has_pairs = stored_registry.is_some_and(crate::nets::Registry::has_pairs);
+    let has_appearance = stored_registry.is_some_and(crate::nets::Registry::has_appearance);
+    if !lock_format && pair_format != has_pairs && !(appearance_format && has_pairs && has_appearance) {
         return Err(
             "Differential pairs require project format 45, 51 or 52 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
                 .into(),
@@ -1803,9 +1805,9 @@ impl DocumentsEncoder {
                     if has_profiles && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Assembly profiles require adopted storage/occurrence metadata.".into());
                     }
-                    let format = if has_locks {
+                    let format = if !has_appearance && has_locks {
                         DESIGNATOR_LOCK_PROJECT_FORMAT
-                    } else if has_profiles && !has_pairs {
+                    } else if !has_appearance && has_profiles && !has_pairs {
                         ASSEMBLY_PROFILE_PROJECT_FORMAT
                     } else {
                         format

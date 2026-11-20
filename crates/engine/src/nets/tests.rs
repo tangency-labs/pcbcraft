@@ -7,6 +7,7 @@ use crate::{
 use serde_json::{Value, json};
 use std::sync::Arc;
 
+mod appearance;
 mod codec;
 mod numbering;
 mod pairs;

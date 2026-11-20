@@ -51,3 +51,42 @@ fn wire_properties_author_net_appearance_through_one_form() {
     let saved = pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     assert_eq!(serde_json::from_slice::<Value>(&saved[pcbcraft_engine::persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/52");
 }
+
+/// Save both channels through the form, which makes both checkboxes start checked next time.
+fn seed_both_channels(h: &mut Harness<'_, PcbApp>) {
+    click(h, "Net appearance…");
+    click(h, "Set wire color");
+    click(h, "Set drawn width");
+    click(h, "Apply");
+}
+
+/// Unchecking one independent channel clears only that saved override, the checked channel keeps
+/// its value, and one Undo restores both. This relies on the engine's `clear` marker rather than
+/// preserving the unchecked saved value of a partial patch.
+#[test]
+fn unchecking_a_channel_clears_only_that_override_and_one_undo_restores_both() {
+    let mut h = harness();
+    h.run();
+    let theme_color = pcbcraft_chrome::theme::Tokens::get().schematic_wire;
+    let theme = [theme_color.r(), theme_color.g(), theme_color.b()];
+    let both = nets::Appearance { color: Some(theme), width_cp: Some(nets::DEFAULT_WIDTH_CP) };
+
+    seed_both_channels(&mut h);
+    assert_eq!(h.state().session.project().unwrap().wire_appearances().unwrap().values().next(), Some(&both));
+
+    for (uncheck, expected) in [
+        ("Set drawn width", nets::Appearance { color: Some(theme), width_cp: None }),
+        ("Set wire color", nets::Appearance { color: None, width_cp: Some(nets::DEFAULT_WIDTH_CP) }),
+    ] {
+        let revision = h.state().session.revision();
+        click(&mut h, "Net appearance…");
+        click(&mut h, uncheck);
+        click(&mut h, "Apply");
+        assert_eq!(h.state().session.revision(), revision + 1, "one form apply is one shared command");
+        assert_eq!(h.state().session.project().unwrap().wire_appearances().unwrap().values().next(), Some(&expected));
+
+        h.state_mut().run("edit.undo", &Value::Null);
+        h.run();
+        assert_eq!(h.state().session.project().unwrap().wire_appearances().unwrap().values().next(), Some(&both));
+    }
+}

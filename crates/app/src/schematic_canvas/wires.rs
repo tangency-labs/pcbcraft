@@ -2,6 +2,7 @@ use egui::{Color32, Painter, PointerButton, Pos2, Rect, Response, Shape, Stroke}
 use pcbcraft_chrome::{Tokens, theme};
 use pcbcraft_engine::{
     Project,
+    nets::Appearance,
     schematic::{Point, SymbolPlacement, WireEndpoint, orthogonal_path},
     wire::{Anchor, Reshape},
 };
@@ -20,17 +21,55 @@ mod tests;
 pub(crate) struct Draft {
     corners: Vec<Vec<Point>>,
     target_cache: RefCell<targets::Cache>,
+    /// Last wire-appearance derivation, reused across camera-only repaints of the same snapshot.
+    appearance_cache: RefCell<AppearanceCache>,
     pub(crate) horizontal_first: bool,
     pub(crate) finish_requested: bool,
 }
 
+/// One view's derived wire appearances, tied to the immutable snapshot they came from. Keeping
+/// a cloned snapshot alive also keeps its wire collection address from being reused by a later
+/// snapshot, so identity cannot accidentally hit a stale result.
+#[derive(Debug, Default)]
+struct AppearanceCache {
+    snapshot: Option<Project>,
+    revision: u64,
+    appearances: std::collections::BTreeMap<String, Appearance>,
+}
+
 impl Default for Draft {
     fn default() -> Self {
-        Self { target_cache: RefCell::default(), corners: Vec::new(), horizontal_first: true, finish_requested: false }
+        Self {
+            target_cache: RefCell::default(),
+            appearance_cache: RefCell::default(),
+            corners: Vec::new(),
+            horizontal_first: true,
+            finish_requested: false,
+        }
     }
 }
 
 impl Draft {
+    /// Resolve wire appearance overrides for one paint. The last derivation is reused when
+    /// `project` is still the same immutable snapshot at the same revision, so camera-only
+    /// repaints skip rebuilding the electrical graph. A preview snapshot is computed fresh and
+    /// never cached, because its transformed geometry belongs only to that transient frame. The
+    /// engine's no-override fast path inside `wire_appearances()` is preserved on every miss.
+    pub(crate) fn appearances(&self, project: &Project, revision: u64, preview: bool) -> std::collections::BTreeMap<String, Appearance> {
+        if preview {
+            return project.wire_appearances().unwrap_or_default();
+        }
+        let mut cache = self.appearance_cache.borrow_mut();
+        if cache.revision == revision && cache.snapshot.as_ref().is_some_and(|snapshot| std::ptr::eq(snapshot.wires(), project.wires())) {
+            return cache.appearances.clone();
+        }
+        let appearances = project.wire_appearances().unwrap_or_default();
+        cache.snapshot = Some(project.clone());
+        cache.revision = revision;
+        cache.appearances = appearances.clone();
+        appearances
+    }
+
     /// Resolve the frozen corners and current leg, retracting self-overlap with the same
     /// normalization as commit when enabled. Invalid or overly complex previews are refused.
     pub(crate) fn path(&self, from: Point, to: Point, auto_heal: bool) -> Option<Vec<Point>> {
@@ -273,6 +312,7 @@ pub(super) fn paint_handles(
 /// wire ends meet the route reads as continuous, so nothing is drawn; three or more get a filled
 /// junction dot.
 /// Local selection takes precedence over a counterpart highlight; neither changes connectivity.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     painter: &Painter,
     rect: Rect,
@@ -281,10 +321,9 @@ pub(super) fn paint(
     moved: Option<(SymbolPlacement, Point)>,
     selected: &std::collections::BTreeSet<String>,
     highlighted: &std::collections::BTreeSet<String>,
+    appearances: &std::collections::BTreeMap<String, Appearance>,
 ) {
     let tokens = Tokens::get();
-    // Net appearance is sparse and read-only; the fast path skips graph construction entirely.
-    let appearances = project.wire_appearances().unwrap_or_default();
     let preview =
         moved.map(|(symbol, point)| (symbol.terminals(), symbol.unit_definition().pin_positions(point, symbol.turns(), symbol.is_mirrored())));
     let position = |endpoint| {

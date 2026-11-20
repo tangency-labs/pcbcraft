@@ -432,3 +432,28 @@ fn dragging_an_explicitly_selected_wire_moves_it_whole() {
     drop(&mut h, to);
     assert_eq!(routes(&h), vec![vec![grid(-8, 2), grid(8, 2), grid(8, 8)]]);
 }
+
+/// The paint cache reuses one derivation for the same committed snapshot and revision, never
+/// stores a preview snapshot, and recomputes once the document revision moves on.
+#[test]
+fn appearance_cache_reuses_committed_snapshot_and_bypasses_previews() {
+    let h = harness();
+    let project = h.state().session.project().unwrap().clone();
+    let revision = h.state().session.revision();
+    let draft = super::Draft::default();
+
+    let first = draft.appearances(&project, revision, false);
+    assert!(draft.appearance_cache.borrow().snapshot.is_some());
+    assert_eq!(draft.appearances(&project, revision, false), first);
+
+    let cached_revision = draft.appearance_cache.borrow().revision;
+    let cached_wires = draft.appearance_cache.borrow().snapshot.as_ref().map(|snapshot| snapshot.wires().as_ptr());
+    // A preview is derived at a later revision but must not replace the committed cache.
+    let _ = draft.appearances(&project, revision + 1, true);
+    assert_eq!(draft.appearance_cache.borrow().revision, cached_revision);
+    assert_eq!(draft.appearance_cache.borrow().snapshot.as_ref().map(|snapshot| snapshot.wires().as_ptr()), cached_wires);
+
+    let recomputed = draft.appearances(&project, revision + 1, false);
+    assert_eq!(recomputed, first);
+    assert_eq!(draft.appearance_cache.borrow().revision, revision + 1);
+}

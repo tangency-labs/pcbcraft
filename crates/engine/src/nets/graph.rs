@@ -52,6 +52,7 @@ impl Network {
                 generated_number: record.generated_number,
                 lineage: record.lineage.clone(),
                 class_bindings: record.class_bindings.clone(),
+                appearance: record.appearance,
                 ..next
             })
         }
