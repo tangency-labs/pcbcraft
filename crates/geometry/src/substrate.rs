@@ -60,7 +60,9 @@ pub fn build(paths: &[OutlinePath], drills: &[RoundDrill], thickness_nm: i64) ->
 }
 
 /// Tessellate a substrate body using the same kernel family that constructed it. The tolerance
-/// is chord error in nanometres, not a change to the body. Refused faces return an error instead
+/// is chord error in nanometres, not a change to the body. A tolerance finer than a millionth of
+/// the body's largest extent (100 nm on a 100 mm board) is refused, since the kernel would
+/// silently coarsen it. Refused faces return an error instead
 /// of a partial mesh; this function never writes a file or consumes the body.
 pub fn tessellate(body: &Body, chord_nm: i64) -> Result<BoardMesh> {
     if !(1..=MAX_LENGTH_NM).contains(&chord_nm) {

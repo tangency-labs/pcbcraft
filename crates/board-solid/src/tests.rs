@@ -209,3 +209,30 @@ fn refuses_crossing_board_outline() {
     assert_eq!(error.code(), ErrorCode::InvalidParams);
     assert!(error.message().contains("cross or touch"), "{error}");
 }
+
+/// A 100 mm board's kernel floor is 100 nm: a 10 nm request is refused rather than coarsened,
+/// and a supported 1000 nm request still meshes.
+fn hundred_mm_board_solid() -> Option<BoardSolid> {
+    let mut session = board(None);
+    draw(&mut session, &[[0, 0], [100_000_000, 0], [100_000_000, 20_000_000], [0, 20_000_000]], true);
+    let solid = BoardSolid::build(view(&session));
+    if cfg!(all(target_arch = "wasm32", not(feature = "wasm-kernel"))) {
+        assert_eq!(solid.unwrap_err().code(), ErrorCode::KernelUnavailable);
+        return None;
+    }
+    Some(solid.unwrap())
+}
+
+#[test]
+fn refuses_chord_tolerance_below_the_kernel_floor() {
+    let Some(solid) = hundred_mm_board_solid() else { return };
+    let error = substrate::tessellate(&solid.body, 10).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidParams);
+    assert!(error.message().contains("10 nm is below the"), "{error}");
+}
+
+#[test]
+fn keeps_supported_chord_tolerance_on_a_100_mm_board() {
+    let Some(solid) = hundred_mm_board_solid() else { return };
+    assert!(!substrate::tessellate(&solid.body, 1_000).unwrap().triangles.is_empty());
+}

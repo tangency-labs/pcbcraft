@@ -61,8 +61,17 @@ pub(crate) fn substrate_mesh(body: &KernelBody, chord_nm: i64) -> Result<BoardMe
     guard("tessellate board substrate", || {
         let (lo, hi) = body.0.bounds().map_err(|e| ops_error("board mesh bounds", e))?;
         let size = lo.into_iter().zip(hi).map(|(lo, hi)| hi - lo).fold(0.0, f64::max);
+        // The mesher never plans finer than a millionth of `size`; refuse rather than coarsen.
+        let chord = chord_nm as f64 / NM_PER_MM as f64;
+        if chord < size * 1e-6 {
+            let floor_nm = (size * 1e-6 * NM_PER_MM as f64).ceil();
+            return Err(GeometryError::new(
+                ErrorCode::InvalidParams,
+                format!("mesh chord tolerance {chord_nm} nm is below the {floor_nm} nm the kernel supports for this board"),
+            ));
+        }
         let (record, _) = body.0.to_record().map_err(|e| ops_error("board mesh record", e))?;
-        let tolerance = solidcore_tess::MeshTolerance::chord(chord_nm as f64 / NM_PER_MM as f64);
+        let tolerance = solidcore_tess::MeshTolerance::chord(chord);
         let (plan, stats) = solidcore_tess::plan(&record, &tolerance, size)
             .map_err(|e| GeometryError::new(ErrorCode::OperationFailed, format!("plan board mesh: {e}")))?;
         let (mesh, refused) = plan.welded();
