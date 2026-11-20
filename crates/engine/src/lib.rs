@@ -4180,6 +4180,8 @@ impl Session {
     /// Remove a unit and its wires. Removing the last unit retires its live component;
     /// an enabled accepted baseline retains its physical footprint pending review.
     /// Legacy mode removes that footprint immediately. Undo restores the full snapshot.
+    /// Delete a placed unit. Without an accepted board baseline, refuse to retire
+    /// its component if that would immediately remove a locked footprint.
     fn delete_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -4192,6 +4194,11 @@ impl Session {
         project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
         if !project.all_symbols().any(|other| other.component == symbol.component) {
+            if project.board.baseline.is_none()
+                && let Some(footprint) = project.board.footprint_for_part_instance(symbol.component)
+            {
+                board::transform::require_unlocked_placements(&project, [Some(footprint)])?;
+            }
             project.retire_component(symbol.component);
         }
         project.sheet_mut().connectivity = Arc::default();

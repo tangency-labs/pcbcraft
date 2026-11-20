@@ -11,9 +11,9 @@ and cancellation. The two-resistor example below is an original
 development fixture; the polished MVP demo and its end-to-end acceptance remain
 separate work.
 
-Footprint lock flags currently have a [storage-only contract](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
-There is no footprint lock toggle/command or move/delete protection to try yet;
-track/via locks remain the supported interactive locking workflow.
+Boards with [existing footprint locks](pcb-layout-workflow.md#placed-footprint-locks)
+refuse move, rotate, flip, align and delete edits on those footprints. Track/via
+locks remain the supported way to lock and unlock objects interactively.
 
 ## Build and open an example
 

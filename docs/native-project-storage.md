@@ -328,10 +328,10 @@ definition reference. Geometry and connectivity use the same resolution paths
 as for unlocked placements. Host Open and Save still apply the existing
 migrations described above.
 
-This is storage and inspection only: no footprint lock command, GUI toggle or
-movement/deletion protection is provided yet. Diagnostic single-file encoding
-and the board clipboard explicitly refuse active footprint locks rather than
-silently losing them. See [the layout guide](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
+See [the layout guide](pcb-layout-workflow.md#placed-footprint-locks) for the
+placement commands that respect this flag. There is no footprint lock command or
+GUI toggle yet. Diagnostic single-file encoding and the board clipboard explicitly
+refuse active footprint locks rather than silently losing them.
 
 ### Assembly profiles and stack fields
 
