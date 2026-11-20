@@ -1014,6 +1014,34 @@ fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
 }
 
+/// A read-only headless session admits the assembly orientation check in both return modes,
+/// with the same report as an editing session, and leaves the project, revision and undo and
+/// redo history unchanged.
+#[test]
+fn headless_read_only_runs_the_assembly_check_without_changing_anything() {
+    use pcbcraft_engine::{CHECK_ASSEMBLY, SessionScope};
+    let mut editor = Session::default();
+    editor.apply("project.new", &json!({"name":"Review fixture","create_board":true})).unwrap();
+    let mut control = Server::new(Box::new(Headless::with_scope(SessionScope::Edit, editor.snapshot())));
+    let mut s = Server::new(Box::new(Headless::with_scope(SessionScope::ReadOnly, editor.snapshot())));
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    assert_eq!(before["scope"], "read_only");
+    assert_eq!(before["can_undo"], false);
+    assert_eq!(before["can_redo"], false);
+    let board = before["project"]["boards"][0]["id"].clone();
+    assert!(board.is_string(), "{before}");
+    for (params, inspect) in [(json!({}), false), (json!({"board":board}), false), (json!({"board":board}), true)] {
+        let args = json!({"command":CHECK_ASSEMBLY,"params":params,"inspect":inspect});
+        let response = call(&mut s, "execute", args.clone());
+        assert_ne!(response["isError"], true, "{response}");
+        let result = body(&response);
+        assert_eq!(result["revision"], before["revision"]);
+        assert_eq!(result["assembly_check"]["board"], json!({"project":before["project"]["id"],"board":board}));
+        assert_eq!(result["assembly_check"], body(&call(&mut control, "execute", args))["assembly_check"]);
+        assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+    }
+}
+
 /// A failed headless tool call keeps its message as the first text part and adds the published
 /// code and details, as a second text part and as the structured result.
 #[test]
@@ -1996,6 +2024,37 @@ fn design_check_report_survives_suppressed_project_inspection() {
     let result = body(&response);
     assert_eq!(result["revision"], created["revision"]);
     assert_eq!(result["design_check"]["rules"]["clearance_nm"], 250_000);
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
+/// The read-only assembly orientation report also survives suppressed project inspection.
+#[test]
+fn assembly_check_report_survives_suppressed_project_inspection() {
+    let mut server = server();
+    let created = body(&call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true}})));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::CHECK_ASSEMBLY,"params":{},"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["revision"], created["revision"]);
+    assert_eq!(result["assembly_check"]["findings"], json!([]));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
+/// An explicit unknown board returns the published error code instead of falling back.
+#[test]
+fn assembly_check_unknown_board_keeps_typed_error() {
+    let mut server = server();
+    let _ = call(&mut server, "execute", json!({"command":"project.new","params":{"create_board":true}}));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let response = call(
+        &mut server,
+        "execute",
+        json!({"command":pcbcraft_engine::CHECK_ASSEMBLY,"params":{"board":"00000000-0000-0000-0000-000000000000"},"inspect":false}),
+    );
+    assert_eq!(response["isError"], true, "{response}");
+    assert_eq!(response["structuredContent"]["error"]["code"], "not_found");
+    assert_eq!(response["structuredContent"]["error"]["message"], "unknown board ID");
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
 

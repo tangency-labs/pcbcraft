@@ -2,6 +2,8 @@
 
 ## 0.1.0 (unreleased)
 
+- Check for polarized packages with no readable orientation using `pcb.check_assembly`. The read-only report warns once per package revision when symmetrical lands, silkscreen and fabrication artwork leave its orientation ambiguous and no zero orientation is declared. Read-only headless sessions can run it. Definitions with an orientation statement use `pcbcraft-footprint/7`, with or without non-plated holes; existing definitions and assembly output profiles are unchanged.
+
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
 its old slot. Splitting a pane itself opens another view. Separate Split window

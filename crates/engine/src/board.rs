@@ -26,6 +26,7 @@ mod library_migration;
 mod lock_storage_tests;
 pub mod materials;
 pub mod movement;
+pub mod orientation;
 pub mod origin;
 pub mod outline;
 mod pair_index;

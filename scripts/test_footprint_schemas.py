@@ -113,6 +113,55 @@ for (const item of cases) {
             with self.subTest(invalid=value):
                 self.assertFalse(validator.is_valid(value))
 
+    def test_orientation_statement_selects_format_7(self):
+        """Format 7 is format 4 plus a required, closed orientation object; holes stay optional."""
+        npth = json.loads((ROOT / "docs/schemas/footprint-v4.schema.json").read_text())
+        schema = json.loads((ROOT / "docs/schemas/footprint-v7.schema.json").read_text())
+        registry = Registry().with_resources(
+            (item["$id"], Resource.from_contents(item)) for item in (self.schema, npth)
+        )
+        validator = Draft202012Validator(schema, registry=registry)
+        value = copy.deepcopy(self.definition)
+        value["format"] = "pcbcraft-footprint/7"
+        value["orientation"] = {"polarized": True, "pin_1": "1", "zero": "ipc-7351"}
+        validator.validate(value)
+        self.assertFalse(self.validator.is_valid(value), "format 1 has no orientation")
+        hole = {"center": {"x_nm": 0, "y_nm": 2000000}, "diameter_nm": 500000}
+        validator.validate(dict(value, non_plated_holes=[hole]))
+        validator.validate(dict(value, pads=[], non_plated_holes=[hole]))
+        self.assertFalse(validator.is_valid(dict(value, pads=[])), "a package needs a pad or a hole")
+        self.assertFalse(validator.is_valid(dict(value, non_plated_holes=[])))
+        self.assertFalse(Draft202012Validator(npth, registry=registry).is_valid(dict(value, format="pcbcraft-footprint/4", non_plated_holes=[hole])))
+        for orientation in [
+            None, {}, [True, "1", "ipc-7351"], {"polarized": None},
+            {"polarized": True, "zero": "ipc-7350"}, {"polarized": True, "zero": {"ipc-7351": None}},
+            {"polarized": True, "pin_1": None}, {"polarized": True, "side": "top"},
+        ]:
+            with self.subTest(orientation=orientation):
+                value["orientation"] = orientation
+                self.assertFalse(validator.is_valid(value))
+        del value["orientation"]
+        self.assertFalse(validator.is_valid(value), "format 7 needs the statement")
+
+    def test_checker_selects_the_schema_by_format(self):
+        """A supplied format-7 definition passes; the same object as format 1, 4 or 2 fails."""
+        import tempfile
+        value = copy.deepcopy(self.definition)
+        value["format"] = "pcbcraft-footprint/7"
+        value["orientation"] = {"polarized": True}
+        value["non_plated_holes"] = [{"center": {"x_nm": 0, "y_nm": 2000000}, "diameter_nm": 500000}]
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "diode.json"
+            path.write_text(json.dumps(value))
+            result = subprocess.run([sys.executable, str(CHECKER), str(path)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            for other in ["pcbcraft-footprint/1", "pcbcraft-footprint/4", "pcbcraft-footprint/2"]:
+                with self.subTest(format=other):
+                    value["format"] = other
+                    path.write_text(json.dumps(value))
+                    result = subprocess.run([sys.executable, str(CHECKER), str(path)], capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 1)
+
     def test_missing_dependency_has_a_setup_message(self):
         """A Python environment without site packages receives an installation hint."""
         result = subprocess.run([sys.executable, "-S", str(CHECKER)], capture_output=True, text=True)

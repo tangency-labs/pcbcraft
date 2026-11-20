@@ -799,6 +799,26 @@ offline save/reopen and Undo/Redo. Undo shares immutable payloads. Profiles chan
 no board geometry or fabrication output. No placement exporter, import/export
 wrapper or profile-management UI is provided here.
 
+## Assembly orientation check
+
+`pcb.check_assembly` checks the addressed board, or the only board when `board` is
+omitted, without editing it; `execute` returns `assembly_check` with the `board`
+target and `findings`. It is a query, so a read-only [headless session](#headless-mcp)
+can run it. There is one warning per polarized package revision placed on
+the board that shows no pin 1 or polarity mark and states no zero orientation (see
+[assembly orientation](footprint-schema.md#assembly-orientation)). Packages without an
+orientation statement, unpolarized ones and legacy marker footprints are not reported.
+The check is about the library package; adopting an [assembly output profile](#assembly-output-profiles)
+can change output coordinates and rotation but does not declare or prove package orientation.
+Each finding has a `key` that depends only on the check and the package identity, a
+`fingerprint` of the definition and placement IDs and references, `check_kind`
+(`assembly.orientation`), `rule_id`, `rule_source` (IPC-7351 sections 7.3.1 and 16),
+`severity` (`warning`), `objects` (each placement as `{"id","kind":"footprint","role":"placement","reference"}`
+in board order), the `package` (`library`, `id`, `revision`, `name`), `locations`
+(one `point` per placement and one `bounds` box) and a `message`. Keys and
+fingerprints are the first 128 bits of a SHA-256 digest, in hex. These findings are
+not part of `pcb.check_design` yet and cannot be waived.
+
 ## Saved board defaults
 
 `pcb.set_rules` requires an explicit `board`, `expected_revision` and complete
