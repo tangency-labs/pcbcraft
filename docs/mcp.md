@@ -607,8 +607,10 @@ pushes other copper's unlocked tracks and vias out of the way, with optional
 `points`, the `reshaped`, `added` and `removed` tracks, moved `vias`, an `outcome`
 (`reached`, `blocked` with `last_legal`, `incomplete`, `canceled` or `stale`), any
 `blocker`, `probes`, `depth` and `moved`, also with `inspect: false`.
-`pcb.shove_tracks` takes the same parameters and commits the shove in one undo step
-only when it is reached; otherwise it is refused with nothing changed. See
+The route and drag forms exclude each other (the schema publishes them as `oneOf`),
+and a drag lists at most 256 tracks. `pcb.shove_tracks` takes the same parameters
+with `expected_revision` required and commits the shove in one undo step only when
+it is reached; otherwise it is refused with nothing changed. See
 [shove](route-shove.md).
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those

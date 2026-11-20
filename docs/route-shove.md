@@ -68,13 +68,16 @@ track segments and vias, 128 single pushes and 256 points per chain.
 
 ## Commands
 
-`pcb.plan_shove` and `pcb.shove_tracks` take a copper `layer` UUID and either
+`pcb.plan_shove` and `pcb.shove_tracks` take a copper `layer` UUID and exactly one
+of two forms, which the published schema lists as a `oneOf` and execution enforces:
 `points` for a new route, with an optional `width_nm` (an omitted width uses the
 head contact's net-class preference or the board's preferred width, as
-`pcb.plan_route` does), or `tracks` to drag, each `{track, start, end}` as
-`pcb.reshape_tracks` takes them. Dragged tracks must be unlocked tracks on the
-layer; they keep their width and membership, and the caller moves any neighbours
-that must follow. Both take optional `board`, `budget` and `expected_revision`.
+`pcb.plan_route` does), or `tracks` to drag, 1 to 256 distinct entries, each
+`{track, start, end}` as `pcb.reshape_tracks` takes them, without `width_nm`.
+Dragged tracks must be unlocked tracks on the layer; they keep their width and
+membership, and the caller moves any neighbours that must follow. Both take
+optional `board` and `budget`. `expected_revision` is optional for
+`pcb.plan_shove` and required for `pcb.shove_tracks`, as for the other copper edits.
 
 `pcb.plan_shove` returns `shove_plan` without changing revision, history or saved
 bytes, also with `inspect: false`; an `expected_revision` that is not current

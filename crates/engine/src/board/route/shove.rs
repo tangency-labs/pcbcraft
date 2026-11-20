@@ -39,6 +39,8 @@ use uuid::Uuid;
 pub const MAX_DEPTH: usize = 8;
 /// Most track segments and vias one shove may change, add or remove.
 pub const MAX_MOVED: usize = 64;
+/// Most tracks one drag may move, as the shove commands publish.
+pub const MAX_DRAGGED: usize = MAX_PATH_POINTS;
 /// Exact probes one shove may charge when the caller gives no budget.
 pub const DEFAULT_BUDGET: usize = 16_384;
 /// Most times other parts of the pushing copper merge into the hull a chain bends round.
@@ -336,8 +338,8 @@ impl<'a> Solver<'a> {
             Shover::Drag { tracks: ends } => {
                 query.candidates(&Contour::capsule(Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 0, y_nm: 0 }, 0.), &layer)?;
                 let unique: BTreeSet<_> = ends.iter().map(|e| e.track).collect();
-                if ends.is_empty() || ends.len() > MAX_PATH_POINTS || unique.len() != ends.len() {
-                    return Err(CommandError::InvalidParams(format!("Drag 1 to {MAX_PATH_POINTS} distinct tracks.")));
+                if ends.is_empty() || ends.len() > MAX_DRAGGED || unique.len() != ends.len() {
+                    return Err(CommandError::InvalidParams(format!("Drag 1 to {MAX_DRAGGED} distinct tracks.")));
                 }
                 for e in ends {
                     let k = tracks.iter().position(|t| t.id == e.track).ok_or_else(|| CommandError::NotFound("unknown track".into()))?;

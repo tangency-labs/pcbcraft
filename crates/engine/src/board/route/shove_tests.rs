@@ -397,3 +397,50 @@ fn a_diagonal_chain_keeps_its_posture() {
     assert!(pushed.len() > 2, "{pushed:?}");
     assert!(pushed.iter().all(|t| Posture::Diagonal.allows(t.start, t.end)), "{pushed:?}");
 }
+
+/// Discovery, runtime validation and the solver agree on the shove contracts: the route and
+/// drag forms exclude each other, a drag lists at most 256 tracks, and only the edit requires
+/// `expected_revision`, while the planner keeps it optional.
+#[test]
+fn shove_contracts_publish_their_forms_drag_limit_and_revision() {
+    let described = |id: &str| crate::command(id).unwrap().to_json()["params"].clone();
+    let forms = json!([
+        {"required":["points"],"not":{"anyOf":[{"required":["tracks"]}]}},
+        {"required":["tracks"],"not":{"anyOf":[{"required":["points"]},{"required":["width_nm"]}]}}
+    ]);
+    for id in [PLAN_SHOVE, SHOVE_TRACKS] {
+        let params = described(id);
+        assert_eq!(params["oneOf"], forms, "{id}");
+        assert_eq!(params["properties"]["tracks"]["maxItems"], json!(shove::MAX_DRAGGED));
+        assert_eq!(shove::MAX_DRAGGED, 256);
+    }
+    assert_eq!(described(PLAN_SHOVE)["required"], json!(["layer"]));
+    assert_eq!(described(SHOVE_TRACKS)["required"], json!(["layer", "expected_revision"]));
+    assert_eq!(described(crate::RESHAPE_TRACKS)["properties"]["tracks"]["maxItems"], json!(crate::board::track::MAX_TRACKS));
+
+    let mut s = board();
+    let [t] = track(&mut s, &[p(2 * MM, 10 * MM), p(18 * MM, 10 * MM)])[..] else { panic!() };
+    let layer = layer(&s);
+    let line = json!([p(5 * MM, 12 * MM), p(15 * MM, 12 * MM)]);
+    let ends = json!([{"track":t,"start":p(2 * MM, 11 * MM),"end":p(18 * MM, 11 * MM)}]);
+    let many: Vec<Value> = (0..=shove::MAX_DRAGGED as i64)
+        .map(|k| json!({"track":Uuid::from_u128(k as u128 + 1),"start":p(0, k * 1_000),"end":p(1_000, k * 1_000)}))
+        .collect();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    for (params, expected) in [
+        (json!({"layer":layer,"points":line,"tracks":ends,"expected_revision":revision}), "takes exactly one of"),
+        (json!({"layer":layer,"tracks":ends,"width_nm":WIDTH,"expected_revision":revision}), "takes exactly one of"),
+        (json!({"layer":layer,"expected_revision":revision}), "takes exactly one of"),
+        (json!({"layer":layer,"tracks":many,"expected_revision":revision}), "at most 256 tracks"),
+    ] {
+        for id in [PLAN_SHOVE, SHOVE_TRACKS] {
+            let error = s.execute(id, &params).unwrap_err();
+            assert!(matches!(error, CommandError::InvalidParams(_)) && error.to_string().contains(expected), "{id} {params}: {error}");
+        }
+    }
+    let error = s.execute(SHOVE_TRACKS, &json!({"layer":layer,"tracks":ends})).unwrap_err();
+    assert!(error.to_string().contains("expected_revision"), "{error}");
+    assert_eq!(kind(&plan(&mut s, &json!({"layer":layer,"tracks":ends}))), "reached");
+    assert_eq!((s.revision(), encode_documents(s.snapshot().unwrap()).unwrap()), (revision, before), "refusals change nothing");
+}

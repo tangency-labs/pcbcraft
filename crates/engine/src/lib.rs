@@ -163,6 +163,9 @@ enum ParamKind {
     TrackIds,
     LayerChanges,
     TrackEnds,
+    /// Tracks a shove drags, each UUID with new ends: at most the solver's
+    /// [`board::route::shove::MAX_DRAGGED`] entries.
+    ShoveTracks,
     ArcTracks,
     AlignMode,
     BoardSide,
@@ -287,9 +290,8 @@ impl ParamKind {
                 schema
             }
             Self::LayerChanges => board::track::layer_changes_schema(),
-            Self::TrackEnds => {
-                json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
-            }
+            Self::TrackEnds => track_ends_schema(board::track::MAX_TRACKS),
+            Self::ShoveTracks => track_ends_schema(board::route::shove::MAX_DRAGGED),
             Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
@@ -632,6 +634,10 @@ impl ParamKind {
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
             Self::BoardSide => Err("must be front or back"),
+            Self::ShoveTracks if value.as_array().is_some_and(|items| items.len() > board::route::shove::MAX_DRAGGED) => {
+                Err("must list at most 256 tracks to drag")
+            }
+            Self::ShoveTracks => Self::TrackEnds.validate(value),
             Self::TrackEnds
                 if value.as_array().is_some_and(|items| {
                     !items.is_empty()
@@ -833,11 +839,16 @@ impl Command {
             params.insert("sheet".to_owned(), json!({"type":"string", "format":"uuid", "description":"Sheet UUID from inspection. Required when the project has multiple sheets; omission is compatible with one-sheet projects."}));
         }
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
+        let mut schema = json!({"type": "object", "properties": params, "required": required, "additionalProperties": false});
+        let forms = param_forms(self.id);
+        if !forms.is_empty() {
+            schema["oneOf"] = forms.iter().map(ParamForm::schema).collect();
+        }
         json!({
             "id": self.id,
             "title": self.title,
             "summary": self.summary,
-            "params": {"type": "object", "properties": params, "required": required, "additionalProperties": false},
+            "params": schema,
         })
     }
 }
@@ -948,36 +959,81 @@ const CLIPBOARD_OBJECTS: Param = Param {
     kind: ParamKind::ClipboardHierarchyObjects,
     summary: "Selected root sheet symbols and hierarchical labels; sheet symbols include their complete child subtree",
 };
-/// Parameters shared by `pcb.plan_shove` and `pcb.shove_tracks`.
-const SHOVE_PARAMS: &[Param] = &[
+const SHOVE_LAYER: Param =
+    Param { name: "layer", required: true, summary: "Copper layer UUID of the addressed board; the shove stays on it", kind: ParamKind::DrawingId };
+const SHOVE_POINTS: Param = Param {
+    name: "points",
+    required: false,
+    summary: "A new route's vertices in integer nanometres; copper the first point touches lends the route its net. Give points or tracks, not both",
+    kind: ParamKind::TrackPath,
+};
+const SHOVE_WIDTH: Param = Param {
+    name: "width_nm",
+    required: false,
+    summary: "The new route's width, only with points; omitted uses the head contact's net-class or board preferred width",
+    kind: ParamKind::TrackWidth,
+};
+const SHOVE_DRAG: Param = Param {
+    name: "tracks",
+    required: false,
+    summary: "1 to 256 distinct unlocked tracks on the layer to drag, each UUID with its new start and end. Give points or tracks, not both",
+    kind: ParamKind::ShoveTracks,
+};
+const SHOVE_BUDGET: Param =
+    Param { name: "budget", required: false, summary: "Most exact clearance probes; defaults to 16384", kind: ParamKind::RouteBudget };
+/// `pcb.plan_shove`: an omitted revision plans against the current board; a stale one answers `stale`.
+const PLAN_SHOVE_PARAMS: &[Param] = &[
     BOARD,
-    Param { name: "layer", required: true, summary: "Copper layer UUID of the addressed board; the shove stays on it", kind: ParamKind::DrawingId },
-    Param {
-        name: "points",
-        required: false,
-        summary: "A new route's vertices in integer nanometres; copper the first point touches lends the route its net. Give points or tracks",
-        kind: ParamKind::TrackPath,
-    },
-    Param {
-        name: "width_nm",
-        required: false,
-        summary: "The new route's width; omitted uses the head contact's net-class or board preferred width",
-        kind: ParamKind::TrackWidth,
-    },
-    Param {
-        name: "tracks",
-        required: false,
-        summary: "Unlocked tracks on the layer to drag, each UUID with its new start and end. Give points or tracks",
-        kind: ParamKind::TrackEnds,
-    },
-    Param { name: "budget", required: false, summary: "Most exact clearance probes; defaults to 16384", kind: ParamKind::RouteBudget },
+    SHOVE_LAYER,
+    SHOVE_POINTS,
+    SHOVE_WIDTH,
+    SHOVE_DRAG,
+    SHOVE_BUDGET,
     Param {
         name: "expected_revision",
         required: false,
-        summary: "Revision the caller planned against; a planning query answers stale and an edit is refused when it is not current",
+        summary: "Revision the caller planned against; a planning query answers stale when it is not current",
         kind: ParamKind::Revision,
     },
 ];
+/// `pcb.shove_tracks`: an edit, so like the other copper edits it requires the current revision.
+const SHOVE_TRACKS_PARAMS: &[Param] = &[BOARD, SHOVE_LAYER, SHOVE_POINTS, SHOVE_WIDTH, SHOVE_DRAG, SHOVE_BUDGET, EXPECTED_REVISION];
+/// The route and drag forms of both shove commands: exactly one applies.
+const SHOVE_FORMS: &[ParamForm] =
+    &[ParamForm { required: &["points"], excluded: &["tracks"] }, ParamForm { required: &["tracks"], excluded: &["points", "width_nm"] }];
+
+/// One accepted combination of a command's optional parameters: every `required` name is given
+/// and no `excluded` name is. A command with forms accepts exactly one of them.
+pub struct ParamForm {
+    pub required: &'static [&'static str],
+    pub excluded: &'static [&'static str],
+}
+
+impl ParamForm {
+    /// Whether the given parameter names satisfy this form.
+    fn matches(&self, given: &Map<String, Value>) -> bool {
+        self.required.iter().all(|name| given.contains_key(*name)) && !self.excluded.iter().any(|name| given.contains_key(*name))
+    }
+
+    /// The form as a JSON Schema alternative.
+    fn schema(&self) -> Value {
+        let excluded: Vec<Value> = self.excluded.iter().map(|name| json!({"required":[name]})).collect();
+        json!({"required": self.required, "not": {"anyOf": excluded}})
+    }
+}
+
+/// The exclusive parameter forms a command publishes, or none.
+fn param_forms(id: &str) -> &'static [ParamForm] {
+    match id {
+        board::route::PLAN_SHOVE | board::route::SHOVE_TRACKS => SHOVE_FORMS,
+        _ => &[],
+    }
+}
+
+/// The schema of a list of tracks with new ends, at most `max` entries.
+fn track_ends_schema(max: usize) -> Value {
+    json!({"type":"array","minItems":1,"maxItems":max,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
+}
 
 const CATALOG: &[Command] = &[
     Command {
@@ -2330,13 +2386,13 @@ const CATALOG: &[Command] = &[
         id: board::route::PLAN_SHOVE,
         title: "Plan Shove",
         summary: "Plan a new route or a track drag on one copper layer that pushes other copper's unlocked tracks and vias out of the way, with effective clearance and board-edge rules, without editing. pcb.shove_tracks commits the same shove.",
-        params: SHOVE_PARAMS,
+        params: PLAN_SHOVE_PARAMS,
     },
     Command {
         id: board::route::SHOVE_TRACKS,
         title: "Shove Tracks",
         summary: "Add a route or drag tracks on one copper layer, pushing other copper's unlocked tracks and vias out of the way, in one undo step. Refused with nothing changed unless the whole shove fits.",
-        params: SHOVE_PARAMS,
+        params: SHOVE_TRACKS_PARAMS,
     },
     Command {
         id: CHECK_DESIGN,
@@ -4583,6 +4639,20 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
             param.kind.validate(value).map_err(str::to_owned)
         };
         checked.map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
+    }
+    let forms = param_forms(command.id);
+    if !forms.is_empty() && forms.iter().filter(|form| form.matches(given)).count() != 1 {
+        let described: Vec<String> = forms
+            .iter()
+            .map(|form| {
+                let mut text = form.required.join(" and ");
+                if !form.excluded.is_empty() {
+                    text.push_str(&format!(" without {}", form.excluded.join(" or ")));
+                }
+                text
+            })
+            .collect();
+        return Err(CommandError::InvalidParams(format!("`{}` takes exactly one of: {}", command.id, described.join("; "))));
     }
     Ok(())
 }
