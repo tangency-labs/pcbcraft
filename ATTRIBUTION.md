@@ -1780,3 +1780,25 @@ rings using the shared accent ink. Pad inspection reuses the existing copper
 emphasis and physical shape painter. Pad hit testing reuses the exact copper
 contours already used by connectivity; no external implementation, artwork,
 dependency or native format was introduced.
+
+## macOS packaging
+
+The scripts in `packaging/env.sh`, `packaging/.shellcheckrc`, and
+`packaging/macos/{Info.plist.in,entitlements.plist,import-cert.sh,package.sh}`
+are adapted from:
+
+- `tangency-labs/fieldcraft` at commit
+  `c1bec5b74f666f40b2fa45db89ff2aeccbe61431` (MIT OR Apache-2.0): shared
+  `env.sh` layout, macOS `Info.plist.in` template substitutions, inside-out
+  `codesign` + `notarytool` workflow, and `hdiutil` retry loop.
+- `UCS-Care-Group/mailcraft` at commit
+  `b1e2d1ce0aa9b1e780dcec57e658df261b5bc452` (MIT OR Apache-2.0): minimal
+  hardened-runtime `entitlements.plist`, DMG layout hooks, and CLI archive
+  packaging flow.
+
+Changes for PCBCraft: set bundle identifier `io.tangencylabs.pcbcraft`,
+adapted desktop/CLI target names (`pcbcraft`, `pcbcraft-cli`) and `.pc`
+document association, made `.icns` icon embedding optional until artwork
+is added, added absolute `CARGO_TARGET_DIR` resolution, added per-attempt
+keychain cleanup in `import-cert.sh`, and added input character validation
+for `VERSION` and `PCBCRAFT_BUILD_SHA` before `Info.plist` templating.
