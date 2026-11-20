@@ -543,14 +543,17 @@ new window**, **Detach view**, **Dock in main window** and **Close view**, as
 applicable. These actions target that pane, including its remembered document
 navigation. Dividers resize panes, with narrow areas stacking vertically.
 
-On desktop, drag a pane header to its own top or bottom edge to divide that pane
-into two stacked views, leaving other panes in place. Its left and right edges
-create two views side by side. The new half opens the same document at the same
-zoom. Within a window the drag list follows the pane under the pointer, with
-**Split up** and **Split down** beneath its header. Releasing over one of those
-rows on another pane, or over that pane's edge, moves the source pane there and
-closes its old slot. The highlighted half shows where it will land. Explicit
-splits keep their direction when resized or restored from a saved layout.
+On desktop, drag a pane header over a destination pane and choose **Split up** or
+**Split down** beneath that pane's header. A new view of the dragged document
+opens inside the selected pane; its outer bounds and the original source pane
+stay in place. Its top, bottom, left and right edges offer the same pane-specific
+placement. Dropping on the source pane opens another view there.
+
+The drag list also offers **Split window up** and **Split window down**. These move
+the existing pane above or below the window's entire remaining layout, closing
+its old slot. The preview is labelled **Split window above/below** and spans the
+window. Explicit pane and window splits keep their direction when resized or
+restored from a saved layout.
 
 On desktop, dragging a header shades its source pane and displays window
 destinations. Drop over the centre of another pane in the same window to move into that slot;
@@ -571,8 +574,9 @@ source `view` and destination `beside` view IDs from `inspect_editor`. An option
 `side` of `top`, `bottom`, `left` or `right` selects an explicit split in the same
 window or another one. The window destination list also offers **Above** and
 **Below**, including on compositors that do not expose window positions.
-`view.open_beside` accepts the same optional `side` to create a new view within
-the addressed pane. `view.reorder` takes source `view` and destination `target` IDs for in-window movement.
+`view.open_beside` accepts `side` and an optional destination `beside`, opening
+a copy of source `view` inside that pane. `view.dock` adds `scope: "window"` with
+`beside` and `side` for a full-window move; its default scope retains ordinary docking. `view.reorder` takes source `view` and destination `target` IDs for in-window movement.
 Opening another view copies the source camera and grid without copying its edit
 selection. Turning Split off keeps the focused pane; turning it back on restores
 the window's remembered split arrangement, seeding restored cameras from the

@@ -217,12 +217,19 @@ impl EditorViews {
     /// Other panes and cached documents remain in place; no project data is duplicated.
     /// Without an explicit side, retain the existing adaptive beside placement.
     pub(super) fn open_at(&mut self, source: ViewId, side: Option<pcbcraft_chrome::editor::DockSide>) -> Option<ViewId> {
-        let host = self.owner(source)?;
+        self.open_into(source, source, side)
+    }
+
+    /// Open a copy of the source's displayed document inside the destination pane.
+    /// Validate both addresses before copying; retain the original source placement and cameras.
+    pub(super) fn open_into(&mut self, source: ViewId, target: ViewId, side: Option<pcbcraft_chrome::editor::DockSide>) -> Option<ViewId> {
+        self.owner(source)?;
+        let host = self.owner(target)?;
         let id = self.duplicate(source, false)?;
         if let Some(layout) = self.hosts.get_mut(&host) {
-            layout.layout.insert_group_at(source, &Layout::View(id), side);
+            layout.layout.insert_group_at(target, &Layout::View(id), side);
             if let Some(collapsed) = &mut layout.collapsed {
-                collapsed.insert_group_at(source, &Layout::View(id), side);
+                collapsed.insert_group_at(target, &Layout::View(id), side);
             }
             layout.rects.clear();
         }
@@ -334,12 +341,26 @@ impl EditorViews {
     /// Move a whole pane to the requested edge, within a host or across native hosts.
     /// Validate distinct groups before removal; adaptive moves retain the cross-host policy.
     pub(super) fn move_to(&mut self, id: ViewId, target: ViewId, side: Option<pcbcraft_chrome::editor::DockSide>) -> bool {
+        self.move_group(id, target, crate::editor_layout::DockPlacement::Pane(side))
+    }
+
+    /// Move an existing pane to an outer edge of the destination window's entire layout.
+    pub(super) fn move_to_window(&mut self, id: ViewId, target: ViewId, side: pcbcraft_chrome::editor::DockSide) -> bool {
+        self.move_group(id, target, crate::editor_layout::DockPlacement::Window(side))
+    }
+
+    /// Validate placement before unplacing the source, sharing focus, cached groups and host cleanup.
+    fn move_group(&mut self, id: ViewId, target: ViewId, placement: crate::editor_layout::DockPlacement) -> bool {
+        use crate::editor_layout::DockPlacement;
         let (Some(source), Some(destination)) = (self.owner(id), self.owner(target)) else { return false };
-        if source == destination && side.is_none() {
+        if source == destination && matches!(placement, DockPlacement::Pane(None)) {
             return false;
         }
         let Some(group) = self.hosts.get(&source).and_then(|host| host.layout.group(id)).cloned() else { return false };
-        if group.views().contains(&target) {
+        if matches!(placement, DockPlacement::Pane(_)) && group.views().contains(&target) {
+            return false;
+        }
+        if matches!(placement, DockPlacement::Window(_)) && source == destination && self.hosts[&source].layout.visible_views().len() == 1 {
             return false;
         }
         if source == self.main && self.hosts.get(&source).is_some_and(|host| host.layout.visible_views().len() == 1) {
@@ -357,9 +378,9 @@ impl EditorViews {
             self.unplace(source, member);
         }
         if let Some(host) = self.hosts.get_mut(&destination) {
-            host.layout.insert_group_at(target, &group, side);
+            placement.insert(&mut host.layout, target, &group);
             if let Some(collapsed) = &mut host.collapsed {
-                collapsed.insert_group_at(target, &group, side);
+                placement.insert(collapsed, target, &group);
             }
             host.focused = focused;
             host.rects.clear();

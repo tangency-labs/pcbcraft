@@ -22,6 +22,28 @@ pub(super) enum Layout {
     Split { first: Box<Self>, second: Box<Self>, ratio: f32, axis: editor::SplitAxis },
 }
 
+/// A moved group can split a destination pane or the entire destination window.
+#[derive(Clone, Copy)]
+pub(super) enum DockPlacement {
+    Pane(Option<editor::DockSide>),
+    Window(editor::DockSide),
+}
+
+impl DockPlacement {
+    /// Apply placement after source removal; window splits wrap the remaining complete tree.
+    pub(super) fn insert(self, layout: &mut Layout, target: ViewId, group: &Layout) {
+        match self {
+            Self::Pane(side) => {
+                layout.insert_group_at(target, group, side);
+            }
+            Self::Window(side) => {
+                let (first, second) = if side.first() { (group.clone(), layout.clone()) } else { (layout.clone(), group.clone()) };
+                *layout = Layout::Split { first: Box::new(first), second: Box::new(second), ratio: 0.5, axis: side.axis() };
+            }
+        }
+    }
+}
+
 impl Layout {
     /// Replace runtime identities with snapshot-local references for persistence.
     pub(super) fn saved_state(&self, indices: &std::collections::BTreeMap<ViewId, usize>) -> Option<crate::arrangements::SavedLayout> {

@@ -2,13 +2,11 @@
 
 ## 0.1.0 (unreleased)
 
-Dragging a pane header to its own top, bottom, left or right edge creates a new
-view within that pane. Dragging to another pane’s edge moves the existing pane
-there, with an explicit split direction. The preview shows the incoming half, and
-resizing or restoring a saved layout keeps that direction. Each pane tab offers
-Split up/down, and the drag list brings those choices to the pane under the
-pointer. Above/Below supports native window transfers, and live commands share
-the placement options.
+Pane headers support explicit up/down and left/right splits, with previews and
+saved orientation. Pane-specific drops open another view inside the destination
+and keep the original source in place. Separate Split window up/down targets move
+the existing pane across the full window. Every pane header also offers Split
+up/down in its shared context menu, and live commands expose both placement scopes.
 
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 

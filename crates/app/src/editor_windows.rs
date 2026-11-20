@@ -48,9 +48,11 @@ pub(super) enum ViewAction {
     Dock,
     OpenBeside,
     OpenAt(pcbcraft_chrome::editor::DockSide),
+    OpenInto(ViewInput, Option<pcbcraft_chrome::editor::DockSide>),
     Close,
     MoveBeside(ViewInput),
     MoveTo(ViewInput, pcbcraft_chrome::editor::DockSide),
+    MoveToWindow(ViewInput, pcbcraft_chrome::editor::DockSide),
     Reorder(ViewInput),
     DetachAt(Option<egui::Pos2>),
 }
@@ -279,6 +281,11 @@ impl PcbApp {
             ViewAction::OpenAt(side) => {
                 self.views.open_at(id, Some(side));
             }
+            ViewAction::OpenInto(target, side) => {
+                if self.views.view(target.view()).is_some_and(|view| view.control_input(&self.session) == Some(target)) {
+                    self.views.open_into(id, target.view(), side);
+                }
+            }
             ViewAction::Close => self.views.close_view(id),
             ViewAction::MoveBeside(target) => {
                 if self.views.view(target.view()).is_some_and(|view| view.control_input(&self.session) == Some(target))
@@ -291,6 +298,14 @@ impl PcbApp {
             ViewAction::MoveTo(target, side) => {
                 if self.views.view(target.view()).is_some_and(|view| view.control_input(&self.session) == Some(target))
                     && self.views.move_to(id, target.view(), Some(side))
+                    && let Some(host) = self.views.owner(id)
+                {
+                    ctx.send_viewport_cmd_to(viewport(host), ViewportCommand::Focus);
+                }
+            }
+            ViewAction::MoveToWindow(target, side) => {
+                if self.views.view(target.view()).is_some_and(|view| view.control_input(&self.session) == Some(target))
+                    && self.views.move_to_window(id, target.view(), side)
                     && let Some(host) = self.views.owner(id)
                 {
                     ctx.send_viewport_cmd_to(viewport(host), ViewportCommand::Focus);

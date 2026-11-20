@@ -274,6 +274,12 @@ pub fn split_preview(ui: &Ui, id: egui::Id, rect: Rect, side: DockSide, active: 
     placement_preview(ui, id, split_region(rect, side), caption, active, dragging);
 }
 
+/// Full-window placement has a distinct caption and always previews the complete host area.
+pub fn window_split_preview(ui: &Ui, id: egui::Id, rect: Rect, side: DockSide, active: bool, dragging: bool) {
+    let caption = if side == DockSide::Top { "Split window above" } else { "Split window below" };
+    placement_preview(ui, id, split_region(rect, side), caption, active, dragging);
+}
+
 /// Animate the area a pane will occupy after docking. The preview and label never take input;
 /// calling with `active = false` fades the previous highlight while dragging. Ending a drag
 /// clears it immediately so a changed split layout cannot retain an obsolete preview.
@@ -312,6 +318,7 @@ fn placement_preview(ui: &Ui, id: egui::Id, rect: Rect, caption: &str, active: b
 pub enum WindowDrop {
     NewWindow,
     Split(DockSide),
+    WindowSplit(DockSide),
     Host(u64),
     HostSide(u64, DockSide),
 }
@@ -355,6 +362,8 @@ pub fn window_drop_targets(
                 ui.set_width(width);
                 let mut choices =
                     vec![(WindowDrop::Split(DockSide::Top), "Split up".to_owned()), (WindowDrop::Split(DockSide::Bottom), "Split down".to_owned())];
+                choices.push((WindowDrop::WindowSplit(DockSide::Top), "Split window up".to_owned()));
+                choices.push((WindowDrop::WindowSplit(DockSide::Bottom), "Split window down".to_owned()));
                 if state.can_detach {
                     choices.push((WindowDrop::NewWindow, "Open in new window".to_owned()));
                 }

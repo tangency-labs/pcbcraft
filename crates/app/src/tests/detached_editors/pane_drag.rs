@@ -299,7 +299,8 @@ fn pane_drag_highlights_detach_before_release_without_a_floating_card() {
     let source = root_drag(&mut h, 1);
     let before = h.state().session.snapshot().unwrap();
     let initial = h.get_by_label("Open in new window").rect();
-    h.hover_at(pos2(1000.0, 400.0));
+    let canvas = h.state().views.hosts[&HostId::ROOT].rects.iter().find(|(id, _)| *id == source).unwrap().1;
+    h.hover_at(canvas.center());
     h.run();
     let moved = h.get_by_label("Open in new window").rect();
     assert_eq!(moved, initial);
@@ -655,7 +656,7 @@ fn pane_edge_drops_split_in_all_four_directions() {
             h.state_mut().split_editors(&ctx, true);
             h.run();
             let target = h.state().views.hosts[&HostId::ROOT].layout.visible_views()[0];
-            let moved = root_drag(&mut h, 1);
+            let source = root_drag(&mut h, 1);
             let rect = h.state().views.hosts[&HostId::ROOT].rects[0].1;
             let host_area = h.state().views.hosts[&HostId::ROOT].rects.iter().map(|(_, rect)| *rect).reduce(Rect::union).unwrap();
             let at = match side {
@@ -665,7 +666,7 @@ fn pane_edge_drops_split_in_all_four_directions() {
                 _ => pos2(rect.right() - 8.0, rect.center().y),
             };
             let before = h.state().session.snapshot().unwrap();
-            let camera = h.state().views.view(moved).unwrap().camera.saved_state();
+            let camera = h.state().views.view(source).unwrap().camera.saved_state();
             h.hover_at(at);
             h.run();
             let preview = h.get_by_label(caption).rect();
@@ -678,13 +679,14 @@ fn pane_edge_drops_split_in_all_four_directions() {
             }
             h.drop_at(at);
             h.run();
-            let placed = h.state().views.hosts[&HostId::ROOT].rects.iter().find(|(id, _)| *id == moved).unwrap().1;
+            let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+            let (moved, placed) = *panes.iter().find(|(id, _)| *id != source && *id != target).unwrap();
             assert_eq!(preview, placed.shrink(pcbcraft_chrome::Tokens::get().space_4));
             for size in [vec2(1400.0, 900.0), vec2(760.0, 650.0)] {
                 h.set_size(size);
                 h.run();
                 let panes = &h.state().views.hosts[&HostId::ROOT].rects;
-                assert_eq!(panes.len(), 2);
+                assert_eq!(panes.len(), 3);
                 let a = panes.iter().find(|(id, _)| *id == moved).unwrap().1;
                 let b = panes.iter().find(|(id, _)| *id == target).unwrap().1;
                 match side {
@@ -694,7 +696,7 @@ fn pane_edge_drops_split_in_all_four_directions() {
                     _ => assert!(a.left() > b.right()),
                 }
             }
-            assert_eq!(h.state().views.view(moved).unwrap().camera.saved_state(), camera);
+            assert_eq!(h.state().views.view(source).unwrap().camera.saved_state(), camera);
             assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
         }
     }
@@ -926,7 +928,7 @@ fn split_up_down_drag_targets_subdivide_nested_panes() {
     }
 }
 
-/// Each pane under the pointer offers both directions for moving the dragged view into it.
+/// Each pane under the pointer offers both directions for opening the dragged document inside it.
 #[test]
 fn peer_pane_drag_menu_splits_the_hovered_pane() {
     for (theme, size) in [(ThemeChoice::Dark, vec2(2560.0, 1600.0)), (ThemeChoice::Light, vec2(760.0, 650.0))] {
@@ -941,6 +943,8 @@ fn peer_pane_drag_menu_splits_the_hovered_pane() {
                 h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":right.0,"side":"right"})).unwrap();
                 h.run();
                 let (target, area) = h.state().views.hosts[&HostId::ROOT].rects[index];
+                let original = h.state().views.hosts[&HostId::ROOT].rects.clone();
+                let ids = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
                 let moved = root_drag(&mut h, usize::from(index == 0));
                 h.hover_at(area.center());
                 h.run();
@@ -954,13 +958,20 @@ fn peer_pane_drag_menu_splits_the_hovered_pane() {
                 h.drop_at(row);
                 h.run();
                 let panes = &h.state().views.hosts[&HostId::ROOT].rects;
-                assert_eq!(panes.len(), 3, "the original pane is moved");
-                let moved_rect = panes.iter().find(|(id, _)| *id == moved).unwrap().1;
+                assert_eq!(panes.len(), 4, "the original pane remains and a new view is added");
+                let moved_rect = panes.iter().find(|(id, _)| !ids.contains(id)).unwrap().1;
+                assert_eq!(panes.iter().find(|(id, _)| *id == moved).unwrap(), original.iter().find(|(id, _)| *id == moved).unwrap());
+                for (id, rect) in &original {
+                    if *id != target {
+                        assert_eq!(panes.iter().find(|(peer, _)| peer == id).unwrap().1, *rect);
+                    }
+                }
                 let target_rect = panes.iter().find(|(id, _)| *id == target).unwrap().1;
                 assert_eq!(preview, moved_rect.shrink(pcbcraft_chrome::Tokens::get().space_4));
                 let (first, second) = if above { (moved_rect, target_rect) } else { (target_rect, moved_rect) };
                 assert!(first.bottom() < second.top());
                 assert_eq!(first.x_range(), second.x_range());
+                assert_eq!((first.top(), second.bottom()), (area.top(), area.bottom()));
             }
         }
     }
@@ -978,7 +989,9 @@ fn overhanging_split_row_still_addresses_its_pane() {
     }
     h.run();
     let (target, bounds) = *h.state().views.hosts[&HostId::ROOT].rects.last().unwrap();
+    let ids = h.state().views.hosts[&HostId::ROOT].layout.views();
     let moved = root_drag(&mut h, 0);
+    let source_rect = h.state().views.hosts[&HostId::ROOT].rects[0].1;
     h.hover_at(bounds.center());
     h.run();
     let row = h.get_by_label("Split down").rect().center();
@@ -990,7 +1003,8 @@ fn overhanging_split_row_still_addresses_its_pane() {
     h.run();
     let panes = &h.state().views.hosts[&HostId::ROOT].rects;
     let to = panes.iter().find(|(id, _)| *id == target).unwrap().1;
-    let placed = panes.iter().find(|(id, _)| *id == moved).unwrap().1;
+    let placed = panes.iter().find(|(id, _)| !ids.contains(id)).unwrap().1;
+    assert_eq!(panes.iter().find(|(id, _)| *id == moved).unwrap().1, source_rect);
     assert_eq!(to.x_range(), placed.x_range());
     assert!(to.bottom() < placed.top());
     assert_eq!(preview, placed.shrink(pcbcraft_chrome::Tokens::get().space_4));
@@ -1027,4 +1041,117 @@ fn pane_tab_menu_splits_its_own_view_up_or_down() {
         assert!(after.contains(panes.iter().find(|(id, _)| *id != source).unwrap()));
         assert!(h.query_by_label("Split up").is_none());
     }
+}
+
+/// A right-hand schematic can be opened below the left board without expanding that pane.
+#[test]
+fn pane_drop_keeps_two_pane_bounds_and_copies_the_dragged_document() {
+    let (mut h, _) = many_windows();
+    let ctx = h.ctx.clone();
+    h.state_mut().split_editors(&ctx, true);
+    let ids = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+    let app = h.state_mut();
+    app.views.switch_workspace(ids[0], crate::editor_view::Workspace::Board, &app.session);
+    h.run();
+    let original = h.state().views.hosts[&HostId::ROOT].rects.clone();
+    let source_target = h.state().views.view(ids[1]).unwrap().target();
+    let snapshot = h.state().session.snapshot().unwrap();
+    root_drag(&mut h, 1);
+    h.hover_at(original[0].1.center());
+    h.run();
+    let at = h.get_by_label("Split down").rect().center();
+    h.hover_at(at);
+    h.run();
+    let preview = h.get_by_label("Split below").rect();
+    assert!(original[0].1.contains_rect(preview));
+    h.drop_at(at);
+    h.run();
+    let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+    assert_eq!(panes.len(), 3);
+    assert!(panes.contains(&original[1]));
+    let top = panes.iter().find(|(id, _)| *id == ids[0]).unwrap().1;
+    let (copy, bottom) = *panes.iter().find(|(id, _)| !ids.contains(id)).unwrap();
+    assert_eq!((top.top(), bottom.bottom()), (original[0].1.top(), original[0].1.bottom()));
+    assert_eq!(top.x_range(), original[0].1.x_range());
+    assert_eq!(bottom.x_range(), original[0].1.x_range());
+    assert_eq!(preview, bottom.shrink(pcbcraft_chrome::Tokens::get().space_4));
+    assert_eq!(h.state().views.view(copy).unwrap().target(), source_target);
+    assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+}
+
+/// Full-window targets move the existing pane around the entire remaining split tree.
+#[test]
+fn window_split_targets_span_the_full_host_and_retain_view_identity() {
+    for third in [false, true] {
+        for (label, caption, above) in [("Split window up", "Split window above", true), ("Split window down", "Split window below", false)] {
+            let (mut h, _) = many_windows();
+            let ctx = h.ctx.clone();
+            h.state_mut().split_editors(&ctx, true);
+            let first = h.state().views.hosts[&HostId::ROOT].layout.visible_views()[0];
+            if third {
+                h.state_mut().views.open_beside(first);
+            }
+            h.run();
+            let ids = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+            let rects = h.state().views.hosts[&HostId::ROOT].rects.clone();
+            let area = rects.iter().map(|(_, rect)| *rect).reduce(Rect::union).unwrap();
+            let source = root_drag(&mut h, ids.len() - 1);
+            h.hover_at(rects[0].1.center());
+            h.run();
+            let at = h.get_by_label(label).rect().center();
+            h.hover_at(at);
+            h.run();
+            let preview = h.get_by_label(caption).rect();
+            assert_eq!(preview.x_range(), area.shrink(pcbcraft_chrome::Tokens::get().space_4).x_range());
+            h.drop_at(at);
+            h.run();
+            let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+            assert_eq!(panes.len(), ids.len());
+            let moved = panes.iter().find(|(id, _)| *id == source).unwrap().1;
+            assert_eq!(preview, moved.shrink(pcbcraft_chrome::Tokens::get().space_4));
+            assert_eq!(moved.x_range(), area.x_range());
+            for (id, rect) in panes {
+                if *id != source {
+                    if above {
+                        assert!(moved.bottom() < rect.top());
+                    } else {
+                        assert!(rect.bottom() < moved.top());
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Shared commands expose destination copies and full-window moves without changing project history.
+#[test]
+fn pane_and_window_scope_commands_validate_before_changing_layout() {
+    let (mut h, _) = many_windows();
+    let ctx = h.ctx.clone();
+    h.state_mut().split_editors(&ctx, true);
+    h.run();
+    let ids = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+    let before = h.state().session.snapshot().unwrap();
+    for params in [
+        json!({"view":ids[1].0,"beside":ids[0].0,"scope":"window"}),
+        json!({"view":ids[1].0,"side":"top","scope":"window"}),
+        json!({"view":ids[1].0,"beside":999,"side":"top","scope":"window"}),
+    ] {
+        assert!(h.state_mut().run_window_command(&ctx, "view.dock", &params).is_err());
+        assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.visible_views(), ids);
+    }
+    assert!(h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":ids[1].0,"beside":999,"side":"bottom"})).is_err());
+    h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":ids[1].0,"beside":ids[0].0,"side":"bottom"})).unwrap();
+    h.run();
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.visible_views().len(), 3);
+    h.state_mut().run_window_command(&ctx, "view.dock", &json!({"view":ids[1].0,"beside":ids[0].0,"side":"top","scope":"window"})).unwrap();
+    h.run();
+    let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+    let top = panes.iter().find(|(id, _)| *id == ids[1]).unwrap().1;
+    assert!(panes.iter().filter(|(id, _)| *id != ids[1]).all(|(_, rect)| top.bottom() < rect.top()));
+    let app = h.state_mut();
+    let saved = app.views.saved_state(&app.session).unwrap();
+    assert!(saved.valid());
+    app.views.restore_state(&saved, &app.session).unwrap();
+    assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
 }

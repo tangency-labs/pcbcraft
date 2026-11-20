@@ -31,6 +31,7 @@ enum DropDestination {
     Reorder(ViewInput),
     Split(ViewInput, pcbcraft_chrome::editor::DockSide),
     Duplicate(ViewInput, pcbcraft_chrome::editor::DockSide),
+    WindowSplit(ViewInput, pcbcraft_chrome::editor::DockSide),
 }
 
 #[cfg(test)]
@@ -206,7 +207,7 @@ impl PcbApp {
                 return side.map(|side| DropDestination::Duplicate(input, side));
             }
             return Some(match side {
-                Some(side) => DropDestination::Split(input, side),
+                Some(side) => DropDestination::Duplicate(input, side),
                 None => DropDestination::Reorder(input),
             });
         }
@@ -230,7 +231,7 @@ impl PcbApp {
             if let Some((target, side)) = target {
                 let target = self.views.view(target)?.control_input(&self.session)?;
                 return Some(match side {
-                    Some(side) => DropDestination::Split(target, side),
+                    Some(side) => DropDestination::Duplicate(target, side),
                     None => DropDestination::Beside(target),
                 });
             }
@@ -297,12 +298,16 @@ impl PcbApp {
             );
             let target = match hovered {
                 Some(pcbcraft_chrome::editor::WindowDrop::NewWindow) => Some(DropDestination::NewWindow),
-                Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) if target_pane == drag.source.view() => {
-                    Some(DropDestination::Duplicate(drag.source, side))
-                }
-                Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) => {
-                    self.views.view(target_pane).and_then(|view| view.control_input(&self.session)).map(|target| DropDestination::Split(target, side))
-                }
+                Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) => self
+                    .views
+                    .view(target_pane)
+                    .and_then(|view| view.control_input(&self.session))
+                    .map(|target| DropDestination::Duplicate(target, side)),
+                Some(pcbcraft_chrome::editor::WindowDrop::WindowSplit(side)) => self
+                    .views
+                    .view(target_pane)
+                    .and_then(|view| view.control_input(&self.session))
+                    .map(|target| DropDestination::WindowSplit(target, side)),
                 Some(pcbcraft_chrome::editor::WindowDrop::Host(id)) => self
                     .views
                     .hosts
@@ -362,6 +367,19 @@ impl PcbApp {
                 self.windows.drag.is_some(),
             );
         }
+        for side in [pcbcraft_chrome::editor::DockSide::Top, pcbcraft_chrome::editor::DockSide::Bottom] {
+            let active = matches!(destination, Some(DropDestination::WindowSplit(target, selected)) if self.views.owner(target.view()) == Some(host) && selected == side);
+            if let Some(area) = panes.iter().map(|(_, rect)| *rect).reduce(Rect::union) {
+                pcbcraft_chrome::editor::window_split_preview(
+                    ui,
+                    ui.scope_id().with(("window_split", side)),
+                    area,
+                    side,
+                    active,
+                    self.windows.drag.is_some(),
+                );
+            }
+        }
         if let Some(drag) = &self.windows.drag
             && drag.host == host
         {
@@ -373,9 +391,9 @@ impl PcbApp {
     }
 
     /// Commit only after every host has restored its render slots. A release in another pane
-    /// moves the original pane; its own edge creates another view inside that pane. A release
-    /// outside native bounds detaches it. Other source-pane drops do nothing. This queue uses
-    /// the same handlers as other view controls.
+    /// creates a view inside that destination without removing the source. Explicit window
+    /// targets move the original pane across the full window; outside native bounds detaches
+    /// it. This queue uses the same handlers as other view controls.
     pub(crate) fn finish_editor_drag(&mut self, ctx: &Context) {
         self.windows.drag_geometry.retain(|host, _| self.views.hosts.contains_key(host));
         self.windows.spawn_positions.retain(|host, _| self.views.hosts.contains_key(host));
@@ -388,7 +406,8 @@ impl PcbApp {
             Some(DropDestination::Beside(target)) => Some(ViewAction::MoveBeside(target)),
             Some(DropDestination::Reorder(target)) => Some(ViewAction::Reorder(target)),
             Some(DropDestination::Split(target, side)) => Some(ViewAction::MoveTo(target, side)),
-            Some(DropDestination::Duplicate(_, side)) => Some(ViewAction::OpenAt(side)),
+            Some(DropDestination::Duplicate(target, side)) => Some(ViewAction::OpenInto(target, Some(side))),
+            Some(DropDestination::WindowSplit(target, side)) => Some(ViewAction::MoveToWindow(target, side)),
             Some(DropDestination::NewWindow) => {
                 let position = drag.desktop.and_then(|desktop| self.windows.drag_geometry.get(&drag.host).map(|geometry| desktop / geometry.scale));
                 Some(ViewAction::DetachAt(position))
