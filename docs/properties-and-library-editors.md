@@ -42,6 +42,16 @@ applied atomically; typing in a draft does not change the project. Expanding the
 form does not create another draft or undo history. Invalid input stays editable,
 Cancel leaves the document unchanged and stale view/project revisions are refused.
 
+A schematic wire selection also offers **Net rules…** and **Net appearance…**.
+Appearance applies to the whole logical net, across sheets and repeated
+instances: the form edits an optional RGB color and drawn stroke width in
+hundredths of a point, with a reset to the theme default. The shared
+`nets.set_appearance` and `nets.inspect_appearance` commands back the form, so
+MCP sees the same fields, bounds, revision refusal and one-step undo. Stroke
+width is a screen-space width and stays readable at every zoom. Color is
+presentation only; selection, hover and error indicators keep their own colors
+and remain distinguishable.
+
 Footprint selection includes a physical preview, explicit terminal-to-pad map
 and an expandable source/license section. Assignment pins a definition without
 placing copper. Initial board placement stays a separate command. A placed

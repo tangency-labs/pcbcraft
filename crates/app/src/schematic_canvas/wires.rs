@@ -283,6 +283,8 @@ pub(super) fn paint(
     highlighted: &std::collections::BTreeSet<String>,
 ) {
     let tokens = Tokens::get();
+    // Net appearance is sparse and read-only; the fast path skips graph construction entirely.
+    let appearances = project.wire_appearances().unwrap_or_default();
     let preview =
         moved.map(|(symbol, point)| (symbol.terminals(), symbol.unit_definition().pin_positions(point, symbol.turns(), symbol.is_mirrored())));
     let position = |endpoint| {
@@ -299,14 +301,20 @@ pub(super) fn paint(
         let [Some(from), Some(to)] = wire.endpoints().map(position) else {
             continue;
         };
+        let override_ = appearances.get(&wire.id());
         let color = if selected.contains(&wire.id()) {
             tokens.accent
         } else if highlighted.contains(&wire.id()) {
             tokens.schematic_highlight
+        } else if let Some(appearance) = override_.and_then(|appearance| appearance.color) {
+            Color32::from_rgb(appearance[0], appearance[1], appearance[2])
         } else {
             tokens.schematic_wire
         };
-        paint_route(painter, rect, camera, pcbcraft_engine::wire::wire_path(wire, from, to), color);
+        // A drawn width is a screen-space stroke, so it stays readable at every zoom level.
+        let width =
+            override_.and_then(|appearance| appearance.width_cp).map_or(theme::SCHEMATIC_SYMBOL_STROKE, |width_cp| f32::from(width_cp) / 100.0);
+        paint_stroked_route(painter, rect, camera, pcbcraft_engine::wire::wire_path(wire, from, to), color, width);
     }
     let mut ends = std::collections::BTreeMap::<u64, usize>::new();
     for endpoint in project.wires().iter().flat_map(|wire| wire.endpoints()) {
@@ -671,7 +679,12 @@ fn paint_pin(painter: &Painter, pos: Pos2, color: Color32) {
 
 /// Paint a model-space polyline through the canvas clip using shared wire styling.
 fn paint_route(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32) {
-    paint_stroke(painter, rect, camera, points, Stroke::new(theme::SCHEMATIC_SYMBOL_STROKE, color));
+    paint_stroked_route(painter, rect, camera, points, color, theme::SCHEMATIC_SYMBOL_STROKE);
+}
+
+/// Paint a model-space polyline with an explicit screen-space stroke width.
+fn paint_stroked_route(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<Point>, color: Color32, width: f32) {
+    paint_stroke(painter, rect, camera, points, Stroke::new(width, color));
 }
 
 /// Paint a model-space polyline with `stroke`; fewer than two points paints nothing.

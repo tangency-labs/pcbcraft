@@ -1,8 +1,11 @@
 //! Persistent electrical identities and net-owned presentation numbers; the authored schematic remains the connectivity authority.
 
 mod anchor;
+mod appearance;
 mod classes;
 mod commands;
+pub(crate) use appearance::appearance_param_schema;
+pub use appearance::{Appearance, DEFAULT_WIDTH_CP, INSPECT_APPEARANCE, MAX_WIDTH_CP, MIN_WIDTH_CP, SET_APPEARANCE};
 pub(crate) use classes::target_schema as class_target_schema;
 pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, NetAddress, SET_CLASSES};
 pub mod display;
@@ -101,6 +104,9 @@ pub struct Record {
     /// Dimensional class intent and originating assigning nets, without saved endpoint membership.
     #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "classes::stored_bindings")]
     pub class_bindings: Vec<ClassBinding>,
+    /// Schematic wire drawing override, owned by the net identity rather than by a wire or name.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "appearance::stored_appearance")]
+    pub appearance: Option<Appearance>,
 }
 
 impl Record {

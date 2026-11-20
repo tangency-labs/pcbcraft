@@ -157,14 +157,28 @@ these headers rather than discard identity, lineage or unresolved decisions.
 When no other content requires a later project format, a nonempty class catalog
 selects project/20; saved [net-class bindings](net-class-assignments.md) select
 project/21. Parameters and generated numbers select project/22 and /23 unless
-other records require a later format. In precedence order, active designator
+other records require a later format. In precedence order, saved [net wire
+appearance](#net-wire-appearance) selects project/52, active designator
 locks select project/51, differential pairs /45, an assembly profile catalog /36,
 and part groups /39 with compact memberships or /24 otherwise. Board-owned
 bindings use instances/3, instances/4 with generated numbers, instances/5 or /7
-with expanded or compact memberships, or instances/8 with pairs. Bindings
-remain inside the same logical registry and carry class and origin net UUIDs,
-while physical board and sheet formats stay unchanged. Older headers refuse the new vocabulary, and project/21
-requires actual bindings.
+with expanded or compact memberships, instances/8 with pairs, or instances/9
+with wire appearance. Bindings and appearance remain inside the same logical
+registry; appearance is a sparse field on the net UUID record, never on a wire
+or a display name. Physical board and sheet formats stay unchanged. Older
+headers refuse the new vocabulary, and project/21 requires actual bindings.
+
+### Net wire appearance
+
+An `appearance` object on a net registry record overrides the drawn color and
+stroke width of every schematic wire on that logical net, across sheets. `color`
+is an RGB triple of integers 0–255 and `width_cp` is a stroke width in hundredths
+of a point from 50 to 800; each field is optional, and a record with neither
+field is invalid. Absent fields use the theme defaults. Removing the last
+override returns the project to the format required by its other data, with the
+same bytes as before, and older readers refuse project/52 and instances/9 rather
+than silently dropping presentation intent. The override never changes
+connectivity, electrical identity, net-class rules or PCB geometry.
 
 If any unowned `boards`, `builds`, `documents` or `outputs` name already exists
 at the root, save selects an unused `pcbcraft-data-<project-id-prefix>` root,

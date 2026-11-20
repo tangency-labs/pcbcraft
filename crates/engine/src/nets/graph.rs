@@ -35,6 +35,7 @@ impl Network {
             fallbacks: self.anchors.iter().filter(|a| *a != primary).take(3).cloned().collect(),
             lineage: Vec::new(),
             class_bindings: Vec::new(),
+            appearance: None,
             state: State::Active {},
         })
     }

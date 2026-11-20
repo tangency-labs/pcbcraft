@@ -104,7 +104,7 @@ impl ClassDraft {
 }
 
 /// Resolve actual selected object identities once when Rules opens. Mixed nets require a choice.
-fn selected_target(
+pub(super) fn selected_target(
     project: &Project,
     target: Option<DocumentTarget>,
     schematic: &pcbcraft_engine::selection::Selection,

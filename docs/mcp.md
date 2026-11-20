@@ -845,6 +845,17 @@ for target shapes and protected removal/rebind. `pcb.route_rules` inspects effec
 sizes, clearance and conflicts at an addressed copper contact without mutation,
 including with `inspect: false`. Omitted routing sizes use that contact's class
 preferences; explicit changed copper must satisfy applicable hard dimensions.
+
+## Net wire appearance
+
+`nets.inspect_appearance` reports a net's effective schematic drawing override
+and identity status without promoting it. `nets.set_appearance` takes
+`expected_revision`, a net `target` and a sparse `appearance` object with an RGB
+`color` array and/or a `width_cp` integer from 50 to 800 hundredths of a point.
+An empty object or null resets to theme defaults. Both schematic Properties and
+the headless/live catalogs use these commands; the edit promotes an eligible
+derived net in one history step, refuses stale revisions, changes no electrical
+or PCB data and is saved with stable net identity in project/52 or instances/9.
 Queries and DRC retain per-object class IDs, revisions and assignment origins.
 See the [consumer contract](net-class-consumers.md) for parameters, provenance,
 stale authority and operation-specific conflict behavior.
