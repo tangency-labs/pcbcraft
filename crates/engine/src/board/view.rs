@@ -82,6 +82,8 @@ pub struct PadView {
     pub center: Point,
     /// Land bounding corners in board coordinates; None denotes a legacy center-only marker.
     pub copper: Option<[Point; 4]>,
+    /// Authored land width and height before rotation; zero for a legacy marker.
+    pub size_nm: (i64, i64),
     /// None denotes a marker with no physical copper. Configured memberships contain layer UUIDs.
     pub copper_layers: Option<CopperLayers>,
     pub shape: super::definition::PadShape,
@@ -99,7 +101,7 @@ impl PadView {
     pub fn contains_point(&self, at: Point) -> bool {
         crate::wire::valid_point(&at)
             && self.copper.is_some_and(|corners| {
-                super::geometry::Contour::pad(self.center, corners, self.shape, self.corner_radius_nm).overlaps_segment(at, at, 0.)
+                super::geometry::Contour::pad(self.center, corners, self.shape, self.corner_radius_nm, self.size_nm).overlaps_segment(at, at, 0.)
             })
     }
 }
@@ -343,6 +345,7 @@ impl<'a> BoardView<'a> {
                             number: pad.as_str().to_owned(),
                             center,
                             copper,
+                            size_nm: definition.map_or((0, 0), |p| (p.width_nm, p.height_nm)),
                             copper_layers: definition.map(|pad| CopperLayers::resolve(self.setup(), pad.copper, footprint.bottom)),
                             shape: definition.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
                             corner_radius_nm: definition.map_or(0, |p| p.corner_radius_nm),

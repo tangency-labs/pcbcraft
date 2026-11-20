@@ -77,7 +77,7 @@ impl<'a> Land<'a> {
             copper_layers: CopperLayers::resolve(setup, pad.copper, placement.bottom),
             mask_sides,
             paste_sides,
-            contour: Contour::pad(center, corners, pad.shape, pad.corner_radius_nm),
+            contour: Contour::pad(center, corners, pad.shape, pad.corner_radius_nm, (pad.width_nm, pad.height_nm)),
         }
     }
 

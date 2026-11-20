@@ -316,6 +316,41 @@ fn footprint_preview_keeps_circular_openings_when_authored_rotation_changes() {
     assert_eq!(pad["loose_ends"], json!([]));
 }
 
+/// Rounded rotated bounds do not change a circle at angles that are not quarter turns, whether the
+/// pad turns 0 to 30 degrees on a square placement or 0 to 90 degrees on a 23-degree placement.
+/// A tangent track cap stays attached, as no opening or contact check changes.
+#[test]
+fn footprint_preview_keeps_circle_outline_at_non_quarter_angles() {
+    for (placement, rotation) in [(0, 30), (23, 90)] {
+        let (mut session, _, params) = fixture_with_original(
+            |pad| {
+                pad.shape = PadShape::Circle;
+                pad.width_nm = 500_000;
+                pad.height_nm = 500_000;
+                pad.corner_radius_nm = 0;
+                pad.rotation = 0;
+            },
+            |pad| pad.rotation = rotation,
+            false,
+        );
+        let id = session.project().unwrap().boards().next().unwrap().footprint_ids().next().unwrap();
+        edit(&mut session, SET_FOOTPRINT_TRANSFORM, json!({"footprint":id,"rotation":placement,"x_nm":0,"y_nm":0}));
+        let (x, y) = crate::board::rotate(500_000, 0, placement);
+        let front = layer(&session, Side::Front);
+        edit(
+            &mut session,
+            ADD_TRACKS,
+            json!({"layer":front,"width_nm":100_000,
+                "points":[{"x_nm":x + 600_000,"y_nm":y},{"x_nm":x + 300_000,"y_nm":y}]}),
+        );
+        let report = session.execute(PREVIEW_FOOTPRINT_REVISION, &params).unwrap();
+        let pad = &report["delta"]["pads"][0];
+        assert_eq!(pad["number"], "2");
+        assert_eq!(pad["changes"], json!(["rotated"]), "placement {placement}, pad {rotation}");
+        assert_eq!(pad["loose_ends"], json!([]), "placement {placement}, pad {rotation}");
+    }
+}
+
 /// At the response limit, a dense pad still fits in the live reply and MCP JSON text wrapper.
 /// One more contact fails closed, with distinct recovery for full and single-pad queries.
 #[test]
