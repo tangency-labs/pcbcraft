@@ -1743,6 +1743,20 @@ and the DRC outline predicates, head-island and membership rules from the snapsh
 query, a probe budget with incomplete, canceled and stale outcomes, and previous-plan
 continuity. No Sparksmith world model, shove, dependency or file format was imported.
 
+## Shove
+
+The shove solver in `crates/engine/src/board/route/shove.rs` is original PCBcraft
+code under MIT OR Apache-2.0, built on the walkaround's hulls. Its approach follows
+the shove notes in Sparksmith's `docs/push-and-shove.md`
+(https://github.com/DAmesberger/sparksmith, revision `c70dfd5e`, MIT OR Apache-2.0):
+tracks pushed as chains with fixed ends, the part inside the pusher's hull replaced
+by the hull's boundary on the side that clears immovable copper, vias moved the least
+distance in a 45° multiple with their tracks following, breadth-first propagation
+within depth and push bounds. No Sparksmith code was copied; the implementation is
+written against PCBcraft's `ClearanceQuery` overlay, copper preparation and
+commands. No KiCad or other GPL EDA source was read or used, and no dependency,
+asset or file format was added.
+
 ## Explicit via net assignments
 
 The optional scoped via target, snapshot-local membership projection and shared

@@ -171,6 +171,77 @@ impl Hull {
         (0..n).map(|step| if ccw { self.corners[(edge + 1 + step) % n] } else { self.corners[(edge + n - step) % n] }).collect()
     }
 
+    /// Whether `p` lies strictly inside the hull; a point on the boundary does not.
+    pub(super) fn contains(&self, p: Point) -> bool {
+        self.inside(p, p).is_some()
+    }
+
+    /// The fewest whole lattice steps `t` that take `p + t·step` out of the hull's interior;
+    /// zero when `p` is already outside. `None` when `step` never leaves (a zero step).
+    pub(super) fn escape(&self, p: Point, step: Point) -> Option<i64> {
+        if !self.contains(p) {
+            return Some(0);
+        }
+        (0..8)
+            .filter(|k| self.uses(*k))
+            .filter_map(|k| {
+                let rate = dot(k, step);
+                (rate > 0).then(|| {
+                    let need = self.support[k] - dot(k, p);
+                    (need + rate - 1).div_euclid(rate)
+                })
+            })
+            .min()
+            .and_then(|t| i64::try_from(t).ok())
+    }
+
+    /// The corners met walking the boundary from `from` to `to` (both on or next to it),
+    /// counter-clockwise when `ccw`, excluding the two ends. A point off the boundary uses its
+    /// nearest edge. `None` for a hull without corners.
+    pub(super) fn path(&self, from: Point, to: Point, ccw: bool) -> Option<Vec<Point>> {
+        let n = self.corners.len();
+        if n < 3 {
+            return None;
+        }
+        let (start, end) = (self.edge_of(from), self.edge_of(to));
+        if start == end {
+            let (a, b) = (self.corners[start], self.corners[(start + 1) % n]);
+            let along =
+                |p: Point| i128::from(b.x_nm - a.x_nm) * i128::from(p.x_nm - a.x_nm) + i128::from(b.y_nm - a.y_nm) * i128::from(p.y_nm - a.y_nm);
+            if (ccw && along(from) <= along(to)) || (!ccw && along(from) >= along(to)) {
+                return Some(Vec::new());
+            }
+        }
+        let mut corners = Vec::new();
+        let mut edge = start;
+        for _ in 0..n {
+            if ccw {
+                edge = (edge + 1) % n;
+                corners.push(self.corners[edge]);
+            } else {
+                corners.push(self.corners[edge]);
+                edge = (edge + n - 1) % n;
+            }
+            if edge == end {
+                return Some(corners);
+            }
+        }
+        None
+    }
+
+    /// The edge `p` lies on, or else the edge nearest it; the lowest index on ties.
+    fn edge_of(&self, p: Point) -> usize {
+        let n = self.corners.len();
+        if let Some(edge) = (0..n).find(|i| self.on_edge(*i, p)) {
+            return edge;
+        }
+        let distance = |i: usize| {
+            let (a, b) = (self.corners[i], self.corners[(i + 1) % n]);
+            super::super::geometry::segment_distance(p, p, a, b)
+        };
+        (0..n).min_by(|x, y| distance(*x).total_cmp(&distance(*y)).then(x.cmp(y))).unwrap_or(0)
+    }
+
     /// The corner nearest `p`, with the lowest index on ties.
     fn nearest_corner(&self, p: Point) -> usize {
         let distance = |c: &Point| {

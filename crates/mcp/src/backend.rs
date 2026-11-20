@@ -168,6 +168,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                     pcbcraft_engine::nets::INSPECT_CLASSES
                         | pcbcraft_engine::board::class_rules::ROUTE_RULES
                         | pcbcraft_engine::board::route::PLAN_ROUTE
+                        | pcbcraft_engine::board::route::PLAN_SHOVE
                         | pcbcraft_engine::net_classes::INSPECT
                         | pcbcraft_engine::net_classes::RESOLVE
                         | pcbcraft_engine::part_groups::INSPECT

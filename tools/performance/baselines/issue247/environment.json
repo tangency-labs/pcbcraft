@@ -1,0 +1,10 @@
+{
+  "hardware": "Apple M5 Max; 128 GB RAM; physical host",
+  "os": "macOS 27.2.1 (Darwin 27.2.0)",
+  "runtime": "native CPU replay",
+  "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
+  "profile": "release",
+  "power": "AC power; macOS default power mode; developer desktop with other build and agent load; CPU exclusivity and thermal state not controlled.",
+  "notes": "Issue247 shove solver: new board_perf shove service diagnostic on channels-v1 and dense-v1, 100 iterations, after only. No existing measured path changed. No latency-tail, allocation, presentation or endurance qualification.",
+  "revision": "83bdf997"
+}

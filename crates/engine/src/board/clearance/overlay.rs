@@ -174,14 +174,28 @@ impl Overlay<'_> {
             Some(id) => self.object(id).ok_or_else(|| CommandError::NotFound("unknown overlay intent object".into()))?.intended_nets.clone(),
             None => Vec::new(),
         };
+        self.probe_membership(contour, layers, &nets, intended_from)
+    }
+
+    /// Probe with an explicit intended membership, as a connected multi-object item (a pushed
+    /// track chain or a new route) needs. `replaced`, when given, is excluded from the results;
+    /// every other overlay obstacle, including the item's own copper, is reported.
+    pub(crate) fn probe_membership(
+        &self,
+        contour: &Contour,
+        layers: &[Uuid],
+        nets: &[usize],
+        replaced: Option<ObstacleId>,
+    ) -> Result<OverlayResults, CommandError> {
         let gaps: Vec<_> = self
             .candidates(contour, layers)?
             .into_iter()
-            .filter(|id| Some(*id) != intended_from)
+            .filter(|id| Some(*id) != replaced)
             .filter_map(|id| self.object(id).map(|item| (id, item, contour.gap(&item.contour))))
             .collect();
         let connected: Vec<_> = nets
-            .into_iter()
+            .iter()
+            .copied()
             .chain(gaps.iter().filter(|(_, _, gap)| *gap <= 0.).flat_map(|(_, item, _)| item.intended_nets.iter().copied()))
             .collect::<BTreeSet<_>>()
             .into_iter()

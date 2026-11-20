@@ -563,7 +563,7 @@ impl<'a> Walker<'a> {
 /// Where the polyline first enters `hull`: the leg and a whole-nanometre point on its lattice.
 /// A diagonal leg meeting a perpendicular diagonal edge between lattice points widens that
 /// edge by one unit so the entry is exact; otherwise the entry stays just outside.
-fn entry(legs: &[Point], hull: &mut Hull) -> Option<(usize, Point)> {
+pub(super) fn entry(legs: &[Point], hull: &mut Hull) -> Option<(usize, Point)> {
     for attempt in 0..2 {
         let (i, a, b, through) =
             legs.windows(2).enumerate().find_map(|(i, leg)| hull.inside(leg[0], leg[1]).map(|(_, _, through)| (i, leg[0], leg[1], through)))?;
