@@ -73,14 +73,36 @@ pub fn collapsing<R>(
     );
     let expanded = state.is_open();
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), expanded, title));
-    let verb = solidcraft_ui_text::tr(if expanded { "ui.collapse" } else { "ui.expand" });
+    let verb_key = if expanded { "ui.collapse" } else { "ui.expand" };
+    let verb = solidcraft_ui_text::tr(verb_key);
+    let logical_verb = crate::i18n::logical_tr(verb_key);
     let action = format!("{verb} {title}");
+    let accessible_action = format!("{logical_verb} {title}");
     let mut arrow_ui = ui.new_child(egui::UiBuilder::new().id_salt(id.with("disclosure")).max_rect(arrow));
-    let disclosure = kit::panel_disclosure_button_at(&mut arrow_ui, arrow, expanded, &action);
+    let disclosure = panel_disclosure_button(&mut arrow_ui, arrow, expanded, &accessible_action, &action);
     if response.clicked() || disclosure.clicked() {
         state.toggle(ui);
     }
     state.show_body_indented(&response, ui, add).map(|body| body.inner)
+}
+
+/// Render a panel disclosure button using shared toolkit chrome, keeping `accessible_label` in
+/// logical reading order for screen readers while showing `tooltip_label` in display order.
+fn panel_disclosure_button(ui: &mut Ui, rect: egui::Rect, open: bool, accessible_label: &str, tooltip_label: &str) -> Response {
+    use kit::BackingTooltipExt as _;
+    let t = solidcraft_theme::Tokens::get();
+    let response = ui.interact(rect, ui.make_persistent_id("disclosure_button"), egui::Sense::click());
+    if response.clicked() {
+        response.request_focus();
+    }
+    if response.hovered() {
+        kit::panel_header_hover(ui.painter(), rect);
+    }
+    let ink = if response.hovered() || response.has_focus() { t.form_ink } else { t.form_dim };
+    kit::disclosure(ui.painter(), rect.center(), open, ink);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, ui.is_enabled(), open, accessible_label));
+    ui.ctx().accesskit_node_builder(response.id, |node| node.set_expanded(open));
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).backing_on_hover_text(tooltip_label)
 }
 
 /// Render an enabled or disabled command action without changing its command ownership.
@@ -213,4 +235,35 @@ impl Choice {
 /// Determinate operation progress using the pinned toolkit's accessible meter and tokens.
 pub fn progress(ui: &mut Ui, key: &str, fraction: f32) -> Response {
     kit::progress(ui, key, fraction)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collapsing_disclosure_uses_logical_hebrew_accessible_name() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::install(&ctx);
+        let _guard = crate::i18n::scope(crate::i18n::LanguageChoice::Hebrew);
+        let mut output = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 200.0))), ..Default::default() },
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    collapsing(ui, "test_section", "Details", false, None, |ui| {
+                        ui.label("Body");
+                    });
+                });
+            },
+        );
+        output.textures_delta.clear();
+        let labels: Vec<&str> = output
+            .platform_output
+            .accesskit_update
+            .as_ref()
+            .map(|update| update.nodes.iter().filter_map(|(_, node)| node.label()).collect())
+            .unwrap_or_default();
+        assert!(labels.contains(&"הרחבה Details"), "expected logical Hebrew accessible label in {labels:?}");
+    }
 }

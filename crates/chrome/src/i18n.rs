@@ -138,16 +138,26 @@ fn resolve_system_language() -> &'static str {
         return HEBREW;
     }
     #[cfg(not(target_arch = "wasm32"))]
-    if detected == ENGLISH && hebrew_font_available() {
-        for var in ["LC_ALL", "LC_MESSAGES", "LANG"] {
-            if let Ok(val) = std::env::var(var)
-                && normalize_language_tag(&val).split('-').next() == Some(HEBREW)
-            {
-                return HEBREW;
-            }
-        }
+    if detected == ENGLISH && hebrew_font_available() && resolve_posix_env_hebrew(|name| std::env::var(name).ok()) {
+        return HEBREW;
     }
     ENGLISH
+}
+
+/// Return whether the highest-priority nonempty POSIX locale variable (`LC_ALL`, then
+/// `LC_MESSAGES`, then `LANG`) normalizes to Hebrew.
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn resolve_posix_env_hebrew(mut get_var: impl FnMut(&str) -> Option<String>) -> bool {
+    let Some(first_nonempty) = ["LC_ALL", "LC_MESSAGES", "LANG"].into_iter().find_map(|var| get_var(var).filter(|val| !val.trim().is_empty())) else {
+        return false;
+    };
+    normalize_language_tag(&first_nonempty).split('-').next() == Some(HEBREW)
+}
+
+/// Look up `id` in logical (reading) order for accessibility names, falling back to
+/// [`solidcraft_ui_text::tr`] when `id` is absent from the active catalog.
+pub fn logical_tr(id: &str) -> &str {
+    solidcraft_ui_text::locale().catalog().messages().get(id).map(String::as_str).unwrap_or_else(|| solidcraft_ui_text::tr(id))
 }
 
 /// Whether the active thread locale is right-to-left.
@@ -249,10 +259,24 @@ mod tests {
             assert_eq!(solidcraft_ui_text::language(), HEBREW);
             assert_ne!(solidcraft_ui_text::tr("ui.copy"), "Copy");
             assert_ne!(solidcraft_ui_text::tr("ui.collapse"), "Collapse");
+            assert_eq!(logical_tr("ui.collapse"), "כיווץ");
+            assert_eq!(logical_tr("ui.expand"), "הרחבה");
             let formatted = solidcraft_ui_text::format("ui.details_show_all", &[("count", "12")]);
             assert!(formatted.contains("12"), "got {formatted:?}");
         }
         assert!(!is_rtl());
+    }
+
+    #[test]
+    fn posix_env_precedence_respects_lc_all_override() {
+        fn lookup<'a>(vars: &'a [(&'a str, &'a str)]) -> impl FnMut(&str) -> Option<String> + 'a {
+            move |key: &str| vars.iter().find(|(k, _)| *k == key).map(|(_, v)| (*v).to_owned())
+        }
+        assert!(!resolve_posix_env_hebrew(lookup(&[("LC_ALL", "en_US.UTF-8"), ("LANG", "iw_IL.UTF-8")])));
+        assert!(!resolve_posix_env_hebrew(lookup(&[("LC_MESSAGES", "C"), ("LANG", "he_IL.UTF-8")])));
+        assert!(resolve_posix_env_hebrew(lookup(&[("LC_ALL", ""), ("LANG", "iw_IL.UTF-8")])));
+        assert!(resolve_posix_env_hebrew(lookup(&[("LC_ALL", "iw_IL.UTF-8"), ("LANG", "en_US.UTF-8")])));
+        assert!(!resolve_posix_env_hebrew(lookup(&[])));
     }
 
     #[test]

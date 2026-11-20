@@ -1821,6 +1821,14 @@ or project file format was added.
 
 The `CRAFT_FONTS_DIR` build-script probe (`crates/chrome/build.rs`), BCP 47 and
 legacy `iw` language-tag normalization / RTL detection (`crates/chrome/src/i18n.rs`),
-and desktop system Hebrew font fallback list (`crates/chrome/src/fonts.rs`) adapt the
-localization helpers from FieldCraft (`tangency-labs/fieldcraft`, MIT OR Apache-2.0).
-No GPL, KiCad, or `pcbcraft-gpl` source code or binary font assets were copied or added.
+and desktop system Hebrew font fallback list (`crates/chrome/src/fonts.rs`) are
+adapted from:
+
+- `tangency-labs/fieldcraft` (`hrb9/fieldcraft` PR #988 at commit
+  `2d546a6b32c061b3d51d29f2d40a5d6f69d4a5f1`, MIT OR Apache-2.0).
+
+Changes for PCBCraft: adapted crate paths and tokens to `pcbcraft-chrome`,
+integrated `solidcraft-ui-text` Hebrew catalogs (`crates/chrome/assets/shared-ui/he.json`),
+added RTL arrow/label positioning in `controls::collapsing`, and wired language
+selection into `crates/app/src/preferences.rs`. No GPL, KiCad, or `pcbcraft-gpl`
+source code or binary font assets were copied or added.
