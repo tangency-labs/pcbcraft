@@ -291,9 +291,9 @@ authored data.
 
 ### Straight-via teardrop intents
 
-Board format `pcbcraft-board/37` requires a nonempty `teardrops` array and
-accepts existing straight-board fields, including footprint locks. Each record
-stores a stable UUID, the attached via and track UUIDs, and their sizing
+Board format `pcbcraft-board/37` requires a copper board setup and a nonempty
+`teardrops` array. It accepts existing straight-board fields, including footprint
+locks. Each record stores a stable UUID, the attached via and track UUIDs, and their sizing
 parameters. Vertices, net membership and rule reports are never written to the
 board. Encoding orders the records by UUID; decoding rejects duplicate
 identities/sites, dangling attachments and unrepresentable parameters or shapes.
@@ -548,7 +548,7 @@ Project/19 extends the existing occurrence and optional net-registry homes with
 sparse `no_connects` on affected component records and allows wire-end intent
 on sheet/8. It adds no document paths.
 Each nonempty list is ordered by exact terminal token and captures that pin's
-`electrical_type` when authored. There are at most 128 records per part and
+`electrical_type` when authored. There are at most 1,024 records per part (128 in earlier releases) and
 4,096 combined pin/wire-end records per project; absent intent is omitted.
 Older project headers reject this field, as do unsupported diagnostic single-file encodings.
 
@@ -850,6 +850,10 @@ placements, and legacy single-file export refuses physical definitions. Existing
 canonical marker-only documents retain their bytes in a no-op codec round trip;
 marker placements are not upgraded to physical pads implicitly. Deleting the last placement using a physical definition removes its
 unused pinned copy on save.
+
+Pinned footprints hold up to 1,024 pads and 256 artwork objects, pinned symbols
+up to 1,024 terminals, and a mapping up to 1,024 terminals. The formats keep their
+numbers; earlier releases refuse records above their old limit of 128.
 
 Board format 6 requires a `silkscreen` object with `text_height_nm`,
 `stroke_width_nm` and `pad_clearance_nm`, as defined in the

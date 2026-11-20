@@ -54,6 +54,7 @@ fn crowded(tracks: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>, [Uuid; 2]) {
                 center: at(x + 400_000, y + 400_000),
                 shape: if k % 4 == 0 { PadShape::Circle } else { PadShape::Rectangle },
                 corner_radius_nm: 0,
+                size_nm: (800_000, 800_000),
             }
         })
         .collect();
@@ -124,6 +125,7 @@ fn crossing(items: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>) {
             center: at(x + 400_000, y + 400_000),
             shape: PadShape::Rectangle,
             corner_radius_nm: 0,
+            size_nm: (800_000, 800_000),
         });
     }
     vias.truncate(items / 8);

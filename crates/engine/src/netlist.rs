@@ -25,8 +25,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
 
 mod accepted;
+pub mod compare;
 mod integer;
 pub use accepted::EXPORT_BOARD_NETLIST;
+pub use compare::{COMPARE_NETLIST, Comparison, compare};
 
 /// Generate the project's netlist file; edits nothing.
 pub const EXPORT_NETLIST: &str = "project.export_netlist";
@@ -358,13 +360,9 @@ fn nullable_capture<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<cr
 }
 
 impl Netlist {
-    /// Read a netlist document, refusing other formats, unknown fields and malformed values.
-    /// The format tag is read first, so a document of a later format is refused by its tag
-    /// rather than by the first field this reader does not know. Omitted fields are refused
-    /// even where null is allowed, and so are fields that do not belong to the document's
-    /// basis: see [`Netlist::validate_document`]. The tag must be the one the content needs: format 1
-    /// for a `schematic` netlist and format 2 for an `accepted` one, so a format 1 reader never
-    /// meets format 2 fields under its own tag.
+    /// Read an exported netlist and validate its connectivity references. After reading the
+    /// JSON header, refuse an unknown format before decoding its data fields. The tag must
+    /// match the basis: format 1 for `schematic`, format 2 for `accepted`.
     pub fn parse(text: &str) -> Result<Self, String> {
         #[derive(Deserialize)]
         struct Header {
@@ -374,7 +372,52 @@ impl Netlist {
         if header.format != FORMAT && header.format != FORMAT_V2 {
             return Err(format!("unsupported netlist format `{}`", header.format));
         }
-        serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))
+        let netlist: Self = serde_json::from_str(text).map_err(|error| format!("invalid netlist: {error}"))?;
+        netlist.check_addresses().map_err(|error| format!("invalid netlist: {error}"))?;
+        Ok(netlist)
+    }
+
+    /// Require unique persistent net IDs and component IDs, unique terminal numbers per
+    /// component, and an existing terminal address for every placement. Placements are unique;
+    /// accepted netlists must place every terminal, even those of unplaced schematic units.
+    fn check_addresses(&self) -> Result<(), String> {
+        let mut net_ids = BTreeSet::new();
+        for id in self.nets.iter().filter_map(|net| net.id) {
+            if !net_ids.insert(id) {
+                return Err(format!("net ID {id} is listed twice"));
+            }
+        }
+        let mut ids = BTreeSet::new();
+        let mut table = BTreeSet::new();
+        for component in &self.components {
+            if !ids.insert(component.id.as_str()) {
+                return Err(format!("component {} is listed twice", component.id));
+            }
+            let mut numbers = BTreeSet::new();
+            for terminal in &component.terminals {
+                if !numbers.insert(terminal.terminal.as_str()) {
+                    return Err(format!("component {} lists terminal {} twice", component.id, terminal.terminal));
+                }
+            }
+            table.extend(numbers.into_iter().map(|number| (component.id.as_str(), number)));
+        }
+        let mut listed = BTreeSet::new();
+        for terminal in self.nets.iter().flat_map(|net| &net.terminals).chain(&self.unconnected) {
+            let key = (terminal.part.as_str(), terminal.terminal.as_str());
+            if !table.contains(&key) {
+                return Err(format!("{} terminal {} is not in its component's terminal table", terminal.part, terminal.terminal));
+            }
+            if !listed.insert(key) {
+                return Err(format!("{} terminal {} is listed more than once", terminal.part, terminal.terminal));
+            }
+        }
+        if self.basis == Basis::Accepted
+            && listed.len() != table.len()
+            && let Some((part, terminal)) = table.difference(&listed).next()
+        {
+            return Err(format!("accepted netlist omits the placement of {part} terminal {terminal}"));
+        }
+        Ok(())
     }
 
     /// The format tag a netlist of this basis is written with: the lowest one that carries it.

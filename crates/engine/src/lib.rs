@@ -7,6 +7,7 @@
 
 #[cfg(test)]
 mod allocation_tests;
+pub mod annotation;
 pub mod authoring;
 pub mod board;
 pub mod clipboard;
@@ -90,6 +91,8 @@ enum ParamKind {
     /// A persistent registry UUID, distinct from a revision-scoped graph row.
     NetId,
     ExternalText,
+    /// A netlist document's text, bounded before it is parsed.
+    NetlistText,
     ClipboardUnits,
     BoardSelection,
     SchematicPasteTargets,
@@ -219,6 +222,9 @@ impl ParamKind {
                 json!({"oneOf":[{"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false},{"type":"object","properties":{"junction":{"type":"string","pattern":"^junction-[1-9][0-9]*$"}},"required":["junction"],"additionalProperties":false}]})
             }
             Self::ExternalText => json!({"type":"string","maxLength":clipboard_text::MAX_TEXT_BYTES}),
+            Self::NetlistText => {
+                json!({"type":"string","maxLength":netlist::compare::MAX_TEXT_BYTES,"description":"Netlist JSON text, at most 8 MiB when encoded as UTF-8."})
+            }
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
                 "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
@@ -240,7 +246,7 @@ impl ParamKind {
             Self::CreateBoard => json!({"type":"boolean"}),
             Self::PartMetadata => schematic::fields::metadata_schema(),
             Self::UnconnectedPads => {
-                json!({"type":"array","maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
+                json!({"type":"array","maxItems":board::definition::MAX_PADS,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
             }
             Self::OptionalNativeId => json!({"type":["string","null"],"minLength":1,"maxLength":64}),
             Self::NativeReference => {
@@ -360,7 +366,7 @@ impl ParamKind {
                 json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::BASIC_COMPONENT_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
-                json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
+                json!({"type":"object","minProperties":1,"maxProperties":library::MAX_TERMINALS,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":board::MAX_COMMAND_PADS_PER_TERMINAL,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
             }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
             Self::SymbolDefinition => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -395,6 +401,31 @@ impl ParamKind {
         }
     }
 
+    /// Report oversized footprint inputs before syntax validation or parsing copies their data.
+    /// The caller supplies the parameter name; other kinds have no footprint capacity check.
+    fn footprint_size_error(self, value: &Value) -> Option<String> {
+        use board::{MAX_COMMAND_PADS_PER_TERMINAL, definition::MAX_PADS};
+        use library::MAX_TERMINALS;
+        match self {
+            Self::FootprintMapping => {
+                let mapping = value.as_object()?;
+                if mapping.len() > MAX_TERMINALS {
+                    return Some(format!("must contain at most {MAX_TERMINALS} terminal entries, not {}", mapping.len()));
+                }
+                let (terminal, count) = mapping.iter().find_map(|(terminal, pads)| {
+                    let count = pads.as_array()?.len();
+                    (count > MAX_COMMAND_PADS_PER_TERMINAL).then_some((terminal, count))
+                })?;
+                Some(format!("terminal {terminal:?} must map to at most {MAX_COMMAND_PADS_PER_TERMINAL} pads, not {count}"))
+            }
+            Self::UnconnectedPads => {
+                let count = value.as_array()?.len();
+                (count > MAX_PADS).then(|| format!("must contain at most {MAX_PADS} pads, not {count}"))
+            }
+            _ => None,
+        }
+    }
+
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
@@ -415,6 +446,8 @@ impl ParamKind {
             Self::ExternalText if value.as_str().is_some_and(|s| s.len() <= clipboard_text::MAX_TEXT_BYTES) => Ok(()),
             Self::ClipboardUnits if serde_json::from_value::<clipboard_text::CoordinateUnits>(value.clone()).is_ok() => Ok(()),
             Self::ExternalText => Err("must be UTF-8 text of at most 64 KiB"),
+            Self::NetlistText if value.as_str().is_some_and(|s| s.len() <= netlist::compare::MAX_TEXT_BYTES) => Ok(()),
+            Self::NetlistText => Err("must be UTF-8 text of at most 8 MiB"),
             Self::ClipboardUnits => Err("must be mm or mil"),
             Self::BoardSelection if board::clipboard::BoardSelection::parse(value).is_some() => Ok(()),
             Self::SchematicPasteTargets
@@ -458,7 +491,7 @@ impl ParamKind {
                 .ok_or("must contain a valid text appearance"),
             Self::UnconnectedPads
                 if serde_json::from_value::<Vec<String>>(value.clone()).is_ok_and(|pads| {
-                    pads.len() <= 128
+                    pads.len() <= board::definition::MAX_PADS
                         && pads.iter().all(|pad| schematic::PinNumber::new(pad).is_some())
                         && pads.iter().collect::<std::collections::BTreeSet<_>>().len() == pads.len()
                 }) =>
@@ -1353,6 +1386,17 @@ const CATALOG: &[Command] = &[
         }],
     },
     Command {
+        id: netlist::COMPARE_NETLIST,
+        title: "Compare Netlist",
+        summary: "Read a netlist file back and compare it with what the open project exports now: the project netlist, or the named board's accepted netlist for a board file. Terminals are matched by part and terminal, never by net name or position; execute returns whether they match, the counts on both sides, connectivity differences (such as a terminal on another net) and notes for annotation or net-metadata changes. Edits nothing.",
+        params: &[Param {
+            name: "netlist",
+            required: true,
+            summary: "The netlist document's text, as project.export_netlist or pcb.export_netlist writes it",
+            kind: ParamKind::NetlistText,
+        }],
+    },
+    Command {
         id: PLACE_RESISTOR,
         title: "Place Resistor",
         summary: "Compatibility command for the starter library's 1k resistor. Use schematic.place_symbol for new calls. Undoable.",
@@ -1588,6 +1632,20 @@ const CATALOG: &[Command] = &[
         params: &[SYMBOL, EXPECTED_REVISION],
     },
     Command {
+        id: annotation::PREVIEW,
+        title: "Preview schematic annotation",
+        summary: "Review reference designators without editing. Propose the lowest free references for unlocked placeholders and report duplicates.",
+        params: &[
+            Param {
+                required: false,
+                name: "sheet",
+                summary: "Limit to this sheet UUID; omission previews the whole project",
+                kind: ParamKind::SheetId,
+            },
+            Param { required: false, ..EXPECTED_REVISION },
+        ],
+    },
+    Command {
         id: SET_SYMBOL_FIELDS,
         title: "Edit Symbol Fields",
         summary: "Set reference, value, optional designator lock, metadata, field appearance and placement together. Attached wires follow center changes. References remain unique. Undoable.",
@@ -1598,7 +1656,7 @@ const CATALOG: &[Command] = &[
             Param {
                 required: false,
                 name: "designator_locked",
-                summary: "Record a designator lock for future annotation; omission preserves the current lock",
+                summary: "Protect the designator during automatic annotation; omission preserves the current lock",
                 kind: ParamKind::Flag,
             },
             Param {
@@ -1930,6 +1988,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[7],
     library::sources::COMMANDS[8],
     library::sources::COMMANDS[9],
+    library::sources::COMMANDS[10],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2843,6 +2902,22 @@ impl Project {
         self.component_terminals(component, pin).next()
     }
 
+    /// Index one placed appearance per logical terminal, taking the first in the same stable
+    /// unit-ID order as `component_terminal`, without scanning a unit for every footprint pad.
+    fn first_component_terminals(&self, component: u64) -> BTreeMap<String, Terminal> {
+        let mut terminals = BTreeMap::new();
+        if let Some(part) = self.components.get(&component) {
+            for ((_, unit), symbol) in self.units.range((component, String::new())..).take_while(|((owner, _), _)| *owner == component) {
+                if let Some(definition) = part.definition.unit(unit) {
+                    for terminal in Terminal::for_symbol(*symbol, definition) {
+                        terminals.entry(terminal.number().to_owned()).or_insert(terminal);
+                    }
+                }
+            }
+        }
+        terminals
+    }
+
     /// Every placed appearance in stable unit-ID order. The part/unit index avoids scanning
     /// unrelated placements for each pin during board capture and cross-probing.
     pub(crate) fn component_terminals<'a>(&'a self, component: u64, pin: &'a str) -> impl Iterator<Item = Terminal> + 'a {
@@ -3146,7 +3221,9 @@ impl Session {
         if id == board::identity::CREATE_BOARD {
             return self.project.as_ref().is_some_and(|project| project.board_target().is_none());
         }
-        if id.starts_with("pcb.") && id != ASSIGN_FOOTPRINT && !self.project.as_ref().is_some_and(|project| project.board_target().is_some()) {
+        if ((id.starts_with("pcb.") && id != ASSIGN_FOOTPRINT) || id == library::sources::PREVIEW_FOOTPRINT_REVISION)
+            && !self.project.as_ref().is_some_and(|project| project.board_target().is_some())
+        {
             return false;
         }
         match id {
@@ -3181,7 +3258,9 @@ impl Session {
             | parameters::RESOLVE
             | "project.rename"
             | netlist::EXPORT_NETLIST
+            | netlist::COMPARE_NETLIST
             | library::sources::AVAILABLE_REVISIONS
+            | library::sources::PREVIEW_FOOTPRINT_REVISION
             | no_connect::SET
             | no_connect::CHECK
             | net_classes::CREATE
@@ -3210,6 +3289,7 @@ impl Session {
             | MIRROR_SYMBOL
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
+            | annotation::PREVIEW
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
@@ -3370,10 +3450,10 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Authorized symbol-field dry runs return provisional document changes without publishing an edit.
-    /// Failed commands leave the project intact. Scope refusals precede validation; otherwise
-    /// a stale `expected_revision` is reported first unless the command returns a stale query
-    /// outcome, as `pcb.plan_route` does.
+    /// Authorized symbol-field dry runs and annotation previews return proposals without
+    /// publishing edits. Failed commands leave the project intact. Scope refusals precede
+    /// validation; otherwise a stale `expected_revision` is reported first unless the command
+    /// returns a stale query outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
@@ -3387,6 +3467,10 @@ impl Session {
         }
         if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
             return self.preview_symbol_fields(params);
+        }
+        if id == annotation::PREVIEW {
+            self.validate_project_command(id, params)?;
+            return self.preview_annotation(params);
         }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3421,6 +3505,10 @@ impl Session {
         if id == netlist::EXPORT_NETLIST {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"netlist":self.netlist_report(params)?}));
+        }
+        if id == netlist::COMPARE_NETLIST {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"comparison":self.compare_netlist(params)?}));
         }
         if id == netlist::EXPORT_BOARD_NETLIST {
             self.validate_project_command(id, params)?;
@@ -3638,6 +3726,7 @@ impl Session {
                 | sheets::DELETE_SHEET
                 | "project.rename"
                 | netlist::EXPORT_NETLIST
+                | netlist::COMPARE_NETLIST
                 | no_connect::SET
                 | no_connect::CHECK
                 | net_classes::CREATE
@@ -3666,6 +3755,7 @@ impl Session {
                 | MIRROR_SYMBOL
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
+                | annotation::PREVIEW
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
@@ -3777,6 +3867,9 @@ impl Session {
             netlist::EXPORT_NETLIST => {
                 self.export_netlist()?;
             }
+            netlist::COMPARE_NETLIST => {
+                self.compare_netlist(params)?;
+            }
             net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD
             | hierarchy::PLACE_SHEET
@@ -3860,6 +3953,9 @@ impl Session {
             MIRROR_SYMBOL => self.mirror_symbol(params)?,
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
+            annotation::PREVIEW => {
+                self.preview_annotation(params)?;
+            }
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,
@@ -4145,7 +4241,7 @@ impl Session {
     /// only this unit's text appearance. Omission preserves either. Invalid/dangling fields or
     /// board exclusion of a legacy placed component reject every accompanying change.
     /// With an accepted baseline, exclusion stages a reviewed physical removal.
-    /// The optional designator lock records intent for future annotation, not a ban on explicit
+    /// The optional designator lock protects automatic annotation, not a ban on explicit
     /// reference edits. Successful Apply does not guarantee the later native Save fits its limits.
     /// Validation/contact failures reject the entire edit; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
@@ -4471,9 +4567,13 @@ impl Session {
         if let Some(regenerate) = regenerate {
             regenerate(&mut project)?;
         }
-        // Check the final candidate after pruning, before changing history or notifying observers.
-        if (!project.board.tracks.is_empty() || !project.board.vias.is_empty())
-            && source.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+        // Copper and package maps can exhaust the native board document before the record-count
+        // limits. Check the final candidate after pruning, before changing history or notifying observers.
+        if source.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+            && (!project.board.tracks.is_empty()
+                || !project.board.vias.is_empty()
+                || !project.board.assignments.is_empty()
+                || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some()))
         {
             persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
         } else {
@@ -4572,6 +4672,9 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
             continue;
         }
         let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
+        if let Some(message) = param.kind.footprint_size_error(value) {
+            return Err(CommandError::InvalidParams(format!("`{}` {message}", param.name)));
+        }
         let checked = if command.id == library::sources::PREVIEW_PIN_REMAP && param.name == "item" {
             value.is_object().then_some(()).ok_or_else(|| "Pin remap item must be an object.".into())
         } else if matches!(param.kind, ParamKind::PinRemaps) {
