@@ -1,7 +1,12 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use pcbcraft_engine::{
-    INITIALIZE_BOARD_SETUP, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP, SET_FOOTPRINT_TRANSFORM, Session, board::drawing::ADD_DRAWING,
+    ASSIGN_FOOTPRINT, INITIALIZE_BOARD_SETUP, INITIALIZE_UPDATE_BASELINE, PLACE_ASSIGNED_FOOTPRINT, PLACE_FOOTPRINT, PLACE_SYMBOL, SET_BOARD_SETUP,
+    SET_FOOTPRINT_TRANSFORM, Session,
+    authoring::{Action, Item, Kind, Primitive},
+    board::{definition::CircularNpth, drawing::ADD_DRAWING},
+    library::{LIBRARY_FORMAT, sources::LOAD},
+    schematic::Point,
 };
 use pcbcraft_geometry::ErrorCode;
 use serde_json::{Value, json};
@@ -43,8 +48,7 @@ fn add_rectangle(session: &mut Session) {
     draw(session, &[[5_000_000, -3_000_000], [55_000_000, -3_000_000], [55_000_000, 27_000_000], [5_000_000, 27_000_000]], true);
 }
 
-/// The command-built 50 × 30 mm test board, deliberately away from board zero. This
-/// PCB document format has plated round drills only: use a 3 mm via, not a mock NPTH.
+/// The command-built 50 × 30 mm test board, deliberately away from board zero, with a 3 mm via.
 /// The cut-out surrounds a separate material island that must survive drill subtraction.
 #[test]
 fn board_mesh_preserves_bounds_and_through_voids() {
@@ -114,6 +118,48 @@ fn board_solid_uses_finished_thickness_and_rotated_pad_drill_centres() {
     assert_eq!(vertical_hits(&mesh, [8_000_000, 4_730_000]), [false; 2], "pad 2 is drilled through");
     assert_eq!(vertical_hits(&mesh, [x_nm, y_nm]), [true; 2], "the footprint origin is not drilled");
     assert_eq!(vertical_hits(&mesh, [8_600_000, 7_270_000]), [true; 2], "material remains outside the 0.5 mm drill radius");
+}
+
+/// Author one 3.2 mm non-plated hole at local (3 mm, 5 mm) in a footprint whose pads have no
+/// drills, and place it at board (20 mm, 12 mm). Only the opening, at (23 mm, 17 mm), is cut.
+#[test]
+fn cuts_footprint_non_plated_holes_at_their_finished_diameter() {
+    let mut editor = pcbcraft_engine::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+    let hole = CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 };
+    editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
+    let item = editor.snapshot();
+    let definition = item.footprint().unwrap();
+
+    let mut session = board(None);
+    draw(&mut session, &[[0, 0], [40_000_000, 0], [40_000_000, 30_000_000], [0, 30_000_000]], true);
+    let manifest = json!({"format":LIBRARY_FORMAT,"id":definition.library,"name":"Synthetic NPTH fixture","license":definition.license});
+    let native = item.export_native().unwrap().to_string();
+    session.execute(LOAD, &json!({"source":"npth-fixture","documents":{"library.json":manifest.to_string(),"footprints/npth.json":native}})).unwrap();
+    apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":0,"y_nm":0}));
+    let component = session.project().unwrap().components().next().unwrap().id();
+    apply(
+        &mut session,
+        ASSIGN_FOOTPRINT,
+        json!({"component":component,"library":definition.library,"definition":definition.id,
+            "definition_revision":definition.revision,"mapping":{"1":"1","2":"2"}}),
+    );
+    apply(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    apply(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component":component,"x_nm":20_000_000,"y_nm":12_000_000}));
+
+    let solid = BoardSolid::build(view(&session));
+    if cfg!(all(target_arch = "wasm32", not(feature = "wasm-kernel"))) {
+        assert_eq!(solid.unwrap_err().code(), ErrorCode::KernelUnavailable);
+        return;
+    }
+    let mesh = substrate::tessellate(&solid.unwrap().body, 1_000).unwrap();
+    // Expected centre and the 1.6 mm radius come from the authored values, not the projection.
+    assert_eq!(vertical_hits(&mesh, [23_000_000, 17_000_000]), [false; 2], "the hole centre is open");
+    assert_eq!(vertical_hits(&mesh, [24_580_000, 17_000_000]), [false; 2], "open just inside the radius on X");
+    assert_eq!(vertical_hits(&mesh, [24_620_000, 17_000_000]), [true; 2], "solid just outside the radius on X");
+    assert_eq!(vertical_hits(&mesh, [23_000_000, 15_420_000]), [false; 2], "open just inside the radius on Y");
+    assert_eq!(vertical_hits(&mesh, [23_000_000, 15_380_000]), [true; 2], "solid just outside the radius on Y");
+    assert_eq!(vertical_hits(&mesh, [20_000_000, 12_000_000]), [true; 2], "the footprint origin is not cut");
+    assert_eq!(vertical_hits(&mesh, [19_500_000, 12_000_000]), [true; 2], "undrilled pads leave no hole");
 }
 
 /// Scan exact projected triangles against a ray from negative Z. Non-degenerate

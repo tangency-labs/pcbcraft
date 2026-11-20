@@ -100,8 +100,9 @@ Outline drawings in board coordinates. Open paths can join only at exactly
 coincident endpoints. Nested contours alternate material and void regardless of
 winding; crossings, touches and unfinished contours are refused. Round through
 pad and via drills are removed at their resolved board centres, using drill
-rather than copper-land diameters. This does not infer slots or non-plated holes
-that the board document cannot yet represent.
+rather than copper-land diameters. Circular footprint non-plated holes are removed
+at their resolved board centres using their finished diameters. This does not
+infer slots, which the board document cannot yet represent.
 
 The underside is at Z=0. The top is at the stackup's declared nominal finished
 thickness, not its minimum or the sum of stock plies. If there is no finished
