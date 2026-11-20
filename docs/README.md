@@ -30,6 +30,7 @@ before treating an older plan as implemented behavior.
 | Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) · [Schematic keyboard shortcuts](keyboard-shortcuts.md) · [Board keyboard shortcuts](board-keyboard-shortcuts.md) · [Library editor keyboard shortcuts](library-editor-keyboard-shortcuts.md) |
 | Net names, labels and power symbols | [Named nets and power symbols](net-labels.md) |
 | Sheet hierarchy and interfaces | [Hierarchical sheets](hierarchical-sheets.md) |
+| Review reference designators | [Schematic annotation preview](annotation.md) |
 | Selection exchange and reuse | [Copy and paste](clipboard.md) |
 | Intentional unused connections | [No-connect markers](no-connect-markers.md) |
 | Schematic-to-board review and airwires | [Single-board updates](single-board-update.md) · [Accepted board connections](board-ratsnest.md) |

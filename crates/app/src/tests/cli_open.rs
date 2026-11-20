@@ -193,3 +193,34 @@ fn the_terminal_report_survives_frames_without_a_file_result() {
     app.report_startup_open(Some(&project_files::Update::Opened));
     assert!(!app.startup_open_pending, "an opened result consumes the arming too");
 }
+
+/// A command-line target whose final component is a symlink to a project folder or `.pc`
+/// archive opens as its target would, and history records the resolved target. The ordinary
+/// loader resolves only the parent and refuses the final symlink.
+#[cfg(unix)]
+#[test]
+fn symlinked_folder_and_archive_startup_targets_open() {
+    for archive in [false, true] {
+        let (_copy, project_json) = dual_led_copy();
+        let root = pcbcraft_storage::plain_path_if_equivalent(project_json.parent().unwrap().canonicalize().unwrap());
+        let target = if archive {
+            let path = root.parent().unwrap().join("board.pc");
+            let project = pcbcraft_storage::open(&project_json).unwrap();
+            std::fs::write(&path, pcbcraft_engine::persistence::encode_packed(project).unwrap()).unwrap();
+            path
+        } else {
+            root.clone()
+        };
+        let link = root.parent().unwrap().join(if archive { "link.pc" } else { "link" });
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_eframe(|cc| PcbApp::new(cc).with_startup_project(link));
+        h.run();
+        finish_file(&mut h);
+        assert!(h.state().message.is_none(), "{:?}", h.state().message);
+        assert_eq!(h.state().session.project().unwrap().name, "Dual LED · transistor flasher");
+        assert!(!h.state().home);
+        assert!(!h.state().startup_open_pending);
+        assert!(h.state().startup_reports.is_empty());
+        assert_eq!(h.state().files.recent.entries()[0].path, target, "history records the resolved target");
+    }
+}

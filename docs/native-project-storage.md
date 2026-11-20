@@ -324,6 +324,18 @@ require a higher format. Those formats accept the origin. Boards without an
 origin measure outputs from board zero and use the format required by the remaining
 authored data.
 
+### Straight-via teardrop intents
+
+Board format `pcbcraft-board/37` requires a copper board setup and a nonempty
+`teardrops` array. It accepts existing straight-board fields, including footprint
+locks. Each record stores a stable UUID, the attached via and track UUIDs, and their sizing
+parameters. Vertices, net membership and rule reports are never written to the
+board. Encoding orders the records by UUID; decoding rejects duplicate
+identities/sites, dangling attachments and unrepresentable parameters or shapes.
+Older board formats reject the new array. Format 37 does not permit circular
+tracks. Removing all teardrops restores the format selected by the remaining data.
+See [straight via teardrops](teardrop-records.md) for the command and current limits.
+
 ### Placed-footprint lock metadata
 
 Board format `pcbcraft-board/34` adds optional boolean `locked` on placed
@@ -332,7 +344,7 @@ Repeated `locked` members, null and nonboolean `locked` values are refused.
 Format 34 works with or without setup when the other records allow it. For example,
 material reports, via assignments, stack fields, assembly profile adoptions,
 origin, rules, zones, silkscreen and copper retain their existing validation.
-Formats 34 and 35 accept active locks; other headers refuse `true` but accept an
+Formats 34, 35 and 37 accept active locks; other headers refuse `true` but accept an
 explicit `false` on an otherwise valid placement. Fresh canonical encoding omits
 false. Native Save can retain an unchanged board document verbatim, including
 explicit false, which older readers may reject. Formats 27–33 remain unsupported.
@@ -341,7 +353,7 @@ remaining data.
 
 A board with [circular copper records](circular-copper-records.md) but no active
 footprint locks uses format 26. A board with active footprint locks but no arcs
-uses format 34. Format 35 requires both features, so readers that support only one
+uses format 34 unless it contains straight-via teardrop intents. Format 35 requires both features, so readers that support only one
 of the earlier formats refuse the combined file instead of dropping records.
 Removing either feature selects the other feature's format; removing both
 selects the format required by the remaining content.
@@ -461,7 +473,7 @@ registry's retained identities.
 | `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45`, `/49`, `/51` or `/54` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 49 adds authored electrical intent and may also carry differential pairs; version 51 requires an active designator lock and can also carry differential pairs; version 54 requires both authored electrical intent and an active designator lock |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7`, `/8` or `/10` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; version 10 adds authored net intent, may also carry differential pairs and carries either membership representation; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
-| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34` or `/35` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; versions 27–33 remain unsupported |
+| `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35` or `/37` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; versions 27–33 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
 | `library/footprints/<library>/<footprint>.r<revision>.json` | [`pcbcraft-footprint/1` or `/4`](footprint-schema.md) | One full pinned physical footprint copy, including optional circular plated drills in pads and, in `/4` only, separate circular non-plated through holes |
 
@@ -572,7 +584,7 @@ Project/19 extends the existing occurrence and optional net-registry homes with
 sparse `no_connects` on affected component records and allows wire-end intent
 on sheet/8. It adds no document paths.
 Each nonempty list is ordered by exact terminal token and captures that pin's
-`electrical_type` when authored. There are at most 128 records per part and
+`electrical_type` when authored. There are at most 1,024 records per part (128 in earlier releases) and
 4,096 combined pin/wire-end records per project; absent intent is omitted.
 Older project headers reject this field, as do unsupported diagnostic single-file encodings.
 
@@ -878,6 +890,10 @@ placements, and legacy single-file export refuses physical definitions. Existing
 canonical marker-only documents retain their bytes in a no-op codec round trip;
 marker placements are not upgraded to physical pads implicitly. Deleting the last placement using a physical definition removes its
 unused pinned copy on save.
+
+Pinned footprints hold up to 1,024 pads and 256 artwork objects, pinned symbols
+up to 1,024 terminals, and a mapping up to 1,024 terminals. The formats keep their
+numbers; earlier releases refuse records above their old limit of 128.
 
 Board format 6 requires a `silkscreen` object with `text_height_nm`,
 `stroke_width_nm` and `pad_clearance_nm`, as defined in the
