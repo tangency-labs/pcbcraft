@@ -35,7 +35,7 @@ fn resistor_assertion() -> sources::lifecycle::Assertion {
 /// Load the same validated native source into both hosts before testing the part and lifecycle readers.
 fn add_native_part(reader: &mut Session, control: &mut Session) {
     let docs = sources::Documents::from([
-        ("lifecycle-assertions/resistor-assessment.r1.json".into(), resistor_assertion().encode().unwrap().into()),
+        ("lifecycle-assertions/resistor-assessment.r1.json".into(), resistor_assertion().encode().unwrap()),
         ("library.json".into(), include_str!("../../../../examples/native-parts/library.json").into()),
         ("symbols/resistor.json".into(), include_str!("../../../../examples/native-parts/symbols/resistor.json").into()),
         ("footprints/resistor-0603.json".into(), include_str!("../../../../examples/native-parts/footprints/resistor-0603.json").into()),
