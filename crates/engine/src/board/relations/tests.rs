@@ -1241,7 +1241,7 @@ fn a_preview_edge_projected_and_sheet_retirement() {
             let args = match command {
                 crate::DELETE_SYMBOL => json!({"symbol":symbol,"sheet":sheet}),
                 crate::sheets::DELETE_SHEET => json!({"sheet":sheet}),
-                _ => json!({"items":{"symbols":[symbol]},"sheet":sheet}),
+                _ => json!({"items":{"symbols":[symbol],"wires":[]},"sheet":sheet}),
             };
             if accepted {
                 run(&mut s, command, args).unwrap();
