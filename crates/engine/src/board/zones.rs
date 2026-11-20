@@ -149,6 +149,7 @@ pub(crate) struct ZoneValidation {
 }
 
 impl ZoneValidation {
+    /// Reject excessive zone counts before visiting any polygon.
     pub(crate) fn check_count(&self, project: &Project) -> Result<(), String> {
         if project.board.zones.len() > MAX_ZONES {
             return Err("Zone resource limit exceeded.".into());
@@ -156,6 +157,7 @@ impl ZoneValidation {
         Ok(())
     }
 
+    /// Check one zone's electrical owner, shape and cumulative point contribution.
     pub(crate) fn row(&mut self, project: &Project, z: &Zone) -> Result<(), String> {
         self.points += z.points.len();
         if self.points > MAX_TOTAL_POINTS {

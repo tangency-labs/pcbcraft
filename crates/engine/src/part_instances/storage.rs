@@ -63,6 +63,7 @@ pub(crate) struct DependencyEncoding {
 }
 
 impl DependencyEncoding {
+    /// Retain the exact bytes of at most one dependency; return true after the complete closure.
     pub(crate) fn step(&mut self, selection: &Selection, documents: &mut Documents) -> Result<bool, String> {
         match self.phase {
             0 => write(documents, "parts", &selection.resolved.definition.reference(), selection.resolved.definition.as_ref())?,

@@ -2768,6 +2768,7 @@ fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &Boar
     Ok(())
 }
 
+/// Emit the optional board fields after accepted history and before the streamed arrays.
 fn board_metadata_tail(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     let board = &project.board;
     if let Some(rules) = &board.rules {
@@ -2811,6 +2812,7 @@ struct BoardFacts {
 }
 
 impl BoardFacts {
+    /// Collect one authored format flag or check one row's board ownership and validity.
     fn step(&mut self, project: &Project) -> Result<bool, String> {
         let board = &project.board;
         match self.phase {
@@ -3012,6 +3014,7 @@ fn start_record(bytes: &mut impl Write, first: &mut bool) -> Result<(), String> 
     bytes.write_all(RECORD_INDENT).map_err(|error| error.to_string())
 }
 
+/// Emit one compact native row between the standard indentation and newline.
 fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
     start_record(bytes, first)?;
     serde_json::to_writer(&mut *bytes, value).map_err(|e| e.to_string())?;
@@ -3066,6 +3069,7 @@ fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Paramet
     Ok(())
 }
 
+/// Select the exact native sheet vocabulary from its authored fields and streamed facts.
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet, fields: bool, mirrored: bool, generated: bool) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
     let text = sheet.net_labels.iter().any(|l| l.text.is_some());

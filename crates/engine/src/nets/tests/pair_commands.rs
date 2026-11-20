@@ -405,7 +405,7 @@ fn pair_capacity_reuses_only_exact_net_record_proof() {
     assert!(invalid.net_registry.validate(&invalid).unwrap_err().contains("non-nil UUIDs"));
     let mut changed_hierarchy = Project::clone(&candidate);
     Arc::make_mut(&mut changed_hierarchy.sheets)[0].sheet_name.push_str(" B");
-    assert!(changed_hierarchy.net_registry.require_records_proof(&changed_hierarchy).is_err());
+    assert!(changed_hierarchy.net_registry.require_records_proof(&changed_hierarchy).unwrap_err().contains("validated source"));
     changed_hierarchy.net_registry.validate(&changed_hierarchy).unwrap();
     assert!(changed_hierarchy.net_registry.require_records_proof(&changed_hierarchy).is_ok());
 

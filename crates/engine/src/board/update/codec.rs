@@ -155,6 +155,7 @@ fn noncanonical() -> String {
     "board baseline nets exceed bounds or are not canonical".into()
 }
 
+/// Check one historical component's exact identity, value, terminals and package choice.
 fn validate_component(baseline: &Baseline, id: u64, component: &PartInstanceState) -> Result<(), String> {
     if !(1..=MAX_OBJECT_ID).contains(&id)
         || component.revision == 0
@@ -187,6 +188,7 @@ fn validate_component(baseline: &Baseline, id: u64, component: &PartInstanceStat
     Ok(())
 }
 
+/// Check net version, optional presentation and cardinality before reading either array.
 fn validate_net_header(baseline: &Baseline, net: &NetState) -> Result<(), String> {
     let stores_origin = baseline.format == NET_ORIGIN_FORMAT;
     let stores_display = matches!(baseline.format.as_str(), DISPLAY_FORMAT | NET_ORIGIN_FORMAT);
@@ -317,6 +319,7 @@ impl BaselineEncoding {
     }
 }
 
+/// Serialize a compact array member, inserting a comma only after the first member.
 fn array_item(bytes: &mut impl Write, index: usize, value: &impl serde::Serialize) -> Result<(), String> {
     if index != 0 {
         bytes.write_all(b",").map_err(|error| error.to_string())?;
@@ -366,6 +369,7 @@ mod tests {
     use crate::board::update::SourceCapture;
     use uuid::Uuid;
 
+    /// A large accepted net emits one terminal at a time without changing compact JSON or indentation.
     #[test]
     fn large_accepted_net_keeps_native_bytes_and_resumes_between_terminals() {
         const TERMINALS: u64 = 1024;

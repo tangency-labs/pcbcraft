@@ -155,6 +155,7 @@ pub(crate) struct CatalogValidation {
 }
 
 impl CatalogValidation {
+    /// Check an envelope, a bounded revision header, one correction, or the owner references.
     pub(crate) fn step(&mut self, catalog: &Catalog, adoptions: &[Adoption]) -> Result<bool, String> {
         if !self.header {
             catalog.validate_envelope()?;
@@ -195,6 +196,7 @@ pub(crate) struct CatalogEncoding {
 }
 
 impl CatalogEncoding {
+    /// Emit the catalog or revision framing, or one correction within the active revision.
     pub(crate) fn step(&mut self, out: &mut impl std::io::Write, catalog: &Catalog) -> Result<bool, String> {
         if !self.header {
             emit(out, b"{\"heads\":")?;
@@ -346,6 +348,7 @@ impl ProfileContent {
         Ok(())
     }
 
+    /// Check bounded metadata and cardinality without visiting the correction rows.
     fn validate_header(&self) -> Result<(), String> {
         if self.revision == 0 {
             return Err("An assembly profile content revision must be positive.".into());
@@ -366,6 +369,7 @@ impl ProfileContent {
         Ok(())
     }
 
+    /// Validate one correction and the ordering boundary to its predecessor.
     fn validate_correction(&self, index: usize) -> Result<(), String> {
         let correction = &self.corrections[index];
         correction.validate()?;
@@ -386,6 +390,7 @@ impl AssemblyProfile {
         self.content.validate()
     }
 
+    /// Validate the identity independently of the potentially large revision contents.
     fn validate_identity(&self) -> Result<(), String> {
         if self.format != FORMAT || self.id.is_nil() {
             return Err("Unsupported assembly profile format or invalid profile identity.".into());
@@ -453,6 +458,7 @@ impl Catalog {
         Ok(())
     }
 
+    /// Check the independently bounded identity and revision tables before reading corrections.
     fn validate_envelope(&self) -> Result<(), String> {
         if self.heads.len() > MAX_PROFILES || self.revision_watermarks.len() > MAX_PROFILES || self.revisions.len() > MAX_REVISIONS {
             return Err(format!("A project may retain at most {MAX_PROFILES} assembly profile identities and {MAX_REVISIONS} revisions."));
@@ -483,6 +489,7 @@ impl Catalog {
         Ok(())
     }
 
+    /// Ensure available names and board adoptions resolve to exact pinned revisions.
     fn validate_references(&self, adoptions: &[Adoption]) -> Result<(), String> {
         let mut names = BTreeSet::new();
         for head in self.heads.iter().filter(|head| !head.removed) {

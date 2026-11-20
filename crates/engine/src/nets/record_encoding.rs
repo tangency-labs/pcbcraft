@@ -17,6 +17,7 @@ impl RecordEncoding {
         self.phase == 0
     }
 
+    /// Write one compact record fragment or one member of its large history arrays.
     pub(crate) fn step(&mut self, out: &mut impl Write, row: &Record) -> Result<bool, String> {
         let successors = match &row.state {
             State::Active {} => 0,
@@ -108,6 +109,7 @@ fn json(out: &mut impl Write, value: &impl Serialize) -> Result<(), String> {
     serde_json::to_writer(out, value).map_err(|error| error.to_string())
 }
 
+/// Emit a stable compact array separator and the next member.
 fn array_item(out: &mut impl Write, index: usize, value: &impl Serialize) -> Result<(), String> {
     if index != 0 {
         emit(out, b",")?;
