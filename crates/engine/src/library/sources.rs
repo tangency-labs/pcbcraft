@@ -39,6 +39,8 @@ pub const SEARCH: &str = "library.search";
 pub const AVAILABLE_REVISIONS: &str = "library.available_revisions";
 /// List the current project's actual uses of one exact native item revision.
 pub const WHERE_USED: &str = "library.where_used";
+/// Read-only pad geometry and endpoint preview for one placed part instance.
+pub const PREVIEW_FOOTPRINT_REVISION: &str = "library.preview_footprint_revision";
 /// Resolve a part's exact dependencies and validate its typed values and complete package maps.
 pub const RESOLVE_PART: &str = "library.resolve_part";
 /// Normalize typed quantity input into the canonical base-unit representation.
@@ -81,7 +83,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 11] = [
+pub(crate) const COMMANDS: [Command; 12] = [
     Command {
         id: PREVIEW_PIN_REMAP,
         title: "Preview symbol pin remap",
@@ -195,6 +197,16 @@ pub(crate) const COMMANDS: [Command; 11] = [
         title: "List available library revisions",
         summary: "Compare existing project instances with loaded native revisions. No adoption or network access; availability is not compatibility.",
         params: &[],
+    },
+    Command {
+        id: PREVIEW_FOOTPRINT_REVISION,
+        title: "Preview footprint revision",
+        summary: "Compare a placed footprint with its latest available library revision without editing the board or resolving pad maps.",
+        params: &[
+            Param { name: "board", summary: "Explicit physical board ID", required: true, kind: ParamKind::BoardId },
+            Param { name: "part_instance", summary: "Part instance ID from library.available_revisions", required: true, kind: ParamKind::Text },
+            Param { name: "pad", summary: "Limit the preview to this exact pad number", required: false, kind: ParamKind::Text },
+        ],
     },
     Command {
         id: PARSE_QUANTITY,
@@ -1138,6 +1150,10 @@ impl Session {
                     revision: params["definition_revision"].as_u64().and_then(|revision| u32::try_from(revision).ok()).unwrap_or_default(),
                 };
                 serde_json::to_value(self.library_where_used(&key)?).map_err(|error| CommandError::InvalidParams(error.to_string()))
+            }
+            PREVIEW_FOOTPRINT_REVISION => {
+                let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
+                updates::preview_footprint(project, &self.libraries, self.revision(), params)
             }
             PARSE_QUANTITY => {
                 let quantity: super::parts::Quantity =
