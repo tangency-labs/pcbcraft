@@ -160,7 +160,11 @@ pub(super) fn show(
         state.zones.delete_requested = false;
         state.drawing.delete_requested = false;
         ui.label(error);
-        ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
+        if project.teardrops().is_empty() {
+            ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
+        } else {
+            ui.label("Remove the saved teardrop intents with pcb.edit_teardrops to resume board editing.");
+        }
         return Interaction::default();
     }
     let idle = !crate::board_clipboard::busy(state);

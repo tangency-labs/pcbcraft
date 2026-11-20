@@ -101,7 +101,7 @@ power-driver checks tracked by #47, or incremental scheduling under #245/#243.
 Marking a wire end suppresses only that endpoint's `dangling_wire` warning;
 `no_connect_not_dangling` reports retained connected ends from older projects. Normal netlist inspection
 and physical board DRC continue to describe the actual connectivity.
-There are at most 128 marker records per part and 4,096 per project. All
+There are at most 1,024 marker records per part and 4,096 per project. All
 transactions, including compound pastes, validate these limits before publication.
 Reports count every marker and finding but retain at most 256 detailed records
 of each kind, with an explicit truncation flag and project/revision authority.

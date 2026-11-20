@@ -99,7 +99,7 @@
         "mapping": {
           "type": "object",
           "minProperties": 0,
-          "maxProperties": 128,
+          "maxProperties": 1024,
           "propertyNames": {
             "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
           },
@@ -109,7 +109,7 @@
               "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
             },
             "minItems": 1,
-            "maxItems": 128,
+            "maxItems": 1024,
             "uniqueItems": true
           }
         },
@@ -119,7 +119,7 @@
             "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id"
           },
           "minItems": 1,
-          "maxItems": 128,
+          "maxItems": 1024,
           "uniqueItems": true
         }
       }

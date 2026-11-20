@@ -7,7 +7,8 @@ use solidcore_record::step::product::{ItemKind, MAX_ASSEMBLY_DEPTH, MAX_VISITS, 
 use solidcore_step::write::product::{ExportBody, ExportError, Header};
 
 use crate::guard::guard;
-use crate::{ErrorCode, GeometryError, RefusedItem, Result};
+use crate::substrate::{BoardMesh, BoardPoint, Region, RoundDrill};
+use crate::{ErrorCode, GeometryError, NM_PER_MM, RefusedItem, Result, point_nm};
 
 /// Written into the STEP header as the originating system.
 const ORIGINATING_SYSTEM: &str = "PCBcraft";
@@ -18,6 +19,79 @@ pub(crate) struct KernelBody(solidcore_ops::Body);
 /// An axis-aligned block from its least corner and positive sizes, in millimetres.
 pub(crate) fn cuboid(origin: [f64; 3], size: [f64; 3]) -> Result<KernelBody> {
     guard("cuboid", || solidcore_ops::make_box(origin, size).map(KernelBody).map_err(|e| ops_error("cuboid", e)))
+}
+
+/// Extrude the resolved material regions after subtracting the union of round drill profiles
+/// in the same XY plane. Keep the circular boundaries analytic until tessellation.
+pub(crate) fn substrate(regions: &[Region], drills: BTreeSet<RoundDrill>, thickness_nm: i64) -> Result<KernelBody> {
+    use solidcore_ops::{BooleanOp, prism};
+    use solidcore_record::{Loop2, Plane, Region2, Vec2};
+
+    fn xy(BoardPoint([x, y]): BoardPoint) -> Vec2 {
+        Vec2 { x: x as f64 / NM_PER_MM as f64, y: y as f64 / NM_PER_MM as f64 }
+    }
+    /// The kernel's region convention: outer loops counter-clockwise, holes clockwise. Callers
+    /// may supply either winding, for example after mirroring Y, so orient each loop exactly.
+    fn polygon(points: &[BoardPoint], counter_clockwise: bool) -> Loop2 {
+        let twice_area: i128 = points
+            .iter()
+            .zip(points.iter().cycle().skip(1))
+            .map(|(BoardPoint([ax, ay]), BoardPoint([bx, by]))| i128::from(*ax) * i128::from(*by) - i128::from(*bx) * i128::from(*ay))
+            .sum();
+        let mut pts: Vec<_> = points.iter().copied().map(xy).collect();
+        if (twice_area > 0) != counter_clockwise {
+            pts.reverse();
+        }
+        Loop2::polygon(&pts)
+    }
+    guard("build board substrate", || {
+        let regions: Vec<_> =
+            regions.iter().map(|r| Region2 { outer: polygon(&r.outer, true), holes: r.holes.iter().map(|h| polygon(h, false)).collect() }).collect();
+        let drills: Vec<_> = drills
+            .into_iter()
+            .map(|d| Region2 { outer: Loop2::circle(xy(d.center), d.diameter_nm as f64 / (2.0 * NM_PER_MM as f64)), holes: Vec::new() })
+            .collect();
+        let remaining = if drills.is_empty() {
+            regions
+        } else {
+            prism::planar_regions_boolean(&regions, &drills, BooleanOp::Subtract, prism::EXTRUDE_TOLERANCE)
+                .map_err(|e| ops_error("subtract board drills", e))?
+        };
+        if remaining.is_empty() {
+            return Err(GeometryError::new(ErrorCode::InvalidParams, "through drills remove all board material"));
+        }
+        prism::extrude_planar_regions(&Plane::XY, &remaining, 0.0, thickness_nm as f64 / NM_PER_MM as f64)
+            .map(KernelBody)
+            .map_err(|e| ops_error("extrude board substrate", e))
+    })
+}
+
+/// Tessellate in the kernel's units and refuse a partial or lenient mesh (a missing mesh face
+/// is not a board cut-out). Round positions once at the public boundary.
+pub(crate) fn substrate_mesh(body: &KernelBody, chord_nm: i64) -> Result<BoardMesh> {
+    guard("tessellate board substrate", || {
+        let (lo, hi) = body.0.bounds().map_err(|e| ops_error("board mesh bounds", e))?;
+        let size = lo.into_iter().zip(hi).map(|(lo, hi)| hi - lo).fold(0.0, f64::max);
+        // The mesher never plans finer than a millionth of `size`; refuse rather than coarsen.
+        let chord = chord_nm as f64 / NM_PER_MM as f64;
+        if chord < size * 1e-6 {
+            let floor_nm = (size * 1e-6 * NM_PER_MM as f64).ceil();
+            return Err(GeometryError::new(
+                ErrorCode::InvalidParams,
+                format!("mesh chord tolerance {chord_nm} nm is below the {floor_nm} nm the kernel supports for this board"),
+            ));
+        }
+        let (record, _) = body.0.to_record().map_err(|e| ops_error("board mesh record", e))?;
+        let tolerance = solidcore_tess::MeshTolerance::chord(chord);
+        let (plan, stats) = solidcore_tess::plan(&record, &tolerance, size)
+            .map_err(|e| GeometryError::new(ErrorCode::OperationFailed, format!("plan board mesh: {e}")))?;
+        let (mesh, refused) = plan.welded();
+        if !stats.unmeshed.is_empty() || !stats.lenient.is_empty() || !refused.is_empty() || mesh.triangles.is_empty() {
+            return Err(GeometryError::new(ErrorCode::OperationFailed, "kernel could not tessellate every substrate face"));
+        }
+        let positions_nm = mesh.positions.into_iter().map(|p| point_nm([p.x, p.y, p.z])).collect::<Result<_>>()?;
+        Ok(BoardMesh { positions_nm, triangles: mesh.triangles })
+    })
 }
 
 /// The body's exact box in millimetres, least corner first.

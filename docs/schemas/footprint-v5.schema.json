@@ -23,7 +23,7 @@
     "pads": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 128,
+      "maxItems": 1024,
       "contains": { "$ref": "#/$defs/slotted_pad" },
       "items": {
         "oneOf": [

@@ -21,6 +21,7 @@ fn pad_contours_test_contact_with_round_track_ends() {
             center: Point { x_nm: 0, y_nm: 0 },
             shape,
             corner_radius_nm,
+            size_nm: (2 * half_x, 2 * half_y),
         };
         let contour = land.contour();
         let corner = corners[2];

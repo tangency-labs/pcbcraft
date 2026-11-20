@@ -12,7 +12,9 @@ pub struct Contour {
 
 impl Contour {
     /// Resolve a trusted pad through the same contour used for copper connectivity.
-    pub(super) fn pad(center: Point, corners: [Point; 4], shape: super::definition::PadShape, corner_radius_nm: i64) -> Self {
+    /// `size_nm` is the authored width and height before rotation. A circle takes its radius
+    /// from that diameter, so rounding its rotated bounds cannot make it depend on the angle.
+    pub(super) fn pad(center: Point, corners: [Point; 4], shape: super::definition::PadShape, corner_radius_nm: i64, size_nm: (i64, i64)) -> Self {
         use super::definition::PadShape;
         if shape == PadShape::Rectangle {
             return Self { core: corners, radius: 0. };
@@ -24,7 +26,8 @@ impl Contour {
         let radius = match shape {
             PadShape::Rectangle => 0.,
             PadShape::RoundedRectangle => (corner_radius_nm as f64).min(w.min(h) / 2.),
-            PadShape::Circle | PadShape::Oval => w.min(h).round() / 2.,
+            PadShape::Circle => size_nm.0.min(size_nm.1) as f64 / 2.,
+            PadShape::Oval => w.min(h).round() / 2.,
         };
         let (x, y) = if shape == PadShape::RoundedRectangle {
             ((c[0].x_nm as f64 + c[2].x_nm as f64) / 2., (c[0].y_nm as f64 + c[2].y_nm as f64) / 2.)

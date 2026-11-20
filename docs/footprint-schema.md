@@ -91,10 +91,10 @@ also accept `null` for some optional Rust fields as a compatibility input.
 | `revision` | Integer 1…4,294,967,295 | Immutable content revision |
 | `name`, `license` | Nonempty trimmed strings, at most 200 UTF-8 bytes each | Display name and license declaration |
 | `source` | Required `kind`, `reference`, `locator` strings | Provenance, preserved when pinned |
-| `pads` | Up to 128 distinct numbered pads (at least one for formats 1 and 5) | Physical lands with optional plated circular or obround holes |
+| `pads` | 1…1,024 distinct numbered pads in formats 1 and 5; 0…1,024 in format 4 | Physical lands with optional plated circular or obround holes |
 | `non_plated_holes` | 1…128 entries when present; required in format 4, optional in format 5, forbidden in format 1 | Circular mechanical holes with a local `center` and positive finished `diameter_nm` |
 | `graphics` | 0…64 rectangles | Fabrication, silkscreen or courtyard geometry |
-| `artwork` | Optional 1…128 parameterized objects | Lines, rectangles, circles, arcs, polylines or stroke text |
+| `artwork` | Optional 1…256 parameterized objects | Lines, rectangles, circles, arcs, polylines or stroke text |
 | `silkscreen` | Optional 1…64 centerline paths | Physical paths clipped against pad clearance |
 | `reference` | Optional `pcbcraft-stroke-1` or `pcbcraft-technical-1` | Enable generated reference text using this font |
 | `reference_offset` | Optional nonzero local point | Displace the generated reference from its automatic anchor |

@@ -214,13 +214,14 @@ pub(super) struct Land {
     pub(super) center: Point,
     shape: PadShape,
     corner_radius_nm: i64,
+    size_nm: (i64, i64),
 }
 
 impl Land {
     /// Derive the outer copper contour, which also bounds a pad's contained plated hole.
     /// Routing clearance treats the entire land as occupied, including the enclosed opening.
     pub(super) fn contour(&self) -> PadContour {
-        PadContour::pad(self.center, self.corners, self.shape, self.corner_radius_nm)
+        PadContour::pad(self.center, self.corners, self.shape, self.corner_radius_nm, self.size_nm)
     }
 }
 
@@ -331,6 +332,7 @@ pub(super) fn lands_from_footprints<'a>(footprints: impl Iterator<Item = super::
                     center: pad.center,
                     shape: pad.shape,
                     corner_radius_nm: pad.corner_radius_nm,
+                    size_nm: pad.size_nm,
                 })
             })
         })

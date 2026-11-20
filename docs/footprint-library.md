@@ -132,9 +132,9 @@ on all copper layers when the footprint is rotated or moved to the back. The
 hole must fit inside the land; the design check reports the smallest copper
 margin around the opening. Non-plated slots and arbitrary pad stacks remain
 unsupported. Fabrication export refuses a board with a plated slot rather than
-omitting the machining operation. Definitions with pads allow up to 128 distinct
-pad numbers and up to 64 graphics. Graphics use the same rectangular geometry
-and a `purpose` of
+omitting the machining operation. Formats 1 and 5 allow 1…1,024 distinct pads;
+format 4 allows 0…1,024. Each format allows up to 64 graphics. Graphics use the
+same rectangular geometry and a `purpose` of
 `fabrication`, `silkscreen` or `courtyard`. Coordinates and dimensions are bounded
 by 100,000,000 nm; unknown fields and invalid geometry fail validation.
 
@@ -149,7 +149,7 @@ checks treat the circle as a mechanical obstacle without adding a net.
 Fabrication output refuses boards containing these holes until a separate
 non-plated drill export is supported.
 
-Optional `artwork` adds up to 128 parameterized drawing objects. Each carries a
+Optional `artwork` adds up to 256 parameterized drawing objects. Each carries a
 `purpose` (`fabrication`, `silkscreen`, `courtyard`) and `graphic` with editable
 `geometry`, physical `stroke_nm` and `fill: "none"`. The shared geometry supports
 lines, rectangles, circles, arcs, polylines and stroke text as described in the
@@ -159,10 +159,21 @@ legacy definitions. These additions retain `pcbcraft-footprint/1`; old readers
 will reject unknown fields/shapes rather than silently dropping them.
 
 Placement supplies the built-in definition ID and an explicit `mapping` object
-from symbol terminal ID to pad-number string. Mapping validation, placement,
-board views and cross-probing preserve the complete identifier spelling, including
-alphanumeric names and numeric-looking names such as `01`. Maps support up to 128
-pads. Non-plated holes are not part of the mapping. Every terminal and every pad must appear exactly once. Two-pad callers may instead supply the legacy `pin_1_pad`
+from symbol terminal ID to one pad-number string or a nonempty list of pad-number
+strings. The mapping parameter of `pcb.assign_footprint` and `pcb.place_footprint`
+allows up to 1,024 distinct terminal entries and at most 128 pads in one terminal's
+array. Direct `pcb.place_footprint` still resolves only built-in definitions. For a
+larger native footprint, select its native package or use `pcb.assign_footprint`,
+then call `pcb.place_assigned_footprint`. Native part packages and saved mappings
+allow up to 1,024 pads per terminal,
+within the footprint's total pad limit. Mapping validation, placement, board views
+and cross-probing preserve the complete identifier spelling, including alphanumeric
+names and numeric-looking names such as `01`. Complete maps support up to 1,024
+terminals and 1,024 pads. A footprint or symbol over its limit is refused with
+an error that names the limit and the count; a larger map is refused. Non-plated
+holes are not part of the mapping. Every terminal must appear once in the
+mapping, and every pad must appear exactly once in either a terminal mapping or
+`unconnected_pads`. Two-pad callers may instead supply the legacy `pin_1_pad`
 shortcut; it cannot be combined with `mapping`. Invalid assignments change
 neither the project nor its undo history.
 
