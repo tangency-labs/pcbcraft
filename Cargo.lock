@@ -2962,6 +2962,7 @@ dependencies = [
  "solidcraft-ui-kit",
  "solidcraft-ui-registry",
  "solidcraft-ui-text",
+ "ttf-parser",
 ]
 
 [[package]]
