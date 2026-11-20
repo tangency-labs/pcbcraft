@@ -217,6 +217,17 @@ pub(crate) fn compare<'a>(
     Ok(Delta { pad_numbers_changed, pads })
 }
 
+/// Compare the resolved convex cores without depending on their starting corner or winding.
+/// Equal radii then give the same outline, including point and segment cores.
+fn same_outline(a: &Contour, b: &Contour) -> bool {
+    let corners = |outline: &Contour| {
+        let mut points = outline.core.map(|point| (point.x_nm, point.y_nm));
+        points.sort_unstable();
+        points
+    };
+    a.radius.to_bits() == b.radius.to_bits() && corners(a) == corners(b)
+}
+
 /// Distinguish copper-affecting edits from drill-only edits, and report changes in the nominal
 /// apertures. Native pads do not have independent mask or paste adjustments.
 fn describe(before: Option<&Land<'_>>, after: Option<&Land<'_>>) -> (Vec<Change>, Option<f64>, bool) {
@@ -229,14 +240,9 @@ fn describe(before: Option<&Land<'_>>, after: Option<&Land<'_>>) -> (Vec<Change>
     let resized = (a.width_nm, a.height_nm) != (b.width_nm, b.height_nm);
     let rotated = a.rotation != b.rotation;
     let shape = (a.shape, a.corner_radius_nm) != (b.shape, b.corner_radius_nm);
-    // Compare the nominal outline, not the authored angle. A circle is invariant,
-    // a square profile repeats each quarter-turn, and other native lands each half-turn.
-    let period = match a.shape {
-        super::definition::PadShape::Circle => 1,
-        _ if a.width_nm == a.height_nm => 90,
-        _ => 180,
-    };
-    let profile = moved || resized || shape || a.rotation % period != b.rotation % period;
+    // Odd dimensions can move an integer edge by a nanometer even at an apparently
+    // symmetric angle. The projected contour is also the one used for contact tests.
+    let profile = !same_outline(&before.contour, &after.contour);
     let layers = a.copper != b.copper;
     let mask = profile || before.mask_sides != after.mask_sides;
     let paste = (profile && (!before.paste_sides.is_empty() || !after.paste_sides.is_empty())) || before.paste_sides != after.paste_sides;

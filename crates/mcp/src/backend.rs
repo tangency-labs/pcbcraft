@@ -122,6 +122,13 @@ impl Headless {
         Self { session, ..Self::default() }
     }
 
+    /// Install a trusted in-memory fixture source without granting MCP catalog mutation.
+    #[cfg(test)]
+    pub(crate) fn install_fixture_source(&mut self, id: &str, documents: &pcbcraft_engine::library::sources::Documents) {
+        use pcbcraft_engine::library::sources::NativeSource;
+        self.session.install_library_source(id, std::sync::Arc::new(NativeSource::load(documents).unwrap())).unwrap();
+    }
+
     #[cfg(test)]
     pub(crate) fn with_command_api(api_version: u32, deprecations: &'static [Deprecation]) -> Self {
         Self { api_version, deprecations, ..Self::default() }

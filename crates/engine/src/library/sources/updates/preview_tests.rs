@@ -1,6 +1,7 @@
 use super::*;
 use crate::{
     ADD_TRACKS, ADD_VIA, ASSIGN_FOOTPRINT, INITIALIZE_BOARD_SETUP, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL, SET_FOOTPRINT_TRANSFORM, Session,
+    SessionScope,
     authoring::{
         Item as Draft, Kind as DraftKind, Primitive,
         publishing::{new_library, prepare},
@@ -10,7 +11,7 @@ use crate::{
         setup::{BoardSetup, LayerPurpose, Side},
         track::Track,
     },
-    library::sources::{Documents, LOAD, PREVIEW_FOOTPRINT_REVISION, REMOVE, part_digest, symbol_digest},
+    library::sources::{Documents, LOAD, NativeSource, PREVIEW_FOOTPRINT_REVISION, REMOVE, part_digest, symbol_digest},
     part_instances::PLACE_PART,
     persistence::encode_documents,
 };
@@ -152,6 +153,87 @@ fn footprint_preview_moves_pad_two_and_reports_one_loose_end_at_point_two_mm() {
     assert_eq!(session.inspect()["project"]["name"], "Redo remains");
     session.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// A read-only host can inspect an installed revision without changing the document, history,
+/// or the source catalog. Client commands still cannot edit the project or sources.
+#[test]
+fn footprint_preview_succeeds_in_read_only_session_without_editing_history() {
+    let (setup, documents, params) = fixture(|pad| pad.center.x_nm += 200_000, false);
+    let snapshot = setup.snapshot().unwrap();
+    let mut read_only = Session::with_scope(SessionScope::ReadOnly);
+    read_only.open_snapshot(snapshot.clone());
+    read_only.install_library_source("test", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    let before = read_only.inspect();
+    assert_eq!(before["can_undo"], false);
+    assert_eq!(before["can_redo"], false);
+    let bytes = encode_documents(snapshot.clone()).unwrap();
+    let generation = read_only.libraries().generation();
+    let result = read_only.execute(PREVIEW_FOOTPRINT_REVISION, &params).unwrap();
+    assert_eq!(result["delta"]["pads"][0]["center_shift_nm"], 200_000.0);
+    assert_eq!(result["candidate_footprint"]["revision"], 2);
+    for (command, args) in [("project.rename", json!({"name":"No edit"})), (REMOVE, json!({"source":"test"}))] {
+        assert!(matches!(read_only.execute(command, &args), Err(crate::CommandError::OutOfScope { .. })));
+    }
+    assert_eq!(read_only.inspect(), before);
+    let after = read_only.snapshot().unwrap();
+    assert!(Arc::ptr_eq(&snapshot, &after));
+    assert_eq!(encode_documents(after).unwrap(), bytes);
+    assert_eq!(read_only.libraries().generation(), generation);
+}
+
+/// Half-turning an odd-width rectangle or quarter-turning an odd square moves one
+/// projected edge by 1 nm. A previously tangent cap loses contact with that edge.
+#[test]
+fn footprint_preview_reports_odd_pad_rotation_and_tangent_cap_loss() {
+    for (rotation, height, start, end) in [(180, 400_000, (1_000_000, 0), (800_001, 0)), (90, 500_001, (500_000, 500_000), (500_000, 300_001))] {
+        let (mut session, _, params) = fixture_with_original(
+            |pad| {
+                pad.width_nm = 500_001;
+                pad.height_nm = height;
+                pad.shape = PadShape::Rectangle;
+                pad.corner_radius_nm = 0;
+                pad.rotation = 0;
+            },
+            |pad| pad.rotation = rotation,
+            false,
+        );
+        let front = layer(&session, Side::Front);
+        edit(
+            &mut session,
+            ADD_TRACKS,
+            json!({"layer":front,"width_nm":100_000,
+                "points":[{"x_nm":start.0,"y_nm":start.1},{"x_nm":end.0,"y_nm":end.1}]}),
+        );
+        let snapshot = session.snapshot().unwrap();
+        let track = &snapshot.board.tracks[0];
+        let report = session.execute(PREVIEW_FOOTPRINT_REVISION, &params).unwrap();
+        let row = &report["delta"]["pads"][0];
+        assert_eq!(row["number"], "2");
+        assert_eq!(row["changes"], json!(["rotated", "mask", "paste"]), "rotation {rotation}");
+        assert_eq!(row["loose_ends"], json!([{"id":track.id,"kind":"track_end","layer":front,"at":track.end,"gap_nm":1.0}]));
+    }
+}
+
+/// Reordered corners on a truly symmetric integer projection are not an opening change.
+#[test]
+fn footprint_preview_keeps_even_square_openings_after_quarter_turn() {
+    let (mut session, _, params) = fixture_with_original(
+        |pad| {
+            pad.width_nm = 500_000;
+            pad.height_nm = 500_000;
+            pad.shape = PadShape::Rectangle;
+            pad.corner_radius_nm = 0;
+            pad.rotation = 0;
+        },
+        |pad| pad.rotation = 90,
+        false,
+    );
+    let report = session.execute(PREVIEW_FOOTPRINT_REVISION, &params).unwrap();
+    let row = &report["delta"]["pads"][0];
+    assert_eq!(row["number"], "2");
+    assert_eq!(row["changes"], json!(["rotated"]));
+    assert_eq!(row["loose_ends"], json!([]));
 }
 
 /// The authored number changes instead of receiving an inferred correspondence, including

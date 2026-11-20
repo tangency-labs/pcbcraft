@@ -1,11 +1,11 @@
 //! Available-revision discovery is one shared, non-editing engine query.
 use super::{body, call, server};
 use crate::{
-    Backend, Failure, Headless,
+    Backend, Failure, Headless, Server,
     live::{Editor, call_editor},
 };
 use pcbcraft_engine::{
-    ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL, Session,
+    ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_SYMBOL, Session, SessionScope,
     authoring::{
         Item, Kind, Primitive,
         publishing::{new_library, prepare},
@@ -84,6 +84,7 @@ fn available_revisions_has_identical_live_and_headless_results() {
 
 /// The catalog exposes the preview, and live and headless clients receive the same geometry
 /// rather than a revision-only response when they suppress ordinary project inspection.
+/// The same successful result is available through the normal read-only headless MCP tool.
 #[test]
 fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
     let mut server = server();
@@ -102,7 +103,7 @@ fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
     documents.extend(first.documents().clone());
     documents.extend(second.documents().clone());
     documents.insert("library.json".into(), manifest);
-    let load = json!({"command":LOAD,"params":{"source":"test","documents":documents},"inspect":false});
+    let load = json!({"command":LOAD,"params":{"source":"test","documents":&documents},"inspect":false});
     let mut setup = Session::default();
     setup.apply("project.new", &json!({"create_board":true})).unwrap();
     setup.execute(LOAD, &load["params"]).unwrap();
@@ -138,6 +139,18 @@ fn footprint_revision_preview_is_discoverable_and_retained_for_both_backends() {
     let live_report = call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap();
     assert_eq!(headless_report, live_report);
     assert_eq!(live_report["delta"]["pads"][0]["center_shift_nm"], 200_000.0);
+
+    let mut read_only = Headless::with_scope(SessionScope::ReadOnly, Some(snapshot.clone()));
+    read_only.install_fixture_source("test", &documents);
+    let mut read_only = Server::new(Box::new(read_only));
+    let read_only_before = body(&call(&mut read_only, "inspect_project", json!({})));
+    assert_eq!(read_only_before["scope"], "read_only");
+    assert_eq!(read_only_before["can_undo"], false);
+    assert_eq!(read_only_before["can_redo"], false);
+    let read_only_report = body(&call(&mut read_only, "execute", query.clone()));
+    assert_eq!(read_only_report, headless_report);
+    assert_eq!(body(&call(&mut read_only, "inspect_project", json!({}))), read_only_before);
+
     let mut unknown = query.clone();
     unknown["params"]["part_instance"] = json!("component-9999");
     let headless_error = headless.call("engine.execute", unknown.clone()).unwrap_err();
