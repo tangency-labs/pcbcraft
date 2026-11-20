@@ -13,6 +13,7 @@ use pcbcraft_engine::{
 pub(super) enum Place {
     Pin,
     Pad,
+    NonPlatedHole,
     Line,
     Rectangle,
     Circle,
@@ -61,7 +62,7 @@ pub(super) fn browser_icon(primitive: &Primitive) -> pcbcraft_chrome::workspace:
         Primitive::Pin { .. } => ToolIcon::Pin,
         Primitive::Pad { .. } => ToolIcon::Pad,
         Primitive::Rectangle { .. } | Primitive::Outline { .. } => ToolIcon::Rectangle,
-        Primitive::Circle { .. } => ToolIcon::Circle,
+        Primitive::Circle { .. } | Primitive::NonPlatedHole { .. } => ToolIcon::Circle,
         Primitive::Text { .. } | Primitive::Silkscreen { .. } => ToolIcon::Text,
         Primitive::Line { .. } | Primitive::Polyline { .. } => ToolIcon::Line,
         Primitive::Graphic { graphic } => graphic_icon(graphic),
@@ -88,6 +89,7 @@ pub(super) fn name(primitive: &Primitive) -> String {
         Primitive::Artwork { artwork } => format!("{:?} {}", artwork.purpose, graphic_name(&artwork.graphic).to_lowercase()),
         Primitive::Pin { number, .. } => format!("Pin {number}"),
         Primitive::Pad { pad } => format!("Pad {}", pad.number),
+        Primitive::NonPlatedHole { .. } => "Non-plated hole".into(),
         Primitive::Line { .. } => "Line".into(),
         Primitive::Rectangle { .. } => "Rectangle".into(),
         Primitive::Circle { .. } => "Circle".into(),
@@ -140,6 +142,7 @@ fn points(primitive: &Primitive) -> Vec<Point> {
         ],
         Primitive::Polyline { points } => points.clone(),
         Primitive::Pad { pad } => rectangle(pad.center, pad.width_nm, pad.height_nm, pad.rotation),
+        Primitive::NonPlatedHole { hole } => rectangle(hole.center, hole.diameter_nm, hole.diameter_nm, 0),
         Primitive::Outline { graphic } => rectangle(graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation),
         Primitive::Silkscreen { path } => path.points.clone(),
     }
@@ -191,7 +194,7 @@ impl Document {
         let item = self.session.snapshot();
         let enabled = !self.pending();
         let selected = enabled && !self.selection.is_empty();
-        let tools = [
+        let mut tools = vec![
             (None, "Select", Icon::Select),
             (
                 Some(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad }),
@@ -205,6 +208,9 @@ impl Document {
             (Some(Place::Polyline), "Polyline", Icon::Line),
             (Some(Place::Text), "Text", Icon::Text),
         ];
+        if item.kind == Kind::Footprint {
+            tools.push((Some(Place::NonPlatedHole), "Non-plated hole", Icon::Circle));
+        }
         let buttons = tools
             .iter()
             .map(|(kind, label, icon)| RibbonTool {
@@ -258,12 +264,13 @@ impl Document {
         }
         workspace::ribbon_separator(ui);
         let tools = [button(Icon::Sheet, "Duplicate", selected), button(Icon::Nets, "Array", selected)];
-        let extra = [button(Icon::Sheet, "Copy", selected), button(Icon::Sheet, "Paste", enabled)];
+        let extra = [button(Icon::Sheet, "Copy", selected), button(Icon::Sheet, "Cut", selected), button(Icon::Sheet, "Paste", enabled)];
         if let Some(index) = workspace::ribbon_group_with_menu(ui, "Copy", &tools, &extra) {
             match index {
                 0 => self.duplicate(),
                 1 => self.array_requested = true,
                 2 => self.copy(ui.ctx()),
+                3 => self.cut(ui.ctx()),
                 _ => self.paste(ui.ctx()),
             }
         }
@@ -385,6 +392,20 @@ impl Document {
         {
             self.error = Some(error);
         }
+    }
+    /// Cut stores the selection on the internal clipboard and removes it as one undoable edit.
+    /// Pending fields refuse before changing the clipboard; an empty selection is a no-op.
+    /// Deletion failures leave the copied selection available and are reported through `self.error`.
+    fn cut(&mut self, ctx: &egui::Context) {
+        if self.pending() {
+            self.error = Some("Apply or reset the property fields before cutting.".into());
+            return;
+        }
+        if self.selection.is_empty() {
+            return;
+        }
+        self.copy(ctx);
+        self.delete();
     }
     /// R rotates the placement prototype or applies a validated rotation to the selected objects.
     fn rotate(&mut self) {
@@ -723,7 +744,7 @@ impl Document {
                 if command && ui.input(|i| i.key_pressed(egui::Key::A)) {
                     let _ = self.select_many(item.objects.keys().copied().collect());
                 }
-                // Command-only C/V arrive as normalized clipboard events on desktop; a raw
+                // Command-only C/X/V arrive as normalized clipboard events on desktop; a raw
                 // key press only appears when another modifier bypasses that translation.
                 // egui-winit emits Paste("") when the OS clipboard read is empty and
                 // PasteImage when it holds only an image — both mean "paste intent" here.
@@ -731,6 +752,14 @@ impl Document {
                 // in the same batch cancels the chord, and a focus-loss batch must not
                 // arm a preview the reset at the top of this canvas just cleared.
                 let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
+                let cut = ui.input(|i| {
+                    i.focused
+                        && i.events.iter().any(|event| match event {
+                            egui::Event::Cut => true,
+                            egui::Event::Key { key: egui::Key::X, pressed: true, modifiers, .. } => modifiers.command,
+                            _ => false,
+                        })
+                });
                 let pasted = ui.input(|i| {
                     i.focused
                         && i.events.iter().fold(false, |armed, event| match event {
@@ -742,6 +771,9 @@ impl Document {
                 });
                 if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
                     self.copy(ui.ctx());
+                }
+                if cut {
+                    self.cut(ui.ctx());
                 }
                 if pasted {
                     self.paste(ui.ctx());
@@ -820,6 +852,9 @@ impl Document {
 }
 /// Allocate the next unused electrical number; object allocation remains inside the engine.
 fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primitive, String> {
+    if kind == Place::NonPlatedHole {
+        return Ok(Primitive::NonPlatedHole { hole: foot::CircularNpth { center: end, diameter_nm: 1_000_000 } });
+    }
     let number = (1..=513)
         .map(|n| n.to_string())
         .find(|number| {
@@ -847,7 +882,7 @@ fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primi
                 drill_nm: None,
             },
         },
-        Place::Arc | Place::Polyline => return Err("Choose drawing geometry through its parameterized tool.".into()),
+        Place::Arc | Place::Polyline | Place::NonPlatedHole => return Err("Choose drawing geometry through its parameterized tool.".into()),
         Place::Line => Primitive::Line { from: start, to: end },
         Place::Rectangle => Primitive::Rectangle { min, max },
         Place::Circle => {
@@ -927,6 +962,7 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
         Primitive::Polyline { points } => {
             painter.add(egui::Shape::line(points.iter().map(|p| at(*p)).collect(), stroke));
         }
+        Primitive::NonPlatedHole { hole } => board::non_plated_hole(painter, at(hole.center), hole.diameter_nm as f32 * scale / 2., selected),
         Primitive::Pad { pad } => board::footprint(
             painter,
             &[board::PadDrawing {
@@ -1052,6 +1088,7 @@ fn hit(primitive: &Primitive, camera: &crate::canvas_camera::Camera, area: Rect,
         Primitive::Circle { center, radius_nm } => (pointer.distance(at(*center)) - *radius_nm as f32 * scale).abs() <= authoring::PICK_PADDING,
         Primitive::Polyline { points } => points.windows(2).any(|pair| near(at(pair[0]), at(pair[1]))),
         Primitive::Pad { pad } => rectangle(pad.center, pad.width_nm, pad.height_nm, pad.rotation, true),
+        Primitive::NonPlatedHole { hole } => pointer.distance(at(hole.center)) <= (hole.diameter_nm as f32 * scale / 2.).max(authoring::PICK_PADDING),
         Primitive::Outline { graphic } => rectangle(graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation, false),
         Primitive::Silkscreen { path } => {
             path.points.windows(2).any(|pair| near(at(pair[0]), at(pair[1])))

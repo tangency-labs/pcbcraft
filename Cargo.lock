@@ -2997,6 +2997,7 @@ version = "0.1.0"
 dependencies = [
  "craft-control",
  "pcbcraft-engine",
+ "serde",
  "serde_json",
 ]
 

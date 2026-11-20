@@ -43,6 +43,14 @@ within the existing 128-terminal and per-unit drawing bounds; higher pin counts
 remain separate work under #251. The schema and engine validate the declared supported
 fields rather than accepting arbitrary extension properties.
 
+A placed part instance also owns `designator_locked`, independently of its
+symbol definition and unit drawings. All placed units share that flag; unit
+letters have no separate lock. Inspection includes false explicitly, and
+`schematic.set_symbol_fields` edits it through an existing placed symbol.
+[Project/51](native-project-storage.md#designator-locks) stores active locks
+without changing any library symbol schema. Manual reference edits remain
+available; automatic annotation itself is not implemented.
+
 ## Explicit category defaults
 
 The version-3 field has this shape:
@@ -121,7 +129,10 @@ The symbol editor can add and select units through the shared authoring actions.
 It retains source unit order, inactive drawings and globally unique primitive IDs in
 `pcbcraft-library-item/2`; single-unit items keep format 1. Shared terminal
 name/type edits propagate to the other appearances. Native export emits format 4
-when several units exist. This does not add pin/gate swapping, alternative symbol
-definitions for a part, repeated circuit occurrences, high-pin-count geometry,
-or a new BOM/ERC subsystem. Existing single-unit files keep their original
+when several units exist. Explicit [reviewed pin renumbering](properties-and-library-editors.md#review-pin-renumbering)
+changes only the authored definition, including its shared terminal appearances;
+it adds no saved fields. It does not swap terminals/gates in placed instances or
+update their native package mappings. Alternative symbol definitions for a part,
+repeated circuit occurrences, high-pin-count geometry and a new BOM/ERC subsystem
+remain separate work. Existing single-unit files keep their original
 symbol formats and no-op serialization.

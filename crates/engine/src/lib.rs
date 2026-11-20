@@ -33,6 +33,7 @@ pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
 pub mod selection;
+mod session_scope;
 pub mod sheets;
 pub mod wire;
 pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -43,6 +44,7 @@ pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
 pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
 pub use board::via_nets::SET_VIA_NET;
+pub use session_scope::SessionScope;
 
 use board::{Board, FOOTPRINT_DEFINITION, Footprint, Pad};
 
@@ -109,6 +111,8 @@ enum ParamKind {
     LibrarySource,
     LibraryDocuments,
     AuthoringItem,
+    PinRemaps,
+    RemapBaseRevision,
     PartDraft,
     LibraryQuery,
     LibraryKind,
@@ -257,6 +261,8 @@ impl ParamKind {
             Self::AuthoringItem => {
                 json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
             }
+            Self::PinRemaps => authoring::remap::schema(),
+            Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision.schema(),
             Self::LibraryQuery => json!({"type":"string","maxLength":128}),
             Self::LibraryKind => json!({"type":"string","enum":["symbol","footprint","category","part","manufacturer_part"]}),
             Self::LibraryQuantity => {
@@ -512,6 +518,11 @@ impl ParamKind {
             Self::LibraryQuantity if serde_json::from_value::<library::parts::Quantity>(value.clone()).is_ok() => Ok(()),
             Self::LibrarySource => Err("must be a portable source or library ID"),
             Self::LibraryDocuments => Err("must contain bounded native path-to-text entries"),
+            Self::PinRemaps => authoring::remap::decode(value).map(|_| ()).map_err(|_| "must contain 1 to 128 explicit valid pin correspondences"),
+            Self::RemapBaseRevision => authoring::remap::Scalar::BaseRevision
+                .parse(value)
+                .map(|_| ())
+                .map_err(|_| "must be a canonical decimal string from 1 through 4294967295"),
             Self::AuthoringItem => Err("must contain a valid bounded native authoring item"),
             Self::LibraryQuery => Err("must contain at most 128 UTF-8 bytes"),
             Self::LibraryKind => Err("must be symbol, footprint, category or part"),
@@ -1128,7 +1139,7 @@ const CATALOG: &[Command] = &[
                 name: "text",
                 required: true,
                 kind: ParamKind::ClipboardText,
-                summary: "pcbcraft-clipboard/1 or pcbcraft-clipboard/2 UTF-8 envelope",
+                summary: "pcbcraft-clipboard/1, /2 or /3 schematic UTF-8 envelope",
             },
             SYMBOL_X,
             SYMBOL_Y,
@@ -1605,11 +1616,17 @@ const CATALOG: &[Command] = &[
     Command {
         id: SET_SYMBOL_FIELDS,
         title: "Edit Symbol Fields",
-        summary: "Set reference, value, optional metadata, field appearance and placement together. Attached wires follow center changes. References remain unique. Undoable.",
+        summary: "Set reference, value, optional designator lock, metadata, field appearance and placement together. Attached wires follow center changes. References remain unique. Undoable.",
         params: &[
             SYMBOL,
             Param { required: true, name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
             Param { required: true, name: "value", summary: "Value text, such as 4.7k", kind: ParamKind::Text },
+            Param {
+                required: false,
+                name: "designator_locked",
+                summary: "Record a designator lock for future annotation; omission preserves the current lock",
+                kind: ParamKind::Flag,
+            },
             Param {
                 required: false,
                 name: "metadata",
@@ -1627,6 +1644,12 @@ const CATALOG: &[Command] = &[
                 name: "rotation",
                 summary: "Counterclockwise degrees; omission preserves orientation",
                 kind: ParamKind::Rotation,
+            },
+            Param {
+                required: false,
+                name: "dry_run",
+                summary: "Validate without editing; return complete proposed native documents with provisional allocation identities",
+                kind: ParamKind::Flag,
             },
             Param { required: false, ..SYMBOL_X },
             Param { required: false, ..SYMBOL_Y },
@@ -1932,6 +1955,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[6],
     library::sources::COMMANDS[7],
     library::sources::COMMANDS[8],
+    library::sources::COMMANDS[9],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2635,6 +2659,10 @@ pub enum CommandError {
         stated: u64,
         current: u32,
     },
+    /// A scoped session may not run this known command.
+    OutOfScope {
+        command: &'static str,
+    },
 }
 
 impl CommandError {
@@ -2649,6 +2677,7 @@ impl CommandError {
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::CapExceeded(_) => ErrorCode::CapExceeded,
             Self::VersionMismatch { .. } => ErrorCode::VersionMismatch,
+            Self::OutOfScope { .. } => ErrorCode::OutOfScope,
         }
     }
 
@@ -2658,6 +2687,7 @@ impl CommandError {
         match self {
             Self::StaleRevision { current } => json!({"current_revision": current}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
+            Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
             _ => json!({}),
         }
     }
@@ -2674,6 +2704,7 @@ impl std::fmt::Display for CommandError {
                 f,
                 "`{command}` was requested with command API version {stated}, but this session runs version {current}; refresh the command catalog"
             ),
+            Self::OutOfScope { command } => write!(f, "`{command}` cannot run in a read-only session"),
         }
     }
 }
@@ -2687,6 +2718,11 @@ impl std::error::Error for CommandError {}
 pub struct SheetTarget {
     project: uuid::Uuid,
     sheet: uuid::Uuid,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static DESIGNATOR_METADATA_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A typed project snapshot. History and background saves share immutable collections.
@@ -2757,6 +2793,24 @@ impl Project {
     /// Return the logical components in stable component ID order.
     pub fn components(&self) -> impl Iterator<Item = &PartInstance> {
         self.components.values()
+    }
+
+    /// Adopt storage metadata after an edit introduces a locked part. Decoding already
+    /// validates these requirements, and ordinary edits, removals and history retain them.
+    /// The caller knows from the changed part that a lock was introduced; do not scan the map.
+    pub(crate) fn prepare_designator_metadata(&mut self) -> Result<(), String> {
+        #[cfg(test)]
+        DESIGNATOR_METADATA_PREPARATIONS.with(|calls| calls.set(calls.get() + 1));
+        if self.layout.is_none() {
+            *self = self.with_board_folders(".")?;
+        }
+        if !self.has_sheet_occurrences() {
+            *self = self.with_sheet_occurrences()?;
+        }
+        if self.numeric_id_high_water.is_none() {
+            self.numeric_id_high_water = Some(self.allocation_high_water());
+        }
+        Ok(())
     }
 
     /// Whether a live component belongs in this project's current physical board
@@ -2930,6 +2984,8 @@ impl Project {
 /// separate session. Window placement and navigation are not part of the project history.
 #[derive(Debug)]
 pub struct Session {
+    /// Command authority fixed at construction, never part of a document.
+    scope: SessionScope,
     /// Runtime authority shared only by clearance captures from this session, never persisted.
     clearance_identity: Arc<()>,
     /// One disposable captured-board query cache; history snapshots never retain this cache.
@@ -2957,6 +3013,7 @@ impl Default for Session {
     /// Start with the bundled native sources; no project or authored history exists yet.
     fn default() -> Self {
         Self {
+            scope: SessionScope::Edit,
             clearance_identity: Arc::new(()),
             clearance_cache: std::sync::Mutex::new(None),
             libraries: Arc::new(library::sources::Catalog::bundled()),
@@ -3025,7 +3082,8 @@ impl Session {
     /// identity/absence and retains a later root/folder choice made since the save began.
     /// Later created sheets retain their inspected compatibility IDs through occurrence adoption.
     /// The captured snapshot is replaced by the saved Arc so dirty-state comparisons stay valid.
-    /// When it changes anything, the edit observer is told the current project as a new root.
+    /// When both Arcs are already the same, only other history snapshots may need adoption.
+    /// If anything changes, the edit observer is told the current project as a new root.
     pub fn adopt_saved_metadata(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
         if !saved.same_document(original) {
             return false;
@@ -3037,8 +3095,10 @@ impl Session {
                 continue;
             }
             if Arc::ptr_eq(project, original) {
-                *project = saved.clone();
-                changed = true;
+                if !Arc::ptr_eq(project, saved) {
+                    *project = saved.clone();
+                    changed = true;
+                }
                 continue;
             }
             let mut next = Project::clone(project);
@@ -3119,7 +3179,8 @@ impl Session {
             | library::sources::RESOLVE_PART
             | library::sources::PARSE_QUANTITY
             | library::sources::PREPARE_PART_PUBLICATION
-            | library::sources::PREPARE_PUBLICATION => true,
+            | library::sources::PREPARE_PUBLICATION
+            | library::sources::PREVIEW_PIN_REMAP => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -3242,7 +3303,7 @@ impl Session {
         }
     }
 
-    /// Return the current project, revision, and undo and redo availability as JSON.
+    /// Return the current project, scope, revision, and undo and redo availability as JSON.
     /// Each schematic wire reports explicit component/junction/interface endpoints, authored `bends`, and
     /// its drawn `path`: every corner from end to end in nanometres, so a point on any leg can be
     /// chosen for the commands that take one.
@@ -3316,6 +3377,7 @@ impl Session {
             "project": project,
             "footprint_catalog": self.project.as_ref().map(|p| p.inspect_footprint_catalog()),
             "revision": self.revision,
+            "scope": self.scope.as_str(),
             "can_undo": !self.undo.is_empty(),
             "can_redo": !self.redo.is_empty(),
         });
@@ -3331,9 +3393,12 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Failed commands leave the project intact; a stale `expected_revision` is reported first
-    /// unless the command returns a stale query outcome, as `pcb.plan_route` and `pcb.plan_shove` do.
+    /// Authorized symbol-field dry runs return provisional document changes without publishing an edit.
+    /// Failed commands leave the project intact. Scope refusals precede validation; otherwise
+    /// a stale `expected_revision` is reported first unless the command returns a stale query
+    /// outcome, as `pcb.plan_route` and `pcb.plan_shove` do.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
+        self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
         if id == board::arc::SET_ARCS {
             let before = self.revision;
@@ -3342,6 +3407,9 @@ impl Session {
                 self.report_committed(id, params);
             }
             return Ok(result);
+        }
+        if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
+            return self.preview_symbol_fields(params);
         }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3428,20 +3496,26 @@ impl Session {
     /// Run the shared command without building an inspection snapshot. Returns the current
     /// revision, which remains unchanged on a no-op. Failed commands leave the project intact.
     /// Preview commands may replace runtime-only cached authority without an authored edit.
+    /// Symbol-field dry runs validate a disposable candidate without notifying the edit observer.
     /// Setup handlers retain their revision checks and specific state diagnostics even when
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
     /// that use while allocating a fresh occurrence after legacy metadata has been adopted.
-    /// A stale `expected_revision` is reported before any other check, except for `pcb.plan_route`
-    /// and `pcb.plan_shove`.
+    /// Scope is checked first, then a stale `expected_revision` is reported before other
+    /// validation, except for `pcb.plan_route` and `pcb.plan_shove`.
     /// A command that advances the revision is reported to the edit observer once it has
     /// been adopted; failures, no-ops and queries are not reported. Copper commands report
     /// from their prepared publication path, which also serves direct prepared commits.
     /// Board cut checks the encoded clipboard limit even though only the revision is returned.
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
+        self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
         if id == board::clipboard::CUT {
             self.cut_board(params)?;
+            return Ok(self.revision);
+        }
+        if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
+            self.preview_symbol_fields(params)?;
             return Ok(self.revision);
         }
         let before = self.revision;
@@ -3938,6 +4012,7 @@ impl Session {
                 definition: definition.clone(),
                 reference_number,
                 reference: format!("{}{reference_number}", definition.reference_prefix),
+                designator_locked: false,
                 value: params["value"].as_str().unwrap_or(definition.default_value()).to_owned(),
                 metadata: defaults.metadata,
                 part: None,
@@ -4055,6 +4130,38 @@ impl Session {
         Ok(())
     }
 
+    /// Validate the ordinary property transaction in a disposable session. Return complete
+    /// proposed document changes without publishing state or history. Newly allocated net and
+    /// capture identities are provisional; a later Apply allocates its own identities.
+    /// Ordinary validation precedes encoding; native size limits can still refuse the preview.
+    fn preview_symbol_fields(&self, params: &Value) -> Result<Value, CommandError> {
+        let mut candidate = Self { project: self.project.clone(), revision: self.revision, ..Self::default() };
+        let mut params = params.clone();
+        params["dry_run"] = json!(false);
+        candidate.apply(SET_SYMBOL_FIELDS, &params)?;
+        let before =
+            persistence::encode_documents(self.snapshot().ok_or_else(|| CommandError::Unavailable("Create or open a project first.".into()))?)
+                .map_err(CommandError::InvalidParams)?;
+        let after =
+            persistence::encode_documents(candidate.snapshot().ok_or_else(|| CommandError::Unavailable("Create or open a project first.".into()))?)
+                .map_err(CommandError::InvalidParams)?;
+        let paths: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
+        let mut changes = Vec::new();
+        for path in paths {
+            if before.get(path) != after.get(path) {
+                let text = |documents: &persistence::Documents| {
+                    documents
+                        .get(path)
+                        .map(|bytes| std::str::from_utf8(bytes).map(str::to_owned))
+                        .transpose()
+                        .map_err(|error| CommandError::InvalidParams(error.to_string()))
+                };
+                changes.push(json!({"path":path,"before":text(&before)?,"after":text(&after)?}));
+            }
+        }
+        Ok(json!({"revision":self.revision,"provisional":true,"changes":changes}))
+    }
+
     /// Set component-owned fields through a placed unit. References must be unique across
     /// components; both fields are bounded single-line text. Optional orientation and center axes
     /// change in the same transaction; omitted placement fields retain their values. Center changes
@@ -4064,6 +4171,8 @@ impl Session {
     /// only this unit's text appearance. Omission preserves either. Invalid/dangling fields or
     /// board exclusion of a legacy placed component reject every accompanying change.
     /// With an accepted baseline, exclusion stages a reviewed physical removal.
+    /// The optional designator lock records intent for future annotation, not a ban on explicit
+    /// reference edits. Successful Apply does not guarantee the later native Save fits its limits.
     /// Validation/contact failures reject the entire edit; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -4073,6 +4182,8 @@ impl Session {
             project.component(&project.symbols[index]).ok_or_else(|| CommandError::InvalidParams("symbol has no component".to_owned()))?;
         let reference = params["reference"].as_str().unwrap_or_default().trim().to_owned();
         let mut value = params["value"].as_str().unwrap_or_default().trim().to_owned();
+        let designator_locked = params.get("designator_locked").and_then(Value::as_bool).unwrap_or(component.designator_locked);
+        let introduced_lock = designator_locked && !component.designator_locked;
         let mut part_selection = component.part.clone();
         if value != component.value
             && let Some(selection) = &mut part_selection
@@ -4113,6 +4224,7 @@ impl Session {
         schematic::fields::validate_layouts(&field_layout, &metadata).map_err(CommandError::InvalidParams)?;
         if component.reference == reference
             && component.value == value
+            && component.designator_locked == designator_locked
             && component.part == part_selection
             && component.metadata == metadata
             && project.symbols[index].field_layout == field_layout
@@ -4124,6 +4236,7 @@ impl Session {
         let mut component = component.clone();
         component.reference = reference;
         component.value = value;
+        component.designator_locked = designator_locked;
         component.part = part_selection;
         component.metadata = metadata;
         let mut next = if position != original_position {
@@ -4144,6 +4257,9 @@ impl Session {
         Arc::make_mut(&mut next.components).insert(component.ordinal, component);
         let symbol = &mut Arc::make_mut(&mut next.sheet_mut().symbols)[index];
         symbol.field_layout = field_layout;
+        if introduced_lock {
+            next.prepare_designator_metadata().map_err(CommandError::InvalidParams)?;
+        }
         self.change(next)?;
         Ok(())
     }
@@ -4287,6 +4403,7 @@ impl Session {
 
     /// Prepare an edit without publishing it. Locked copper, unsupported circular geometry,
     /// metadata, nets and zone ownership are checked here so previews share Apply's preparation.
+    /// Adopt required no-connect metadata; lock-introducing edits prepare their own metadata.
     /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
     fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
@@ -4436,6 +4553,8 @@ fn assert_same_content(expected: &Arc<Project>, actual: &Arc<Project>) {
 }
 
 /// Validate declared inputs, requiring mandatory parameters and rejecting unknown or invalid values.
+/// Remap rows keep the decoder's shape or value reason, not necessarily an individual key path.
+/// The native item envelope is decoded separately after this outer check.
 fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
     let empty = Map::new();
     let given = match params {
@@ -4456,7 +4575,14 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
             continue;
         }
         let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
-        param.kind.validate(value).map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
+        let checked = if command.id == library::sources::PREVIEW_PIN_REMAP && param.name == "item" {
+            value.is_object().then_some(()).ok_or_else(|| "Pin remap item must be an object.".into())
+        } else if matches!(param.kind, ParamKind::PinRemaps) {
+            authoring::remap::decode(value).map(|_| ())
+        } else {
+            param.kind.validate(value).map_err(str::to_owned)
+        };
+        checked.map_err(|message| CommandError::InvalidParams(format!("`{}` {message}", param.name)))?;
     }
     Ok(())
 }
@@ -4746,6 +4872,21 @@ mod tests {
         assert_eq!(name(&s), Some(UNTITLED));
         s.apply("edit.undo", &Value::Null).unwrap();
         assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &saved));
+    }
+
+    /// Adopting the same snapshot is a no-op when history already has its saved metadata.
+    #[test]
+    fn adopting_an_unchanged_saved_snapshot_with_current_history_is_a_noop() {
+        let mut s = Session::default();
+        s.apply("project.new", &Value::Null).unwrap();
+        let prepared = s.snapshot().unwrap().with_board_folders(".").unwrap().with_sheet_occurrences().unwrap();
+        s.open_snapshot(Arc::new(prepared));
+        s.apply("project.rename", &json!({"name":"Already prepared"})).unwrap();
+        let saved = s.snapshot().unwrap();
+        let revision = s.revision();
+        assert!(!s.adopt_saved_metadata(&saved, &saved));
+        assert_eq!(s.revision(), revision);
+        assert!(Arc::ptr_eq(&saved, &s.snapshot().unwrap()));
     }
 
     #[test]

@@ -24,8 +24,35 @@ pub const MAX_WAIT: Duration = Duration::from_secs(900);
 const MAX_TOKEN_FILE: u64 = 4096;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_REPLY_BYTES: usize = 16 << 20;
 const VERSIONED_EXECUTE: &str = "engine.execute_versioned";
+
+/// Existing live JSON success-frame bound, including the result wrapper and excluding LF.
+/// Hosts may preflight the same transport contract before publishing transient review authority.
+pub const MAX_REPLY_BYTES: usize = 16 << 20;
+
+/// Check the complete success frame against the receiving client's existing byte limit.
+/// Serialization stops at the limit without retaining a second encoded copy. This bounds
+/// transport bytes, not the memory or work used to prepare the supplied inspection value.
+pub fn check_reply_size(result: &Value) -> Result<(), String> {
+    struct Budget(usize);
+    impl std::io::Write for Budget {
+        /// Count each encoded chunk, refusing before it crosses the remaining byte budget.
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.0 {
+                return Err(std::io::Error::other("live reply byte limit exceeded"));
+            }
+            self.0 -= bytes.len();
+            Ok(bytes.len())
+        }
+        /// Counting has no buffered output to flush.
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    // Request::answer wraps the result; craft_control::read_frame excludes the framing newline.
+    let mut budget = Budget(MAX_REPLY_BYTES - b"{\"result\":".len() - b"}".len());
+    serde_json::to_writer(&mut budget, result).map_err(|error| format!("Live editor reply exceeds the reply byte limit: {error}"))
+}
 
 /// MCP backend for an explicitly selected local desktop editor.
 pub struct Remote {
@@ -201,7 +228,8 @@ fn check_window_version(editor: &dyn Editor, id: &str, stated: &Value) -> Result
 /// Document/presentation commands obey the editor's refusal; UI automation uses its own input
 /// lifecycle and returns query data or a queue ticket. Other window commands answer with editor
 /// inspection (or only the unchanged revision when `inspect` is false); document commands answer
-/// as in a headless session.
+/// as in a headless session. A symbol-field preview that exceeds the live reply limit
+/// returns a tool error without applying the edit.
 pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Failure> {
     let method = request["method"].as_str().ok_or_else(|| Failure::new(ErrorCode::InvalidRequest, "missing control method"))?;
     let params = &request["params"];
@@ -227,6 +255,17 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
             }
             if !is_window_command(id) {
                 let result = call_session(editor.session(), method, params)?;
+                // This dry run cannot publish an edit. Refuse an oversized reply before the
+                // host writes its frame, rather than truncating the proposed documents.
+                if id == pcbcraft_engine::SET_SYMBOL_FIELDS
+                    && params["params"]["dry_run"].as_bool() == Some(true)
+                    && check_reply_size(&result).is_err()
+                {
+                    return Err(Failure::new(
+                        ErrorCode::CapExceeded,
+                        "The symbol-field preview exceeds the 16 MiB live reply limit; no edit was applied.",
+                    ));
+                }
                 return if id == pcbcraft_engine::netlist::EXPORT_BOARD_NETLIST { board_netlist_reply(result) } else { Ok(result) };
             }
             check_window_version(editor, id, &params["version"])?;
@@ -279,5 +318,37 @@ mod tests {
         assert!(refused.message().contains("16 MiB") && refused.message().contains("headless"), "{refused}");
         let dry = json!({"revision":7,"netlist":{"files":[{"name":"netlist.json"}],"findings":[]}});
         assert_eq!(board_netlist_reply(dry.clone()).unwrap(), dry);
+    }
+}
+
+#[cfg(test)]
+mod reply_size_tests {
+    use super::*;
+
+    /// Match the actual frame reader's success-wrapper budget, accepting the last JSON byte
+    /// and refusing the next. UTF-8 characters and JSON escapes count as their encoded bytes.
+    #[test]
+    fn reply_budget_matches_the_complete_transport_frame() {
+        let overhead = serde_json::to_vec(&json!({"result":""})).unwrap().len();
+        for (extra, accepted) in [(0, true), (1, false)] {
+            let result = json!("x".repeat(MAX_REPLY_BYTES - overhead + extra));
+            let mut frame = serde_json::to_vec(&json!({"result":result})).unwrap();
+            assert_eq!(frame.len() <= MAX_REPLY_BYTES, accepted);
+            if accepted {
+                check_reply_size(&result).unwrap();
+            } else {
+                assert!(check_reply_size(&result).unwrap_err().contains("reply byte limit"));
+            }
+            frame.push(b'\n');
+            let parsed = craft_control::read_frame(&mut std::io::Cursor::new(frame), MAX_REPLY_BYTES).unwrap();
+            if accepted {
+                assert!(matches!(parsed, Some(craft_control::Frame::Message(_))));
+            } else {
+                assert!(matches!(parsed, Some(craft_control::Frame::Oversized)));
+            }
+        }
+        let result = json!("\"界\n".repeat(MAX_REPLY_BYTES / 4));
+        assert!(serde_json::to_vec(&json!({"result":result})).unwrap().len() > MAX_REPLY_BYTES);
+        assert!(check_reply_size(&result).unwrap_err().contains("reply byte limit"));
     }
 }

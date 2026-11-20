@@ -57,6 +57,9 @@ instances/2 for a board; opening or inspecting an older project does not promote
 On Home, choose **Open Project**, then **Project file or archive…**, and select
 `crates/app/tests/fixtures/split/two-resistors/project.json` from your checkout.
 The folder contains two wired resistors and their pinned symbol definition.
+On desktop you can also name the project on the command line:
+`cargo run --locked -p pcbcraft -- crates/app/tests/fixtures/split/two-resistors`
+opens it as the app starts.
 Use **File → Save As… → Project folder…** to save your own copy in a new or empty
 folder outside the checkout before making changes. This keeps the tracked test
 fixture intact. **View → Fit** brings the circuit into view. On desktop, use the
@@ -351,6 +354,46 @@ Library tabs show the exact definition retained by the project. The **Footprint*
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
+### Designator locks
+
+Select a symbol and check **Lock designator** in compact Properties, then choose
+**Apply changes**; the expanded **E** form has the same checkbox and **OK** action.
+The lock belongs to the part instance and is visible from all its placed units.
+It is intent for automatic annotation, not a prohibition on deliberately editing
+Reference. Reset/Cancel discard drafts, and one Undo reverses an applied edit.
+Save/reopen retains the flag; copy and paste carry it even when ordinary paste
+renumbers the new instance's reference.
+
+GUI, headless MCP and the live connection share `schematic.set_symbol_fields`.
+Include `symbol`, `reference`, `value`, current `expected_revision`, and optional
+boolean `designator_locked` (omit it to retain the current lock). Include `sheet`
+when several sheets exist. `symbol` takes the placed unit's `symbol-N` address,
+not its owner's `component-N` inspection address. `dry_run: true` validates the
+ordinary transaction first, then encodes the original and candidate, and returns `{revision, provisional: true, changes}` without changing project state
+or undo. Each change contains `path` and the complete proposed native UTF-8
+texts `before` and `after` (null for an absent document). An unchanged preview
+returns an empty list when both snapshots are encodable. Encoding can refuse a
+preview at the native size limits; ordinary Apply does not perform those full
+encodes, so successful Apply does not guarantee a later Save fits. See the
+[storage limits and refusal behavior](native-project-storage.md#designator-locks).
+New net and lineage-capture UUIDs from topology edits are provisional: Apply
+can allocate different UUIDs even at the same revision. Adopting legacy storage
+persists the deterministic circuit-use and sheet-occurrence compatibility UUIDs
+already visible in inspection. These are candidate documents, not replay-ready
+replacements. A lock-only edit in an already-adopted project retains its existing
+net and lineage-capture identities.
+MCP `inspect:false` still returns this preview. The live connection limits the
+complete JSON reply (including escaping) to 16 MiB. A larger preview returns a
+tool error without applying the edit or truncating documents. Preview confers no authority to
+apply later: send the edit again against the same current revision, or inspect
+and review again after a concurrent edit.
+
+Inspection reports `designator_locked` even when false. Automatic annotation and
+its skipped-item report are not implemented yet; the engine's
+`PartInstance::can_annotate_designator()` predicate exposes this lock policy for
+that implementation. Unit-letter locks and package completion remain separate
+work. See the [storage contract](native-project-storage.md#designator-locks).
+
 ## Inspect a board beside its schematic
 
 Generate an original example into a directory that does not already exist:
@@ -624,7 +667,9 @@ launch `target/debug/pcbcraft-cli` with arguments
 repository as its working directory. Use `.exe` on Windows. Running that command
 in a terminal waits for MCP input; it is not an interactive command prompt.
 Headless edits change only that process's in-memory session. They do not edit an
-open GUI window or save back to the file.
+open GUI window or save back to the file. For a review that must not edit even
+that snapshot, add `--read-only` to the headless arguments. See
+[headless MCP](mcp.md#headless-mcp) for scope discovery and refusal details.
 
 For the new layer/stackup foundation, use `describe_command` with
 `pcb.initialize_board_setup` and `pcb.set_board_setup`. On a project with no
@@ -742,6 +787,19 @@ last window still asks about unsaved work.
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
 To make a plated hole, set Layers to All copper and enter a positive drill smaller
 than the land. Corner radius is zero for rectangular/circular pads.
+
+For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
+pins, enter each other's numbers and choose **Preview current nets** before
+**Apply remap**. The table separates the draft's unchanged name from the pinned
+before-number name, current nets and native package pads; these are not predicted
+reconnections or proof of primitive lineage across prior draft renumbering.
+**Unconnected** is a known placed terminal without a net. Actual net names start
+with **Net:**, so a net named Unconnected reads **Net: Unconnected**. **Unknown**
+means missing association or evidence (for example, no open project or no matching
+placed copy), not a known no-net/no-package result. Only the library draft
+changes, in one Undo step. Cancel leaves both documents alone. To associate nets,
+edit the same published identity/revision used by the project; **Edit copy** does
+not infer that association. See [pin renumbering](properties-and-library-editors.md#review-pin-renumbering).
 
 On desktop, **Parts Library → New → Library** creates a writable native folder.
 Create a symbol or footprint and publish it to that collection first, or choose an

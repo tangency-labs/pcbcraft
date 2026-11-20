@@ -1,12 +1,25 @@
 //! JSON-RPC 2.0 framing and the MCP lifecycle / tools / resources methods.
 
-use std::io::{BufRead, Write};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt,
+    io::{BufRead, Write},
+};
 
 use craft_control::{Frame, read_frame, write_frame};
 
 use crate::backend::Backend;
-use crate::tools::{call_tool, check_arguments, tool_definitions};
-use serde_json::{Value, json};
+use pcbcraft_engine::error_codes::ErrorCode;
+
+use crate::{
+    Failure,
+    tools::{call_tool, check_arguments, failure, tool_definitions},
+};
+use serde::{
+    Deserializer,
+    de::{MapAccess, Visitor},
+};
+use serde_json::{Value, json, value::RawValue};
 
 /// The newest protocol revision we speak; offered when the client asks for one we don't know.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -44,6 +57,78 @@ fn response(id: Value, result: Value) -> Value {
 }
 fn error(id: Value, code: i64, message: impl Into<String>) -> Value {
     json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message.into()}})
+}
+
+/// Only the remap item needs its original JSON; ordinary transport arguments keep their existing codecs.
+fn has_raw_remap_item(message: &Value) -> bool {
+    let params = &message["params"];
+    message.get("id").is_some()
+        && message["method"] == "tools/call"
+        && params["name"] == "execute"
+        && params["arguments"]["command"] == pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
+        && params["arguments"]["params"]["item"].is_object()
+}
+
+/// Borrow the selected member's exact bytes, including any repeated keys inside it.
+fn raw_member<'a>(text: &'a str, key: &str) -> Result<&'a str, String> {
+    let object: BTreeMap<String, &RawValue> = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    object.get(key).map(|value| value.get()).ok_or_else(|| format!("Missing raw `{key}` member."))
+}
+
+#[derive(Clone, Copy)]
+enum RemapMap {
+    Item,
+    Units,
+    Drawing,
+}
+
+impl<'de> Visitor<'de> for RemapMap {
+    type Value = Option<&'static str>;
+
+    /// Describe the JSON shape accepted by the duplicate-key check.
+    fn expecting(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        out.write_str("a native item, drawing or unit map")
+    }
+
+    /// Compare decoded keys and inspect every original inactive drawing before any normalization.
+    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
+        let mut keys = BTreeSet::new();
+        let mut duplicate = false;
+        let mut nested_error = None;
+        while let Some((key, body)) = map.next_entry::<String, &RawValue>()? {
+            let nested = match (self, key.as_str()) {
+                (Self::Item, "objects") | (Self::Units, _) => Some(Self::Drawing),
+                (Self::Item, "other_units") => Some(Self::Units),
+                _ => None,
+            };
+            duplicate |= !keys.insert(key);
+            if nested_error.is_none() {
+                nested_error = nested.and_then(|level| duplicate_remap_keys(body.get(), level));
+            }
+        }
+        Ok(if duplicate {
+            Some(match self {
+                Self::Item => "Duplicate member in the pin remap item.",
+                Self::Units => "Duplicate unit name in the pin remap item.",
+                Self::Drawing => "Duplicate primitive ID in the pin remap item.",
+            })
+        } else {
+            nested_error
+        })
+    }
+}
+
+/// Inspect the raw native item and its drawing maps without decoding primitive values.
+fn duplicate_remap_keys(text: &str, level: RemapMap) -> Option<&'static str> {
+    serde_json::Deserializer::from_str(text).deserialize_map(level).ok().flatten()
+}
+
+/// Detect duplicate item members and drawing/unit keys; keep normalized size accounting.
+fn raw_remap_duplicate(mut text: &str) -> Option<&'static str> {
+    for key in ["params", "arguments", "params", "item"] {
+        text = raw_member(text, key).ok()?;
+    }
+    duplicate_remap_keys(text, RemapMap::Item)
 }
 
 impl Server {
@@ -90,16 +175,35 @@ impl Server {
             Ok(Value::Array(batch)) if batch.is_empty() => Some(error(Value::Null, INVALID_REQUEST, "empty batch")),
             Ok(Value::Array(batch)) if batch.len() > MAX_BATCH => Some(error(Value::Null, INVALID_REQUEST, "batch too large")),
             Ok(Value::Array(batch)) => {
-                let replies: Vec<Value> = batch.into_iter().filter_map(|m| self.handle(m)).collect();
+                let replies: Vec<Value> = if batch.iter().any(has_raw_remap_item) {
+                    match serde_json::from_str::<Vec<&RawValue>>(line) {
+                        Ok(raw) => batch.into_iter().zip(raw).filter_map(|(msg, raw)| self.handle_raw(msg, raw.get())).collect(),
+                        Err(e) => return Some(error(Value::Null, PARSE_ERROR, format!("parse error: {e}")).to_string()),
+                    }
+                } else {
+                    batch.into_iter().filter_map(|msg| self.handle(msg)).collect()
+                };
                 (!replies.is_empty()).then_some(Value::Array(replies))
             }
-            Ok(msg) => self.handle(msg),
+            Ok(msg) => self.handle_raw(msg, line),
             Err(e) => Some(error(Value::Null, PARSE_ERROR, format!("parse error: {e}"))),
         };
         reply.map(|r| r.to_string())
     }
 
+    /// Detect duplicate remap keys on the wire without changing normal request validation.
+    fn handle_raw(&mut self, msg: Value, raw: &str) -> Option<Value> {
+        let remap_error = has_raw_remap_item(&msg).then(|| raw_remap_duplicate(raw)).flatten();
+        self.handle_message(msg, remap_error)
+    }
+
+    /// Handle an already-decoded message, which has no raw wire keys to inspect.
     pub fn handle(&mut self, msg: Value) -> Option<Value> {
+        self.handle_message(msg, None)
+    }
+
+    /// Share JSON-RPC handling for programmatic messages and requests parsed from the wire.
+    fn handle_message(&mut self, msg: Value, remap_error: Option<&'static str>) -> Option<Value> {
         let Value::Object(o) = &msg else { return Some(error(Value::Null, INVALID_REQUEST, "message must be an object")) };
         let id = o.get("id").cloned();
         let Some(method) = o.get("method").and_then(Value::as_str) else {
@@ -116,17 +220,16 @@ impl Server {
             }
             return None;
         };
-        Some(match self.request(method, &params) {
+        Some(match self.request(method, &params, remap_error) {
             Ok(r) => response(id, r),
             Err((code, m)) => error(id, code, m),
         })
     }
 
-    /// Answer one JSON-RPC method. A tool that runs and fails is still a result (with
-    /// `isError` and its code); an unknown method or resource, tool arguments its schema
-    /// refuses, or a backend failure while reading a resource is a JSON-RPC error, which
-    /// carries the message without a PCBCraft code.
-    fn request(&mut self, method: &str, params: &Value) -> Result<Value, (i64, String)> {
+    /// Answer one JSON-RPC method. A command failure, including duplicate raw remap keys
+    /// inside a checked tool call, carries `isError` and a stable PCBCraft code. An unknown
+    /// method or resource, invalid tool envelope, or resource read failure is a JSON-RPC error.
+    fn request(&mut self, method: &str, params: &Value, remap_error: Option<&'static str>) -> Result<Value, (i64, String)> {
         match method {
             "initialize" => {
                 let asked = params.get("protocolVersion").and_then(Value::as_str).unwrap_or(PROTOCOL_VERSION);
@@ -147,6 +250,9 @@ impl Server {
                     Some(a) => a.clone(),
                 };
                 check_arguments(name, &args).map_err(|e| (INVALID_PARAMS, e))?;
+                if let Some(message) = remap_error {
+                    return Ok(failure(&Failure::new(ErrorCode::InvalidParams, message)));
+                }
                 Ok(call_tool(self.backend.as_mut(), name, &args))
             }
             "resources/list" => Ok(json!({"resources": [

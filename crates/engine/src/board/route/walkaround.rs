@@ -119,7 +119,7 @@ impl<'a> Walker<'a> {
         let at_origin = Contour::capsule(origin, origin, half);
         let candidates =
             if (origin, origin_layer) == (request.head, request.layer) { head_candidates } else { query.candidates(&at_origin, &[origin_layer])? };
-        let contacts: Vec<usize> = candidates.into_iter().filter(|i| objects[*i].contour.gap(&at_origin) <= 0.).collect();
+        let contacts: Vec<usize> = candidates.into_iter().filter(|i| !objects[*i].mechanical && objects[*i].contour.gap(&at_origin) <= 0.).collect();
         let route_nets: Vec<usize> =
             contacts.iter().flat_map(|i| objects[*i].intended_nets.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();
         let view = query.authority().view().ok_or_else(|| CommandError::Unavailable("The captured board is no longer available.".into()))?;
@@ -222,11 +222,12 @@ impl<'a> Walker<'a> {
             // contacted nets for short/class checks; that union cannot assign this route a
             // foreign net merely by crossing it, including during previous-path confirmation.
             let same_net = self.route_nets.len() == 1 && object.intended_nets == self.route_nets;
-            let clearance_violation = !same_net && decision.gap_nm < decision.clearance_nm as f64;
+            let clearance_violation =
+                if object.mechanical { decision.clearance_violation } else { !same_net && decision.gap_nm < decision.clearance_nm as f64 };
             if !clearance_violation && !decision.conflicting_nets {
                 continue;
             }
-            if !decision.conflicting_nets && self.own_islands.contains(&object.island) {
+            if !object.mechanical && !decision.conflicting_nets && self.own_islands.contains(&object.island) {
                 continue;
             }
             legal = false;

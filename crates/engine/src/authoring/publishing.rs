@@ -55,6 +55,7 @@ pub struct Prepared {
     latest: u32,
     documents: Documents,
     copy: bool,
+    symbol: Option<Arc<crate::schematic::SymbolDefinition>>,
 }
 impl Prepared {
     /// Exact source definition before publication, for explicitly reviewed dependent-part updates.
@@ -153,7 +154,12 @@ pub fn prepare(item: Arc<Item>, manifest: &str, latest: u32, base: Option<u32>, 
     if !parsed.problems().is_empty() {
         return Err(parsed.problems().join("\n"));
     }
-    Ok(Prepared { captured: item, published: Arc::new(published), manifest: manifest.into(), latest, documents, copy: false })
+    let symbol = if item.kind == Kind::Symbol {
+        Some(parsed.items().iter().find_map(|item| item.symbol()).ok_or("Missing prepared symbol definition.")?)
+    } else {
+        None
+    };
+    Ok(Prepared { captured: item, published: Arc::new(published), manifest: manifest.into(), latest, documents, copy: false, symbol })
 }
 
 /// Prepare Save As from the current draft under a fresh item identity. Its editor is rebound
@@ -184,10 +190,16 @@ impl Item {
 }
 
 impl Session {
-    /// Bind a freshly reconstructed published item without changing its geometry or history.
-    pub fn bind_published(&mut self) {
+    /// Bind the actual opened native symbol (None for a footprint) without changing history.
+    pub fn bind_published(&mut self, symbol: Option<Arc<crate::schematic::SymbolDefinition>>) {
         self.published = Some(address(&self.item));
         self.publication_saved = Some(self.item.clone());
+        self.published_symbol = symbol;
+    }
+
+    /// Exact native body of the opened or last durably published symbol, not the draft drawing.
+    pub fn published_symbol(&self) -> Option<&Arc<crate::schematic::SymbolDefinition>> {
+        self.published_symbol.as_ref()
     }
 
     /// Last durably published address. Draft-file saves do not change publication identity.
@@ -221,6 +233,7 @@ impl Session {
         self.saved = Some(prepared.published.clone());
         self.publication_saved = self.saved.clone();
         self.published = Some(address(&prepared.published));
+        self.published_symbol = prepared.symbol.clone();
         if prepared.copy {
             // Save As changes the edited identity; fields/gestures captured for the original
             // remain available but cannot silently commit their metadata into the new item.

@@ -601,16 +601,22 @@ fn wheel(events: &[Event], viewport_height: f32, navigation: Navigation) -> Whee
     out
 }
 
-/// Fit/reveal includes real copper and technical extents; legacy footprints retain their centers.
+/// Fit/reveal includes real copper, mechanical openings and technical extents.
 fn board_extent(footprint: pcbcraft_engine::board::view::FootprintView<'_>) -> impl Iterator<Item = Point> {
-    footprint.pads.into_iter().flat_map(|pad| std::iter::once(pad.center).chain(pad.copper.into_iter().flatten())).chain(
-        footprint.graphics.into_iter().flat_map(|g| {
+    footprint
+        .pads
+        .into_iter()
+        .flat_map(|pad| std::iter::once(pad.center).chain(pad.copper.into_iter().flatten()))
+        .chain(footprint.graphics.into_iter().flat_map(|g| {
             let half = (g.stroke_nm.unwrap_or(0) + 1) / 2;
-            g.points
-                .into_iter()
-                .flat_map(move |p| [Point { x_nm: p.x_nm - half, y_nm: p.y_nm - half }, Point { x_nm: p.x_nm + half, y_nm: p.y_nm + half }])
-        }),
-    )
+            g.points.into_iter().flat_map(move |p| extents(p, half))
+        }))
+        .chain(footprint.non_plated_holes.into_iter().flat_map(|hole| extents(hole.center, (hole.diameter_nm + 1) / 2)))
+}
+
+/// Opposite corners of a square enclosing a round opening or stroke cap.
+fn extents(p: Point, half: i64) -> [Point; 2] {
+    [Point { x_nm: p.x_nm - half, y_nm: p.y_nm - half }, Point { x_nm: p.x_nm + half, y_nm: p.y_nm + half }]
 }
 
 #[cfg(test)]

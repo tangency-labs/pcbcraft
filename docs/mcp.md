@@ -113,7 +113,13 @@ leaves the whole project and history unchanged. Optional `metadata` replaces the
 component's standard/custom fields and attributes; optional `field_layout`
 replaces only the addressed unit's text appearance. Omission preserves either
 map. Inspection publishes component metadata and each symbol's field layout;
-positions remain symbol-local nanometres. `schematic.place_net_label` and
+positions remain symbol-local nanometres. Optional `designator_locked` sets the
+lock for the entire part instance; omitting it retains the current lock.
+`dry_run: true` previews the full changed native documents without applying the
+edit or adding an undo step. See [designator locks and previews](quickstart.md#designator-locks)
+for the response, revision requirements, and limits.
+
+`schematic.place_net_label` and
 `schematic.set_net_label` accept optional `text` with the same appearance schema;
 omission preserves a marker's existing appearance. The strict schemas appear in the shared
 command catalog, and dangling field layouts or invalid values reject the entire
@@ -142,10 +148,14 @@ The live connection runs every project command in `list_commands`, such as
 `schematic.delete_wire` or `edit.undo`, in the window's own session, so the
 editor and the agent share one undo history and the status bar names each edit
 (for example **Delete Wire through MCP**). `project.new` waits until the open
-project's unsaved changes are saved or discarded in the editor, and every
-command waits while an inline text edit, dialog or file operation is open.
+project's unsaved changes are saved or discarded in the editor. Commands normally
+wait while an inline text edit, dialog or file operation is open. Addressed
+`app.library_pin_remap` apply/cancel may resolve its own remap dialog; a new live
+preview and other gated document/presentation commands still refuse that dialog.
+Inspection remains available; separate `ui.*` automation uses its own input lifecycle.
+`file.abandon` can release a stalled open without waiting for the file job.
 `inspect_editor` reports `text_editing`, `dialog_open` and `file_operation` so
-clients can identify the state holding command input. Its `file` object gives
+clients can identify the state holding input. Its `file` object gives
 the open project's saved `location` (`path` and `format`), the
 running `operation` (`id`, `kind` and known `destination`) and the `last`
 result (`id`, `operation`, `status` `succeeded`/`failed`/`cancelled`/`abandoned`, `path`,
@@ -154,6 +164,35 @@ means a later job replaced its result. `location` is null until the project has 
 opened from or saved to a location, whatever its name: a renamed project that was
 never saved has none, while a saved `Untitled.pc` has one. Use `file.save` when
 `location` is present and `file.save_as` when it is null.
+
+For pin remapping, normal live execution/`inspect_editor` exposes the captured
+token and report at `library_editors.pin_remap`; apply/cancel uses its string
+`document`, `expected_revision` and `token`. The token is runtime correlation,
+not an authentication secret. `inspect:false` on this window command returns only
+an acknowledgement/project revision, not the capture. Native preview counts the
+complete prospective inspection reply against the existing 16 MiB JSON limit
+before publishing a new capture/modal; oversize refusal preserves the previous
+capture. No report rows are silently truncated. This bounds encoded reply bytes,
+not peak heap. All report routes enforce the common 4 MiB report budget. The
+[editor guide](properties-and-library-editors.md#review-pin-renumbering) describes
+conservative graph-input and path-text admission, which runs only for a
+connectivity lookup on an associated, placed terminal.
+A failed form refresh keeps its old token/map owned by the form, so its visible Cancel
+or dismissal can retire it. Refresh can adopt a changed project snapshot while the
+library revision is still current; if the library revision changed, cancel and reopen
+the form at the current library revision. A project-close decision that displaces the form retires
+its review even if closing is cancelled. Addressed apply/cancel cannot close another form;
+changing typed numbers
+withdraws the old capture. Unrelated later editor changes can affect inspection
+size, so this is a capture-time check, not permanent transport availability.
+Headless `library.preview_pin_remap` is a focused read-only query and preserves
+its report even with `inspect:false`; it does not host the live editor documents.
+Preparation is synchronous and can outlast a request deadline. After a lost/timed-out
+reply, inspect both library revision and capture state before retrying. A successful
+unchanged Apply consumes the token without advancing the library revision. If full
+inspection is too large, use visible Cancel or send an addressed Cancel with known
+routing fields and `inspect:false`. Disconnect does not roll back a captured review
+or an applied edit, and cannot guarantee delivery of a returned error.
 
 It also lists presentation commands, marked `"scope": "window"`, which run through
 the same handlers as the editor's own controls without editing the project, its
@@ -168,12 +207,13 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 
 | Commands | Matching control |
 |---|---|
-| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Project and definition pane headers and **View → Split / Detach / New window** |
+| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Project and definition pane headers and **View → Split / Detach / New window**. `view.open_beside` takes optional `beside` and `side` to open source `view` inside a destination pane. `view.dock` accepts source `view`, destination `beside` and optional `side` (`top`, `bottom`, `left`, `right`) for an explicit move within or across windows; `scope: "window"` splits the entire destination window. |
 | `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
 | `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
 | `app.set_workspace` | Choose Schematic, PCB layout, Symbol Editor or Footprint Editor in an addressed pane, here/beside/in a native window; definition workspaces resume their last document |
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
+| `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
 | `pcb.align_footprints` | Align two or more `footprints` by their physical bounds (`mode` `left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute three or more with equal gaps to nanometer precision (`distribute_x`, `distribute_y`), in one undo step; distribution keeps physical outermost footprints and the span fixed, refusing overlapping selections that cannot retain those anchors. Track ends follow moving pads, as for a transform |
 | `pcb.set_footprint_transform` | Set a footprint center, whole-degree orientation and optional `side` (`front` or `back`) through the same atomic command used by the PCB canvas; inspection reports each footprint's `side`. Track ends follow the pads that move on their layer. Edits that join two nets are refused |
 | `pcb.set_footprint_reference_offset` | Move the reference of a placed footprint. `offset` is a local `{x_nm, y_nm}` displacement from the library default. A zero offset restores that default |
@@ -385,10 +425,12 @@ a malformed reply from another editor may omit the facts it describes.
 | `connection_failed` | Connecting or sending the request failed. A failed send may still have delivered a complete request; inspect before retrying an edit. |
 | `invalid_request` | The request to the live editor is malformed: an unknown method, a missing command id or a missing required version pin. |
 | `version_mismatch` | The stated command API version is older or newer than the one this session serves; the command did not run. `details` gives `command`, `stated_version` and `current_version`. |
+| `out_of_scope` | A known command is not allowed in the read-only session. `details.command` names it and `details.scope` is `read_only`. The check precedes revision and command parameter validation. |
 
 A version pin is checked before the command’s parameters, including
-`expected_revision`. Once that pin matches or is omitted, project commands that
-take `expected_revision` still check it before their other parameters. A stale
+`expected_revision`. Once that pin matches or is omitted, the read-only scope is checked.
+After that, project commands that take `expected_revision` check it before
+their other parameters. A stale
 edit reports `stale_revision`; a malformed revision is `invalid_params`. The read-only [`pcb.plan_route`](route-planning.md#command)
 query and the read-only [`pcb.plan_shove`](route-shove.md#commands) query keep their
 `stale` plan outcome for otherwise valid requests. The
@@ -484,7 +526,8 @@ editing it; `execute` returns `fabrication.files`, each with a `name` and text `
 and `fabrication.origin`, the placement origin every coordinate is measured from:
 Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
 plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
-resolvable placement origin.
+resolvable placement origin. It refuses boards containing placed circular non-plated holes
+until separate non-plated drill export is available; no partial set is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns
@@ -596,12 +639,36 @@ To start the MCP server from the repository root, run
 at `pcbcraft-cli mcp`. Pass
 `--project path/to/project.json` (or a folder or `.pc`) after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
-`execute` to return just the resulting revision. Use `inspect_project` to read
+`execute` to omit inspection and return the revision for ordinary edits.
+Commands that return their own data, such as exports and clipboard queries,
+retain that data. In particular, `schematic.set_symbol_fields` with `dry_run: true`
+still returns the full preview, including the changed native documents. Use `inspect_project` to read
 the project, or `cross_probe` to look up a linked terminal or pad. The additive
 read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
 unavailable states at a captured revision; see [pin/pad correspondence](pin-pad-correspondence.md)
 for qualified addresses and the versioned response. `cross_probe` retains its
 singular compatibility response.
+
+To give a reviewer only command-level read access, start a separate headless process:
+
+```sh
+pcbcraft-cli mcp --read-only --project path/to/project.pc
+```
+
+The host sets this scope at startup; no MCP request can widen it. `inspect_project`
+reports `scope: "read_only"`. `describe_command` and `list_commands` report it
+in `structuredContent` and the second text part. The first text part keeps the
+unchanged command descriptor or catalog list.
+Queries, data exports and transient previews remain available; project edits,
+Undo/Redo, Cut and library-source changes return `out_of_scope` without changing
+the snapshot or the file. Startup does not recover an interrupted folder save;
+if recovery is needed, have the owner open the project normally first. A command
+added to the catalog must be explicitly classified as a read before a read-only
+session can run it.
+
+This setting confines the command interface of that process, not the client's
+filesystem permissions. It does not grant read-only access to a live editor:
+`--read-only` cannot be combined with `--connect`.
 
 An MCP client can use `schematic.connect_pins` to join two terminals from
 `inspect_project`. Describe the command for its input shape, and send the current

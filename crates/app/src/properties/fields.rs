@@ -136,6 +136,7 @@ impl Edit {
             reference.request_focus();
             self.focused = true;
         }
+        self.designator_lock(ui);
         let value = row(ui, "Value", &mut self.value, self.appearance.get_mut("value"), None);
         let enter = (reference.lost_focus() || value.lost_focus()) && ui.input(|i| i.key_pressed(egui::Key::Enter));
         for (id, name) in fields::STANDARD {

@@ -1,7 +1,7 @@
 //! Dispatch MCP tools to a headless session or an open desktop editor.
 
 use pcbcraft_engine::{
-    Project, Session,
+    Project, Session, SessionScope,
     board::Pad,
     catalog,
     command_api::{self, CAPABILITIES, COMMAND_API_VERSION, DEPRECATIONS, Deprecation},
@@ -47,6 +47,10 @@ pub trait Backend {
     /// Whether discovery describes an editor, rather than a headless project session.
     fn has_live_editor(&self) -> bool {
         false
+    }
+    /// The fixed command scope, if this backend owns and can attest to it.
+    fn scope(&self) -> Option<SessionScope> {
+        None
     }
     /// Where the commands run, for the client's information.
     fn describe(&self) -> String;
@@ -106,8 +110,15 @@ impl Default for Headless {
 impl Headless {
     /// Start a separate MCP session from a validated snapshot.
     pub fn with_project(project: std::sync::Arc<Project>) -> Self {
-        let mut session = Session::default();
-        session.open_snapshot(project);
+        Self::with_scope(SessionScope::Edit, Some(project))
+    }
+
+    /// Start a headless MCP session with fixed access and an optional validated project.
+    pub fn with_scope(scope: SessionScope, project: Option<std::sync::Arc<Project>>) -> Self {
+        let mut session = Session::with_scope(scope);
+        if let Some(project) = project {
+            session.open_snapshot(project);
+        }
         Self { session, ..Self::default() }
     }
 
@@ -135,22 +146,31 @@ impl Backend for Headless {
         Ok((result, execute_warnings(&request, self.deprecations)))
     }
 
+    /// Report the engine's fixed scope, not a client-provided preference.
+    fn scope(&self) -> Option<SessionScope> {
+        Some(self.session.scope())
+    }
+
+    /// Describe this headless process and the scope it actually enforces.
     fn describe(&self) -> String {
-        "a headless session in this process, not an open window. Window commands (view., window., arrangement., app. and file.) need a live editor"
-            .to_owned()
+        format!(
+            "a headless session in this process with scope `{}`, not an open window. Window commands (view., window., arrangement., app. and file.) need a live editor",
+            self.session.scope().as_str()
+        )
     }
 }
 
 /// Run an operation against the supplied session. Its owner controls execution policy.
 /// Window commands and editor inspection fail with a reason instead of silently succeeding,
-/// because a bare session has no window to act on. Clipboard/export queries retain their
-/// requested data even when project inspection is suppressed.
+/// because a bare session has no window to act on. Clipboard/export queries and provisional
+/// property previews retain their requested data even when project inspection is suppressed.
 #[cfg(any(test, not(target_arch = "wasm32")))]
 pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) -> Result<Value, Failure> {
     serve_session(session, method, params, COMMAND_API_VERSION)
 }
 
 /// Dispatch with the serving backend's version before invoking engine handlers.
+/// Symbol-field previews return the engine result even when inspection is disabled.
 fn serve_session(session: &mut Session, method: &str, params: &Value, api_version: u32) -> Result<Value, Failure> {
     match method {
         "engine.commands" => Ok(Value::Array(describe_engine_commands(DEPRECATIONS))),
@@ -163,6 +183,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                 command_api::check_version(id, &params["version"], api_version)?;
             }
             if params["inspect"].as_bool() == Some(false)
+                && !(id == pcbcraft_engine::SET_SYMBOL_FIELDS && params["params"]["dry_run"].as_bool() == Some(true))
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES
@@ -193,6 +214,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::library::sources::PARSE_QUANTITY
                         | pcbcraft_engine::library::sources::PREPARE_PART_PUBLICATION
                         | pcbcraft_engine::library::sources::PREPARE_PUBLICATION
+                        | pcbcraft_engine::library::sources::PREVIEW_PIN_REMAP
                 )
             {
                 session.apply(id, &params["params"]).map(|revision| json!({"revision": revision})).map_err(Failure::from)
