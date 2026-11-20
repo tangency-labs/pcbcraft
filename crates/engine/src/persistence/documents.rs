@@ -1662,6 +1662,7 @@ struct ProjectHeaderFacts {
     part_validation: crate::part_instances::storage::PartValidation,
     has_metadata: bool,
     has_parts: bool,
+    has_locks: bool,
     extended_choices: bool,
     has_bindings: bool,
     has_numbers: bool,
@@ -1788,6 +1789,13 @@ impl DocumentsEncoder {
         (self.phase == 21).then_some(self.cursor as usize)
     }
 
+    /// Designator-lock fact accumulated by the component scan (phase 26), exposed only while
+    /// the remaining header scans (27, 28, 29, 36) run and before phase 0 consumes it.
+    #[cfg(test)]
+    pub(crate) fn scanned_designator_locks(&mut self) -> Option<&mut bool> {
+        matches!(self.phase, 27 | 28 | 29 | 36).then_some(&mut self.header.has_locks)
+    }
+
     /// Advance the current representation within the caller's incremental record budget.
     fn step_records(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
@@ -1799,6 +1807,7 @@ impl DocumentsEncoder {
                         self.header.part_validation.row(p, part)?;
                         self.header.has_metadata |= !part.metadata.is_empty();
                         self.header.has_parts |= part.part.is_some();
+                        self.header.has_locks |= part.designator_locked;
                         if !crate::no_connect::valid_terminal_markers(part) {
                             return Err("No-connect intent exceeds its terminal or project limits.".into());
                         }
@@ -1898,7 +1907,7 @@ impl DocumentsEncoder {
                     if has_parameters && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Project parameters require adopted storage/occurrence metadata.".into());
                     }
-                    let has_locks = p.components.values().any(|part| part.designator_locked);
+                    let has_locks = self.header.has_locks;
                     if has_locks && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Designator locks require adopted storage/occurrence metadata.".into());
                     }
