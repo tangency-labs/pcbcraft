@@ -491,7 +491,6 @@ fn authored_electrical_intent_composes_with_designator_locks() {
         }
         let unlocked = encode_documents(session.snapshot().unwrap()).unwrap();
         let (address, _) = named_net(&mut session, "TEST_LOCKED", 50_800_000);
-        let before_intent = encode_documents(session.snapshot().unwrap()).unwrap();
         let lock = |session: &mut Session, locked: bool| {
             apply(session, SET_SYMBOL_FIELDS, json!({"symbol":"symbol-2","reference":"R1","value":"R","designator_locked":locked}));
         };
@@ -530,6 +529,11 @@ fn authored_electrical_intent_composes_with_designator_locks() {
         lock(&mut session, false);
         let intent_only = encode_documents(session.snapshot().unwrap()).unwrap();
         assert_eq!(document(&intent_only, ENTRY_POINT)["format"], "pcbcraft-project/49");
-        assert_ne!(intent_only, before_intent);
+        let intent_project = decode_documents(&intent_only).unwrap();
+        assert_eq!(encode_documents(intent_project.clone()).unwrap(), intent_only);
+        let mut reader = Session::default();
+        reader.open_snapshot(intent_project);
+        assert_eq!(inspect(&mut reader, &target)["isolation_group"], "Locked primary");
+        assert!(reader.project().unwrap().components().all(|part| !part.designator_locked()));
     }
 }

@@ -391,8 +391,9 @@ identities without invalidating adoptions; cleanup discards only unused
 superseded or retired payloads in that transaction. Watermarks prevent reuse of
 cleaned revisions. Undo/Redo preserve the greatest issued revision in this project
 history without retaining undone payloads or changing restored board adoptions.
-A retained catalog, even with only watermarks, uses project/51 with an active
-designator lock, otherwise project/45 with differential pairs, otherwise
+A retained catalog, even with only watermarks, uses project/54 with authored
+electrical intent and an active designator lock, project/49 with intent alone,
+otherwise project/51 with an active designator lock, otherwise project/45 with differential pairs, otherwise
 project/36. The catalog takes precedence over the project/39 header for compact
 memberships but does not change their representation. All three formats apply
 the same validation rules and retain folder and occurrence metadata, even after
@@ -744,8 +745,9 @@ are rejected. `N` is the part instance's number, as in `components` and
 `component-N`; see [part groups](part-groups.md).
 
 Compact memberships replace that list with `compact_part_group_memberships`.
-With compact memberships, the encoder selects project/51 if a designator lock
-is active, otherwise project/45 if pairs are present, otherwise project/36 if an
+With compact memberships, the encoder selects project/54 with authored electrical
+intent and an active designator lock, project/49 with intent alone, otherwise
+project/51 if a designator lock is active, otherwise project/45 if pairs are present, otherwise project/36 if an
 assembly profile catalog is retained, otherwise project/39. Board-owned compact
 memberships use instances/8 with pairs and instances/7 without pairs.
 Schematic-only memberships remain embedded in the entry point. The compact

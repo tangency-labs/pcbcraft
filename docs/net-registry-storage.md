@@ -17,7 +17,8 @@ select project/21 and board-owned instances/3 in the same registry home when
 numbered names are absent. Net-owned generated numbers select **project/23** and
 board-owned **instances/4** instead, with optional class catalogs, assignments and
 no-connect intent in that envelope. Active [designator locks](native-project-storage.md#designator-locks)
-select project/51 instead, retaining the content-selected instance header,
+select project/51 instead (project/54 alongside authored electrical intent),
+retaining the content-selected instance header,
 including instances/5 or /7 for part-group memberships, or instances/8 when pairs
 are present. Every record stored under project/23 has a positive
 `generated_number`; duplicate numbers, explicit nulls, missing numbers and use

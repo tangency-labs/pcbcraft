@@ -135,7 +135,8 @@ When no other content requires a later project format, classes without bindings
 use `pcbcraft-project/20` and bindings select project/21. Parameters, generated
 numbers select project/22 and /23. Project/24, /36 and /39 can carry classes
 alongside part groups or assembly profiles; project/45 can carry them alongside
-pairs, and project/51 alongside an active lock. Board-owned bindings use
+pairs, project/51 alongside an active lock, and project/54 alongside an active
+lock and authored electrical intent. Board-owned bindings use
 instances/3, instances/4 with generated numbers, instances/5 or /7 with group
 memberships, or instances/8 with pairs. The nonempty `net_classes` record is stored in `project.json`,
 with definitions sorted by UUID
