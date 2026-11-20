@@ -245,7 +245,7 @@ impl ParamKind {
             Self::CreateBoard => json!({"type":"boolean"}),
             Self::PartMetadata => schematic::fields::metadata_schema(),
             Self::UnconnectedPads => {
-                json!({"type":"array","maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
+                json!({"type":"array","maxItems":board::definition::MAX_PADS,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}})
             }
             Self::OptionalNativeId => json!({"type":["string","null"],"minLength":1,"maxLength":64}),
             Self::NativeReference => {
@@ -364,7 +364,7 @@ impl ParamKind {
                 json!({"type":"string", "enum":std::iter::once(FOOTPRINT_DEFINITION).chain(board::definition::BASIC_COMPONENT_IDS).collect::<Vec<_>>()})
             }
             Self::FootprintMapping => {
-                json!({"type":"object","minProperties":1,"maxProperties":128,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":128,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
+                json!({"type":"object","minProperties":1,"maxProperties":library::MAX_TERMINALS,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":board::MAX_COMMAND_PADS_PER_TERMINAL,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
             }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
             Self::SymbolDefinition => json!({"type":"string","minLength":1,"maxLength":64}),
@@ -396,6 +396,31 @@ impl ParamKind {
                 "required": ["symbol", "terminal"],
                 "additionalProperties": false,
             }),
+        }
+    }
+
+    /// Report oversized footprint inputs before syntax validation or parsing copies their data.
+    /// The caller supplies the parameter name; other kinds have no footprint capacity check.
+    fn footprint_size_error(self, value: &Value) -> Option<String> {
+        use board::{MAX_COMMAND_PADS_PER_TERMINAL, definition::MAX_PADS};
+        use library::MAX_TERMINALS;
+        match self {
+            Self::FootprintMapping => {
+                let mapping = value.as_object()?;
+                if mapping.len() > MAX_TERMINALS {
+                    return Some(format!("must contain at most {MAX_TERMINALS} terminal entries, not {}", mapping.len()));
+                }
+                let (terminal, count) = mapping.iter().find_map(|(terminal, pads)| {
+                    let count = pads.as_array()?.len();
+                    (count > MAX_COMMAND_PADS_PER_TERMINAL).then_some((terminal, count))
+                })?;
+                Some(format!("terminal {terminal:?} must map to at most {MAX_COMMAND_PADS_PER_TERMINAL} pads, not {count}"))
+            }
+            Self::UnconnectedPads => {
+                let count = value.as_array()?.len();
+                (count > MAX_PADS).then(|| format!("must contain at most {MAX_PADS} pads, not {count}"))
+            }
+            _ => None,
         }
     }
 
@@ -464,7 +489,7 @@ impl ParamKind {
                 .ok_or("must contain a valid text appearance"),
             Self::UnconnectedPads
                 if serde_json::from_value::<Vec<String>>(value.clone()).is_ok_and(|pads| {
-                    pads.len() <= 128
+                    pads.len() <= board::definition::MAX_PADS
                         && pads.iter().all(|pad| schematic::PinNumber::new(pad).is_some())
                         && pads.iter().collect::<std::collections::BTreeSet<_>>().len() == pads.len()
                 }) =>
@@ -2856,6 +2881,22 @@ impl Project {
         self.component_terminals(component, pin).next()
     }
 
+    /// Index one placed appearance per logical terminal, taking the first in the same stable
+    /// unit-ID order as `component_terminal`, without scanning a unit for every footprint pad.
+    fn first_component_terminals(&self, component: u64) -> BTreeMap<String, Terminal> {
+        let mut terminals = BTreeMap::new();
+        if let Some(part) = self.components.get(&component) {
+            for ((_, unit), symbol) in self.units.range((component, String::new())..).take_while(|((owner, _), _)| *owner == component) {
+                if let Some(definition) = part.definition.unit(unit) {
+                    for terminal in Terminal::for_symbol(*symbol, definition) {
+                        terminals.entry(terminal.number().to_owned()).or_insert(terminal);
+                    }
+                }
+            }
+        }
+        terminals
+    }
+
     /// Every placed appearance in stable unit-ID order. The part/unit index avoids scanning
     /// unrelated placements for each pin during board capture and cross-probing.
     pub(crate) fn component_terminals<'a>(&'a self, component: u64, pin: &'a str) -> impl Iterator<Item = Terminal> + 'a {
@@ -4474,10 +4515,13 @@ impl Session {
         if !self.defer_net_reconciliation {
             project.reconcile_nets(self.project.as_deref())?;
         }
-        // A copper-bearing board must still fit the native board file after a physical edit.
-        // Do this before replacing the snapshot, changing history or notifying observers.
-        if (!project.board.tracks.is_empty() || !project.board.vias.is_empty())
-            && self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+        // Copper and package maps can exhaust the native board document even before the
+        // record-count limits. Check the changed board before publishing snapshot or history.
+        if self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+            && (!project.board.tracks.is_empty()
+                || !project.board.vias.is_empty()
+                || !project.board.assignments.is_empty()
+                || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some()))
         {
             persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
         } else {
@@ -4570,6 +4614,9 @@ fn check_params(command: &Command, params: &Value) -> Result<(), CommandError> {
             continue;
         }
         let value = given.get(param.name).ok_or_else(|| CommandError::InvalidParams(format!("`{}` needs `{}`", command.id, param.name)))?;
+        if let Some(message) = param.kind.footprint_size_error(value) {
+            return Err(CommandError::InvalidParams(format!("`{}` {message}", param.name)));
+        }
         let checked = if command.id == library::sources::PREVIEW_PIN_REMAP && param.name == "item" {
             value.is_object().then_some(()).ok_or_else(|| "Pin remap item must be an object.".into())
         } else if matches!(param.kind, ParamKind::PinRemaps) {
