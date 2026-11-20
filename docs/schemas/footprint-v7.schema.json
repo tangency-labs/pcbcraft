@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:footprint:7",
+  "title": "PCBcraft footprint with an assembly orientation statement",
+  "description": "Format 4 plus a required orientation object; circular non-plated through holes stay optional. Geometry relationships, UTF-8 byte limits and project identity checks are defined in ../footprint-schema.md and enforced by the engine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "library", "id", "revision", "name", "license", "source", "pads", "graphics", "orientation"],
+  "properties": {
+    "format": { "const": "pcbcraft-footprint/7" },
+    "library": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/library" },
+    "id": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/id" },
+    "revision": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/revision" },
+    "name": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/name" },
+    "license": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/license" },
+    "source": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/source" },
+    "pads": { "$ref": "urn:pcbcraft:schema:footprint:4#/properties/pads" },
+    "non_plated_holes": { "$ref": "urn:pcbcraft:schema:footprint:4#/properties/non_plated_holes" },
+    "graphics": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/graphics" },
+    "artwork": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/artwork" },
+    "silkscreen": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/silkscreen" },
+    "reference": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/reference" },
+    "reference_offset": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/reference_offset" },
+    "orientation": {
+      "description": "Assembly polarity and zero orientation. pin_1 must also name one of this definition's pads, which the engine checks.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["polarized"],
+      "properties": {
+        "polarized": { "type": "boolean" },
+        "pin_1": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/terminal_id" },
+        "zero": { "const": "ipc-7351" }
+      }
+    }
+  },
+  "anyOf": [
+    { "required": ["non_plated_holes"] },
+    { "properties": { "pads": { "minItems": 1 } } }
+  ],
+  "dependentRequired": { "reference_offset": ["reference"] }
+}

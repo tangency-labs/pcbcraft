@@ -182,7 +182,12 @@ impl Preparation {
                 }
                 let context = self.context.as_ref().ok_or("route source unavailable")?;
                 let wanted = self.wanted.as_ref().ok_or("route request canceled")?;
-                let job = session.prepare_copper_edit_with(context, wanted.key.command, &wanted.key.params).map_err(|e| e.to_string())?;
+                let job = if wanted.key.command == pcbcraft_engine::ADD_TRACKS {
+                    session.prepare_interactive_route_with(context, &wanted.key.params)
+                } else {
+                    session.prepare_copper_edit_with(context, wanted.key.command, &wanted.key.params)
+                }
+                .map_err(|e| e.to_string())?;
                 Ok::<_, String>(Request { id: wanted.generation, job })
             })();
             match result {

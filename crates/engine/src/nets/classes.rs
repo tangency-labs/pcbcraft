@@ -232,8 +232,8 @@ impl Session {
                 return Err(CommandError::InvalidParams("A derived net needs a current anchor.".into()));
             };
             let graph = Graph::build(original).map_err(CommandError::InvalidParams)?;
-            let mut ids = registry.records.iter().map(|record| record.id).collect();
-            let id = allocate(&mut ids)?;
+            let mut ids = registry.reserved_ids();
+            let id = allocate(registry.records.len(), &mut ids)?;
             registry.records.push(
                 graph.networks[index.ok_or_else(|| CommandError::InvalidParams("Missing derived network.".into()))?]
                     .record(id, Some(&anchor))

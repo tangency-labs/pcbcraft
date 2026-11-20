@@ -154,6 +154,15 @@ pub(super) fn show(
     markers: &[(Point, bool)],
     unit: pcbcraft_chrome::units::Unit,
 ) -> Interaction {
+    if let Err(error) = project.require_linear_copper() {
+        state.tracks.take_key_requests();
+        // A Delete pressed while the ruler owns input must not act once linear copper returns.
+        state.zones.delete_requested = false;
+        state.drawing.delete_requested = false;
+        ui.label(error);
+        ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
+        return Interaction::default();
+    }
     let idle = !crate::board_clipboard::busy(state);
     let rect = ui.available_rect_before_wrap();
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
@@ -184,21 +193,19 @@ pub(super) fn show(
         .iter()
         .map(|footprint| {
             let (pads, graphics) = drawing(footprint, camera, rect, visible, &colors);
-            if pads.is_empty() && graphics.is_empty() {
-                egui::Rect::NOTHING
-            } else {
-                board::footprint_bounds(&pads, &graphics, camera.screen(footprint.position, rect))
-            }
+            visible_footprint_bounds(footprint, &pads, &graphics, camera, rect)
         })
         .collect();
     let hit = |pointer: egui::Pos2| {
-        footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| (filters.footprints && bounds.contains(pointer)).then_some(footprint))
+        footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| {
+            (filters.footprints && footprint_interactive(visible, footprint) && bounds.contains(pointer)).then_some(footprint)
+        })
     };
     let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
     if !enabled || lost_focus || state.box_drag.as_ref().is_some_and(|drag| Some(drag.source) != source) {
         state.box_drag = None;
     }
-    let hovered = response.hover_pos().filter(|_| visible).and_then(hit);
+    let hovered = response.hover_pos().and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
     let extend_selection = modifiers.shift || modifiers.ctrl || modifiers.command;
     let pad_at = |pointer| {
@@ -276,7 +283,6 @@ pub(super) fn show(
     // A footprint gesture owns its completion and overlapping drag origin. Explicit drawing
     // tools and existing drawing edits keep their own input even when crossing a footprint.
     let footprint_drag = drag_start
-        && visible
         && state.zones.tool.is_none()
         && state.zones.source().is_none()
         && state.drawing.tool.is_none()
@@ -427,14 +433,17 @@ pub(super) fn show(
     }
     if enabled && !cancelled && !lost_focus && state.box_drag.is_none() {
         if state.draft.is_none()
-            && visible
             && filters.footprints
             && let Some(source) = source
         {
             let picked = if drag_start {
                 ui.input(|i| i.pointer.press_origin()).and_then(hit)
             } else if moving || rotating || flipping {
-                hovered.or_else(|| (state.selection.len() == 1).then(|| footprints.iter().find(|f| state.selection.contains(&f.id))).flatten())
+                hovered.or_else(|| {
+                    (state.selection.len() == 1)
+                        .then(|| footprints.iter().find(|f| state.selection.contains(&f.id) && footprint_interactive(visible, f)))
+                        .flatten()
+                })
             } else {
                 None
             };
@@ -516,7 +525,15 @@ pub(super) fn show(
         || requested
         || state.highlight_net.is_some()
         || state.tracks.route_contact().is_some())
-    .then(|| state.copper_connectivity(project, source));
+    .then(|| state.copper_connectivity(project, source))
+    .transpose();
+    let connectivity = match connectivity {
+        Ok(value) => value,
+        Err(error) => {
+            out.error = source.map(|source| (source, error));
+            return out;
+        }
+    };
     if requested && let Some(connectivity) = &connectivity {
         state.highlight_net =
             response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
@@ -530,7 +547,13 @@ pub(super) fn show(
     // Tracks on its pads are painted where the move carries them.
     let shown = state.draft.clone().or_else(|| out.edit.clone());
     let shown = shown.as_ref();
-    let carried = shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).unwrap_or_default();
+    let carried = match shown.map(|draft| project.carried_tracks(&draft.footprint, draft.position, draft.rotation, draft.bottom)).transpose() {
+        Ok(value) => value.unwrap_or_default(),
+        Err(error) => {
+            out.error = source.map(|source| (source, error));
+            return out;
+        }
+    };
     let mut track_labels = crate::board_tracks::paint(
         ui,
         rect,
@@ -571,6 +594,7 @@ pub(super) fn show(
         }
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
+    let mut openings = Vec::new();
     for mut footprint in footprints {
         if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -586,14 +610,14 @@ pub(super) fn show(
         }
         let center = camera.screen(footprint.position, rect);
         let (mut pads, graphics) = drawing(&footprint, camera, rect, visible, &colors);
-        let bounds = board::footprint_bounds(&pads, &graphics, center);
+        let bounds = visible_footprint_bounds(&footprint, &pads, &graphics, camera, rect);
         let shift = reference_shift(&footprint, camera, rect);
         let label_visible = if footprint.physical_reference {
             graphics.iter().any(|graphic| graphic.reference && rect.intersects(graphic.bounds()))
         } else {
             rect.intersects(board::footprint_reference_bounds(&p, bounds, footprint.reference, shift))
         };
-        if (pads.is_empty() && graphics.is_empty()) || !(rect.intersects(bounds) || label_visible) {
+        if (pads.is_empty() && graphics.is_empty() && footprint.non_plated_holes.is_empty()) || !(rect.intersects(bounds) || label_visible) {
             continue;
         }
         let inspected = inspected_pads.get(&footprint.id);
@@ -626,7 +650,7 @@ pub(super) fn show(
                 track_labels.cover_rect(Rect::from_points(&corners));
             }
         }
-        board::footprint(
+        board::footprint_in_bounds(
             &p,
             &pads,
             &graphics,
@@ -639,11 +663,14 @@ pub(super) fn show(
             highlighted.contains(&footprint.id),
             focus.is_some(),
             shift,
+            bounds,
         );
+        collect_openings(&mut openings, &footprint, camera, rect, state.selection.contains(&footprint.id));
         if selected || reference_enabled && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
             board::reference_outline(&p, reference_bounds, selected, reference_color);
         }
     }
+    paint_openings(&p, openings);
     for (at, focused) in markers {
         let at = camera.screen(*at, rect);
         if rect.contains(at) {
@@ -758,7 +785,7 @@ fn place_group(
         let components: BTreeSet<_> = placement.components.iter().map(String::as_str).collect();
         let ids: BTreeSet<_> = board.footprints().filter(|f| components.contains(f.component.as_str())).map(|f| f.id).collect();
         if !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)
-            && let Some(ratsnest) = board.ratsnest()
+            && let Ok(ratsnest) = board.ratsnest()
         {
             for line in ratsnest.lines.iter().filter(|line| ids.contains(&line.from.footprint) || ids.contains(&line.to.footprint)) {
                 let point = |endpoint: &pcbcraft_engine::board::ratsnest::Endpoint| {
@@ -772,6 +799,7 @@ fn place_group(
             }
         }
         let colors = FootprintColors::new(appearance, board, state.active_layer.as_deref(), &state.hidden_layers);
+        let mut openings = Vec::new();
         for mut footprint in board.footprints().filter(|f| ids.contains(&f.id)) {
             for pad in &mut footprint.pads {
                 pad.center = transform(pad.center);
@@ -779,6 +807,9 @@ fn place_group(
             }
             for graphic in &mut footprint.graphics {
                 graphic.points = graphic.points.iter().copied().map(transform).collect();
+            }
+            for hole in &mut footprint.non_plated_holes {
+                hole.center = transform(hole.center);
             }
             footprint.position = transform(footprint.position);
             footprint.rotation = placement.rotation;
@@ -788,7 +819,11 @@ fn place_group(
                     pad.net = None;
                 }
             }
-            pcbcraft_chrome::board::footprint(
+            let bounds = visible_footprint_bounds(&footprint, &pads, &graphics, camera, response.rect);
+            if !bounds.is_positive() {
+                continue;
+            }
+            pcbcraft_chrome::board::footprint_in_bounds(
                 ui.painter(),
                 &pads,
                 &graphics,
@@ -799,8 +834,11 @@ fn place_group(
                 false,
                 false,
                 reference_shift(&footprint, camera, response.rect),
+                bounds,
             );
+            collect_openings(&mut openings, &footprint, camera, response.rect, true);
         }
+        paint_openings(ui.painter(), openings);
     }
     if response.clicked() && response.contains_pointer() {
         return Some(placement);
@@ -941,12 +979,15 @@ fn move_reference(
     (true, None)
 }
 
-/// Transform resolved pad offsets only for painting; pad identities and authored snapshots stay intact.
+/// Transform resolved pads and openings only for painting; authored snapshots stay intact.
 fn preview(footprint: &mut FootprintView<'_>, draft: &Draft) {
     let transform = |point| preview_point(point, footprint.position, footprint.rotation, footprint.bottom, draft);
     for pad in &mut footprint.pads {
         pad.center = transform(pad.center);
         pad.copper = pad.copper.map(|points| points.map(transform));
+    }
+    for hole in &mut footprint.non_plated_holes {
+        hole.center = transform(hole.center);
     }
     for graphic in &mut footprint.graphics {
         graphic.points = graphic.points.iter().copied().map(transform).collect();
@@ -976,6 +1017,52 @@ fn repose(x: i64, y: i64, from: (u16, bool), to: (u16, bool)) -> (i64, i64) {
     let mirrored = from.1 != to.1;
     let degrees = if mirrored { (from.0 + to.0) % 360 } else { (to.0 + 360 - from.0) % 360 };
     rotate_board(if mirrored { -x } else { x }, y, degrees)
+}
+
+/// Project a finished opening with the same physical scale as its footprint lands.
+fn hole_circle(hole: &pcbcraft_engine::board::definition::CircularNpth, camera: &Camera, rect: Rect) -> (Pos2, f32) {
+    let center = camera.screen(hole.center, rect);
+    let edge = camera.screen(Point { x_nm: hole.center.x_nm + hole.diameter_nm, y_nm: hole.center.y_nm }, rect);
+    (center, (edge - center).length() / 2.)
+}
+
+/// Keep copper-layer visibility independent of the board's through openings.
+fn visible_footprint_bounds(
+    footprint: &FootprintView<'_>,
+    pads: &[board::PadDrawing],
+    graphics: &[board::GraphicDrawing],
+    camera: &Camera,
+    rect: Rect,
+) -> Rect {
+    let base = if pads.is_empty() && graphics.is_empty() {
+        Rect::NOTHING
+    } else {
+        board::footprint_bounds(pads, graphics, camera.screen(footprint.position, rect))
+    };
+    footprint.non_plated_holes.iter().fold(base, |bounds, hole| {
+        let (center, radius) = hole_circle(hole, camera, rect);
+        bounds.union(Rect::from_center_size(center, egui::Vec2::splat(radius * 2.)))
+    })
+}
+
+/// When copper is hidden, keep through openings interactive; preserve copper-only behavior otherwise.
+fn footprint_interactive(copper_visible: bool, footprint: &FootprintView<'_>) -> bool {
+    copper_visible || !footprint.non_plated_holes.is_empty()
+}
+
+/// Capture projected openings from the same pose and selection used to paint this footprint.
+fn collect_openings(openings: &mut Vec<(Pos2, f32, bool)>, footprint: &FootprintView<'_>, camera: &Camera, rect: Rect, selected: bool) {
+    openings.extend(footprint.non_plated_holes.iter().map(|hole| {
+        let (center, radius) = hole_circle(hole, camera, rect);
+        (center, radius, selected)
+    }));
+}
+
+/// Paint openings after every footprint in this pass, including copper from other footprints.
+fn paint_openings(painter: &egui::Painter, openings: Vec<(Pos2, f32, bool)>) {
+    for (center, radius, selected) in openings {
+        board::non_plated_hole(painter, center, radius, selected);
+    }
 }
 
 /// Project physical geometry without deriving dimensions or copper membership from UI state.
@@ -1150,7 +1237,7 @@ pub(super) fn all_visible(
             .footprints()
             .filter(|f| {
                 let (pads, graphics) = drawing(f, &camera, rect, visible, &colors);
-                !pads.is_empty() || !graphics.is_empty()
+                visible_footprint_bounds(f, &pads, &graphics, &camera, rect).is_positive()
             })
             .map(|f| f.id)
             .collect();
@@ -1202,6 +1289,7 @@ mod clipboard_geometry_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pcbcraft_engine::board::definition::CircularNpth;
 
     /// Crossing includes the visible edge of a physical graphic, while enclosure requires
     /// its full width rather than only its centerline.
@@ -1227,6 +1315,154 @@ mod tests {
         let narrow = egui::Rect::from_min_max(a - egui::vec2(half + 1., half - 1.), b + egui::vec2(half + 1., half - 1.));
         assert!(geometry_for_box(view, camera, rect, &state, filters, narrow, false).drawings.is_empty());
         assert_eq!(geometry_for_box(view, camera, rect, &state, filters, narrow.expand(2.), false).drawings.len(), 1);
+    }
+
+    const OFFSET_HOLE: CircularNpth = CircularNpth { center: Point { x_nm: 8_000_000, y_nm: -9_000_000 }, diameter_nm: 3_000_000 };
+
+    /// Publish and place a footprint with a hole; optionally center a later footprint's pad over it.
+    fn offset_hole_fixture(overlap: bool) -> pcbcraft_engine::Session {
+        use pcbcraft_engine::authoring::{Action, Item, Kind, Primitive};
+        use serde_json::json;
+
+        let hole = OFFSET_HOLE;
+        let mut editor = pcbcraft_engine::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
+        let item = editor.snapshot();
+        let definition = item.footprint().unwrap();
+        let manifest = json!({"format":pcbcraft_engine::library::LIBRARY_FORMAT,"id":definition.library,"name":"Synthetic fixture","license":definition.license}).to_string();
+        let document = item.export_native().unwrap().to_string();
+        let mut s = pcbcraft_engine::Session::default();
+        s.apply("project.new", &json!({"create_board":true})).unwrap();
+        s.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
+        s.execute("library.load_source", &json!({"source":"fixture","documents":{"library.json":manifest,"footprints/mounting.json":document}}))
+            .unwrap();
+        for i in 0..if overlap { 2 } else { 1 } {
+            s.apply(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":i*20_000_000,"y_nm":0,"expected_revision":s.revision()}))
+                .unwrap();
+        }
+        let components: Vec<_> = s.project().unwrap().components().map(|component| component.id()).collect();
+        for component in &components {
+            s.apply(pcbcraft_engine::ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"1","2":"2"},"expected_revision":s.revision()})).unwrap();
+        }
+        s.apply(pcbcraft_engine::INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
+        let pad = definition.pads[0].center;
+        for (component, (x, y)) in components.iter().zip([(0, 0), (hole.center.x_nm - pad.x_nm, hole.center.y_nm - pad.y_nm)]) {
+            s.apply(pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":x,"y_nm":y,"expected_revision":s.revision()}))
+                .unwrap();
+        }
+        s
+    }
+
+    /// A published offset hole remains available to picking and Select All with copper hidden.
+    #[test]
+    fn offset_hole_extends_visible_bounds_with_copper_hidden() {
+        let hole = OFFSET_HOLE;
+        let s = offset_hole_fixture(false);
+        let view = s.project().unwrap().boards().next().unwrap();
+        let mut footprint = view.footprints().next().unwrap();
+        let mut state = BoardState::default();
+        state.hidden_layers.extend(view.layers().into_iter().map(|layer| layer.id.to_string()));
+        let appearance = crate::board_appearance::Appearance::default();
+        let camera = Camera::default();
+        let rect = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 700.));
+        let colors = FootprintColors::new(&appearance, view, None, &state.hidden_layers);
+        let (pads, graphics) = drawing(&footprint, &camera, rect, false, &colors);
+        assert!(pads.is_empty() && graphics.is_empty());
+        let bounds = visible_footprint_bounds(&footprint, &pads, &graphics, &camera, rect);
+        assert!(bounds.contains(camera.screen(hole.center, rect)));
+        assert!(footprint_interactive(false, &footprint));
+        let all = all_visible(view, &state, crate::selection_filters::Filters::default(), &appearance);
+        assert!(all.footprints.contains(&footprint.id));
+        let (pads, graphics) = drawing(&footprint, &camera, rect, true, &FootprintColors::new(&appearance, view, None, &Default::default()));
+        let with_hole = visible_footprint_bounds(&footprint, &pads, &graphics, &camera, rect);
+        footprint.non_plated_holes.clear();
+        let without = visible_footprint_bounds(&footprint, &pads, &graphics, &camera, rect);
+        assert!(with_hole.top() < without.top());
+        assert!(!footprint_interactive(false, &footprint));
+    }
+
+    /// The real board and rotated group-preview painters put the first drill over the second pad.
+    #[test]
+    fn earlier_footprint_opening_paints_over_later_copper() {
+        use crate::editor_view::{EditorView, ViewId};
+        use egui::{Color32, Shape};
+        use pcbcraft_chrome::Tokens;
+
+        let s = offset_hole_fixture(true);
+        let view = s.project().unwrap().boards().next().unwrap();
+        let footprints: Vec<_> = view.footprints().collect();
+        assert_eq!(footprints.len(), 2);
+        let hole = footprints[0].non_plated_holes[0];
+        assert_eq!(hole.center, OFFSET_HOLE.center);
+        assert!(footprints[1].pads.iter().any(|pad| pad.center == hole.center && pad.copper.is_some()));
+        let mut editor = EditorView::new(ViewId(1));
+        editor.sync(&s);
+        let source = editor.input(&s).unwrap();
+        let appearance = crate::board_appearance::Appearance::default();
+        let shift = Point { x_nm: 3_000_000, y_nm: -2_000_000 };
+        for preview in [false, true] {
+            let ctx = egui::Context::default();
+            pcbcraft_chrome::install(&ctx);
+            let mut camera = Camera::board();
+            let mut state = BoardState::default();
+            let mut opening = hole;
+            if preview {
+                state.placement = Some(Placement {
+                    source,
+                    components: footprints.iter().map(|f| f.component.clone()).collect(),
+                    candidate: s.snapshot().unwrap(),
+                    handoff: false,
+                    position: shift,
+                    rotation: 90,
+                });
+                let (x, y) = rotate(hole.center.x_nm, hole.center.y_nm, 1);
+                opening.center = Point { x_nm: x + shift.x_nm, y_nm: y + shift.y_nm };
+            }
+            let mut projected = (Pos2::ZERO, 0.);
+            let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 700.));
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                let rect = ui.available_rect_before_wrap();
+                show(
+                    ui,
+                    view,
+                    &mut camera,
+                    &mut state,
+                    Some(source),
+                    &BTreeSet::new(),
+                    Default::default(),
+                    &appearance,
+                    preview,
+                    Navigation::default(),
+                    0,
+                    pcbcraft_chrome::grid::Style::Off,
+                    "PCB canvas",
+                    &[],
+                    &[],
+                    pcbcraft_chrome::units::Unit::Mm,
+                );
+                projected = hole_circle(&opening, &camera, rect);
+            });
+            // This headless pass inspects shapes without a renderer to consume the font atlas updates.
+            output.textures_delta.clear();
+            let (center, radius) = projected;
+            let t = Tokens::get();
+            let ink = if preview { t.icon_active_2 } else { t.board_ink };
+            let copper = output.shapes.iter().rposition(|shape| shape.clip_rect.contains(center) && matches!(&shape.shape,
+                Shape::Path(path) if path.closed && path.fill != Color32::TRANSPARENT && Rect::from_points(&path.points).center().distance(center) < 0.1
+            )).expect("later pad is painted centered on the opening");
+            let opening = output
+                .shapes
+                .iter()
+                .position(|shape| {
+                    shape.clip_rect.contains(center)
+                        && matches!(&shape.shape,
+                            Shape::Circle(circle) if circle.center.distance(center) < 0.1 && (circle.radius - radius).abs() < 0.1
+                                && circle.fill == t.board_canvas && circle.stroke.color == ink
+                        )
+                })
+                .expect("earlier opening is painted with the correct selection outline");
+            assert!(opening > copper, "the later pad would hide the earlier opening (preview={preview})");
+        }
     }
 
     /// Whole-degree source poses move without changing their resolved offsets; side changes and

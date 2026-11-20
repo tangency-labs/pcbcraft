@@ -3,7 +3,7 @@ use crate::{
     PLACE_RESISTOR,
     board::{
         assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT},
-        definition::{FORMAT_V1, FORMAT_V2, basic_components, read_saved},
+        definition::{LEGACY_FORMAT, NPTH_FORMAT, ORIENTATION_FORMAT, basic_components, read_saved, write_saved},
     },
     library::sources::LOAD,
     persistence::{decode_documents, encode_documents, test_board_path},
@@ -20,7 +20,7 @@ fn refused<T: std::fmt::Debug, E: std::fmt::Display>(result: Result<T, E>, needl
 const LIBRARY: &str = "orientation-test";
 
 /// A test package copied from a bundled footprint under a new library identity, with an
-/// optional orientation statement. A statement selects format 2.
+/// optional orientation statement. A statement selects format 7.
 fn package(base: &str, id: &str, orientation: Option<Value>) -> Value {
     let mut definition = serde_json::to_value(basic_components(base).unwrap().as_ref()).unwrap();
     definition["library"] = json!(LIBRARY);
@@ -28,7 +28,7 @@ fn package(base: &str, id: &str, orientation: Option<Value>) -> Value {
     definition["revision"] = json!(1);
     definition["name"] = json!(format!("Test {id}"));
     if let Some(orientation) = orientation {
-        definition["format"] = json!(FORMAT_V2);
+        definition["format"] = json!(ORIENTATION_FORMAT);
         definition["orientation"] = orientation;
     }
     definition
@@ -294,7 +294,7 @@ fn exact_half_turn_and_rotated_lands() {
 }
 
 /// Readers refuse a malformed orientation statement and a format that does not match it;
-/// definitions without one keep format 1.
+/// definitions without one keep format 1, and the withdrawn format 2 is unknown.
 #[test]
 fn orientation_reader() {
     let good = package("resistor-0402", "diode-0402", Some(json!({"polarized":true,"pin_1":"2","zero":"ipc-7351"})));
@@ -302,7 +302,7 @@ fn orientation_reader() {
     assert_eq!(parsed.orientation.as_ref().unwrap().pin_1.as_deref(), Some("2"));
     assert_eq!(serde_json::to_value(parsed.as_ref()).unwrap(), good, "round trip is exact");
     let plain = package("resistor-0402", "plain-0402", None);
-    assert_eq!(plain["format"], json!(FORMAT_V1));
+    assert_eq!(plain["format"], json!(LEGACY_FORMAT));
     assert!(read_saved(plain.to_string().as_bytes()).is_ok());
     let mut wrong = Vec::new();
     for (pointer, value, reason) in [
@@ -319,7 +319,9 @@ fn orientation_reader() {
         ("/orientation", Value::Null, "expected an orientation object"),
         ("/orientation", json!([true, "1", "ipc-7351"]), "expected an orientation object"),
         ("/orientation", json!(true), "expected an orientation object"),
-        ("/format", json!(FORMAT_V1), "must be pcbcraft-footprint/2 for a definition with an orientation statement"),
+        ("/format", json!(LEGACY_FORMAT), "must be pcbcraft-footprint/7 for a definition with an orientation statement"),
+        ("/format", json!(NPTH_FORMAT), "must be pcbcraft-footprint/7 for a definition with an orientation statement"),
+        ("/format", json!("pcbcraft-footprint/2"), "unsupported footprint format pcbcraft-footprint/2"),
     ] {
         let mut bad = good.clone();
         let (parent, field) = pointer.rsplit_once('/').unwrap();
@@ -333,12 +335,37 @@ fn orientation_reader() {
     let mut missing = good.clone();
     missing["orientation"].as_object_mut().unwrap().remove("polarized");
     refused(read_saved(missing.to_string().as_bytes()), "missing field `polarized`");
-    let mut v2 = plain;
-    v2["format"] = json!(FORMAT_V2);
-    refused(read_saved(v2.to_string().as_bytes()), "must be pcbcraft-footprint/1 for a definition without an orientation statement");
+    let mut unoriented = plain;
+    unoriented["format"] = json!(ORIENTATION_FORMAT);
+    refused(read_saved(unoriented.to_string().as_bytes()), "must be pcbcraft-footprint/1 for a definition without an orientation statement");
 }
 
-/// A project pins the format 2 copy and saves it again byte for byte; the editor declines to
+/// An oriented package with a circular non-plated hole is format 7 and keeps both features
+/// through read, write and a pinned project save/reopen; formats 1 and 4 refuse it.
+#[test]
+fn oriented_footprint_with_npth_round_trip() {
+    let mut mounted = package("resistor-0402", "diode-mounted", Some(json!({"polarized":true,"pin_1":"1","zero":"ipc-7351"})));
+    mounted["non_plated_holes"] = json!([{"center":{"x_nm":0,"y_nm":2 * MM},"diameter_nm":MM / 2}]);
+    let parsed = read_saved(mounted.to_string().as_bytes()).unwrap();
+    assert_eq!(parsed.non_plated_holes.len(), 1);
+    assert_eq!(parsed.orientation.as_ref().unwrap().pin_1.as_deref(), Some("1"));
+    let written: Value = serde_json::from_slice(&write_saved(&parsed).unwrap()).unwrap();
+    assert_eq!(written, mounted, "round trip is exact");
+    for format in [LEGACY_FORMAT, NPTH_FORMAT] {
+        let mut downgraded = mounted.clone();
+        downgraded["format"] = json!(format);
+        refused(read_saved(downgraded.to_string().as_bytes()), "must be pcbcraft-footprint/7 for a definition with an orientation statement");
+    }
+    let s = fixture(&[mounted.clone()]);
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let saved: Value = serde_json::from_slice(&documents[&format!("library/footprints/{LIBRARY}/diode-mounted.r1.json")]).unwrap();
+    assert_eq!(saved["format"], json!(ORIENTATION_FORMAT));
+    assert_eq!(saved["non_plated_holes"], mounted["non_plated_holes"]);
+    assert_eq!(saved["orientation"], mounted["orientation"]);
+    assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
+}
+
+/// A project pins the format 7 copy and saves it again byte for byte; the editor declines to
 /// open it rather than drop the statement.
 #[test]
 fn pinned_copy_round_trip() {
@@ -347,10 +374,10 @@ fn pinned_copy_round_trip() {
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let pinned = &documents[&format!("library/footprints/{LIBRARY}/diode-0402.r1.json")];
     let saved: Value = serde_json::from_slice(pinned).unwrap();
-    assert_eq!(saved["format"], json!(FORMAT_V2));
+    assert_eq!(saved["format"], json!(ORIENTATION_FORMAT));
     assert_eq!(saved["orientation"], json!({"polarized":true,"pin_1":"1"}));
     let bundled: Value = serde_json::from_slice(&documents["library/footprints/basic-components/resistor-0402.r4.json"]).unwrap();
-    assert_eq!(bundled["format"], json!(FORMAT_V1));
+    assert_eq!(bundled["format"], json!(LEGACY_FORMAT));
     assert!(bundled.get("orientation").is_none());
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     refused(crate::authoring::Item::edit_footprint(&read_saved(pinned).unwrap()), "states an assembly orientation, which the editor cannot keep yet");

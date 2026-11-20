@@ -1,9 +1,6 @@
 //! MCP tool definitions and dispatch. Every tool wraps an engine or window command, or an inspection.
 
-use pcbcraft_engine::{
-    command_api::{CAPABILITIES, COMMAND_API_VERSION, catalog_revision},
-    error_codes::ErrorCode,
-};
+use pcbcraft_engine::{SessionScope, command_api::catalog_revision, error_codes::ErrorCode};
 use serde_json::{Value, json};
 
 use crate::{
@@ -54,8 +51,8 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "execute",
             "Run a command",
-            "Run a project or live-window command. ui. commands locate controls or send ordinary input, which can edit, save or close documents; input returns a ticket to poll with ui.inspect. Other window commands (view., window., arrangement., app., file.) answer with the editor; set inspect to false for only the revision. Project commands answer with the project. Board-update queries return review data.",
-            json!({"command": {"type": "string"}, "params": {"type": "object"}, "inspect": {"type": "boolean", "default": true}}),
+            "Run a project or live-window command. ui. commands locate controls or send ordinary input, which can edit, save or close documents; input returns a ticket to poll with ui.inspect. Other window commands (view., window., arrangement., app., file.) answer with the editor; set inspect to false for only the revision. Project commands answer with the project. Board-update queries return review data. Optionally pin `version` to the discovered command API version. Successful use of deprecated commands or parameters adds warnings.",
+            json!({"command": {"type": "string"}, "params": {"type": "object"}, "inspect": {"type": "boolean", "default": true}, "version": {"type": "integer", "minimum": 1}}),
             &["command"],
             Effect::Edits,
         ),
@@ -105,6 +102,9 @@ pub(crate) fn check_arguments(name: &str, args: &Value) -> Result<(), String> {
         if !fits {
             return Err(format!("`{key}` must be of type {kind}"));
         }
+        if name == "execute" && key == "version" && value.as_u64().is_none_or(|version| version == 0) {
+            return Err("`version` must be a positive integer".into());
+        }
     }
     for key in schema["required"].as_array().into_iter().flatten().filter_map(Value::as_str) {
         if !args.contains_key(key) {
@@ -121,8 +121,11 @@ fn text(value: &Value) -> Value {
 /// The command list as clients have always read it, followed by the command API version, the
 /// revision of the whole unfiltered catalog `all` and the optional features this build offers,
 /// which are also the structured result.
-fn listing(commands: &Value, all: &[Value]) -> Value {
-    let about = json!({"command_api_version": COMMAND_API_VERSION, "catalog_revision": catalog_revision(all), "capabilities": CAPABILITIES});
+fn listing(commands: &Value, all: &[Value], mut about: Value, scope: Option<SessionScope>) -> Value {
+    about["catalog_revision"] = Value::String(catalog_revision(all));
+    if let Some(scope) = scope {
+        about["scope"] = json!(scope.as_str());
+    }
     json!({
         "content": [{"type": "text", "text": commands.to_string()}, {"type": "text", "text": about.to_string()}],
         "structuredContent": about,
@@ -132,7 +135,7 @@ fn listing(commands: &Value, all: &[Value]) -> Value {
 /// A failed command is a tool result the agent can read, not a protocol error. The message
 /// stays the first text part as clients have always read it; the second part and the
 /// structured result carry the stable code and details.
-fn failure(failure: &Failure) -> Value {
+pub(crate) fn failure(failure: &Failure) -> Value {
     let error = json!({"error": failure.to_json()});
     json!({
         "isError": true,
@@ -142,13 +145,39 @@ fn failure(failure: &Failure) -> Value {
 }
 
 /// Describe a command from the backend's own discovery, so a live editor's window commands are
-/// described too. A window command a headless session lacks says what it needs.
+/// described too. Keep the descriptor identical to the catalog and append session metadata
+/// separately. A window command a headless session lacks says what it needs.
 fn describe_command(backend: &mut dyn Backend, id: &str) -> Result<Value, Failure> {
     let commands = backend.call("engine.commands", json!({}))?;
     match commands.as_array().into_iter().flatten().find(|command| command["id"] == id) {
-        Some(command) => Ok(command.clone()),
+        Some(command) => Ok(match backend.scope() {
+            Some(scope) => {
+                let about = json!({"scope":scope.as_str()});
+                json!({
+                    "content": [{"type":"text","text":command.to_string()}, {"type":"text","text":about.to_string()}],
+                    "structuredContent": about,
+                })
+            }
+            None => text(command),
+        }),
         None if is_window_command(id) && !backend.has_live_editor() => Err(needs_live_editor(&format!("`{id}`"))),
         None => Err(Failure::new(ErrorCode::UnknownCommand, format!("unknown command `{id}`"))),
+    }
+}
+
+/// Preserve the first text part and append warning metadata only on warned success.
+fn execute(backend: &mut dyn Backend, args: &Value) -> Value {
+    let mut request = json!({"command": args["command"], "params": args["params"], "inspect": args["inspect"]});
+    if let Some(version) = args.get("version") {
+        request["version"] = version.clone();
+    }
+    match backend.execute(request) {
+        Ok((result, warnings)) if warnings.is_empty() => text(&result),
+        Ok((result, warnings)) => {
+            let metadata = json!({"warnings": warnings});
+            json!({"content": [{"type": "text", "text": result.to_string()}, {"type": "text", "text": metadata.to_string()}], "structuredContent": metadata})
+        }
+        Err(error) => failure(&error),
     }
 }
 
@@ -156,21 +185,23 @@ fn describe_command(backend: &mut dyn Backend, id: &str) -> Result<Value, Failur
 pub fn call_tool(backend: &mut dyn Backend, name: &str, args: &Value) -> Value {
     let result = match name {
         "list_commands" => {
-            return match backend.call("engine.commands", json!({})) {
-                Ok(all) => {
+            return match backend.command_catalog() {
+                Ok((all, metadata)) => {
                     let all = all.as_array().cloned().unwrap_or_default();
                     let filter = args["filter"].as_str().unwrap_or_default().to_lowercase();
                     let keeps = |c: &&Value| {
                         let field = |key: &str| c[key].as_str().unwrap_or_default().to_lowercase();
                         field("id").contains(&filter) || field("summary").contains(&filter)
                     };
-                    listing(&Value::Array(all.iter().filter(keeps).cloned().collect()), &all)
+                    listing(&Value::Array(all.iter().filter(keeps).cloned().collect()), &all, metadata, backend.scope())
                 }
                 Err(message) => failure(&message),
             };
         }
-        "describe_command" => describe_command(backend, args["command"].as_str().unwrap_or_default()),
-        "execute" => backend.call("engine.execute", json!({"command": args["command"], "params": args["params"], "inspect": args["inspect"]})),
+        "describe_command" => {
+            return describe_command(backend, args["command"].as_str().unwrap_or_default()).unwrap_or_else(|error| failure(&error));
+        }
+        "execute" => return execute(backend, args),
         "cross_probe" => backend.call("project.cross_probe", args.clone()),
         "resolve_counterparts" => backend.call("project.resolve_counterparts", args.clone()),
         "inspect_project" => backend.call("project.inspect", json!({})),

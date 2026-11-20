@@ -6,6 +6,11 @@ use std::{collections::BTreeSet, sync::Arc};
 /// Stable identity of an immutable library item revision; paths and labels are only locators.
 pub(crate) type Key = (String, String, u32);
 pub(super) const MAX_OFFSET_NM: i64 = 100_000_000;
+pub(crate) const LEGACY_FORMAT: &str = "pcbcraft-footprint/1";
+pub(crate) const NPTH_FORMAT: &str = "pcbcraft-footprint/4";
+/// Format 4 plus a required `orientation` object; non-plated holes stay optional.
+pub(crate) const ORIENTATION_FORMAT: &str = "pcbcraft-footprint/7";
+const MAX_MECHANICAL_HOLES: usize = 128;
 pub(crate) const BASIC_COMPONENT_IDS: [&str; 18] = [
     "resistor-0402",
     "resistor-0603",
@@ -135,6 +140,32 @@ pub struct Source {
     pub locator: String,
 }
 
+/// A circular, non-plated through hole in local footprint coordinates. It has no
+/// copper land, pad number or terminal. Its diameter is the finished opening.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct CircularNpth {
+    pub center: Point,
+    pub diameter_nm: i64,
+}
+
+impl CircularNpth {
+    /// Bound the centre and finished diameter to the same envelope as existing footprint geometry.
+    fn valid(self) -> bool {
+        rectangle(self.center, self.diameter_nm, self.diameter_nm, 0)
+    }
+}
+
+/// Absence is the only encoding for an empty list. In particular, older formats
+/// must not accept a `non_plated_holes` field disguised as an empty array.
+fn nonempty_mechanical_holes<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<CircularNpth>, D::Error> {
+    let holes = Vec::<CircularNpth>::deserialize(deserializer)?;
+    if !(1..=MAX_MECHANICAL_HOLES).contains(&holes.len()) {
+        return Err(serde::de::Error::custom("expected 1–128 non-plated holes"));
+    }
+    Ok(holes)
+}
+
 /// A bounded physical footprint definition independent of any schematic component.
 /// It is pinned in the project at an exact library/item/revision and opens offline.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -148,6 +179,9 @@ pub struct FootprintDefinition {
     pub license: String,
     pub source: Source,
     pub pads: Vec<RectPad>,
+    /// Authored mechanical openings, separate from the electrical pad namespace.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "nonempty_mechanical_holes")]
+    pub non_plated_holes: Vec<CircularNpth>,
     pub graphics: Vec<GraphicRect>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artwork: Vec<Artwork>,
@@ -158,16 +192,11 @@ pub struct FootprintDefinition {
     /// Optional local displacement of the default reference from the automatic anchor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_offset: Option<Point>,
-    /// Optional assembly orientation statement. Its presence selects format 2; absent, the
-    /// definition keeps its format 1 bytes.
+    /// Optional assembly orientation statement. Its presence selects format 7; absent, the
+    /// definition keeps its format 1 or 4 bytes.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "orientation_object")]
     pub orientation: Option<Orientation>,
 }
-
-/// The format written by definitions without an orientation statement.
-pub const FORMAT_V1: &str = "pcbcraft-footprint/1";
-/// Format 1 plus a required `orientation` object.
-pub const FORMAT_V2: &str = "pcbcraft-footprint/2";
 
 /// How a package is meant to sit on the board for assembly. `polarized` says that turning the
 /// part by a half turn changes its function, `pin_1` names the pad an assembler aligns with the
@@ -311,25 +340,49 @@ impl FootprintDefinition {
         (self.library.clone(), self.id.clone(), self.revision)
     }
 
-    /// Validate the schema, provenance, bounded graphics and distinct electrical pad identifiers.
-    /// Arbitrary pad stacks, slots and non-plated drills remain unsupported.
+    /// Select the native format from authored features, leaving untouched legacy footprints unchanged.
+    pub(crate) fn format_for(has_npth: bool) -> &'static str {
+        if has_npth { NPTH_FORMAT } else { LEGACY_FORMAT }
+    }
+
+    /// The format this definition's authored features require: an orientation statement selects
+    /// format 7 whether or not it has non-plated holes; otherwise holes select format 4.
+    pub(crate) fn expected_format(&self) -> &'static str {
+        if self.orientation.is_some() { ORIENTATION_FORMAT } else { Self::format_for(!self.non_plated_holes.is_empty()) }
+    }
+
+    /// Refuse unknown versions and mixed feature/version pairs before writing or accepting a definition.
+    fn validate_format(&self) -> Result<(), String> {
+        let expected = self.expected_format();
+        match self.format.as_str() {
+            format if format == expected => Ok(()),
+            ORIENTATION_FORMAT => Err(format!("footprint format must be {expected} for a definition without an orientation statement")),
+            LEGACY_FORMAT | NPTH_FORMAT if self.orientation.is_some() => {
+                Err(format!("footprint format must be {ORIENTATION_FORMAT} for a definition with an orientation statement"))
+            }
+            LEGACY_FORMAT | NPTH_FORMAT => Err("footprint format does not match its non-plated hole content".into()),
+            _ => Err(format!("unsupported footprint format {}", self.format)),
+        }
+    }
+
+    /// Validate the schema, provenance, bounded geometry and distinct electrical pad identifiers.
+    /// Land-less circular NPTH never takes part in the electrical pad checks.
     pub(crate) fn validate(&self) -> Result<(), String> {
         self.validate_mode(false)
     }
-    /// Empty pad sets are permitted only in editable drafts, never silently published.
+    /// A draft can temporarily have neither pads nor mechanical holes.
     pub(crate) fn validate_draft(&self) -> Result<(), String> {
         self.validate_mode(true)
     }
     /// Check shared constraints before accepting either an editable draft or a published package.
-    /// A format that does not match the orientation statement and a `pin_1` naming no pad are
+    /// A format that does not match the authored features and a `pin_1` naming no pad are
     /// refused with their own reasons; every other constraint shares one message.
     fn validate_mode(&self, draft: bool) -> Result<(), String> {
-        let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
-        let format = if self.orientation.is_some() { FORMAT_V2 } else { FORMAT_V1 };
-        if self.format != format {
-            let with = if self.orientation.is_some() { "with" } else { "without" };
-            return Err(format!("footprint format must be {format} for a definition {with} an orientation statement"));
+        self.validate_format()?;
+        if self.non_plated_holes.len() > MAX_MECHANICAL_HOLES || self.non_plated_holes.iter().any(|hole| !hole.valid()) {
+            return Err("invalid circular non-plated hole count, centre or finished diameter".into());
         }
+        let numbers: BTreeSet<_> = self.pads.iter().map(|pad| pad.number.as_str()).collect();
         if self.orientation.as_ref().and_then(|o| o.pin_1.as_deref()).is_some_and(|pin| !numbers.contains(pin)) {
             return Err("orientation pin_1 names no pad of this footprint".into());
         }
@@ -341,7 +394,7 @@ impl FootprintDefinition {
             || !text(&self.source.kind, 64)
             || !text(&self.source.reference, 2048)
             || !text(&self.source.locator, 1024)
-            || (!draft && self.pads.is_empty())
+            || (!draft && self.pads.is_empty() && self.non_plated_holes.is_empty())
             || self.pads.len() > 128
             || numbers.len() != self.pads.len()
             || self.pads.iter().any(|p| crate::schematic::PinNumber::new(&p.number).is_none())
@@ -372,6 +425,15 @@ pub(crate) fn read_saved(bytes: &[u8]) -> Result<Arc<FootprintDefinition>, Strin
     let definition: FootprintDefinition = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     definition.validate()?;
     Ok(Arc::new(definition))
+}
+
+/// Emit the shared native bytes for a validated footprint dependency, checking the
+/// version/feature pair without rerunning geometric and electrical validation on save.
+pub(crate) fn write_saved(definition: &FootprintDefinition) -> Result<Vec<u8>, String> {
+    definition.validate_format()?;
+    let mut bytes = serde_json::to_vec_pretty(definition).map_err(|error| error.to_string())?;
+    bytes.push(b'\n');
+    Ok(bytes)
 }
 
 /// Resolve an original built-in definition. A project pins this copy once, rather than resolving

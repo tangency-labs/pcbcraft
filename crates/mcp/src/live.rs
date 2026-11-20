@@ -1,15 +1,19 @@
 //! The live editor's MCP adapter. Document commands run on the editor's own session, sharing
 //! its undo history; window commands run through the editor's own handlers.
 
-use std::time::Duration;
+use std::{io, time::Duration};
 
 use craft_control::loopback::{Connection, Token};
-use pcbcraft_engine::{Session, catalog, error_codes::ErrorCode};
+use pcbcraft_engine::{
+    Session,
+    command_api::{self, COMMAND_API_VERSION, DEPRECATIONS},
+    error_codes::ErrorCode,
+};
 use serde_json::{Value, json};
 
 use crate::{
     Failure,
-    backend::{Backend, call_session, command_id, is_window_command},
+    backend::{Backend, api_metadata, call_session, command_id, describe_engine_commands, execute_warnings, is_window_command, legacy_api_metadata},
 };
 
 /// Environment variable used by the desktop configuration and the MCP CLI.
@@ -20,7 +24,35 @@ pub const MAX_WAIT: Duration = Duration::from_secs(900);
 const MAX_TOKEN_FILE: u64 = 4096;
 
 const TIMEOUT: Duration = Duration::from_secs(5);
-const MAX_REPLY_BYTES: usize = 16 << 20;
+const VERSIONED_EXECUTE: &str = "engine.execute_versioned";
+
+/// Existing live JSON success-frame bound, including the result wrapper and excluding LF.
+/// Hosts may preflight the same transport contract before publishing transient review authority.
+pub const MAX_REPLY_BYTES: usize = 16 << 20;
+
+/// Check the complete success frame against the receiving client's existing byte limit.
+/// Serialization stops at the limit without retaining a second encoded copy. This bounds
+/// transport bytes, not the memory or work used to prepare the supplied inspection value.
+pub fn check_reply_size(result: &Value) -> Result<(), String> {
+    struct Budget(usize);
+    impl std::io::Write for Budget {
+        /// Count each encoded chunk, refusing before it crosses the remaining byte budget.
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if bytes.len() > self.0 {
+                return Err(std::io::Error::other("live reply byte limit exceeded"));
+            }
+            self.0 -= bytes.len();
+            Ok(bytes.len())
+        }
+        /// Counting has no buffered output to flush.
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    // Request::answer wraps the result; craft_control::read_frame excludes the framing newline.
+    let mut budget = Budget(MAX_REPLY_BYTES - b"{\"result\":".len() - b"}".len());
+    serde_json::to_writer(&mut budget, result).map_err(|error| format!("Live editor reply exceeds the reply byte limit: {error}"))
+}
 
 /// MCP backend for an explicitly selected local desktop editor.
 pub struct Remote {
@@ -57,13 +89,14 @@ impl Remote {
         self.wait = Duration::from_secs(seconds).clamp(TIMEOUT, MAX_WAIT);
         self
     }
-}
 
-impl Backend for Remote {
     /// Open one authenticated connection per call. Never retry a call after a lost reply.
     /// A connect or send failure reports `connection_failed`; a lost or unreadable reply
     /// reports `no_reply`. Either can follow a delivered request, so inspect before retrying.
-    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+    fn request(&self, method: &str, params: Value) -> Result<Value, Failure> {
+        // An older editor ignores new fields on engine.execute. It refuses this distinct
+        // method instead, so a pinned edit never runs without a version check.
+        let method = if method == "engine.execute" && !params["version"].is_null() { VERSIONED_EXECUTE } else { method };
         let request = json!({"method": method, "params": params});
         let mut peer = Connection::connect(self.port, &self.token, request, self.wait).map_err(|error| {
             Failure::new(ErrorCode::ConnectionFailed, format!("Could not send request to the PCBCraft editor on port {}: {error}", self.port))
@@ -74,10 +107,35 @@ impl Backend for Remote {
             .map_err(|error| Failure::new(ErrorCode::NoReply, format!("{LOST_REPLY} ({error})")))?
             .ok_or_else(|| Failure::new(ErrorCode::NoReply, LOST_REPLY))?;
         match (reply.get("result"), reply.get("error").and_then(Value::as_str)) {
-            (Some(value), None) => Ok(value.clone()),
+            (Some(_), None) => Ok(reply),
             (None, Some(error)) => Err(Failure::from_reply(&reply, error)),
             _ => Err(Failure::new(ErrorCode::NoReply, "Invalid reply from the PCBCraft editor")),
         }
+    }
+}
+
+impl Backend for Remote {
+    fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+        self.request(method, params).map(|mut reply| reply["result"].take())
+    }
+
+    fn command_catalog(&mut self) -> Result<(Value, Value), Failure> {
+        let mut reply = self.request("engine.commands", json!({}))?;
+        // Preserve the previous discovery metadata for an old endpoint, but don't promise
+        // version checks or warnings it cannot provide.
+        let metadata = reply["command_api"].take();
+        let metadata = if metadata["command_api_version"].as_u64().is_some_and(|version| version > 0) && metadata["capabilities"].is_array() {
+            metadata
+        } else {
+            legacy_api_metadata()
+        };
+        Ok((reply["result"].take(), metadata))
+    }
+
+    fn execute(&mut self, request: Value) -> Result<(Value, Vec<Value>), Failure> {
+        let mut reply = self.request("engine.execute", request)?;
+        let warnings = reply["warnings"].as_array().into_iter().flatten().filter(|value| value.is_object()).cloned().collect();
+        Ok((reply["result"].take(), warnings))
     }
 
     /// Name the selected local editor and what its commands reach during MCP initialization.
@@ -118,6 +176,54 @@ pub trait Editor {
     fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), Failure>;
 }
 
+/// Normalize the fail-closed wire method before the app applies its ordinary execute policies.
+///
+/// # Errors
+/// A guarded wire request without a stated version is invalid.
+pub fn normalize_request(request: &mut Value) -> Result<(), Failure> {
+    if request["method"] == VERSIONED_EXECUTE {
+        if request["params"]["version"].is_null() {
+            return Err(Failure::new(ErrorCode::InvalidRequest, "versioned execution requires `version`"));
+        }
+        request["method"] = "engine.execute".into();
+    }
+    Ok(())
+}
+
+/// Check the version before deferred engine work reaches its parameter or revision checks.
+///
+/// # Errors
+/// Returns a version failure for a known engine command with a malformed or different version.
+pub fn check_deferred_version(id: &str, params: &Value) -> Result<(), Failure> {
+    if !params["version"].is_null() && pcbcraft_engine::command(id).is_some() {
+        command_api::check_version(id, &params["version"], COMMAND_API_VERSION)?;
+    }
+    Ok(())
+}
+
+/// Form the successful live reply; keep existing execution results intact and add warnings only
+/// when used. The legacy catalog array is also unchanged; its API metadata travels beside it.
+pub fn success_reply(request: &Value, result: Value) -> Value {
+    let mut reply = json!({"result": result});
+    if request["method"] == "engine.execute" {
+        let warnings = execute_warnings(&request["params"], DEPRECATIONS);
+        if !warnings.is_empty() {
+            reply["warnings"] = Value::Array(warnings);
+        }
+    } else if request["method"] == "engine.commands" {
+        reply["command_api"] = api_metadata(COMMAND_API_VERSION);
+    }
+    reply
+}
+
+/// Unknown commands keep the window or UI handler's own refusal.
+fn check_window_version(editor: &dyn Editor, id: &str, stated: &Value) -> Result<(), Failure> {
+    if !stated.is_null() && editor.window_commands().iter().any(|command| command["id"] == id) {
+        command_api::check_version(id, stated, COMMAND_API_VERSION)?;
+    }
+    Ok(())
+}
+
 /// Serve one live request against the open editor, including callers that bypass the MCP CLI.
 /// Document/presentation commands obey the editor's refusal; UI automation uses its own input
 /// lifecycle and returns query data or a queue ticket. Other window commands answer with editor
@@ -128,8 +234,11 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
     let params = &request["params"];
     match method {
         "engine.commands" => {
-            let mut commands: Vec<Value> = catalog().iter().map(|command| command.to_json()).collect();
-            commands.extend(editor.window_commands());
+            let mut commands = describe_engine_commands(DEPRECATIONS);
+            commands.extend(editor.window_commands().into_iter().map(|mut command| {
+                command_api::mark_deprecations(&mut command, DEPRECATIONS);
+                command
+            }));
             Ok(Value::Array(commands))
         }
         "project.inspect" | "project.cross_probe" | "project.resolve_counterparts" => call_session(editor.session(), method, params),
@@ -137,17 +246,97 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
         "engine.execute" => {
             let id = command_id(params)?;
             if id.starts_with("ui.") {
+                check_window_version(editor, id, &params["version"])?;
                 return editor.ui_command(id, &params["params"]);
             }
             if let Some(reason) = editor.refusal(id) {
                 return Err(Failure::new(ErrorCode::Unavailable, reason));
             }
             if !is_window_command(id) {
-                return call_session(editor.session(), method, params);
+                let result = call_session(editor.session(), method, params)?;
+                return if id == pcbcraft_engine::netlist::EXPORT_BOARD_NETLIST { board_netlist_reply(result) } else { Ok(result) };
             }
+            check_window_version(editor, id, &params["version"])?;
             editor.run_window_command(id, &params["params"])?;
             if params["inspect"].as_bool() == Some(false) { Ok(json!({"revision": editor.session().revision()})) } else { Ok(editor.inspect()) }
         }
         _ => Err(Failure::new(ErrorCode::InvalidRequest, format!("Unknown live control method `{method}`"))),
+    }
+}
+
+/// Measure the exact escaped JSON payload of the live reply, including the `result` envelope.
+/// The framing newline is not counted by `Connection::receive`. No second buffer is allocated.
+fn board_netlist_reply(result: Value) -> Result<Value, Failure> {
+    struct ReplyBudget(usize);
+
+    impl io::Write for ReplyBudget {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0 = self.0.checked_sub(bytes.len()).ok_or_else(|| io::Error::other("reply exceeds the live limit"))?;
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    serde_json::to_writer(ReplyBudget(MAX_REPLY_BYTES - b"{\"result\":}".len()), &result).map_err(|_| {
+        Failure::from("Board netlist reply exceeds the live editor's 16 MiB limit. Save the project and run pcb.export_netlist in a headless session for the full export, or use dry_run for findings only.")
+    })?;
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Live exports fit at the escaped reply limit and refuse one byte beyond it.
+    #[test]
+    fn live_board_netlist_reply_counts_escaping_and_envelope() {
+        let report = |contents: String| json!({"revision":7,"netlist":{"files":[{"name":"netlist.json","contents":contents}],"findings":[]}});
+        let overhead = serde_json::to_vec(&json!({"result":report(String::new())})).unwrap().len();
+        let length = MAX_REPLY_BYTES - overhead;
+        // CR, newline, quote and backslash each take two bytes on the wire.
+        let text = ["\r\n\"\\".repeat(length / 8), "x".repeat(length % 8)].concat();
+        assert!(text.len() < MAX_REPLY_BYTES);
+        let fits = board_netlist_reply(report(text.clone())).unwrap();
+        assert_eq!(serde_json::to_vec(&json!({"result":fits})).unwrap().len(), MAX_REPLY_BYTES);
+        let refused = board_netlist_reply(report(text + "x")).unwrap_err();
+        assert_eq!(refused.code(), ErrorCode::Unavailable.as_str());
+        assert!(refused.message().contains("16 MiB") && refused.message().contains("headless"), "{refused}");
+        let dry = json!({"revision":7,"netlist":{"files":[{"name":"netlist.json"}],"findings":[]}});
+        assert_eq!(board_netlist_reply(dry.clone()).unwrap(), dry);
+    }
+}
+
+#[cfg(test)]
+mod reply_size_tests {
+    use super::*;
+
+    /// Match the actual frame reader's success-wrapper budget, accepting the last JSON byte
+    /// and refusing the next. UTF-8 characters and JSON escapes count as their encoded bytes.
+    #[test]
+    fn reply_budget_matches_the_complete_transport_frame() {
+        let overhead = serde_json::to_vec(&json!({"result":""})).unwrap().len();
+        for (extra, accepted) in [(0, true), (1, false)] {
+            let result = json!("x".repeat(MAX_REPLY_BYTES - overhead + extra));
+            let mut frame = serde_json::to_vec(&json!({"result":result})).unwrap();
+            assert_eq!(frame.len() <= MAX_REPLY_BYTES, accepted);
+            if accepted {
+                check_reply_size(&result).unwrap();
+            } else {
+                assert!(check_reply_size(&result).unwrap_err().contains("reply byte limit"));
+            }
+            frame.push(b'\n');
+            let parsed = craft_control::read_frame(&mut std::io::Cursor::new(frame), MAX_REPLY_BYTES).unwrap();
+            if accepted {
+                assert!(matches!(parsed, Some(craft_control::Frame::Message(_))));
+            } else {
+                assert!(matches!(parsed, Some(craft_control::Frame::Oversized)));
+            }
+        }
+        let result = json!("\"界\n".repeat(MAX_REPLY_BYTES / 4));
+        assert!(serde_json::to_vec(&json!({"result":result})).unwrap().len() > MAX_REPLY_BYTES);
+        assert!(check_reply_size(&result).unwrap_err().contains("reply byte limit"));
     }
 }

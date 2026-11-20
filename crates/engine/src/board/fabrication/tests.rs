@@ -13,17 +13,18 @@ fn aperture_fixture(shape: PadShape, width: i64, height: i64, pad_rotation: u16,
 /// Author lands through the library editor, load its production encoding, then assign
 /// and place the package through the same commands used by live and headless clients.
 fn aperture_fixture_with_pads(pads: &[(PadShape, i64, i64, u16)], rotation: u16, bottom: bool) -> Session {
-    aperture_fixture_at(pads, rotation, bottom, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, false)
+    aperture_fixture_at(pads, rotation, bottom, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None)
 }
 
-/// Author the same command-built fixture with explicit local/placement centers and copper binding.
+/// Author the command-built fixture with explicit centers and optionally plate pads from a
+/// zero-based index onward. A plated fixture has inner copper too.
 fn aperture_fixture_at(
     pads: &[(PadShape, i64, i64, u16)],
     rotation: u16,
     bottom: bool,
     offset: Point,
     position: Point,
-    through_hole: bool,
+    plated_from: Option<usize>,
 ) -> Session {
     use crate::authoring::{Action, Item, Kind, Primitive};
     let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
@@ -33,7 +34,7 @@ fn aperture_fixture_at(
         let mut pad = template.clone();
         pad.number = (index + 1).to_string();
         pad.center = Point { x_nm: index as i64 * 2_000_000 + offset.x_nm, y_nm: offset.y_nm };
-        if through_hole {
+        if plated_from.is_some_and(|first| index >= first) {
             pad.copper = crate::board::definition::CopperBinding::AllCopper;
             pad.drill_nm = Some(width.min(height) / 2);
         }
@@ -55,7 +56,7 @@ fn aperture_fixture_at(
             .to_string();
     s.execute("library.load_source", &json!({"source":"apertures","documents":{"library.json":manifest,"footprints/lands.json":document}})).unwrap();
     // Include interior copper in the plated-land fixture.
-    let copper_layers = if through_hole { 4 } else { 2 };
+    let copper_layers = if plated_from.is_some() { 4 } else { 2 };
     s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":copper_layers,"expected_revision":s.revision()})).unwrap();
     s.apply(crate::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     let component = s.project().unwrap().components().next().unwrap().id();
@@ -88,6 +89,7 @@ struct ReadAperture {
     kind: char,
     width: i64,
     height: i64,
+    function: Option<&'static str>,
 }
 
 #[derive(Debug, Default)]
@@ -96,6 +98,7 @@ struct ReadGerber {
     flashes: Vec<(Point, ReadAperture)>,
     strokes: Vec<(Point, Point, ReadAperture)>,
     regions: Vec<Vec<Point>>,
+    region_functions: Vec<&'static str>,
 }
 
 /// Parse a strictly positive unsigned millimeter dimension with exactly six decimals.
@@ -127,7 +130,8 @@ fn read_coordinate(value: &str) -> Result<i64, &'static str> {
 }
 
 /// Read only the explicit linear fixture subset: file identity, modes, aperture syntax,
-/// operation order and structural contour closure, not geometric validity or CAM suitability.
+/// the writer's per-definition/region TA/TD pairs, operation order and contour closure.
+/// This is not a general Gerber parser or a CAM validity check.
 fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str) -> Result<ReadGerber, &'static str> {
     if text.contains('\r') || !text.ends_with('\n') {
         return Err("invalid line endings");
@@ -179,7 +183,26 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
     let mut position = None;
     let mut region: Option<Vec<Point>> = None;
     let mut body = false;
+    let mut pending_function = None;
     while let Some(line) = lines.next() {
+        if pending_function.is_some() && !line.starts_with("%ADD") && line != "G36*" {
+            return Err("aperture function outside definition or region");
+        }
+        if let Some(value) = line.strip_prefix("%TA.AperFunction,").and_then(|value| value.strip_suffix("*%")) {
+            if region.is_some() {
+                return Err("attribute in region");
+            }
+            pending_function = Some(match value {
+                "SMDPad,CuDef" => "SMDPad,CuDef",
+                "ComponentPad" => "ComponentPad",
+                "ViaPad" => "ViaPad",
+                "Conductor" => "Conductor",
+                "Material" => "Material",
+                "Profile" => "Profile",
+                _ => return Err("unsupported aperture function"),
+            });
+            continue;
+        }
         if line == "M02*" {
             if region.is_some() {
                 return Err("unclosed region");
@@ -203,9 +226,13 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
             if dimensions.len() != if kind == 'C' { 1 } else { 2 } {
                 return Err("invalid aperture arity");
             }
-            let aperture = ReadAperture { kind, width: dimensions[0], height: *dimensions.last().unwrap() };
+            let function = pending_function.take();
+            let aperture = ReadAperture { kind, width: dimensions[0], height: *dimensions.last().unwrap(), function };
             if read.apertures.insert(code, aperture).is_some() {
                 return Err("duplicate aperture");
+            }
+            if function.is_some() && lines.next() != Some("%TD.AperFunction*%") {
+                return Err("aperture function not cleared");
             }
             continue;
         }
@@ -220,12 +247,16 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
             if region.replace(Vec::new()).is_some() {
                 return Err("nested region");
             }
+            read.region_functions.push(pending_function.take().ok_or("missing region function")?);
         } else if line == "G37*" {
             let points = region.take().ok_or("region end without start")?;
             if points.len() < 4 || points.first() != points.last() {
                 return Err("region contour not closed");
             }
             read.regions.push(points);
+            if lines.next() != Some("%TD.AperFunction*%") {
+                return Err("region function not cleared");
+            }
         } else if let Some(coordinates) = line.strip_prefix('X') {
             let (x, rest) = coordinates.split_once('Y').ok_or("invalid coordinate")?;
             let (y, operation) = rest.split_once('D').ok_or("invalid coordinate")?;
@@ -302,7 +333,7 @@ fn mixed_pad_shapes_use_standard_flashes_with_resolved_sizes() {
     assert_eq!(read.flashes.len(), expected.len());
     for (((center, aperture), pad), (kind, width, height)) in read.flashes.iter().zip(view(&s).footprints().next().unwrap().pads).zip(expected) {
         assert_eq!(*center, Point { x_nm: pad.center.x_nm, y_nm: -pad.center.y_nm });
-        assert_eq!(*aperture, ReadAperture { kind, width, height });
+        assert_eq!(*aperture, ReadAperture { kind, width, height, function: Some("SMDPad,CuDef") });
     }
     assert_eq!(outputs, view(&s).fabrication_outputs().unwrap());
     assert_eq!(zip(&outputs).unwrap(), zip(&view(&s).fabrication_outputs().unwrap()).unwrap());
@@ -329,16 +360,18 @@ fn standard_pad_apertures_read_back_on_copper_mask_and_paste() {
                 let s = aperture_fixture(shape, width, height, pad_rotation, rotation, bottom);
                 let outputs = view(&s).fabrication_outputs().unwrap();
                 let pads: Vec<_> = view(&s).footprints().flat_map(|f| f.pads).collect();
-                for output in surface_files(bottom) {
+                for (output, function) in surface_files(bottom).into_iter().zip(["SMDPad,CuDef", "Material", "Material"]) {
                     let read = read_gerber(&outputs, output);
+                    assert!(read.region_functions.iter().all(|&actual| actual == function));
                     if shape == PadShape::Oval && width % 2 != height % 2 {
+                        let function = (function == "Material").then_some(function);
                         assert!(read.flashes.is_empty() && read.regions.is_empty());
                         assert_eq!(read.strokes.len(), pads.len());
                         for ((a, b, aperture), pad) in read.strokes.iter().zip(&pads) {
                             let corners = pad.copper.unwrap();
                             let x = (corners[1].x_nm - corners[0].x_nm).abs() + (corners[2].x_nm - corners[1].x_nm).abs();
                             let y = (corners[1].y_nm - corners[0].y_nm).abs() + (corners[2].y_nm - corners[1].y_nm).abs();
-                            assert_eq!(*aperture, ReadAperture { kind: 'C', width: x.min(y), height: x.min(y) });
+                            assert_eq!(*aperture, ReadAperture { kind: 'C', width: x.min(y), height: x.min(y), function });
                             assert_eq!((a.x_nm + b.x_nm, a.y_nm + b.y_nm), (2 * pad.center.x_nm, -2 * pad.center.y_nm));
                             let span = (x - y).abs() + 1;
                             assert_eq!(((a.x_nm - b.x_nm).abs(), (a.y_nm - b.y_nm).abs()), if x > y { (span, 0) } else { (0, span) });
@@ -346,6 +379,7 @@ fn standard_pad_apertures_read_back_on_copper_mask_and_paste() {
                         continue;
                     }
                     assert!(read.strokes.is_empty());
+                    assert!(read.apertures.values().all(|aperture| aperture.function == Some(function)));
                     if shape == PadShape::Rectangle && (width % 2 != 0 || height % 2 != 0) {
                         assert!(read.flashes.is_empty() && read.apertures.is_empty());
                         assert_eq!(read.regions.len(), pads.len());
@@ -401,12 +435,12 @@ fn aperture_identity_and_selection_retain_shape_and_orientation() {
         Aperture::Obround(800_000, 400_000),
         Aperture::Obround(400_000, 800_000),
     ] {
-        gerber.aperture(aperture);
+        gerber.aperture(aperture, Some(ApertureFunction::Material));
         gerber.body.push_str("X0Y0D03*\n");
     }
-    gerber.stroke(&[point, Point { x_nm: 1_000_000, y_nm: 0 }], 400_000);
-    let text = gerber.finish("Copper,L1,Top", "Positive");
-    let read = try_read_gerber(&text, "Copper,L1,Top", "Positive").unwrap();
+    gerber.stroke(&[point, Point { x_nm: 1_000_000, y_nm: 0 }], 400_000, Some(ApertureFunction::Material));
+    let text = gerber.finish("Soldermask,Top", "Negative");
+    let read = try_read_gerber(&text, "Soldermask,Top", "Negative").unwrap();
     assert_eq!(read.apertures.len(), 7);
     assert_eq!(read.flashes.len(), 7);
     assert_eq!(
@@ -420,9 +454,12 @@ fn aperture_identity_and_selection_retain_shape_and_orientation() {
             ('O', 800_000, 400_000),
             ('O', 400_000, 800_000),
         ]
-        .map(|(kind, width, height)| (point, ReadAperture { kind, width, height }))
+        .map(|(kind, width, height)| (point, ReadAperture { kind, width, height, function: Some("Material") }))
     );
-    assert_eq!(read.strokes, [(point, Point { x_nm: 1_000_000, y_nm: 0 }, ReadAperture { kind: 'C', width: 400_000, height: 400_000 })]);
+    assert_eq!(
+        read.strokes,
+        [(point, Point { x_nm: 1_000_000, y_nm: 0 }, ReadAperture { kind: 'C', width: 400_000, height: 400_000, function: Some("Material") })]
+    );
     assert_eq!(read.strokes[0].2.kind, 'C');
     assert_eq!(read.strokes[0].2.width, 400_000);
     assert_eq!(text.matches("D10*\n").count(), 2, "circle is selected again after the last O flash");
@@ -532,6 +569,9 @@ fn gerber_subset_reader_rejects_header_syntax_and_order_mutations() {
     let text = file(&outputs, suffix);
     assert_eq!(read_gerber(&outputs, TOP_COPPER).flashes.len(), 3);
     let first_definition = text.lines().find(|line| line.starts_with("%ADD")).unwrap();
+    let set = "%TA.AperFunction,SMDPad,CuDef*%\n";
+    let clear = "%TD.AperFunction*%\n";
+    let definition_block = format!("{set}{first_definition}\n{clear}");
     for (mutant, reason) in [
         (text.replace("%TF.SameCoordinates,Original*%\n", ""), "invalid header"),
         (text.replace("%TF.FileFunction,Copper,L1,Top*%", "%TF.FileFunction,Unknown*%"), "invalid file function"),
@@ -557,8 +597,12 @@ fn gerber_subset_reader_rejects_header_syntax_and_order_mutations() {
         (text.replace("\nD10*\n", "\nD010*\n"), "invalid selection"),
         (text.replace("%ADD10", "%ADD+10").replace("\nD10*\n", "\nD+10*\n"), "invalid aperture code"),
         (text.replace("%ADD10", "%ADD010"), "invalid aperture code"),
-        (text.replace(first_definition, &format!("{first_definition}\n{first_definition}")), "duplicate aperture"),
-        (text.replace("M02*", &format!("{first_definition}\nM02*")), "late aperture definition"),
+        (text.replacen(&definition_block, &definition_block.repeat(2), 1), "duplicate aperture"),
+        (text.replace("M02*", &format!("{definition_block}M02*")), "late aperture definition"),
+        (text.replacen(set, "", 1), "unsupported record"),
+        (text.replacen(clear, "", 1), "aperture function not cleared"),
+        (text.replacen("SMDPad,CuDef", "SMDPad", 1), "unsupported aperture function"),
+        (text.replace("M02*", &format!("{set}M02*")), "aperture function outside definition or region"),
         (text.replace("M02*\n", ""), "missing end record"),
         (format!("{text}G01*\n"), "records after end"),
     ] {
@@ -599,8 +643,11 @@ fn gerber_subset_reader_rejects_header_syntax_and_order_mutations() {
         (text.replace("D01*", "D02*"), "invalid region operation"),
         (text.replacen("D02*", "D01*", 1), "invalid region operation"),
         (text.replacen("D01*", "D03*", 1), "invalid region operation"),
-        (text.replace("G37*\n", ""), "nested region"),
+        (text.replace(&format!("G37*\n{clear}{set}"), ""), "nested region"),
         (text.replace("G36*", "G36*\nG36*"), "nested region"),
+        (text.replacen(set, "", 1), "missing region function"),
+        (text.replacen(clear, "", 1), "region function not cleared"),
+        (text.replacen("G36*\n", &format!("G36*\n{set}"), 1), "attribute in region"),
     ] {
         assert_ne!(mutant, text, "mutation must affect fixture");
         assert_eq!(try_read_gerber(&mutant, function, polarity).unwrap_err(), reason);
@@ -624,7 +671,13 @@ fn aperture_eligibility_is_per_pad_within_one_footprint() {
     let [rect, rotated_rect, oval, rotated_oval] = [30_000_001, 32_000_001, 34_000_001, 36_000_001].map(|x_nm| Point { x_nm, y_nm: 25_000_003 });
     let outputs = view(&s).fabrication_outputs().unwrap();
     let read = read_gerber(&outputs, TOP_COPPER);
-    assert_eq!(read.flashes, [(rect, ReadAperture { kind: 'R', width: 2, height: 2 }), (oval, ReadAperture { kind: 'O', width: 2, height: 4 })]);
+    assert_eq!(
+        read.flashes,
+        [
+            (rect, ReadAperture { kind: 'R', width: 2, height: 2, function: Some("SMDPad,CuDef") }),
+            (oval, ReadAperture { kind: 'O', width: 2, height: 4, function: Some("SMDPad,CuDef") })
+        ]
+    );
     assert_eq!(read.regions.len(), 1);
     assert_eq!(
         read.regions[0],
@@ -635,7 +688,7 @@ fn aperture_eligibility_is_per_pad_within_one_footprint() {
         [(
             Point { y_nm: rotated_oval.y_nm + 1, ..rotated_oval },
             Point { y_nm: rotated_oval.y_nm - 1, ..rotated_oval },
-            ReadAperture { kind: 'C', width: 2, height: 2 },
+            ReadAperture { kind: 'C', width: 2, height: 2, function: None },
         )]
     );
 }
@@ -675,7 +728,7 @@ fn tiny_and_composed_rotations_do_not_flash_rectangular_or_obround_apertures() {
         (PadShape::Oval, 800_000, 400_000, 45, 45, true, Point { x_nm: 0, y_nm: 0 }),
     ] {
         let s =
-            aperture_fixture_at(&[(shape, width, height, local); 2], rotation, bottom, offset, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, false);
+            aperture_fixture_at(&[(shape, width, height, local); 2], rotation, bottom, offset, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
         let pads: Vec<_> = view(&s).footprints().flat_map(|f| f.pads).collect();
         if width == 2 && (height == 2 || height == 4) {
             assert_eq!(axis_aligned_size(&pads[0].copper.unwrap()), Some((width, height)), "snapped geometry alone would permit a flash");
@@ -741,14 +794,14 @@ fn obround_capsules_match_land_geometry_across_parity_sides_and_output_origins()
                         bottom,
                         Point { x_nm: 0, y_nm: 0 },
                         Point { x_nm: center, y_nm: -center },
-                        false,
+                        None,
                     );
                     s.apply(crate::SET_PLACEMENT_ORIGIN, &json!({"board":s.project().unwrap().board_target().unwrap().board,"origin":{"kind":"point","x_nm":origin,"y_nm":-origin},"expected_revision":s.revision()})).unwrap();
                     let fabrication = view(&s).fabrication().unwrap();
                     let frame = fabrication.origin.frame();
                     let lands = crate::board::track::lands(view(&s));
                     let pads: Vec<_> = view(&s).footprints().flat_map(|f| f.pads).collect();
-                    for output in surface_files(bottom) {
+                    for (output, function) in surface_files(bottom).into_iter().zip(["SMDPad,CuDef", "Material", "Material"]) {
                         let read = read_gerber(&fabrication.files, output);
                         assert!(read.regions.is_empty());
                         if width % 2 == height % 2 {
@@ -779,10 +832,11 @@ fn obround_capsules_match_land_geometry_across_parity_sides_and_output_origins()
                                 assert_eq!(actual, expected, "analytic O core and land core");
                             }
                         } else {
+                            let function = (function == "Material").then_some(function);
                             assert!(read.flashes.is_empty());
                             assert_eq!(read.strokes.len(), lands.len());
                             for ((a, b, aperture), land) in read.strokes.iter().zip(&lands) {
-                                assert_eq!(*aperture, ReadAperture { kind: 'C', width: width.min(height), height: width.min(height) });
+                                assert_eq!(*aperture, ReadAperture { kind: 'C', width: width.min(height), height: width.min(height), function });
                                 let contour = land.contour();
                                 let expected: BTreeSet<_> = contour
                                     .core
@@ -815,6 +869,23 @@ fn obround_capsules_match_land_geometry_across_parity_sides_and_output_origins()
     assert!(observed_fallback_difference, "legacy endpoint rounding is not general exact land equivalence");
 }
 
+/// Ucamco Gerber 2026.05 §§5.6.10 and 6.4: a swept circular tool is not the pad. A
+/// mixed-parity obround retains its endpoints, but does not share the same-size pad flash's tag.
+#[test]
+fn legacy_copper_obround_stroke_does_not_inherit_pad_function() {
+    let s = aperture_fixture_with_pads(&[(PadShape::Circle, 400_000, 400_000, 0), (PadShape::Oval, 800_001, 400_000, 0)], 0, false);
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    let read = read_gerber(&outputs, TOP_COPPER);
+    let tagged = ReadAperture { kind: 'C', width: 400_000, height: 400_000, function: Some("SMDPad,CuDef") };
+    assert_eq!(read.apertures.len(), 2);
+    assert_eq!(read.flashes, [(Point { x_nm: 30_000_001, y_nm: 25_000_003 }, tagged)]);
+    assert_eq!(
+        read.strokes,
+        [(Point { x_nm: 31_800_000, y_nm: 25_000_003 }, Point { x_nm: 32_200_002, y_nm: 25_000_003 }, ReadAperture { function: None, ..tagged },)]
+    );
+    assert!(read.regions.is_empty());
+}
+
 /// All-copper plated pads reach every copper and both outer mask files, but not paste.
 #[test]
 fn through_hole_pad_flashes_are_excluded_from_paste() {
@@ -826,12 +897,10 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
             true,
             Point { x_nm: 0, y_nm: 0 },
             Point { x_nm: 3_000_000, y_nm: -3_000_000 },
-            true,
+            Some(0),
         );
         let outputs = view(&s).fabrication_outputs().unwrap();
         // The back-side quarter turn swaps the aperture axes and mirrors the local X offsets.
-        let aperture = ReadAperture { kind, width: 400_000, height: width };
-        let expected = [3_000_000, 1_000_000].map(|y_nm| (Point { x_nm: 3_000_000, y_nm }, aperture));
         for output in [
             TOP_COPPER,
             ("-Inner_1.gbr", "Copper,L2,Inr", "Positive"),
@@ -840,6 +909,9 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
             TOP[1],
             BOTTOM[1],
         ] {
+            let function = if output.1.starts_with("Copper,") { "ComponentPad" } else { "Material" };
+            let aperture = ReadAperture { kind, width: 400_000, height: width, function: Some(function) };
+            let expected = [3_000_000, 1_000_000].map(|y_nm| (Point { x_nm: 3_000_000, y_nm }, aperture));
             let read = read_gerber(&outputs, output);
             assert_eq!(read.flashes, expected, "{}", output.0);
             assert!(read.regions.is_empty() && read.strokes.is_empty());
@@ -849,6 +921,51 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
             assert!(read.flashes.is_empty() && read.regions.is_empty() && read.strokes.is_empty());
         }
     }
+}
+
+/// Ucamco Gerber 2026.05 §5.6.10: same-sized copper with different functions must not share
+/// an aperture. Equal circles with the same function still share; read-back checks geometry too.
+#[test]
+fn equal_size_copper_uses_distinct_aperture_functions() {
+    let size = 600_000;
+    let mut s = aperture_fixture_at(
+        &[(PadShape::Circle, size, size, 0); 4],
+        0,
+        false,
+        Point { x_nm: 0, y_nm: 0 },
+        Point { x_nm: 3_000_000, y_nm: -3_000_000 },
+        Some(2),
+    );
+    let front = copper_layers(&s)[0];
+    let points = [Point { x_nm: 1_000_000, y_nm: 20_000_000 }, Point { x_nm: 3_000_000, y_nm: 20_000_000 }];
+    s.apply(crate::ADD_TRACKS, &json!({"layer":front,"width_nm":size,"points":points,"expected_revision":s.revision()})).unwrap();
+    let via = Point { x_nm: 6_000_000, y_nm: 20_000_000 };
+    s.apply(crate::ADD_VIA, &json!({"at":via,"via_diameter_nm":size,"via_drill_nm":300_000,"expected_revision":s.revision()})).unwrap();
+
+    let outputs = s.export_fabrication(&json!({})).unwrap();
+    let top = read_gerber(&outputs, TOP_COPPER);
+    let circle = |function| ReadAperture { kind: 'C', width: size, height: size, function: Some(function) };
+    let expected_apertures = ["SMDPad,CuDef", "ComponentPad", "Conductor", "ViaPad"].map(circle);
+    assert_eq!(top.apertures.len(), expected_apertures.len(), "one D-code per function, not per pad");
+    for aperture in expected_apertures {
+        assert_eq!(top.apertures.values().filter(|&&actual| actual == aperture).count(), 1);
+    }
+    assert_eq!(
+        top.flashes,
+        [
+            (Point { x_nm: 3_000_000, y_nm: 3_000_000 }, circle("SMDPad,CuDef")),
+            (Point { x_nm: 5_000_000, y_nm: 3_000_000 }, circle("SMDPad,CuDef")),
+            (Point { x_nm: 7_000_000, y_nm: 3_000_000 }, circle("ComponentPad")),
+            (Point { x_nm: 9_000_000, y_nm: 3_000_000 }, circle("ComponentPad")),
+            (Point { y_nm: -via.y_nm, ..via }, circle("ViaPad")),
+        ]
+    );
+    let [start, end] = points.map(|p| Point { y_nm: -p.y_nm, ..p });
+    assert_eq!(top.strokes, [(start, end, circle("Conductor"))]);
+    assert!(top.regions.is_empty());
+    let repeat = s.export_fabrication(&json!({})).unwrap();
+    assert_eq!(outputs, repeat);
+    assert_eq!(zip(&outputs).unwrap(), zip(&repeat).unwrap());
 }
 
 /// Shared export dispatch is read-only, deterministic, origin-aware and survives native reopen.
@@ -864,7 +981,18 @@ fn aperture_exports_preserve_revision_storage_and_history() {
     let revision = s.revision();
     let result = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
     let direct = view(&s).fabrication().unwrap();
-    assert_eq!(result["fabrication"], serde_json::to_value(&direct).unwrap());
+    let records: Vec<_> = direct
+        .files
+        .iter()
+        .map(|output| {
+            let bytes = output.contents.as_bytes();
+            json!({"name": output.name, "size_bytes": bytes.len(), "sha256": format!("{:x}", Sha256::digest(bytes))})
+        })
+        .collect();
+    assert_eq!(
+        result["fabrication"],
+        json!({"files": direct.files, "origin": direct.origin, "manifest": {"generator_version": env!("CARGO_PKG_VERSION"), "files": records}})
+    );
     assert_eq!(s.revision(), revision);
     assert_eq!(s.apply(EXPORT_FABRICATION, &json!({})).unwrap(), revision);
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
@@ -901,6 +1029,29 @@ fn outputs_require_setup_and_a_closed_outline() {
     let s = routed_fixture();
     let error = view(&s).fabrication_outputs().unwrap_err();
     assert!(error.contains("closed Board Outline"), "{error}");
+}
+
+/// Ucamco Gerber 2026.05 §§5.6.10 and 6.5: a disconnected line is not the physical profile.
+/// Preserve the existing line and loop coordinates but separate the same-width apertures.
+#[test]
+fn only_the_closed_outline_drawing_gets_the_profile_function() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let layer = view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let stray = [Point { x_nm: 30_000_000, y_nm: 0 }, Point { x_nm: 35_000_000, y_nm: 0 }];
+    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":stray,"closed":false,"expected_revision":s.revision()})).unwrap();
+    let outputs = view(&s).fabrication_outputs().unwrap();
+    let read = read_gerber(&outputs, ("-Outline.gbr", "Profile,NP", "Positive"));
+    let profile = ReadAperture { kind: 'C', width: 100_000, height: 100_000, function: Some("Profile") };
+    let loop_points =
+        [(-5_000_000, 5_000_000), (25_000_000, 5_000_000), (25_000_000, -35_000_000), (-5_000_000, -35_000_000), (-5_000_000, 5_000_000)]
+            .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    let expected: Vec<_> = loop_points.windows(2).map(|pair| (pair[0], pair[1], profile)).collect();
+    let (tagged, untagged): (Vec<_>, Vec<_>) = read.strokes.into_iter().partition(|(_, _, aperture)| aperture.function.is_some());
+    assert_eq!(read.apertures.len(), 2);
+    assert!(read.flashes.is_empty() && read.regions.is_empty());
+    assert_eq!(tagged, expected);
+    assert_eq!(untagged, [(stray[0], stray[1], ReadAperture { function: None, ..profile })]);
 }
 
 /// A local reference move affects only that footprint's silk and round-trips through native storage.
@@ -1047,9 +1198,12 @@ fn a_routed_board_produces_gerber_and_drill_files() {
     assert!(file(&outputs, "-Mask_Top.gbr").contains("%TF.FilePolarity,Negative*%"));
     assert_eq!(file(&outputs, "-Paste_Top.gbr").matches("G36*").count(), pads.len());
     assert_eq!(file(&outputs, "-Paste_Bottom.gbr").matches("G36*").count(), 0);
-    let profile = file(&outputs, "-Outline.gbr");
-    assert!(profile.contains("%TF.FileFunction,Profile,NP*%"));
-    assert_eq!(profile.matches("D01*").count(), 4, "a closed rectangle is four strokes");
+    let profile = read_gerber(&outputs, ("-Outline.gbr", "Profile,NP", "Positive"));
+    assert_eq!(profile.strokes.len(), 4, "a closed rectangle is four strokes");
+    assert!(profile.strokes.iter().all(|(_, _, aperture)| aperture.function == Some("Profile")));
+    let silk = read_gerber(&outputs, ("-Silkscreen_Top.gbr", "Legend,Top", "Positive"));
+    assert!(!silk.apertures.is_empty());
+    assert!(silk.apertures.values().all(|aperture| aperture.function == Some("Material")));
 
     let drill = file(&outputs, "-PTH.drl");
     assert!(drill.starts_with("M48\n") && drill.ends_with("M30\n"));
@@ -1057,31 +1211,92 @@ fn a_routed_board_produces_gerber_and_drill_files() {
     assert!(drill.contains("X7.000Y-20.000\n"), "{drill}");
 }
 
-/// The same board gives byte-identical files and archive. Every entry retains its contents,
-/// fixed timestamp and Unix regular-file metadata, including on Windows.
+/// Read the JSON actually stored in a captured ZIP.
+fn embedded_manifest(capture: &Archive) -> Value {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(capture.bytes())).unwrap();
+    serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap()
+}
+
+/// The same board gives byte-identical archives. The sole extra member describes the exact
+/// generated bytes in order, not itself or the outer ZIP. All entries have fixed metadata.
 #[test]
-fn outputs_and_their_archive_are_deterministic() {
-    let mut s = routed_fixture();
-    outline(&mut s);
-    let first = view(&s).fabrication_outputs().unwrap();
-    assert_eq!(first, view(&s).fabrication_outputs().unwrap());
-    let bytes = zip(&first).unwrap();
-    assert_eq!(bytes, zip(&first).unwrap());
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
-    let mut names: Vec<String> = archive.file_names().map(|name| name.unwrap().into_owned()).collect();
-    names.sort();
-    let mut expected: Vec<_> = first.iter().map(|output| output.name.clone()).collect();
-    expected.sort();
-    assert_eq!(names, expected);
-    for output in &first {
-        let mut entry = archive.by_name(&output.name).unwrap();
-        assert_eq!(entry.system(), zip::System::Unix, "{}", output.name);
-        assert_eq!(entry.unix_mode(), Some(0o100644), "{}", output.name);
-        assert_eq!(entry.last_modified(), Some(zip::DateTime::default()), "{}", output.name);
-        let mut contents = String::new();
-        entry.read_to_string(&mut contents).unwrap();
-        assert_eq!(contents, output.contents, "{}", output.name);
+fn embedded_manifest_matches_every_generated_member() {
+    let mut session = routed_fixture();
+    outline(&mut session);
+    let outputs = session.export_fabrication(&json!({})).unwrap();
+    let capture = session.export_fabrication_archive(&json!({})).unwrap();
+    assert_eq!(capture.bytes(), zip(&outputs).unwrap());
+    assert_eq!(capture, session.export_fabrication_archive(&json!({})).unwrap());
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(capture.bytes())).unwrap();
+    let names: Vec<_> = archive.file_names().map(|name| name.unwrap().into_owned()).collect();
+    assert_eq!(names.iter().filter(|name| name.as_str() == "manifest.json").count(), 1);
+    assert!(!outputs.is_empty());
+    assert_eq!(archive.len(), outputs.len() + 1);
+    let mut records = Vec::new();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).unwrap();
+        assert_eq!(entry.system(), zip::System::Unix);
+        assert_eq!(entry.unix_mode(), Some(0o100644));
+        assert_eq!(entry.last_modified(), Some(zip::DateTime::default()));
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes).unwrap();
+        if let Some(output) = outputs.get(index) {
+            assert_eq!(entry.name().unwrap(), output.name);
+            assert_eq!(bytes, output.contents.as_bytes());
+            records.push(json!({"name": output.name, "size_bytes": bytes.len(), "sha256": format!("{:x}", Sha256::digest(&bytes))}));
+        } else {
+            assert_eq!(entry.name().unwrap(), "manifest.json");
+            assert_eq!(bytes.last(), Some(&b'\n'));
+            assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), json!({"generator_version": env!("CARGO_PKG_VERSION"), "files": records}));
+        }
     }
+}
+
+/// Byte sizes and digests include multibyte UTF-8 and preserve LF versus CRLF without normalization.
+#[test]
+fn manifest_counts_bytes_not_characters_or_lines() {
+    let outputs = [Output { name: "text.txt".into(), contents: "é\r\nλ\n".into() }];
+    let capture = Archive::new(&outputs).unwrap();
+    let manifest = embedded_manifest(&capture);
+    let record = &manifest["files"][0];
+    assert_eq!(record["size_bytes"], 7);
+    assert_eq!(record["sha256"], format!("{:x}", Sha256::digest(b"\xc3\xa9\r\n\xce\xbb\n")));
+    assert_ne!(record["sha256"], format!("{:x}", Sha256::digest("é\nλ\n".as_bytes())));
+}
+
+/// Generic callers cannot shadow the embedded manifest with another file of that name.
+#[test]
+fn archive_reserves_the_manifest_member_name() {
+    for name in ["manifest.json", "MANIFEST.JSON"] {
+        let output = Output { name: name.into(), contents: "not the manifest".into() };
+        assert!(Archive::new(&[output]).unwrap_err().contains("manifest.json is reserved"));
+    }
+}
+
+/// The command result and embedded manifest agree. Neither export edits documents, revision or
+/// undo/redo; a later edit affects the new capture but not the earlier ZIP or its manifest.
+#[test]
+fn manifest_is_read_only_and_stays_bound_to_its_capture() {
+    use crate::persistence::encode_documents;
+    let mut session = routed_fixture();
+    outline(&mut session);
+    let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    let capture = session.export_fabrication_archive(&json!({})).unwrap();
+    let manifest = embedded_manifest(&capture);
+    let result = session.execute(EXPORT_FABRICATION, &json!({})).unwrap();
+    assert_eq!(result["fabrication"]["manifest"], manifest);
+    assert_eq!(result["revision"], revision);
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+    let [front, _] = copper_layers(&session)[..] else { panic!("two copper layers") };
+    route(&mut session, front, &[Point { x_nm: 1_000_000, y_nm: 20_000_000 }, Point { x_nm: 3_000_000, y_nm: 20_000_000 }]).unwrap();
+    let changed = session.export_fabrication_archive(&json!({})).unwrap();
+    assert_ne!(capture.bytes(), changed.bytes());
+    assert_ne!(manifest["files"], embedded_manifest(&changed)["files"]);
+    assert_eq!(embedded_manifest(&capture), manifest);
 }
 
 /// The command edits nothing and returns every file through execute.

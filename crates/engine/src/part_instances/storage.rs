@@ -35,7 +35,7 @@ pub(crate) fn insert(documents: &mut Documents, path: String, bytes: Vec<u8>) ->
     documents.insert(path, bytes);
     Ok(())
 }
-/// Write a canonical JSON dependency using the same bytes as the existing footprint encoder.
+/// Write a canonical JSON dependency without a specialized native definition codec.
 fn write<T: serde::Serialize>(documents: &mut Documents, kind: &str, reference: &Reference, value: &T) -> Result<(), String> {
     let mut bytes = serde_json::to_vec_pretty(value).map_err(|error| error.to_string())?;
     bytes.push(b'\n');
@@ -49,12 +49,8 @@ pub(crate) fn collect(selection: &Selection, documents: &mut Documents) -> Resul
         write(documents, "categories", &category.reference(), category.as_ref())?;
     }
     for footprint in selection.resolved.footprints.values() {
-        write(
-            documents,
-            "footprints",
-            &Reference { library: footprint.library.clone(), id: footprint.id.clone(), revision: footprint.revision },
-            footprint.as_ref(),
-        )?;
+        let reference = Reference { library: footprint.library.clone(), id: footprint.id.clone(), revision: footprint.revision };
+        insert(documents, path("footprints", &reference)?, crate::board::definition::write_saved(footprint)?)?;
     }
     if let Some(manufacturer) = &selection.manufacturer {
         write(documents, "manufacturer-parts", &manufacturer.reference(), manufacturer.as_ref())?;

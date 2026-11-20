@@ -5,6 +5,7 @@ mod operations;
 pub mod publishing;
 #[cfg(test)]
 mod publishing_tests;
+pub mod remap;
 use crate::{
     board::definition as footprint,
     library,
@@ -19,6 +20,7 @@ use std::{collections::BTreeMap, sync::Arc};
 pub const MAX_BYTES: usize = 1 << 20;
 const FORMAT: &str = "pcbcraft-library-item/1";
 const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
+const NPTH_FORMAT: &str = "pcbcraft-library-item/3";
 const HISTORY: usize = 64;
 
 /// A definition editor is distinct from schematic-sheet and board-placement editors.
@@ -94,6 +96,9 @@ pub enum Primitive {
     Pad {
         pad: footprint::RectPad,
     },
+    NonPlatedHole {
+        hole: footprint::CircularNpth,
+    },
     Outline {
         graphic: footprint::GraphicRect,
     },
@@ -117,6 +122,7 @@ impl Primitive {
             Self::Circle { center, .. } => *center,
             Self::Polyline { points } => points.first().copied().unwrap_or(Point { x_nm: 0, y_nm: 0 }),
             Self::Pad { pad } => pad.center,
+            Self::NonPlatedHole { hole } => hole.center,
             Self::Outline { graphic } => graphic.center,
             Self::Silkscreen { path } => path.points.first().copied().unwrap_or(Point { x_nm: 0, y_nm: 0 }),
         }
@@ -170,6 +176,7 @@ impl Primitive {
                 pad.center = at(pad.center)?;
                 Self::Pad { pad }
             }
+            Self::NonPlatedHole { hole } => Self::NonPlatedHole { hole: footprint::CircularNpth { center: at(hole.center)?, ..*hole } },
             Self::Outline { graphic } => {
                 let mut graphic = graphic.clone();
                 graphic.center = at(graphic.center)?;
@@ -303,6 +310,10 @@ pub enum Action {
     },
     ReplaceMany {
         primitives: BTreeMap<u64, Primitive>,
+    },
+    /// Renumber explicitly selected logical pins simultaneously, including shared unit appearances.
+    RemapPins {
+        pins: Vec<remap::PinRemap>,
     },
     Delete {
         objects: Vec<u64>,
@@ -552,6 +563,9 @@ impl Item {
             return Err("This footprint states an assembly orientation, which the editor cannot keep yet.".into());
         }
         let mut item = Self::new(Kind::Footprint)?;
+        if !definition.non_plated_holes.is_empty() {
+            item.format = NPTH_FORMAT.into();
+        }
         item.objects.clear();
         item.license = definition.license.clone();
         item.reference_font = definition.reference.clone();
@@ -562,6 +576,7 @@ impl Item {
             .iter()
             .cloned()
             .map(|pad| Primitive::Pad { pad })
+            .chain(definition.non_plated_holes.iter().copied().map(|hole| Primitive::NonPlatedHole { hole }))
             .chain(definition.graphics.iter().cloned().map(|graphic| Primitive::Outline { graphic }))
             .chain(definition.artwork.iter().cloned().map(|artwork| Primitive::Artwork { artwork }))
             .chain(definition.silkscreen.iter().cloned().map(|path| Primitive::Silkscreen { path }))
@@ -657,6 +672,7 @@ impl Item {
             Ok(value)
         } else {
             let mut pads = Vec::new();
+            let mut non_plated_holes = Vec::new();
             let mut artwork = Vec::new();
             let mut graphics = Vec::new();
             let mut silkscreen = Vec::new();
@@ -664,13 +680,14 @@ impl Item {
                 match object {
                     Primitive::Artwork { artwork: a } => artwork.push(a.clone()),
                     Primitive::Pad { pad } => pads.push(pad.clone()),
+                    Primitive::NonPlatedHole { hole } => non_plated_holes.push(*hole),
                     Primitive::Outline { graphic } => graphics.push(graphic.clone()),
                     Primitive::Silkscreen { path } => silkscreen.push(path.clone()),
                     _ => return Err("A footprint cannot contain schematic primitives.".into()),
                 }
             }
             let definition = footprint::FootprintDefinition {
-                format: "pcbcraft-footprint/1".into(),
+                format: footprint::FootprintDefinition::format_for(!non_plated_holes.is_empty()).into(),
                 library: self.library.clone(),
                 id: self.id.clone(),
                 revision: self.revision,
@@ -678,6 +695,7 @@ impl Item {
                 license: self.license.clone(),
                 source: footprint::Source { kind: "native-editor".into(), reference: self.source.clone(), locator: self.id.clone() },
                 pads,
+                non_plated_holes,
                 graphics,
                 artwork,
                 silkscreen,
@@ -694,11 +712,17 @@ impl Item {
         }
     }
 
+    /// Detect new footprint content without inferring electrical meaning from a pad number.
+    fn has_npth(&self) -> bool {
+        self.kind == Kind::Footprint && self.objects.values().any(|object| matches!(object, Primitive::NonPlatedHole { .. }))
+    }
+
     /// Bound the editor envelope as well as the derived native geometry and electrical metadata.
     pub fn validate(&self) -> Result<(), String> {
         let all_objects: Vec<_> = self.objects.iter().chain(self.other_units.values().flat_map(|objects| objects.iter())).collect();
         let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
-        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT)
+        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT)
+            || (self.format == NPTH_FORMAT) != self.has_npth()
             || (!self.other_units.is_empty() && (self.format != MULTI_UNIT_FORMAT || self.kind != Kind::Symbol))
             || (!self.unit_order.is_empty()
                 && (self.unit_order.len() != self.other_units.len() + 1
@@ -781,6 +805,7 @@ pub struct Session {
     next_content_revision: u32,
     published: Option<publishing::Address>,
     publication_saved: Option<Arc<Item>>,
+    published_symbol: Option<Arc<SymbolDefinition>>,
 }
 
 impl Session {
@@ -800,6 +825,7 @@ impl Session {
             next_content_revision,
             published: None,
             publication_saved: None,
+            published_symbol: None,
         })
     }
     /// Retain immutable data for rendering or an in-flight save.
@@ -878,6 +904,7 @@ impl Session {
                         }
                         next.objects.extend(primitives);
                     }
+                    Action::RemapPins { pins } => remap::apply(&mut next, &pins)?,
                     Action::Delete { objects } => {
                         if objects.is_empty() {
                             return Err("Choose at least one primitive.".into());
@@ -975,6 +1002,9 @@ impl Session {
                 }
                 next.revision = self.next_content_revision;
                 next.allocation = Allocation { object: cursor - 1, revision: self.next_content_revision };
+                if next.kind == Kind::Footprint {
+                    next.format = if next.has_npth() { NPTH_FORMAT } else { FORMAT }.into();
+                }
                 next.validate()?;
                 let next_content_revision = self.next_content_revision.checked_add(1).ok_or("Content revision limit reached.")?;
                 let next_id = cursor;

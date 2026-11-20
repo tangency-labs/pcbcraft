@@ -13,6 +13,8 @@
     "busy",
     "no_reply",
     "connection_failed",
-    "invalid_request"
+    "invalid_request",
+    "version_mismatch",
+    "out_of_scope"
   ]
 }

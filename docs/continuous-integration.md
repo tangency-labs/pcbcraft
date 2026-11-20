@@ -58,6 +58,14 @@ pushes supersede prior PR work; unrelated labels cannot cancel a real build.
 
 ## Full builds, Windows and caches
 
+Pages builds and deploys run inside CI after the aggregate `checks` job succeeds
+in full-validation mode. Only public-repository main pushes and manual CI runs
+on main can deploy; PR, nightly and documentation-only runs do not publish the
+site. The build checks out the exact tested commit, and deployment checks main
+again before publishing so a superseded revision is skipped. An API failure
+prevents deployment. The separate push-triggered Pages workflow has been removed,
+so manual deployment also goes through the full CI workflow.
+
 Full runs retain the complete Windows workspace suite, both Windows Clippy
 passes, Python/Node regressions and the opt-in harness. Windows checkouts keep
 `core.autocrlf=true`; Git attributes protect recorded evidence bytes. The build

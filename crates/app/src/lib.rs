@@ -260,6 +260,7 @@ enum Dialog {
     LibraryClose(Option<u64>),
     LibraryProperties(u64, ViewId),
     LibraryArray(Box<library_editors::editing::ArrayDraft>),
+    LibraryPinRemap(Box<library_editors::remap::Draft>),
     LibraryPublish(library_editors::publishing::Draft),
     PartReference(Box<part_documents::picker::State>),
     NewLibrary(library_editors::publishing::NewLibrary),
@@ -325,6 +326,19 @@ pub struct PcbApp {
     dialog: Dialog,
     /// Whether the Home page replaces the ribbon and canvas. The project stays open behind it.
     home: bool,
+    /// The project path the desktop command line asked to open, spent on the first drawn
+    /// frame; `None` keeps startup at Home.
+    #[cfg(not(target_arch = "wasm32"))]
+    startup_open: Option<std::path::PathBuf>,
+    /// Set once the command line's startup open has a running worker, cleared when a result
+    /// comes back for it; a failed result then also reports once to the launching terminal.
+    /// A setup failure that never starts a worker prints once without setting it.
+    /// Opens started in the window (picker or recents) never set it.
+    #[cfg(not(target_arch = "wasm32"))]
+    startup_open_pending: bool,
+    /// Startup open failures printed to the launching terminal, kept for tests.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    startup_reports: Vec<String>,
     /// Why the last command failed, until the next one runs.
     message: Option<String>,
     /// Selection inspector visibility belongs to this native host.
@@ -461,6 +475,18 @@ impl PcbApp {
         self
     }
 
+    /// Open `path` through the ordinary project-file worker when this window first draws,
+    /// instead of waiting for a choice on Home. The path names a project folder, its
+    /// `project.json` or a `.pc` archive, the same targets recent projects reopen. The
+    /// ordinary completion path enters the workspace on success; on failure the status bar
+    /// reports the error and Home stays usable. The path is spent on that first frame either
+    /// way. Desktop only: the browser has no command line.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_startup_project(mut self, path: std::path::PathBuf) -> Self {
+        self.startup_open = Some(path);
+        self
+    }
+
     pub fn session(&self) -> &Session {
         &self.session
     }
@@ -590,6 +616,58 @@ impl PcbApp {
             self.dialog = Dialog::OpenLocation;
         }
         self.file_notice = None;
+    }
+
+    /// Start the open the desktop command line asked for, once, on the frame that first runs
+    /// the file poll; the path is spent whether or not the worker starts. Mirrors a
+    /// recent-project reopen: no picker or disk access runs on the editor thread, the
+    /// ordinary completion path adopts or reports the result, and a worker that cannot start
+    /// reports in the status bar and prints the same line once to the launching terminal.
+    /// A started worker marks the job so its failure also reaches the launching terminal.
+    /// Only the native launcher sets a startup path.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn begin_startup_open(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.startup_open.take() else { return };
+        let path = Self::resolve_startup_path(path);
+        self.file_notice = None;
+        if let Some(error) = self.files.open_path(path, self.session.revision(), ctx).err() {
+            self.print_startup_failure(&error);
+            self.message = Some(error);
+        } else {
+            self.startup_open_pending = true;
+        }
+    }
+
+    /// Resolve the path named on the command line against the launching directory, so `.` and
+    /// a bare `project.json` or `.pc` name keep a parent directory and a file name for the
+    /// ordinary open. This is lexical resolution only; filesystem lookup for a nameless
+    /// directory such as `..` or a drive/share root belongs to the native file worker.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn resolve_startup_path(path: std::path::PathBuf) -> std::path::PathBuf {
+        std::path::absolute(&path).unwrap_or(path)
+    }
+
+    /// Print one startup open failure line to the launching terminal, and keep it for tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn print_startup_failure(&mut self, error: &str) {
+        eprintln!("{error}");
+        #[cfg(test)]
+        self.startup_reports.push(error.to_owned());
+    }
+
+    /// Decide the launching terminal's part in one file poll result. While the worker has
+    /// no result yet `update` is `None` and the startup arming survives the frame; the
+    /// worker cannot finish in the frame that starts it, so no result-free frame may
+    /// consume it. The first result consumes the arming whatever it is, and only an error
+    /// also prints to the terminal. Picker and recents opens never arm, so they never print.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn report_startup_open(&mut self, update: Option<&project_files::Update>) {
+        let Some(update) = update else { return };
+        if std::mem::take(&mut self.startup_open_pending)
+            && let project_files::Update::Error(error) = update
+        {
+            self.print_startup_failure(error);
+        }
     }
 
     /// Start a save or download for the current snapshot and report setup failures.
@@ -934,13 +1012,20 @@ impl PcbApp {
         self.assistant.show(ctx, workspace, &self.session, can_edit, has_document);
         self.serve_chat(ctx);
         if let Some(request) = self.assistant.take_settings_request() {
-            self.dialog = match request {
-                assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
-                assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
-            };
+            self.open_assistant_settings(request);
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.request_repaint();
         }
+    }
+
+    /// Retire the remap form's capture before either Assistant settings dialog displaces it.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_assistant_settings(&mut self, request: assistant::SettingsRequest) {
+        self.dismiss_library_pin_remap();
+        self.dialog = match request {
+            assistant::SettingsRequest::Settings => Dialog::Preferences(preferences::PreferencesWindow::at_ai(self.preferences)),
+            assistant::SettingsRequest::Add(form) => Dialog::Agent { form, return_to: None },
+        };
     }
 
     /// Route the Assistant toggle and report whether its chat owns the canvas keys.
@@ -2285,6 +2370,7 @@ impl PcbApp {
             Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),
             Dialog::ExternalPasteOptions(draft) => self.external_paste_options_dialog(ctx, draft),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
+            Dialog::LibraryPinRemap(draft) => self.library_pin_remap_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
@@ -2510,11 +2596,24 @@ impl PcbApp {
         self.adopt_opened_library(&ctx);
         self.sync_library_bindings();
         match self.fabrication_exports.poll() {
-            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication outputs".into()),
+            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication ZIP".into()),
+            #[cfg(any(test, target_arch = "wasm32"))]
+            Some(Ok(board_outputs::Outcome::DownloadRequested)) => {
+                self.file_notice = Some("Requested fabrication ZIP download; check your browser".into());
+            }
             Some(Ok(board_outputs::Outcome::Cancelled)) | None => {}
             Some(Err(error)) => self.message = Some(error),
         }
-        if let Some(update) = self.files.poll(&mut self.session, &ctx) {
+        // The desktop command line's open starts once, before this frame's poll can report it.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.begin_startup_open(&ctx);
+        let update = self.files.poll(&mut self.session, &ctx);
+        // A command-line startup open that failed also prints its error once to the launching
+        // terminal, the same line the status bar shows; result-free frames leave the arming
+        // intact. Only begin_startup_open arms it, so picker and recents opens never print.
+        #[cfg(not(target_arch = "wasm32"))]
+        self.report_startup_open(update.as_ref());
+        if let Some(update) = update {
             match update {
                 project_files::Update::Opened => {
                     self.views.bind_opened_project(&self.session);

@@ -67,7 +67,7 @@ impl PartDefinition {
             if !field_id(id) {
                 return Err(format!("Invalid namespaced parameter {id:?}."));
             }
-            value.validate()?;
+            value.validate_entry(id)?;
         }
         for (id, package) in &self.packages {
             crate::library::check_id(id)?;

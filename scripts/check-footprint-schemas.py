@@ -34,7 +34,8 @@ def validate(definitions: list[Path], placements: list[Path], placement_version:
         json.loads((root / "docs/schemas" / name).read_text(encoding="utf-8"))
         for name in (
             "footprint-v1.schema.json",
-            "footprint-v2.schema.json",
+            "footprint-v4.schema.json",
+            "footprint-v7.schema.json",
             f"footprint-placement-v{placement_version}.schema.json",
             "library-common-v1.schema.json",
         )
@@ -44,24 +45,20 @@ def validate(definitions: list[Path], placements: list[Path], placement_version:
     registry = Registry().with_resources(
         (schema["$id"], Resource.from_contents(schema)) for schema in schemas
     )
-    v1, v2, placement_validator, _ = [Draft202012Validator(schema, registry=registry) for schema in schemas]
+    legacy, npth, oriented, placement, _common = [Draft202012Validator(schema, registry=registry) for schema in schemas]
     # Other or malformed format fields are rejected by the format-1 validator.
-    by_format = {"pcbcraft-footprint/1": v1, "pcbcraft-footprint/2": v2}
+    by_format = {"pcbcraft-footprint/1": legacy, "pcbcraft-footprint/4": npth, "pcbcraft-footprint/7": oriented}
     bundled = sorted((root / "libraries/basic-components/footprints").glob("*.json"))
     if not bundled:
         raise ValueError("No bundled footprint definitions found.")
-    for placement, paths in [(False, bundled + definitions), (True, placements)]:
-        for path in paths:
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-                if placement:
-                    placement_validator.validate(record)
-                else:
-                    fmt = record.get("format") if isinstance(record, dict) else None
-                    validator = by_format.get(fmt, v1) if isinstance(fmt, str) else v1
-                    validator.validate(record)
-            except (OSError, ValueError, ValidationError) as error:
-                raise ValueError(f"{path}: {error}") from error
+    for path, validator in [(p, legacy) for p in bundled + definitions] + [(p, placement) for p in placements]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if validator is legacy and isinstance(value, dict) and isinstance(value.get("format"), str):
+                validator = by_format.get(value["format"], legacy)
+            validator.validate(value)
+        except (OSError, ValueError, ValidationError) as error:
+            raise ValueError(f"{path}: {error}") from error
     print(
         f"Validated {len(schemas)} schemas, {len(bundled) + len(definitions)} "
         f"footprint definitions and {len(placements)} physical placement records."

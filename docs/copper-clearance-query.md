@@ -5,8 +5,11 @@ an integer convex core expanded by a floating radius. Rectangular and rounded
 rectangular pads retain their resolved cores; circles, ovals, round-ended tracks
 and through vias use point or segment cores. Connectivity, DRC copper separation,
 disposable query probes and DRC board-edge distances share this representation.
-Native circular arcs remain the separate representation and integration work in
-[#259](https://github.com/tangency-labs/pcbcraft/issues/259).
+[Exact circular copper records](circular-copper-records.md) can be saved, but
+query preparation explicitly refuses a board containing them. Circular contours,
+connectivity and query integration remain follow-up work in
+[#259](https://github.com/tangency-labs/pcbcraft/issues/259); arcs are never queried
+as straight endpoint chords.
 
 `Session::clearance_query(BoardTarget, clearance_nm)` captures an immutable
 project snapshot, explicit board, session identity, opening, revision and effective

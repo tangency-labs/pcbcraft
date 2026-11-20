@@ -7,9 +7,10 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-In board format 34, the placed footprint owns `locked`, an optional boolean
-that defaults to false and is omitted by fresh canonical encoding when false.
-At least one true footprint lock requires format 34; the flag does not change
+In board formats 34 and 35, the placed footprint owns `locked`, an optional
+boolean that defaults to false and is omitted by fresh canonical encoding when
+false. An active footprint lock requires format 34, or 35 when arcs are also
+present; the flag does not change
 the pinned library definition or mapping. This is
 [storage and inspection only](pcb-layout-workflow.md#footprint-lock-metadata-storage-only),
 not a lock command or edit-protection contract. The historical format-15
@@ -17,18 +18,20 @@ placement schema below remains frozen and does not accept this newer field.
 
 Board format 15 adds local reference position and print overrides. Earlier board
 formats retain their existing encodings when these fields are absent. Footprint
-library definitions use their own versioned format: format 2 is format 1 plus the
-[assembly orientation](#assembly-orientation) statement, and a definition without
-one keeps format 1 and its existing bytes.
+library definitions are independently versioned: definitions without non-plated
+holes or an [assembly orientation](#assembly-orientation) statement still write
+format 1; definitions with holes write format 4; and a definition with an
+orientation statement writes format 7, with or without holes.
 
 | Document | Format | Machine-readable schema |
 | --- | --- | --- |
-| Published footprint definition | `pcbcraft-footprint/1` | [Footprint schema](schemas/footprint-v1.schema.json) |
-| Published footprint definition with an orientation statement | `pcbcraft-footprint/2` | [Footprint schema, format 2](schemas/footprint-v2.schema.json) |
+| Published footprint without non-plated holes | `pcbcraft-footprint/1` | [Footprint schema](schemas/footprint-v1.schema.json) |
+| Published footprint with circular non-plated through holes | `pcbcraft-footprint/4` | [Footprint schema with holes](schemas/footprint-v4.schema.json) |
+| Published footprint with an orientation statement | `pcbcraft-footprint/7` | [Footprint schema with orientation](schemas/footprint-v7.schema.json) |
 | Physical placement inside a board | Enclosing `pcbcraft-board/15` | [Placement schema](schemas/footprint-placement-v15.schema.json) |
 
 The schemas use [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12/json-schema-core).
-Register both schemas locally by their `$id` URNs when validating placements.
+Register the schemas locally by their `$id` URNs when validating definitions and placements.
 Their references resolve from those registrations, with no network lookup.
 Application validation belongs in the shared command and storage codecs. These
 schema documents are also available to library tooling independently of the
@@ -41,8 +44,8 @@ definitions.
 Additional arguments accept standalone native definitions. By default,
 `--placement` checks one historical format-15 physical placement record. Use
 `--placement-version 17` for the historical format-17 mapping described in the
-[part schema guide](part-schema.md). Neither checker is a validator for format 34;
-use the native board reader for that format.
+[part schema guide](part-schema.md). Use the native board reader to validate
+formats 34 and 35.
 
 ```sh
 python3 scripts/check-footprint-schemas.py
@@ -57,7 +60,7 @@ python3 -B -m unittest discover -s scripts -p 'test_footprint_schemas.py'
 
 ## Ownership and identity
 
-A footprint owns pads, physical artwork and a generated reference's default
+A footprint owns pads, mechanical holes, physical artwork and a generated reference's default
 position and font. A component instance owns its reference text, such as `R12`.
 A board placement owns its origin, orientation, side, terminal-to-pad mapping
 and optional reference displacement. Library previews substitute `REF` for the
@@ -84,18 +87,19 @@ also accept `null` for some optional Rust fields as a compatibility input.
 
 | Field | Type and constraint | Meaning |
 | --- | --- | --- |
-| `format` | Exact string `pcbcraft-footprint/1`, or `pcbcraft-footprint/2` exactly when `orientation` is present | Native footprint field contract |
+| `format` | `pcbcraft-footprint/1`, `pcbcraft-footprint/4`, or `pcbcraft-footprint/7` exactly when `orientation` is present | Native footprint field contract |
 | `library`, `id` | 1–64 lowercase ASCII letters, digits and internal hyphens | Stable library and item identity |
 | `revision` | Integer 1…4,294,967,295 | Immutable content revision |
 | `name`, `license` | Nonempty trimmed strings, at most 200 UTF-8 bytes each | Display name and license declaration |
 | `source` | Required `kind`, `reference`, `locator` strings | Provenance, preserved when pinned |
-| `pads` | 1…128 distinct numbered pads | Physical lands and optional plated drills |
+| `pads` | 1…128 distinct numbered pads in format 1; 0…128 in formats 4 and 7, with at least one pad or hole | Physical lands and optional plated drills |
+| `non_plated_holes` | Required 1…128 entries in format 4; optional 1…128 in format 7; forbidden in format 1 | Circular mechanical holes, each with a local `center` and a positive finished `diameter_nm` |
 | `graphics` | 0…64 rectangles | Fabrication, silkscreen or courtyard geometry |
 | `artwork` | Optional 1…128 parameterized objects | Lines, rectangles, circles, arcs, polylines or stroke text |
 | `silkscreen` | Optional 1…64 centerline paths | Physical paths clipped against pad clearance |
 | `reference` | Optional `pcbcraft-stroke-1` or `pcbcraft-technical-1` | Enable generated reference text using this font |
 | `reference_offset` | Optional nonzero local point | Displace the generated reference from its automatic anchor |
-| `orientation` | Optional object, format 2 only | Polarity, pin 1 pad and stated zero orientation for assembly |
+| `orientation` | Required in format 7; forbidden in formats 1 and 4 | Polarity, pin 1 pad and stated zero orientation for assembly |
 
 Source strings are nonempty, trimmed and free of control characters. Their UTF-8
 byte limits are 64 for `kind`, 2,048 for `reference` and 1,024 for `locator`.
@@ -107,6 +111,12 @@ They contain 1…8 ASCII letters, digits, `+`, `-` or `_`. The
 defines the existing land shapes, copper bindings and drill relationships.
 Parameterized artwork uses the existing shared drawing geometry, with physical
 stroke width and `fill` equal to `none`.
+
+A `non_plated_holes` entry has exactly `center` and `diameter_nm` (1…100,000,000).
+The array implies a non-plated through hole with no copper land. It has no pad
+number and does not participate in terminal mappings or connectivity. Footprint
+rotation and side changes transform its center, not its diameter. An empty array
+is not a format-4 definition; removing the last hole restores the format-1 writer.
 
 ## Coordinates and generated reference
 
@@ -286,7 +296,7 @@ change an existing adoption.
 
 IPC-7351 section 7.3.1 asks that a device's orientation and polarity be defined in
 the CAD data, and section 16 defines placement rotations from the library's zero
-component orientation. A format-2 definition may state both in `orientation`:
+component orientation. A format-7 definition states both in `orientation`:
 
 | Field | Type and constraint | Meaning |
 | --- | --- | --- |
@@ -296,7 +306,7 @@ component orientation. A format-2 definition may state both in `orientation`:
 
 The object is closed to unknown fields, `null` is refused for each field and for the
 object, and `pin_1` must name an existing pad. The editor does not keep the statement
-yet, so it declines to open or fork a format-2 definition instead of dropping it.
+yet, so it declines to open or fork a format-7 definition instead of dropping it.
 Symbols and parts carry no orientation data.
 
 Whether a part shows its orientation on the board is derived from geometry, not
@@ -330,7 +340,7 @@ other fields or project state.
 - Drawing extents after tessellation stay within definition bounds. Lines have
   distinct endpoints, rectangles have ordered corners, and polyline segments
   have distinct consecutive points. Text is nonblank and control-free.
-- The format is `pcbcraft-footprint/2` exactly when `orientation` is present, and
+- The format is `pcbcraft-footprint/7` exactly when `orientation` is present, and
   its `pin_1`, when given, names one of the definition's pads.
 - Metadata meets the UTF-8 byte limits and trimming rules. JSON Schema's string
   lengths count Unicode characters, so its bounds alone cannot establish this.
@@ -341,9 +351,13 @@ other fields or project state.
 - The board format agrees with the fields present. Retained legacy forms and
   no-op save bytes retain their existing compatibility behavior.
 
-Editable authoring documents use `pcbcraft-library-item/1`, with stable
-primitive IDs, draft state and revision allocation. A draft may have no pads.
-Export validates a complete published definition against the footprint contract.
+Editable authoring documents retain `pcbcraft-library-item/1` when there are no
+non-plated holes and use `pcbcraft-library-item/3` when a hole is present. Both
+keep stable primitive IDs, draft state and revision allocation. Drafts may have
+no pads; a footprint with at least one non-plated hole can also be exported with
+zero pads. Export validates the published definition against the footprint contract.
+Native board placement still uses an assigned schematic component and a pad mapping.
+A standalone board-owned footprint without a schematic component cannot be placed.
 The published schema therefore applies after export. Reopening the draft retains
 the default reference offset and subsequent exports retain its new revision.
 
@@ -357,8 +371,8 @@ version for placed overrides.
 
 The format-1 field set defined here is fixed. Future authored fields or changed
 meanings require a new footprint format and an explicit compatibility design.
-Format 2 is the first such step: it adds only `orientation`, and the writer uses it
-only for a definition that carries the statement. Readers of format 1 refuse format 2
+Format 7 adds only `orientation` to format 4, and the writer uses it only for a
+definition that carries the statement. Readers of formats 1 and 4 refuse format 7
 cleanly instead of dropping the statement.
 The board-local appearance fields above extend the first format-15 implementation
 before its release. Later changes to the released board contract require their

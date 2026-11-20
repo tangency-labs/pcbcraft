@@ -305,6 +305,24 @@ fn center_alignment_is_idempotent_across_zero() {
     }
 }
 
+/// An offset odd-diameter opening extends the alignment edge, not just the displayed outline.
+#[test]
+fn alignment_uses_the_outer_edge_of_a_non_plated_hole() {
+    use crate::board::{
+        definition::CircularNpth,
+        track::tests::{routed_fixture, view},
+    };
+    let session = routed_fixture();
+    let board = view(&session);
+    let mut footprint = board.footprints().next().unwrap();
+    let plain = super::bounds(&footprint);
+    let center = Point { x_nm: plain[2] + 1_000_000, y_nm: footprint.position.y_nm };
+    footprint.non_plated_holes.push(CircularNpth { center, diameter_nm: 600_001 });
+    let mechanical = super::bounds(&footprint);
+    assert_eq!(mechanical[2], center.x_nm + 300_001);
+    assert_eq!(super::alignment(AlignMode::Right, &[plain, mechanical]).unwrap(), vec![(1_300_001, 0), (0, 0)]);
+}
+
 /// The command aligns real footprints in one undoable edit, is a no-op when already aligned,
 /// and refuses too few, repeated or unknown footprints and unknown modes.
 #[test]
@@ -520,20 +538,20 @@ fn moving_a_footprint_leaves_track_outside_rounded_copper_fixed() {
     .unwrap();
     let before = view(&s).tracks().to_vec();
     let track = before[0].id;
-    let copper = view(&s).copper();
+    let copper = view(&s).copper().unwrap();
     assert_ne!(copper.pads[&pad_key], copper.tracks[&track], "the copper does not reach the rounded pad");
-    assert!(!view(&s).copper_nets().contains_key(&track));
+    assert!(!view(&s).copper_nets().unwrap().contains_key(&track));
     let position = Point { x_nm: origin.x_nm + 2_000_000, y_nm: origin.y_nm };
-    assert!(view(&s).carried_tracks(&id, position, 0, false).is_empty());
+    assert!(view(&s).carried_tracks(&id, position, 0, false).unwrap().is_empty());
     s.apply(
         SET_FOOTPRINT_TRANSFORM,
         &json!({"footprint":id,"x_nm":position.x_nm,"y_nm":position.y_nm,"rotation":0,"expected_revision":s.revision()}),
     )
     .unwrap();
     assert_eq!(view(&s).tracks(), before);
-    let copper = view(&s).copper();
+    let copper = view(&s).copper().unwrap();
     assert_ne!(copper.pads[&pad_key], copper.tracks[&track]);
-    assert!(!view(&s).copper_nets().contains_key(&track));
+    assert!(!view(&s).copper_nets().unwrap().contains_key(&track));
 }
 
 /// Direct pad overlap between different nets is refused on the same layer, even without routing.

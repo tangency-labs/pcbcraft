@@ -126,10 +126,21 @@ counterclockwise `rotation` in 0…359 and a `shape` of `rectangle`,
 field (zero); circles require equal width and height. Surface lands use
 `copper: "component_side"` without a drill. Plated through-hole lands use
 `copper: "all_copper"` and a positive `drill_nm` smaller than both land dimensions.
-Slots and arbitrary pad stacks remain unsupported. Definitions allow 1…128 distinct pads and up to 64
+Slots and arbitrary pad stacks remain unsupported. Format 1 allows 1…128 distinct pads and up to 64
 graphics. Graphics use the same rectangular geometry and a `purpose` of
 `fabrication`, `silkscreen` or `courtyard`. Coordinates and dimensions are bounded
 by 100,000,000 nm; unknown fields and invalid geometry fail validation.
+
+In the Footprint Editor, choose **Draw → Non-plated hole**, place the center,
+then edit its center and finished diameter in Properties. The shared editor
+accepts the same `non_plated_hole` primitive through `app.library_edit`. These
+holes belong to the footprint, not to any schematic terminal. A definition with
+holes uses `pcbcraft-footprint/4` and may have zero pads. When placed, holes
+follow rotation, side changes and movement; board inspection lists their
+transformed centers and diameters, separately from pads. Routing and design
+checks treat the circle as a mechanical obstacle without adding a net.
+Fabrication output refuses boards containing these holes until a separate
+non-plated drill export is supported.
 
 Optional `artwork` adds up to 128 parameterized drawing objects. Each carries a
 `purpose` (`fabrication`, `silkscreen`, `courtyard`) and `graphic` with editable
@@ -139,14 +150,14 @@ lines, rectangles, circles, arcs, polylines and stroke text as described in the
 clearance by the board renderer. Absent artwork is omitted on save, preserving
 legacy definitions. These additions retain `pcbcraft-footprint/1`; old readers
 will reject unknown fields/shapes rather than silently dropping them. Later
-authored fields take a new format instead: `pcbcraft-footprint/2` is used only for
+authored fields take a new format instead: `pcbcraft-footprint/7` is used only for
 definitions with an [assembly orientation](footprint-schema.md#assembly-orientation) statement.
 
 Placement supplies the built-in definition ID and an explicit `mapping` object
 from symbol terminal ID to pad-number string. Mapping validation, placement,
 board views and cross-probing preserve the complete identifier spelling, including
 alphanumeric names and numeric-looking names such as `01`. Maps support up to 128
-pads. Every terminal and every pad must appear exactly once. Two-pad callers may instead supply the legacy `pin_1_pad`
+pads. Non-plated holes are not part of the mapping. Every terminal and every pad must appear exactly once. Two-pad callers may instead supply the legacy `pin_1_pad`
 shortcut; it cannot be combined with `mapping`. Invalid assignments change
 neither the project nor its undo history.
 
