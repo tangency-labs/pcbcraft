@@ -249,7 +249,7 @@ fn filters_follow_the_view_and_restore_from_local_arrangements() {
     app.views.switch_workspace(id, Workspace::Board, &app.session);
     app.set_selection_filters(id, &json!({"footprints":false})).unwrap();
     let default = serde_json::to_value(app.views.active.saved_state(&app.session).unwrap()).unwrap();
-    assert!(default["filters"].get("include_locked").is_none());
+    assert_eq!(default["filters"]["include_locked"], true);
     app.set_selection_filters(id, &json!({"include_locked":false})).unwrap();
     let current = serde_json::to_value(app.views.active.saved_state(&app.session).unwrap()).unwrap();
     assert_eq!(current["filters"]["include_locked"], false);
@@ -257,7 +257,6 @@ fn filters_follow_the_view_and_restore_from_local_arrangements() {
     assert!(!EditorView::from_state(ViewId(903), &restored, &app.session).filters.include_locked);
     let mut legacy = current;
     legacy["filters"].as_object_mut().unwrap().remove("include_locked");
-    assert_eq!(legacy, default);
     let restored = serde_json::from_value(legacy).unwrap();
     assert!(EditorView::from_state(ViewId(904), &restored, &app.session).filters.include_locked);
     let other = app.views.open_beside(id).unwrap();

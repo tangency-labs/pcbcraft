@@ -24,13 +24,7 @@ pub(super) struct Filters {
     pub vias: bool,
     pub graphics: bool,
     pub zones: bool,
-    #[serde(skip_serializing_if = "include_locked_by_default")]
     pub include_locked: bool,
-}
-
-/// Avoid writing a new field into arrangements that use the original selection policy.
-fn include_locked_by_default(value: &bool) -> bool {
-    *value
 }
 
 impl Default for Filters {
