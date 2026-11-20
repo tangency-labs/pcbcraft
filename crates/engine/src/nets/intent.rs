@@ -4,9 +4,10 @@
 use super::{NetAddress, State, graph::Graph};
 use crate::{CommandError, Project, Session, named_catalog};
 use pcbcraft_units::quantity::{Quantity, decimal};
+use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{fmt, marker::PhantomData, sync::Arc};
 use uuid::Uuid;
 
 /// Replace authored electrical intent on one existing net or net-class record.
@@ -17,10 +18,11 @@ pub const INSPECT: &str = "electrical_intent.inspect";
 pub(crate) const CONTRACT_VERSION: u8 = 1;
 
 /// Sparse authored values. Nothing here denotes a board default or an effective rule.
+/// Saved records are read through `stored`, which accepts named fields only.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IntentV1 {
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::persistence::present")]
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present_named")]
     voltage: Option<WorkingVoltage>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "crate::persistence::present")]
     current_amperes: Option<ExactDecimal>,
@@ -36,6 +38,7 @@ pub struct IntentV1 {
 struct ExactDecimal(String);
 
 /// A voltage and its reference are one value: neither can be authored without the other.
+/// Saved values are read through [`present_named`], which accepts named fields only.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkingVoltage {
@@ -53,10 +56,11 @@ enum VoltageBasis {
 
 /// Store the net identity, not its current label or owner spelling. First-board adoption changes
 /// the registry address, not the UUID; an unresolved or retired identity is not silently rebound.
+/// Earth is an empty struct variant, so a saved Earth reference with extra fields is refused.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Reference {
-    Earth,
+    Earth {},
     Net { net: Uuid },
 }
 
@@ -67,13 +71,15 @@ enum Target {
     NetClass { project: Uuid, class: Uuid },
 }
 
+/// Earth is an empty struct variant, so a leftover address is refused rather than ignored.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum ReferenceInput {
-    Earth,
+    Earth {},
     Net { address: NetAddress },
 }
 
+/// Decoded only through [`named`] or [`named_or_null`]; positional arrays are refused.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct QuantityInput {
@@ -81,19 +87,25 @@ struct QuantityInput {
     unit: String,
 }
 
+/// Decoded only through [`named_or_null`]; positional arrays are refused.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct VoltageInput {
+    #[serde(deserialize_with = "named")]
     magnitude: QuantityInput,
     basis: VoltageBasis,
     reference: ReferenceInput,
 }
 
+/// Decoded only through [`named`]; positional arrays are refused. Absent and null fields are unset.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct IntentInput {
+    #[serde(default, deserialize_with = "named_or_null")]
     working_voltage: Option<VoltageInput>,
+    #[serde(default, deserialize_with = "named_or_null")]
     maximum_continuous_current: Option<QuantityInput>,
+    #[serde(default, deserialize_with = "named_or_null")]
     allowed_temperature_rise: Option<QuantityInput>,
     isolation_group: Option<String>,
 }
@@ -104,6 +116,7 @@ struct SetInput {
     version: u8,
     expected_revision: u64,
     target: Target,
+    #[serde(deserialize_with = "named")]
     intent: IntentInput,
     #[serde(default)]
     dry_run: bool,
@@ -114,6 +127,48 @@ struct SetInput {
 struct InspectInput {
     version: u8,
     target: Target,
+}
+
+/// Admits only a map, then applies the record's derived field rules (unknown, duplicate and
+/// missing fields) to its entries.
+struct NamedFields<T>(PhantomData<T>);
+
+impl<'de, T: Deserialize<'de>> Visitor<'de> for NamedFields<T> {
+    type Value = T;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("an object with named fields")
+    }
+
+    fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+        T::deserialize(MapAccessDeserializer::new(map))
+    }
+}
+
+/// Decode a record from an object only. A positional array is refused rather than read in field
+/// declaration order, which is not part of the command contract or the native format.
+fn named<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<T, D::Error> {
+    de.deserialize_map(NamedFields(PhantomData))
+}
+
+/// A record decoded through [`named`], for use inside generic containers such as `Option`.
+struct Named<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Named<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        named(de).map(Named)
+    }
+}
+
+/// Decode an optional input record: null means unset, and any other value must be an object.
+fn named_or_null<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Option<T>, D::Error> {
+    Option::<Named<T>>::deserialize(de).map(|value| value.map(|Named(value)| value))
+}
+
+/// Decode a saved field that is present only when authored; null is refused and the value must be
+/// an object.
+fn present_named<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Option<T>, D::Error> {
+    named(de).map(Some)
 }
 
 /// Describe the closed object shape shared by authoring and inspection targets.
@@ -161,7 +216,7 @@ pub(crate) fn validate_target(value: &Value) -> Result<(), &'static str> {
 
 /// Validate the sparse input shape. Units, canonical decimals and ownership are checked by the edit.
 pub(crate) fn validate_intent(value: &Value) -> Result<(), &'static str> {
-    serde_json::from_value::<IntentInput>(value.clone()).map(|_| ()).map_err(|_| "requires a sparse authored electrical intent object")
+    named::<_, IntentInput>(value.clone()).map(|_| ()).map_err(|_| "requires a sparse authored electrical intent object")
 }
 
 impl ExactDecimal {
@@ -214,7 +269,7 @@ impl IntentV1 {
             .map(|input| {
                 let magnitude_volts = ExactDecimal::checked(input.magnitude, Quantity::Voltage, input.basis == VoltageBasis::Dc)?;
                 let reference = match input.reference {
-                    ReferenceInput::Earth => Reference::Earth,
+                    ReferenceInput::Earth {} => Reference::Earth {},
                     ReferenceInput::Net { address } => Reference::Net { net: local_net(project, address)? },
                 };
                 Ok::<_, CommandError>(WorkingVoltage { magnitude_volts, basis: input.basis, reference })
@@ -236,7 +291,7 @@ impl IntentV1 {
     fn inspect(&self, project: &Project) -> Value {
         let voltage = self.voltage.as_ref().map(|voltage| {
             let reference = match voltage.reference {
-                Reference::Earth => json!({"kind": "earth"}),
+                Reference::Earth {} => json!({"kind": "earth"}),
                 Reference::Net { net } => json!({"kind": "net", "address": NetAddress { project: project.id(), scope: project.net_scope(), net }}),
             };
             json!({"magnitude": voltage.magnitude_volts.inspect(Quantity::Voltage), "basis": voltage.basis, "reference": reference})
@@ -377,10 +432,10 @@ impl Session {
     }
 }
 
-/// Decode only a nonempty canonical payload. Older native envelopes additionally refuse its
-/// presence, regardless of whether a newer reader knows its vocabulary.
+/// Decode only a nonempty canonical payload with named fields. Older native envelopes
+/// additionally refuse its presence, regardless of whether a newer reader knows its vocabulary.
 pub(crate) fn stored<'de, D: serde::Deserializer<'de>>(de: D) -> Result<IntentV1, D::Error> {
-    let intent = IntentV1::deserialize(de)?;
+    let intent: IntentV1 = named(de)?;
     if intent.is_empty()
         || intent.voltage.as_ref().is_some_and(|v| !v.magnitude_volts.valid(v.basis == VoltageBasis::Dc))
         || intent.current_amperes.as_ref().is_some_and(|v| !v.valid(false))

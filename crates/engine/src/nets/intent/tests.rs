@@ -537,3 +537,118 @@ fn authored_electrical_intent_composes_with_designator_locks() {
         assert!(reader.project().unwrap().components().all(|part| !part.designator_locked()));
     }
 }
+
+/// A schematic-only project whose one catalog class holds the given authored intent, its target,
+/// and the saved documents with the class intent at `net_classes.definitions[0].authored_intent`.
+fn class_with_intent(intent: &Value) -> (Session, Value, Documents) {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":false})).unwrap();
+    apply(&mut session, net_classes::CREATE, json!({"name":"Review class","rules":{}}));
+    let project = session.project().unwrap();
+    let target = json!({"kind":"net_class","project":project.id(),"class":project.net_classes().definitions[0].id});
+    let args = request(&session, &target, intent);
+    session.apply(SET, &args).unwrap();
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    (session, target, saved)
+}
+
+/// Replace one field of the saved class intent, leaving every other document byte unchanged.
+fn saved_intent(docs: &Documents, change: impl FnOnce(&mut Value)) -> Documents {
+    altered(docs, ENTRY_POINT, |v| change(&mut v["net_classes"]["definitions"][0]["authored_intent"]))
+}
+
+/// Earth carries no fields: a saved Earth reference with a leftover `net` is refused on open
+/// rather than read as Earth and silently dropped by the next save.
+#[test]
+fn saved_earth_reference_refuses_extra_fields() {
+    let earth = json!({"working_voltage":{"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":{"kind":"earth"}}});
+    let (_, _, saved) = class_with_intent(&earth);
+    assert_eq!(document(&saved, ENTRY_POINT)["net_classes"]["definitions"][0]["authored_intent"]["voltage"]["reference"], json!({"kind":"earth"}));
+    for net in [json!(""), json!(Uuid::from_u128(7))] {
+        refused(&saved_intent(&saved, |intent| intent["voltage"]["reference"]["net"] = net), "unknown field `net`");
+    }
+}
+
+/// SET refuses an Earth reference that still carries a net address, without changing the
+/// stored reference, revision or history; a plain Earth reference stays valid.
+#[test]
+fn set_earth_reference_refuses_leftover_address() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":false})).unwrap();
+    let (address, _) = named_net(&mut session, "TEST_SOURCE", 0);
+    let (reference, _) = named_net(&mut session, "TEST_REFERENCE", 25_400_000);
+    let target = json!({"kind":"net","address":address});
+    let voltage = |reference: Value| json!({"working_voltage":{"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":reference}});
+    let named = voltage(json!({"kind":"net","address":reference}));
+    let args = request(&session, &target, &named);
+    session.apply(SET, &args).unwrap();
+    let before = session.snapshot().unwrap();
+    let history = (session.revision(), session.undo.len(), session.redo.len());
+
+    let leftover = request(&session, &target, &voltage(json!({"kind":"earth","address":reference})));
+    assert!(matches!(session.apply(SET, &leftover), Err(CommandError::InvalidParams(_))));
+    assert!(matches!(session.execute(SET, &leftover), Err(CommandError::InvalidParams(_))));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!((session.revision(), session.undo.len(), session.redo.len()), history);
+    assert_eq!(inspect(&mut session, &target)["working_voltage"], named["working_voltage"]);
+
+    let earth = voltage(json!({"kind":"earth"}));
+    let args = request(&session, &target, &earth);
+    session.apply(SET, &args).unwrap();
+    assert_eq!(inspect(&mut session, &target)["working_voltage"], earth["working_voltage"]);
+}
+
+/// Command intent records are objects: positional arrays for the intent, a voltage or a quantity
+/// are refused without clearing authored values, while `{}` and null properties still clear.
+#[test]
+fn set_intent_refuses_positional_arrays() {
+    let current = json!({"maximum_continuous_current":{"value":"3","unit":"A"}});
+    let (mut session, target, _) = class_with_intent(&current);
+    let before = session.snapshot().unwrap();
+    let history = (session.revision(), session.undo.len(), session.redo.len());
+    for positional in [
+        json!([null, null, null, null]),
+        json!({"maximum_continuous_current":["3","A"]}),
+        json!({"allowed_temperature_rise":["1","K"]}),
+        json!({"working_voltage":[{"value":"5","unit":"V"},"dc",{"kind":"earth"}]}),
+        json!({"working_voltage":{"magnitude":["5","V"],"basis":"dc","reference":{"kind":"earth"}}}),
+    ] {
+        let args = request(&session, &target, &positional);
+        assert!(matches!(session.apply(SET, &args), Err(CommandError::InvalidParams(_))), "{positional}");
+        assert!(matches!(session.execute(SET, &args), Err(CommandError::InvalidParams(_))), "{positional}");
+    }
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!((session.revision(), session.undo.len(), session.redo.len()), history);
+    assert_eq!(inspect(&mut session, &target)["maximum_continuous_current"], current["maximum_continuous_current"]);
+
+    let nulls = json!({"working_voltage":null,"maximum_continuous_current":null,"allowed_temperature_rise":null,"isolation_group":null});
+    let args = request(&session, &target, &nulls);
+    session.apply(SET, &args).unwrap();
+    assert_eq!(inspect(&mut session, &target), nulls);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    let args = request(&session, &target, &json!({}));
+    session.apply(SET, &args).unwrap();
+    assert_eq!(inspect(&mut session, &target), nulls);
+}
+
+/// Saved intent and its voltage use named fields only: positional arrays are refused on open
+/// rather than rewritten as objects on save. Duplicate fields stay refused, and sparse objects
+/// still round-trip exactly.
+#[test]
+fn saved_intent_refuses_positional_records() {
+    let values = json!({"working_voltage":{"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":{"kind":"earth"}},
+        "isolation_group":"Review group"});
+    let (_, _, saved) = class_with_intent(&values);
+    let stored = document(&saved, ENTRY_POINT)["net_classes"]["definitions"][0]["authored_intent"].clone();
+    assert_eq!(stored, json!({"voltage":{"magnitude_volts":"5","basis":"dc","reference":{"kind":"earth"}},"isolation_group":"Review group"}));
+    refused(&saved_intent(&saved, |intent| intent["voltage"] = json!(["5", "dc", {"kind":"earth"}])), "invalid type: sequence");
+    refused(&saved_intent(&saved, |intent| *intent = json!([null, null, null, "Review group"])), "invalid type: sequence");
+
+    let entry = String::from_utf8(saved[ENTRY_POINT].clone()).unwrap();
+    let key = "\"isolation_group\"";
+    assert_eq!(entry.matches(key).count(), 1);
+    let mut duplicate = saved.clone();
+    duplicate.insert(ENTRY_POINT.into(), entry.replacen(key, &format!("{key}:\"Other group\",{key}"), 1).into_bytes());
+    refused(&duplicate, "duplicate field `isolation_group`");
+}

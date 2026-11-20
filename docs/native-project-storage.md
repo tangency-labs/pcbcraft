@@ -186,7 +186,9 @@ The payload contains only set fields: `voltage` (`magnitude_volts`, `basis`, and
 fields are exact canonical decimal strings, including `"0"`. A `reference` is
 `{"kind":"earth"}` or `{"kind":"net","net":UUID}` in the same persistent net
 registry. An existing historical reference is retained, not resolved to a new
-net. Null, empty objects, dangling references and header/payload mismatches are
+net. The payload and its `voltage` are objects with named fields; positional
+arrays, unknown or duplicate fields (including a `net` on an Earth reference),
+null, empty objects, dangling references and header/payload mismatches are
 refused. Older readers refuse the new envelope instead of dropping intent.
 
 Project/49 accepts all earlier project-level capabilities, including optional
