@@ -543,7 +543,9 @@ target that pane, including its remembered document navigation. Dividers resize
 panes, with narrow areas stacking vertically.
 
 On desktop, drag a pane header to its own top or bottom edge to divide that pane
-into two stacked views, leaving other panes in place. Its left/right edges create
+into two stacked views, leaving other panes in place. The drag destination list
+also offers **Split up** and **Split down** beside the header, without needing an
+outer-edge drop. Its left/right edges create
 two views side by side. The new half opens the same document at the same zoom.
 Dragging onto an edge of another pane moves the source pane there and closes its
 old slot. The highlighted half is labelled **Split above**, **Split below**, **Split

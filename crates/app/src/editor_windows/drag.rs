@@ -284,6 +284,9 @@ impl PcbApp {
             );
             let target = match hovered {
                 Some(pcbcraft_chrome::editor::WindowDrop::NewWindow) => Some(DropDestination::NewWindow),
+                Some(pcbcraft_chrome::editor::WindowDrop::Split(side)) => {
+                    self.windows.drag.as_ref().map(|drag| DropDestination::Duplicate(drag.source, side))
+                }
                 Some(pcbcraft_chrome::editor::WindowDrop::Host(id)) => self
                     .views
                     .hosts

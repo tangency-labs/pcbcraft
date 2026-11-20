@@ -5,8 +5,9 @@
 Dragging a pane header to its own top, bottom, left or right edge creates a new
 view within that pane. Dragging to another pane’s edge moves the existing pane
 there, with an explicit split direction. The preview shows the incoming half, and
-resizing or restoring a saved layout keeps that direction. Native window drop
-targets also offer Above and Below; live `view.dock` shares the placement options.
+resizing or restoring a saved layout keeps that direction. The drag list offers
+Split up/down within a pane and Above/Below for native window transfers; live
+commands share the placement options.
 
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 

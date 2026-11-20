@@ -876,3 +876,52 @@ fn explicit_open_beside_subdivides_only_the_addressed_pane() {
     assert_eq!(panes[0].0, ids[0]);
     assert!(panes[0].1.bottom() < panes[1].1.top());
 }
+
+/// Explicit up/down drag destinations subdivide each existing pane without finding an outer edge.
+#[test]
+fn split_up_down_drag_targets_subdivide_nested_panes() {
+    for size in [vec2(2560.0, 1600.0), vec2(760.0, 650.0)] {
+        for index in [0, 1, 2] {
+            for label in ["Split up", "Split down"] {
+                let (mut h, _) = many_windows();
+                h.set_size(size);
+                let ctx = h.ctx.clone();
+                h.state_mut().split_editors(&ctx, true);
+                let right = h.state().views.hosts[&HostId::ROOT].layout.visible_views()[1];
+                h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":right.0,"side":"right"})).unwrap();
+                h.run();
+                let rects = h.state().views.hosts[&HostId::ROOT].rects.clone();
+                let ids = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+                let source = ids[index];
+                let area = rects[index].1;
+                let at = h.get_all_by_label(&h.state().view_title(source)).find(|node| area.contains(node.rect().center())).unwrap().rect().center();
+                h.hover_at(at);
+                h.run();
+                h.drag_at(at);
+                h.run();
+                h.hover_at(at + vec2(0.0, 20.0));
+                h.run();
+                let up = h.get_by_label("Split up").rect();
+                let down = h.get_by_label("Split down").rect();
+                assert!(up.bottom() <= down.top());
+                let target = h.get_by_label(label).rect().center();
+                h.hover_at(target);
+                h.run();
+                let preview = h.get_by_label(if label == "Split up" { "Split above" } else { "Split below" }).rect();
+                assert!(area.contains_rect(preview));
+                h.drop_at(target);
+                h.run();
+                let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+                assert_eq!(panes.len(), 4);
+                for (peer, rect) in &rects {
+                    if *peer != source {
+                        assert_eq!(panes.iter().find(|(id, _)| id == peer).unwrap().1, *rect);
+                    }
+                }
+                let placed = panes.iter().find(|(id, _)| !ids.contains(id)).unwrap().1;
+                assert_eq!(preview, placed.shrink(pcbcraft_chrome::Tokens::get().space_4));
+                assert!(h.query_by_label("Split up").is_none());
+            }
+        }
+    }
+}

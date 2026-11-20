@@ -307,6 +307,7 @@ fn placement_preview(ui: &Ui, id: egui::Id, rect: Rect, caption: &str, active: b
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowDrop {
     NewWindow,
+    Split(DockSide),
     Host(u64),
     HostSide(u64, DockSide),
 }
@@ -347,7 +348,8 @@ pub fn window_drop_targets(
         .show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
                 ui.set_width(width);
-                let mut choices = Vec::new();
+                let mut choices =
+                    vec![(WindowDrop::Split(DockSide::Top), "Split up".to_owned()), (WindowDrop::Split(DockSide::Bottom), "Split down".to_owned())];
                 if state.can_detach {
                     choices.push((WindowDrop::NewWindow, "Open in new window".to_owned()));
                 }

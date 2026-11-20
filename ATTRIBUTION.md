@@ -1810,5 +1810,6 @@ are original PCBcraft work requested by @travle1. They extend the existing host
 layout and chrome pane-preview adapters. Above/Below targets use the pinned
 Craft kit's standard buttons and existing theme tokens. The extracted toolkit
 does not own PCBcraft's view IDs, native-window transfers or saved split trees;
-those remain host responsibilities. No dependency, external artwork or project
-file format was added.
+those remain host responsibilities. Explicit Split up/down drag destinations
+extend the same pane-preview and destination-list adapters. No dependency,
+external artwork or project file format was added.
