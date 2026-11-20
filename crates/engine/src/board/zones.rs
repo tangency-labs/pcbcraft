@@ -133,37 +133,13 @@ pub fn validate_outline(points: &[Point]) -> Result<(), String> {
 }
 /// Validate all authored records against this physical board; inactive net identities remain inspectable.
 pub(crate) fn validate(project: &Project) -> Result<(), String> {
-    let mut check = ZoneValidation::default();
-    check.check_count(project)?;
-    for zone in &project.board.zones {
-        check.row(project, zone)?;
+    let zones = &project.board.zones;
+    if zones.len() > MAX_ZONES || zones.iter().map(|z| z.points.len()).sum::<usize>() > MAX_TOTAL_POINTS {
+        return Err("Zone resource limit exceeded.".into());
     }
-    Ok(())
-}
-
-/// Retain cross-row zone resource and identity checks between native writer batches.
-#[derive(Default)]
-pub(crate) struct ZoneValidation {
-    points: usize,
-    ids: BTreeSet<Uuid>,
-}
-
-impl ZoneValidation {
-    /// Reject excessive zone counts before visiting any polygon.
-    pub(crate) fn check_count(&self, project: &Project) -> Result<(), String> {
-        if project.board.zones.len() > MAX_ZONES {
-            return Err("Zone resource limit exceeded.".into());
-        }
-        Ok(())
-    }
-
-    /// Check one zone's electrical owner, shape and cumulative point contribution.
-    pub(crate) fn row(&mut self, project: &Project, z: &Zone) -> Result<(), String> {
-        self.points += z.points.len();
-        if self.points > MAX_TOTAL_POINTS {
-            return Err("Zone resource limit exceeded.".into());
-        }
-        if z.id.is_nil() || !self.ids.insert(z.id) || !project.net_registry.has_canonical_record(z.net) {
+    let mut ids = BTreeSet::new();
+    for z in zones {
+        if z.id.is_nil() || !ids.insert(z.id) || project.net_registry.record(z.net).is_none() {
             return Err("Zone has a duplicate/nil identity or unregistered net.".into());
         }
         if !project
@@ -175,8 +151,9 @@ impl ZoneValidation {
             return Err("Zone needs a copper layer on its board.".into());
         }
         z.options.validate()?;
-        validate_outline(&z.points)
+        validate_outline(&z.points)?;
     }
+    Ok(())
 }
 impl Project {
     /// Report historical net state instead of silently redirecting a zone after a merge or split.

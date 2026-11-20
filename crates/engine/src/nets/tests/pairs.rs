@@ -291,7 +291,8 @@ fn pair_first_board_transfer_preserves_relationship_and_undo() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Deleting a member's last anchor retires the net without retargeting the pair or setting review state.
+/// Deleting a member's last anchor retires the net, keeps the original pair and member UUIDs,
+/// and surfaces `NeedsReview` through save/reopen and Undo/Redo.
 #[test]
 fn pair_keeps_retired_member_and_reuses_the_relationship_through_history() {
     for board in [false, true] {
@@ -300,13 +301,56 @@ fn pair_keeps_retired_member_and_reuses_the_relationship_through_history() {
         let before = encode_documents(original.clone()).unwrap();
         apply(&mut session, crate::net_labels::DELETE, json!({"id":label}));
         let current = session.snapshot().unwrap();
-        assert_eq!(*current.net_registry.pairs[0], pair);
-        assert!(Arc::ptr_eq(&original.net_registry.pairs, &current.net_registry.pairs));
+        let updated = &current.net_registry.pairs[0];
+        assert_eq!(updated.id, pair.id);
+        assert_eq!(updated.positive, pair.positive);
+        assert_eq!(updated.negative, pair.negative);
+        assert_eq!(updated.name, pair.name);
+        assert!(matches!(&updated.state, PairState::NeedsReview { reason } if reason.contains("retired")));
         assert!(matches!(current.net_registry.record(pair.positive).unwrap().state, State::Retired { reason: Retirement::Removed, .. }));
         assert!(matches!(current.net_registry.record(pair.negative).unwrap().state, State::Active {}));
         round_trip(&session);
         let after = encode_documents(current).unwrap();
         apply(&mut session, "edit.undo", json!({}));
+        assert_eq!(*session.project().unwrap().net_registry.pairs[0], pair);
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+        apply(&mut session, "edit.redo", json!({}));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);
+    }
+}
+
+/// A split where the member net UUID survives on one branch still changes its endpoint
+/// membership and must flag the pair `NeedsReview` while keeping original pair and member IDs.
+#[test]
+fn pair_flags_needs_review_on_split_where_member_uuid_survives() {
+    for board in [false, true] {
+        let (mut session, pins) = circuit(6, board);
+        connect(&mut session, &pins[0], &pins[1]);
+        let middle = connect(&mut session, &pins[1], &pins[2]);
+        connect(&mut session, &pins[2], &pins[3]);
+        let positive = promote(&mut session, &pins[0]);
+        connect(&mut session, &pins[4], &pins[5]);
+        let negative = promote(&mut session, &pins[4]);
+        let pair_id = crate::nets::new_pair_id().unwrap();
+        apply(&mut session, crate::nets::CREATE_PAIR, json!({"pair":pair_id,"name":"USB_D","positive":positive,"negative":negative}));
+        let before = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(session.project().unwrap().net_registry.pairs[0].state, PairState::Active {});
+
+        apply(&mut session, crate::DELETE_WIRE, json!({"wire":middle}));
+        // The member UUID survives as Active on the primary-anchor branch, while the other
+        // branch receives a fresh UUID; endpoint membership changed, so review is required.
+        assert_eq!(id_for(&session, &pins[0]), positive);
+        assert_ne!(id_for(&session, &pins[2]), positive);
+        let current = session.snapshot().unwrap();
+        assert!(matches!(current.net_registry.record(positive).unwrap().state, State::Active {}));
+        assert!(matches!(current.net_registry.record(negative).unwrap().state, State::Active {}));
+        let pair = &current.net_registry.pairs[0];
+        assert_eq!((pair.id, pair.positive, pair.negative), (pair_id, positive, negative));
+        assert!(matches!(&pair.state, PairState::NeedsReview { reason } if reason.contains("split")));
+        round_trip(&session);
+        let after = encode_documents(current).unwrap();
+        apply(&mut session, "edit.undo", json!({}));
+        assert_eq!(session.project().unwrap().net_registry.pairs[0].state, PairState::Active {});
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
         apply(&mut session, "edit.redo", json!({}));
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);

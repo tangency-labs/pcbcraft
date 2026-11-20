@@ -72,9 +72,11 @@ Omitted `state` means active intent. The reader accepts `{"kind":"active"}`
 and the writer omits it. `{"kind":"needs_review","reason":"Member endpoints require review"}`
 retains review context, with the same text bounds as `name`. Unknown fields and
 states, explicit nulls and missing required fields are refused. Active intent
-is not an electrical or routing qualification. A member may become retired or
-ambiguous; the stored relationship keeps that exact UUID and does not follow
-successors or set a review state automatically.
+is not an electrical or routing qualification. When a topology change retires,
+merges, splits, or alters the endpoint membership of a member net, the stored
+relationship keeps its original pair and member UUIDs without following
+successors and transitions to `needs_review` with a review reason. Creating a
+pair or changing its endpoints requires active (live) member nets.
 
 A nonempty pair list selects project/45 unless an active designator lock selects
 project/51. Board-owned pairs use instances/8 in either case. Project/45 and

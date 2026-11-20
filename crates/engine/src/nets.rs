@@ -146,27 +146,10 @@ impl Registry {
             .max()
             .unwrap_or(0)
     }
-    /// Check a validated registry's canonical UUID order without scanning the full list.
-    /// Historical records count as registered; callers needing authority check state separately.
-    pub(crate) fn has_canonical_record(&self, id: Uuid) -> bool {
-        self.records
-            .binary_search_by_key(&id, |record| {
-                #[cfg(test)]
-                CANONICAL_RECORD_COMPARISONS.with(|count| count.set(count.get() + 1));
-                record.id
-            })
-            .is_ok()
-    }
-
     /// Resolve an exact identity, including historical reservations, without promoting a net.
     pub fn record(&self, id: Uuid) -> Option<&Record> {
         self.records.iter().find(|record| record.id == id)
     }
-}
-
-#[cfg(test)]
-std::thread_local! {
-    pub(crate) static CANONICAL_RECORD_COMPARISONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]

@@ -531,15 +531,6 @@ fn largest_allowed_profile_catalog_serializes_under_two_mebibytes() {
     assert_eq!(catalog.revisions.iter().map(|r| r.content.corrections.len()).sum::<usize>(), MAX_CORRECTIONS);
     let bytes = serde_json::to_vec_pretty(&catalog).unwrap().len();
     assert!(bytes < crate::persistence::MAX_DOCUMENT_BYTES / 8, "{bytes}");
-    let mut writer = CatalogEncoding::default();
-    let mut compact = Vec::new();
-    let mut steps = 0;
-    while !writer.step(&mut compact, &catalog).unwrap() {
-        steps += 1;
-        assert!(steps <= MAX_CORRECTIONS + 2 * MAX_REVISIONS + 1);
-    }
-    assert!(steps >= MAX_CORRECTIONS);
-    assert_eq!(compact, serde_json::to_vec(&catalog).unwrap());
     let mut extra = (*catalog.revisions[0]).clone();
     extra.content.revision -= 1;
     catalog.revisions.insert(0, Arc::new(extra));

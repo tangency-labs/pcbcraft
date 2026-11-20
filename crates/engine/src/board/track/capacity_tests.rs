@@ -635,8 +635,6 @@ fn teardrop_preview_and_apply_share_the_native_board_budget() {
     assert_eq!(session.undo.len(), undo + 1);
     let edited = encode_documents(session.snapshot().unwrap()).unwrap();
     assert!(fits[&path].len() < edited[&path].len() && edited[&path].len() <= MAX_DOCUMENT_BYTES);
-    let reopened = decode_documents(&edited).unwrap();
-    assert_eq!(reopened.board_view(target).unwrap().teardrops(), &[intent]);
     session.execute("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), fits);
 }

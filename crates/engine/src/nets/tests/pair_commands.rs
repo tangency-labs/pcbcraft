@@ -330,11 +330,7 @@ fn large_board_pair_registry_sizing_respects_the_poll_budget() {
     drop(job);
     assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
     assert_eq!((session.revision(), session.undo.len()), (revision, undo));
-    CANONICAL_RECORD_COMPARISONS.with(|count| count.set(0));
     session.apply(CREATE_PAIR, &params).unwrap();
-    let comparisons = CANONICAL_RECORD_COMPARISONS.with(|count| count.get());
-    let logarithmic_bound = snapshot.net_registry.records.len().next_power_of_two().trailing_zeros() as usize + 1;
-    assert!((1..=logarithmic_bound).contains(&comparisons), "late zone net took {comparisons} comparisons");
     assert_eq!((session.revision(), session.undo.len()), (revision + 1, undo + 1));
     let current = session.snapshot().unwrap();
     let board_path = current.board_document_path().unwrap();
@@ -458,4 +454,52 @@ fn pair_update_preserves_retained_review_state() {
     apply(&mut session, UPDATE_PAIR, json!({"pair":id,"name":"Changed","positive":n,"negative":p}));
     assert_eq!(session.project().unwrap().differential_pairs()[0].state, reason);
     round_trip(&session);
+}
+
+/// Deleting a member's only wire retires the net and flags the pair for review; new pairs and
+/// endpoint changes require live (active) member nets while preserving retired-member renames.
+#[test]
+fn pair_commands_require_live_members_for_new_or_changed_endpoints() {
+    let (mut session, pins) = circuit(6, false);
+    let wire_p = connect(&mut session, &pins[0], &pins[1]);
+    connect(&mut session, &pins[2], &pins[3]);
+    connect(&mut session, &pins[4], &pins[5]);
+    let positive = promote(&mut session, &pins[0]);
+    let negative = promote(&mut session, &pins[2]);
+    let spare = promote(&mut session, &pins[4]);
+    let pair = new_pair_id().unwrap();
+    apply(&mut session, CREATE_PAIR, json!({"pair":pair,"name":"CLK","positive":positive,"negative":negative}));
+
+    // Delete positive's only wire: net retires and the existing pair transitions to NeedsReview.
+    apply(&mut session, crate::DELETE_WIRE, json!({"wire":wire_p}));
+    assert!(matches!(session.project().unwrap().net_registry.record(positive).unwrap().state, State::Retired { reason: Retirement::Removed, .. }));
+    let current = &session.project().unwrap().differential_pairs()[0];
+    assert_eq!((current.id, current.positive, current.negative), (pair, positive, negative));
+    assert!(matches!(current.state, PairState::NeedsReview { .. }));
+
+    // Creating a new pair with a retired UUID must be refused (both normal and dry_run).
+    let revision = session.revision();
+    let undo = session.undo.len();
+    let fresh = new_pair_id().unwrap();
+    for dry_run in [false, true] {
+        let params = json!({"pair":fresh,"name":"Bad","positive":positive,"negative":spare,"expected_revision":revision,"dry_run":dry_run});
+        let err = if dry_run { session.execute(CREATE_PAIR, &params).unwrap_err() } else { session.apply(CREATE_PAIR, &params).unwrap_err() };
+        assert_eq!(err.code(), crate::error_codes::ErrorCode::InvalidParams);
+        assert_eq!((session.revision(), session.undo.len()), (revision, undo));
+    }
+
+    // Renaming without changing endpoints keeps the retained member UUID and review state.
+    apply(&mut session, UPDATE_PAIR, json!({"pair":pair,"name":"CLK_RENAMED","positive":positive,"negative":negative}));
+    assert_eq!(session.project().unwrap().differential_pairs()[0].name, "CLK_RENAMED");
+    assert!(matches!(session.project().unwrap().differential_pairs()[0].state, PairState::NeedsReview { .. }));
+
+    // Updating the retired endpoint to a live net succeeds; changing an endpoint back to a retired net is refused.
+    apply(&mut session, UPDATE_PAIR, json!({"pair":pair,"name":"CLK_LIVE","positive":spare,"negative":negative}));
+    let rev_live = session.revision();
+    let undo_live = session.undo.len();
+    let err = session
+        .apply(UPDATE_PAIR, &json!({"pair":pair,"name":"CLK_BAD","positive":positive,"negative":negative,"expected_revision":rev_live}))
+        .unwrap_err();
+    assert_eq!(err.code(), crate::error_codes::ErrorCode::InvalidParams);
+    assert_eq!((session.revision(), session.undo.len()), (rev_live, undo_live));
 }

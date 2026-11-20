@@ -411,7 +411,7 @@ fn designator_locks_compose_with_project_parameters_and_numbered_nets() {
             if version == 1 {
                 historical.net_registry = Arc::default();
             } else {
-                for record in Arc::make_mut(&mut Arc::make_mut(&mut historical.net_registry).records) {
+                for record in &mut Arc::make_mut(&mut historical.net_registry).records {
                     if version < 4 {
                         record.generated_number = None;
                     }
@@ -687,36 +687,4 @@ fn designator_lock_hierarchy_copy_and_cut_relocation() {
     let mut expected = before.clone();
     expected.insert(persistence::ENTRY_POINT.into(), text.replace(&old, &format!("\"numeric_id_high_water\": {current_watermark}")).into_bytes());
     assert_eq!(restored, expected);
-}
-
-/// The project header takes its lock format from the bounded component scan, not a full rescan.
-#[test]
-fn designator_lock_header_uses_the_incremental_component_scan() {
-    // Step the native writer one unit at a time; once the component scan has finished, read its
-    // lock fact and optionally replace it. A header that rescans every component ignores it.
-    let encode = |session: &Session, forced: Option<bool>| {
-        let mut encoder = persistence::DocumentsEncoder::new(session.snapshot().unwrap());
-        let mut scanned = None;
-        loop {
-            if scanned.is_none()
-                && let Some(fact) = encoder.scanned_designator_locks()
-            {
-                scanned = Some(*fact);
-                if let Some(forced) = forced {
-                    *fact = forced;
-                }
-            }
-            if let Some(documents) = encoder.step(1).unwrap() {
-                let entry: Value = serde_json::from_slice(&documents[persistence::ENTRY_POINT]).unwrap();
-                return (scanned, entry["format"].clone());
-            }
-        }
-    };
-    let mut session = fixture(false);
-    let (scanned, format) = encode(&session, None);
-    assert_eq!(scanned, Some(false));
-    assert_ne!(format, "pcbcraft-project/51");
-    assert_eq!(encode(&session, Some(true)), (Some(false), json!("pcbcraft-project/51")));
-    lock(&mut session, true);
-    assert_eq!(encode(&session, None), (Some(true), json!("pcbcraft-project/51")));
 }

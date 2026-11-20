@@ -845,10 +845,13 @@ preserved and remain reportable.
 pair, or read its saved UUID from `project.inspect` (`project.net_registry.pairs`)
 for updates and removal. Create and update also take `name`, `positive` and
 `negative`. The two members must be distinct persistent net UUIDs in the open
-project's registry and cannot belong to another pair. Display names do not
+project's registry and cannot belong to another pair; new pairs and changed
+endpoints require active (live) net members. Display names do not
 identify pairs or nets. Remove takes only the pair UUID and revision and leaves
 both member nets in place. Update preserves the pair UUID and any stored review
-state, and identical edits do not advance the revision.
+state, and identical edits do not advance the revision. All three commands
+require an edit-scoped session; read-only sessions return `out_of_scope` on both
+direct and prepared edit entry points.
 
 Set `dry_run: true` on any of the three commands to validate it and return a
 `pair_change` with `changed`, `before` and `after`, even with `inspect: false`.

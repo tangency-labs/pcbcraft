@@ -87,6 +87,15 @@ fn contains_net(registry: &Registry, id: Uuid) -> bool {
     registry.records.binary_search_by_key(&id, |record| record.id).is_ok()
 }
 
+/// New or changed pair endpoints must reference live nets, never retired or ambiguous history.
+fn is_active_net(registry: &Registry, id: Uuid) -> bool {
+    registry
+        .records
+        .binary_search_by_key(&id, |record| record.id)
+        .ok()
+        .is_some_and(|index| matches!(registry.records[index].state, super::State::Active {}))
+}
+
 /// Resolve the one record that changes without copying or validating the pair collection.
 fn pair_edit(project: &Project, command: &str, params: &Value) -> Result<(Edit, Option<PairDraft>), CommandError> {
     let pair_id = id(params, "pair")?;
@@ -107,11 +116,18 @@ fn pair_edit(project: &Project, command: &str, params: &Value) -> Result<(Edit, 
         None
     } else {
         let name = params["name"].as_str().ok_or_else(|| CommandError::InvalidParams("Expected a pair name.".into()))?;
+        let positive = id(params, "positive")?;
+        let negative = id(params, "negative")?;
+        let check_positive = before.as_ref().is_none_or(|pair| pair.positive != positive);
+        let check_negative = before.as_ref().is_none_or(|pair| pair.negative != negative);
+        if (check_positive && !is_active_net(registry, positive)) || (check_negative && !is_active_net(registry, negative)) {
+            return Err(CommandError::InvalidParams("Differential pair members must be active nets in the owning registry.".into()));
+        }
         Some(Arc::new(Pair {
             id: pair_id,
             name: name.into(),
-            positive: id(params, "positive")?,
-            negative: id(params, "negative")?,
+            positive,
+            negative,
             state: before.as_ref().map_or_else(Default::default, |pair| pair.state.clone()),
         }))
     };
@@ -352,8 +368,9 @@ impl Session {
     /// In particular, no pair records or project documents are serialized here.
     ///
     /// # Errors
-    /// A stale revision, an unavailable project or malformed parameters reject admission.
+    /// A read-only scope, stale revision, unavailable project or malformed parameters reject admission.
     pub fn prepare_pair_edit(&self, command: &str, params: &Value) -> Result<PairEditJob, CommandError> {
+        self.authorize_command(command)?;
         self.refuse_stale(command, params)?;
         if !is_pair_edit(command) {
             return Err(CommandError::InvalidParams("Command does not edit a differential pair.".into()));
@@ -375,8 +392,9 @@ impl Session {
     /// A live host must also recheck its request lease and UI policy before calling this method.
     ///
     /// # Errors
-    /// A prepared edit from a different session or obsolete snapshot returns `StaleRevision`.
+    /// A read-only scope returns `OutOfScope`; a prepared edit from a different session or obsolete snapshot returns `StaleRevision`.
     pub fn complete_pair_edit(&mut self, prepared: PreparedPairEdit, inspect: bool) -> Result<Value, CommandError> {
+        self.authorize_command(prepared.command)?;
         if !prepared.source.is_current(self) {
             return Err(CommandError::StaleRevision { current: self.revision() });
         }
