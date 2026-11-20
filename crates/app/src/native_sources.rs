@@ -276,6 +276,7 @@ impl Sources {
 
     /// Hold an ordinary refresh open deterministically, without starting a filesystem worker.
     #[cfg(all(test, not(target_arch = "wasm32")))]
+    #[allow(clippy::unwrap_used)]
     pub(super) fn hold_refresh_for_test(&mut self, source: &str, generation: u64) -> impl FnOnce() + use<> {
         assert!(self.job.is_none());
         let (send, receive) = mpsc::channel();

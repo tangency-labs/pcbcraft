@@ -27,6 +27,7 @@ fn fixture(width: f32) -> Harness<'static, PcbApp> {
 }
 
 /// Open the actual desktop pane and complete a preview for one placed revision.
+#[allow(clippy::unwrap_used)]
 fn adoption_fixture() -> Harness<'static, PcbApp> {
     use pcbcraft_engine::authoring::{
         Item as Draft, Kind as DraftKind,
