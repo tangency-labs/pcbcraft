@@ -243,7 +243,7 @@ impl Gerber {
     fn pad(&mut self, pad: &PadView, cardinal: bool, function: ApertureFunction) {
         let Some(corners) = pad.copper else { return };
         if pad.shape == PadShape::RoundedRectangle {
-            let contour = Contour::pad(pad.center, corners, pad.shape, pad.corner_radius_nm);
+            let contour = Contour::pad(pad.center, corners, pad.shape, pad.corner_radius_nm, pad.size_nm);
             // Snapping rotated corners can shorten a side and clamp a maximum radius. Compare
             // the emitted grid diameter, not the unrounded projection, to the authored diameter.
             let diameter = (2. * contour.radius).round() as i64;

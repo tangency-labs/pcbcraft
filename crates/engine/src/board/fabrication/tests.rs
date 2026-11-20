@@ -869,7 +869,7 @@ fn tiny_rounded_pad_flashes_its_clamped_point_core() {
     let pads = view(&s).footprints().next().unwrap().pads;
     assert_eq!(pads.len(), 2);
     assert!(pads.iter().all(|pad| pad.corner_radius_nm == 1));
-    let contour = Contour::pad(pads[0].center, pads[0].copper.unwrap(), pads[0].shape, pads[0].corner_radius_nm);
+    let contour = Contour::pad(pads[0].center, pads[0].copper.unwrap(), pads[0].shape, pads[0].corner_radius_nm, pads[0].size_nm);
     assert!((contour.radius - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-9);
     let outputs = view(&s).fabrication_outputs().unwrap();
     let read = read_gerber(&outputs, TOP_COPPER);
@@ -901,7 +901,8 @@ fn rotated_maximum_radius_pads_keep_circular_corners() {
         let s = aperture_fixture_with_radii(&pads, placed, bottom, offset, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
         let fabrication = view(&s).fabrication().unwrap();
         let pads = view(&s).footprints().next().unwrap().pads;
-        let contours: Vec<_> = pads.iter().map(|pad| Contour::pad(pad.center, pad.copper.unwrap(), pad.shape, pad.corner_radius_nm)).collect();
+        let contours: Vec<_> =
+            pads.iter().map(|pad| Contour::pad(pad.center, pad.copper.unwrap(), pad.shape, pad.corner_radius_nm, pad.size_nm)).collect();
         // The second pad's different local center can cause different placement rounding.
         assert!(contours[0].radius < 200_000., "the first pad must clamp the radius");
         if (local, placed) == (18, 32) {
@@ -968,7 +969,7 @@ fn tiny_rounded_pad_with_non_strict_core_retains_region() {
     );
     let pads = view(&s).footprints().next().unwrap().pads;
     let first = &pads[0];
-    let contour = Contour::pad(first.center, first.copper.unwrap(), first.shape, first.corner_radius_nm);
+    let contour = Contour::pad(first.center, first.copper.unwrap(), first.shape, first.corner_radius_nm, first.size_nm);
     assert_eq!(contour.radius, 1.);
     let at = Point { x_nm: first.center.x_nm, y_nm: -first.center.y_nm };
     let read = read_gerber(&view(&s).fabrication_outputs().unwrap(), TOP_COPPER);

@@ -1,15 +1,27 @@
-//! In-memory intent and derived copper for a centered straight track entering a round via.
-//! Nothing here registers a board field, edit command, or copper consumer.
+//! Authored intent and derived copper for a centered straight track entering a round via.
 
 use super::view::{BoardTarget, BoardView};
-use crate::schematic::{MAX_CENTER_NM, Point};
+use crate::{
+    Project,
+    schematic::{MAX_CENTER_NM, Point},
+};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeSet;
 use uuid::Uuid;
 
+mod command;
+pub mod edit;
+pub use command::EDIT_TEARDROPS;
+pub(crate) use command::{Batch, schema};
+
+/// Error for operations that cannot consume authored teardrop copper yet.
+pub(crate) const UNSUPPORTED: &str = "straight via teardrops are stored but unsupported by this geometry operation";
 #[cfg(test)]
 mod tests;
 
 /// Requested axial extension past the via's outer land, before applying any cap.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Length {
     /// Whole percent of the via's outer diameter. Values over 100 are allowed.
     Percent(u16),
@@ -18,7 +30,8 @@ pub enum Length {
 }
 
 /// Sizing intent; limits are not design-rule or manufacturing clearances.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Parameters {
     pub length: Length,
     pub max_length_nm: Option<i64>,
@@ -62,6 +75,64 @@ pub struct ViaTeardrop {
     pub parameters: Parameters,
 }
 
+/// Board-owned record. The file or command supplies the containing board address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Record {
+    pub id: Uuid,
+    pub via: Uuid,
+    pub track: Uuid,
+    pub parameters: Parameters,
+}
+
+impl Record {
+    /// Qualify the board-local record for use against one board view.
+    pub fn on(self, board: BoardTarget) -> ViaTeardrop {
+        ViaTeardrop { id: self.id, board, via: self.via, track: self.track, parameters: self.parameters }
+    }
+}
+
+impl From<ViaTeardrop> for Record {
+    /// Keep only authored data; the containing board supplies ownership.
+    fn from(intent: ViaTeardrop) -> Self {
+        Self { id: intent.id, via: intent.via, track: intent.track, parameters: intent.parameters }
+    }
+}
+
+impl<'a> BoardView<'a> {
+    /// Authored teardrop intent in stable UUID order, without derived polygons.
+    pub fn teardrops(self) -> &'a [Record] {
+        &self.project().board.teardrops
+    }
+}
+
+/// Require a configured board and refuse over-cap, unsorted, duplicate, dangling or unrepresentable records.
+pub(crate) fn validate(project: &Project) -> Result<(), String> {
+    let records = &project.board.teardrops;
+    if records.is_empty() {
+        return Ok(());
+    }
+    if records.len() > edit::MAX_INTENTS || records.windows(2).any(|pair| pair[0].id >= pair[1].id) {
+        return Err("too many or non-unique teardrop identities".into());
+    }
+    if !project.board.arcs.is_empty() {
+        return Err("teardrop checking does not support boards with circular copper arcs".into());
+    }
+    let board = project.board_target().and_then(|target| project.board_view(target)).ok_or("teardrops require a physical board")?;
+    if board.setup().is_none() {
+        return Err("teardrops require a copper board setup".into());
+    }
+    let occupied: BTreeSet<_> = board.tracks().iter().map(|track| track.id).chain(board.vias().iter().map(|via| via.id)).collect();
+    let mut sites = BTreeSet::new();
+    for record in records {
+        if occupied.contains(&record.id) || !sites.insert((record.via, record.track)) {
+            return Err("duplicate teardrop attachment or copper identity".into());
+        }
+        record.on(board.target).derive(board).map_err(|error| format!("invalid teardrop {}: {error:?}", record.id))?;
+    }
+    Ok(())
+}
+
 /// A disposable copper outline for one board view, not a second authored copper item.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StraightCopper {
@@ -74,7 +145,8 @@ pub struct StraightCopper {
 }
 
 /// Reasons the local record or straight-via contour could not be constructed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Error {
     InvalidSize,
     InvalidIdentity,

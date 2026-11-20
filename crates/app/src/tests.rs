@@ -24,6 +24,7 @@ mod board_views;
 mod board_zones;
 #[cfg(not(target_arch = "wasm32"))]
 mod cli_open;
+mod designator_locks;
 #[cfg(not(target_arch = "wasm32"))]
 mod detached_editors;
 mod display_units;
@@ -1944,6 +1945,65 @@ mod live_mcp {
         click(harness, "Close");
         let settings = &config["mcpServers"]["pcbcraft-live"];
         (settings["args"][2].as_str().unwrap().parse().unwrap(), settings["env"][TOKEN_ENV].as_str().unwrap().to_owned())
+    }
+
+    /// The actual editor and Remote exchange complete previews or a normal MCP tool error.
+    #[test]
+    fn designator_lock_live_preview_obeys_frame_budget() {
+        use pcbcraft_engine::{
+            SET_SYMBOL_FIELDS, persistence,
+            schematic::fields::{Field, Metadata},
+        };
+        let mut h = harness();
+        resistor_at_origin(&mut h);
+        let (port, token) = connect(&mut h);
+        let preview = |revision| {
+            json!({"command":SET_SYMBOL_FIELDS,"inspect":false,"params":{"symbol":"symbol-2","reference":"R1","value":"R",
+                "designator_locked":true,"dry_run":true,"expected_revision":revision}})
+        };
+        let revision = h.state().session.revision();
+        let result = payload(tool(&mut h, (port, &token), "execute", preview(revision)));
+        assert_eq!(result["revision"], revision);
+        assert_eq!(result["provisional"], true);
+        assert_eq!(result["changes"].as_array().unwrap().len(), 1);
+        let change = &result["changes"][0];
+        assert_eq!(change["path"], persistence::ENTRY_POINT);
+        let proposed: Value = serde_json::from_str(change["after"].as_str().unwrap()).unwrap();
+        assert_eq!(proposed["components"][0]["designator_locked"], true);
+        assert!(!h.state().session.project().unwrap().components().next().unwrap().designator_locked());
+
+        let session = &mut h.state_mut().session;
+        for index in 1..18 {
+            session
+                .apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":index*25_400_000i64,"y_nm":0,"expected_revision":session.revision()}))
+                .unwrap();
+        }
+        // Both raw document texts fit together; escaping the embedded quotes makes the wire
+        // reply too large. This detects a check that only adds raw document lengths.
+        let fields = (1..=64)
+            .map(|index| (uuid::Uuid::from_u128(index).to_string(), Field { name: format!("Field {index}"), value: "\"".repeat(2048) }))
+            .collect();
+        let metadata = Metadata { fields, ..Metadata::default() };
+        let symbols: Vec<_> = session.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
+        for symbol in &symbols[..17] {
+            super::designator_locks::native_limit_fields(session, symbol, json!({"metadata":metadata}));
+        }
+        let predecessor = session.snapshot().unwrap();
+        super::designator_locks::native_limit_fields(session, &symbols[17], json!({"metadata":metadata}));
+        let snapshot = session.snapshot().unwrap();
+        let documents = persistence::encode_documents(snapshot.clone()).unwrap();
+        assert!(2 * documents[persistence::ENTRY_POINT].len() < (16 << 20));
+        let revision = session.revision();
+        let refused = tool(&mut h, (port, &token), "execute", preview(revision));
+        assert_eq!(refused["isError"], true);
+        assert_eq!(refused["structuredContent"]["error"]["code"], "cap_exceeded");
+        assert_eq!(refused["content"][0]["text"], "The symbol-field preview exceeds the 16 MiB live reply limit; no edit was applied.");
+        let session = &mut h.state_mut().session;
+        assert_eq!(session.revision(), revision);
+        assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+        assert!(session.project().unwrap().components().all(|part| !part.designator_locked()));
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&predecessor, &session.snapshot().unwrap()));
     }
 
     /// Run a window command over the live connection and return the editor inspection it answers.
