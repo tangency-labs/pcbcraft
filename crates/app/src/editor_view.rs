@@ -438,8 +438,8 @@ impl EditorView {
         }
     }
 
-    /// Retarget an attached schematic pane for a counterpart reveal, keeping its camera and
-    /// parked workspace. Old-sheet edit state and input tokens must not apply to the new sheet.
+    /// Point a fresh copy of a schematic view at another sheet for a counterpart reveal, keeping
+    /// the copied camera and parked workspace. Old-sheet edit state and input tokens must not apply.
     pub(super) fn reveal_sheet(&mut self, sheet: SheetTarget, session: &Session) -> Option<Arc<pcbcraft_engine::Project>> {
         if !matches!(self.target(), Some(DocumentTarget::Sheet(current)) if current != sheet) {
             return None;

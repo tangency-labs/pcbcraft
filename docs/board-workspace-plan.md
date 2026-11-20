@@ -394,8 +394,12 @@ current model has one occurrence per sheet; with repeated definitions the
 placement's owning occurrence must identify the target, not the first use of
 that definition.
 
-A sheet change stays in the same pane without taking focus. Old-sheet selection
-and gestures do not carry into the newly displayed sheet. The amber highlights
+A sheet change stays in the same pane without taking focus. Like Browser
+navigation, it shows the pane's cached document for that sheet, or opens one
+there, and keeps the previous sheet's document cached with its navigation.
+Reveals are queued only for displayed documents, so a hidden cached document
+never holds a reveal it cannot paint. Old-sheet selection and gestures do not
+carry into the newly displayed sheet. The amber highlights
 do not become edit targets or emit another selection event. Only the focused
 view’s actual edit selection receives destructive commands.
 

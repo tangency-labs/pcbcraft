@@ -250,40 +250,51 @@ fn mixed_panes_highlight_both_ways_without_granting_schematic_edit_authority() {
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
 }
 
+/// Where the Power child sheet places U3, outside Main's initial view.
+const POWER_U3: Point = Point { x_nm: 127_000_000, y_nm: 63_500_000 };
+
+/// Main holds R1 at the origin; its Power child holds U3 at `POWER_U3`, linked to a footprint.
+/// Return the two sheets, U3's symbol ID and its footprint ID.
+fn power_child_harness<'a>() -> (Harness<'a, PcbApp>, pcbcraft_engine::SheetTarget, pcbcraft_engine::SheetTarget, String, String) {
+    use pcbcraft_engine::{PLACE_FOOTPRINT, SET_SYMBOL_FIELDS, hierarchy::CREATE_CHILD};
+
+    let mut h = harness();
+    h.set_size(egui::vec2(1400., 900.));
+    resistor_with_board_at_origin(&mut h);
+    let at = POWER_U3;
+    let (main, child, symbol, footprint) = {
+        let app = h.state_mut();
+        app.browser.open = false;
+        let main = app.session.project().unwrap().sheet_target();
+        let mut edit = |command, mut params: Value| {
+            params["expected_revision"] = json!(app.session.revision());
+            app.session.apply(command, &params).unwrap();
+            app.session.snapshot().unwrap()
+        };
+        let project = edit(CREATE_CHILD, json!({"sheet":main.id(),"name":"Power","x_nm":12_700_000,"y_nm":12_700_000}));
+        let child = project.child_sheet(project.sheet_symbols()[0].id).unwrap();
+        let project = edit(PLACE_SYMBOL, json!({"sheet":child.id(),"definition":"resistor","x_nm":at.x_nm,"y_nm":at.y_nm}));
+        let symbol = project.for_sheet(child).unwrap().symbols()[0].id();
+        edit(SET_SYMBOL_FIELDS, json!({"sheet":child.id(),"symbol":symbol,"reference":"U3","value":"R"}));
+        let project =
+            edit(PLACE_FOOTPRINT, json!({"sheet":child.id(),"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0}));
+        let footprint = project.board_view(project.board_target().unwrap()).unwrap().footprints().next().unwrap().id;
+        (main, child, symbol, footprint)
+    };
+    h.run();
+    (h, main, child, symbol, footprint)
+}
+
 /// Selecting U3 on the board reveals its child sheet only when the schematic is allowed to
-/// follow. Old-sheet edit selection never carries across, and follow does not recur on idle.
+/// follow. The pane shows a new document for that sheet and keeps the old one cached with its
+/// edit selection, which never carries across. Follow does not recur on idle.
 #[test]
 fn board_selection_reveals_the_owning_child_sheet_once() {
     use crate::editor_view::DocumentTarget;
-    use pcbcraft_engine::{PLACE_FOOTPRINT, SET_SYMBOL_FIELDS, hierarchy::CREATE_CHILD};
 
     for policy in [SelectionFollow::Off, SelectionFollow::Both] {
-        let mut h = harness();
-        h.set_size(egui::vec2(1400., 900.));
-        resistor_with_board_at_origin(&mut h);
-        let at = Point { x_nm: 127_000_000, y_nm: 63_500_000 };
-        let (main, child, symbol, footprint) = {
-            let app = h.state_mut();
-            app.browser.open = false;
-            let main = app.session.project().unwrap().sheet_target();
-            let mut edit = |command, mut params: Value| {
-                params["expected_revision"] = json!(app.session.revision());
-                app.session.apply(command, &params).unwrap();
-                app.session.snapshot().unwrap()
-            };
-            let project = edit(CREATE_CHILD, json!({"sheet":main.id(),"name":"Power","x_nm":12_700_000,"y_nm":12_700_000}));
-            let child = project.child_sheet(project.sheet_symbols()[0].id).unwrap();
-            let project = edit(PLACE_SYMBOL, json!({"sheet":child.id(),"definition":"resistor","x_nm":at.x_nm,"y_nm":at.y_nm}));
-            let symbol = project.for_sheet(child).unwrap().symbols()[0].id();
-            edit(SET_SYMBOL_FIELDS, json!({"sheet":child.id(),"symbol":symbol,"reference":"U3","value":"R"}));
-            let project = edit(
-                PLACE_FOOTPRINT,
-                json!({"sheet":child.id(),"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0}),
-            );
-            let footprint = project.board_view(project.board_target().unwrap()).unwrap().footprints().next().unwrap().id;
-            (main, child, symbol, footprint)
-        };
-        h.run();
+        let (mut h, main, child, symbol, footprint) = power_child_harness();
+        let at = POWER_U3;
         click(&mut h, "Choose workspace");
         click(&mut h, "Open PCB Layout beside current view");
         let schematic = ViewId(0);
@@ -304,31 +315,103 @@ fn board_selection_reveals_the_owning_child_sheet_once() {
         click_canvas_at(&mut h, board_point);
         h.run();
         let app = h.state();
-        let view = app.views.view(schematic).unwrap();
-        let highlight = app.views.highlight_for(schematic, &app.session);
+        let (cached, shown) = app.views.pane(schematic);
+        let view = app.views.view(shown).unwrap();
+        let highlight = app.views.highlight_for(shown, &app.session);
         assert_eq!(app.views.active.id(), pcb);
         assert!(app.views.active.board.selection.contains(&footprint));
         assert_eq!(view.camera.zoom(), zoom);
+        assert_eq!(app.views.pending_reveals(), 0);
+        let old = app.views.view(schematic).unwrap();
+        assert_eq!(old.target(), Some(DocumentTarget::Sheet(main)));
+        assert_eq!(old.schematic.selection.single_symbol(), Some("symbol-2"));
         if policy == SelectionFollow::Both {
+            assert_eq!(cached, [schematic, shown]);
             assert_eq!(view.target(), Some(DocumentTarget::Sheet(child)));
             assert_eq!(highlight.single_symbol(), Some(symbol.as_str()));
             assert!(view.schematic.selection.is_empty());
             assert!(rect.contains(view.camera.screen(at, rect)));
             assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "U3" && rect.contains(text.pos) && text.fallback_color == Tokens::get().schematic_highlight)));
         } else {
-            assert_eq!(view.target(), Some(DocumentTarget::Sheet(main)));
-            assert_eq!(view.schematic.selection.single_symbol(), Some("symbol-2"));
+            assert_eq!(cached, [schematic]);
             assert!(highlight.is_empty());
             assert!(!rect.contains(view.camera.screen(at, rect)));
         }
         assert_eq!(app.session.inspect(), before);
         assert_eq!(encode_documents(app.session.snapshot().unwrap()).unwrap(), bytes);
-        let camera = &mut h.state_mut().views.view_mut(schematic).unwrap().camera;
+        let camera = &mut h.state_mut().views.view_mut(shown).unwrap().camera;
         camera.center_on(origin);
         let panned = camera.screen(at, rect);
         h.run();
-        assert_eq!(h.state().views.view(schematic).unwrap().camera.screen(at, rect), panned);
+        assert_eq!(h.state().views.view(shown).unwrap().camera.screen(at, rect), panned);
     }
+}
+
+/// A pane that showed Power and then returned to Main keeps one cached view per sheet. Following
+/// a footprint linked to Power displays the cached Power view at its own zoom, Main keeps its
+/// navigation for the return, the PCB keeps focus, and the hidden view queues no reveal.
+#[test]
+fn board_follow_reuses_cached_sheet_views_and_settles() {
+    use crate::editor_view::DocumentTarget;
+
+    let (mut h, main, child, symbol, footprint) = power_child_harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let schematic = ViewId(0);
+    let pcb = ViewId(2);
+    let rect = h.get_by_label("Schematic canvas 1").rect();
+    let board_point = h.state().views.view(pcb).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, h.get_by_label("PCB canvas 3").rect());
+    let app = h.state_mut();
+    let power = app.views.open_document(schematic, DocumentTarget::Sheet(child), &app.session).unwrap();
+    assert_ne!(power, schematic);
+    h.run();
+    let app = h.state_mut();
+    assert_eq!(app.views.open_document(power, DocumentTarget::Sheet(main), &app.session), Some(schematic));
+    app.views.view_mut(schematic).unwrap().camera.center_on(Point { x_nm: -25_400_000, y_nm: 12_700_000 });
+    app.preferences.selection_follow = SelectionFollow::Both;
+    h.run();
+    let views = &h.state().views;
+    assert_eq!(views.pane(schematic), (vec![schematic, power], schematic));
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let (main_origin, main_zoom) = {
+        let camera = &views.view(schematic).unwrap().camera;
+        (camera.screen(origin, rect), camera.zoom())
+    };
+    let power_zoom = views.view(power).unwrap().camera.zoom();
+    assert!(!rect.contains(views.view(power).unwrap().camera.screen(POWER_U3, rect)));
+    let before = h.state().session.inspect();
+
+    click_canvas_at(&mut h, board_point);
+    let app = h.state();
+    assert_eq!(app.views.active.id(), pcb);
+    assert!(app.views.active.board.selection.contains(&footprint));
+    assert_eq!(app.views.pane(schematic), (vec![schematic, power], power));
+    let shown = app.views.view(power).unwrap();
+    assert_eq!(shown.target(), Some(DocumentTarget::Sheet(child)));
+    assert_eq!(shown.camera.zoom(), power_zoom);
+    let revealed = shown.camera.screen(POWER_U3, rect);
+    assert!(rect.contains(revealed));
+    assert_eq!(app.views.highlight_for(power, &app.session).single_symbol(), Some(symbol.as_str()));
+    let kept = app.views.view(schematic).unwrap();
+    assert_eq!(kept.target(), Some(DocumentTarget::Sheet(main)));
+    assert_eq!((kept.camera.screen(origin, rect), kept.camera.zoom()), (main_origin, main_zoom));
+    assert_eq!(app.views.pending_reveals(), 0);
+    assert_eq!(app.session.inspect(), before);
+
+    // Settled: further frames queue nothing and leave the revealed camera where it is.
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.views.pending_reveals(), 0);
+    assert_eq!(app.views.view(power).unwrap().camera.screen(POWER_U3, rect), revealed);
+    assert_eq!(app.views.active.id(), pcb);
+
+    let app = h.state_mut();
+    assert_eq!(app.views.open_document(power, DocumentTarget::Sheet(main), &app.session), Some(schematic));
+    h.run();
+    let views = &h.state().views;
+    assert_eq!(views.pane(schematic), (vec![schematic, power], schematic));
+    let camera = &views.view(schematic).unwrap().camera;
+    assert_eq!((camera.screen(origin, rect), camera.zoom()), (main_origin, main_zoom));
 }
 
 /// Shared part units give a PCB footprint two possible sheet destinations. Keep a matching
@@ -395,11 +478,13 @@ fn board_follow_prefers_current_match_then_project_sheet_order() {
     for (shown, expected, symbol) in [(later, later, later_symbol), (empty, first, first_symbol)] {
         app.views.view_mut(schematic).unwrap().open_document(DocumentTarget::Sheet(shown), &app.session);
         app.views.select_board([footprint.clone()].into(), &app.session, SelectionFollow::Both);
-        assert_eq!(app.views.reveal_highlight(schematic, &app.session), shown != expected);
-        let view = app.views.view(schematic).unwrap();
+        assert_eq!(app.views.reveal_highlight(schematic, &app.session, SelectionFollow::Both), shown != expected);
+        let (_, displayed) = app.views.pane(schematic);
+        assert_eq!(displayed == schematic, shown == expected);
+        let view = app.views.view(displayed).unwrap();
         assert_eq!(view.target(), Some(DocumentTarget::Sheet(expected)));
         assert!(view.schematic.selection.is_empty());
-        assert_eq!(app.views.highlight_for(schematic, &app.session).single_symbol(), Some(symbol.as_str()));
+        assert_eq!(app.views.highlight_for(displayed, &app.session).single_symbol(), Some(symbol.as_str()));
         assert_eq!(app.views.active.id(), pcb);
         assert_eq!(app.session.inspect(), before);
     }
