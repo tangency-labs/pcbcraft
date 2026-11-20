@@ -126,6 +126,40 @@ fn params_for_lookup(assertion: &Assertion) -> Value {
     json!({"library":assertion.address.library,"assertion":assertion.address.id,"assertion_revision":assertion.address.revision})
 }
 
+/// A read-only session runs both lifecycle reads through each dispatch path, while adoption is
+/// refused before validation. The project, revision and history stay exactly as opened.
+#[test]
+fn read_only_sessions_read_lifecycle_state_without_changing_project_or_history() {
+    use crate::{SessionScope, error_codes::ErrorCode};
+    let (mut editor, documents, draft, released) = placed();
+    editor.apply(ADOPT, &params(&editor, &draft)).unwrap();
+    let project = editor.snapshot().unwrap();
+    let saved = encode_documents(project.clone()).unwrap();
+    let mut reader = Session::with_scope(SessionScope::ReadOnly);
+    reader.open_snapshot(project.clone());
+    reader.install_library_source("fixture", Arc::new(crate::library::sources::NativeSource::load(&documents).unwrap())).unwrap();
+    let before = reader.inspect();
+    let (revision, root) = (reader.revision(), reader.history_root_revision());
+    let lookup = reader.execute(LOOKUP, &params_for_lookup(&released)).unwrap();
+    assert_eq!(lookup, json!({"assertion":released,"digest":released.digest().unwrap()}));
+    let inspected = reader.execute(INSPECT, &json!({})).unwrap();
+    assert_eq!(inspected["revision"], revision);
+    assert_eq!(inspected["assessments"], json!([{"assertion":draft,"disposition":"draft"}]));
+    assert_eq!(reader.apply(LOOKUP, &params_for_lookup(&released)).unwrap(), revision);
+    assert_eq!(reader.apply(INSPECT, &json!({})).unwrap(), revision);
+    for request in [params(&reader, &released), json!({"unexpected":true})] {
+        for refused in [reader.execute(ADOPT, &request).unwrap_err(), reader.apply(ADOPT, &request).unwrap_err()] {
+            assert_eq!(refused.code(), ErrorCode::OutOfScope);
+            assert_eq!(refused.details(), json!({"command":ADOPT,"scope":"read_only"}));
+        }
+    }
+    assert_eq!(reader.inspect(), before);
+    assert_eq!((reader.revision(), reader.history_root_revision()), (revision, root));
+    assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
+    assert_eq!(encode_documents(reader.snapshot().unwrap()).unwrap(), saved);
+    assert_eq!(reader.snapshot().unwrap().lifecycle().disposition(&draft.target), Some(Disposition::Draft));
+}
+
 /// An unknown scheme remains unknown, and a supplied policy changes classification only for its exact scheme revision.
 #[test]
 fn custom_and_unknown_schemes_are_not_evaluated_by_label() {

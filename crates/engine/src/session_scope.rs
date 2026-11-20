@@ -51,7 +51,8 @@ impl Session {
 
 /// These commands return data or manage only ephemeral review state. In particular, Copy
 /// returns data without setting a system clipboard, and export/publication preparation does
-/// not write files. Loading/removing library sources and Cut are not reads.
+/// not write files. Lifecycle lookup and inspection read exact pinned or loaded content only.
+/// Loading/removing library sources, lifecycle adoption and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
@@ -87,6 +88,8 @@ fn is_read_command(id: &str) -> bool {
             | sources::PREVIEW_PIN_REMAP
             | sources::PREPARE_PART_PUBLICATION
             | sources::PREPARE_PUBLICATION
+            | sources::lifecycle::LOOKUP
+            | sources::lifecycle::INSPECT
     )
 }
 

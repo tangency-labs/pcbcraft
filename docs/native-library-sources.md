@@ -208,7 +208,9 @@ The transfer packager and bundled-library embedding include this directory, and
   draft, released, deprecated and obsolete. Other schemes and unmapped state IDs
   remain unknown until explicitly mapped; labels do not determine release status.
 
-These are shared engine commands accessible through MCP. There is no dedicated
+These are shared engine commands accessible through MCP. A
+[read-only session](mcp.md) runs the lookup and inspection; adoption returns
+`out_of_scope` there. There is no dedicated
 lifecycle editor or publisher action in this slice. Source changes are never
 automatically adopted. The [project storage contract](native-project-storage.md#adopted-lifecycle-assessments)
 describes offline pins. Lifecycle metadata does not change placement eligibility
