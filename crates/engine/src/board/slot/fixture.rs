@@ -186,7 +186,7 @@ fn a_slot_connects_copper_through_the_stack() {
         route(&mut session, layer, &points).unwrap();
     }
     let board = view(&session);
-    let (copper, nets) = board.copper_with_nets();
+    let (copper, nets) = board.copper_with_nets().unwrap();
     assert_eq!(board.tracks().len(), 2);
     for track in board.tracks() {
         assert_eq!(copper.tracks[&track.id], copper.pads[&key]);
