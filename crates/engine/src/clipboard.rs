@@ -21,6 +21,7 @@ pub const PASTE: &str = "schematic.paste";
 pub const MAX_BYTES: usize = 8 << 20;
 const FORMAT: &str = "pcbcraft-clipboard/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-clipboard/2";
+const NPTH_FORMAT: &str = "pcbcraft-clipboard/6";
 mod hierarchy;
 mod preview;
 pub(crate) use hierarchy::hierarchy_objects;
@@ -221,7 +222,7 @@ impl Fragment {
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft design fragment."))?;
-        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT)
+        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | NPTH_FORMAT)
             || envelope.kind != "schematic"
             || !crate::wire::valid_point(&envelope.anchor)
         {
@@ -229,7 +230,8 @@ impl Fragment {
         }
         let documents = envelope.documents.into_iter().map(|(path, text)| (path, text.into_bytes())).collect();
         let project = crate::persistence::decode_documents(&documents).map_err(invalid)?;
-        let project = if envelope.format == HIERARCHY_FORMAT {
+        let hierarchical = envelope.format == HIERARCHY_FORMAT || (envelope.format == NPTH_FORMAT && envelope.root_sheet.is_some());
+        let project = if hierarchical {
             let root =
                 envelope.root_sheet.filter(|id| !id.is_nil()).ok_or_else(|| invalid("hierarchy clipboard needs an explicit root sheet UUID"))?;
             Arc::new(
@@ -244,8 +246,23 @@ impl Fragment {
             project
         };
         let fragment = Self { project, anchor: envelope.anchor, cut_sheets: envelope.cut_sheets };
-        fragment.validate_scope(envelope.format == HIERARCHY_FORMAT)?;
+        if (envelope.format == NPTH_FORMAT) != fragment.has_npth() {
+            return Err(invalid("clipboard format does not match its pinned non-plated holes"));
+        }
+        fragment.validate_scope(hierarchical)?;
         Ok(fragment)
+    }
+
+    /// Include assigned footprints and the exact closure of selected native parts, even
+    /// when a hole belongs to an unselected package variant retained for offline paste.
+    pub(crate) fn has_npth(&self) -> bool {
+        self.project.schematic_packages.definitions.values().any(|footprint| !footprint.non_plated_holes.is_empty())
+            || self
+                .project
+                .components
+                .values()
+                .filter_map(|part| part.part.as_ref())
+                .any(|part| part.resolved.footprints.values().any(|footprint| !footprint.non_plated_holes.is_empty()))
     }
 
     /// Serialize just the fragment; no paths, credentials, unused definitions or source files travel.
@@ -256,7 +273,14 @@ impl Fragment {
             .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)).map_err(invalid))
             .collect::<Result<_, _>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.has_hierarchy() { HIERARCHY_FORMAT } else { FORMAT }.into(),
+            format: if self.has_npth() {
+                NPTH_FORMAT
+            } else if self.has_hierarchy() {
+                HIERARCHY_FORMAT
+            } else {
+                FORMAT
+            }
+            .into(),
             kind: "schematic".into(),
             anchor: self.anchor,
             documents,

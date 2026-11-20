@@ -64,7 +64,8 @@ impl AlignMode {
     }
 }
 
-/// A footprint's physical extent: pad centers and lands plus courtyard and fabrication graphics.
+/// Physical extent of pads, courtyards, fabrication graphics and non-plated holes.
+/// Round a half-nanometer hole radius outward to contain the entire opening.
 /// Silkscreen, including the reference text, is left out so labels never shift an alignment.
 /// Falls back to its origin when it has no geometry.
 fn bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
@@ -75,6 +76,11 @@ fn bounds(footprint: &super::view::FootprintView<'_>) -> [i64; 4] {
             .filter(|graphic| graphic.purpose != super::definition::GraphicPurpose::Silkscreen)
             .flat_map(|graphic| graphic.points.iter().copied()),
     );
+    let points = points.chain(footprint.non_plated_holes.iter().flat_map(|hole| {
+        let r = (hole.diameter_nm + 1) / 2;
+        let Point { x_nm, y_nm } = hole.center;
+        [Point { x_nm: x_nm - r, y_nm: y_nm - r }, Point { x_nm: x_nm + r, y_nm: y_nm + r }]
+    }));
     let start = [footprint.position.x_nm, footprint.position.y_nm, footprint.position.x_nm, footprint.position.y_nm];
     let mut first = true;
     points.fold(start, |b, p| {

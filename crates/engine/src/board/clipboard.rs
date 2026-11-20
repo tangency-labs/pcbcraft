@@ -23,6 +23,21 @@ use uuid::Uuid;
 
 mod connectivity;
 
+const NPTH_FORMAT: &str = "pcbcraft-clipboard/7";
+
+/// Keep the released format ladder when no newer embedded dependency is present.
+fn legacy_format(assigned: bool, locked: bool, stroked: bool) -> &'static str {
+    if assigned {
+        "pcbcraft-clipboard/4"
+    } else if locked {
+        "pcbcraft-clipboard/3"
+    } else if stroked {
+        "pcbcraft-clipboard/2"
+    } else {
+        "pcbcraft-clipboard/1"
+    }
+}
+
 /// Export a board selection without changing the project or system clipboard.
 pub const COPY: &str = "pcb.copy";
 /// Export and remove physical objects, retaining their logical component identities.
@@ -442,12 +457,8 @@ impl BoardFragment {
         }
         let assigned = envelope.vias.iter().any(|v| v.net_assignment.is_some());
         let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
-        if !matches!(envelope.format.as_str(), "pcbcraft-clipboard/1" | "pcbcraft-clipboard/2" | "pcbcraft-clipboard/3" | "pcbcraft-clipboard/4")
-            || (envelope.format == "pcbcraft-clipboard/4") != assigned
-            || (!assigned && (envelope.format == "pcbcraft-clipboard/3") != locked)
-            || (!assigned
-                && !locked
-                && (envelope.format == "pcbcraft-clipboard/2") != envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()))
+        let npth_format = envelope.format == NPTH_FORMAT;
+        if (!npth_format && envelope.format != legacy_format(assigned, locked, envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some())))
             || envelope.kind != "board"
             || envelope.source_project.is_nil()
             || envelope.source_board.is_nil()
@@ -489,6 +500,9 @@ impl BoardFragment {
                 }
             }
             circuits.push(Circuit { source_sheet: circuit.sheet, name: circuit.name, fragment });
+        }
+        if npth_format != circuits.iter().any(|c| c.fragment.has_npth()) {
+            return Err(invalid("board clipboard format does not match its pinned non-plated holes"));
         }
         let mut owners = BTreeSet::new();
         for footprint in &envelope.footprints {
@@ -601,14 +615,14 @@ impl BoardFragment {
             .map(|c| Ok(CircuitEnvelope { sheet: c.source_sheet, name: c.name.clone(), text: c.fragment.to_text()? }))
             .collect::<Result<_, CommandError>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.vias.iter().any(|via| via.net_assignment.is_some()) {
-                "pcbcraft-clipboard/4"
-            } else if self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked) {
-                "pcbcraft-clipboard/3"
-            } else if self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()) {
-                "pcbcraft-clipboard/2"
+            format: if self.circuits.iter().any(|c| c.fragment.has_npth()) {
+                NPTH_FORMAT
             } else {
-                "pcbcraft-clipboard/1"
+                legacy_format(
+                    self.vias.iter().any(|via| via.net_assignment.is_some()),
+                    self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked),
+                    self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()),
+                )
             }
             .into(),
             kind: "board".into(),

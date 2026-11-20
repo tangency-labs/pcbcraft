@@ -81,7 +81,8 @@ pub struct ShortNet {
 }
 
 /// One finding: what, where (a representative point in board nanometers) and which items.
-/// Items are footprint IDs (`footprint-N`), pads (`footprint-N:pad`) or track/via UUIDs.
+/// Items are footprint IDs (`footprint-N`), pads (`footprint-N:pad`), mechanical
+/// openings (`footprint-N:npth:index`, 1-based in the pinned definition), or track/via UUIDs.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Violation {
     pub kind: Kind,
@@ -168,6 +169,26 @@ fn in_polygon(point: Point, polygon: &[Point]) -> bool {
 /// The midpoint of two points, as a violation marker.
 fn midpoint(a: Point, b: Point) -> Point {
     Point { x_nm: a.x_nm / 2 + b.x_nm / 2, y_nm: a.y_nm / 2 + b.y_nm / 2 }
+}
+
+/// Keep the existing copper diagnostics and identify mechanical openings in both DRC paths.
+fn clearance_message(a: &Item, b: &Item, distance: f64, clearance_nm: i64) -> String {
+    if a.mechanical || b.mechanical {
+        return if distance <= 0. {
+            "Non-plated hole touches copper".into()
+        } else {
+            format!("Non-plated hole to copper clearance {} is below the {} rule", mm(distance), mm(clearance_nm as f64))
+        };
+    }
+    let nets = match (&a.net, &b.net) {
+        (Some(x), Some(y)) => format!(" between nets {x} and {y}"),
+        _ => String::new(),
+    };
+    if distance <= 0. {
+        format!("Copper touches{nets}")
+    } else {
+        format!("Clearance {} is below the {} rule{nets}", mm(distance), mm(clearance_nm as f64))
+    }
 }
 
 /// Format a length for messages in millimeters, independent of the viewer's display units.
@@ -272,16 +293,7 @@ impl BoardView<'_> {
             }
             if let Some(i) = decision.first {
                 let (a, b) = (&items[i], &items[decision.second]);
-                let distance = decision.gap_nm;
-                let nets = match (&a.net, &b.net) {
-                    (Some(x), Some(y)) => format!(" between nets {x} and {y}"),
-                    _ => String::new(),
-                };
-                let message = if distance <= 0. {
-                    format!("Copper touches{nets}")
-                } else {
-                    format!("Clearance {} is below the {} rule{nets}", mm(distance), mm(decision.clearance_nm as f64))
-                };
+                let message = clearance_message(a, b, decision.gap_nm, decision.clearance_nm);
                 let mut names = vec![a.name.clone(), b.name.clone()];
                 names.sort();
                 found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
@@ -458,11 +470,12 @@ impl BoardView<'_> {
             return;
         }
         for item in items {
+            let subject = if item.mechanical { "Non-plated hole" } else { "Copper" };
             let rules = context.map_or(rules, |context| context.limits_for(&item.name, rules));
             if !contains(&polygons, &item.contour) {
                 found.push(Violation {
                     kind: Kind::OutsideBoard,
-                    message: "Copper lies outside the Board Outline".into(),
+                    message: format!("{subject} lies outside the Board Outline"),
                     at: item.at,
                     items: vec![item.name.clone()],
                     nets: Vec::new(),
@@ -474,9 +487,9 @@ impl BoardView<'_> {
                 found.push(Violation {
                     kind: Kind::EdgeClearance,
                     message: if crosses {
-                        "Copper crosses the Board Outline".into()
+                        format!("{subject} crosses the Board Outline")
                     } else {
-                        format!("Copper is {} from the board edge, below the {} rule", mm(distance.max(0.)), mm(rules.edge_clearance_nm as f64))
+                        format!("{subject} is {} from the board edge, below the {} rule", mm(distance.max(0.)), mm(rules.edge_clearance_nm as f64))
                     },
                     at: item.at,
                     items: vec![item.name.clone()],
