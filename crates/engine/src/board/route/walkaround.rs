@@ -178,6 +178,12 @@ impl<'a> Walker<'a> {
         self.displacement_side = (side != 0).then_some((start, end, side));
     }
 
+    /// Test a soft trace bend with the same inherited membership/contact policy as
+    /// its eventual displacement. An obstructed hint may move; protected contacts may not.
+    pub(super) async fn displacement_anchor(&mut self, point: Point) -> Result<bool, Stop> {
+        Ok(self.check(point, point).await?.legal)
+    }
+
     /// Probes charged so far; never more than the budget.
     pub(super) fn probes(&self) -> usize {
         self.probes

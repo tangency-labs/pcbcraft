@@ -10,12 +10,7 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-/// Suspend before one exact probe or contact scan; the host explicitly drives the next unit.
-/// No executor, thread, timer, wake callback or shared mutable document is needed.
-pub(super) async fn yield_unit() {
-    let mut yielded = false;
-    std::future::poll_fn(move |_| if std::mem::replace(&mut yielded, true) { Poll::Ready(()) } else { Poll::Pending }).await
-}
+pub(super) use crate::board::work::yield_unit;
 
 /// Retain the walk's own stack and local geometry across budget boundaries without replay.
 pub(super) async fn walk(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {

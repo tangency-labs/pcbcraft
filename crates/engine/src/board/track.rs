@@ -38,6 +38,7 @@ pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
 /// Lock or unlock explicitly addressed tracks and vias without changing geometry.
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
 
+pub(crate) mod chains;
 mod locks;
 pub mod preparation;
 pub mod replacements;

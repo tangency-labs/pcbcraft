@@ -56,14 +56,14 @@ fn compound_route_preserves_branch_width_layer_identity_and_one_history_entry() 
     let layer = copper_layers(&s)[0];
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
     let rev = s.revision();
-    let command = params(&s, json!([{"track":id,"points":[p(10,0),p(12,0),p(12,20),p(10,20)]}]));
+    let command = params(&s, json!([{"track":id,"points":[p(10,0),p(12,0),p(12,8),p(10,10),p(12,12),p(12,20),p(10,20)]}]));
     let prepared = finish(s.prepare_copper_edit(ADD_TRACKS, &command).unwrap()).unwrap();
     assert_eq!(s.revision(), rev);
     assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
     s.commit_copper_edit(prepared).unwrap();
     assert_eq!(s.revision(), rev + 1);
     let tracks = view(&s).tracks();
-    assert_eq!(tracks.len(), 5);
+    assert_eq!(tracks.len(), 8);
     assert_eq!(tracks.iter().find(|t| t.id == branch), Some(&old_branch));
     let retained = tracks.iter().find(|t| t.id == id).unwrap();
     assert_eq!((retained.start, retained.end, retained.width_nm, retained.layer), (p(10, 0), p(12, 0), 500_000, layer));
@@ -102,7 +102,7 @@ fn interior_contacts_are_preserved_or_the_whole_edit_is_refused() {
         let before = encode_documents(s.snapshot().unwrap()).unwrap();
         let rev = s.revision();
         let error = finish(s.prepare_copper_edit(ADD_TRACKS, &command).unwrap()).err().unwrap().to_string();
-        assert!(error.contains("disconnect"), "{fixture}: {error}");
+        assert!(error.contains("disconnect") || error.contains("protected contact"), "{fixture}: {error}");
         assert_eq!(rev, s.revision());
         assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
         assert!(s.apply(ADD_TRACKS, &command).is_err());
@@ -171,7 +171,7 @@ fn compound_validation_rejects_new_overlap_within_a_connected_island() {
         let command = params(
             &s,
             json!([
-                {"track":a,"points":[p(0,5),p(1,6),p(16,6),p(17,5),p(20,5)]},
+                {"track":a,"points":[p(0,5),p(17,5),Point{x_nm:17_500_000,y_nm:5_000_000},Point{x_nm:18_500_000,y_nm:6_000_000},p(19,6),p(20,5)]},
                 {"track":b,"points":[Point{x_nm:0,y_nm:5_800_000},Point{x_nm:1_000_000,y_nm:6_100_000},Point{x_nm:16_000_000,y_nm:6_100_000},Point{x_nm:17_000_000,y_nm:5_800_000},Point{x_nm:20_000_000,y_nm:5_800_000}]}
             ]),
         );
@@ -205,5 +205,122 @@ fn same_net_merge_option_still_refuses_a_short_atomically() {
     let revision = s.revision();
     assert!(s.apply(ADD_TRACKS, &command).is_err());
     assert_eq!(s.revision(), revision);
+    assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+}
+
+/// Uniform degree-two joins may move together; branching, vias, locks and width
+/// transitions still define protected source contacts, even for direct command clients.
+#[test]
+fn compound_chains_move_bends_but_keep_protected_contacts() {
+    for fixed in 0..5 {
+        let mut s = board();
+        add(&mut s, vec![p(0, 0), p(2, 0)], 250_000);
+        add(&mut s, vec![p(2, 0), p(2, 2)], if fixed == 4 { 500_000 } else { 250_000 });
+        add(&mut s, vec![p(2, 2), p(4, 2)], 250_000);
+        let source: Vec<_> = view(&s).tracks().to_vec();
+        let ids: Vec<_> = [p(0, 0), p(2, 0), p(2, 2)].into_iter().map(|start| source.iter().find(|t| t.start == start).unwrap().id).collect();
+        if fixed == 1 {
+            add(&mut s, vec![p(2, 2), p(2, 5)], 250_000);
+        }
+        if fixed == 2 {
+            s.apply(ADD_VIA, &json!({"at":p(2,2),"expected_revision":s.revision()})).unwrap();
+        }
+        if fixed == 3 {
+            s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[ids[1]],"locked":true,"expected_revision":s.revision()}))
+                .unwrap();
+        }
+        let command = params(
+            &s,
+            json!([
+                {"track":ids[0],"points":[p(0,0),p(1,0)]},
+                {"track":ids[1],"points":[p(1,0),p(1,3)]},
+                {"track":ids[2],"points":[p(1,3),p(4,3),p(4,2)]}
+            ]),
+        );
+        let before = encode_documents(s.snapshot().unwrap()).unwrap();
+        let rev = s.revision();
+        if fixed == 0 {
+            let edit = finish(s.prepare_copper_edit(ADD_TRACKS, &command).unwrap()).unwrap();
+            assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+            s.commit_copper_edit(edit).unwrap();
+            assert_eq!(s.revision(), rev + 1);
+            for old in &source {
+                let now = view(&s).tracks().iter().find(|t| t.id == old.id).unwrap();
+                assert_eq!((now.width_nm, now.layer), (old.width_nm, old.layer));
+            }
+            let after = encode_documents(s.snapshot().unwrap()).unwrap();
+            assert_eq!(encode_documents(decode_documents(&after).unwrap()).unwrap(), after);
+            s.apply("edit.undo", &Value::Null).unwrap();
+            assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+            s.apply("edit.redo", &Value::Null).unwrap();
+            assert_eq!(after, encode_documents(s.snapshot().unwrap()).unwrap());
+        } else {
+            assert!(s.apply(ADD_TRACKS, &command).is_err(), "protected fixture{fixed} was accepted");
+            assert_eq!(s.revision(), rev);
+            assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+        }
+    }
+}
+
+/// Chain membership cannot hide a folded trace's lost spacing or a centerline
+/// crossing. Explicit merging permits close returning copper, but never a crossing.
+#[test]
+fn compound_chain_self_spacing_and_crossings_are_checked() {
+    for allocation in [false, true] {
+        for crossing in [false, true] {
+            for merge in [false, true] {
+                let mut s = board();
+                add(&mut s, vec![p(0, 0), p(2, 0), p(2, 2), p(4, 2)], 250_000);
+                let source = view(&s).tracks().to_vec();
+                let id = |start| source.iter().find(|t| t.start == start).unwrap().id;
+                let near = Point { x_nm: 5_000_000, y_nm: 300_000 };
+                let tail = if crossing { vec![near, p(2, -1), p(4, 2)] } else { vec![near, Point { x_nm: 0, y_nm: 300_000 }, p(0, 2), p(4, 2)] };
+                let middle =
+                    if allocation && !crossing { vec![p(5, 0), near, Point { x_nm: 0, y_nm: 300_000 }, p(0, 2)] } else { vec![p(5, 0), near] };
+                let tail = if allocation && !crossing { vec![p(0, 2), p(4, 2)] } else { tail };
+                let mut command = params(
+                    &s,
+                    json!([
+                        {"track":id(p(0,0)),"points":[p(0,0),p(5,0)]},
+                        {"track":id(p(2,0)),"points":middle},
+                        {"track":id(p(2,2)),"points":tail}
+                    ]),
+                );
+                command["merge_same_net"] = json!(merge);
+                let before = encode_documents(s.snapshot().unwrap()).unwrap();
+                if merge && !crossing {
+                    s.apply(ADD_TRACKS, &command).unwrap();
+                } else {
+                    assert!(s.apply(ADD_TRACKS, &command).is_err());
+                    assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+                }
+            }
+        }
+    }
+}
+
+/// An endpoint touching a nonadjacent diagonal is a self-contact even when its
+/// floating distance projection has a tiny residual. Merging does not erase this check.
+#[test]
+fn compound_chain_self_contact_uses_exact_integer_incidence() {
+    let mut s = board();
+    add(&mut s, vec![p(0, 0), p(2, 0), p(2, 2), p(4, 2)], 250_000);
+    let source = view(&s).tracks().to_vec();
+    let id = |start| source.iter().find(|t| t.start == start).unwrap().id;
+    let turn = Point { x_nm: 9_000_001, y_nm: 9_000_001 };
+    let contact = Point { x_nm: 3_000_011, y_nm: 3_000_011 };
+    let mut command = params(
+        &s,
+        json!([
+            {"track":id(p(0,0)),"points":[p(0,0),turn]},
+            {"track":id(p(2,0)),"points":[turn,p(10,0),contact]},
+            {"track":id(p(2,2)),"points":[contact,p(4,2)]}
+        ]),
+    );
+    command["merge_same_net"] = json!(true);
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    assert!(s.apply(ADD_TRACKS, &command).is_err(), "nonadjacent exact self-contact was accepted");
+    assert_eq!(revision, s.revision());
     assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
 }

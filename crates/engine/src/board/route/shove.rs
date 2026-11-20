@@ -4,7 +4,10 @@ use super::*;
 use crate::board::{
     clearance::{Object, Overlay},
     geometry::Contour,
-    track::replacements::Replacement,
+    track::{
+        chains::{self, Chains},
+        replacements::Replacement,
+    },
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -120,55 +123,6 @@ async fn charge(progress: &AtomicUsize, budget: usize) -> bool {
     true
 }
 
-/// A connected source graph is represented by stable contact anchors on each displaced segment.
-/// Branch junctions and pad/via contacts remain fixed; legal intervals between them can bend.
-fn anchors(query: &ClearanceQuery, source: usize, stats: &mut ShoveStats) -> Result<Option<Vec<Point>>, CommandError> {
-    let object = &query.objects()[source];
-    let view = query.authority().view().ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
-    let Some(track) = view.tracks().iter().find(|t| t.id.to_string() == object.name) else {
-        return Ok(None);
-    };
-    let (a, b) = (track.start, track.end);
-    let (dx, dy) = ((b.x_nm - a.x_nm) as f64, (b.y_nm - a.y_nm) as f64);
-    let length = dx * dx + dy * dy;
-    let project = |p: Point| {
-        let t = (((p.x_nm - a.x_nm) as f64 * dx + (p.y_nm - a.y_nm) as f64 * dy) / length).clamp(0., 1.);
-        (t, Point { x_nm: (a.x_nm as f64 + t * dx).round() as i64, y_nm: (a.y_nm as f64 + t * dy).round() as i64 })
-    };
-    let mut points = vec![(0., a), (1., b)];
-    let candidates = query.candidates(&object.contour, &object.layers)?;
-    stats.candidate_hits += candidates.len();
-    for index in candidates {
-        if index == source {
-            continue;
-        }
-        let other = &query.objects()[index];
-        if !object.contour.touches(&other.contour) {
-            continue;
-        }
-        let best = other
-            .contour
-            .core
-            .iter()
-            .copied()
-            .chain([other.at])
-            .map(project)
-            .filter(|(_, p)| other.contour.touches(&Contour::capsule(*p, *p, object.contour.radius)))
-            .min_by(|(ta, _), (tb, _)| ta.total_cmp(tb));
-        let Some(point) = best else {
-            return Ok(None);
-        };
-        points.push(point);
-        if points.len() > MAX_ANCHORS {
-            return Ok(None);
-        }
-    }
-    points.sort_by(|(a, _), (b, _)| a.total_cmp(b));
-    let mut points: Vec<_> = points.into_iter().map(|(_, p)| p).collect();
-    points.dedup();
-    Ok(Some(points))
-}
-
 /// Source-qualified membership and physical contacts at the immutable gesture pickup.
 struct Pickup {
     source: Option<usize>,
@@ -192,10 +146,12 @@ struct Push {
     from: Point,
     toward: Point,
     piece: usize,
+    hit: usize,
 }
 
 /// Source queue with the originating route-piece direction retained through a cascade.
 struct Propagation<'a> {
+    chains: &'a Chains,
     movable: &'a BTreeSet<usize>,
     replaced: &'a BTreeSet<usize>,
     queue: &'a mut BTreeSet<usize>,
@@ -222,7 +178,8 @@ impl Propagation<'_> {
             let result = query.probe_membership(contour, layers, nets, None)?;
             self.stats.candidate_hits += result.decisions.len();
             for hit in result.decisions {
-                if self.replaced.contains(&hit.second) {
+                let owner = self.chains.owner[hit.second];
+                if self.replaced.contains(&owner) {
                     continue;
                 }
                 let object = &query.objects()[hit.second];
@@ -241,14 +198,16 @@ impl Propagation<'_> {
                 if !self.movable.contains(&hit.second) {
                     return Ok(false);
                 }
-                if self.queue.insert(hit.second) {
-                    self.pushes
-                        .entry(hit.second)
-                        .or_insert_with(|| self.incoming.unwrap_or(Push { from: contour.core[0], toward: contour.core[1], piece }));
-                    self.stats.queued_tracks += 1;
+                if self.queue.insert(owner) {
+                    self.pushes.entry(owner).or_insert_with(|| {
+                        let mut push = self.incoming.unwrap_or(Push { from: contour.core[0], toward: contour.core[1], piece, hit: hit.second });
+                        push.hit = hit.second;
+                        push
+                    });
+                    self.stats.queued_tracks += self.chains.units[&owner].members.len();
                 }
             }
-            self.stats.maximum_queue = self.stats.maximum_queue.max(self.queue.len());
+            self.stats.maximum_queue = self.stats.maximum_queue.max(self.queue.iter().map(|i| self.chains.units[i].members.len()).sum());
         }
         Ok(true)
     }
@@ -287,6 +246,51 @@ fn push_order(object: &Object, push: Push) -> f64 {
     }
 }
 
+/// Partition a certified chain into source-owned paths. Subdividing existing
+/// lattice legs retains every original UUID without changing copper or posture.
+/// Insufficient whole-nanometre length refuses the candidate rather than losing IDs.
+fn split_chain(chains: &Chains, source: usize, path: &[Point]) -> Option<Vec<Replacement>> {
+    let chain = chains.units.get(&source)?;
+    let mut boundaries = vec![(0, 0)];
+    let mut cursor = 0;
+    for (position, (member, reverse)) in chain.members.iter().enumerate().take(chain.members.len() - 1) {
+        let track = &chains.tracks[member];
+        let point = if *reverse { track.start } else { track.end };
+        if let Some(offset) = path[cursor + 1..].iter().position(|p| *p == point) {
+            cursor += offset + 1;
+            boundaries.push((position + 1, cursor));
+        }
+    }
+    boundaries.push((chain.members.len(), path.len() - 1));
+    let mut result = Vec::new();
+    for pair in boundaries.windows(2) {
+        let (first, last) = (pair[0].0, pair[1].0);
+        let count = last - first;
+        let mut points = path[pair[0].1..=pair[1].1].to_vec();
+        while points.len() <= count {
+            let (index, steps) = points.windows(2).enumerate().map(|(i, p)| (i, super::posture::lattice(p[0], p[1]).0)).max_by_key(|p| p.1)?;
+            if steps < 2 || points.len() >= chains::MAX_POINTS {
+                return None;
+            }
+            points.insert(index + 1, super::posture::along(points[index], points[index + 1], steps / 2, steps));
+        }
+        let mut start = 0;
+        for (position, (member, reverse)) in chain.members[first..last].iter().enumerate() {
+            let end = (position + 1) * (points.len() - 1) / count;
+            let mut part = super::walkaround::simplify(&points[start..=end]);
+            if *reverse {
+                part.reverse();
+            }
+            let track = &chains.tracks[member];
+            if part != [track.start, track.end] {
+                result.push(Replacement { track: track.id, points: part });
+            }
+            start = end;
+        }
+    }
+    Some(result)
+}
+
 /// Run a nested walk with inherited source intent; its probes charge the global gesture budget.
 async fn displace(
     query: &ClearanceQuery,
@@ -302,7 +306,7 @@ async fn displace(
     walker.push_forward(request.head, request.target, incoming.from, incoming.toward);
     let first = match walker.run(request).await {
         Ok(plan) if plan.outcome == Outcome::Reached => {
-            return walker.tidy_displacement(plan, request.flipped).await;
+            return walker.localize_displacement(plan, request).await;
         }
         Ok(plan) if plan.start_blocked => return Ok(plan),
         Err(super::walkaround::Stop::Failed(error)) => return Err(error),
@@ -346,11 +350,69 @@ async fn displace(
     }
 }
 
-/// Try one alternate return direction after a blocked cascade. Both attempts share the same
-/// captured source and probe budget; cancellation drops the currently owned overlay. The
-/// initial attempt must finish normally, so explicit search exhaustion stays incomplete.
+/// Validate the original pickup before removing movable bodies, then reuse captured
+/// topology and try one alternate return direction after a blocked cascade. Both attempts
+/// share the source/probe budget; cancellation drops only disposable work. Explicit search
+/// exhaustion stays incomplete, and an invalid pickup cannot become a placement authority.
 pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
-    let first = attempt(query, request, budget, progress.clone(), false).await?;
+    // A free pickup inside existing clearance is invalid even when that copper
+    // could later move. Validate the original contact before removing any bodies.
+    let (point, layer) = request.origin.unwrap_or((request.head, request.layer));
+    let width = request
+        .fixed
+        .iter()
+        .find_map(|piece| match piece {
+            FixedCopper::Segment { start, layer: fixed_layer, width_nm, .. } if *start == point && *fixed_layer == layer => Some(*width_nm),
+            _ => None,
+        })
+        .unwrap_or(request.width_nm);
+    let start = Request {
+        head: point,
+        target: point,
+        layer,
+        width_nm: width,
+        origin: None,
+        previous: Vec::new(),
+        fixed: Vec::new(),
+        mode: Mode::Walkaround,
+        ..request.clone()
+    };
+    let mut pickup = super::walkaround::Walker::new(query, &start, budget, progress.clone())?;
+    let rejected = match pickup.displacement_anchor(point).await {
+        Ok(true) => None,
+        Ok(false) => Some((Outcome::Blocked { last_legal: request.head }, true)),
+        Err(super::walkaround::Stop::Exhausted) => Some((Outcome::Incomplete, false)),
+        Err(super::walkaround::Stop::Failed(error)) => return Err(error),
+    };
+    if let Some((outcome, start_blocked)) = rejected {
+        return Ok(Plan {
+            adjusted_target: None,
+            start_blocked,
+            replacements: Vec::new(),
+            shove: Some(ShoveStats::default()),
+            points: vec![request.head],
+            outcome,
+            blocker: None,
+            probes: progress.load(Ordering::Relaxed),
+        });
+    }
+    let chains = match chains::capture(query).await {
+        Ok(chains) => chains,
+        Err(CommandError::CapExceeded(_)) => {
+            return Ok(Plan {
+                adjusted_target: None,
+                start_blocked: false,
+                replacements: Vec::new(),
+                shove: Some(ShoveStats::default()),
+                points: vec![request.head],
+                outcome: Outcome::Incomplete,
+                blocker: None,
+                probes: progress.load(Ordering::Relaxed),
+            });
+        }
+        Err(error) => return Err(error),
+    };
+    let first = attempt(query, &chains, request, budget, progress.clone(), false).await?;
     if !matches!(first.outcome, Outcome::Blocked { .. })
         || first.start_blocked
         || !first.shove.as_ref().is_some_and(|stats| stats.queued_tracks > 0)
@@ -358,7 +420,7 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
     {
         return Ok(first);
     }
-    let mut second = attempt(query, request, budget, progress, true).await?;
+    let mut second = attempt(query, &chains, request, budget, progress, true).await?;
     if let (Some(stats), Some(previous)) = (&mut second.shove, &first.shove) {
         stats.include_previous(previous);
     }
@@ -371,33 +433,27 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
 /// it never changes to walking around the original movable tracks.
 async fn attempt(
     query: &ClearanceQuery,
+    chains: &Chains,
     request: &Request,
     budget: usize,
     progress: Arc<AtomicUsize>,
     reverse_displacements: bool,
 ) -> Result<Plan, CommandError> {
     let Pickup { source: origin, nets, islands } = pickup(query, request)?;
-    let view = query.authority().view().ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
-    let tracks: BTreeMap<_, _> = view.tracks().iter().map(|t| (t.id.to_string(), t)).collect();
-    let movable: BTreeSet<_> = query
-        .objects()
-        .iter()
-        .enumerate()
-        .filter_map(|(i, o)| tracks.get(&o.name).filter(|t| !t.locked && !islands.contains(&o.island)).map(|_| i))
-        .collect();
+    let movable: BTreeSet<_> =
+        chains.tracks.iter().filter(|(i, t)| !t.locked && !islands.contains(&query.objects()[**i].island)).map(|(i, _)| *i).collect();
+    let units: BTreeSet<_> = movable.iter().map(|i| chains.owner[*i]).collect();
     let mut next = 1u128;
     let mut stats = ShoveStats { attempts: 1, ..ShoveStats::default() };
     let fixed: Vec<_> = request.fixed.iter().map(|p| p.geometry(query)).collect::<Result<_, _>>()?;
-    // Endpoints are fixed graph anchors. Keeping their caps visible prevents an earlier
-    // displacement from stranding a later neighbor's start inside displaced copper.
+    // Free ends and protected contacts are fixed graph anchors. Ordinary degree-two
+    // bends remain soft hints, so an earlier displacement may move them later.
     let mut items = query.objects().to_vec();
-    for source in &movable {
+    for root in &units {
         super::search::yield_unit().await;
-        let object = &query.objects()[*source];
-        let Some(track) = tracks.get(&object.name) else {
-            continue;
-        };
-        let Some(points) = anchors(query, *source, &mut stats)? else {
+        let chain = &chains.units[root];
+        let protected: Vec<_> = chain.anchors.iter().filter(|a| a.protected).collect();
+        if protected.len() > MAX_ANCHORS {
             return Ok(Plan {
                 adjusted_target: None,
                 start_blocked: false,
@@ -408,15 +464,19 @@ async fn attempt(
                 blocker: None,
                 probes: progress.load(Ordering::Relaxed),
             });
-        };
-        items[*source].contour = Contour::capsule(track.start, track.start, object.contour.radius);
-        for point in points.iter().skip(1) {
-            let mut anchor = object.clone();
-            anchor.contour = Contour::capsule(*point, *point, object.contour.radius);
+        }
+        let Some(first) = protected.first() else { continue };
+        for (source, _) in &chain.members {
+            items[*source].contour = Contour::capsule(first.point, first.point, query.objects()[*source].contour.radius);
+        }
+        for point in protected.iter().skip(1) {
+            let mut anchor = query.objects()[*root].clone();
+            anchor.contour = Contour::capsule(point.point, point.point, anchor.contour.radius);
             items.push(anchor);
         }
-        stats.fixed_anchor_objects += points.len();
-        stats.overlay_geometry_bytes += points.len() * (std::mem::size_of::<Contour>() + std::mem::size_of::<Uuid>());
+        let caps = chain.members.len() + protected.len() - 1;
+        stats.fixed_anchor_objects += caps;
+        stats.overlay_geometry_bytes += caps * (std::mem::size_of::<Contour>() + std::mem::size_of::<Uuid>());
     }
     let fixed_query = query.with_objects(items)?;
     let mut overlay = fixed_query.overlay();
@@ -438,6 +498,7 @@ async fn attempt(
         let mut replaced = BTreeSet::new();
         let mut replacements = Vec::new();
         let mut legal = Propagation {
+            chains,
             movable: &movable,
             replaced: &replaced,
             queue: &mut queue,
@@ -461,7 +522,9 @@ async fn attempt(
                 pushes[a]
                     .piece
                     .cmp(&pushes[b].piece)
-                    .then_with(|| push_order(&query.objects()[*a], pushes[a]).total_cmp(&push_order(&query.objects()[*b], pushes[b])))
+                    .then_with(|| {
+                        push_order(&query.objects()[pushes[a].hit], pushes[a]).total_cmp(&push_order(&query.objects()[pushes[b].hit], pushes[b]))
+                    })
                     .then(a.cmp(b))
             }) else {
                 break;
@@ -474,31 +537,53 @@ async fn attempt(
                 break;
             }
             let object = &query.objects()[source];
-            let Some(anchors) = anchors(query, source, &mut stats)? else {
-                incomplete = true;
-                legal = false;
-                break;
-            };
-            let Some(track) = tracks.get(&object.name) else {
-                incomplete = true;
-                legal = false;
-                break;
-            };
-            let contacts = if request.merge_same_net {
-                None
-            } else {
-                Some(
-                    query
-                        .candidates(&object.contour, &object.layers)?
-                        .into_iter()
-                        .filter(|i| query.objects()[*i].contour.touches(&object.contour))
-                        .map(|i| query.objects()[i].name.clone())
-                        .collect(),
-                )
-            };
-            let mut path = vec![track.start];
+            let chain = &chains.units[&source];
+            let track = &chains.tracks[&source];
+            let contacts = (!request.merge_same_net).then(|| chain.contacts.clone());
             let obstacles = overlay.routing_query(origin)?;
-            for anchor in anchors.windows(2) {
+            let mut retained = Vec::new();
+            for (position, anchor) in chain.anchors.iter().enumerate() {
+                if anchor.protected {
+                    retained.push(position);
+                    continue;
+                }
+                let probe = Request {
+                    head: anchor.point,
+                    target: anchor.point,
+                    layer: track.layer,
+                    width_nm: track.width_nm,
+                    previous: Vec::new(),
+                    origin: None,
+                    fixed: Vec::new(),
+                    mode: Mode::Walkaround,
+                    merge_same_net: request.merge_same_net,
+                    posture: request.posture,
+                    flipped: request.flipped,
+                };
+                let mut walker = super::walkaround::Walker::new(&obstacles, &probe, budget, progress.clone())?;
+                walker.inherit(object, contacts.clone());
+                match walker.displacement_anchor(anchor.point).await {
+                    Ok(true) => retained.push(position),
+                    Ok(false) => {}
+                    Err(super::walkaround::Stop::Failed(error)) => return Err(error),
+                    Err(super::walkaround::Stop::Exhausted) => {
+                        incomplete = true;
+                        legal = false;
+                        break;
+                    }
+                }
+            }
+            if !legal {
+                break;
+            }
+            let Some(first) = retained.first() else {
+                incomplete = true;
+                legal = false;
+                break;
+            };
+            let mut path = vec![chain.anchors[*first].point];
+            for interval in retained.windows(2) {
+                let anchor = [chain.anchors[interval[0]].point, chain.anchors[interval[1]].point];
                 let mut displaced = Request {
                     head: anchor[0],
                     target: anchor[1],
@@ -507,7 +592,7 @@ async fn attempt(
                     width_nm: track.width_nm,
                     posture: request.posture,
                     flipped: request.flipped,
-                    previous: Vec::new(),
+                    previous: chain.anchors[interval[0]..=interval[1]].iter().map(|a| a.point).collect(),
                     mode: Mode::Walkaround,
                     merge_same_net: request.merge_same_net,
                     fixed: Vec::new(),
@@ -536,9 +621,25 @@ async fn attempt(
             if !legal {
                 break;
             }
+            let Some(parts) = split_chain(chains, source, &path) else {
+                incomplete = true;
+                legal = false;
+                break;
+            };
+            if replacements.len() + parts.len() > MAX_SHOVES {
+                incomplete = true;
+                legal = false;
+                break;
+            }
+            if !chains.legal_replacements(query, chain, &parts, request.merge_same_net).await? {
+                legal = false;
+                plan.blocker = Some(object.name.clone());
+                break;
+            }
             let pieces: Vec<_> = path.windows(2).map(|p| (Contour::capsule(p[0], p[1], track.width_nm as f64 / 2.), vec![track.layer])).collect();
             add_path(&mut overlay, &pieces, Some(source), &mut next, &mut stats)?;
             legal = Propagation {
+                chains,
                 movable: &movable,
                 replaced: &replaced,
                 queue: &mut queue,
@@ -551,7 +652,7 @@ async fn attempt(
             }
             .enqueue(query, &pieces, &object.intended_nets, &[object.island].into_iter().collect())
             .await?;
-            replacements.push(Replacement { track: track.id, points: path });
+            replacements.extend(parts);
             stats.displaced_tracks = replacements.len();
         }
         if legal {

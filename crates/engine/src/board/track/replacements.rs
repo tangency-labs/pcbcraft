@@ -9,6 +9,8 @@ use std::sync::{Arc, Mutex, TryLockError};
 
 /// One original segment replaced by a connected path of the same width and layer. Its first
 /// resulting segment retains the original UUID; all other segments receive fresh UUIDs.
+/// Ordinary degree-two joins may move together; final validation independently preserves
+/// trace continuity, free ends, branches and fixed pad/via/lock contacts.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Replacement {
@@ -87,6 +89,10 @@ pub(super) struct Validation {
     groups: BTreeMap<usize, usize>,
     cursor: usize,
     phase: u8,
+    chain_job: Option<super::chains::Validation>,
+    chains: Option<Arc<super::chains::Chains>>,
+    chain_paths: Vec<Replacement>,
+    chain_checked: bool,
 }
 impl Validation {
     /// Capture the final contact graph and replacement ownership; no result is accepted yet.
@@ -108,7 +114,13 @@ impl Validation {
                 .map(|item| (item.contour.radius * 2.) as i64)
                 .ok_or_else(|| CommandError::Unavailable("Missing new route copper.".into()))?,
         };
+        let chain_paths = params.get("replacements").map(parse).transpose()?.unwrap_or_default();
+        let chain_checked = chain_paths.is_empty();
         Ok(Self {
+            chain_paths,
+            chain_checked,
+            chain_job: None,
+            chains: None,
             preparation,
             source,
             final_positions: final_geometry.items.iter().enumerate().map(|(i, o)| (o.name.clone(), i)).collect(),
@@ -143,6 +155,19 @@ impl Validation {
             return Ok(false);
         }
         let source = self.query.as_ref().cloned().ok_or_else(|| CommandError::Unavailable("Missing replacement source query.".into()))?;
+        if !self.chain_checked {
+            if self.chain_job.is_none() {
+                self.chain_job = Some(super::chains::Validation::new(source.clone(), std::mem::take(&mut self.chain_paths), self.merge_same_net));
+            }
+            if let Some(job) = &mut self.chain_job
+                && let Some(result) = job.step(budget.min(16))
+            {
+                self.chains = Some(result?);
+                self.chain_job = None;
+                self.chain_checked = true;
+            }
+            return Ok(false);
+        }
         if self.phase == 0 {
             for object in source.objects().iter().skip(self.cursor).take(budget.min(32)) {
                 let &position = self
@@ -177,11 +202,14 @@ impl Validation {
                 let same_net = object.intended_nets.len() == 1 && object.intended_nets == other.intended_nets;
                 let same_island = object.island == other.island;
                 let original_contact = match (self.final_origins[index], self.final_origins[decision.second]) {
-                    (Some(a), Some(b)) => {
-                        a == b
-                            || (source.objects()[a].layers.iter().any(|l| source.objects()[b].layers.contains(l))
-                                && source.objects()[a].contour.touches(&source.objects()[b].contour))
-                    }
+                    (Some(a), Some(b)) => self.chains.as_ref().map_or_else(
+                        || {
+                            a == b
+                                || (source.objects()[a].layers.iter().any(|l| source.objects()[b].layers.contains(l))
+                                    && source.objects()[a].contour.touches(&source.objects()[b].contour))
+                        },
+                        |chains| chains.contact(a, b),
+                    ),
                     _ => false,
                 };
                 let exempt = if !self.merge_same_net && (self.final_displaced[index] || self.final_displaced[decision.second]) {
