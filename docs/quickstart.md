@@ -627,7 +627,9 @@ launch `target/debug/pcbcraft-cli` with arguments
 repository as its working directory. Use `.exe` on Windows. Running that command
 in a terminal waits for MCP input; it is not an interactive command prompt.
 Headless edits change only that process's in-memory session. They do not edit an
-open GUI window or save back to the file.
+open GUI window or save back to the file. For a review that must not edit even
+that snapshot, add `--read-only` to the headless arguments. See
+[headless MCP](mcp.md#headless-mcp) for scope discovery and refusal details.
 
 For the new layer/stackup foundation, use `describe_command` with
 `pcb.initialize_board_setup` and `pcb.set_board_setup`. On a project with no

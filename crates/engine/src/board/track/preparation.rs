@@ -105,7 +105,7 @@ impl Session {
     }
     /// Validate catalog parameters, source and revision before queuing work. Reusing a context
     /// retains derived pads across pointer generations while every candidate is independently checked.
-    /// A stale `expected_revision` is reported first, as by [`Session::execute`].
+    /// Scope and stale revisions are checked in the same order as by [`Session::execute`].
     pub fn prepare_copper_edit_with(&self, context: &CopperPreparation, command: &str, params: &Value) -> Result<CopperEditJob, CommandError> {
         let (command, target) = self.admit_copper_edit(command, params)?;
         if target != context.source.target() || !context.source.is_current(self) {
@@ -124,8 +124,9 @@ impl Session {
         Ok(job)
     }
 
-    /// Use project dispatch's validation order before resolving a preparation context.
+    /// Check scope before stale revisions or resolving a preparation context.
     fn admit_copper_edit(&self, command: &str, params: &Value) -> Result<(&'static str, BoardTarget), CommandError> {
+        self.authorize_command(command)?;
         self.refuse_stale(command, params)?;
         if !is_copper_edit(command) {
             return Err(CommandError::InvalidParams("command does not prepare copper".into()));
@@ -156,7 +157,7 @@ impl Session {
     }
     /// Prepare one existing copper command without adopting any authored state. Headless callers
     /// may drain the job; GUI/MCP hosts can schedule the same work and defer publication.
-    /// A stale `expected_revision` is reported before the board is resolved.
+    /// Scope and a stale `expected_revision` are checked before resolving the board.
     pub fn prepare_copper_edit(&self, command: &str, params: &Value) -> Result<CopperEditJob, CommandError> {
         let (command, target) = self.admit_copper_edit(command, params)?;
         Ok(Self::copper_job(&self.copper_preparation(target)?, command, params))
@@ -165,6 +166,7 @@ impl Session {
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
     /// A committed candidate is reported to the edit observer as its prepared command.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
+        self.authorize_command(prepared.command)?;
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
         }
