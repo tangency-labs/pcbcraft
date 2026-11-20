@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened-runtime entitlements for PCBCraft: pure Rust, no JIT, no unsigned libraries,
+     and unsandboxed so local project files can be opened from paths, CLI, and drag-and-drop. -->
+<plist version="1.0">
+<dict>
+</dict>
+</plist>

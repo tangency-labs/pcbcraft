@@ -52,6 +52,88 @@ fn session_with_symbol(symbol: &str) -> Session {
     session
 }
 
+/// Both unit property targets edit one shared designator lock, retaining compatibility
+/// addresses, terminals and physical ownership through reopen and one-step Undo.
+#[test]
+fn designator_lock_is_shared_by_all_placed_units() {
+    let mut session = session();
+    let first = session.project().unwrap().symbols()[0].clone();
+    let part = first.component_id();
+    apply(&mut session, PLACE_UNIT, json!({"component":part,"unit":"b","x_nm":25_400_000,"y_nm":0}));
+    let symbols = session.project().unwrap().symbols();
+    let targets = [symbols[0].id(), symbols[1].id()];
+    let terminals: Vec<_> = symbols.iter().map(|symbol| symbol.terminals()).collect();
+    let owner = session.project().unwrap().components().next().unwrap();
+    let reference = owner.reference().to_owned();
+    let value = owner.value().to_owned();
+    let placements = session.inspect()["project"]["schematic"]["symbols"].clone();
+    for (target, locked) in [(&targets[0], true), (&targets[1], false), (&targets[1], true), (&targets[0], false)] {
+        let before = session.snapshot().unwrap();
+        let before_documents = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        apply(&mut session, SET_SYMBOL_FIELDS, json!({"symbol":target,"reference":reference,"value":value,"designator_locked":locked}));
+        assert_eq!(session.revision(), revision + 1);
+        let edited = session.snapshot().unwrap();
+        assert_eq!(edited.components().count(), 1);
+        assert_eq!(session.inspect()["project"]["components"][0]["id"], part);
+        assert_eq!(session.inspect()["project"]["components"][0]["designator_locked"], locked);
+        assert_eq!(session.inspect()["project"]["schematic"]["symbols"], placements);
+        assert_eq!(edited.units, before.units);
+        assert_eq!(edited.footprint_assignments(), before.footprint_assignments());
+        assert_eq!(edited.components().next().unwrap().part, before.components().next().unwrap().part);
+        let saved = encode_documents(edited.clone()).unwrap();
+        let reopened = decode_documents(&saved).unwrap();
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
+        for project in [&edited, &reopened] {
+            for (index, symbol) in project.symbols().iter().enumerate() {
+                assert_eq!(symbol.id(), targets[index]);
+                assert_eq!(symbol.component_id(), part);
+                assert_eq!(symbol.terminals(), terminals[index]);
+                assert_eq!(project.component(symbol).unwrap().designator_locked(), locked);
+            }
+        }
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_documents);
+        session.apply("edit.redo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+    }
+}
+
+/// Copying one locked unit creates one independent destination owner, not a link to the source.
+#[test]
+fn designator_lock_partial_unit_clipboard_has_independent_destination_owner() {
+    let mut source = session();
+    let first = source.project().unwrap().symbols()[0].clone();
+    let owner = first.component_id();
+    apply(&mut source, PLACE_UNIT, json!({"component":owner,"unit":"b","x_nm":25_400_000,"y_nm":0}));
+    let second = source.project().unwrap().symbols()[1].id();
+    let part = source.project().unwrap().components().next().unwrap();
+    let fields = json!({"symbol":second,"reference":part.reference(),"value":part.value(),"designator_locked":true});
+    apply(&mut source, SET_SYMBOL_FIELDS, fields);
+    let before = encode_documents(source.snapshot().unwrap()).unwrap();
+    let response = source.execute(clipboard::COPY, &json!({"items":{"symbols":[second],"wires":[]},"expected_revision":source.revision()})).unwrap();
+    let text = response["clipboard"].as_str().unwrap();
+    assert_eq!(serde_json::from_str::<Value>(text).unwrap()["format"], "pcbcraft-clipboard/3");
+    apply(&mut source, clipboard::PASTE, json!({"text":text,"x_nm":76_200_000,"y_nm":0}));
+    let project = source.snapshot().unwrap();
+    assert_eq!(project.components().count(), 2);
+    assert_eq!(project.symbols().len(), 3);
+    let duplicate = &project.symbols()[2];
+    assert_ne!(duplicate.component_id(), owner);
+    assert_eq!(duplicate.unit, "b");
+    assert_eq!(project.symbols().iter().filter(|symbol| symbol.component_id() == duplicate.component_id()).count(), 1);
+    assert_eq!(project.symbols().iter().filter(|symbol| symbol.component_id() == owner).count(), 2);
+    assert!(project.component(duplicate).unwrap().designator_locked());
+    let saved = encode_documents(project).unwrap();
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    source.apply("edit.undo", &Value::Null).unwrap();
+    // Paste keeps issued numeric identities reserved; compare authored owners and units directly.
+    assert_eq!(source.project().unwrap().components().count(), 1);
+    assert_eq!(source.project().unwrap().symbols().len(), 2);
+    assert!(source.project().unwrap().components().next().unwrap().designator_locked());
+    assert_eq!(decode_documents(&before).unwrap().symbols().len(), 2);
+}
+
 /// Schemas cannot enforce terminal coverage, per-unit uniqueness or stable unit identities alone.
 #[test]
 fn codec_checks_units_and_logical_terminal_coverage() {
