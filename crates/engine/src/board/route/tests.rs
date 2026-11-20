@@ -786,18 +786,6 @@ fn blocked_cursor_approach_tracks_the_clearance_boundary() {
             }
             assert!(done);
             assert_eq!(job.take_result().unwrap().unwrap(), planned);
-            let exhausted = s.plan_route(&query(&s), &req, planned.probes - 1, &|| false).unwrap();
-            let Outcome::Blocked { last_legal } = exhausted.outcome else { panic!("{exhausted:?}") };
-            assert_eq!(exhausted.adjusted_target, Some(last_legal));
-            assert_ne!(last_legal, head);
-            assert_eq!(exhausted.probes, planned.probes - 1);
-            let mut candidate = Session::default();
-            candidate.open_snapshot(s.snapshot().unwrap());
-            commit_and_agree(&mut candidate, &exhausted, req.layer, WIDTH);
-            let no_prefix = s.plan_route(&query(&s), &req, 1, &|| false).unwrap();
-            assert_eq!(no_prefix.outcome, Outcome::Incomplete);
-            assert_eq!(no_prefix.points, vec![head]);
-            assert!(no_prefix.adjusted_target.is_none());
             let count = std::cell::Cell::new(0);
             let canceled = s
                 .plan_route(&query(&s), &req, DEFAULT_BUDGET, &|| {
@@ -810,6 +798,30 @@ fn blocked_cursor_approach_tracks_the_clearance_boundary() {
             assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
         }
     }
+}
+
+/// A single round obstacle isolates optional cursor refinement from the primary walk.
+#[test]
+fn refinement_exhaustion_keeps_a_certified_prefix() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    add(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    add(&mut session, ADD_VIA, json!({"at":p(5_000_000,0),"via_diameter_nm":1_000_000,"via_drill_nm":300_000}));
+    let request = request(&session, p(0, 0), p(5_000_000, 200_000));
+    let query = query(&session);
+    let refined = session.plan_route(&query, &request, DEFAULT_BUDGET, &|| false).unwrap();
+    let prefix = session.plan_route(&query, &request, 45, &|| false).unwrap();
+    let Outcome::Blocked { last_legal } = prefix.outcome else { panic!("{prefix:?}") };
+    assert_eq!(prefix.probes, 45);
+    assert_eq!(prefix.points, [request.head, last_legal]);
+    assert_ne!(last_legal, request.head);
+    assert_eq!(prefix.adjusted_target, Some(last_legal));
+    assert_ne!(prefix.adjusted_target, refined.adjusted_target);
+    let no_prefix = session.plan_route(&query, &request, 1, &|| false).unwrap();
+    assert_eq!(no_prefix.outcome, Outcome::Incomplete);
+    assert_eq!(no_prefix.points, [request.head]);
+    assert!(no_prefix.adjusted_target.is_none());
+    commit_and_agree(&mut session, &prefix, request.layer, WIDTH);
 }
 
 /// Both pointer-only movement and continuation from a fixed top bend reach legal pad-gap
