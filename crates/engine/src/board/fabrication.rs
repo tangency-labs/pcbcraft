@@ -31,6 +31,8 @@ use std::{
     io::Write as _,
 };
 
+mod part_layers;
+
 /// Generate the board's fabrication files; returns them without editing anything.
 pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
 /// Silkscreen strokes without an authored width use 0.12 mm.
@@ -119,7 +121,7 @@ enum Aperture {
     Obround(i64, i64),
 }
 
-/// X2 functions supported by the existing board model (Ucamco Gerber 2026.05 §5.6.10).
+/// Aperture functions supported by the board writers (Ucamco Gerber 2026.05 §5.6.10).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum ApertureFunction {
     SmdPad,
@@ -129,6 +131,8 @@ enum ApertureFunction {
     Conductor,
     Material,
     Profile,
+    /// A flash marking the placed part's reference point, independent of its pads.
+    PartMain,
 }
 
 const DELETE_APERTURE_FUNCTION: &str = "%TD.AperFunction*%\n";
@@ -143,6 +147,7 @@ impl ApertureFunction {
             Self::Conductor => "Conductor",
             Self::Material => "Material",
             Self::Profile => "Profile",
+            Self::PartMain => "ComponentMain",
         };
         let _ = writeln!(text, "%TA.AperFunction,{value}*%");
     }
@@ -260,13 +265,21 @@ impl Gerber {
         }
     }
 
-    /// Wrap the body in an X2 header and footer. Tagged AD commands capture the current
-    /// dictionary entry, then TD clears it so later untagged apertures stay untagged (§§5.3, 5.5).
+    /// Finish a layer in the existing bare-board export, which writes all layers in one frame.
     fn finish(self, function: &str, polarity: &str) -> String {
+        self.finish_in_frame(function, polarity, Some("Original"))
+    }
+
+    /// Wrap one layer in a Gerber header and footer. Only a coordinated export supplies a frame
+    /// identity (§5.6.5). Tagged AD commands capture the current dictionary entry, then TD clears
+    /// it so later untagged apertures stay untagged (§§5.3, 5.5).
+    fn finish_in_frame(self, function: &str, polarity: &str, same_coordinates: Option<&str>) -> String {
         let mut text = String::new();
         let _ = writeln!(text, "G04 PCBcraft fabrication output*");
         let _ = writeln!(text, "%TF.GenerationSoftware,PCBcraft,PCBcraft,{}*%", env!("CARGO_PKG_VERSION"));
-        text.push_str("%TF.SameCoordinates,Original*%\n");
+        if let Some(identity) = same_coordinates {
+            let _ = writeln!(text, "%TF.SameCoordinates,{identity}*%");
+        }
         let _ = writeln!(text, "%TF.FileFunction,{function}*%");
         let _ = writeln!(text, "%TF.FilePolarity,{polarity}*%");
         text.push_str("%FSLAX46Y46*%\n%MOMM*%\n%LPD*%\nG01*\n");
