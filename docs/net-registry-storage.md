@@ -16,15 +16,17 @@ another feature requires a newer envelope. [Class bindings](net-class-assignment
 select project/21 and board-owned instances/3 in the same registry home when
 numbered names are absent. Net-owned generated numbers select **project/23** and
 board-owned **instances/4** instead, with optional class catalogs, assignments and
-no-connect intent in that envelope. Every record stored under project/23 has a positive
+no-connect intent in that envelope. Active [designator locks](native-project-storage.md#designator-locks)
+select project/51 instead, retaining the content-selected instance header,
+including instances/5 or /7 for part-group memberships, or instances/8 when pairs
+are present. Every record stored under project/23 has a positive
 `generated_number`; duplicate numbers, explicit nulls, missing numbers and use
 under older headers are rejected. Project/24 carries the same records beside
 [part groups](part-groups.md), with generated numbers optional: a
 registry there numbers every record under the same rules or numbers none.
-Without assembly profiles or pairs, board-owned expanded memberships select
-instances/5; dense memberships use
-project/39 and instances/7 with the same optional net-registry records and a
-compact UUID dictionary. A part-group catalog without
+Without pairs, board-owned expanded memberships select instances/5 and compact
+memberships select instances/7. Compact memberships use project/39 if no other
+content requires a higher project format. A part-group catalog without
 memberships keeps the instance header the other records need, such as
 instances/4 for a numbered registry. Active, ambiguous and retired records reserve
 their numbers, which are never inferred from component references.
@@ -74,12 +76,13 @@ is not an electrical or routing qualification. A member may become retired or
 ambiguous; the stored relationship keeps that exact UUID and does not follow
 successors or set a review state automatically.
 
-A nonempty pair list selects project/45 and, for a board-owned registry,
-instances/8. These headers require pairs; earlier headers refuse them.
+A nonempty pair list selects project/45 unless an active designator lock selects
+project/51. Board-owned pairs use instances/8 in either case. Project/45 and
+instances/8 require pairs; project/51 permits them but does not require them.
 [Authored electrical intent](native-project-storage.md#authored-electrical-intent)
-instead selects project/49, and net intent selects instances/10; both carry
-pairs optionally. An empty
-or null `pairs` field is invalid, not an alias for omission. Project/45 allows
+instead selects project/49 (project/54 alongside a lock), and net intent selects
+instances/10; these carry pairs optionally. An empty or null `pairs` field is invalid, not an alias for
+omission. These project formats allow
 both fully numbered and fully unnumbered registries, but not a mixture. Existing
 class catalogs and bindings, parameters, no-connect intent, part groups and
 assembly profiles keep their existing validation rules. Either expanded or

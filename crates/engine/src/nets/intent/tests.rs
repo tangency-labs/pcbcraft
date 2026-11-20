@@ -1,7 +1,7 @@
 use super::{INSPECT, SET};
 use crate::persistence::{Documents, ENTRY_POINT, decode_documents, decode_packed, encode_documents, encode_packed};
 use crate::{
-    CommandError, Session, net_classes, net_labels,
+    CommandError, PLACE_SYMBOL, SET_SYMBOL_FIELDS, Session, net_classes, net_labels,
     nets::{AnchorKind, NetAddress, State},
 };
 use serde_json::{Value, json};
@@ -475,5 +475,61 @@ fn authored_electrical_intent_composes_with_differential_pairs() {
             assert_eq!(document(&class_only, path)["format"], "pcbcraft-instances/8");
         }
         assert_eq!(encode_documents(decode_documents(&class_only).unwrap()).unwrap(), class_only);
+    }
+}
+
+/// Authored intent and an active designator lock compose under project/54 only while both
+/// are present. Save and reopen preserve both exactly; each single-feature header refuses the
+/// composed content, and clearing either feature returns to that feature's own header.
+#[test]
+fn authored_electrical_intent_composes_with_designator_locks() {
+    for board in [false, true] {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":board})).unwrap();
+        for x_nm in [0, 25_400_000] {
+            apply(&mut session, PLACE_SYMBOL, json!({"definition":"resistor","x_nm":x_nm,"y_nm":0}));
+        }
+        let unlocked = encode_documents(session.snapshot().unwrap()).unwrap();
+        let (address, _) = named_net(&mut session, "TEST_LOCKED", 50_800_000);
+        let before_intent = encode_documents(session.snapshot().unwrap()).unwrap();
+        let lock = |session: &mut Session, locked: bool| {
+            apply(session, SET_SYMBOL_FIELDS, json!({"symbol":"symbol-2","reference":"R1","value":"R","designator_locked":locked}));
+        };
+        lock(&mut session, true);
+        let locks_only = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_ne!(locks_only, unlocked);
+        assert_eq!(document(&locks_only, ENTRY_POINT)["format"], "pcbcraft-project/51");
+
+        let target = json!({"kind":"net","address":address});
+        let args = request(&session, &target, &json!({"isolation_group":"Locked primary"}));
+        session.apply(SET, &args).unwrap();
+        let both = encode_documents(session.snapshot().unwrap()).unwrap();
+        let entry = document(&both, ENTRY_POINT);
+        assert_eq!(entry["format"], "pcbcraft-project/54");
+        assert_eq!(entry["components"][0]["designator_locked"], true);
+        if let Some(path) = session.project().unwrap().instances_document_path() {
+            assert_eq!(document(&both, &path)["format"], "pcbcraft-instances/10");
+        }
+        refused(&altered(&both, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/49")), "Designator locks require project format 51");
+        let lock_header = altered(&both, ENTRY_POINT, |v| v["format"] = json!("pcbcraft-project/51"));
+        refused(&lock_header, if board { "unsupported instances format" } else { "requires project format 49" });
+
+        let reopened = decode_documents(&both).unwrap();
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), both);
+        assert_eq!(encode_documents(decode_packed(&encode_packed(reopened.clone()).unwrap()).unwrap().project).unwrap(), both);
+        let mut reader = Session::default();
+        reader.open_snapshot(reopened);
+        assert_eq!(inspect(&mut reader, &target)["isolation_group"], "Locked primary");
+        assert!(reader.project().unwrap().components().next().unwrap().designator_locked());
+
+        let clear = request(&session, &target, &json!({}));
+        session.apply(SET, &clear).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), locks_only);
+        let args = request(&session, &target, &json!({"isolation_group":"Locked primary"}));
+        session.apply(SET, &args).unwrap();
+        lock(&mut session, false);
+        let intent_only = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(document(&intent_only, ENTRY_POINT)["format"], "pcbcraft-project/49");
+        assert_ne!(intent_only, before_intent);
     }
 }
