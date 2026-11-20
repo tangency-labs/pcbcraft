@@ -3,7 +3,7 @@ use super::*;
 use crate::board_drc::jobs::{Queue, Request as Queued};
 use pcbcraft_engine::{
     Session,
-    board::route::{DEFAULT_BUDGET, Outcome, Plan, PlanningContext, PlanningJob, Posture, Request},
+    board::route::{Outcome, Plan, PlanningContext, PlanningJob, Posture, Request},
 };
 
 /// A click fixes one target; pointer motion cannot replace it before its plan is adopted.
@@ -176,7 +176,7 @@ impl Planning {
             && context.source().target() == wanted.key.board
             && context.source().revision() == wanted.key.source.revision
         {
-            match context.try_prepare_cached(wanted.key.request.clone(), DEFAULT_BUDGET) {
+            match context.try_prepare_cached(wanted.key.request.clone(), wanted.key.request.mode.default_probe_budget()) {
                 Ok(Some(mut job)) => {
                     self.submitted = true;
                     if job.step(8) {
@@ -377,7 +377,9 @@ impl Planning {
                     self.inline_source = Some(wanted.key.source);
                 }
                 let context = self.context.as_ref().ok_or("Route source unavailable")?;
-                session.prepare_route_plan(context, wanted.key.request.clone(), DEFAULT_BUDGET).map_err(|e| e.to_string())
+                session
+                    .prepare_route_plan(context, wanted.key.request.clone(), wanted.key.request.mode.default_probe_budget())
+                    .map_err(|e| e.to_string())
             })();
             match result {
                 Ok(job) => {

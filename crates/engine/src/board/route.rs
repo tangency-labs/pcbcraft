@@ -176,8 +176,8 @@ impl Session {
         let posture: Posture = params.get("posture").map(|_| field(params, "posture")).transpose()?.unwrap_or_default();
         let flipped = params.get("flipped").and_then(Value::as_bool).unwrap_or(false);
         let previous: Vec<Point> = params.get("previous").map(|_| field(params, "previous")).transpose()?.unwrap_or_default();
-        let budget = params.get("budget").map(|_| field(params, "budget")).transpose()?.unwrap_or(DEFAULT_BUDGET);
-        let mode = params.get("mode").map(|_| field(params, "mode")).transpose()?.unwrap_or_default();
+        let mode: Mode = params.get("mode").map(|_| field(params, "mode")).transpose()?.unwrap_or_default();
+        let budget = params.get("budget").map(|_| field(params, "budget")).transpose()?.unwrap_or_else(|| mode.default_probe_budget());
         let merge_same_net = params.get("merge_same_net").and_then(Value::as_bool).unwrap_or(false);
         let fixed: Vec<FixedCopper> = params.get("fixed").map(|_| field(params, "fixed")).transpose()?.unwrap_or_default();
         let origin = fixed.first().and_then(FixedCopper::origin);

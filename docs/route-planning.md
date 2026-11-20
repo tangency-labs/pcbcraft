@@ -194,11 +194,12 @@ neighbors when obstructed. Closed or longer-than-255-segment components retain
 per-segment anchors in this slice.
 
 The solver starts with the requested elbow. If its cascade blocks, it can try
-displaced intervals from their other ends, continue a previously displayed guide
-to the new cursor, or try the other elbow sense. Each candidate must run from the
+displaced intervals from their other ends or with a different elbow, continue a
+previously displayed guide to the new cursor, or change the incoming elbow. Each candidate must run from the
 same head to the requested target. The original pickup, fixed gesture copper,
 forward push constraints, and probe budget apply to all candidates. A previously
-displayed guide must be certified again before it can influence placement.
+displayed guide must be certified again before it can influence placement. This also
+checks that a returned path stays clear of its own earlier legs on the same layer.
 
 The original pickup is checked against the original copper before any movable
 bodies are hidden. A free start inside an existing clearance band is refused,
@@ -254,8 +255,8 @@ of its original line; that direction follows the first colliding piece through
 cascades and fixed vertices. Interior contact anchors are reserved before moving
 any neighbor, so an earlier displacement cannot occupy a later branch junction.
 When a local displacement walk fails, the engine tries parallel runs derived
-from individual obstacle hulls, retaining at most 64 forward guide intervals while
-streaming indexed neighbors. Overlapping intervals at the same offset coalesce;
+from individual obstacle hulls, retaining forward guide intervals in proportion
+to the remaining probe budget while streaming indexed neighbors. Overlapping intervals at the same offset coalesce;
 separate intervals remain separate so distant copper does not force a long plateau.
 Every body remains in the exact collision checks. These
 alternatives share the existing probe budget, cancellation and exact leg/path
@@ -276,10 +277,12 @@ membership and forward half-plane. If its optional search runs out of work, it
 keeps the already-certified path; remaining propagation still needs to finish
 within the gesture budget.
 
-The solver replaces at most
-96 original segments with at most 256 points each and preserving at most 128
-anchors per trace chain. Nested walks and propagation share the request's
-probe budget. Cancellation or stale ownership cannot publish partial work, and
+The number of displaced segments is bounded by the board's track capacity and
+the probe budget. A replacement can contain at most 256 points and a trace
+chain preserves at most 128 protected anchors. Shove has a default budget of
+65,536 probes, and at most one eighth of that work per cascade is allocated to
+optional bend refinement. Nested walks and propagation share that budget.
+Cancellation or stale ownership cannot publish partial work, and
 the preview hides displaced originals only while their replacement paths are
 displayed. A rejected first click inside clearance releases the draft while
 leaving the routing tool armed.

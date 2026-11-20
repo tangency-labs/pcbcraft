@@ -466,12 +466,23 @@ fn lateral_shove_keeps_a_valid_return_to_the_branch() {
                 }
                 assert!(done);
                 assert_eq!(job.take_result().unwrap().unwrap(), plan);
-                let exhausted = s.plan_route(&query(&s), &request, plan.probes - 1, &|| false).unwrap();
-                assert_eq!(exhausted.outcome, Outcome::Incomplete);
-                assert_eq!(exhausted.shove.as_ref().unwrap().attempts, 2);
-                assert!(exhausted.probes < plan.probes);
-                assert_eq!(exhausted.points, vec![request.head]);
-                assert!(exhausted.replacements.is_empty());
+                let limited = s.plan_route(&query(&s), &request, plan.probes - 1, &|| false).unwrap();
+                assert!(limited.probes < plan.probes);
+                match limited.outcome {
+                    Outcome::Reached => {
+                        // A smaller allowance can skip optional refinements and still
+                        // certify the same two-rail cascade within the available work.
+                        assert_eq!(limited.replacements.len(), 2);
+                        let mut candidate = Session::default();
+                        candidate.open_snapshot(s.snapshot().unwrap());
+                        commit(&mut candidate, &request, &limited);
+                    }
+                    Outcome::Incomplete => {
+                        assert_eq!(limited.points, vec![request.head]);
+                        assert!(limited.replacements.is_empty());
+                    }
+                    other => panic!("unexpected limited outcome: {other:?}"),
+                }
                 let count = std::cell::Cell::new(0);
                 let canceled = s
                     .plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| {
@@ -910,4 +921,51 @@ fn continuing_a_guide_retries_the_incoming_path() {
         assert!(plan.probes <= DEFAULT_BUDGET);
         commit(&mut s, &request, &plan);
     }
+}
+
+/// A cached guide can fold as the cursor moves. Reusing its endpoint must
+/// certify the incoming copper against itself before applying any displacement.
+#[test]
+fn shove_rebuilds_a_guide_that_folds_back_into_its_own_clearance() {
+    let mut s = board();
+    let head = p(0, 0);
+    let target = p(12, 4);
+    let previous = vec![head, p(10, 0), p(10, 2), p(2, 2), p(2, 4), target];
+    let request = Request { head, target, previous, ..request(&s) };
+    let result = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(result.outcome, Outcome::Reached, "{result:?}");
+    assert_eq!(result.points, super::super::posture::elbow(head, target, request.posture, request.flipped));
+    commit(&mut s, &request, &result);
+}
+
+/// An incoming extension cannot run back into an earlier fixed leg of the same gesture.
+#[test]
+fn shove_refuses_to_overlap_an_earlier_fixed_vertex() {
+    let s = board();
+    let layer = copper_layers(&s)[0];
+    let (origin, corner, head) = (p(0, 0), p(50, 0), p(50, 30));
+    let fixed = [origin, corner, head].windows(2).map(|leg| FixedCopper::Segment { start: leg[0], end: leg[1], layer, width_nm: 250_000 }).collect();
+    let request = Request { head, target: p(20, 0), origin: Some((origin, layer)), fixed, ..request(&s) };
+    let plan = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_ne!(plan.outcome, Outcome::Reached, "{plan:?}");
+    assert!(plan.replacements.is_empty());
+}
+
+/// An incoming route can carry a shove across a wide row of unlocked copper.
+#[test]
+fn shove_displaces_more_than_ninety_six_rails_in_one_edit() {
+    let mut s = board();
+    let first = add(&mut s, vec![p(-1500, 0), p(1500, 0)], 250_000)[0];
+    for rail in 1..112 {
+        add(&mut s, vec![p(-1500, rail * 8), p(1500, rail * 8)], 250_000);
+    }
+    let request = Request { head: p(0, -10), target: p(0, 111 * 8 + 1), ..request(&s) };
+    let plan = s.plan_route(&query(&s), &request, request.mode.default_probe_budget(), &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached, "large cascade stopped after {} probes", plan.probes);
+    assert_eq!(plan.replacements.len(), 112);
+    let displaced = plan.replacements.iter().find(|path| path.track == first).unwrap();
+    assert!(displaced.points.iter().any(|point| point.y_nm > request.target.y_nm));
+    assert_eq!(displaced.points.first(), Some(&p(-1500, 0)));
+    assert_eq!(displaced.points.last(), Some(&p(1500, 0)));
+    commit(&mut s, &request, &plan);
 }

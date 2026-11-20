@@ -53,7 +53,8 @@ fn rule_key(id: ObstacleId) -> String {
 }
 
 /// Disposable query data, never authored geometry or an authorization to publish an edit.
-/// Up to 8,192 changed/added objects are retained; the source index is never modified/rebuilt.
+/// The source index remains immutable. Public edits keep a small overlay limit,
+/// while routing can stage the copper allowed by the board model.
 pub struct Overlay<'a> {
     query: &'a ClearanceQuery,
     changed: BTreeMap<usize, Option<Object>>,
@@ -61,12 +62,32 @@ pub struct Overlay<'a> {
     added_from: BTreeMap<Uuid, Option<usize>>,
     identity: Arc<()>,
     generation: u64,
+    limit: usize,
 }
 
 impl ClearanceQuery {
     /// Start an empty disposable overlay sharing this captured board's index and authority.
     pub fn overlay(&self) -> Overlay<'_> {
-        Overlay { query: self, changed: BTreeMap::new(), added: BTreeMap::new(), added_from: BTreeMap::new(), identity: Arc::new(()), generation: 0 }
+        self.overlay_with_limit(8192)
+    }
+
+    /// The shove planner already checks the final segment count. Allow its
+    /// disposable overlay enough space for that copper and the fixed via lands.
+    pub(in crate::board) fn route_overlay(&self) -> Overlay<'_> {
+        self.overlay_with_limit(super::super::track::MAX_TRACKS + 2 * super::super::track::MAX_PATH_POINTS)
+    }
+
+    /// Bind capacity to the owner of the disposable work.
+    fn overlay_with_limit(&self, limit: usize) -> Overlay<'_> {
+        Overlay {
+            query: self,
+            changed: BTreeMap::new(),
+            added: BTreeMap::new(),
+            added_from: BTreeMap::new(),
+            identity: Arc::new(()),
+            generation: 0,
+            limit,
+        }
     }
 }
 
@@ -122,8 +143,8 @@ impl Overlay<'_> {
     }
     /// Replacing a previous change consumes no extra slot; reject excess work before mutation.
     fn room(&self, existing: bool) -> Result<(), CommandError> {
-        if !existing && self.changed.len() + self.added.len() >= 8192 {
-            return Err(CommandError::CapExceeded("overlay supports at most 8192 changed objects".into()));
+        if !existing && self.changed.len() + self.added.len() >= self.limit {
+            return Err(CommandError::CapExceeded(format!("overlay supports at most {} changed objects", self.limit)));
         }
         Ok(())
     }
