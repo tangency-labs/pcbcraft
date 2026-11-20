@@ -162,3 +162,53 @@ fn invalid_or_stale_command_does_not_change_history() {
     );
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
+
+/// Recipes and a designator lock together use project/57 and survive save/reopen in both
+/// codecs. The writer is lazy: removing either feature returns to /51 or /47 exactly.
+#[test]
+fn recipe_and_designator_lock_save_as_project_57_and_fall_back() {
+    let (mut session, content) = fixture();
+    session.apply(crate::PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":0,"y_nm":0,"expected_revision":session.revision()})).unwrap();
+    let symbol = session.project().unwrap().symbols()[0].id();
+    let lock = |session: &mut Session, locked: bool| {
+        session
+            .apply(
+                crate::SET_SYMBOL_FIELDS,
+                &json!({"symbol":symbol,"reference":"R1","value":"R","designator_locked":locked,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+    };
+    let format = |documents: &Documents| serde_json::from_slice::<Value>(&documents[ENTRY_POINT]).unwrap()["format"].clone();
+    set(&mut session, ID, &content).unwrap();
+    let recipes_only = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(format(&recipes_only), "pcbcraft-project/47");
+
+    lock(&mut session, true);
+    let project = session.snapshot().unwrap();
+    let both = encode_documents(project.clone()).unwrap();
+    assert_eq!(format(&both), "pcbcraft-project/57");
+    let reopened = decode_documents(&both).unwrap();
+    assert_eq!(reopened.output_recipes(), project.output_recipes());
+    assert!(reopened.components().any(|part| part.designator_locked()));
+    assert_eq!(encode_documents(reopened).unwrap(), both);
+    let packed = decode_packed(&encode_packed(project).unwrap()).unwrap();
+    assert!(packed.project.components().any(|part| part.designator_locked()));
+    assert_eq!(packed.project.output_recipes().len(), 1);
+    assert_eq!(packed.documents, both);
+
+    // Each single-feature header refuses the other feature; /57 requires both.
+    let downgraded = replace_entry(&both, |entry| entry["format"] = json!("pcbcraft-project/51"));
+    assert!(decode_documents(&downgraded).err().unwrap().contains("output_recipes"));
+    let downgraded = replace_entry(&both, |entry| entry["format"] = json!("pcbcraft-project/47"));
+    assert!(decode_documents(&downgraded).err().unwrap().contains("Designator locks require project format 51 or 57"));
+    let unlocked = replace_entry(&recipes_only, |entry| entry["format"] = json!("pcbcraft-project/57"));
+    assert!(decode_documents(&unlocked).err().unwrap().contains("at least one true"));
+
+    set(&mut session, ID, &Value::Null).unwrap();
+    let locks_only = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert_eq!(format(&locks_only), "pcbcraft-project/51");
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), both);
+    lock(&mut session, false);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), recipes_only);
+}
