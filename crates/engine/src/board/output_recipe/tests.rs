@@ -212,3 +212,97 @@ fn recipe_and_designator_lock_save_as_project_57_and_fall_back() {
     lock(&mut session, false);
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), recipes_only);
 }
+
+/// Published command discovery enforces the same reserved file stems and trimmed name rules
+/// as runtime validation, while accepting an ordinary valid recipe.
+#[test]
+fn recipe_command_schema_matches_runtime_validation() {
+    let described = crate::catalog().iter().find(|command| command.id == SET_OUTPUT_RECIPE).unwrap().to_json();
+    let content_schema = &described["params"]["properties"]["content"];
+    assert_eq!(content_schema, &schema());
+    let properties = &content_schema["oneOf"][1]["properties"];
+    let name_schema = &properties["name"];
+    let stem_schema = &properties["file_stem"];
+
+    assert_eq!(name_schema["type"], "string");
+    assert_eq!(name_schema["minLength"], 1);
+    assert_eq!(name_schema["maxLength"], MAX_RECIPE_NAME);
+    assert_eq!(name_schema["pattern"], RECIPE_NAME_PATTERN);
+
+    assert_eq!(stem_schema["type"], "string");
+    assert_eq!(stem_schema["minLength"], 1);
+    assert_eq!(stem_schema["maxLength"], MAX_FILE_STEM);
+    assert_eq!(stem_schema["pattern"], FILE_STEM_PATTERN);
+    let forbidden_stems: Vec<&str> = stem_schema["not"]["enum"].as_array().unwrap().iter().map(|item| item.as_str().unwrap()).collect();
+    assert_eq!(forbidden_stems, RESERVED_PORTABLE_SEGMENTS);
+
+    let name_matches_schema = |value: &str| {
+        let count = value.chars().count();
+        let min = name_schema["minLength"].as_u64().unwrap() as usize;
+        let max = name_schema["maxLength"].as_u64().unwrap() as usize;
+        (min..=max).contains(&count)
+            && !value.chars().any(char::is_control)
+            && value.chars().next().is_some_and(|ch| !ch.is_whitespace())
+            && value.chars().next_back().is_some_and(|ch| !ch.is_whitespace())
+    };
+    let stem_matches_schema = |value: &str| {
+        let len = value.len();
+        let min = stem_schema["minLength"].as_u64().unwrap() as usize;
+        let max = stem_schema["maxLength"].as_u64().unwrap() as usize;
+        (min..=max).contains(&len)
+            && value.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !value.starts_with('-')
+            && !value.ends_with('-')
+            && !forbidden_stems.contains(&value)
+    };
+
+    let (mut session, content) = fixture();
+    let revision = session.revision();
+    let initial = session.snapshot().unwrap();
+
+    for reserved in RESERVED_PORTABLE_SEGMENTS {
+        assert!(!stem_matches_schema(reserved), "schema should reject reserved stem {reserved}");
+        let mut invalid = content.clone();
+        invalid["file_stem"] = json!(reserved);
+        assert!(matches!(set(&mut session, ID, &invalid), Err(CommandError::InvalidParams(_))), "command should reject reserved stem {reserved}");
+    }
+
+    for stem in ["", "-proto", "proto-", "Proto", "prototype\n", "../package"] {
+        assert!(!stem_matches_schema(stem), "schema should reject stem {stem:?}");
+        let mut invalid = content.clone();
+        invalid["file_stem"] = json!(stem);
+        assert!(matches!(set(&mut session, ID, &invalid), Err(CommandError::InvalidParams(_))), "command should reject stem {stem:?}");
+    }
+
+    for name in [
+        "",
+        " ",
+        " Prototype ",
+        " Prototype",
+        "Prototype ",
+        "Proto\ntype",
+        "Prototype\n",
+        "Proto\ttype",
+        "Proto\u{0000}type",
+        "Proto\u{007f}type",
+        "Proto\u{0085}type",
+        "\u{00a0}Prototype",
+    ] {
+        assert!(!name_matches_schema(name), "schema should reject name {name:?}");
+        let mut invalid = content.clone();
+        invalid["name"] = json!(name);
+        assert!(matches!(set(&mut session, ID, &invalid), Err(CommandError::InvalidParams(_))), "command should reject name {name:?}");
+    }
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&initial, &session.snapshot().unwrap()));
+
+    for (name, stem) in [("Prototype", "prototype"), ("A", "a"), ("Rev 2 / Proto", "con-1"), ("Board 1", "lpt10")] {
+        assert!(name_matches_schema(name), "schema should accept name {name:?}");
+        assert!(stem_matches_schema(stem), "schema should accept stem {stem:?}");
+        let mut valid = content.clone();
+        valid["name"] = json!(name);
+        valid["file_stem"] = json!(stem);
+        set(&mut session, ID, &valid).unwrap();
+    }
+    assert_eq!(session.project().unwrap().output_recipes()[0].content.file_stem, "lpt10");
+}

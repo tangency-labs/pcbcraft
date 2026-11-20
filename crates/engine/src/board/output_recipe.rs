@@ -1,7 +1,10 @@
 //! Authored fabrication selections. A recipe is not an export run or a destination.
 
 use super::{assembly_profile::Adoption, origin::Anchor};
-use crate::{CommandError, ParamKind, Project, Session, persistence::layout::portable_segment};
+use crate::{
+    CommandError, ParamKind, Project, Session,
+    persistence::layout::{RESERVED_PORTABLE_SEGMENTS, portable_segment},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, sync::Arc};
@@ -13,6 +16,11 @@ const MAX_RECIPES: usize = 32;
 const MAX_RECIPE_LAYERS: usize = 128;
 const MAX_RECIPE_NAME: usize = 80;
 const MAX_FILE_STEM: usize = 48;
+/// Trimmed, nonempty recipe name without C0/C1 control characters.
+const RECIPE_NAME_PATTERN: &str =
+    "^[^\\s\\u0000-\\u001f\\u007f-\\u009f](?:[^\\u0000-\\u001f\\u007f-\\u009f]*[^\\s\\u0000-\\u001f\\u007f-\\u009f])?(?![\\s\\S])";
+/// Lowercase ASCII file stem with interior hyphens only.
+const FILE_STEM_PATTERN: &str = "^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?![\\s\\S])";
 
 /// The desired output units, not the units of authored board coordinates.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,10 +118,10 @@ pub(crate) fn schema() -> Value {
     json!({"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,
         "required":["name","board","units","file_stem","gerber_layers","drill"],
         "anyOf":[{"properties":{"drill":{"const":true}}},{"properties":{"gerber_layers":{"minItems":1}}}],"properties":{
-            "name":{"type":"string","minLength":1,"maxLength":MAX_RECIPE_NAME},
+            "name":{"type":"string","minLength":1,"maxLength":MAX_RECIPE_NAME,"pattern":RECIPE_NAME_PATTERN},
             "board":id,
             "units":{"type":"string","enum":["mm","in"]},
-            "file_stem":{"type":"string","maxLength":MAX_FILE_STEM,"pattern":"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"},
+            "file_stem":{"type":"string","minLength":1,"maxLength":MAX_FILE_STEM,"pattern":FILE_STEM_PATTERN,"not":{"enum":RESERVED_PORTABLE_SEGMENTS}},
             "gerber_layers":{"type":"array","maxItems":MAX_RECIPE_LAYERS,"uniqueItems":true,"items":id},
             "drill":{"type":"boolean"},
             "origin":{"oneOf":origin["oneOf"].as_array().into_iter().flatten().filter(|item| item["type"] != "null").collect::<Vec<_>>()},
