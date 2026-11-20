@@ -719,13 +719,16 @@ fn gerber_subset_reader_rejects_header_syntax_and_order_mutations() {
     let text = file(&outputs, suffix);
     assert_eq!(read_gerber(&outputs, TOP_COPPER).regions.len(), 2);
     let start = text.lines().find(|line| line.ends_with("D02*")).unwrap().strip_suffix("D02*").unwrap();
+    // Remove the first region's close and all records before the next region opens.
+    let (_, after_close) = text.split_once("G37*\n").unwrap();
+    let between_regions = format!("G37*\n{}", after_close.split_once("G36*\n").unwrap().0);
     for (mutant, reason) in [
         (text.replacen(&format!("{start}D01*"), "X0Y0D01*", 1), "region contour not closed"),
         (format!("{}M02*\n", text.split_once("G37*\n").unwrap().0), "unclosed region"),
         (text.replace("D01*", "D02*"), "invalid region operation"),
         (text.replacen("D02*", "D01*", 1), "invalid region operation"),
         (text.replacen("D01*", "D03*", 1), "invalid region operation"),
-        (text.replace(&format!("G37*\n{clear}{set}"), ""), "nested region"),
+        (text.replacen(&between_regions, "", 1), "nested region"),
         (text.replace("G36*", "G36*\nG36*"), "nested region"),
         (text.replacen(set, "", 1), "missing region function"),
         (text.replacen(clear, "", 1), "region function not cleared"),
