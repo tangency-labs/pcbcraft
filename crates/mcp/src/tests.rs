@@ -935,6 +935,34 @@ fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
 }
 
+/// A read-only headless session admits the assembly orientation check in both return modes,
+/// with the same report as an editing session, and leaves the project, revision and undo and
+/// redo history unchanged.
+#[test]
+fn headless_read_only_runs_the_assembly_check_without_changing_anything() {
+    use pcbcraft_engine::{CHECK_ASSEMBLY, SessionScope};
+    let mut editor = Session::default();
+    editor.apply("project.new", &json!({"name":"Review fixture","create_board":true})).unwrap();
+    let mut control = Server::new(Box::new(Headless::with_scope(SessionScope::Edit, editor.snapshot())));
+    let mut s = Server::new(Box::new(Headless::with_scope(SessionScope::ReadOnly, editor.snapshot())));
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    assert_eq!(before["scope"], "read_only");
+    assert_eq!(before["can_undo"], false);
+    assert_eq!(before["can_redo"], false);
+    let board = before["project"]["boards"][0]["id"].clone();
+    assert!(board.is_string(), "{before}");
+    for (params, inspect) in [(json!({}), false), (json!({"board":board}), false), (json!({"board":board}), true)] {
+        let args = json!({"command":CHECK_ASSEMBLY,"params":params,"inspect":inspect});
+        let response = call(&mut s, "execute", args.clone());
+        assert_ne!(response["isError"], true, "{response}");
+        let result = body(&response);
+        assert_eq!(result["revision"], before["revision"]);
+        assert_eq!(result["assembly_check"]["board"], board);
+        assert_eq!(result["assembly_check"], body(&call(&mut control, "execute", args))["assembly_check"]);
+        assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+    }
+}
+
 /// A failed headless tool call keeps its message as the first text part and adds the published
 /// code and details, as a second text part and as the structured result.
 #[test]

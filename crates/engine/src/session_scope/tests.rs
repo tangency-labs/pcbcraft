@@ -123,7 +123,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
         let id = command.id;
         // These are independent expectations, not derived from the production access policy.
         let params = match id {
-            netlist::EXPORT_BOARD_NETLIST => json!({"board":board}),
+            netlist::EXPORT_BOARD_NETLIST | CHECK_ASSEMBLY => json!({"board":board}),
             no_connect::CHECK
             | sheets::page::LIST_TEMPLATES
             | netlist::EXPORT_NETLIST

@@ -111,6 +111,37 @@ fn unmarked_polarized_diode_raises_one_finding() {
     assert_eq!(findings(&mut s), found, "the report is repeatable");
 }
 
+/// A read-only session admits the check and gets the editing session's report. Through both
+/// `execute` and `apply`, the project, revision and history stay exactly as they were.
+#[test]
+fn read_only_session_runs_the_check_without_changing_anything() {
+    let diode = package("resistor-0402", "diode-0402", Some(json!({"polarized":true,"pin_1":"1"})));
+    let mut editor = fixture(&[diode]);
+    let expected = editor.execute(CHECK_ASSEMBLY, &json!({})).unwrap();
+    assert_eq!(expected["assembly_check"]["findings"].as_array().unwrap().len(), 1, "{expected:#}");
+    let project = editor.snapshot().unwrap();
+    let documents = encode_documents(project.clone()).unwrap();
+    let board = project.board_target().unwrap().board;
+    let mut reader = Session::with_scope(crate::SessionScope::ReadOnly);
+    reader.open_snapshot(project.clone());
+    let before = reader.inspect();
+    let revision = reader.revision();
+    let root = reader.history_root_revision();
+    for params in [json!({}), json!({"board":board})] {
+        let report = reader.execute(CHECK_ASSEMBLY, &params).unwrap();
+        assert_eq!(report["revision"], json!(revision));
+        assert_eq!(report["assembly_check"], expected["assembly_check"]);
+        assert_eq!(reader.apply(CHECK_ASSEMBLY, &params).unwrap(), revision);
+    }
+    assert_eq!(reader.revision(), revision);
+    assert_eq!(reader.history_root_revision(), root);
+    assert!(reader.undo.is_empty() && reader.redo.is_empty(), "no history entry is recorded");
+    assert!(!reader.available("edit.undo") && !reader.available("edit.redo"));
+    assert_eq!(reader.inspect(), before);
+    assert!(std::sync::Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
+    assert_eq!(encode_documents(reader.snapshot().unwrap()).unwrap(), documents);
+}
+
 /// A circular land and a rotated equal-dimension oval are indistinguishable in copper.
 #[test]
 fn equivalent_circular_lands_still_warn() {

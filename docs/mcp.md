@@ -784,7 +784,8 @@ wrapper or profile-management UI is provided here.
 
 `pcb.check_assembly` checks the addressed board, or the only board when `board` is
 omitted, without editing it; `execute` returns `assembly_check` with the `board`
-target and `findings`. There is one warning per polarized package revision placed on
+target and `findings`. It is a query, so a read-only [headless session](#headless-mcp)
+can run it. There is one warning per polarized package revision placed on
 the board that shows no pin 1 or polarity mark and states no zero orientation (see
 [assembly orientation](footprint-schema.md#assembly-orientation)). Packages without an
 orientation statement, unpolarized ones and legacy marker footprints are not reported.
