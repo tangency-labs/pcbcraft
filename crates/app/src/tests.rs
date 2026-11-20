@@ -2071,7 +2071,7 @@ mod live_mcp {
             }
             let ids: Vec<_> = session.project().unwrap().for_sheet(background).unwrap().symbols().iter().map(|s| s.id()).collect();
             assert_eq!(ids.len(), BACKGROUND_SYMBOLS);
-            for pair in ids.chunks_exact(2).take(BACKGROUND_WIRES) {
+            for pair in ids.as_chunks::<2>().0.iter().take(BACKGROUND_WIRES) {
                 session
                     .apply(
                         CONNECT_PINS,
