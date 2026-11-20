@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+Pane headers support explicit up/down and left/right splits, with previews and
+saved orientation. Dragging between panes moves the existing view and collapses
+its old slot. Splitting a pane itself opens another view. Separate Split window
+up/down targets move the existing pane across the full window, and live commands
+expose both placement scopes.
+
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
