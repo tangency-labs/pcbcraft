@@ -185,14 +185,21 @@ straight-only copper.
 
 The routing context menu offers **Shove tracks** alongside **Walk around
 obstacles**. Shove searches on a disposable overlay, displacing unlocked tracks
-while pads, vias and locked tracks stay fixed. Original track endpoints and
-branch/pad contact anchors also stay fixed; intervals between them can bend.
-This conservative solver can refuse a channel that would require relocating a
-junction or an endpoint. If a cascade blocks after choosing an earlier bend,
+while pads, vias and locked tracks stay fixed. Uniform-width, same-layer and
+same-membership tracks form open chains through unambiguous degree-two joins.
+Free ends, branch contacts, pad/via/lock contacts and width/layer transitions stay
+fixed. Ordinary bends are soft hints: legal ones remain in place, while obstructed
+ones can move with their neighbors. Closed or longer-than-255-segment components
+retain per-segment anchors in this slice. This conservative solver can refuse a
+channel that would require relocating a protected junction or free end. If a cascade blocks after choosing an earlier bend,
 one fresh attempt approaches displaced intervals from their return ends. This
 can keep the first moved trace from trapping a later neighbor near a fixed branch.
 Both attempts share the original pickup intent, forward push constraints and
 global probe budget. Exhausted searches do not start another attempt.
+
+The original pickup is checked against the original copper before any movable
+bodies are hidden. A free start inside an existing clearance band is refused,
+while a valid contact retains its captured membership through later vertices.
 
 When propagation cannot complete, it discards every replacement and returns a
 head-only blocked or incomplete result. It does not
@@ -222,6 +229,18 @@ UUIDs. The compound command independently checks original membership, contact
 preservation, clearance, widths and board edges before publishing one Undo/Redo
 entry. GUI and command clients use this same transaction.
 
+Trace topology is prepared cooperatively and cached on the immutable source query.
+Coalesced requests retain the preparation's progress; a busy cache never blocks a
+worker or UI caller. Geometry replacements receive a fresh cache, and query teardown
+drops incomplete work without a reference cycle. GUI and direct commands independently
+reconstruct replacement chains before accepting their original-contact exemptions.
+They preserve protected contact stations, reject centerline crossings and enforce
+spacing between returning, originally separate runs. Non-returning corners form a
+continuous stroke; existing direct-contact exemptions remain valid. Same-net merging
+can relax spacing but cannot authorize a trace self-crossing or lost protected contact.
+Unchanged source portions keep their original geometry and IDs; moved bends repartition
+only the affected source span, and each original record retains its width and layer.
+
 The counters include the number of attempts (at most two) and combined collision
 and queue work. Geometry payload estimates report the larger attempt, excluding
 the captured query/index and allocator overhead; they are not process memory measurements.
@@ -232,11 +251,19 @@ of its original line; that direction follows the first colliding piece through
 cascades and fixed vertices. Interior contact anchors are reserved before moving
 any neighbor, so an earlier displacement cannot occupy a later branch junction.
 When a local displacement walk fails, the engine tries parallel runs derived
-from individual obstacle hulls, bounded to 32 objects contributing eligible
-forward portals and 64 runs. Indexed neighbors with no such portal do not consume
-that guide quota; every body remains in the exact collision checks. These
+from individual obstacle hulls, retaining at most 64 forward guide intervals while
+streaming indexed neighbors. Overlapping intervals at the same offset coalesce;
+separate intervals remain separate so distant copper does not force a long plateau.
+Every body remains in the exact collision checks. These
 alternatives share the existing probe budget, cancellation and exact leg/path
 validation; they cannot relax a narrow channel’s spacing or move a locked item.
+
+A reached displacement can first try a more compact parallel alternative, spending
+at most 128 additional probes within the same gesture budget. Candidate ordering
+minimizes swept distance from the original source line, then path length. Only a
+complete, exact-confirmed path with lower swept distance replaces the certified
+fallback; optional search exhaustion keeps the fallback. This preference changes
+the geometry search, not clearance, membership or contact requirements.
 
 A reached displacement with a long backward return can also try up to two local
 hull shortcuts, capped at 128 probes within the same gesture budget. A shortcut

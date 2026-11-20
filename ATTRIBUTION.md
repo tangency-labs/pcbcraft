@@ -1818,3 +1818,8 @@ projections/intersections for concave walkaround pockets are original PCBcraft w
 under MIT OR Apache-2.0. They preserve captured pickup intent and use the existing
 planner's budget, cancellation and exact validation. No external implementation
 was read or imported for these additions.
+
+The degree-two trace-chain graph, cooperative per-query topology preparation,
+soft bend hints, source-preserving path partitioning and independent chain/contact
+validation are original PCBcraft work under MIT OR Apache-2.0. No external routing
+implementation, dependency or saved-format change was introduced.

@@ -547,3 +547,212 @@ fn bent_approach_below_the_rails_still_shoves() {
         }
     }
 }
+
+/// A short push between long rails must localize their bends rather than sweep
+/// distant hooked copper into the cascade. Rotation and source insertion order
+/// change without changing the available channel or its clearance requirements.
+#[test]
+fn local_rail_displacements_leave_distant_hooks_untouched() {
+    for turns in 0..4 {
+        for reverse in [false, true] {
+            let mut s = board();
+            let point = |x: i64, y: i64| {
+                let (mut x, mut y) = (x, y);
+                for _ in 0..turns {
+                    (x, y) = (-y, x);
+                }
+                Point { x_nm: x + 30_000_000, y_nm: y - 20_000_000 }
+            };
+            let mut paths = vec![
+                (vec![point(-975_000, 5_000_000), point(19_025_000, 5_000_000)], 500_000),
+                (vec![point(0, 5_800_000), point(20_000_000, 5_800_000)], 250_000),
+                (vec![point(17_000_000, 5_000_000), point(17_000_000, 8_000_000)], 250_000),
+                (
+                    vec![
+                        point(-400_000, 1_000_000),
+                        point(-400_000, 4_400_000),
+                        point(7_200_000, 4_400_000),
+                        point(8_800_000, 2_800_000),
+                        point(14_000_000, 2_800_000),
+                    ],
+                    250_000,
+                ),
+            ];
+            // Additional legal source fragments supply fixed guide caps near the
+            // far side of the channel, outside the requested local displacement.
+            for i in 0..12 {
+                let x = -3_000_000 - i * 700_000;
+                paths.push((vec![point(x, 1_000_000), point(x, 4_000_000)], 250_000));
+            }
+            if reverse {
+                paths.reverse();
+            }
+            for (points, width) in paths {
+                add(&mut s, points, width);
+            }
+            let unchanged: Vec<_> = view(&s)
+                .tracks()
+                .iter()
+                .filter(|t| {
+                    t.start == point(-400_000, 1_000_000)
+                        || t.start == point(-400_000, 4_400_000)
+                        || t.start == point(7_200_000, 4_400_000)
+                        || t.start == point(8_800_000, 2_800_000)
+                })
+                .cloned()
+                .collect();
+            let mut req = request(&s);
+            let origin = point(4_826_000, 10_414_000);
+            req.head = point(5_588_000, 10_414_000);
+            req.origin = Some((origin, req.layer));
+            req.flipped = turns % 2 == 0;
+            req.fixed = vec![FixedCopper::Segment { start: origin, end: req.head, layer: req.layer, width_nm: req.width_nm }];
+            let q = query(&s);
+            let mut last = None;
+            for y in [6_350_000, 5_842_000, 5_334_000, 4_826_000, 4_572_000] {
+                req.target = point(11_176_000, y);
+                let plan = s.plan_route(&q, &req, DEFAULT_BUDGET, &|| false).unwrap();
+                assert_eq!(plan.outcome, Outcome::Reached, "rotation{turns} reverse{reverse} y{y}: {plan:?}");
+                assert!(plan.probes <= DEFAULT_BUDGET);
+                assert!(unchanged.iter().all(|t| plan.replacements.iter().all(|r| r.track != t.id)), "{plan:?}");
+                req.previous = plan.points.clone();
+                last = Some(plan);
+            }
+            commit(&mut s, &req, &last.unwrap());
+            for track in unchanged {
+                assert_eq!(view(&s).tracks().iter().find(|t| t.id == track.id), Some(&track));
+            }
+        }
+    }
+}
+
+/// A chamfered trace yields its obstructed ordinary bends while an external
+/// branch remains fixed. Every original record survives the atomic replacement.
+#[test]
+fn shove_moves_ordinary_bends_and_preserves_chain_contacts() {
+    for flipped in [false, true] {
+        for reverse in [false, true] {
+            let mut s = board();
+            let point = |x, y| Point { x_nm: x, y_nm: y };
+            let mut shape = vec![
+                point(0, 5_800_000),
+                point(8_000_000, 5_800_000),
+                point(8_254_000, 5_546_000),
+                point(12_000_000, 5_546_000),
+                point(12_254_000, 5_800_000),
+                point(20_000_000, 5_800_000),
+            ];
+            if reverse {
+                shape.reverse();
+            }
+            let originals = add(&mut s, shape, 250_000);
+            let branch = add(&mut s, vec![point(17_000_000, 5_800_000), point(17_000_000, 9_000_000)], 500_000)[0];
+            let old_branch = view(&s).tracks().iter().find(|t| t.id == branch).unwrap().clone();
+            let req = Request { head: point(8_254_000, 10_000_000), target: point(8_254_000, 4_000_000), flipped, ..request(&s) };
+            let q = query(&s);
+            let before = encode_documents(s.snapshot().unwrap()).unwrap();
+            let plan = s.plan_route(&q, &req, DEFAULT_BUDGET, &|| false).unwrap();
+            assert_eq!(plan.outcome, Outcome::Reached, "reverse{reverse} flipped{flipped}: {plan:?}");
+            assert!(plan.replacements.len() >= 2);
+            assert!(plan.replacements.iter().all(|r| originals.contains(&r.track)));
+            assert!(!plan.replacements.iter().flat_map(|r| &r.points).any(|p| *p == point(8_254_000, 5_546_000)), "blocked bend was retained");
+            assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+            let context = s.route_planning(view(&s).target).unwrap();
+            let mut job = s.prepare_route_plan(&context, req.clone(), DEFAULT_BUDGET).unwrap();
+            let mut done = false;
+            for _ in 0..100_000 {
+                if job.step(1) {
+                    done = true;
+                    break;
+                }
+            }
+            assert!(done);
+            assert_eq!(job.take_result().unwrap().unwrap(), plan);
+            let canceled = s.plan_route(&q, &req, DEFAULT_BUDGET, &|| true).unwrap();
+            assert_eq!(canceled.outcome, Outcome::Canceled);
+            assert!(canceled.replacements.is_empty());
+            let exhausted = s.plan_route(&q, &req, 1, &|| false).unwrap();
+            assert_eq!(exhausted.outcome, Outcome::Incomplete);
+            assert!(exhausted.replacements.is_empty());
+            commit(&mut s, &req, &plan);
+            for id in &originals {
+                assert!(view(&s).tracks().iter().any(|t| t.id == *id));
+            }
+            assert_eq!(view(&s).tracks().iter().find(|t| t.id == branch), Some(&old_branch));
+        }
+    }
+}
+
+/// A mixed-width cascade must move ordinary chamfers in a third trace rather
+/// than pinning its bends. Both routing postures and original path orientations
+/// publish through the same independently validated atomic command.
+#[test]
+fn rail_cascade_moves_a_neighboring_chamfered_trace() {
+    for reverse in [false, true] {
+        for flipped in [false, true] {
+            let (mut s, upper, lower) = locked_channel(reverse);
+            let point = |x, y| Point { x_nm: x, y_nm: y };
+            let mut hook = vec![
+                point(-375_000, 1_000_000),
+                point(-375_000, 4_400_000),
+                point(7_200_000, 4_400_000),
+                point(8_800_000, 2_800_000),
+                point(14_224_000, 2_800_000),
+                point(14_478_000, 3_054_000),
+                point(16_000_000, 3_054_000),
+            ];
+            if reverse {
+                hook.reverse();
+            }
+            let originals = add(&mut s, hook, 250_000);
+            let origin = point(4_826_000, 10_414_000);
+            let req = Request {
+                head: point(5_588_000, 10_414_000),
+                target: point(11_176_000, 1_778_000),
+                origin: Some((origin, copper_layers(&s)[0])),
+                fixed: vec![FixedCopper::Segment {
+                    start: origin,
+                    end: point(5_588_000, 10_414_000),
+                    layer: copper_layers(&s)[0],
+                    width_nm: 250_000,
+                }],
+                flipped,
+                ..request(&s)
+            };
+            let plan = s.plan_route(&query(&s), &req, DEFAULT_BUDGET, &|| false).unwrap();
+            assert_eq!(plan.outcome, Outcome::Reached, "reverse{reverse} flipped{flipped}: {plan:?}");
+            assert!(plan.replacements.iter().any(|r| r.track == upper));
+            assert!(plan.replacements.iter().any(|r| r.track == lower));
+            assert!(plan.replacements.iter().filter(|r| originals.contains(&r.track)).count() >= 2);
+            assert!(plan.probes <= DEFAULT_BUDGET);
+            commit(&mut s, &req, &plan);
+            for id in originals {
+                assert!(view(&s).tracks().iter().any(|t| t.id == id));
+            }
+        }
+    }
+}
+
+/// Invalid free pickups are checked against the original body at both ordinary
+/// bends and segment interiors. A later clear pickup remains immediately usable.
+#[test]
+fn free_pickups_inside_original_clearance_are_refused_before_chain_preparation() {
+    let mut s = board();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    add(&mut s, vec![p(4_000_000, -7_620_000), p(4_000_000, -2_540_000), p(10_160_000, -2_540_000)], 500_000);
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let q = query(&s);
+    for y in [-2_540_000, -5_000_000] {
+        let req = Request { head: p(3_500_000, y), target: p(1_270_000, -5_080_000), ..request(&s) };
+        let plan = s.plan_route(&q, &req, DEFAULT_BUDGET, &|| false).unwrap();
+        assert!(plan.start_blocked);
+        assert!(matches!(plan.outcome, Outcome::Blocked { .. }));
+        assert_eq!(plan.points, [req.head]);
+        assert!(plan.replacements.is_empty());
+        assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+    }
+    let req = Request { head: p(1_270_000, -5_080_000), target: p(2_540_000, -5_080_000), ..request(&s) };
+    let plan = s.plan_route(&q, &req, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached);
+    commit(&mut s, &req, &plan);
+}

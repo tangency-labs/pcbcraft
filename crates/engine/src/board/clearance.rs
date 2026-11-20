@@ -134,6 +134,7 @@ pub struct ClearanceQuery {
     pub(super) route_hulls: BTreeMap<usize, Arc<[usize]>>,
     copper_layers: Vec<Uuid>,
     net_rules: Option<super::class_rules::NetRules>,
+    pub(super) trace_chains: std::sync::Mutex<super::track::chains::Cache>,
 }
 
 impl Session {
@@ -197,6 +198,7 @@ impl ClearanceQuery {
             },
             geometry,
             route_hulls: BTreeMap::new(),
+            trace_chains: std::sync::Mutex::new(super::track::chains::Cache::default()),
             copper_layers,
             net_rules,
         })
@@ -215,6 +217,19 @@ impl ClearanceQuery {
             effective: self.authority.rules.clone(),
         };
         Self::from_geometry(&source, Arc::new(BoardGeometry { items, lands: Vec::new(), members: Vec::new(), index: OnceLock::new() }))
+    }
+
+    /// Share immutable inputs with a topology continuation without retaining the
+    /// cache that owns it. This avoids a query/future reference cycle on cancellation.
+    pub(super) fn chain_source(&self) -> Self {
+        Self {
+            authority: self.authority.clone(),
+            geometry: self.geometry.clone(),
+            copper_layers: self.copper_layers.clone(),
+            net_rules: self.net_rules.clone(),
+            route_hulls: BTreeMap::new(),
+            trace_chains: std::sync::Mutex::new(super::track::chains::Cache::default()),
+        }
     }
 
     /// Captured source, opening, board, revision and effective rule.
