@@ -148,29 +148,6 @@ fn retain_unlocked_ids<T>(selected: &mut BTreeSet<uuid::Uuid>, ordered: &[T], mu
     selected.retain(|id| !ordered.binary_search_by_key(id, |item| fields(item).0).is_ok_and(|index| fields(&ordered[index]).1));
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use uuid::Uuid;
-
-    /// A small edit selection uses logarithmic probes even when the board holds much more copper.
-    #[test]
-    fn pruning_selected_copper_only_probes_ids() {
-        let records: Vec<_> = (1..=4096).map(|id| (Uuid::from_u128(id), id == 4096)).collect();
-        let unlocked = Uuid::from_u128(1);
-        let locked = Uuid::from_u128(4096);
-        let absent = Uuid::from_u128(4097);
-        let mut selected = BTreeSet::from([unlocked, locked, absent]);
-        let mut probes = 0;
-        retain_unlocked_ids(&mut selected, &records, |item| {
-            probes += 1;
-            *item
-        });
-        assert_eq!(selected, BTreeSet::from([unlocked, absent]));
-        assert!(probes <= 3 * 15, "checked {probes} copper records");
-    }
-}
-
 impl PcbApp {
     /// Atomically apply view-only filter changes, refusing unsupported categories. Dropping a
     /// category clears its edit selection and cancels captured gestures so a later release cannot edit it.
@@ -289,5 +266,28 @@ impl PcbApp {
             self.repaint_editors(ui.ctx());
         }
         rect
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    /// A small edit selection uses logarithmic probes even when the board holds much more copper.
+    #[test]
+    fn pruning_selected_copper_only_probes_ids() {
+        let records: Vec<_> = (1..=4096).map(|id| (Uuid::from_u128(id), id == 4096)).collect();
+        let unlocked = Uuid::from_u128(1);
+        let locked = Uuid::from_u128(4096);
+        let absent = Uuid::from_u128(4097);
+        let mut selected = BTreeSet::from([unlocked, locked, absent]);
+        let mut probes = 0;
+        retain_unlocked_ids(&mut selected, &records, |item| {
+            probes += 1;
+            *item
+        });
+        assert_eq!(selected, BTreeSet::from([unlocked, absent]));
+        assert!(probes <= 3 * 15, "checked {probes} copper records");
     }
 }
