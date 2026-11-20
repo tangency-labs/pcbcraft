@@ -54,9 +54,9 @@ save the schematic and board together with shared undo/redo.
   endpoint, connect an MCP client to the open editor, or run a headless session.
 
 Full ERC, broader DRC coverage, advanced routing, copper-zone fill
-and 3D/STEP workflows remain in development. Footprint slots, non-plated drills
-and independent footprint mask/paste controls are not yet supported. The current
-checks and exporters do not establish manufacturing readiness.
+and 3D/STEP workflows remain in development. Footprint slots, separate non-plated
+drill output and independent footprint mask/paste controls are not yet supported.
+The current checks and exporters do not establish manufacturing readiness.
 
 The [capability table](docs/capabilities.md) separates available features from
 remaining work. The [MVP milestone](https://github.com/tangency-labs/pcbcraft/milestone/1)

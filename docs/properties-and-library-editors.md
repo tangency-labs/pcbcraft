@@ -124,7 +124,7 @@ native definition retains the offset when exported or forked.
 Footprints support SMD/plated through-hole rectangular, rounded, circular and oval
 pads. Pad numbers accept the same 1–8 alphanumeric/`+`/`-`/`_` spelling as terminal
 identifiers. Through-hole selection supplies a drill default and validates a
-positive annulus; circles share one diameter. Slot/NPTH/pad-stack/mask/paste editing
+positive annulus; circles share one diameter. Slot/pad-stack/mask/paste editing
 is still outside this slice.
 
 Modifier-click and directional selection boxes select groups; the Browser supports
