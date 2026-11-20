@@ -44,6 +44,7 @@ struct ExactDecimal(String);
 struct WorkingVoltage {
     magnitude_volts: ExactDecimal,
     basis: VoltageBasis,
+    #[serde(deserialize_with = "named")]
     reference: Reference,
 }
 
@@ -94,6 +95,7 @@ struct VoltageInput {
     #[serde(deserialize_with = "named")]
     magnitude: QuantityInput,
     basis: VoltageBasis,
+    #[serde(deserialize_with = "named")]
     reference: ReferenceInput,
 }
 
@@ -115,6 +117,7 @@ struct IntentInput {
 struct SetInput {
     version: u8,
     expected_revision: u64,
+    #[serde(deserialize_with = "named")]
     target: Target,
     #[serde(deserialize_with = "named")]
     intent: IntentInput,
@@ -126,6 +129,7 @@ struct SetInput {
 #[serde(deny_unknown_fields)]
 struct InspectInput {
     version: u8,
+    #[serde(deserialize_with = "named")]
     target: Target,
 }
 
@@ -146,7 +150,8 @@ impl<'de, T: Deserialize<'de>> Visitor<'de> for NamedFields<T> {
 }
 
 /// Decode a record from an object only. A positional array is refused rather than read in field
-/// declaration order, which is not part of the command contract or the native format.
+/// declaration order (or, for an internally tagged enum, with its first element as the tag),
+/// which is not part of the command contract or the native format.
 fn named<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<T, D::Error> {
     de.deserialize_map(NamedFields(PhantomData))
 }
@@ -211,7 +216,7 @@ pub(crate) fn intent_schema() -> Value {
 
 /// Validate the target shape independently of any current project.
 pub(crate) fn validate_target(value: &Value) -> Result<(), &'static str> {
-    serde_json::from_value::<Target>(value.clone()).map(|_| ()).map_err(|_| "requires a scoped net or net-class target")
+    named::<_, Target>(value.clone()).map(|_| ()).map_err(|_| "requires a scoped net or net-class target")
 }
 
 /// Validate the sparse input shape. Units, canonical decimals and ownership are checked by the edit.

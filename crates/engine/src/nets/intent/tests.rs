@@ -599,8 +599,8 @@ fn set_earth_reference_refuses_leftover_address() {
     assert_eq!(inspect(&mut session, &target)["working_voltage"], earth["working_voltage"]);
 }
 
-/// Command intent records are objects: positional arrays for the intent, a voltage or a quantity
-/// are refused without clearing authored values, while `{}` and null properties still clear.
+/// Command records are objects: positional arrays for the target, intent, a voltage, its reference
+/// or a quantity are refused without clearing authored values, while `{}` and null properties still clear.
 #[test]
 fn set_intent_refuses_positional_arrays() {
     let current = json!({"maximum_continuous_current":{"value":"3","unit":"A"}});
@@ -613,11 +613,16 @@ fn set_intent_refuses_positional_arrays() {
         json!({"allowed_temperature_rise":["1","K"]}),
         json!({"working_voltage":[{"value":"5","unit":"V"},"dc",{"kind":"earth"}]}),
         json!({"working_voltage":{"magnitude":["5","V"],"basis":"dc","reference":{"kind":"earth"}}}),
+        json!({"working_voltage":{"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":["earth"]}}),
     ] {
         let args = request(&session, &target, &positional);
         assert!(matches!(session.apply(SET, &args), Err(CommandError::InvalidParams(_))), "{positional}");
         assert!(matches!(session.execute(SET, &args), Err(CommandError::InvalidParams(_))), "{positional}");
     }
+    let positional_target = json!(["net_class", target["project"], target["class"]]);
+    let args = request(&session, &positional_target, &json!({}));
+    assert!(matches!(session.apply(SET, &args), Err(CommandError::InvalidParams(_))));
+    assert!(matches!(session.execute(INSPECT, &json!({"version":1,"target":positional_target})), Err(CommandError::InvalidParams(_))));
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     assert_eq!((session.revision(), session.undo.len(), session.redo.len()), history);
     assert_eq!(inspect(&mut session, &target)["maximum_continuous_current"], current["maximum_continuous_current"]);
@@ -632,7 +637,7 @@ fn set_intent_refuses_positional_arrays() {
     assert_eq!(inspect(&mut session, &target), nulls);
 }
 
-/// Saved intent and its voltage use named fields only: positional arrays are refused on open
+/// Saved intent, its voltage and its reference use named fields only: positional arrays are refused on open
 /// rather than rewritten as objects on save. Duplicate fields stay refused, and sparse objects
 /// still round-trip exactly.
 #[test]
@@ -644,6 +649,9 @@ fn saved_intent_refuses_positional_records() {
     assert_eq!(stored, json!({"voltage":{"magnitude_volts":"5","basis":"dc","reference":{"kind":"earth"}},"isolation_group":"Review group"}));
     refused(&saved_intent(&saved, |intent| intent["voltage"] = json!(["5", "dc", {"kind":"earth"}])), "invalid type: sequence");
     refused(&saved_intent(&saved, |intent| *intent = json!([null, null, null, "Review group"])), "invalid type: sequence");
+    for reference in [json!(["earth"]), json!(["net", Uuid::from_u128(7)])] {
+        refused(&saved_intent(&saved, |intent| intent["voltage"]["reference"] = reference), "invalid type: sequence");
+    }
 
     let entry = String::from_utf8(saved[ENTRY_POINT].clone()).unwrap();
     let key = "\"isolation_group\"";
