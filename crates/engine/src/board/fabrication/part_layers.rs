@@ -170,10 +170,8 @@ fn outline_function(purpose: GraphicPurpose) -> Option<ApertureFunction> {
 fn polygon_outline(writer: &mut Gerber, placement: &Footprint, points: &[Point], function: ApertureFunction, reference: &str) {
     let Some((first, rest)) = points.split_first() else { return };
     let rest = rest.strip_suffix(&[*first]).unwrap_or(rest);
-    let relative: Vec<_> = std::iter::once(first)
-        .chain(rest)
-        .map(|p| Point { x_nm: p.x_nm - placement.x_nm, y_nm: p.y_nm - placement.y_nm })
-        .collect();
+    let relative: Vec<_> =
+        std::iter::once(first).chain(rest).map(|p| Point { x_nm: p.x_nm - placement.x_nm, y_nm: p.y_nm - placement.y_nm }).collect();
     if validate_outline(&relative).is_err() {
         return;
     }

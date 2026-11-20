@@ -291,31 +291,13 @@ fn gerber_x3_pins_and_closed_outlines_use_the_placed_package_geometry() {
             for (purpose, geometry) in [
                 (GraphicPurpose::Fabrication, rectangle.clone()),
                 (GraphicPurpose::Courtyard, Geometry::Circle { center: p(-10, 20), radius_nm: 900_019 }),
-                (
-                    GraphicPurpose::Courtyard,
-                    Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 360 },
-                ),
-                (
-                    GraphicPurpose::Courtyard,
-                    Geometry::Arc { center: p(-200, -300), radius_nm: 920_000, start_degrees: 14, sweep_degrees: -360 },
-                ),
-                (
-                    GraphicPurpose::Fabrication,
-                    Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57), p(13, 27)], closed: false },
-                ),
-                (
-                    GraphicPurpose::Fabrication,
-                    Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57)], closed: false },
-                ),
-                (
-                    GraphicPurpose::Courtyard,
-                    Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 359 },
-                ),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 360 }),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(-200, -300), radius_nm: 920_000, start_degrees: 14, sweep_degrees: -360 }),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57), p(13, 27)], closed: false }),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57)], closed: false }),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 359 }),
                 (GraphicPurpose::Fabrication, Geometry::Line { from: p(0, 0), to: p(4, 3) }),
-                (
-                    GraphicPurpose::Fabrication,
-                    Geometry::Polyline { points: vec![p(0, 0), p(8, 8), p(0, 8), p(7, 0)], closed: true },
-                ),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(0, 0), p(8, 8), p(0, 8), p(7, 0)], closed: true }),
                 (GraphicPurpose::Silkscreen, rectangle),
             ] {
                 let artwork = Artwork { purpose, graphic: Graphic { geometry, stroke_nm: 150_000, fill: Fill::None } };
