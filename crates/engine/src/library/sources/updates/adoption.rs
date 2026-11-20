@@ -73,7 +73,8 @@ impl Session {
         self.check_revision(params)?;
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let target = snapshot.resolve_board(params["board"].as_str())?;
-        let effective = snapshot.board_view(target).expect("resolved board").effective_rules();
+        let effective =
+            snapshot.board_view(target).ok_or_else(|| CommandError::Unavailable("The resolved board is unavailable.".into()))?.effective_rules();
         let source = Source {
             snapshot,
             session: self.clearance_identity.clone(),
@@ -109,7 +110,7 @@ impl Session {
     pub(crate) fn apply_footprint_revision(&mut self, params: &Value) -> Result<(), CommandError> {
         let mut job = self.footprint_revision_job(params)?;
         while !job.step(256) {}
-        let edit = job.take_result()?.expect("completed footprint preparation");
+        let edit = job.take_result()?.ok_or_else(|| CommandError::Unavailable("Footprint preparation did not complete.".into()))?;
         self.install_footprint_revision(&edit)
     }
 }
@@ -162,7 +163,8 @@ impl FootprintRevisionJob {
             if encoder.step(budget).map_err(CommandError::InvalidParams)?.is_none() {
                 return Ok(None);
             }
-            let (candidate, highest, _) = self.pending.take().expect("encoded candidate");
+            let (candidate, highest, _) =
+                self.pending.take().ok_or_else(|| CommandError::Unavailable("The encoded footprint candidate is unavailable.".into()))?;
             return Ok(Some(PreparedFootprintRevision {
                 source: self.source.clone(),
                 catalog: self.catalog.clone(),
@@ -207,7 +209,10 @@ impl FootprintRevisionJob {
         let selection = native_selection(&update, &assignment)?;
         let mut candidate = project.clone();
         if let Some(selection) = selection {
-            Arc::make_mut(&mut candidate.components).get_mut(&assignment.component).expect("resolved part instance").part = Some(selection);
+            Arc::make_mut(&mut candidate.components)
+                .get_mut(&assignment.component)
+                .ok_or_else(|| CommandError::NotFound("The reviewed part instance is no longer present.".into()))?
+                .part = Some(selection);
         }
         Arc::make_mut(&mut candidate.board).replace_reviewed_footprint(assignment, update.candidate).map_err(CommandError::InvalidParams)?;
         if let Some(baseline) = &candidate.board.baseline {
@@ -225,7 +230,7 @@ fn invalid(message: impl Into<String>) -> CommandError {
 /// A physical review cannot authorize a symbol, category, value, MPN or unrelated package change.
 fn native_selection(update: &FootprintUpdate<'_>, assignment: &Assignment) -> Result<Option<Selection>, CommandError> {
     let Some((part, package_id)) = update.native else { return Ok(None) };
-    let old = update.instance.part.as_ref().expect("resolved native package");
+    let old = update.instance.part.as_ref().ok_or_else(|| invalid("The reviewed part instance has no resolved native package."))?;
     let before = &old.resolved.definition;
     let after = &part.definition;
     let symbol = &update.instance.definition;
