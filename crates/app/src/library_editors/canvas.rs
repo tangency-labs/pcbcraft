@@ -352,7 +352,7 @@ impl Document {
                     icon: Icon::Rectangle,
                     label: "Courtyard",
                     description: "Draw closed courtyard outline (C)",
-                    shortcut: "C",
+                    shortcut: "",
                     enabled,
                     active: matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. } | Tool::Courtyard { .. }),
                     menu_check: Some(CheckKind::Choice),
@@ -370,8 +370,10 @@ impl Document {
             if let Some(index) = workspace::ribbon_group(ui, "Courtyard", &courtyard_tools) {
                 match index {
                     0 => {
-                        self.show_courtyard = true;
                         self.start_tool(Place::Courtyard);
+                        if matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. }) {
+                            self.set_show_courtyard(true);
+                        }
                     }
                     _ => self.courtyard_requested = true,
                 }
@@ -387,7 +389,7 @@ impl Document {
             (Icon::Settings, "Properties", "Show or hide Properties panel", !self.collapsed[1]),
         ];
         if self.session.snapshot().kind == Kind::Footprint {
-            entries.push((Icon::Rectangle, "Courtyard", "Show or hide the courtyard layer", self.show_courtyard));
+            entries.push((Icon::Rectangle, "Courtyard layer", "Show or hide the courtyard layer", self.show_courtyard));
         }
         let tools: Vec<_> = entries
             .into_iter()
@@ -406,7 +408,7 @@ impl Document {
                 0 => self.camera.request_fit(),
                 1 => self.collapsed[0] ^= true,
                 2 => self.collapsed[1] ^= true,
-                _ => self.show_courtyard ^= true,
+                _ => self.set_show_courtyard(!self.show_courtyard),
             }
         }
         workspace::ribbon_separator(ui);
@@ -735,8 +737,12 @@ impl Document {
                             && let Some((_, pts, _)) = self.selected_courtyard(&item)
                             && let Some(vertex) = courtyard::pick_vertex(pts, &self.camera, area, point)
                         {
-                            self.selected_vertex = Some(vertex);
-                            Ok(())
+                            if self.pending() {
+                                Err("Apply or reset the property fields before switching vertices.".into())
+                            } else {
+                                self.selected_vertex = Some(vertex);
+                                Ok(())
+                            }
                         } else if show_courtyard
                             && !modify
                             && !self.pending()
@@ -745,15 +751,10 @@ impl Document {
                             && let Some(edge) = courtyard::pick_edge_midpoint(pts, &self.camera, area, point)
                             && let Some(primitive) = item.objects.get(&object)
                         {
-                            let mid = pcbcraft_engine::authoring::courtyard::edge_midpoint(pts, edge)
-                                .ok_or_else(|| "Unable to compute edge midpoint.".to_owned())?;
-                            let snapped = Point {
-                                x_nm: courtyard::snap_to_grid(mid.x_nm, self.camera.snap_nm()),
-                                y_nm: courtyard::snap_to_grid(mid.y_nm, self.camera.snap_nm()),
-                            };
-                            let candidate = pcbcraft_engine::authoring::courtyard::with_inserted_vertex(primitive, edge, snapped)
-                                .or_else(|_| pcbcraft_engine::authoring::courtyard::with_inserted_vertex(primitive, edge, mid))?;
-                            let inserted = self.execute(self.session.revision(), Action::Replace { object, primitive: candidate });
+                            let inserted = pcbcraft_engine::authoring::courtyard::edge_midpoint(pts, edge)
+                                .ok_or_else(|| "Unable to compute edge midpoint.".to_owned())
+                                .and_then(|mid| pcbcraft_engine::authoring::courtyard::with_inserted_vertex(primitive, edge, mid))
+                                .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }));
                             if inserted.is_ok() {
                                 self.selected_vertex = Some(edge + 1);
                             }
@@ -955,8 +956,10 @@ impl Document {
                     self.start_tool(Place::Text);
                 }
                 if !command && item.kind == Kind::Footprint && ui.input(|i| i.key_pressed(egui::Key::C)) {
-                    self.show_courtyard = true;
                     self.start_tool(Place::Courtyard);
+                    if matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. }) {
+                        self.set_show_courtyard(true);
+                    }
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::M)) {
                     self.begin_move();

@@ -37,7 +37,7 @@ pub(crate) const fn default_replace_existing() -> bool {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CourtyardSource {
-    /// Include all copper pads, non-plated holes and non-courtyard body/silkscreen graphics.
+    /// Include all copper pads, non-plated holes and fabrication body graphics (excludes silkscreen).
     #[default]
     PadsAndBody,
     /// Include only copper pads.
@@ -107,9 +107,9 @@ pub fn generate(item: &Item, clearance_nm: i64, source: CourtyardSource, stroke_
         let include = match (source, primitive) {
             (CourtyardSource::PadsOnly, Primitive::Pad { .. }) => true,
             (CourtyardSource::PadsOnly, _) => false,
-            (CourtyardSource::PadsAndBody, Primitive::Pad { .. } | Primitive::NonPlatedHole { .. } | Primitive::Silkscreen { .. }) => true,
-            (CourtyardSource::PadsAndBody, Primitive::Outline { graphic }) => graphic.purpose != GraphicPurpose::Courtyard,
-            (CourtyardSource::PadsAndBody, Primitive::Artwork { artwork }) => artwork.purpose != GraphicPurpose::Courtyard,
+            (CourtyardSource::PadsAndBody, Primitive::Pad { .. } | Primitive::NonPlatedHole { .. }) => true,
+            (CourtyardSource::PadsAndBody, Primitive::Outline { graphic }) => graphic.purpose == GraphicPurpose::Fabrication,
+            (CourtyardSource::PadsAndBody, Primitive::Artwork { artwork }) => artwork.purpose == GraphicPurpose::Fabrication,
             (CourtyardSource::PadsAndBody, _) => false,
         };
         if !include {
@@ -339,7 +339,6 @@ fn primitive_extents(primitive: &Primitive) -> Vec<Point> {
         Primitive::NonPlatedHole { hole } => rect_corners(hole.center, hole.diameter_nm, hole.diameter_nm, 0),
         Primitive::Outline { graphic } => rect_corners(graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation),
         Primitive::Artwork { artwork } => artwork.graphic.paths().into_iter().flatten().collect(),
-        Primitive::Silkscreen { path } => path.points.clone(),
         _ => Vec::new(),
     }
 }
@@ -368,6 +367,50 @@ mod tests {
         assert_eq!(m.height_nm, 1_300_000);
         assert_eq!(m.vertex_count, 4);
         assert!(m.is_simple);
+    }
+
+    /// Pads-and-body generation ignores silkscreen legends/artwork outside the body.
+    #[test]
+    fn generate_pads_and_body_ignores_silkscreen_artwork_and_text() {
+        let mut item = Item::new(Kind::Footprint).unwrap();
+        item.objects.insert(
+            90,
+            Primitive::Artwork {
+                artwork: footprint::Artwork {
+                    purpose: GraphicPurpose::Silkscreen,
+                    graphic: Graphic {
+                        geometry: Geometry::Line { from: pt(-5_000_000, 0), to: pt(5_000_000, 0) },
+                        stroke_nm: 120_000,
+                        fill: Fill::None,
+                    },
+                },
+            },
+        );
+        let primitive = generate(&item, DEFAULT_CLEARANCE_NM, CourtyardSource::PadsAndBody, DEFAULT_STROKE_NM).unwrap();
+        let (points, _) = courtyard_polygon(&primitive).unwrap();
+        let m = metrics(points).unwrap();
+        assert_eq!(m.width_nm, 2_100_000);
+        assert_eq!(m.height_nm, 1_300_000);
+    }
+
+    /// Inserting an exact edge midpoint on a default 0.25 mm outline keeps its area and bounds unchanged.
+    #[test]
+    fn insert_edge_midpoint_on_default_clearance_preserves_area_and_bounds() {
+        let item = Item::new(Kind::Footprint).unwrap();
+        let primitive = generate(&item, DEFAULT_CLEARANCE_NM, CourtyardSource::PadsAndBody, DEFAULT_STROKE_NM).unwrap();
+        let (before_pts, _) = courtyard_polygon(&primitive).unwrap();
+        let before = metrics(before_pts).unwrap();
+
+        let mid = edge_midpoint(before_pts, 1).unwrap();
+        assert_eq!(mid, pt(1_050_000, 0));
+        let inserted = with_inserted_vertex(&primitive, 1, mid).unwrap();
+        let (after_pts, _) = courtyard_polygon(&inserted).unwrap();
+        let after = metrics(after_pts).unwrap();
+
+        assert_eq!(after.vertex_count, 5);
+        assert_eq!(after.area_nm2, before.area_nm2);
+        assert_eq!(after.width_nm, before.width_nm);
+        assert_eq!(after.height_nm, before.height_nm);
     }
 
     /// Pads-only generation ignores a wider fabrication outline.

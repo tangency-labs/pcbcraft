@@ -149,8 +149,8 @@ impl Draft {
     /// Render numbered vertex coordinate fields for the expanded properties dialog.
     /// Returns `true` when Enter was pressed while either field had focus.
     pub(super) fn show_courtyard_vertex_row(&mut self, ui: &mut Ui, index: usize) -> bool {
-        let x_label = format!("Point {} X (mm)", index + 1);
-        let y_label = format!("Point {} Y (mm)", index + 1);
+        let x_label = format!("Vertex {} X (mm)", index + 1);
+        let y_label = format!("Vertex {} Y (mm)", index + 1);
         self.show_courtyard_vertex_labeled(ui, index, &x_label, &y_label)
     }
 
