@@ -7,6 +7,7 @@
 
 #[cfg(test)]
 mod allocation_tests;
+pub mod annotation;
 pub mod authoring;
 pub mod board;
 pub mod clipboard;
@@ -90,6 +91,8 @@ enum ParamKind {
     /// A persistent registry UUID, distinct from a revision-scoped graph row.
     NetId,
     ExternalText,
+    /// A netlist document's text, bounded before it is parsed.
+    NetlistText,
     ClipboardUnits,
     BoardSelection,
     SchematicPasteTargets,
@@ -218,6 +221,9 @@ impl ParamKind {
                 json!({"oneOf":[{"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false},{"type":"object","properties":{"junction":{"type":"string","pattern":"^junction-[1-9][0-9]*$"}},"required":["junction"],"additionalProperties":false}]})
             }
             Self::ExternalText => json!({"type":"string","maxLength":clipboard_text::MAX_TEXT_BYTES}),
+            Self::NetlistText => {
+                json!({"type":"string","maxLength":netlist::compare::MAX_TEXT_BYTES,"description":"Netlist JSON text, at most 8 MiB when encoded as UTF-8."})
+            }
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
                 "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
@@ -438,6 +444,8 @@ impl ParamKind {
             Self::ExternalText if value.as_str().is_some_and(|s| s.len() <= clipboard_text::MAX_TEXT_BYTES) => Ok(()),
             Self::ClipboardUnits if serde_json::from_value::<clipboard_text::CoordinateUnits>(value.clone()).is_ok() => Ok(()),
             Self::ExternalText => Err("must be UTF-8 text of at most 64 KiB"),
+            Self::NetlistText if value.as_str().is_some_and(|s| s.len() <= netlist::compare::MAX_TEXT_BYTES) => Ok(()),
+            Self::NetlistText => Err("must be UTF-8 text of at most 8 MiB"),
             Self::ClipboardUnits => Err("must be mm or mil"),
             Self::BoardSelection if board::clipboard::BoardSelection::parse(value).is_some() => Ok(()),
             Self::SchematicPasteTargets
@@ -1133,7 +1141,7 @@ const CATALOG: &[Command] = &[
                 name: "text",
                 required: true,
                 kind: ParamKind::ClipboardText,
-                summary: "pcbcraft-clipboard/1 or pcbcraft-clipboard/2 UTF-8 envelope",
+                summary: "pcbcraft-clipboard/1, /2 or /3 schematic UTF-8 envelope",
             },
             SYMBOL_X,
             SYMBOL_Y,
@@ -1373,6 +1381,17 @@ const CATALOG: &[Command] = &[
         }],
     },
     Command {
+        id: netlist::COMPARE_NETLIST,
+        title: "Compare Netlist",
+        summary: "Read a netlist file back and compare it with what the open project exports now: the project netlist, or the named board's accepted netlist for a board file. Terminals are matched by part and terminal, never by net name or position; execute returns whether they match, the counts on both sides, connectivity differences (such as a terminal on another net) and notes for annotation or net-metadata changes. Edits nothing.",
+        params: &[Param {
+            name: "netlist",
+            required: true,
+            summary: "The netlist document's text, as project.export_netlist or pcb.export_netlist writes it",
+            kind: ParamKind::NetlistText,
+        }],
+    },
+    Command {
         id: PLACE_RESISTOR,
         title: "Place Resistor",
         summary: "Compatibility command for the starter library's 1k resistor. Use schematic.place_symbol for new calls. Undoable.",
@@ -1608,13 +1627,33 @@ const CATALOG: &[Command] = &[
         params: &[SYMBOL, EXPECTED_REVISION],
     },
     Command {
+        id: annotation::PREVIEW,
+        title: "Preview schematic annotation",
+        summary: "Review reference designators without editing. Propose the lowest free references for unlocked placeholders and report duplicates.",
+        params: &[
+            Param {
+                required: false,
+                name: "sheet",
+                summary: "Limit to this sheet UUID; omission previews the whole project",
+                kind: ParamKind::SheetId,
+            },
+            Param { required: false, ..EXPECTED_REVISION },
+        ],
+    },
+    Command {
         id: SET_SYMBOL_FIELDS,
         title: "Edit Symbol Fields",
-        summary: "Set reference, value, optional metadata, field appearance and placement together. Attached wires follow center changes. References remain unique. Undoable.",
+        summary: "Set reference, value, optional designator lock, metadata, field appearance and placement together. Attached wires follow center changes. References remain unique. Undoable.",
         params: &[
             SYMBOL,
             Param { required: true, name: "reference", summary: "Reference designator, such as R7", kind: ParamKind::Text },
             Param { required: true, name: "value", summary: "Value text, such as 4.7k", kind: ParamKind::Text },
+            Param {
+                required: false,
+                name: "designator_locked",
+                summary: "Protect the designator during automatic annotation; omission preserves the current lock",
+                kind: ParamKind::Flag,
+            },
             Param {
                 required: false,
                 name: "metadata",
@@ -1632,6 +1671,12 @@ const CATALOG: &[Command] = &[
                 name: "rotation",
                 summary: "Counterclockwise degrees; omission preserves orientation",
                 kind: ParamKind::Rotation,
+            },
+            Param {
+                required: false,
+                name: "dry_run",
+                summary: "Validate without editing; return complete proposed native documents with provisional allocation identities",
+                kind: ParamKind::Flag,
             },
             Param { required: false, ..SYMBOL_X },
             Param { required: false, ..SYMBOL_Y },
@@ -1938,6 +1983,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[7],
     library::sources::COMMANDS[8],
     library::sources::COMMANDS[9],
+    library::sources::COMMANDS[10],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2690,6 +2736,11 @@ pub struct SheetTarget {
     sheet: uuid::Uuid,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static DESIGNATOR_METADATA_PREPARATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A typed project snapshot. History and background saves share immutable collections.
 #[derive(Clone, Debug)]
 pub struct Project {
@@ -2758,6 +2809,24 @@ impl Project {
     /// Return the logical components in stable component ID order.
     pub fn components(&self) -> impl Iterator<Item = &PartInstance> {
         self.components.values()
+    }
+
+    /// Adopt storage metadata after an edit introduces a locked part. Decoding already
+    /// validates these requirements, and ordinary edits, removals and history retain them.
+    /// The caller knows from the changed part that a lock was introduced; do not scan the map.
+    pub(crate) fn prepare_designator_metadata(&mut self) -> Result<(), String> {
+        #[cfg(test)]
+        DESIGNATOR_METADATA_PREPARATIONS.with(|calls| calls.set(calls.get() + 1));
+        if self.layout.is_none() {
+            *self = self.with_board_folders(".")?;
+        }
+        if !self.has_sheet_occurrences() {
+            *self = self.with_sheet_occurrences()?;
+        }
+        if self.numeric_id_high_water.is_none() {
+            self.numeric_id_high_water = Some(self.allocation_high_water());
+        }
+        Ok(())
     }
 
     /// Whether a live component belongs in this project's current physical board
@@ -3045,7 +3114,8 @@ impl Session {
     /// identity/absence and retains a later root/folder choice made since the save began.
     /// Later created sheets retain their inspected compatibility IDs through occurrence adoption.
     /// The captured snapshot is replaced by the saved Arc so dirty-state comparisons stay valid.
-    /// When it changes anything, the edit observer is told the current project as a new root.
+    /// When both Arcs are already the same, only other history snapshots may need adoption.
+    /// If anything changes, the edit observer is told the current project as a new root.
     pub fn adopt_saved_metadata(&mut self, original: &Arc<Project>, saved: &Arc<Project>) -> bool {
         if !saved.same_document(original) {
             return false;
@@ -3057,8 +3127,10 @@ impl Session {
                 continue;
             }
             if Arc::ptr_eq(project, original) {
-                *project = saved.clone();
-                changed = true;
+                if !Arc::ptr_eq(project, saved) {
+                    *project = saved.clone();
+                    changed = true;
+                }
                 continue;
             }
             let mut next = Project::clone(project);
@@ -3128,7 +3200,9 @@ impl Session {
         if id == board::identity::CREATE_BOARD {
             return self.project.as_ref().is_some_and(|project| project.board_target().is_none());
         }
-        if id.starts_with("pcb.") && id != ASSIGN_FOOTPRINT && !self.project.as_ref().is_some_and(|project| project.board_target().is_some()) {
+        if ((id.starts_with("pcb.") && id != ASSIGN_FOOTPRINT) || id == library::sources::PREVIEW_FOOTPRINT_REVISION)
+            && !self.project.as_ref().is_some_and(|project| project.board_target().is_some())
+        {
             return false;
         }
         match id {
@@ -3163,7 +3237,9 @@ impl Session {
             | parameters::RESOLVE
             | "project.rename"
             | netlist::EXPORT_NETLIST
+            | netlist::COMPARE_NETLIST
             | library::sources::AVAILABLE_REVISIONS
+            | library::sources::PREVIEW_FOOTPRINT_REVISION
             | no_connect::SET
             | no_connect::CHECK
             | net_classes::CREATE
@@ -3192,6 +3268,7 @@ impl Session {
             | MIRROR_SYMBOL
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
+            | annotation::PREVIEW
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
@@ -3351,9 +3428,10 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Failed commands leave the project intact. Scope refusals precede validation; otherwise
-    /// a stale `expected_revision` is reported first unless the command returns a stale query
-    /// outcome, as `pcb.plan_route` does.
+    /// Authorized symbol-field dry runs and annotation previews return proposals without
+    /// publishing edits. Failed commands leave the project intact. Scope refusals precede
+    /// validation; otherwise a stale `expected_revision` is reported first unless the command
+    /// returns a stale query outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
@@ -3364,6 +3442,13 @@ impl Session {
                 self.report_committed(id, params);
             }
             return Ok(result);
+        }
+        if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
+            return self.preview_symbol_fields(params);
+        }
+        if id == annotation::PREVIEW {
+            self.validate_project_command(id, params)?;
+            return self.preview_annotation(params);
         }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3398,6 +3483,10 @@ impl Session {
         if id == netlist::EXPORT_NETLIST {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"netlist":self.netlist_report(params)?}));
+        }
+        if id == netlist::COMPARE_NETLIST {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"comparison":self.compare_netlist(params)?}));
         }
         if id == netlist::EXPORT_BOARD_NETLIST {
             self.validate_project_command(id, params)?;
@@ -3446,6 +3535,7 @@ impl Session {
     /// Run the shared command without building an inspection snapshot. Returns the current
     /// revision, which remains unchanged on a no-op. Failed commands leave the project intact.
     /// Preview commands may replace runtime-only cached authority without an authored edit.
+    /// Symbol-field dry runs validate a disposable candidate without notifying the edit observer.
     /// Setup handlers retain their revision checks and specific state diagnostics even when
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
@@ -3461,6 +3551,10 @@ impl Session {
         self.refuse_stale(id, params)?;
         if id == board::clipboard::CUT {
             self.cut_board(params)?;
+            return Ok(self.revision);
+        }
+        if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
+            self.preview_symbol_fields(params)?;
             return Ok(self.revision);
         }
         let before = self.revision;
@@ -3598,6 +3692,7 @@ impl Session {
                 | sheets::DELETE_SHEET
                 | "project.rename"
                 | netlist::EXPORT_NETLIST
+                | netlist::COMPARE_NETLIST
                 | no_connect::SET
                 | no_connect::CHECK
                 | net_classes::CREATE
@@ -3626,6 +3721,7 @@ impl Session {
                 | MIRROR_SYMBOL
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
+                | annotation::PREVIEW
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
@@ -3737,6 +3833,9 @@ impl Session {
             netlist::EXPORT_NETLIST => {
                 self.export_netlist()?;
             }
+            netlist::COMPARE_NETLIST => {
+                self.compare_netlist(params)?;
+            }
             net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD
             | hierarchy::PLACE_SHEET
@@ -3820,6 +3919,9 @@ impl Session {
             MIRROR_SYMBOL => self.mirror_symbol(params)?,
             DELETE_SYMBOL => self.delete_symbol(params)?,
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
+            annotation::PREVIEW => {
+                self.preview_annotation(params)?;
+            }
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,
@@ -3946,6 +4048,7 @@ impl Session {
                 definition: definition.clone(),
                 reference_number,
                 reference: format!("{}{reference_number}", definition.reference_prefix),
+                designator_locked: false,
                 value: params["value"].as_str().unwrap_or(definition.default_value()).to_owned(),
                 metadata: defaults.metadata,
                 part: None,
@@ -4063,6 +4166,38 @@ impl Session {
         Ok(())
     }
 
+    /// Validate the ordinary property transaction in a disposable session. Return complete
+    /// proposed document changes without publishing state or history. Newly allocated net and
+    /// capture identities are provisional; a later Apply allocates its own identities.
+    /// Ordinary validation precedes encoding; native size limits can still refuse the preview.
+    fn preview_symbol_fields(&self, params: &Value) -> Result<Value, CommandError> {
+        let mut candidate = Self { project: self.project.clone(), revision: self.revision, ..Self::default() };
+        let mut params = params.clone();
+        params["dry_run"] = json!(false);
+        candidate.apply(SET_SYMBOL_FIELDS, &params)?;
+        let before =
+            persistence::encode_documents(self.snapshot().ok_or_else(|| CommandError::Unavailable("Create or open a project first.".into()))?)
+                .map_err(CommandError::InvalidParams)?;
+        let after =
+            persistence::encode_documents(candidate.snapshot().ok_or_else(|| CommandError::Unavailable("Create or open a project first.".into()))?)
+                .map_err(CommandError::InvalidParams)?;
+        let paths: std::collections::BTreeSet<_> = before.keys().chain(after.keys()).collect();
+        let mut changes = Vec::new();
+        for path in paths {
+            if before.get(path) != after.get(path) {
+                let text = |documents: &persistence::Documents| {
+                    documents
+                        .get(path)
+                        .map(|bytes| std::str::from_utf8(bytes).map(str::to_owned))
+                        .transpose()
+                        .map_err(|error| CommandError::InvalidParams(error.to_string()))
+                };
+                changes.push(json!({"path":path,"before":text(&before)?,"after":text(&after)?}));
+            }
+        }
+        Ok(json!({"revision":self.revision,"provisional":true,"changes":changes}))
+    }
+
     /// Set component-owned fields through a placed unit. References must be unique across
     /// components; both fields are bounded single-line text. Optional orientation and center axes
     /// change in the same transaction; omitted placement fields retain their values. Center changes
@@ -4072,6 +4207,8 @@ impl Session {
     /// only this unit's text appearance. Omission preserves either. Invalid/dangling fields or
     /// board exclusion of a legacy placed component reject every accompanying change.
     /// With an accepted baseline, exclusion stages a reviewed physical removal.
+    /// The optional designator lock protects automatic annotation, not a ban on explicit
+    /// reference edits. Successful Apply does not guarantee the later native Save fits its limits.
     /// Validation/contact failures reject the entire edit; unchanged edits are no-ops.
     fn set_symbol_fields(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -4081,6 +4218,8 @@ impl Session {
             project.component(&project.symbols[index]).ok_or_else(|| CommandError::InvalidParams("symbol has no component".to_owned()))?;
         let reference = params["reference"].as_str().unwrap_or_default().trim().to_owned();
         let mut value = params["value"].as_str().unwrap_or_default().trim().to_owned();
+        let designator_locked = params.get("designator_locked").and_then(Value::as_bool).unwrap_or(component.designator_locked);
+        let introduced_lock = designator_locked && !component.designator_locked;
         let mut part_selection = component.part.clone();
         if value != component.value
             && let Some(selection) = &mut part_selection
@@ -4121,6 +4260,7 @@ impl Session {
         schematic::fields::validate_layouts(&field_layout, &metadata).map_err(CommandError::InvalidParams)?;
         if component.reference == reference
             && component.value == value
+            && component.designator_locked == designator_locked
             && component.part == part_selection
             && component.metadata == metadata
             && project.symbols[index].field_layout == field_layout
@@ -4132,6 +4272,7 @@ impl Session {
         let mut component = component.clone();
         component.reference = reference;
         component.value = value;
+        component.designator_locked = designator_locked;
         component.part = part_selection;
         component.metadata = metadata;
         let mut next = if position != original_position {
@@ -4152,6 +4293,9 @@ impl Session {
         Arc::make_mut(&mut next.components).insert(component.ordinal, component);
         let symbol = &mut Arc::make_mut(&mut next.sheet_mut().symbols)[index];
         symbol.field_layout = field_layout;
+        if introduced_lock {
+            next.prepare_designator_metadata().map_err(CommandError::InvalidParams)?;
+        }
         self.change(next)?;
         Ok(())
     }
@@ -4295,6 +4439,7 @@ impl Session {
 
     /// Prepare an edit without publishing it. Locked copper, unsupported circular geometry,
     /// metadata, nets and zone ownership are checked here so previews share Apply's preparation.
+    /// Adopt required no-connect metadata; lock-introducing edits prepare their own metadata.
     /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
     fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
@@ -4769,6 +4914,21 @@ mod tests {
         assert_eq!(name(&s), Some(UNTITLED));
         s.apply("edit.undo", &Value::Null).unwrap();
         assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &saved));
+    }
+
+    /// Adopting the same snapshot is a no-op when history already has its saved metadata.
+    #[test]
+    fn adopting_an_unchanged_saved_snapshot_with_current_history_is_a_noop() {
+        let mut s = Session::default();
+        s.apply("project.new", &Value::Null).unwrap();
+        let prepared = s.snapshot().unwrap().with_board_folders(".").unwrap().with_sheet_occurrences().unwrap();
+        s.open_snapshot(Arc::new(prepared));
+        s.apply("project.rename", &json!({"name":"Already prepared"})).unwrap();
+        let saved = s.snapshot().unwrap();
+        let revision = s.revision();
+        assert!(!s.adopt_saved_metadata(&saved, &saved));
+        assert_eq!(s.revision(), revision);
+        assert!(Arc::ptr_eq(&saved, &s.snapshot().unwrap()));
     }
 
     #[test]

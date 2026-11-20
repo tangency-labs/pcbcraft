@@ -18,6 +18,7 @@ pub mod definition;
 pub mod drawing;
 pub mod drc;
 pub mod fabrication;
+pub(crate) mod footprint_delta;
 pub mod geometry;
 pub mod identity;
 mod library_migration;
@@ -476,9 +477,13 @@ impl Board {
                 .any(|assignment| project.component_is_board_eligible(assignment.component) && !baseline.validate_assignment(assignment))
         })
     }
+    /// Find the instance's physical placement without scanning other footprints.
+    pub(crate) fn footprint_for_part_instance(&self, instance: u64) -> Option<&Footprint> {
+        self.footprints.get(*self.by_component.get(&instance)?)
+    }
     /// Find a terminal's corresponding physical pad by the explicit component mapping.
     pub(crate) fn pad_for(&self, component: u64, pin: &str) -> Option<Pad> {
-        let f = self.footprints.get(*self.by_component.get(&component)?)?;
+        let f = self.footprint_for_part_instance(component)?;
         Some(Pad { board: None, footprint: f.id, number: f.pad_for(pin)? })
     }
     /// Resolve a physical pad's board-local position without scanning the board.

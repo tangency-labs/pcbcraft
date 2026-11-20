@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+Pane headers support explicit up/down and left/right splits, with previews and
+saved orientation. Dragging between panes moves the existing view and collapses
+its old slot. Splitting a pane itself opens another view. Separate Split window
+up/down targets move the existing pane across the full window, and live commands
+expose both placement scopes.
+
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
@@ -60,11 +66,12 @@ and the board. `part_groups.create`, `update`, `remove` and `inspect`
 manage the catalog, and `part_instances.set_groups` and
 `part_instances.inspect_groups` set and read a part instance's groups by its
 stable ID, so annotation does not change membership. A group that still has
-members cannot be removed. Projects with part groups save as
-`pcbcraft-project/24` (board instances `pcbcraft-instances/5` when memberships
-exist). Dense memberships use `pcbcraft-project/39` and board instances
-`pcbcraft-instances/7` through a compact UUID dictionary when expanded records
-exceed existing size limits; no supported membership is dropped. Earlier files
+members cannot be removed. Projects with part groups use project/24 (expanded
+memberships) or project/39 (compact) unless profiles, pairs or a designator lock
+select project/36, /45 or /51. Board instance documents use instances/5 or /7
+for the two representations, or instances/8 when pairs are present. The compact
+UUID dictionary keeps dense memberships within the existing size limits without
+dropping supported membership. Earlier files
 keep the expanded representation while it fits, and compact files keep their
 encoding after reopening. Unchanged saves preserve canonical encoder bytes;
 accepted noncanonical input may normalize. Copy/Cut leave part groups in their
@@ -230,7 +237,8 @@ and net classes and zones remain separate work.
 
 On desktop, `pcbcraft <path>` opens a project folder, its `project.json` or a
 `.pc` archive as the app starts, without a picker; the opened project enters the
-workspace and joins recent projects. A startup open that fails reports the error
+workspace and joins recent projects. The path may be a symlink to a project
+folder or archive; recent projects record its target. A startup open that fails reports the error
 in the status bar, keeps Home usable and writes the same line once to stderr
 when available. Windows GUI release builds need stderr redirection to capture
 diagnostics. The launcher takes no options and at most one path, so a

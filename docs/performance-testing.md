@@ -233,6 +233,35 @@ and browser reports are separate baselines and cannot be compared as one series.
 If a feature needs a new boundary, apply the same measurement-only instrumentation
 to both revisions and document that patch; do not silently compare different code.
 
+## Property-edit service-time diagnostic
+
+`property_edit_perf` in `pcbcraft-engine` measures synchronous shared property
+commands on an original 8- or 128-part schematic. Build that example in the same
+profile at both revisions, applying the same measurement-only source to an older
+revision that lacks it. Generate each artifact once and reuse its exact bytes:
+
+```sh
+cargo build --locked --release -p pcbcraft-engine --example property_edit_perf
+target/release/examples/property_edit_perf generate 8 /tmp/property-8.pc
+target/release/examples/property_edit_perf generate 128 /tmp/property-128.pc
+target/release/examples/property_edit_perf run /tmp/property-128.pc 100 /tmp/property-after.json
+```
+
+Retain environment metadata, source patch, compiler/profile, executable and
+revision hashes with the artifact and raw JSON. The `fields` boundary is the
+same reference edit on both versions. `lock` and `preview` are measured only when
+the command catalog exposes designator locks; their absolute costs are not a
+matched speedup over an implementation that lacks them. Use artifacts produced by
+this example; its count/shape checks do not authenticate their provenance. Each
+boundary uses eight warmup calls (preview calls do not edit), retains all samples,
+and checks the exact real-Apply document delta and rollback or preview non-mutation
+outside the timed command. The opened input uses the production cap+1 reader. Reports include the archive hash
+and nearest-rank distributions, with no CI timing threshold. A targeted run
+through a busy build queue records elapsed synchronous service time, not isolated
+CPU cost or a machine latency baseline. Outputs are exclusively created, never
+replaced; a failed write may leave a partial new artifact or report. Live MCP transport, UI frames and rendering remain
+explicitly unmeasured by this runner.
+
 ## Record browser evidence
 
 The browser diagnostic is a separate opt-in WebAssembly example, without changing

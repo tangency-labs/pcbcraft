@@ -153,6 +153,7 @@ impl Fragment {
     /// Cut. Flat contents reuse the established identity/reference/package remapper; hierarchy
     /// endpoints are rebound by wire order before validation, retaining exact shared connectivity.
     /// Duplicated sheets receive new occurrence IDs in the destination use; Cut reuse keeps IDs.
+    /// If any new owner carries a lock, adopt storage metadata on the completed hierarchy.
     pub(super) fn placed_hierarchy(
         &self,
         destination: &Project,
@@ -246,6 +247,7 @@ impl Fragment {
             }
         }
         let mut selected = Selection::default();
+        let mut introduced_lock = false;
         for (index, source) in sources.iter().enumerate() {
             if index != 0 && options.reuse_sheets {
                 continue;
@@ -273,7 +275,8 @@ impl Fragment {
                 policy.quarter_turns = 0;
             }
             let position = if index == 0 { transformed(flat.anchor(), self.anchor, at, options.quarter_turns)? } else { flat.anchor() };
-            let (mut candidate, added) = flat.placed_with_parts(&destination, position, cursor, &policy, &mut shared_parts)?;
+            let (mut candidate, added, copied_lock) = flat.placed_with_parts(&destination, position, cursor, &policy, &mut shared_parts)?;
+            introduced_lock |= copied_lock;
             for (offset, source) in source.wires.iter().enumerate() {
                 for (end, original) in source.endpoints.iter().enumerate() {
                     let replacement = match original {
@@ -303,6 +306,9 @@ impl Fragment {
             sheet.connectivity = Arc::default();
         }
         next.validate_hierarchy().map_err(invalid)?;
+        if introduced_lock {
+            next.prepare_designator_metadata().map_err(invalid)?;
+        }
         let next = validate_candidate(next)?;
         Ok((next, selected))
     }
