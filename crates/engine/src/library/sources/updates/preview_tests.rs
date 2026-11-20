@@ -9,6 +9,7 @@ use crate::{
     board::{
         definition::{CopperBinding, PadShape, RectPad},
         setup::{BoardSetup, LayerPurpose, Side},
+        slot::PlatedSlot,
         track::Track,
     },
     library::sources::{Documents, LOAD, NativeSource, PREVIEW_FOOTPRINT_REVISION, REMOVE, part_digest, symbol_digest},
@@ -313,6 +314,30 @@ fn footprint_preview_keeps_circular_openings_when_authored_rotation_changes() {
     let pad = &report["delta"]["pads"][0];
     assert_eq!(pad["number"], "2");
     assert_eq!(pad["changes"], json!(["rotated"]));
+    assert_eq!(pad["loose_ends"], json!([]));
+}
+
+/// A revision changing only a plated slot reports a drill change without triggering loose ends.
+#[test]
+fn footprint_preview_reports_plated_slot_only_changes() {
+    let (mut session, _, params) = fixture_with_original(
+        |pad| {
+            pad.width_nm = 800_000;
+            pad.height_nm = 500_000;
+            pad.shape = PadShape::Oval;
+            pad.corner_radius_nm = 0;
+            pad.copper = CopperBinding::AllCopper;
+            pad.drill_nm = None;
+            pad.plated_slot = Some(PlatedSlot::new(200_000, 400_000, 0).unwrap());
+        },
+        |pad| pad.plated_slot = Some(PlatedSlot::new(200_000, 500_000, 0).unwrap()),
+        false,
+    );
+    let report = session.execute(PREVIEW_FOOTPRINT_REVISION, &params).unwrap();
+    let pad = &report["delta"]["pads"][0];
+    assert_eq!(pad["number"], "2");
+    assert_eq!(pad["changes"], json!(["drill"]));
+    assert_eq!(pad["after"]["geometry"]["plated_slot"]["length_nm"], 500_000);
     assert_eq!(pad["loose_ends"], json!([]));
 }
 
