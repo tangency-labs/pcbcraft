@@ -69,8 +69,9 @@ their coordinates. Panning, zooming, flipping or resizing a pane changes `layout
 so input carrying an older `layout`, or sent after navigation that has not been
 painted yet, is refused as stale; project again. A coordinate click or drag whose
 canvas moves after it was accepted, for example while a wheel zoom is still
-easing, is cancelled before its button press. A closed or hidden view, or a
-Parts Library browsing pane, is refused. Projection is read-only: it changes no
+easing, is cancelled before its button press. A closed or hidden view, one behind Home,
+or a Parts Library browsing pane is refused. Coordinates may reach ±1,000,000,000 nm,
+so pins and pads at the edge of the drawing area can be targeted. Projection is read-only: it changes no
 camera, selection, project data or Undo history. It is geometry only, not image
 recognition or object picking; use project inspection to find object positions.
 

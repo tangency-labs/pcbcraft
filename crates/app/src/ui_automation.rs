@@ -340,7 +340,8 @@ impl PcbApp {
     /// window area covers it; covered and off-canvas points still return their coordinates.
     fn automation_project(&mut self, ctx: &egui::Context, params: &Value) -> Result<Value, String> {
         let query: Projection = serde_json::from_value(params.clone()).map_err(|e| e.to_string())?;
-        let max = pcbcraft_engine::schematic::MAX_CENTER_NM;
+        // Pins and pads can sit up to the pin offset beyond the largest placement center.
+        let max = pcbcraft_engine::schematic::MAX_CENTER_NM + pcbcraft_engine::schematic::MAX_PIN_OFFSET_NM;
         if !(-max..=max).contains(&query.at.x_nm) || !(-max..=max).contains(&query.at.y_nm) {
             return Err(format!("Model coordinates must be within ±{max} nm"));
         }
@@ -351,6 +352,9 @@ impl PcbApp {
         }
         let (&host, _) =
             self.views.hosts.iter().find(|(_, host)| host.layout.visible_views().contains(&view)).ok_or("The addressed view is not visible")?;
+        if self.home && host == self.views.main {
+            return Err("Home hides the workspace; return to it before projecting".into());
+        }
         self.repaint_editors(ctx);
         let snapshot = self.automation.snapshots.get(&host).ok_or("UI geometry is not ready; wait for a paint and retry")?;
         if !self.automation_current(host, snapshot) {
@@ -817,12 +821,14 @@ pub(super) fn catalog() -> Vec<Value> {
         {"type":"object","properties":{"x":{"type":"number"},"y":{"type":"number"}},"required":["x","y"],"additionalProperties":false}]});
     let keys = json!({"type":"object","properties":{"ctrl":{"type":"boolean"},"shift":{"type":"boolean"},"alt":{"type":"boolean"},"command":{"type":"boolean"}},"additionalProperties":false});
     let button = json!({"type":"string","enum":["left","right","middle"],"default":"left"});
+    let bound = pcbcraft_engine::schematic::MAX_CENTER_NM + pcbcraft_engine::schematic::MAX_PIN_OFFSET_NM;
+    let coordinate = json!({"type":"integer","minimum":-bound,"maximum":bound});
     [
         ("inspect","Inspect queued UI input",json!({}),vec![]),
         ("cancel","Cancel queued UI input",json!({}),vec![]),
         ("handles","List visible named controls in one window",json!({"window":{"type":"integer"},"prefix":{"type":"string"}}),vec!["window"]),
         ("at","Locate one unique enabled control",json!({"window":{"type":"integer"},"handle":{"type":"string"}}),vec!["window","handle"]),
-        ("project","Project a model point in a view to window coordinates",json!({"view":{"type":"integer"},"at":{"type":"object","properties":{"x_nm":{"type":"integer"},"y_nm":{"type":"integer"}},"required":["x_nm","y_nm"],"additionalProperties":false}}),vec!["view","at"]),
+        ("project","Project a model point in a view to window coordinates",json!({"view":{"type":"integer"},"at":{"type":"object","properties":{"x_nm":coordinate,"y_nm":coordinate},"required":["x_nm","y_nm"],"additionalProperties":false}}),vec!["view","at"]),
         ("move","Move the pointer through ordinary UI input",json!({"target":point}),vec!["target"]),
         ("click","Click through ordinary UI input",json!({"target":point,"button":button,"modifiers":keys}),vec!["target"]),
         ("drag","Drag over successive UI frames",json!({"from":point,"to":point,"steps":{"type":"integer","minimum":2,"maximum":120},"button":button,"modifiers":keys}),vec!["from","to","steps"]),

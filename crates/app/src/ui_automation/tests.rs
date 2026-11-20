@@ -438,9 +438,9 @@ fn projected_symbol_click_selects_it_without_the_query_changing_state() {
 fn navigation_makes_projected_coordinates_stale() {
     let mut h = ready();
     let view = h.state().views.active.id().0;
-    let first = project(&mut h, view, 0, 0).unwrap();
     let click = |p: &Value| json!({"window":0,"layout":p["layout"],"target":{"x":p["x"],"y":p["y"]}});
     for navigate in [0, 1] {
+        let first = project(&mut h, view, 0, 0).unwrap();
         let camera = &mut h.state_mut().views.active.camera;
         if navigate == 0 {
             camera.center_on(pcbcraft_engine::schematic::Point { x_nm: 2_540_000, y_nm: 0 })
@@ -606,9 +606,29 @@ fn definition_views_project_and_library_browsing_is_refused() {
 fn projection_refuses_out_of_range_coordinates() {
     let mut h = ready();
     let view = h.state().views.active.id().0;
-    for (x, y) in [(i64::MIN, 0), (0, i64::MIN), (i64::MAX, 0), (0, pcbcraft_engine::schematic::MAX_CENTER_NM + 1)] {
-        assert!(project(&mut h, view, x, y).unwrap_err().contains("within"), "({x}, {y})");
+    let bound = pcbcraft_engine::schematic::MAX_CENTER_NM + pcbcraft_engine::schematic::MAX_PIN_OFFSET_NM;
+    for (x, y) in [(i64::MIN, 0), (0, i64::MIN), (i64::MAX, 0), (0, bound + 1), (-bound - 1, 0)] {
+        assert!(project(&mut h, view, x, y).unwrap_err().contains(&format!("±{bound}")), "({x}, {y})");
     }
+    // A pin or pad beyond the largest placement center is still a valid target.
+    project(&mut h, view, bound, -bound).unwrap();
+}
+
+/// Home hides the main workspace: its stale canvases are not projected, and returning to the
+/// workspace changes the layout token.
+#[test]
+fn home_hides_the_main_canvas_from_projection() {
+    let mut h = ready();
+    let view = h.state().views.active.id().0;
+    let before = project(&mut h, view, 0, 0).unwrap();
+    h.state_mut().show_home();
+    h.run();
+    assert!(project(&mut h, view, 0, 0).unwrap_err().contains("Home"));
+    h.state_mut().home = false;
+    h.run();
+    let after = project(&mut h, view, 0, 0).unwrap();
+    assert_ne!(after["layout"], before["layout"]);
+    assert_eq!((after["x"].clone(), after["y"].clone()), (before["x"].clone(), before["y"].clone()));
 }
 
 /// A canvas that moves after a coordinate click was admitted, as an eased zoom does, cancels
