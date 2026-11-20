@@ -115,7 +115,7 @@ pub(crate) async fn capture(query: &ClearanceQuery) -> Result<Arc<Chains>, Comma
 }
 
 /// Resolve only unambiguous endpoint joins. Pad/via/lock contacts, width/layer/net
-/// transitions and branch junctions cannot become flexible degree-two bends.
+/// transitions, branch junctions and overlapping returns cannot become flexible degree-two bends.
 async fn build(query: ClearanceQuery) -> Result<Chains, CommandError> {
     let view = query.authority().view().ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
     let mut work = Work::default();
@@ -145,6 +145,10 @@ async fn build(query: ClearanceQuery) -> Result<Chains, CommandError> {
             continue;
         }
         let p = Point { x_nm: key.1, y_nm: key.2 };
+        let far_end = |track: &Track, at_end| if at_end { track.start } else { track.end };
+        if backtracks(far_end(ta, *ae), p, far_end(tb, *be)) {
+            continue;
+        }
         let cap = Contour::capsule(p, p, ta.width_nm as f64 / 2.);
         let mut clear = true;
         for i in query.candidates(&cap, &[ta.layer])? {
@@ -390,12 +394,8 @@ impl Chains {
             };
             previous = station;
         }
-        for p in points.windows(3) {
-            let (ax, ay) = (p[1].x_nm as i128 - p[0].x_nm as i128, p[1].y_nm as i128 - p[0].y_nm as i128);
-            let (bx, by) = (p[2].x_nm as i128 - p[1].x_nm as i128, p[2].y_nm as i128 - p[1].y_nm as i128);
-            if ax * by - ay * bx == 0 && ax * bx + ay * by < 0 {
-                return false;
-            }
+        if points.windows(3).any(|p| backtracks(p[0], p[1], p[2])) {
+            return false;
         }
         let Some((i, _)) = chain.members.first() else {
             return false;
@@ -423,6 +423,13 @@ impl Chains {
         }
         true
     }
+}
+
+/// Two nonzero legs overlap when they leave their common vertex on the same ray.
+fn backtracks(a: Point, joint: Point, b: Point) -> bool {
+    let (ax, ay) = (i128::from(joint.x_nm) - i128::from(a.x_nm), i128::from(joint.y_nm) - i128::from(a.y_nm));
+    let (bx, by) = (i128::from(b.x_nm) - i128::from(joint.x_nm), i128::from(b.y_nm) - i128::from(joint.y_nm));
+    ax * by - ay * bx == 0 && ax * bx + ay * by < 0
 }
 
 /// Exact integer containment for protected stations, independent of floating

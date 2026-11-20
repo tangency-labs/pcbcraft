@@ -834,3 +834,32 @@ fn shove_checks_fixed_segments_and_vias_against_the_outline() {
         assert!(plan.replacements.is_empty());
     }
 }
+
+/// A short overlapping return on an existing trace is an anchored contact. Shove elsewhere
+/// on the trace may move the adjacent rail while preserving the original return and its branch.
+#[test]
+fn a_distant_overlapping_return_does_not_block_a_rail_shove() {
+    let mut s = board();
+    let point = |x_nm, y_nm| Point { x_nm, y_nm };
+    let (rail_end, bend) = (point(-11_430_000, 18_034_000), point(-11_430_000, 10_539_600));
+    let overlap_end = point(-7_366_000, 13_208_000);
+    let branch = point(-7_366_000, 12_446_000);
+    add(
+        &mut s,
+        vec![rail_end, bend, point(-10_092_398, 9_201_998), point(-7_941_602, 9_201_998), point(-7_366_000, 9_777_600), overlap_end],
+        250_000,
+    );
+    let overlap = add(&mut s, vec![overlap_end, branch], 250_000)[0];
+    add(&mut s, vec![branch, point(-3_810_000, 8_890_000)], 250_000);
+    for x in [-9_906_000, -8_890_000, -8_128_000] {
+        add(&mut s, vec![point(x, 9_652_000), point(x, 20_320_000)], 250_000);
+    }
+    let rail = view(&s).tracks().iter().find(|t| [t.start, t.end] == [rail_end, bend]).unwrap().id;
+    let original_overlap = view(&s).tracks().iter().find(|t| t.id == overlap).unwrap().clone();
+    let request = Request { head: point(-12_192_000, 14_224_000), target: point(-11_430_000, 14_224_000), ..request(&s) };
+    let plan = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+    assert!(plan.replacements.iter().any(|path| path.track == rail), "{plan:?}");
+    commit(&mut s, &request, &plan);
+    assert_eq!(view(&s).tracks().iter().find(|t| t.id == overlap), Some(&original_overlap));
+}
