@@ -824,6 +824,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         layout: None,
         circuit_use: None,
         net_registry: Arc::default(),
+        net_records_proof: Default::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
@@ -1569,11 +1570,13 @@ pub(crate) struct PairDocumentProbe {
 }
 
 impl PairDocumentProbe {
-    /// Capture an exact candidate without walking any of its authored records.
+    /// Retain an exact pair-only candidate after the registry row and compact size checks.
     pub(crate) fn new(project: Arc<Project>, row_bytes: usize) -> Self {
         let home = project.instances_document_path().unwrap_or_else(|| ENTRY_POINT.into());
         let has_pairs = project.net_registry.has_pairs();
-        Self { home, has_pairs, row_bytes, encoder: DocumentsEncoder::new(project) }
+        let mut encoder = DocumentsEncoder::new(project);
+        encoder.pair_capacity_only = true;
+        Self { home, has_pairs, row_bytes, encoder }
     }
 
     /// Count headroom once the native document batches complete; retain only the byte budget.
@@ -1620,6 +1623,7 @@ pub struct DocumentsEncoder {
     membership_index: usize,
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
+    pair_capacity_only: bool,
     sheet_fields: bool,
     sheet_mirrored: bool,
     sheet_wire_index: BTreeMap<u64, usize>,
@@ -1661,6 +1665,7 @@ impl DocumentsEncoder {
             membership_index: 0,
             use_compact_memberships,
             size_limit_exceeded: false,
+            pair_capacity_only: false,
             sheet_fields: false,
             sheet_mirrored: false,
             sheet_wire_index: BTreeMap::new(),
@@ -1679,7 +1684,9 @@ impl DocumentsEncoder {
         match self.step_records(records) {
             Err(_) if self.size_limit_exceeded && !self.use_compact_memberships && !self.project.part_group_memberships.is_empty() => {
                 let project = self.project.clone();
+                let pair_capacity_only = self.pair_capacity_only;
                 *self = Self::new(project);
+                self.pair_capacity_only = pair_capacity_only;
                 self.use_compact_memberships = true;
                 Ok(None)
             }
@@ -1705,7 +1712,7 @@ impl DocumentsEncoder {
                         let records = p.occurrence_instances();
                         Project::clone(p).install_sheet_instances(records.clone())?;
                         if !p.net_registry.records.is_empty() {
-                            p.net_registry.validate(p)?;
+                            self.validate_registry()?;
                         }
                         self.instance_records = Some(records);
                         if p.layout.is_none() {
@@ -1749,7 +1756,7 @@ impl DocumentsEncoder {
                     }
                     let registry_validated = p.has_sheet_occurrences() && !p.net_registry.records.is_empty();
                     if has_bindings && !registry_validated {
-                        p.net_registry.validate(p)?;
+                        self.validate_registry()?;
                     }
                     let has_parameters = !p.parameters.is_empty();
                     if has_parameters && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
@@ -1772,7 +1779,7 @@ impl DocumentsEncoder {
                         return Err("Differential pairs require adopted storage/occurrence metadata.".into());
                     }
                     if (has_numbers || has_pairs) && !has_bindings && !registry_validated {
-                        p.net_registry.validate(p)?;
+                        self.validate_registry()?;
                     }
                     let format = if has_pairs {
                         PAIR_PROJECT_FORMAT
@@ -2241,6 +2248,14 @@ impl DocumentsEncoder {
             }
         }
         Ok(None)
+    }
+
+    /// Ordinary Save independently validates the entire registry. The pair-only capacity probe
+    /// has already checked the pair rows and exact compact size; it can reuse proved unchanged
+    /// record and graph inputs rather than rebuilding the graph.
+    fn validate_registry(&self) -> Result<(), String> {
+        let project = &self.project;
+        if self.pair_capacity_only { project.net_registry.validate_pair_capacity_candidate(project) } else { project.net_registry.validate(project) }
     }
 
     /// Finish components/package choices, writing adopted instances in their single storage home

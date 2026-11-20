@@ -356,6 +356,29 @@ fn large_pair_draft_respects_the_poll_budget() {
     assert_eq!(session.snapshot().unwrap().differential_pairs(), snapshot.differential_pairs());
 }
 
+/// A proof covers only the exact authored inputs to ordinary registry validation, not an
+/// arbitrary project Arc with the same IDs. A changed net record is checked anew on a miss.
+#[test]
+fn pair_capacity_reuses_only_exact_net_record_proof() {
+    let (mut session, [p, n, _]) = pair_fixture(false);
+    let pair = new_pair_id().unwrap();
+    session.open_snapshot(decode_documents(&bytes(&session)).unwrap());
+    let original = session.snapshot().unwrap();
+    assert!(original.net_registry.has_records_proof(&original));
+    apply(&mut session, CREATE_PAIR, json!({"pair":pair,"name":"New","positive":p,"negative":n}));
+    let candidate = session.snapshot().unwrap();
+    assert!(candidate.net_registry.has_records_proof(&candidate));
+    let mut invalid = Project::clone(&candidate);
+    Arc::make_mut(&mut Arc::make_mut(&mut invalid.net_registry).records)[0].id = Uuid::nil();
+    assert!(!invalid.net_registry.has_records_proof(&invalid));
+    assert!(invalid.net_registry.validate_pair_capacity_candidate(&invalid).unwrap_err().contains("non-nil UUIDs"));
+    let mut changed_hierarchy = Project::clone(&candidate);
+    Arc::make_mut(&mut changed_hierarchy.sheets)[0].sheet_name.push_str(" B");
+    assert!(!changed_hierarchy.net_registry.has_records_proof(&changed_hierarchy));
+    assert!(changed_hierarchy.net_registry.validate_pair_capacity_candidate(&changed_hierarchy).is_ok());
+    assert!(changed_hierarchy.net_registry.has_records_proof(&changed_hierarchy));
+}
+
 /// An explicitly recorded review reason survives member swaps and naming edits.
 #[test]
 fn pair_update_preserves_retained_review_state() {

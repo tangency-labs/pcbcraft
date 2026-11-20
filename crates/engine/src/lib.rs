@@ -2721,6 +2721,8 @@ pub struct Project {
     circuit_use: Option<uuid::Uuid>,
     /// Sparse identity authority; current connectivity remains derived from the schematic.
     net_registry: Arc<nets::Registry>,
+    /// Validation evidence for the exact immutable non-pair registry and graph inputs.
+    net_records_proof: nets::RecordsProofCache,
     /// Authored dimensional class definitions, independent of net assignments and boards.
     net_classes: Arc<net_classes::Catalog>,
     /// The project's own parameter values, `@project.Name`; stored only from project/22.
@@ -3682,6 +3684,7 @@ impl Session {
                 layout: Some(persistence::layout::Layout::default()),
                 circuit_use: Some(fresh_id()?),
                 net_registry: Arc::default(),
+                net_records_proof: Default::default(),
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
                 assembly_profiles: Arc::default(),

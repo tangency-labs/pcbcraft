@@ -1063,6 +1063,7 @@ fn validate_with_hierarchy(
         layout: None,
         circuit_use: None,
         net_registry: Arc::default(),
+        net_records_proof: Default::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
