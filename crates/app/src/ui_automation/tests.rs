@@ -688,3 +688,74 @@ fn an_unavailable_sheet_view_is_not_projected() {
     assert!(h.state().views.active.unavailable());
     assert!(project(&mut h, view, 0, 0).unwrap_err().contains("unavailable"));
 }
+
+/// Fit defers navigation until paint. Neither queries nor input can use the previous mapping
+/// in that interval; the new projection is available as soon as the fit is painted.
+#[test]
+fn pending_fit_invalidates_projection_and_input_until_paint() {
+    let mut h = ready();
+    let view = h.state().views.active.id().0;
+    command(&mut h, "view.center", json!({"view":view,"at":{"x_nm":12_700_000,"y_nm":0}})).unwrap();
+    h.run();
+    let before = project(&mut h, view, 0, 0).unwrap();
+    command(&mut h, "view.fit", json!({"view":view})).unwrap();
+    assert!(project(&mut h, view, 0, 0).unwrap_err().contains("stale"));
+    let input = json!({"window":0,"layout":before["layout"],"target":{"x":before["x"],"y":before["y"]}});
+    assert!(command(&mut h, "ui.move", input).unwrap_err().contains("stale"));
+    h.run();
+    let after = project(&mut h, view, 0, 0).unwrap();
+    assert_ne!(before["layout"], after["layout"]);
+    assert_ne!(before["x"], after["x"]);
+}
+
+/// A new overlay over a queued coordinate press cancels it; a new overlay elsewhere leaves
+/// the same intended canvas click available, even when it changes the layout token.
+#[test]
+fn an_overlay_cancels_a_coordinate_press_only_if_it_covers_the_target() {
+    use std::{cell::Cell, rc::Rc};
+    let overlay_at = Rc::new(Cell::new(None::<Pos2>));
+    let source = overlay_at.clone();
+    let activated = Rc::new(Cell::new(false));
+    let button_activated = activated.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_ui_state(
+        move |ui, app: &mut PcbApp| {
+            if let Some(at) = source.get() {
+                egui::Area::new(egui::Id::unique("coordinate_press_test_overlay"))
+                    .order(egui::Order::Foreground)
+                    .fixed_pos(at - egui::vec2(50.0, 12.0))
+                    .show(ui.ctx(), |ui| {
+                        if ui.add_sized([100.0, 24.0], egui::Button::new("Overlay action")).clicked() {
+                            button_activated.set(true);
+                        }
+                    });
+            }
+            app.frame(ui);
+        },
+        PcbApp::default(),
+    );
+    crate::tests::resistor_at_origin(&mut h);
+    let ctx = h.ctx.clone();
+    h.state_mut().live_control = Some(crate::live_control::LiveControl::start(&ctx).unwrap());
+    h.state_mut().automation.observing = true;
+    h.run();
+    let view = h.state().views.active.id().0;
+    for (offset, uncovered, expected) in [(egui::Vec2::ZERO, false, "cancelled"), (egui::vec2(200.0, 0.0), true, "completed")] {
+        overlay_at.set(None);
+        h.run_steps(3);
+        let projected = project(&mut h, view, 0, 0).unwrap();
+        assert_eq!(projected["uncovered"], true);
+        let click = json!({"window":0,"layout":projected["layout"],"target":{"x":projected["x"],"y":projected["y"]}});
+        command(&mut h, "ui.click", click).unwrap();
+        tick(&mut h);
+        let at = egui::pos2(projected["x"].as_f64().unwrap() as f32, projected["y"].as_f64().unwrap() as f32);
+        overlay_at.set(Some(at + offset));
+        h.run_steps(3);
+        let latest = project(&mut h, view, 0, 0).unwrap();
+        assert_eq!(latest["uncovered"], uncovered, "{latest}");
+        assert_ne!(latest["layout"], projected["layout"]);
+        let outcome = finish(&mut h);
+        assert_eq!(outcome["state"], expected, "{outcome}; overlay activated: {}", activated.get());
+        assert!(!activated.get());
+        assert_eq!(h.state().views.active.schematic.selection.single_symbol().is_some(), uncovered);
+    }
+}

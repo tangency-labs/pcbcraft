@@ -66,6 +66,20 @@ struct Snapshot {
     overlays: Vec<Rect>,
 }
 
+/// The painted mapping and layers a coordinate press was admitted against.
+#[derive(Debug)]
+struct CoordinateGuard {
+    canvases: Vec<Canvas>,
+    overlays: Vec<Rect>,
+}
+
+impl CoordinateGuard {
+    /// Compare the layers at the press point, allowing unrelated overlays to change elsewhere.
+    fn overlay_changed_at(&self, snapshot: &Snapshot, at: Pos2) -> bool {
+        self.overlays.iter().filter(|rect| rect.contains(at)).ne(snapshot.overlays.iter().filter(|rect| rect.contains(at)))
+    }
+}
+
 #[derive(Debug)]
 struct Job {
     ticket: u64,
@@ -81,9 +95,7 @@ struct Job {
     scale: f32,
     restore: Modifiers,
     guards: Vec<(String, Pos2)>,
-    /// Canvas mappings a coordinate target was chosen against; a press refuses to land after
-    /// they change, as when an eased zoom continues after admission.
-    canvases: Option<Vec<Canvas>>,
+    coordinates: Option<CoordinateGuard>,
 }
 
 /// At most one bounded input operation and one completion record per editor session.
@@ -311,14 +323,14 @@ impl PcbApp {
         }
     }
 
-    /// The model-to-window mapping of every painted canvas visible in this host.
+    /// The model-to-window mapping of visible canvases with up-to-date paints.
     fn automation_canvases(&self, host: HostId) -> Vec<Canvas> {
         let Some(host) = self.views.hosts.get(&host) else { return Vec::new() };
         host.layout
             .visible_views()
             .into_iter()
             .filter_map(|view| {
-                let camera = self.automation_camera(view)?;
+                let camera = self.automation_camera(view).filter(|camera| !camera.navigation_pending())?;
                 let rect = camera.painted_rect()?;
                 let pane = self.views.view(view)?;
                 let cards = if pane.definition.is_some() { Vec::new() } else { pane.canvas_cards.clone() };
@@ -557,7 +569,8 @@ impl PcbApp {
             return Err("Wait for the current file operation before sending UI input".into());
         }
         let guards = action.guards(snapshot)?;
-        let canvases = action.positional().then(|| snapshot.canvases.clone());
+        let coordinates =
+            action.coordinate_press().then(|| CoordinateGuard { canvases: snapshot.canvases.clone(), overlays: snapshot.overlays.clone() });
         let (frames, modifiers) = action.frames(snapshot)?;
         self.automation.next_ticket = self.automation.next_ticket.checked_add(1).ok_or("UI ticket limit reached")?;
         let ticket = self.automation.next_ticket;
@@ -575,7 +588,7 @@ impl PcbApp {
             scale: snapshot.scale,
             restore: snapshot.modifiers,
             guards,
-            canvases,
+            coordinates,
         });
         ctx.request_repaint_of(viewport(host));
         Ok(json!({"schema":SCHEMA,"ticket":ticket,"state":"queued"}))
@@ -626,10 +639,17 @@ impl PcbApp {
                 })
             {
                 Some("Named input target moved, became disabled or was covered")
-            } else if job.frames.front().is_some_and(|events| events.iter().any(|e| matches!(e, Event::PointerButton { pressed: true, .. })))
-                && job.canvases.as_ref().is_some_and(|canvases| *canvases != self.automation_canvases(job.host))
+            } else if let Some(guard) = &job.coordinates
+                && let Some(at) = job.frames.front().and_then(|events| {
+                    events.iter().find_map(|event| match event {
+                        Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
+                        _ => None,
+                    })
+                })
+                && (guard.canvases != self.automation_canvases(job.host)
+                    || self.automation.snapshots.get(&job.host).is_none_or(|snapshot| guard.overlay_changed_at(snapshot, at)))
             {
-                Some("A canvas moved under a coordinate target")
+                Some("Canvas mapping or overlay changed under a coordinate target")
             } else if input.viewport_id == viewport(job.host) && input.events.iter().any(physical_input) {
                 Some("Physical input interrupted automation")
             } else if input.viewport_id == viewport(job.host) && job.held.is_none() && ctx.input(|input| input.pointer.any_down()) {
@@ -700,12 +720,12 @@ fn physical_input(event: &Event) -> bool {
 }
 
 impl Action {
-    /// Whether any pointer target is given as coordinates, which a moving canvas invalidates.
-    fn positional(&self) -> bool {
+    /// Whether a click or drag uses coordinates that need to be checked before its press.
+    fn coordinate_press(&self) -> bool {
         match self {
-            Self::Move { target } | Self::Click { target, .. } | Self::Scroll { target, .. } => matches!(target, Point::Position(_)),
+            Self::Click { target, .. } => matches!(target, Point::Position(_)),
             Self::Drag { from, to, .. } => matches!(from, Point::Position(_)) || matches!(to, Point::Position(_)),
-            Self::Key { .. } | Self::Text { .. } => false,
+            _ => false,
         }
     }
 

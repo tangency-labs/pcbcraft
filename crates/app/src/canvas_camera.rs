@@ -118,6 +118,12 @@ impl Camera {
         self.painted_rect
     }
 
+    /// Whether the next paint still needs to apply a Fit or a deferred center request.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn navigation_pending(&self) -> bool {
+        self.fit_requested || self.center_requested.is_some()
+    }
+
     /// Capture world-space navigation independently of pane size and transient fit requests.
     pub(super) fn saved_state(&self) -> CameraState {
         let scale = f64::from(self.unit_step()) / GRID_NM as f64;
