@@ -36,6 +36,7 @@ pub mod setup;
 #[cfg(test)]
 mod side_tests;
 pub mod silkscreen;
+pub mod teardrop;
 pub mod track;
 pub(crate) mod transform;
 pub mod update;
@@ -266,6 +267,11 @@ impl Footprint {
         };
         Some(self.point(local))
     }
+    /// Resolve mechanical openings using the same mirror-then-rotate placement transform as pads.
+    fn non_plated_holes<'a>(&'a self, definition: &'a definition::FootprintDefinition) -> impl Iterator<Item = definition::CircularNpth> + 'a {
+        definition.non_plated_holes.iter().map(move |hole| definition::CircularNpth { center: self.point(hole.center), ..*hole })
+    }
+
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
     /// Always include the storage-only `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
@@ -302,6 +308,12 @@ impl Footprint {
             value["reference_text"] = json!(text);
         }
         if let Some(definition) = definition {
+            if !definition.non_plated_holes.is_empty() {
+                value["non_plated_holes"] =
+                    json!(self.non_plated_holes(definition).map(|hole| json!({
+                    "center":hole.center,"diameter_nm":hole.diameter_nm,"shape":"circle","span":"through","plating":"non_plated","net":null
+                })).collect::<Vec<_>>());
+            }
             let name = project
                 .components
                 .get(&self.component)

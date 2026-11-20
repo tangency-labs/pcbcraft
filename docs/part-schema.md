@@ -165,7 +165,10 @@ connector can declare contact count, pitch and rated current; an IC can declare
 supply-voltage limits and functional choices. These are fields of category
 definitions, not new top-level part kinds. A part's optional `primary_value`
 must name a quantity field in its exact category. Fixed values must name existing
-fields and satisfy their types, units, bounds and permitted choices.
+fields and satisfy their types, units, bounds and permitted choices. A unit
+error reports the category field ID when preparing a part or manufacturer
+record, applying an instance requirement, or editing an explicitly bound
+primary Value. This uses the category's existing field IDs and units.
 
 ## Canonical quantities
 

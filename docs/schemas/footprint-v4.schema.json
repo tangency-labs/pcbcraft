@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:footprint:4",
+  "title": "PCBcraft footprint with circular non-plated through holes",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "library", "id", "revision", "name", "license", "source", "pads", "non_plated_holes", "graphics"],
+  "properties": {
+    "format": { "const": "pcbcraft-footprint/4" },
+    "library": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/library" },
+    "id": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/id" },
+    "revision": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/revision" },
+    "name": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/name" },
+    "license": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/license" },
+    "source": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/source" },
+    "pads": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/pad" }
+    },
+    "non_plated_holes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["center", "diameter_nm"],
+        "properties": {
+          "center": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point" },
+          "diameter_nm": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/size" }
+        }
+      }
+    },
+    "graphics": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/graphics" },
+    "artwork": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/artwork" },
+    "silkscreen": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/silkscreen" },
+    "reference": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/reference" },
+    "reference_offset": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/reference_offset" }
+  },
+  "dependentRequired": { "reference_offset": ["reference"] }
+}
