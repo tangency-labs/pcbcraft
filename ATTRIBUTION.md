@@ -1780,3 +1780,7 @@ rings using the shared accent ink. Pad inspection reuses the existing copper
 emphasis and physical shape painter. Pad hit testing reuses the exact copper
 contours already used by connectivity; no external implementation, artwork,
 dependency or native format was introduced.
+
+## macOS packaging
+
+The macOS packaging scripts in `packaging/env.sh` and `packaging/macos/*` are adapted from `tangency-labs/fieldcraft` and `UCS-Care-Group/mailcraft` under MIT OR Apache-2.0.

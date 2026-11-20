@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template: packaging/macos/package.sh substitutes @APP_ID@, @VERSION@,
+     @SHORT_VERSION@, @BUILD_SHA@ and @MIN_MACOS@. -->
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleDisplayName</key>
+  <string>PCBCraft</string>
+  <key>CFBundleName</key>
+  <string>PCBCraft</string>
+  <key>CFBundleExecutable</key>
+  <string>PCBCraft</string>
+  <key>CFBundleIdentifier</key>
+  <string>@APP_ID@</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleSignature</key>
+  <string>????</string>
+  <key>CFBundleShortVersionString</key>
+  <string>@SHORT_VERSION@</string>
+  <key>CFBundleVersion</key>
+  <string>@SHORT_VERSION@</string>
+  <key>PCBCraftVersion</key>
+  <string>@VERSION@</string>
+  <key>PCBCraftBuildCommit</key>
+  <string>@BUILD_SHA@</string>
+  <key>LSApplicationCategoryType</key>
+  <string>public.app-category.developer-tools</string>
+  <!-- Keep in sync with MACOSX_DEPLOYMENT_TARGET in package.sh. -->
+  <key>LSMinimumSystemVersion</key>
+  <string>@MIN_MACOS@</string>
+  <key>NSHighResolutionCapable</key>
+  <true/>
+  <key>NSSupportsAutomaticGraphicsSwitching</key>
+  <true/>
+  <key>NSRequiresAquaSystemAppearance</key>
+  <false/>
+  <key>NSHumanReadableCopyright</key>
+  <string>Copyright © PCBCraft contributors. MIT OR Apache-2.0.</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>PCBCraft Project Archive</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>pc</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>KiCad Project</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>kicad_pro</string>
+        <string>kicad_sch</string>
+        <string>kicad_pcb</string>
+      </array>
+    </dict>
+  </array>
+</dict>
+</plist>
