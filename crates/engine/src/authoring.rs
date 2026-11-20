@@ -582,6 +582,14 @@ impl Item {
         Ok(item)
     }
 
+    /// Re-derive the editor format after a direct test mutation of footprint primitives.
+    #[cfg(test)]
+    pub(crate) fn refresh_footprint_format(&mut self) {
+        if self.kind == Kind::Footprint {
+            self.format = self.footprint_format().into();
+        }
+    }
+
     /// Select the lowest editor format preserving all hole primitives, including mixed drafts.
     fn footprint_format(&self) -> &'static str {
         let mut format = FORMAT;

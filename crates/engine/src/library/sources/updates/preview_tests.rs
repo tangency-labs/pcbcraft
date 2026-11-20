@@ -30,10 +30,12 @@ fn fixture_with_original(original: impl FnOnce(&mut RectPad), edit_pad: impl FnO
     let mut first_draft = Draft::new(DraftKind::Footprint).unwrap();
     let Primitive::Pad { pad } = first_draft.objects.get_mut(&2).unwrap() else { panic!("expected authored pad 2") };
     original(pad);
+    first_draft.refresh_footprint_format();
     let first = prepare(Arc::new(first_draft), &manifest, 0, None, false).unwrap();
     let mut draft = first.item().as_ref().clone();
     let Primitive::Pad { pad } = draft.objects.get_mut(&2).unwrap() else { panic!("expected authored pad 2") };
     edit_pad(pad);
+    draft.refresh_footprint_format();
     let second = prepare(Arc::new(draft), &manifest, 1, Some(1), false).unwrap();
     let mut documents = symbol.documents().clone();
     documents.extend(first.documents().clone());
