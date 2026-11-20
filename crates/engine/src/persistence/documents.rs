@@ -1604,6 +1604,19 @@ enum InstanceTail {
     CompactMemberships,
 }
 
+/// Facts selected before opening the native project header; scan their owning rows once.
+#[derive(Default)]
+struct ProjectHeaderFacts {
+    part_validation: crate::part_instances::storage::PartValidation,
+    has_metadata: bool,
+    has_parts: bool,
+    extended_choices: bool,
+    has_bindings: bool,
+    has_numbers: bool,
+    missing_numbers: bool,
+    marker_count: usize,
+}
+
 /// Incremental split-document writer. Each step bounds work by editable records so browser
 /// downloads can yield between frames, without constructing a legacy monolithic document.
 pub struct DocumentsEncoder {
@@ -1624,6 +1637,7 @@ pub struct DocumentsEncoder {
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
     pair_capacity_only: bool,
+    header: ProjectHeaderFacts,
     sheet_fields: bool,
     sheet_mirrored: bool,
     sheet_wire_index: BTreeMap<u64, usize>,
@@ -1652,7 +1666,7 @@ impl DocumentsEncoder {
             project,
             documents: Documents::new(),
             bytes: Vec::new(),
-            phase: 0,
+            phase: 26,
             sheet_cursor: 0,
             cursor: 0,
             first: true,
@@ -1666,6 +1680,7 @@ impl DocumentsEncoder {
             use_compact_memberships,
             size_limit_exceeded: false,
             pair_capacity_only: false,
+            header: ProjectHeaderFacts::default(),
             sheet_fields: false,
             sheet_mirrored: false,
             sheet_wire_index: BTreeMap::new(),
@@ -1704,10 +1719,64 @@ impl DocumentsEncoder {
     fn step_records(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
             match self.phase {
+                26 => {
+                    let p = &self.project;
+                    if let Some((&id, part)) = p.components.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next() {
+                        self.header.part_validation.row(p, part)?;
+                        self.header.has_metadata |= !part.metadata.is_empty();
+                        self.header.has_parts |= part.part.is_some();
+                        if !crate::no_connect::valid_terminal_markers(part) {
+                            return Err("No-connect intent exceeds its terminal or project limits.".into());
+                        }
+                        self.header.marker_count += part.no_connects.len();
+                        if self.header.marker_count > crate::no_connect::MAX_MARKERS {
+                            return Err("No-connect intent exceeds its terminal or project limits.".into());
+                        }
+                        self.cursor = id;
+                    } else {
+                        self.next();
+                    }
+                }
+                27 => {
+                    let p = &self.project;
+                    if let Some((&id, choice)) =
+                        p.schematic_packages.assignments.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
+                    {
+                        self.header.extended_choices |= crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads);
+                        self.cursor = id;
+                    } else {
+                        self.next();
+                    }
+                }
+                28 => {
+                    if let Some(row) = self.project.net_registry.records.get(self.cursor as usize) {
+                        self.header.has_bindings |= !row.class_bindings.is_empty();
+                        self.header.has_numbers |= row.generated_number.is_some();
+                        self.header.missing_numbers |= row.generated_number.is_none();
+                        self.cursor += 1;
+                    } else {
+                        self.next();
+                    }
+                }
+                29 => {
+                    if let Some(sheet) = self.project.sheets.get(self.sheet_cursor) {
+                        if let Some(&id) = sheet.no_connect_ends.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next() {
+                            self.header.marker_count += 1;
+                            if self.header.marker_count > crate::no_connect::MAX_MARKERS || !sheet.junctions.contains_key(&id) {
+                                return Err("No-connect intent exceeds its terminal or project limits.".into());
+                            }
+                            self.cursor = id;
+                        } else {
+                            self.sheet_cursor += 1;
+                            self.cursor = 0;
+                        }
+                    } else {
+                        self.sheet_cursor = 0;
+                        self.phase = 0;
+                    }
+                }
                 0 => {
                     let p = &self.project;
-                    p.validate_no_connects()?;
-                    crate::part_instances::storage::validate_project(p)?;
                     if p.has_sheet_occurrences() {
                         let records = p.occurrence_instances();
                         Project::clone(p).install_sheet_instances(records.clone())?;
@@ -1730,27 +1799,23 @@ impl DocumentsEncoder {
                         })
                         .collect::<Vec<_>>();
                     let registrations = p.board.ownership.records();
-                    let has_metadata = p.components.values().any(|component| !component.metadata.is_empty());
+                    let has_metadata = self.header.has_metadata;
                     let has_packages = !p.schematic_packages.assignments.is_empty();
                     if has_packages && (p.board_target().is_some() || p.numeric_id_high_water.is_none()) {
                         return Err("schematic package choices require no board and an allocation watermark".into());
                     }
-                    let has_parts = p.components.values().any(|part| part.part.is_some());
-                    let extended_choices = p
-                        .schematic_packages
-                        .assignments
-                        .values()
-                        .any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads));
+                    let has_parts = self.header.has_parts;
+                    let extended_choices = self.header.extended_choices;
                     p.net_classes.validate()?;
                     let has_classes = !p.net_classes.definitions.is_empty();
                     if has_classes && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Net classes require adopted storage/occurrence metadata.".into());
                     }
-                    let has_no_connects = p.no_connect_count() != 0;
+                    let has_no_connects = self.header.marker_count != 0;
                     if has_no_connects && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("No-connect intent requires adopted storage/occurrence metadata.".into());
                     }
-                    let has_bindings = p.net_registry.has_class_bindings();
+                    let has_bindings = self.header.has_bindings;
                     if has_bindings && !has_classes {
                         return Err("Net class assignments require their class catalog.".into());
                     }
@@ -1770,9 +1835,9 @@ impl DocumentsEncoder {
                     if !p.part_group_memberships.is_empty() && !has_part_groups {
                         return Err("Part-group memberships require their group catalog.".into());
                     }
-                    let has_numbers = p.net_registry.has_generated_numbers();
+                    let has_numbers = self.header.has_numbers;
                     let has_pairs = p.net_registry.has_pairs();
-                    if has_numbers && p.net_registry.records.iter().any(|record| record.generated_number.is_none()) {
+                    if has_numbers && self.header.missing_numbers {
                         return Err("Numbered net registries require a number on every record.".into());
                     }
                     if has_pairs && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
@@ -2272,9 +2337,9 @@ impl DocumentsEncoder {
                     COMPACT_PART_GROUP_INSTANCES_FORMAT
                 } else if !self.project.part_group_memberships.is_empty() {
                     PART_GROUP_INSTANCES_FORMAT
-                } else if self.project.net_registry.has_generated_numbers() {
+                } else if self.header.has_numbers {
                     GENERATED_NET_INSTANCES_FORMAT
-                } else if self.project.net_registry.has_class_bindings() {
+                } else if self.header.has_bindings {
                     BINDING_INSTANCES_FORMAT
                 } else if self.project.net_registry.records.is_empty() {
                     INSTANCES_FORMAT

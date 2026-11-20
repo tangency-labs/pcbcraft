@@ -131,11 +131,21 @@ impl Reader {
 /// Check project relationships after ordinary decoding or an isolated placement transaction.
 /// Supplied package choices must agree with the part's native map and pinned footprint content.
 pub(crate) fn validate_project(project: &crate::Project) -> Result<(), String> {
-    let mut meanings = BTreeMap::<String, crate::library::parts::FieldType>::new();
+    let mut validation = PartValidation::default();
     for part in project.components.values() {
-        let Some(selection) = &part.part else {
-            continue;
-        };
+        validation.row(project, part)?;
+    }
+    Ok(())
+}
+
+/// Keep the meaning of each category field across per-component persistence batches.
+#[derive(Default)]
+pub(crate) struct PartValidation(BTreeMap<String, crate::library::parts::FieldType>);
+
+impl PartValidation {
+    /// Validate one instance and its package choice, checking agreement with earlier rows.
+    pub(crate) fn row(&mut self, project: &crate::Project, part: &crate::schematic::PartInstance) -> Result<(), String> {
+        let Some(selection) = &part.part else { return Ok(()) };
         selection.validate()?;
         if Some(&part.definition) != selection.resolved.symbol.as_ref() {
             return Err("Part instance and pinned part symbol content differ.".into());
@@ -147,7 +157,7 @@ pub(crate) fn validate_project(project: &crate::Project) -> Result<(), String> {
         }
         if let Some(category) = &selection.resolved.category {
             for (id, field) in &category.fields {
-                if let Some(previous) = meanings.insert(id.clone(), field.value_type.clone())
+                if let Some(previous) = self.0.insert(id.clone(), field.value_type.clone())
                     && !previous.same_meaning(&field.value_type)
                 {
                     return Err(format!("Conflicting pinned meaning for category field {id}."));
@@ -174,6 +184,6 @@ pub(crate) fn validate_project(project: &crate::Project) -> Result<(), String> {
             None if assigned.is_some() => return Err("Part without a package has an independent physical assignment.".into()),
             None => {}
         }
+        Ok(())
     }
-    Ok(())
 }
