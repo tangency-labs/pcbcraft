@@ -85,7 +85,8 @@ fn recipe_reader_refuses_wrong_header_and_invalid_records() {
     let old_header: Value = serde_json::from_slice::<Value>(&original[ENTRY_POINT]).unwrap()["format"].clone();
     set(&mut session, ID, &content).unwrap();
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
-    for header in [old_header, json!("pcbcraft-project/36"), json!("pcbcraft-project/39"), json!("pcbcraft-project/45"), json!("pcbcraft-project/46")] {
+    for header in [old_header, json!("pcbcraft-project/36"), json!("pcbcraft-project/39"), json!("pcbcraft-project/45"), json!("pcbcraft-project/46")]
+    {
         let invalid = replace_entry(&saved, |entry| entry["format"] = header);
         assert!(decode_documents(&invalid).err().unwrap().contains("earlier formats do not allow"));
     }

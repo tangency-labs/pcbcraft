@@ -718,7 +718,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
         return Err(
-            "Net registry records require project format 17, 19, 20, 21, 22, 23, 24, 36, 39, 45 or 47 and the corresponding instance vocabulary.".into(),
+            "Net registry records require project format 17, 19, 20, 21, 22, 23, 24, 36, 39, 45 or 47 and the corresponding instance vocabulary."
+                .into(),
         );
     }
     let mut layouts = Vec::new();
