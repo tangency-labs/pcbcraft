@@ -163,7 +163,10 @@ within the footprint's total pad limit. Mapping validation, placement, board vie
 and cross-probing preserve the complete identifier spelling, including alphanumeric
 names and numeric-looking names such as `01`. Complete maps support up to 1,024
 terminals and 1,024 pads. A footprint or symbol over its limit is refused with
-an error that names the limit and the count; a larger map is refused. Non-plated holes are not part of the mapping. Every terminal and every pad must appear exactly once. Two-pad callers may instead supply the legacy `pin_1_pad`
+an error that names the limit and the count; a larger map is refused. Non-plated
+holes are not part of the mapping. Every terminal must appear once in the
+mapping, and every pad must appear exactly once in either a terminal mapping or
+`unconnected_pads`. Two-pad callers may instead supply the legacy `pin_1_pad`
 shortcut; it cannot be combined with `mapping`. Invalid assignments change
 neither the project nor its undo history.
 
