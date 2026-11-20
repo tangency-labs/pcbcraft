@@ -975,7 +975,8 @@ arrangement retained while definition panes are open.
 ## Opening and saving projects
 
 Open `project.json`, its project folder, or a `.pc` archive from **File → Open…**.
-On desktop, `pcbcraft <path>` opens one such target as the app starts; a failed
+On desktop, `pcbcraft <path>` opens one such target as the app starts, including
+through a symlink to a project folder or archive; a failed
 open reports in the status bar and leaves Home usable. `pcbcraft` takes no
 options and at most one path, and a usage error exits before the window opens.
 Quote paths containing spaces, for example `pcbcraft "C:\boards\my board\project.json"`

@@ -123,6 +123,11 @@ impl<'a> BoardView<'a> {
     }
     /// Refuse incomplete conductive results rather than silently omitting curved copper.
     pub fn require_linear_copper(self) -> Result<(), String> {
+        self.require_no_arcs()?;
+        if self.teardrops().is_empty() { Ok(()) } else { Err(super::teardrop::UNSUPPORTED.into()) }
+    }
+    /// Refuse circular copper when building a projection of the underlying straight objects.
+    pub(super) fn require_no_arcs(self) -> Result<(), String> {
         if self.arc_tracks().is_empty() { Ok(()) } else { Err(UNSUPPORTED.into()) }
     }
 }
@@ -137,6 +142,9 @@ impl Session {
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let mut arcs: Vec<ArcTrack> = serde_json::from_value(params["arcs"].clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
         validate(project, &arcs).map_err(CommandError::InvalidParams)?;
+        if !arcs.is_empty() && !project.board.teardrops.is_empty() {
+            return Err(CommandError::Unavailable(super::teardrop::UNSUPPORTED.into()));
+        }
         arcs.sort_by_key(|a| a.id);
         let before = &project.board.arcs;
         let changed = before != &arcs;

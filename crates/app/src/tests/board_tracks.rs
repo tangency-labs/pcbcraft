@@ -204,6 +204,59 @@ fn circular_copper_keeps_native_bytes_and_explains_the_unavailable_canvas() {
     assert!(h.state().session.project().unwrap().boards().next().unwrap().arc_tracks().is_empty());
 }
 
+/// The canvas names the teardrop recovery command and returns after the last intent is removed.
+#[test]
+fn teardrop_copper_explains_how_to_resume_board_editing() {
+    use pcbcraft_engine::{
+        ADD_DRAWING, ADD_TRACKS, ADD_VIA,
+        board::{setup::LayerPurpose, teardrop::EDIT_TEARDROPS},
+    };
+
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let session = &mut h.state_mut().session;
+    let target = session.project().unwrap().board_target().unwrap();
+    let outline =
+        session.project().unwrap().board_view(target).unwrap().layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let at = Point { x_nm: 0, y_nm: 20_000_000 };
+    let end = Point { x_nm: 600_000, y_nm: 20_000_000 };
+    session.apply(ADD_VIA, &json!({"at":at,"via_diameter_nm":500_000,"via_drill_nm":300_000,"expected_revision":session.revision()})).unwrap();
+    session.apply(ADD_TRACKS, &json!({"layer":top,"width_nm":100_000,"points":[at,end],"expected_revision":session.revision()})).unwrap();
+    let corners = [(-5_000_000, -5_000_000), (25_000_000, -5_000_000), (25_000_000, 45_000_000), (-5_000_000, 45_000_000)]
+        .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    session
+        .apply(ADD_DRAWING, &json!({"board":target.board,"layer":outline,"points":corners,"closed":true,"expected_revision":session.revision()}))
+        .unwrap();
+    let board = session.project().unwrap().board_view(target).unwrap();
+    let (via, track) = (board.vias()[0].id, board.tracks()[0].id);
+    let id = Uuid::from_u128(1);
+    let report = session
+        .execute(
+            EDIT_TEARDROPS,
+            &json!({"board":target.board,"expected_revision":session.revision(),"edits":{"add":[{
+                "id":id,"via":via,"track":track,"parameters":{"length":{"percent":20},"width_pct":80}
+            }],"remove":[]}}),
+        )
+        .unwrap();
+    assert_eq!(report["teardrops"]["added"].as_array().unwrap().len(), 1, "{report}");
+
+    let notice = "Remove the saved teardrop intents with pcb.edit_teardrops to resume board editing.";
+    h.run();
+    h.get_by_label(notice);
+    assert!(h.query_all_by_label("PCB canvas").next().is_none());
+    assert!(
+        h.query_all_by_label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.")
+            .next()
+            .is_none()
+    );
+
+    let session = &mut h.state_mut().session;
+    session.execute(EDIT_TEARDROPS, &json!({"board":target.board,"expected_revision":session.revision(),"edits":{"add":[],"remove":[id]}})).unwrap();
+    h.run();
+    assert!(h.query_all_by_label(notice).next().is_none());
+    h.get_by_label("PCB canvas");
+}
+
 /// Browser selection remains view-local on arc-bearing boards even though the canvas is unavailable.
 #[test]
 fn circular_copper_keeps_browser_footprint_picks_available() {

@@ -2,6 +2,7 @@
 
 use crate::{
     CommandError, Project, Session, SheetTarget,
+    library::MAX_TERMINALS,
     schematic::{ElectricalType, Point, Terminal, wiring::PinNumber},
 };
 use serde::{Deserialize, Serialize};
@@ -56,8 +57,8 @@ pub(crate) struct Intent {
 
 /// Validate bounded sparse intent without silently retargeting missing/incompatible terminals.
 pub(crate) fn read_intents(records: Vec<Intent>) -> Result<BTreeMap<String, ElectricalType>, String> {
-    if records.is_empty() || records.len() > 128 {
-        return Err("No-connect intent must be a nonempty list of at most 128 terminals.".into());
+    if records.is_empty() || records.len() > MAX_TERMINALS {
+        return Err(format!("No-connect intent must be a nonempty list of at most {MAX_TERMINALS} terminals."));
     }
     let mut intents = BTreeMap::new();
     for record in records {
@@ -133,7 +134,7 @@ impl Report {
 
 /// The identical terminal-intent rule used by transactions and the folder writer.
 pub(crate) fn valid_terminal_markers(part: &crate::schematic::PartInstance) -> bool {
-    part.no_connects.len() <= 128 && part.no_connects.keys().all(|token| PinNumber::new(token).is_some())
+    part.no_connects.len() <= MAX_TERMINALS && part.no_connects.keys().all(|token| PinNumber::new(token).is_some())
 }
 
 impl Project {
@@ -300,7 +301,7 @@ impl Session {
         }
         if expected.is_some()
             && !part.no_connects.contains_key(&target.terminal)
-            && (part.no_connects.len() >= 128 || original.no_connect_count() >= MAX_MARKERS)
+            && (part.no_connects.len() >= MAX_TERMINALS || original.no_connect_count() >= MAX_MARKERS)
         {
             return Err(CommandError::CapExceeded("No-connect marker limit reached.".into()));
         }

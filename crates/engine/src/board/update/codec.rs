@@ -162,7 +162,7 @@ fn validate_component(baseline: &Baseline, id: u64, component: &PartInstanceStat
         || !super::super::definition::valid_id(&component.library)
         || !super::super::definition::valid_id(&component.definition)
         || component.terminals.is_empty()
-        || component.terminals.len() > 128
+        || component.terminals.len() > crate::library::MAX_TERMINALS
         || !strictly_sorted(&component.terminals)
         || component.terminals.iter().any(|terminal| PinNumber::new(terminal).is_none())
     {
@@ -210,7 +210,7 @@ fn validate_net_header(baseline: &Baseline, net: &NetState) -> Result<(), String
                     .and_then(|package| package.mapping.get(&terminal.terminal))
                     .is_some_and(|pads| pads.pads().len() > 1)
             }))
-        || net.terminals.len() > MAX_SYMBOLS * 128
+        || net.terminals.len() > MAX_SYMBOLS * crate::library::MAX_TERMINALS
         || net.names.len() > crate::net_labels::MAX_LABELS * crate::sheets::MAX_SHEETS
     {
         return Err("invalid accepted net membership".into());
@@ -396,6 +396,8 @@ mod tests {
                 origin: None,
             }],
         };
+        // The streamed validator must accept the library's wider terminal sets too.
+        baseline.components.get_mut(&1).unwrap().terminals.extend((2..=129).map(|ordinal| format!("T{ordinal:03}")));
         let standalone = baseline.encode().unwrap();
         let old_compact_net_row = format!("    {}\n", serde_json::to_string(&baseline.nets[0]).unwrap());
         assert!(std::str::from_utf8(&standalone).unwrap().contains(old_compact_net_row.as_str()));

@@ -114,7 +114,7 @@ impl Reader {
             }
             resolved.clone()
         } else {
-            let part = Arc::new(PartDefinition::read(text(documents, used, "parts", &record.definition)?)?);
+            let part = Arc::new(PartDefinition::read_saved(text(documents, used, "parts", &record.definition)?)?);
             if part.reference() != record.definition {
                 return Err("Pinned part identity does not match its file.".into());
             }
