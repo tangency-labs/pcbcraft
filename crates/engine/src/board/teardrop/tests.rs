@@ -346,4 +346,142 @@ mod regeneration {
             .unwrap();
         session.apply(ADD_VIA, &json!({"at":point(5_000_000,20_000_000),"expected_revision":session.revision()})).unwrap();
     }
+
+    /// Regenerating many saved teardrops honors small step budgets across both derivation and
+    /// clearance checks; dropping the job mid-pass leaves project, revision and Undo unchanged.
+    #[test]
+    fn regeneration_yields_in_bounded_batches_and_cancel_leaves_session_unchanged() {
+        use crate::board::track::{
+            Track, Via,
+            tests::{copper_layers, routed_fixture},
+        };
+        use crate::persistence::decode_documents;
+        use std::sync::Arc;
+
+        const COUNT: usize = 300;
+        let mut session = routed_fixture();
+        let board = view(&session).target.board;
+        let copper_layer = copper_layers(&session)[0];
+        let outline_layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+        let corners = [point(-5_000_000, -5_000_000), point(45_000_000, -5_000_000), point(45_000_000, 55_000_000), point(-5_000_000, 55_000_000)];
+        session
+            .apply(ADD_DRAWING, &json!({"board":board,"layer":outline_layer,"points":corners,"closed":true,"expected_revision":session.revision()}))
+            .unwrap();
+        let rules = Values { clearance_nm: 35_000, ..Values::default() };
+        session.apply(SET_RULES, &json!({"board":board,"rules":rules,"expected_revision":session.revision()})).unwrap();
+
+        let mut project = session.project().unwrap().clone();
+        let mut first_record = None;
+        {
+            let board_data = Arc::make_mut(&mut project.board);
+            for index in 0..COUNT {
+                let col = (index % 20) as i64;
+                let row = (index / 20) as i64;
+                let at = point(col * 2_000_000, 20_000_000 + row * 2_000_000);
+                let via = Uuid::from_u128(0x10_0000 + index as u128);
+                let track = Uuid::from_u128(0x20_0000 + index as u128);
+                let id = Uuid::from_u128(0x30_0000 + index as u128);
+                board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+                board_data.tracks.push(Track {
+                    id: track,
+                    locked: false,
+                    layer: copper_layer,
+                    width_nm: 100_000,
+                    start: at,
+                    end: point(at.x_nm + 600_000, at.y_nm),
+                });
+                let record = Record { id, via, track, parameters: PARAMS };
+                if first_record.is_none() {
+                    first_record = Some(record);
+                }
+                board_data.teardrops.push(record);
+            }
+            board_data.vias.sort_by_key(|via| via.id);
+            board_data.tracks.sort_by_key(|track| track.id);
+            board_data.teardrops.sort_by_key(|record| record.id);
+        }
+        let saved = encode_documents(Arc::new(project)).unwrap();
+        session.open_snapshot(decode_documents(&saved).unwrap());
+        session.apply("project.rename", &json!({"name":"Teardrop board"})).unwrap();
+
+        let first = first_record.unwrap().on(view(&session).target);
+        let original = first.derive(view(&session)).unwrap();
+        let before = session.snapshot().unwrap();
+        let before_bytes = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        assert_eq!(view(&session).teardrops().len(), COUNT);
+        assert!(history.0 > 0);
+
+        let (dx, dy) = (200_000, 200_000);
+        let params = json!({"tracks":[first.track],"vias":[first.via],"dx_nm":dx,"dy_nm":dy,"expected_revision":revision});
+
+        // Advance into teardrop regeneration, verify step(1) yields during both derivation
+        // and clearance checking, then drop mid-pass to simulate worker cancellation.
+        let mut canceled = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        for _ in 0..50_000 {
+            if canceled.progress().stage == "Regenerating teardrops" {
+                break;
+            }
+            assert!(!canceled.step(256));
+        }
+        assert_eq!(canceled.progress().stage, "Regenerating teardrops");
+        assert!(!canceled.step(0));
+        let mut last_completed = canceled.progress().completed;
+        for _ in 0..8 {
+            assert!(!canceled.step(1));
+            let progress = canceled.progress();
+            assert_eq!(progress.stage, "Regenerating teardrops");
+            assert!(progress.completed > last_completed);
+            assert!(progress.completed < COUNT);
+            last_completed = progress.completed;
+        }
+        assert!(!canceled.step(COUNT));
+        let entered_check = canceled.progress().completed;
+        assert!(entered_check >= COUNT);
+        assert!(!canceled.step(1));
+        let mid_check = canceled.progress();
+        assert_eq!(mid_check.stage, "Regenerating teardrops");
+        assert!(mid_check.completed > entered_check && mid_check.completed < mid_check.total);
+        assert!(canceled.take_result().unwrap().is_none());
+        drop(canceled);
+
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
+        assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+        assert_eq!(view(&session).teardrops().len(), COUNT);
+
+        // Completing a fresh job in small batches yields throughout regeneration and publishes
+        // atomically only when committed, preserving prior Undo history.
+        let mut job = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        let mut regeneration_yields = 0usize;
+        let mut last_regen_completed = 0usize;
+        let mut finished = false;
+        for _ in 0..50_000 {
+            let budget = if job.progress().stage == "Regenerating teardrops" { 16 } else { 256 };
+            if job.step(budget) {
+                finished = true;
+                break;
+            }
+            let progress = job.progress();
+            if progress.stage == "Regenerating teardrops" {
+                regeneration_yields += 1;
+                assert!(progress.completed >= last_regen_completed);
+                last_regen_completed = progress.completed;
+            }
+        }
+        assert!(finished);
+        assert!(regeneration_yields >= COUNT / 16 * 2);
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(session.revision(), revision);
+        let prepared = job.take_result().unwrap().unwrap();
+        session.commit_copper_edit(prepared).unwrap();
+        assert_eq!(session.revision(), revision + 1);
+        assert_eq!(view(&session).teardrops().len(), COUNT);
+        assert_eq!(first.derive(view(&session)).unwrap().vertices, original.vertices.map(|p| point(p.x_nm + dx, p.y_nm + dy)));
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
+        assert_eq!(session.undo.len(), history.0);
+    }
 }

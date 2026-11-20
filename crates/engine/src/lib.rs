@@ -4474,16 +4474,19 @@ impl Session {
     /// Prepare an ordinary edit without allowing it to regenerate teardrops.
     /// Adopt required no-connect metadata; lock-introducing edits prepare their own metadata.
     fn prepare_change(&self, project: Project) -> Result<(Project, u64), CommandError> {
-        Self::prepare_change_from(self.project(), self.defer_net_reconciliation, project, None::<fn(&mut Project) -> Result<(), CommandError>>)
+        let source = self.project();
+        let (project, highest) = Self::prepare_change_before_regeneration(source, self.defer_net_reconciliation, project, false)?;
+        Self::finalize_prepared_change(source, project, highest)
     }
 
-    /// Validate a private candidate against its source. A copper worker may supply regeneration
-    /// using its projected contacts after net reconciliation and before native size validation.
-    fn prepare_change_from(
+    /// Validate a private candidate against its source up through net reconciliation.
+    /// A copper worker that regenerates teardrops calls [`Self::finalize_prepared_change`]
+    /// once its bounded regeneration pass succeeds.
+    pub(crate) fn prepare_change_before_regeneration(
         source: Option<&Project>,
         defer_net_reconciliation: bool,
         mut project: Project,
-        regenerate: Option<impl FnOnce(&mut Project) -> Result<(), CommandError>>,
+        allow_regeneration: bool,
     ) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !source.is_some_and(|previous| previous.shares_part_instances(&project)) {
@@ -4494,7 +4497,7 @@ impl Session {
             if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
                 return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
             }
-            if regenerate.is_none()
+            if !allow_regeneration
                 && !previous.board.teardrops.is_empty()
                 && !Arc::ptr_eq(&previous.board, &project.board)
                 && previous.board.teardrops == project.board.teardrops
@@ -4564,11 +4567,12 @@ impl Session {
         if !defer_net_reconciliation {
             project.reconcile_nets(source)?;
         }
-        if let Some(regenerate) = regenerate {
-            regenerate(&mut project)?;
-        }
-        // Copper and package maps can exhaust the native board document before the record-count
-        // limits. Check the final candidate after pruning, before changing history or notifying observers.
+        Ok((project, highest))
+    }
+
+    /// Check the final candidate's document size and invariants after any teardrop
+    /// regeneration and pruning, before changing history or notifying observers.
+    pub(crate) fn finalize_prepared_change(source: Option<&Project>, project: Project, highest: u64) -> Result<(Project, u64), CommandError> {
         if source.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
             && (!project.board.tracks.is_empty()
                 || !project.board.vias.is_empty()

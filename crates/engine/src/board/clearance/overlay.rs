@@ -52,10 +52,27 @@ fn rule_key(id: ObstacleId) -> String {
     }
 }
 
+/// Either a borrowed query or an owned one for resumable background work.
+enum QueryRef<'a> {
+    Borrowed(&'a ClearanceQuery),
+    Owned(Box<ClearanceQuery>),
+}
+
+impl std::ops::Deref for QueryRef<'_> {
+    type Target = ClearanceQuery;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Borrowed(query) => query,
+            Self::Owned(query) => query,
+        }
+    }
+}
+
 /// Disposable query data, never authored geometry or an authorization to publish an edit.
 /// Up to 8,192 changed/added objects are retained; the source index is never modified/rebuilt.
 pub struct Overlay<'a> {
-    query: &'a ClearanceQuery,
+    query: QueryRef<'a>,
     changed: BTreeMap<usize, Option<Object>>,
     added: BTreeMap<Uuid, Object>,
     identity: Arc<()>,
@@ -65,7 +82,12 @@ pub struct Overlay<'a> {
 impl ClearanceQuery {
     /// Start an empty disposable overlay sharing this captured board's index and authority.
     pub fn overlay(&self) -> Overlay<'_> {
-        Overlay { query: self, changed: BTreeMap::new(), added: BTreeMap::new(), identity: Arc::new(()), generation: 0 }
+        Overlay { query: QueryRef::Borrowed(self), changed: BTreeMap::new(), added: BTreeMap::new(), identity: Arc::new(()), generation: 0 }
+    }
+
+    /// Start an empty disposable overlay owning this captured board's index and authority.
+    pub(crate) fn into_overlay(self) -> Overlay<'static> {
+        Overlay { query: QueryRef::Owned(Box::new(self)), changed: BTreeMap::new(), added: BTreeMap::new(), identity: Arc::new(()), generation: 0 }
     }
 }
 

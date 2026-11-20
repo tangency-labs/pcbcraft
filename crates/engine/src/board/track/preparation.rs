@@ -2,7 +2,7 @@
 use super::*;
 use crate::board::{
     class_rules::{Context, NetRules},
-    clearance::{BoardGeometry, ClearanceQuery},
+    clearance::BoardGeometry,
     teardrop,
     view::BoardTarget,
     work::{Progress, Source},
@@ -73,6 +73,14 @@ impl PreparedCopperEdit {
     }
 }
 
+const PHASE_DONE: u8 = 5;
+
+struct PendingRegeneration {
+    state: teardrop::Regeneration,
+    highest: u64,
+    class_rules: Option<Context>,
+}
+
 /// Candidate construction, reusable pad projection and bounded contact validation for a copper
 /// command. Dropping unfinished work never changes the source project, revision or history.
 pub struct CopperEditJob {
@@ -87,6 +95,7 @@ pub struct CopperEditJob {
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
+    regeneration: Option<PendingRegeneration>,
     check_route_vias: bool,
 }
 
@@ -172,6 +181,7 @@ impl Session {
             work: 0,
             result: None,
             class_islands: None,
+            regeneration: None,
             check_route_vias: false,
         }
     }
@@ -208,6 +218,12 @@ impl CopperEditJob {
     }
     /// Report work progress without treating partial validation as a valid candidate.
     pub fn progress(&self) -> Progress {
+        if self.phase == 4
+            && let Some(regeneration) = &self.regeneration
+        {
+            let (completed, total) = regeneration.state.progress();
+            return Progress { stage: "Regenerating teardrops", completed, total };
+        }
         let total = self.lands.as_ref().map_or(1, |lands| {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
             n.saturating_mul(n.saturating_sub(1)) / 2
@@ -218,6 +234,7 @@ impl CopperEditJob {
                 1 => "Preparing pad contacts",
                 2 => "Checking copper contacts",
                 3 => "Validating route",
+                4 => "Regenerating teardrops",
                 _ => "Prepared",
             },
             completed: self.work.min(total),
@@ -227,7 +244,7 @@ impl CopperEditJob {
     /// Advance bounded contact/placement batches, yielding between preparation phases. Errors
     /// terminate the job without a candidate; a zero budget performs no work.
     pub fn step(&mut self, budget: usize) -> bool {
-        if self.phase == 4 {
+        if self.phase == PHASE_DONE {
             return true;
         }
         if budget == 0 {
@@ -236,8 +253,9 @@ impl CopperEditJob {
         match self.advance(budget) {
             Ok(done) => done,
             Err(error) => {
+                self.regeneration = None;
                 self.result = Some(Err(error));
-                self.phase = 4;
+                self.phase = PHASE_DONE;
                 true
             }
         }
@@ -308,7 +326,7 @@ impl CopperEditJob {
                 self.added = added;
                 self.candidate = candidate.map(Arc::new);
                 if self.candidate.as_ref().is_none_or(|candidate| self.added.is_empty() && candidate.board.teardrops.is_empty()) {
-                    self.phase = 4;
+                    self.phase = PHASE_DONE;
                     self.result = Some(Ok(PreparedCopperEdit {
                         source: self.context.source.clone(),
                         candidate: self.candidate.take(),
@@ -374,9 +392,8 @@ impl CopperEditJob {
                     return Ok(false);
                 }
                 let source = &self.context.source;
-                let mut candidate = self.candidate.take();
+                let candidate = self.candidate.take();
                 let mut class_rules = None;
-                let mut prepared_highest = None;
                 if let (Some(project), Some(lands), Some(builder), Some((copper, members))) =
                     (&candidate, &self.lands, self.builder.take(), self.class_islands.take())
                 {
@@ -390,46 +407,68 @@ impl CopperEditJob {
                         class_rules = self.candidate_class_rules(view, &geometry)?;
                         self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
                     } else {
-                        // Reuse the worker's contact batches. Map the candidate memberships
-                        // after reconciliation and keep every polygon/rule query off commit.
-                        let (next, highest) = Session::prepare_change_from(
+                        // Reuse the worker's contact batches. Map candidate memberships after
+                        // reconciliation and validate teardrops in bounded phase-4 batches.
+                        let (next, highest) = Session::prepare_change_before_regeneration(
                             Some(&source.snapshot),
                             self.context.defer_net_reconciliation,
                             (**project).clone(),
-                            Some(|project: &mut Project| {
-                                let view = project.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
-                                let geometry = BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
-                                if self.check_route_vias
-                                    || project.has_dimensional_net_classes()
-                                    || view.vias().iter().any(|via| via.net_assignment.is_some())
-                                {
-                                    class_rules = self.candidate_class_rules(view, &geometry)?;
-                                }
-                                self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
-                                teardrop::regenerate(project, source.target, |project| {
-                                    let candidate_source = Source { snapshot: Arc::new(project.clone()), ..source.clone() };
-                                    ClearanceQuery::from_geometry(&candidate_source, Arc::new(geometry))
-                                })
-                            }),
+                            true,
                         )?;
-                        candidate = Some(Arc::new(next));
-                        prepared_highest = Some(highest);
+                        let view = next.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+                        let geometry = Arc::new(BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged));
+                        if self.check_route_vias || next.has_dimensional_net_classes() || view.vias().iter().any(|via| via.net_assignment.is_some()) {
+                            class_rules = self.candidate_class_rules(view, &geometry)?;
+                        }
+                        self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
+                        self.regeneration =
+                            Some(PendingRegeneration { state: teardrop::Regeneration::new(next, source.clone(), geometry), highest, class_rules });
+                        self.phase = 4;
+                        self.work = 0;
+                        return Ok(false);
                     }
                 }
                 self.result = Some(Ok(PreparedCopperEdit {
                     source: source.clone(),
                     candidate,
-                    prepared_highest,
+                    prepared_highest: None,
                     command: self.command,
                     params: self.params.clone(),
                     class_rules,
                 }));
+                self.phase = PHASE_DONE;
+                self.work = 0;
+                return Ok(true);
+            }
+            4 => {
+                let Some(regeneration) = self.regeneration.as_mut() else {
+                    return Err(CommandError::Unavailable("teardrop regeneration state is unavailable".into()));
+                };
+                if !regeneration.state.step(budget)? {
+                    return Ok(false);
+                }
+                let Some(regeneration) = self.regeneration.take() else {
+                    return Err(CommandError::Unavailable("teardrop regeneration state is unavailable".into()));
+                };
+                let source = &self.context.source;
+                let (next, highest) = Session::finalize_prepared_change(Some(&source.snapshot), regeneration.state.finish(), regeneration.highest)?;
+                self.result = Some(Ok(PreparedCopperEdit {
+                    source: source.clone(),
+                    candidate: Some(Arc::new(next)),
+                    prepared_highest: Some(highest),
+                    command: self.command,
+                    params: self.params.clone(),
+                    class_rules: regeneration.class_rules,
+                }));
+                self.phase = PHASE_DONE;
+                self.work = 0;
+                return Ok(true);
             }
             _ => {}
         }
         self.phase += 1;
         self.work = 0;
-        Ok(self.phase == 4)
+        Ok(self.phase == PHASE_DONE)
     }
 }
 

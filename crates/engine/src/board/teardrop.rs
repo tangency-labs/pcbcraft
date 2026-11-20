@@ -18,7 +18,7 @@ pub(crate) use command::{Batch, schema};
 pub(crate) const UNSUPPORTED: &str = "straight via teardrops are stored but unsupported by this geometry operation";
 /// Default dimensions from physical contacts are unavailable until the query includes teardrops.
 pub(super) const EXPLICIT_DIMENSIONS: &str = "supply explicit copper dimensions on boards with straight via teardrops";
-pub(super) use command::regenerate;
+pub(super) use command::Regeneration;
 #[cfg(test)]
 mod tests;
 
