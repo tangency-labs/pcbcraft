@@ -373,13 +373,13 @@ impl PartInstance {
         &self.reference
     }
 
-    /// Stored intent for a future annotator to retain this part instance's reference.
+    /// Stored intent for automatic annotation to retain this part instance's reference.
     /// Explicit reference edits and clipboard duplication remain available.
     pub fn designator_locked(&self) -> bool {
         self.designator_locked
     }
 
-    /// Eligibility predicate for a future annotator; no annotation operation is run here.
+    /// Whether automatic annotation may propose another reference for this part instance.
     pub fn can_annotate_designator(&self) -> bool {
         !self.designator_locked
     }

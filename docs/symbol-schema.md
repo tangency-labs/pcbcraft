@@ -39,9 +39,10 @@ Version 1 refuses electrical behavior/default fields, and versions 1–2 refuse
 older definitions retain their existing format and saved bytes.
 
 The [symbol guide](symbol-library.md) defines the existing geometry, pin
-appearance, defaults and power behavior. Formats 1–3 retain their one-unit limit. Formats 4 and 5 support multiple units
-within the existing 128-terminal and per-unit drawing bounds; higher pin counts
-remain separate work under #251. The schema and engine validate the declared supported
+appearance, defaults and power behavior. A unit can contain at most 441 pins on
+the 1.27 mm grid. Formats 1–3 have one unit and therefore accept at most 441
+terminals; formats 4 and 5 allow up to 1,024 logical terminals across multiple
+units. The schema and engine validate the declared supported
 fields rather than accepting arbitrary extension properties.
 
 A placed part instance also owns `designator_locked`, independently of its

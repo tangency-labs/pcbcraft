@@ -674,6 +674,14 @@ open GUI window or save back to the file. For a review that must not edit even
 that snapshot, add `--read-only` to the headless arguments. See
 [headless MCP](mcp.md#headless-mcp) for scope discovery and refusal details.
 
+To read back a connectivity export, call `execute` with
+`{"command":"project.export_netlist","params":{}}`. Take the text from
+`netlist.files[0].contents` in the reply, then call `execute` with
+`command: "project.compare_netlist"` and that text as `params.netlist`.
+The comparison returns counts, connectivity differences and annotation notes
+without changing the revision or Undo history. See the [JSON netlist guide](netlist-format.md#comparing-a-file-with-the-design)
+for accepted-board files, net identity and input limits.
+
 For the new layer/stackup foundation, use `describe_command` with
 `pcb.initialize_board_setup` and `pcb.set_board_setup`. On a project with no
 footprints, initialize with any even `copper_layers` from 2 through 64 and the current
@@ -733,7 +741,12 @@ not refresh a library, change geometry or adopt a revision. Missing sources are
 unknown, and available does not imply compatible. Native parts compare the owning
 part rather than separately updating its drawing dependencies. See
 [query available revisions](native-library-sources.md#query-available-revisions)
-for the result contract; dedicated update review and adoption remain future work.
+for the result contract. For one placed instance, pass the reported `board`
+and `part_instance` to `library.preview_footprint_revision`. The
+[pad preview](native-library-sources.md#preview-footprint-pad-changes) shows what
+would change and which straight track ends or through vias would lose contact;
+standalone circular track ends are not checked. Nothing is applied; pad map
+resolution and adoption remain future work.
 
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use

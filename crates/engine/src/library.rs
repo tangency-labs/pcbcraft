@@ -8,7 +8,7 @@
 //! browser builds offer the same parts without reading the file system.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, LazyLock},
 };
 
@@ -89,8 +89,9 @@ const MAX_SHAPES: usize = 256;
 const MAX_POINTS: usize = 64;
 /// How far a drawing may reach from the symbol's center on either axis, in nanometers.
 const MAX_DRAWING_NM: i64 = 100_000_000;
-/// Most terminals in one symbol.
-const MAX_TERMINALS: usize = 128;
+/// Most terminals in one symbol, and so in one part's terminal-to-pad map. A pin may sit on only
+/// 441 grid spots in one unit, so symbols this large divide their pins among units.
+pub(crate) const MAX_TERMINALS: usize = 1024;
 /// Longest text label in a drawing, in characters.
 const MAX_LABEL: usize = 16;
 
@@ -278,11 +279,12 @@ struct PinFile {
 /// Parse and check one symbol file.
 ///
 /// The file must use one of formats 1–5 with no unknown fields.
-/// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding. Terminals, 1 to 128 of them, have
-/// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. Formats 1–3 contain one unit; formats 4–5 support up to 32 units
-/// sharing a complete logical terminal table. Format 5 adds alternate functions to one or more terminals.
-/// Each unit has at most one appearance per terminal. Pins sit on the 1.27 mm grid, at most
-/// 12.7 mm from the center on each axis and apart from each other. Drawings have at most 256 strokes within
+/// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding.
+/// A symbol has up to 1,024 logical terminals, each with a unique ID of 1 to 8 letters, digits, `+`, `-` or `_`.
+/// Formats 1–3 contain one unit; formats 4–5 support up to 32 units sharing the logical terminal table.
+/// Format 5 adds alternate functions. Each unit has at most one appearance per terminal.
+/// Pins sit on the 1.27 mm grid, at most 12.7 mm from the center on each axis and apart from each other.
+/// Drawings have at most 256 strokes within
 /// 100 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
     let value: Value = serde_json::from_str(text).map_err(|error| format!("invalid symbol JSON: {error}"))?;
@@ -296,6 +298,7 @@ fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
 }
 
 /// Draft documents may temporarily have no pins; published symbols retain the strict minimum.
+/// More than [`MAX_TERMINALS`] terminals is refused with the limit and the count.
 fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, String> {
     let format_version = match value["format"].as_str() {
         Some(SYMBOL_FORMAT) => 1,
@@ -337,7 +340,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
     }
     check_value(&file.default_value).map_err(|error| error.replace("`value`", "`default_value`"))?;
     if file.terminals.len() > MAX_TERMINALS || (!draft && file.terminals.is_empty()) {
-        return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals"));
+        return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals, not {}", file.terminals.len()));
     }
     if format_version != 5 && file.terminals.iter().any(|terminal| terminal.alternates.is_some()) {
         return Err("Alternate pin functions require pcbcraft-symbol/5.".into());
@@ -368,14 +371,18 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         if let Some(pin) = unit.pins.iter().find(|pin| !numbers.contains(pin.terminal.as_str())) {
             return Err(format!("pin {} names no terminal", pin.terminal));
         }
+        // Each pin's terminal and whether the unit repeats it, so large units are read in one pass.
+        let mut placed: BTreeMap<&str, (&PinFile, bool)> = BTreeMap::new();
+        for pin in &unit.pins {
+            placed.entry(pin.terminal.as_str()).and_modify(|(_, repeated)| *repeated = true).or_insert((pin, false));
+        }
         let mut positions = BTreeSet::new();
         let mut pins = Vec::new();
         for terminal in &file.terminals {
-            let mut placed = unit.pins.iter().filter(|pin| pin.terminal == terminal.id);
-            let Some(pin) = placed.next() else {
+            let Some(&(pin, repeated)) = placed.get(terminal.id.as_str()) else {
                 continue;
             };
-            if placed.next().is_some() {
+            if repeated {
                 return Err(format!("terminal {} needs exactly one pin per unit", terminal.id));
             }
             let [x_nm, y_nm] = pin.at_nm;
@@ -409,15 +416,18 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         }
         units.push(SymbolUnit { unit: unit.id, pins, drawing });
     }
+    // The first unit that shows a terminal supplies its pin, as units are listed.
+    let mut first: BTreeMap<&str, &PinDefinition> = BTreeMap::new();
+    for pin in units.iter().flat_map(|unit| unit.pins.iter()) {
+        first.entry(pin.number.as_str()).or_insert(pin);
+    }
     let pins = file
         .terminals
         .iter()
         .map(|terminal| {
-            units
-                .iter()
-                .flat_map(|unit| unit.pins.iter())
-                .find(|pin| pin.number == terminal.id)
-                .cloned()
+            first
+                .get(terminal.id.as_str())
+                .map(|pin| (*pin).clone())
                 .ok_or_else(|| format!("terminal {} needs exactly one pin in at least one unit", terminal.id))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -820,7 +830,7 @@ mod tests {
         assert!(error(|file| file["revision"] = json!(0)).contains("revision"));
         assert!(error(|file| file["reference_prefix"] = json!("r")).contains("capital"));
         assert!(error(|file| file["terminals"].as_array_mut().unwrap().truncate(1)).contains("pin 2 names no terminal"));
-        assert!(error(|file| file["terminals"] = json!([])).contains("1 to 128 terminals"));
+        assert!(error(|file| file["terminals"] = json!([])).contains("1 to 1024 terminals, not 0"));
         assert!(error(|file| file["terminals"][1]["id"] = json!("1")).contains("terminal 1 appears twice"));
         assert!(error(|file| file["terminals"][1]["id"] = json!("pin two")).contains("1 to 8 letters"));
         assert!(error(|file| file["terminals"][1]["electrical_type"] = json!("magic")).contains("unknown variant"));

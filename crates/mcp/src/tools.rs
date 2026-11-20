@@ -51,7 +51,7 @@ pub fn tool_definitions() -> Vec<Value> {
         tool(
             "execute",
             "Run a command",
-            "Run a project or live-window command. ui. commands locate controls or send ordinary input, which can edit, save or close documents; input returns a ticket to poll with ui.inspect. Other window commands (view., window., arrangement., app., file.) answer with the editor; set inspect to false for only the revision. Project commands answer with the project. Board-update queries return review data. Optionally pin `version` to the discovered command API version. Successful use of deprecated commands or parameters adds warnings.",
+            "Run a project or live-window command. ui. commands locate controls or send ordinary input, which can edit, save or close documents; input returns a ticket to poll with ui.inspect. Other window commands (view., window., arrangement., app., file.) answer with the editor; set inspect to false for only the revision. Project edits answer with the project or just the revision. Board-update and annotation previews return review data even with inspect set to false. Optionally pin `version` to the discovered command API version. Successful use of deprecated commands or parameters adds warnings.",
             json!({"command": {"type": "string"}, "params": {"type": "object"}, "inspect": {"type": "boolean", "default": true}, "version": {"type": "integer", "minimum": 1}}),
             &["command"],
             Effect::Edits,

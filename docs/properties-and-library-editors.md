@@ -158,9 +158,10 @@ multi-unit; removing the last alternate keeps format 5. It records definition id
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
 Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
-and 64 undo snapshots per document. The current footprint schema further limits
-a definition to 128 pads, 128 parameterized artwork objects, 64 legacy technical
-rectangles and 64 legacy silkscreen paths.
+and 64 undo snapshots per document, so footprints with more pads than that cannot
+yet be edited here. The footprint schema itself allows 1,024 pads, 256
+parameterized artwork objects, 64 legacy technical rectangles and 64 legacy
+silkscreen paths.
 Object/content allocation counters survive
 Undo and save/reopen, so deleted IDs and observed content revisions are not reused.
 Undo can therefore leave allocation bookkeeping unsaved even when geometry returns

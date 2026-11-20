@@ -630,7 +630,7 @@ impl PcbApp {
         let Some(path) = self.startup_open.take() else { return };
         let path = Self::resolve_startup_path(path);
         self.file_notice = None;
-        if let Some(error) = self.files.open_path(path, self.session.revision(), ctx).err() {
+        if let Some(error) = self.files.open_startup_path(path, self.session.revision(), ctx).err() {
             self.print_startup_failure(&error);
             self.message = Some(error);
         } else {

@@ -265,13 +265,24 @@ fn malformed_baselines_are_rejected_without_aliasing_history() {
 fn duplicate_or_excessive_package_mappings_are_rejected_while_decoding() {
     let session = fixture();
     let baseline = capture(session.project().unwrap(), 1);
+    let encoded = baseline.encode().unwrap();
+    assert_eq!(Baseline::decode(&encoded).unwrap(), baseline);
     let package = baseline.components.values().find_map(|component| component.package.as_ref()).unwrap();
-    let duplicate = duplicate_mapping(&baseline.encode().unwrap(), &package.mapping);
-    assert!(Baseline::decode(&duplicate).is_err());
+    let duplicate = duplicate_mapping(&encoded, &package.mapping);
+    let refused = "duplicate, excessive or invalid accepted terminal mapping";
+    assert!(Baseline::decode(&duplicate).unwrap_err().contains(refused));
 
+    let limit = crate::library::MAX_TERMINALS;
     let mut excessive = serde_json::to_value(package).unwrap();
-    excessive["mapping"] = json!((1..=129).map(|number| (number.to_string(), number.to_string())).collect::<BTreeMap<_, _>>());
-    assert!(serde_json::from_value::<Package>(excessive).is_err());
+    excessive["mapping"] = json!((1..=limit).map(|number| (number.to_string(), number.to_string())).collect::<BTreeMap<_, _>>());
+    let accepted = serde_json::from_value::<Package>(excessive.clone()).unwrap();
+    assert_eq!(accepted.mapping.len(), limit);
+    let extra = (limit + 1).to_string();
+    assert!(PinNumber::new(&extra).is_some());
+    assert!(!accepted.mapping.contains_key(&extra));
+    assert!(accepted.mapping.values().all(|pads| !pads.pads().contains(&extra)));
+    excessive["mapping"].as_object_mut().unwrap().insert(extra.clone(), json!(extra));
+    assert!(serde_json::from_value::<Package>(excessive).unwrap_err().to_string().contains(refused));
 }
 
 /// Corrupt only a negative test payload by duplicating a mapping key with the
@@ -293,15 +304,54 @@ fn baseline_total_pad_limit_includes_mapped_and_unconnected_pads() {
     let mut baseline = capture(session.project().unwrap(), 1);
     baseline.format = "pcbcraft-board-baseline/2".into();
     let package = baseline.components.values_mut().next().unwrap().package.as_mut().unwrap();
-    package.mapping = BTreeMap::from([("1".into(), (1..=127).map(|n| n.to_string()).collect::<Vec<_>>().into()), ("2".into(), "128".into())]);
+    let limit = crate::board::definition::MAX_PADS;
+    package.mapping = BTreeMap::from([
+        ("1".into(), (1..limit - 1).map(|n| n.to_string()).collect::<Vec<_>>().into()),
+        ("2".into(), (limit - 1).to_string().into()),
+    ]);
+    package.unconnected_pads = vec![limit.to_string()];
+    assert_eq!(package.mapping.values().map(|pads| pads.pads().len()).sum::<usize>() + package.unconnected_pads.len(), limit);
+    let extra = (limit + 1).to_string();
+    assert!(PinNumber::new(&extra).is_some());
+    assert!(package.mapping.values().flat_map(|pads| pads.pads()).chain(&package.unconnected_pads).all(|pad| pad != &extra));
     let encoded = baseline.encode().unwrap();
     assert_eq!(Baseline::decode(&encoded).unwrap(), baseline);
-    baseline.components.values_mut().next().unwrap().package.as_mut().unwrap().unconnected_pads.push("129".into());
-    assert!(baseline.encode().is_err());
+    baseline.components.values_mut().next().unwrap().package.as_mut().unwrap().unconnected_pads.push(extra.clone());
+    let refused = "invalid accepted package identity or terminal mapping";
+    assert_eq!(baseline.encode().unwrap_err(), refused);
     let mut invalid: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
     let component = invalid["components"].as_object_mut().unwrap().values_mut().next().unwrap();
-    component["package"]["unconnected_pads"] = json!(["129"]);
-    assert!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).is_err());
+    component["package"]["unconnected_pads"].as_array_mut().unwrap().push(json!(extra));
+    assert_eq!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(), refused);
+}
+
+/// A historical part instance keeps the symbol terminal limit: exactly `MAX_TERMINALS`
+/// terminals encode and decode, one more is refused.
+#[test]
+fn baseline_part_instance_terminals_follow_the_symbol_terminal_limit() {
+    let session = fixture();
+    let mut baseline = capture(session.project().unwrap(), 1);
+    let limit = crate::library::MAX_TERMINALS;
+    let component = baseline.components.values_mut().next().unwrap();
+    component.package = None;
+    let mut terminals = (1..=limit).map(|number| number.to_string()).collect::<Vec<_>>();
+    terminals.sort();
+    component.terminals = terminals;
+    let encoded = baseline.encode().unwrap();
+    assert_eq!(Baseline::decode(&encoded).unwrap(), baseline);
+
+    let component = baseline.components.values_mut().next().unwrap();
+    component.terminals.push((limit + 1).to_string());
+    component.terminals.sort();
+    let over = component.terminals.clone();
+    // The message is shared by several causes. The same record passed with 1,024 terminals, and
+    // the added terminal is a valid pin number kept in sorted order, so the count is the only cause.
+    let refused = "invalid historical component identity or terminal set";
+    assert_eq!(baseline.encode().unwrap_err(), refused);
+    let mut invalid: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+    let record = invalid["components"].as_object_mut().unwrap().values_mut().next().unwrap();
+    record["terminals"] = json!(over);
+    assert_eq!(Baseline::decode(&serde_json::to_vec(&invalid).unwrap()).unwrap_err(), refused);
 }
 
 /// An accepted name is a frozen presentation baseline, including generated references and
