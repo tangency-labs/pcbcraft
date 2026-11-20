@@ -1802,3 +1802,17 @@ document association, made `.icns` icon embedding optional until artwork
 is added, added absolute `CARGO_TARGET_DIR` resolution, added per-attempt
 keychain cleanup in `import-cert.sh`, and added input character validation
 for `VERSION` and `PCBCRAFT_BUILD_SHA` before `Info.plist` templating.
+
+## Directional pane splitting
+
+The edge-drop selection, projected split geometry and optional saved orientation
+are original PCBcraft work requested by @travle1. They extend the existing host
+layout and chrome pane-preview adapters. Above/Below targets use the pinned
+Craft kit's standard buttons and existing theme tokens. The extracted toolkit
+does not own PCBcraft's view IDs, native-window transfers or saved split trees;
+those remain host responsibilities. Split up/down in the pane tab menu uses
+PCBcraft's shared Craft menu adapter. The drag list shares its menu surface and
+tracks the captured pointer explicitly because ordinary toolkit menu rows
+activate on a click originating inside the row. Explicit view copies and full-window
+placement reuse the existing view fork and split-tree operations. No dependency, external artwork
+or project file format was added.
