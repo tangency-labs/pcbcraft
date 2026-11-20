@@ -173,25 +173,43 @@ pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]
     let copper = copper_layer_ids(project);
     let mut ids = BTreeSet::new();
     for track in tracks.iter() {
-        track.validate()?;
-        if !ids.insert(track.id) {
-            return Err("duplicate track identity".into());
-        }
-        if !copper.contains(&track.layer) {
-            return Err("tracks must stay on a copper layer of the board setup".into());
-        }
+        check_track(track, &copper, &mut ids)?;
     }
-    if !vias.is_empty() && copper.len() < 2 {
-        return Err("vias need at least two copper layers in the board setup".into());
-    }
+    check_via_layers(!vias.is_empty(), &copper)?;
     for via in vias.iter() {
-        via.validate()?;
-        if !ids.insert(via.id) {
-            return Err("duplicate track or via identity".into());
-        }
+        check_via(via, &mut ids)?;
     }
     tracks.sort_by_key(|track| track.id);
     vias.sort_by_key(|via| via.id);
+    Ok(())
+}
+
+/// Check one segment of a candidate in `validate` order, recording its identity.
+fn check_track(track: &Track, copper: &BTreeSet<Uuid>, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    track.validate()?;
+    if !ids.insert(track.id) {
+        return Err("duplicate track identity".into());
+    }
+    if !copper.contains(&track.layer) {
+        return Err("tracks must stay on a copper layer of the board setup".into());
+    }
+    Ok(())
+}
+
+/// Vias pass between copper layers, so a candidate with any needs at least two.
+fn check_via_layers(any_vias: bool, copper: &BTreeSet<Uuid>) -> Result<(), String> {
+    if any_vias && copper.len() < 2 {
+        return Err("vias need at least two copper layers in the board setup".into());
+    }
+    Ok(())
+}
+
+/// Check one via of a candidate after every segment, recording its identity.
+fn check_via(via: &Via, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    via.validate()?;
+    if !ids.insert(via.id) {
+        return Err("duplicate track or via identity".into());
+    }
     Ok(())
 }
 

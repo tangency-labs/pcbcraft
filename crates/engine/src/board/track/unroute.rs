@@ -1,6 +1,7 @@
 //! Plan a directional pad-to-pad unroute without changing the source board.
 use super::*;
 use crate::board::{
+    Board,
     ratsnest::Endpoint,
     view::{BoardTarget, CopperLayers, rectangle_points},
     work::yield_unit,
@@ -8,6 +9,7 @@ use crate::board::{
 use std::{
     future::Future,
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll, Waker},
 };
 
@@ -17,6 +19,13 @@ use index::Index;
 use serde_json::Map;
 
 type Prepared = Result<(Option<Project>, Value), CommandError>;
+
+// Counts candidate items copied or checked, so a regression can bound the work in each step.
+// The count applies only to the calling test thread.
+#[cfg(test)]
+std::thread_local! {
+    static CANDIDATE_ITEMS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// Own the immutable inputs while any native or browser work queue advances the planner.
 /// Dropping the continuation cancels all remaining work without producing a candidate.
@@ -83,25 +92,16 @@ impl Session {
 async fn prepare(project: &Project, target: BoardTarget, params: &Value) -> Prepared {
     let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
     let Cut { tracks, vias, unrouted } = plan(view, &params["from"], &params["to"]).await?;
-    let mut deletion = Map::new();
     let mut removed = Map::new();
-    for (key, ids) in [("tracks", tracks), ("vias", vias)] {
+    for (key, ids) in [("tracks", &tracks), ("vias", &vias)] {
         let mut report_ids = Vec::new();
-        let mut deletion_ids = Vec::new();
         for id in ids {
             yield_unit().await;
-            let value = Value::String(id.to_string());
-            deletion_ids.push(value.clone());
-            report_ids.push(value);
-        }
-        if !deletion_ids.is_empty() {
-            deletion.insert(key.to_owned(), Value::Array(deletion_ids));
+            report_ids.push(Value::String(id.to_string()));
         }
         removed.insert(key.to_owned(), Value::Array(report_ids));
     }
-    yield_unit().await;
-    // This shared validation/audit is synchronous; separate it from report construction.
-    let (candidate, _) = edit_candidate(project, DELETE_TRACKS, &Value::Object(deletion))?;
+    let candidate = delete_candidate(project, &tracks, &vias).await?;
     yield_unit().await;
     let dry_run = params["dry_run"].as_bool() == Some(true);
     let mut report = Map::new();
@@ -110,6 +110,121 @@ async fn prepare(project: &Project, target: BoardTarget, params: &Value) -> Prep
     report.insert("requested".into(), json!({"from":params["from"],"to":params["to"]}));
     report.insert("unrouted".into(), Value::Array(unrouted));
     Ok((candidate.filter(|_| !dry_run), Value::Object(report)))
+}
+
+/// One unit of candidate construction, counted by the step-work regression.
+async fn candidate_unit() {
+    yield_unit().await;
+    #[cfg(test)]
+    CANDIDATE_ITEMS.with(|items| items.set(items.get() + 1));
+}
+
+/// Build the shared deletion command's candidate one item per unit. Retained copper gets the
+/// same checks in the same order as `validate`, then removed locked copper gets the refusal
+/// of `protect_locked`. Preview and apply both run all of it, so they refuse alike.
+async fn delete_candidate(project: &Project, tracks: &[Uuid], vias: &[Uuid]) -> Result<Option<Project>, CommandError> {
+    if tracks.is_empty() && vias.is_empty() {
+        return Err(CommandError::InvalidParams("name at least one track or via to delete".into()));
+    }
+    let source = &*project.board;
+    let mut gone = BTreeSet::new();
+    for id in tracks.iter().chain(vias) {
+        candidate_unit().await;
+        gone.insert(*id);
+    }
+    let invalid = CommandError::InvalidParams;
+    validate_counts(source.tracks.len().saturating_sub(tracks.len()), source.vias.len().saturating_sub(vias.len())).map_err(invalid)?;
+    let copper = copper_layer_ids(project);
+    let mut ids = BTreeSet::new();
+    let mut locked = None;
+    // Saved and edited boards keep ID order, so the retained subsequence normally stays sorted.
+    let mut ordered = true;
+    let mut kept_tracks: Vec<Track> = Vec::with_capacity(source.tracks.len());
+    for track in &source.tracks {
+        candidate_unit().await;
+        if gone.contains(&track.id) {
+            if track.locked && locked.is_none() {
+                locked = Some(("Track", track.id));
+            }
+        } else {
+            check_track(track, &copper, &mut ids).map_err(invalid)?;
+            ordered &= kept_tracks.last().is_none_or(|last| last.id < track.id);
+            kept_tracks.push(track.clone());
+        }
+    }
+    let mut kept_vias: Vec<Via> = Vec::with_capacity(source.vias.len());
+    for via in &source.vias {
+        candidate_unit().await;
+        if gone.contains(&via.id) {
+            // As in `protect_locked`, a locked track is reported before any via.
+            if via.locked && locked.is_none() {
+                locked = Some(("Via", via.id));
+            }
+        } else {
+            ordered &= kept_vias.last().is_none_or(|last| last.id < via.id);
+            kept_vias.push(via.clone());
+        }
+    }
+    check_via_layers(!kept_vias.is_empty(), &copper).map_err(invalid)?;
+    for via in &kept_vias {
+        candidate_unit().await;
+        check_via(via, &mut ids).map_err(invalid)?;
+    }
+    // Like `validate`, store the candidate in ID order.
+    if !ordered {
+        kept_tracks.sort_by_key(|track| track.id);
+        kept_vias.sort_by_key(|via| via.id);
+    }
+    // Every cut ID names an item of this board, so equal counts mean nothing was removed.
+    if kept_tracks.len() == source.tracks.len() && kept_vias.len() == source.vias.len() {
+        return Ok(None);
+    }
+    if let Some((kind, id)) = locked {
+        return Err(super::locks::locked(kind, id));
+    }
+    let board = Board {
+        zones: copy_items(&source.zones).await,
+        ownership: source.ownership.clone(),
+        baseline: source.baseline.clone(),
+        assignments: copy_map(&source.assignments).await,
+        outline: source.outline,
+        drawings: source.drawings.clone(),
+        setup: source.setup.clone(),
+        silkscreen: source.silkscreen,
+        rules: source.rules.clone(),
+        placement_origin: source.placement_origin.clone(),
+        assembly_profiles: copy_items(&source.assembly_profiles).await,
+        tracks: kept_tracks,
+        vias: kept_vias,
+        arcs: copy_items(&source.arcs).await,
+        teardrops: copy_items(&source.teardrops).await,
+        definitions: copy_map(&source.definitions).await,
+        footprints: copy_items(&source.footprints).await,
+        by_component: copy_map(&source.by_component).await,
+    };
+    let mut next = project.clone();
+    next.board = Arc::new(board);
+    Ok(Some(next))
+}
+
+/// Copy a board collection one element per unit.
+async fn copy_items<T: Clone>(items: &[T]) -> Vec<T> {
+    let mut copy = Vec::with_capacity(items.len());
+    for item in items {
+        candidate_unit().await;
+        copy.push(item.clone());
+    }
+    copy
+}
+
+/// Copy a board index one entry per unit.
+async fn copy_map<K: Clone + Ord, V: Clone>(map: &BTreeMap<K, V>) -> BTreeMap<K, V> {
+    let mut copy = BTreeMap::new();
+    for (key, value) in map {
+        candidate_unit().await;
+        copy.insert(key.clone(), value.clone());
+    }
+    copy
 }
 
 struct Cut {
@@ -165,9 +280,9 @@ async fn plan(view: BoardView<'_>, from: &Value, to: &Value) -> Result<Cut, Comm
         return Err(CommandError::InvalidParams("Choose two distinct pads.".into()));
     }
     let (tracks, vias) = (view.tracks(), view.vias());
-    if !same_net(view.project(), [&lands[from], &lands[to]]).await {
+    let Some(affected) = same_net(view.project(), [&lands[from], &lands[to]]).await else {
         return Err(CommandError::InvalidParams("Both pads must belong to the same intended net.".into()));
-    }
+    };
     let contacts = Contacts::new(&lands, tracks, vias).await;
     let no_removals = vec![false; contacts.bounds.len()];
     let mut before = vec![None; no_removals.len()];
@@ -175,13 +290,10 @@ async fn plan(view: BoardView<'_>, from: &Value, to: &Value) -> Result<Cut, Comm
     let Some(first) = before[from] else {
         return Err(CommandError::InvalidParams("The pads are not joined by routed copper.".into()));
     };
-    // Routed islands don't count direct pad-on-pad overlaps. Refuse an arm whose island
-    // touches one rather than claiming physical separation from the ratsnest alone.
-    for &a in &original {
-        yield_unit().await;
-        if a < lands.len() && !contacts.contacts(a, true).await.is_empty() {
-            return Err(CommandError::InvalidParams("The routed island has overlapping pads; delete copper explicitly.".into()));
-        }
+    // Routed islands don't count direct pad-on-pad overlaps, and no track cut separates a
+    // pad from one it touches. Overlaps elsewhere get the post-cut connectivity checks.
+    if !contacts.contacts(from, true).await.is_empty() {
+        return Err(CommandError::InvalidParams("The pad to detach overlaps another pad; delete copper explicitly.".into()));
     }
     let mut protected = no_removals.clone();
     for pad in (0..lands.len()).filter(|&pad| pad != from) {
@@ -196,13 +308,20 @@ async fn plan(view: BoardView<'_>, from: &Value, to: &Value) -> Result<Cut, Comm
             node = parent;
         }
     }
+    let via_start = lands.len() + tracks.len();
+    // An explicitly assigned via anchors its copper even on the selected path, so the cut
+    // stops before it and keeps it with the copper on its far side.
+    let assigned = |node: usize| node >= via_start && vias[node - via_start].net_assignment.is_some();
     let mut remove = no_removals.clone();
     let mut node = first;
-    while node >= lands.len() && !protected[node] {
+    while node >= lands.len() && !protected[node] && !assigned(node) {
         yield_unit().await;
         remove[node] = true;
         let Some(parent) = before[node] else { break };
         node = parent;
+    }
+    if assigned(first) {
+        return Err(CommandError::InvalidParams("An assigned via joins the pad to detach; it cannot be kept while separating them.".into()));
     }
     if !remove[first] {
         return Err(CommandError::InvalidParams("No exclusive routed arm leaves the first pad.".into()));
@@ -216,8 +335,32 @@ async fn plan(view: BoardView<'_>, from: &Value, to: &Value) -> Result<Cut, Comm
             return Err(CommandError::InvalidParams("Cannot separate these pads without cutting another connection.".into()));
         }
     }
+    // A pad overlap elsewhere can still join the detached side to the retained copper,
+    // which routed walks don't cross. Follow such overlaps before claiming separation.
+    let mut reached = no_removals.clone();
+    reached[from] = true;
+    let mut queue = vec![from];
+    let mut i = 0;
+    while let Some(&node) = queue.get(i) {
+        yield_unit().await;
+        i += 1;
+        let mut neighbors = contacts.contacts(node, false).await;
+        if node < lands.len() && node != from {
+            neighbors.extend(contacts.contacts(node, true).await);
+        }
+        for neighbor in neighbors {
+            yield_unit().await;
+            if remove[neighbor] || reached[neighbor] {
+                continue;
+            }
+            if after[neighbor].is_some() {
+                return Err(CommandError::InvalidParams("Cannot separate these pads: they stay joined through overlapping pads.".into()));
+            }
+            reached[neighbor] = true;
+            queue.push(neighbor);
+        }
+    }
 
-    let via_start = lands.len() + tracks.len();
     // Contour overlap at the pad can let BFS skip part of a segmented arm. Follow
     // the cut into the now-exclusive from side, without crossing the pad onto
     // unrelated copper that only used to touch the arm through that pad.
@@ -229,7 +372,8 @@ async fn plan(view: BoardView<'_>, from: &Value, to: &Value) -> Result<Cut, Comm
         i += 1;
         for neighbor in contacts.contacts(node, false).await {
             yield_unit().await;
-            if neighbor >= lands.len() && from_side[neighbor].take().is_some() {
+            // Assigned vias and the copper beyond them stay for the anchor check below.
+            if neighbor >= lands.len() && !assigned(neighbor) && from_side[neighbor].take().is_some() {
                 stubs.push(neighbor);
                 if neighbor < via_start {
                     remove[neighbor] = true;
@@ -281,20 +425,24 @@ async fn plan(view: BoardView<'_>, from: &Value, to: &Value) -> Result<Cut, Comm
             via_ids.push(via.id);
         }
     }
-    let unrouted = airwire_delta(view, &contacts, &lands, (from, to), &no_removals, &mut before).await;
+    let unrouted = airwire_delta(view, &contacts, &lands, (from, to), &affected, &no_removals, &mut before).await;
     Ok(Cut { tracks: track_ids, vias: via_ids, unrouted })
 }
 
 /// Search only for the two mapped terminals; the accepted baseline keeps last-match precedence.
-/// Without an accepted baseline, retain the existing authoritative electrical graph fallback.
-async fn same_net(project: &Project, lands: [&Land; 2]) -> bool {
+/// When they share a net, return every accepted net containing the first terminal, in index
+/// order: only their display can change when its pad is detached. A pad belongs to one
+/// terminal, so no other net resolves an endpoint there. Without an accepted baseline,
+/// retain the existing authoritative electrical graph fallback, which displays no airwires.
+async fn same_net(project: &Project, lands: [&Land; 2]) -> Option<Vec<usize>> {
     let terminals = lands.map(|land| {
         let pad = super::super::Pad::parse(&land.key.0, &land.key.1)?;
         project.board.component_pin_for(pad)
     });
-    let [Some(a), Some(b)] = terminals else { return false };
+    let [Some(a), Some(b)] = terminals else { return None };
     if let Some(baseline) = &project.board.baseline {
         let mut membership = [None; 2];
+        let mut affected = Vec::new();
         for (index, net) in baseline.nets.iter().enumerate() {
             yield_unit().await;
             for terminal in &net.terminals {
@@ -302,18 +450,21 @@ async fn same_net(project: &Project, lands: [&Land; 2]) -> bool {
                 let key = (terminal.component, terminal.terminal.as_str());
                 if key == a {
                     membership[0] = Some(index);
+                    if affected.last() != Some(&index) {
+                        affected.push(index);
+                    }
                 }
                 if key == b {
                     membership[1] = Some(index);
                 }
             }
         }
-        membership[0].is_some() && membership[0] == membership[1]
+        (membership[0].is_some() && membership[0] == membership[1]).then_some(affected)
     } else {
         yield_unit().await;
         let graph = project.borrowed_electrical_connectivity();
         let [a, b] = [a, b].map(|(component, pin)| project.component_terminal(component, pin).and_then(|end| graph.net_index_for(end)));
-        a.is_some() && a == b
+        (a.is_some() && a == b).then(Vec::new)
     }
 }
 
@@ -409,16 +560,18 @@ impl Contacts {
 
 /// Reuse the accepted display's ordering rather than inventing an airwire from the requested
 /// endpoints. Only `from` changes pad connectivity: stubs cannot touch the retained side and
-/// orphan components touch no pads. All other islands keep their original membership.
+/// orphan components touch no pads. All other islands keep their original membership, so
+/// only the `affected` nets, which contain the detached pad, are built before and after.
 async fn airwire_delta(
     view: BoardView<'_>,
     contacts: &Contacts,
     lands: &[Land],
     (from, to): (usize, usize),
+    affected: &[usize],
     no_removals: &[bool],
     parent: &mut [Option<usize>],
 ) -> Vec<Value> {
-    if !view.has_accepted_connectivity() {
+    if affected.is_empty() || !view.has_accepted_connectivity() {
         return Vec::new();
     }
     // Canonical display islands depend only on equality, not on the numeric IDs.
@@ -443,14 +596,14 @@ async fn airwire_delta(
     }
     let edge = |from: &Endpoint, to: &Endpoint| (from.pad.footprint, from.pad.number, to.pad.footprint, to.pad.number);
     let mut old = BTreeSet::new();
-    for line in view.build_ratsnest::<true>(&copper).await.into_iter().flat_map(|r| r.lines) {
+    for line in view.build_ratsnest::<true>(&copper, Some(affected)).await.into_iter().flat_map(|r| r.lines) {
         yield_unit().await;
         old.insert((line.net, edge(&line.from, &line.to)));
     }
     copper.pads.insert(lands[from].key.clone(), lands.len());
     let address = |end: &Endpoint| json!({"footprint":end.footprint,"pad":end.pad.number.as_str()});
     let mut delta = Vec::new();
-    for line in view.build_ratsnest::<true>(&copper).await.into_iter().flat_map(|r| r.lines) {
+    for line in view.build_ratsnest::<true>(&copper, Some(affected)).await.into_iter().flat_map(|r| r.lines) {
         yield_unit().await;
         if !old.contains(&(line.net, edge(&line.from, &line.to))) {
             delta.push(json!({"from":address(&line.from),"to":address(&line.to)}));

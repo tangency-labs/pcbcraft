@@ -4,8 +4,14 @@ use super::{
 };
 use crate::{
     SET_FOOTPRINT_TRANSFORM,
+    board::{
+        ratsnest::TERMINALS_BUILT,
+        update::{NetState, TerminalKey},
+        via_nets::SET_VIA_NET,
+    },
     persistence::{decode_documents, encode_documents},
 };
+use std::{cell::Cell, sync::Arc};
 
 struct Tee {
     session: Session,
@@ -104,13 +110,13 @@ fn unroute_tee_preserves_shared_trunk() {
     let after = encode_documents(session.snapshot().unwrap()).unwrap();
     let reopened = decode_documents(&after).unwrap();
     assert_eq!(reopened.board_view(reopened.board_target().unwrap()).unwrap().ratsnest(), Ok(ratsnest));
-    session.apply("edit.undo", &json!({})).unwrap();
+    session.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
     session.apply("edit.redo", &json!({})).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);
     args["expected_revision"] = json!(session.revision());
     refuses_without_edit(&mut session, &args, "not joined by routed copper");
-    session.apply("edit.undo", &json!({})).unwrap();
+    session.apply("edit.undo", &Value::Null).unwrap();
     args["expected_revision"] = json!(session.revision());
     session.apply(UNROUTE_CONNECTION, &args).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);
@@ -340,7 +346,166 @@ fn invalid_endpoints_and_nonexclusive_arms_do_not_edit() {
     refuses_without_edit(&mut session, &loop_args, "without cutting another connection");
 }
 
-/// Detaching tracks cannot guarantee separation when the pads themselves overlap.
+/// On a large board, no planning step copies or checks more than one candidate item or
+/// resolves more than one display terminal. A large unrelated accepted net adds no display
+/// work, and applying the cut leaves the same board as the shared deletion command.
+#[test]
+fn large_board_candidate_and_delta_work_is_bounded_per_step() {
+    let Tee { mut session, mut args, front, trunk, arm, orphan, net, .. } = tee();
+    let mut project = session.snapshot().unwrap().as_ref().clone();
+    let board = Arc::make_mut(&mut project.board);
+    for i in 0..1024_i64 {
+        let start = Point { x_nm: -80_000_000 + (i % 32) * 400_000, y_nm: -80_000_000 + (i / 32) * 400_000 };
+        let end = Point { x_nm: start.x_nm + 100_000, y_nm: start.y_nm };
+        board.tracks.push(Track { id: Uuid::from_u128(i as u128 + 1), locked: false, layer: front, width_nm: trunk.width_nm, start, end });
+    }
+    board.tracks.sort_by_key(|track| track.id);
+    let baseline = Arc::make_mut(board.baseline.as_mut().unwrap());
+    let terminals = baseline.nets[net].terminals.len();
+    let unrelated = (0..4096).map(|i| TerminalKey { component: u64::MAX - i, terminal: "1".into() }).collect();
+    baseline.nets.insert(0, NetState { display_name: None, terminals: unrelated, names: vec!["UNRELATED".into()], origin: None });
+    let items = board.tracks.len() + board.vias.len() + board.footprints().len();
+    session.open_snapshot(Arc::new(project));
+    args["expected_revision"] = json!(session.revision());
+    args["dry_run"] = json!(true);
+
+    let counts = || (CANDIDATE_ITEMS.with(Cell::get), TERMINALS_BUILT.with(Cell::get));
+    CANDIDATE_ITEMS.with(|count| count.set(0));
+    TERMINALS_BUILT.with(|count| count.set(0));
+    let mut job = session.prepare_copper_edit(UNROUTE_CONNECTION, &args).unwrap();
+    loop {
+        let before = counts();
+        let done = job.step(1);
+        let after = counts();
+        assert!(after.0 - before.0 <= 1, "one step copied or checked several candidate items");
+        assert!(after.1 - before.1 <= 1, "one step resolved several display terminals");
+        if done {
+            break;
+        }
+    }
+    let (candidate, built) = counts();
+    assert!(candidate >= items, "candidate construction must visit every board item cooperatively: {candidate} < {items}");
+    assert_eq!(built, 2 * terminals, "only the net containing the detached pad is built, once before and once after");
+    let (_, preview) = session.commit_copper_edit_with_report(job.take_result().unwrap().unwrap()).unwrap();
+    let preview = preview.unwrap();
+    assert_eq!(preview["removed"], json!({"tracks":[arm],"vias":[orphan]}));
+    assert_eq!(preview["unrouted"], json!([{"from":args["to"],"to":args["from"]}]));
+
+    args["dry_run"] = json!(false);
+    let applied = session.execute(UNROUTE_CONNECTION, &args).unwrap();
+    assert_eq!(applied["removed"], preview["removed"]);
+    assert_eq!(applied["unrouted"], preview["unrouted"]);
+    let unrouted = session.snapshot().unwrap();
+    session.apply("edit.undo", &Value::Null).unwrap();
+    session.apply(DELETE_TRACKS, &json!({"tracks":[arm],"vias":[orphan],"expected_revision":session.revision()})).unwrap();
+    assert!(*session.snapshot().unwrap().board == *unrouted.board);
+}
+
+/// Overlapping pads that both stay on the retained side don't block a cut on another arm.
+#[test]
+fn retained_side_pad_overlap_allows_cut() {
+    let Tee { mut session, mut args, arm, orphan, right, .. } = tee();
+    let pad_at = |session: &Session, end: &Value| {
+        let pad = crate::board::Pad::parse(end["footprint"].as_str().unwrap(), end["pad"].as_str().unwrap()).unwrap();
+        session.project().unwrap().board.pad_position(pad).unwrap()
+    };
+    let footprint = right["footprint"].as_str().unwrap();
+    // Turn the right part so its other pad clears the trunk, then set its routed pad on the
+    // retained left pad.
+    let place = |session: &mut Session, at: Point| {
+        session
+            .apply(
+                SET_FOOTPRINT_TRANSFORM,
+                &json!({"board":args["board"],"footprint":footprint,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":90,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+    };
+    let center = view(&session).footprints().find(|f| f.id == footprint).unwrap().position;
+    place(&mut session, center);
+    let (target, current) = (pad_at(&session, &args["to"]), pad_at(&session, &right));
+    place(&mut session, Point { x_nm: center.x_nm + target.x_nm - current.x_nm, y_nm: center.y_nm + target.y_nm - current.y_nm });
+    assert_eq!(pad_at(&session, &right), pad_at(&session, &args["to"]));
+    args["expected_revision"] = json!(session.revision());
+    for dry_run in [true, false] {
+        args["dry_run"] = json!(dry_run);
+        let report = session.execute(UNROUTE_CONNECTION, &args).unwrap();
+        assert_eq!(report["removed"], json!({"tracks":[arm],"vias":[orphan]}));
+        assert_eq!(report["unrouted"].as_array().unwrap().len(), 1);
+    }
+    assert!(view(&session).tracks().iter().all(|track| track.id != arm));
+}
+
+/// Replace the Tee branch with one that drops from the branch pad to back copper through a
+/// via at `anchor` and returns to the trunk through a via at the junction, then assign the
+/// anchor its net explicitly. An anchor at the tip sits on the pad, with only back copper.
+fn layered_branch(tee: &mut Tee, anchor: Point) {
+    let Tee { session, tip, junction, arm, orphan, .. } = tee;
+    let (tip, junction) = (*tip, *junction);
+    let [front, back] = [copper_layers(session)[0], copper_layers(session)[1]];
+    session.apply(DELETE_TRACKS, &json!({"tracks":[arm],"vias":[orphan],"expected_revision":session.revision()})).unwrap();
+    let (layer, points, changes) = if anchor == tip {
+        (back, json!([tip, junction]), json!([{"at":1,"layer":front}]))
+    } else {
+        (front, json!([tip, anchor, junction]), json!([{"at":1,"layer":back},{"at":2,"layer":front}]))
+    };
+    session
+        .apply(
+            ADD_TRACKS,
+            &json!({"layer":layer,"width_nm":DEFAULT_WIDTH_NM,"points":points,"layer_changes":changes,"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    if anchor == tip {
+        session.apply(ADD_VIA, &json!({"at":anchor,"expected_revision":session.revision()})).unwrap();
+    }
+    let id = view(session).vias().iter().find(|via| via.at == anchor).unwrap().id;
+    let target = json!(view(session).net_class_target_for_copper(&id.to_string()).unwrap().unwrap());
+    session.apply(SET_VIA_NET, &json!({"vias":[id],"target":target,"expected_revision":session.revision()})).unwrap();
+    assert!(view(session).vias().iter().any(|via| via.id == id && via.net_assignment.is_some()));
+}
+
+/// An explicitly assigned via on the selected path is kept with the copper beyond it; only
+/// the copper between it and the detached pad is cut, in preview and apply alike.
+#[test]
+fn assigned_via_on_selected_path_keeps_its_copper() {
+    let mut tee = tee();
+    let anchor = Point { x_nm: tee.tip.x_nm, y_nm: tee.tip.y_nm - 2_000_000 };
+    layered_branch(&mut tee, anchor);
+    let Tee { mut session, mut args, tip, .. } = tee;
+    let cut = view(&session).tracks().iter().find(|track| track.start == tip || track.end == tip).unwrap().id;
+    let kept: Vec<_> = view(&session).tracks().iter().filter(|track| track.id != cut).cloned().collect();
+    let vias: Vec<_> = view(&session).vias().iter().map(|via| via.id).collect();
+    assert_eq!(vias.len(), 3, "the anchor, the trunk via and the standalone via");
+    args["expected_revision"] = json!(session.revision());
+    let before = session.snapshot().unwrap();
+    args["dry_run"] = json!(true);
+    let preview = session.execute(UNROUTE_CONNECTION, &args).unwrap();
+    assert_eq!(preview["removed"], json!({"tracks":[cut],"vias":[]}));
+    assert_eq!(preview["unrouted"], json!([{"from":args["to"],"to":args["from"]}]));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    args["dry_run"] = json!(false);
+    let applied = session.execute(UNROUTE_CONNECTION, &args).unwrap();
+    assert_eq!(applied["removed"], preview["removed"]);
+    assert_eq!(applied["unrouted"], preview["unrouted"]);
+    assert_eq!(view(&session).tracks(), kept);
+    assert_eq!(view(&session).vias().iter().map(|via| via.id).collect::<Vec<_>>(), vias);
+}
+
+/// When the assigned via itself joins the detached pad to its arm, no cut keeps it, so both
+/// preview and apply refuse without an edit.
+#[test]
+fn assigned_via_at_detached_pad_refuses_preview_and_apply() {
+    let mut tee = tee();
+    let tip = tee.tip;
+    layered_branch(&mut tee, tip);
+    let Tee { mut session, mut args, .. } = tee;
+    args["expected_revision"] = json!(session.revision());
+    for dry_run in [true, false] {
+        args["dry_run"] = json!(dry_run);
+        refuses_without_edit(&mut session, &args, "assigned via");
+    }
+}
+
+/// Detaching tracks cannot guarantee separation when the detached pad overlaps another.
 #[test]
 fn directly_overlapping_lands_are_not_reported_as_unrouted() {
     let Tee { mut session, mut args, tip, .. } = tee();
@@ -359,7 +524,10 @@ fn directly_overlapping_lands_are_not_reported_as_unrouted() {
         )
         .unwrap();
     args["expected_revision"] = json!(session.revision());
-    refuses_without_edit(&mut session, &args, "overlapping pads");
+    for dry_run in [true, false] {
+        args["dry_run"] = json!(dry_run);
+        refuses_without_edit(&mut session, &args, "overlaps another pad");
+    }
 }
 
 /// Aside from the returned diagnostic, a refusal is observationally read-only.

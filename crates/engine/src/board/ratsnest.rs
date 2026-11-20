@@ -18,6 +18,13 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+// Counts accepted terminals each build resolves, so a regression can show that unselected
+// nets add no display work. The count applies only to the calling test thread.
+#[cfg(test)]
+std::thread_local! {
+    pub(in crate::board) static TERMINALS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// A logical terminal qualified by its project and physical board, including retained removals.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TerminalAddress {
@@ -93,7 +100,7 @@ impl BoardView<'_> {
     /// Reuse completed copper connectivity when checking the same immutable snapshot.
     /// The non-cooperative build never yields; a pending poll is reported as an error, not a panic.
     pub(super) fn ratsnest_with_copper(self, copper: &super::track::Copper) -> Result<Ratsnest, String> {
-        let mut work = std::pin::pin!(self.build_ratsnest::<false>(copper));
+        let mut work = std::pin::pin!(self.build_ratsnest::<false>(copper, None));
         match work.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
             Poll::Ready(result) => result,
             Poll::Pending => Err("ratsnest computation unexpectedly suspended".into()),
@@ -101,7 +108,13 @@ impl BoardView<'_> {
     }
 
     /// Share display ordering and membership, yielding during published unroute preparation.
-    pub(super) async fn build_ratsnest<const COOPERATIVE: bool>(self, copper: &super::track::Copper) -> Result<Ratsnest, String> {
+    /// `nets` selects accepted net indices in increasing order; each selected net keeps the
+    /// complete membership and display order it has in the full build. Others cost nothing.
+    pub(super) async fn build_ratsnest<const COOPERATIVE: bool>(
+        self,
+        copper: &super::track::Copper,
+        nets: Option<&[usize]>,
+    ) -> Result<Ratsnest, String> {
         self.require_linear_copper()?;
         let board = &self.project().board;
         let baseline = board
@@ -117,10 +130,13 @@ impl BoardView<'_> {
             net_count: baseline.nets.len(),
             terminal_count: 0,
         };
-        for (net, state) in baseline.nets.iter().enumerate() {
+        let selected = nets.map_or(baseline.nets.len(), <[usize]>::len);
+        for position in 0..selected {
             if COOPERATIVE {
                 yield_unit().await;
             }
+            let net = nets.map_or(position, |nets| nets[position]);
+            let Some(state) = baseline.nets.get(net) else { continue };
             let mut endpoints = Vec::with_capacity(state.terminals.len());
             let mut ordered = BTreeMap::new();
             result.terminal_count += state.terminals.len();
@@ -128,6 +144,8 @@ impl BoardView<'_> {
                 if COOPERATIVE {
                     yield_unit().await;
                 }
+                #[cfg(test)]
+                TERMINALS_BUILT.with(|built| built.set(built.get() + 1));
                 let terminal = TerminalAddress { board: self.target, component: key.component, terminal: key.terminal.clone() };
                 let resolution = (|| {
                     let footprint =
