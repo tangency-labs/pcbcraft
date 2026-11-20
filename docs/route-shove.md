@@ -31,9 +31,12 @@ before tracks, then by query address).
   the shortest legal move wins. Chains ending on it follow with an elbow from their
   last fixed vertex.
 - **What never moves:** pads, locked tracks and vias, the shover itself, copper
-  on other layers, the board edge, a chain joined in mid-span (a T or a via on the
-  track), a closed loop, and a via joined to a pad, another via, another layer's
-  track or a track that does not end at its centre.
+  on other layers, the board edge, a chain that other copper touches only in
+  mid-span, away from both of its end discs (a T or a via on the track), a closed
+  loop, and a via joined to a pad, another via, another layer's track or a track
+  that does not end at its centre. Copper that touches a chain's end disc, even if it
+  also overlaps the chain further in, stays joined there, because the ends never
+  move.
 - **What a route joins.** The route takes the nets of the copper it touches, so it
   settles with the same membership confirmation and DRC give it: a route from free
   space onto a pad of net N is a route of net N. When the touched copper carries

@@ -604,3 +604,21 @@ fn a_drag_is_checked_against_the_connectivity_after_it() {
     let changed = commit_and_agree(&mut s, &far);
     assert!(changed.contains(&left.to_string()));
 }
+
+/// A track overlapping a chain from its end into mid-span keeps its joint through the chain's
+/// end, which never moves: the chain is pushed beyond the overlap, every connection survives
+/// and DRC, rebuilt from the committed copper, agrees. Copper touching only mid-span pins the chain (see
+/// `immovable_copper_blocks_and_the_legal_prefix_commits`).
+#[test]
+fn an_overlap_reaching_a_chain_end_keeps_its_joint() {
+    let mut s = board();
+    let [chain] = track(&mut s, &[p(2 * MM, 10 * MM), p(18 * MM, 10 * MM)])[..] else { panic!() };
+    let params = json!({"layer":layer(&s),"width_nm":300_000,"points":[p(2 * MM, 10 * MM), p(4 * MM, 10 * MM)],"expected_revision":s.revision()});
+    s.apply(ADD_TRACKS, &params).unwrap();
+    let overlap = view(&s).tracks().iter().find(|t| t.width_nm == 300_000).unwrap().id;
+    let line = [p(6 * MM, 10_400_000), p(15 * MM, 10_400_000)];
+    let planned = plan_route_shove(&mut s, &line);
+    assert_eq!(kind(&planned), "reached", "{planned}");
+    let changed = commit_route(&mut s, &line);
+    assert!(changed.contains(&chain.to_string()) && !changed.contains(&overlap.to_string()), "{changed:?}");
+}

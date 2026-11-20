@@ -11,7 +11,7 @@
 //! pusher's hull; the tracks ending on it follow with an elbow.
 //!
 //! Pads, locked copper, copper on other layers, the board edge, the shover itself and copper
-//! that cannot move without detaching something (a chain joined in mid-span, a via joined
+//! that cannot move without detaching something (a chain touched only in mid-span, a via joined
 //! to a pad, another via or another layer's track) never move. Every result is confirmed by the
 //! same exact overlay probes and outline predicates DRC uses, with island exemptions only for
 //! copper still joined in the result; the propagation is bounded by depth, moved copper, pushes
@@ -948,7 +948,10 @@ impl<'a> Solver<'a> {
         Ok(index)
     }
 
-    /// Follow track `t` through two-track joints both ways and verify the run can move.
+    /// Follow track `t` through two-track joints both ways and verify the run can move: every
+    /// copper touching the run must touch one of its two end discs. Such copper stays joined
+    /// however the run is reshaped, because the ends never move, even when it also overlaps
+    /// the run further in; copper touching only mid-span would be detached, so it pins the run.
     fn build_chain(&self, t: usize) -> Result<Option<Shape>, Halt> {
         let query = self.query;
         let objects = query.objects();
