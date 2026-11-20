@@ -1660,6 +1660,8 @@ pub struct DocumentsEncoder {
     baseline_encoding: crate::board::update::BaselineEncoding,
     net_record_encoding: crate::nets::RecordEncoding,
     dependency_encoding: crate::part_instances::storage::DependencyEncoding,
+    profile_validation: crate::board::assembly_profile::CatalogValidation,
+    profile_encoding: crate::board::assembly_profile::CatalogEncoding,
     board_rows: BoardRows,
 }
 
@@ -1711,6 +1713,8 @@ impl DocumentsEncoder {
             baseline_encoding: crate::board::update::BaselineEncoding::default(),
             net_record_encoding: crate::nets::RecordEncoding::default(),
             dependency_encoding: crate::part_instances::storage::DependencyEncoding::default(),
+            profile_validation: crate::board::assembly_profile::CatalogValidation::default(),
+            profile_encoding: crate::board::assembly_profile::CatalogEncoding::default(),
             board_rows: BoardRows::default(),
         }
     }
@@ -1801,6 +1805,12 @@ impl DocumentsEncoder {
                         }
                     } else {
                         self.sheet_cursor = 0;
+                        self.phase = 36;
+                    }
+                }
+                36 => {
+                    let p = &self.project;
+                    if self.profile_validation.step(&p.assembly_profiles, &p.board.assembly_profiles)? {
                         self.phase = 0;
                     }
                 }
@@ -1818,15 +1828,6 @@ impl DocumentsEncoder {
                         }
                     }
                     let format = if p.numeric_id_high_water.is_some() { WATERMARK_PROJECT_FORMAT } else { PROJECT_FORMAT };
-                    let sheets = p
-                        .sheets
-                        .iter()
-                        .map(|sheet| SheetReference {
-                            id: sheet.sheet_id,
-                            name: sheet.sheet_name.clone(),
-                            file: format!("sheets/{}.json", sheet.sheet_id),
-                        })
-                        .collect::<Vec<_>>();
                     let registrations = p.board.ownership.records();
                     let has_metadata = self.header.has_metadata;
                     let has_packages = !p.schematic_packages.assignments.is_empty();
@@ -1907,7 +1908,6 @@ impl DocumentsEncoder {
                             (false, false) => format,
                         }
                     };
-                    p.assembly_profiles.validate(&p.board.assembly_profiles)?;
                     let has_profiles = !p.assembly_profiles.is_empty();
                     if has_profiles && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Assembly profiles require adopted storage/occurrence metadata.".into());
@@ -1957,8 +1957,29 @@ impl DocumentsEncoder {
                         self.bytes.extend_from_slice(b"    ]\n  },\n");
                     }
                     if has_profiles {
-                        writeln!(self.bytes, "  \"assembly_profiles\": {},", json(p.assembly_profiles.as_ref())?).map_err(|e| e.to_string())?;
+                        self.bytes.extend_from_slice(b"  \"assembly_profiles\": ");
+                        self.phase = 37;
+                    } else {
+                        self.phase = 38;
                     }
+                }
+                37 => {
+                    if self.profile_encoding.step(&mut self.bytes, &self.project.assembly_profiles)? {
+                        self.bytes.extend_from_slice(b",\n");
+                        self.phase = 38;
+                    }
+                }
+                38 => {
+                    let p = &self.project;
+                    let sheets = p
+                        .sheets
+                        .iter()
+                        .map(|sheet| SheetReference {
+                            id: sheet.sheet_id,
+                            name: sheet.sheet_name.clone(),
+                            file: format!("sheets/{}.json", sheet.sheet_id),
+                        })
+                        .collect::<Vec<_>>();
                     write_parameters(&mut self.bytes, &p.parameters)?;
                     write!(self.bytes, "  \"sheets\": {},\n  \"components\": [\n", json(&sheets)?).map_err(|e| e.to_string())?;
                     if p.part_group_memberships.is_empty() {
@@ -2611,6 +2632,9 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
         while !encoding.step(baseline, &mut bytes, true)? {}
         bytes.write_all(b",\n").map_err(|error| error.to_string())?;
     }
+    if !project.board.assembly_profiles.is_empty() {
+        project.assembly_profiles.validate(&project.board.assembly_profiles)?;
+    }
     board_metadata_tail(&mut bytes, project)?;
     let mut rows = BoardRows::default();
     while !rows.step(&mut bytes, &project.board)? {}
@@ -2755,7 +2779,6 @@ fn board_metadata_tail(bytes: &mut impl Write, project: &Project) -> Result<(), 
         writeln!(bytes, "  \"placement_origin\": {},", serde_json::to_string(origin).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     if !board.assembly_profiles.is_empty() {
-        project.assembly_profiles.validate(&board.assembly_profiles)?;
         writeln!(bytes, "  \"assembly_profiles\": {},", json(&board.assembly_profiles)?).map_err(|e| e.to_string())?;
     }
     if let Some(settings) = &board.silkscreen {

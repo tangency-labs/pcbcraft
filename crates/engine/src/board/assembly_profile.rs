@@ -146,6 +146,126 @@ pub struct Catalog {
     pub revisions: Vec<Arc<AssemblyProfile>>,
 }
 
+/// Validate retained corrections in discrete steps after checking the catalog envelope.
+#[derive(Default)]
+pub(crate) struct CatalogValidation {
+    header: bool,
+    revision: usize,
+    correction: Option<usize>,
+}
+
+impl CatalogValidation {
+    pub(crate) fn step(&mut self, catalog: &Catalog, adoptions: &[Adoption]) -> Result<bool, String> {
+        if !self.header {
+            catalog.validate_envelope()?;
+            self.header = true;
+        } else if let Some(revision) = catalog.revisions.get(self.revision) {
+            match self.correction {
+                None => {
+                    revision.validate_identity()?;
+                    revision.content.validate_header()?;
+                    self.correction = Some(0);
+                }
+                Some(index) if index < revision.content.corrections.len() => {
+                    revision.content.validate_correction(index)?;
+                    self.correction = Some(index + 1);
+                }
+                Some(_) => {
+                    if !catalog.heads.iter().any(|head| head.profile == revision.id && head.revision >= revision.content.revision) {
+                        return Err("An assembly profile revision has no matching identity watermark.".into());
+                    }
+                    self.revision += 1;
+                    self.correction = None;
+                }
+            }
+        } else {
+            catalog.validate_references(adoptions)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
+/// The native catalog stays compact JSON; only the timing of correction emission changes.
+#[derive(Default)]
+pub(crate) struct CatalogEncoding {
+    header: bool,
+    revision: usize,
+    correction: Option<usize>,
+}
+
+impl CatalogEncoding {
+    pub(crate) fn step(&mut self, out: &mut impl std::io::Write, catalog: &Catalog) -> Result<bool, String> {
+        if !self.header {
+            emit(out, b"{\"heads\":")?;
+            compact(out, &catalog.heads)?;
+            if !catalog.revision_watermarks.is_empty() {
+                emit(out, b",\"revision_watermarks\":")?;
+                compact(out, &catalog.revision_watermarks)?;
+            }
+            emit(out, b",\"revisions\":[")?;
+            self.header = true;
+        } else if let Some(profile) = catalog.revisions.get(self.revision) {
+            let content = &profile.content;
+            match self.correction {
+                None => {
+                    if self.revision > 0 {
+                        emit(out, b",")?;
+                    }
+                    if content.corrections.is_empty() {
+                        compact(out, profile.as_ref())?;
+                        self.revision += 1;
+                    } else {
+                        emit(out, b"{\"format\":")?;
+                        compact(out, &profile.format)?;
+                        emit(out, b",\"id\":")?;
+                        compact(out, &profile.id)?;
+                        emit(out, b",\"content\":{\"revision\":")?;
+                        compact(out, &content.revision)?;
+                        emit(out, b",\"name\":")?;
+                        compact(out, &content.name)?;
+                        emit(out, b",\"provenance\":")?;
+                        compact(out, &content.provenance)?;
+                        if let Some(vendor) = &content.vendor {
+                            emit(out, b",\"vendor\":")?;
+                            compact(out, vendor)?;
+                        }
+                        emit(out, b",\"bottom_side\":")?;
+                        compact(out, &content.bottom_side)?;
+                        emit(out, b",\"corrections\":[")?;
+                        self.correction = Some(0);
+                    }
+                }
+                Some(index) => {
+                    if let Some(correction) = content.corrections.get(index) {
+                        if index > 0 {
+                            emit(out, b",")?;
+                        }
+                        compact(out, correction.as_ref())?;
+                        self.correction = Some(index + 1);
+                    } else {
+                        emit(out, b"]}}")?;
+                        self.revision += 1;
+                        self.correction = None;
+                    }
+                }
+            }
+        } else {
+            emit(out, b"]}")?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+}
+
+fn emit(out: &mut impl std::io::Write, bytes: &[u8]) -> Result<(), String> {
+    out.write_all(bytes).map_err(|error| error.to_string())
+}
+
+fn compact(out: &mut impl std::io::Write, item: &impl Serialize) -> Result<(), String> {
+    serde_json::to_writer(out, item).map_err(|error| error.to_string())
+}
+
 /// Serialize pinned payloads by reference without changing their shared in-memory ownership.
 fn serialize_revisions<S: serde::Serializer>(revisions: &[Arc<AssemblyProfile>], serializer: S) -> Result<S::Ok, S::Error> {
     use serde::ser::SerializeSeq;
@@ -219,6 +339,14 @@ impl ProfileContent {
 
     /// Check exact integer revisions, bounded metadata and canonical, nonempty corrections.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_header()?;
+        for index in 0..self.corrections.len() {
+            self.validate_correction(index)?;
+        }
+        Ok(())
+    }
+
+    fn validate_header(&self) -> Result<(), String> {
         if self.revision == 0 {
             return Err("An assembly profile content revision must be positive.".into());
         }
@@ -235,11 +363,17 @@ impl ProfileContent {
         if self.corrections.len() > MAX_CORRECTIONS {
             return Err(format!("An assembly profile may carry at most {MAX_CORRECTIONS} corrections."));
         }
-        for correction in self.corrections.iter() {
-            correction.validate()?;
-        }
-        if self.corrections.windows(2).any(|pair| (&pair[0].library, &pair[0].definition) >= (&pair[1].library, &pair[1].definition)) {
-            return Err("Assembly profile corrections must be unique and in library and definition order.".into());
+        Ok(())
+    }
+
+    fn validate_correction(&self, index: usize) -> Result<(), String> {
+        let correction = &self.corrections[index];
+        correction.validate()?;
+        if index > 0 {
+            let previous = &self.corrections[index - 1];
+            if (&previous.library, &previous.definition) >= (&correction.library, &correction.definition) {
+                return Err("Assembly profile corrections must be unique and in library and definition order.".into());
+            }
         }
         Ok(())
     }
@@ -248,11 +382,17 @@ impl ProfileContent {
 impl AssemblyProfile {
     /// Refuse unsupported schema versions, nil identities or invalid content.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_identity()?;
+        self.content.validate()
+    }
+
+    fn validate_identity(&self) -> Result<(), String> {
         if self.format != FORMAT || self.id.is_nil() {
             return Err("Unsupported assembly profile format or invalid profile identity.".into());
         }
-        self.content.validate()
+        Ok(())
     }
+
     /// The definition's correction, independent of the footprint revision; markers never match.
     pub(crate) fn correction_for(&self, footprint: &Footprint) -> Option<&PackageCorrection> {
         let library = footprint.library.as_deref()?;
@@ -308,6 +448,12 @@ impl Catalog {
     }
     /// Validate bounds, canonical identities, retained revisions and every board reference.
     pub fn validate(&self, adoptions: &[Adoption]) -> Result<(), String> {
+        let mut validation = CatalogValidation::default();
+        while !validation.step(self, adoptions)? {}
+        Ok(())
+    }
+
+    fn validate_envelope(&self) -> Result<(), String> {
         if self.heads.len() > MAX_PROFILES || self.revision_watermarks.len() > MAX_PROFILES || self.revisions.len() > MAX_REVISIONS {
             return Err(format!("A project may retain at most {MAX_PROFILES} assembly profile identities and {MAX_REVISIONS} revisions."));
         }
@@ -334,12 +480,10 @@ impl Catalog {
         if self.revisions.iter().map(|r| r.content.corrections.len()).sum::<usize>() > MAX_CORRECTIONS {
             return Err(format!("The assembly profiles of one project may carry at most {MAX_CORRECTIONS} corrections together."));
         }
-        for revision in &self.revisions {
-            revision.validate()?;
-            if !self.heads.iter().any(|h| h.profile == revision.id && h.revision >= revision.content.revision) {
-                return Err("An assembly profile revision has no matching identity watermark.".into());
-            }
-        }
+        Ok(())
+    }
+
+    fn validate_references(&self, adoptions: &[Adoption]) -> Result<(), String> {
         let mut names = BTreeSet::new();
         for head in self.heads.iter().filter(|head| !head.removed) {
             let latest = self
