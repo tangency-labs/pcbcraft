@@ -90,6 +90,8 @@ enum ParamKind {
     /// A persistent registry UUID, distinct from a revision-scoped graph row.
     NetId,
     ExternalText,
+    /// A netlist document's text, bounded before it is parsed.
+    NetlistText,
     ClipboardUnits,
     BoardSelection,
     SchematicPasteTargets,
@@ -218,6 +220,9 @@ impl ParamKind {
                 json!({"oneOf":[{"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false},{"type":"object","properties":{"junction":{"type":"string","pattern":"^junction-[1-9][0-9]*$"}},"required":["junction"],"additionalProperties":false}]})
             }
             Self::ExternalText => json!({"type":"string","maxLength":clipboard_text::MAX_TEXT_BYTES}),
+            Self::NetlistText => {
+                json!({"type":"string","maxLength":netlist::compare::MAX_TEXT_BYTES,"description":"Netlist JSON text, at most 8 MiB when encoded as UTF-8."})
+            }
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
                 "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
@@ -413,6 +418,8 @@ impl ParamKind {
             Self::ExternalText if value.as_str().is_some_and(|s| s.len() <= clipboard_text::MAX_TEXT_BYTES) => Ok(()),
             Self::ClipboardUnits if serde_json::from_value::<clipboard_text::CoordinateUnits>(value.clone()).is_ok() => Ok(()),
             Self::ExternalText => Err("must be UTF-8 text of at most 64 KiB"),
+            Self::NetlistText if value.as_str().is_some_and(|s| s.len() <= netlist::compare::MAX_TEXT_BYTES) => Ok(()),
+            Self::NetlistText => Err("must be UTF-8 text of at most 8 MiB"),
             Self::ClipboardUnits => Err("must be mm or mil"),
             Self::BoardSelection if board::clipboard::BoardSelection::parse(value).is_some() => Ok(()),
             Self::SchematicPasteTargets
@@ -1345,6 +1352,17 @@ const CATALOG: &[Command] = &[
             required: false,
             summary: "True returns the file name and findings without the file text",
             kind: ParamKind::Flag,
+        }],
+    },
+    Command {
+        id: netlist::COMPARE_NETLIST,
+        title: "Compare Netlist",
+        summary: "Read a netlist file back and compare it with what the open project exports now: the project netlist, or the named board's accepted netlist for a board file. Terminals are matched by part and terminal, never by net name or position; execute returns whether they match, the counts on both sides, connectivity differences (such as a terminal on another net) and notes for annotation or net-metadata changes. Edits nothing.",
+        params: &[Param {
+            name: "netlist",
+            required: true,
+            summary: "The netlist document's text, as project.export_netlist or pcb.export_netlist writes it",
+            kind: ParamKind::NetlistText,
         }],
     },
     Command {
@@ -3163,6 +3181,7 @@ impl Session {
             | parameters::RESOLVE
             | "project.rename"
             | netlist::EXPORT_NETLIST
+            | netlist::COMPARE_NETLIST
             | library::sources::AVAILABLE_REVISIONS
             | library::sources::PREVIEW_FOOTPRINT_REVISION
             | no_connect::SET
@@ -3404,6 +3423,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"netlist":self.netlist_report(params)?}));
         }
+        if id == netlist::COMPARE_NETLIST {
+            self.validate_project_command(id, params)?;
+            return Ok(json!({"revision":self.revision,"comparison":self.compare_netlist(params)?}));
+        }
         if id == netlist::EXPORT_BOARD_NETLIST {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"netlist":self.board_netlist_report(params)?}));
@@ -3608,6 +3631,7 @@ impl Session {
                 | sheets::DELETE_SHEET
                 | "project.rename"
                 | netlist::EXPORT_NETLIST
+                | netlist::COMPARE_NETLIST
                 | no_connect::SET
                 | no_connect::CHECK
                 | net_classes::CREATE
@@ -3746,6 +3770,9 @@ impl Session {
             }
             netlist::EXPORT_NETLIST => {
                 self.export_netlist()?;
+            }
+            netlist::COMPARE_NETLIST => {
+                self.compare_netlist(params)?;
             }
             net_labels::ADD | net_labels::SET | net_labels::DELETE => self.edit_net_label(id, params)?,
             hierarchy::CREATE_CHILD

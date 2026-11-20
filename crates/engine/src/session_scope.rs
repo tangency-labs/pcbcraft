@@ -50,8 +50,9 @@ impl Session {
 }
 
 /// These commands return data or manage only ephemeral review state. In particular, Copy
-/// returns data without setting a system clipboard, and export/publication preparation does
-/// not write files. Loading/removing library sources and Cut are not reads.
+/// returns data without setting a system clipboard, export/publication preparation does
+/// not write files, and netlist comparison only reads the text it is given. Loading/removing
+/// library sources and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
@@ -64,6 +65,7 @@ fn is_read_command(id: &str) -> bool {
             | parameters::LIST
             | parameters::RESOLVE
             | netlist::EXPORT_NETLIST
+            | netlist::COMPARE_NETLIST
             | netlist::EXPORT_BOARD_NETLIST
             | PREVIEW_UPDATE
             | CANCEL_UPDATE
