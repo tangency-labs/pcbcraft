@@ -66,6 +66,11 @@ again before publishing so a superseded revision is skipped. An API failure
 prevents deployment. The separate push-triggered Pages workflow has been removed,
 so manual deployment also goes through the full CI workflow.
 
+Both Pages jobs use explicit status conditions so the quick-compile job's
+intentional skip during full CI does not suppress publication. Cancellation
+still stops publication, and deployment requires both the aggregate checks and
+the Pages build to succeed.
+
 Full runs retain the complete Windows workspace suite, both Windows Clippy
 passes, Python/Node regressions and the opt-in harness. Windows checkouts keep
 `core.autocrlf=true`; Git attributes protect recorded evidence bytes. The build

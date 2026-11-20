@@ -43,6 +43,14 @@ within the existing 128-terminal and per-unit drawing bounds; higher pin counts
 remain separate work under #251. The schema and engine validate the declared supported
 fields rather than accepting arbitrary extension properties.
 
+A placed part instance also owns `designator_locked`, independently of its
+symbol definition and unit drawings. All placed units share that flag; unit
+letters have no separate lock. Inspection includes false explicitly, and
+`schematic.set_symbol_fields` edits it through an existing placed symbol.
+[Project/51](native-project-storage.md#designator-locks) stores active locks
+without changing any library symbol schema. Manual reference edits remain
+available; automatic annotation itself is not implemented.
+
 ## Explicit category defaults
 
 The version-3 field has this shape:
