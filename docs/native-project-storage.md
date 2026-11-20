@@ -1354,7 +1354,8 @@ even with no new edits. Detected removal disables that entry until the project
 is replaced or reopened.
 
 Only an approved project close attempts to delete the current entry. An
-unexpected framework exit drains what it can and leaves the entry. On a project
+unexpected framework exit drains what it can and leaves the entry, as does
+Close without waiting while a save or open is still running. On a project
 replacement or reopen, the outgoing recorder does not receive the next project's
 state. At most one recorder is active or retiring; if retirement stalls, the
 replacement starts recording from its latest state once the old worker stops.

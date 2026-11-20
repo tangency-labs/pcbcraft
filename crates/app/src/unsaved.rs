@@ -136,7 +136,8 @@ impl PcbApp {
     /// Close at once while a save still runs, as the person chose in the Close Project wait. The
     /// process ends with the worker: an archive is replaced atomically and a folder save's journal
     /// completes or rolls back on the next open, so the project on disk is the earlier or the
-    /// new version (nothing, for a first save). Unsaved edits are lost, which the wait dialog says.
+    /// new version (nothing, for a first save). Unsaved edits are lost, which the wait dialog says;
+    /// on the desktop the recovery entry stays, since exit with the job still running isn't approved.
     pub(crate) fn close_without_waiting(&mut self, ctx: &egui::Context) {
         self.waiting = None;
         self.file_notice = None;

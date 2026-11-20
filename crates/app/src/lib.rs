@@ -2991,10 +2991,13 @@ impl eframe::App for PcbApp {
     }
 
     /// Always stop recording. An error or framework exit that bypasses the project's close
-    /// decision must leave the current recovery entry behind.
+    /// decision must leave the current recovery entry behind, and so must a close that didn't
+    /// wait for a running save or open: that job ends with the process, so recovery may hold
+    /// the only copy of the unsaved edits.
     #[cfg(not(target_arch = "wasm32"))]
     fn on_exit(&mut self) {
-        self.autosave.finish(&mut self.session, self.close_allowed);
+        let approved = self.close_allowed && !self.files.busy();
+        self.autosave.finish(&mut self.session, approved);
     }
 }
 
