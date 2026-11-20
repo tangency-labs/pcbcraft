@@ -591,8 +591,8 @@ offers highlight only (the default), all views, other views following primary,
 or primary following other views. Following reveals out-of-view items once while
 preserving zoom. When you select a PCB footprint, a following schematic pane
 can switch to the sheet containing its linked symbol. The pane does not take
-focus or select that symbol for editing. Primary is the original view even if detached; closing it
-transfers that role to the main window's focused view. Delete acts only on the
+focus or select that symbol for editing. Primary is the original view even if detached, and its
+pane keeps the role whichever sheet it shows; closing it transfers that role to the main window's focused view. Delete acts only on the
 focused view's own selection, and clearing the source selection clears its
 highlights.
 

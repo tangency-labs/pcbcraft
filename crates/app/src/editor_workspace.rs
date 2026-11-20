@@ -577,13 +577,14 @@ impl EditorViews {
         let Some(source) = self.active.input(session) else {
             return;
         };
+        let from_primary = self.in_primary_pane(source.view());
         // Hidden cached documents never paint, so a queued reveal there could never be consumed.
         for id in self.hosts.values().flat_map(|host| host.layout.visible_views()) {
             let allowed = match policy {
                 SelectionFollow::Off => false,
                 SelectionFollow::Both => true,
-                SelectionFollow::SecondaryFollowsPrimary => source.view() == self.primary,
-                SelectionFollow::PrimaryFollowsSecondary => id == self.primary,
+                SelectionFollow::SecondaryFollowsPrimary => from_primary,
+                SelectionFollow::PrimaryFollowsSecondary => self.in_primary_pane(id),
             };
             if id != source.view()
                 && allowed
@@ -593,6 +594,16 @@ impl EditorViews {
                 self.pending_reveal.insert(id, PendingReveal { source, target, policy });
             }
         }
+    }
+
+    /// The primary role belongs to the pane holding the primary view, whichever cached document
+    /// it displays, so directed following continues after the pane changes sheet.
+    fn in_primary_pane(&self, id: ViewId) -> bool {
+        id == self.primary
+            || self
+                .owner(self.primary)
+                .and_then(|host| self.hosts.get(&host)?.layout.group(self.primary))
+                .is_some_and(|pane| pane.views().contains(&id))
     }
 
     /// Resolve a live source and destination in this opening. A source workspace may be parked

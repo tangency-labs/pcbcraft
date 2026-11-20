@@ -414,6 +414,52 @@ fn board_follow_reuses_cached_sheet_views_and_settles() {
     assert_eq!((camera.screen(origin, rect), camera.zoom()), (main_origin, main_zoom));
 }
 
+/// When only the primary follows, its pane keeps that role after Follow displays another cached
+/// sheet there, so a second PCB pick on a different sheet still moves the primary pane.
+#[test]
+fn directed_follow_keeps_the_primary_pane_across_sheet_changes() {
+    use crate::editor_view::DocumentTarget;
+
+    let policy = SelectionFollow::PrimaryFollowsSecondary;
+    let (mut h, main, child, symbol, footprint) = power_child_harness();
+    let r1 = {
+        let app = h.state_mut();
+        let params = json!({"sheet":main.id(),"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,
+            "x_nm":25_400_000,"y_nm":0,"expected_revision":app.session.revision()});
+        app.session.apply(pcbcraft_engine::PLACE_FOOTPRINT, &params).unwrap();
+        let project = app.session.snapshot().unwrap();
+        let board = project.board_view(project.board_target().unwrap()).unwrap();
+        board.footprints().map(|placed| placed.id.clone()).find(|id| *id != footprint).unwrap()
+    };
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let schematic = ViewId(0);
+    let pcb = ViewId(2);
+    assert_eq!(h.state().views.primary(), schematic);
+    h.state_mut().preferences.selection_follow = policy;
+    let board_point = h.state().views.view(pcb).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, h.get_by_label("PCB canvas 3").rect());
+
+    click_canvas_at(&mut h, board_point);
+    let app = h.state();
+    assert_eq!(app.views.active.id(), pcb);
+    let (_, power) = app.views.pane(schematic);
+    assert_ne!(power, schematic);
+    assert_eq!(app.views.view(power).unwrap().target(), Some(DocumentTarget::Sheet(child)));
+    assert_eq!(app.views.highlight_for(power, &app.session).single_symbol(), Some(symbol.as_str()));
+
+    let app = h.state_mut();
+    app.views.select_board([r1].into(), &app.session, policy);
+    assert_eq!(app.views.pending_reveals(), 1);
+    h.run();
+    let app = h.state();
+    assert_eq!(app.views.pane(schematic), (vec![schematic, power], schematic));
+    assert_eq!(app.views.view(schematic).unwrap().target(), Some(DocumentTarget::Sheet(main)));
+    assert_eq!(app.views.highlight_for(schematic, &app.session).single_symbol(), Some("symbol-2"));
+    assert_eq!(app.views.pending_reveals(), 0);
+    assert_eq!(app.views.active.id(), pcb);
+}
+
 /// Shared part units give a PCB footprint two possible sheet destinations. Keep a matching
 /// current sheet; otherwise use project order, not the most recently placed or displayed unit.
 #[test]
