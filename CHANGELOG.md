@@ -239,7 +239,8 @@ and net classes and zones remain separate work.
 
 On desktop, `pcbcraft <path>` opens a project folder, its `project.json` or a
 `.pc` archive as the app starts, without a picker; the opened project enters the
-workspace and joins recent projects. A startup open that fails reports the error
+workspace and joins recent projects. The path may be a symlink to a project
+folder or archive; recent projects record its target. A startup open that fails reports the error
 in the status bar, keeps Home usable and writes the same line once to stderr
 when available. Windows GUI release builds need stderr redirection to capture
 diagnostics. The launcher takes no options and at most one path, so a

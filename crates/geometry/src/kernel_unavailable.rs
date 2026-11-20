@@ -2,6 +2,9 @@
 //! every operation that reaches it answers [`ErrorCode::KernelUnavailable`], and no body can
 //! exist.
 
+use std::collections::BTreeSet;
+
+use crate::substrate::{BoardMesh, Region, RoundDrill};
 use crate::{ErrorCode, GeometryError, RefusedItem, Result};
 
 /// No body can be made without a kernel.
@@ -15,6 +18,16 @@ fn unavailable(what: &str) -> GeometryError {
 /// No block can be made: always `kernel_unavailable`.
 pub(crate) fn cuboid(_origin: [f64; 3], _size: [f64; 3]) -> Result<KernelBody> {
     Err(unavailable("cuboid"))
+}
+
+/// Valid geometry still cannot produce a substrate without a kernel.
+pub(crate) fn substrate(_regions: &[Region], _drills: BTreeSet<RoundDrill>, _thickness_nm: i64) -> Result<KernelBody> {
+    Err(unavailable("build board substrate"))
+}
+
+/// Never called, since no [`KernelBody`] exists.
+pub(crate) fn substrate_mesh(body: &KernelBody, _chord_nm: i64) -> Result<BoardMesh> {
+    match *body {}
 }
 
 /// Never called, since no [`KernelBody`] exists.
