@@ -167,6 +167,7 @@ enum ParamKind {
     LayerChanges,
     TrackEnds,
     ArcTracks,
+    TeardropEdits,
     AlignMode,
     BoardSide,
     RuleLength,
@@ -287,6 +288,7 @@ impl ParamKind {
             Self::DrawingId => json!({"type":"string","format":"uuid"}),
             Self::TrackPath => board::track::path_schema(),
             Self::ArcTracks => board::arc::schema(),
+            Self::TeardropEdits => board::teardrop::schema(),
             Self::PreviousRoute => {
                 let mut schema = board::track::path_schema();
                 schema["minItems"] = json!(0);
@@ -630,6 +632,9 @@ impl ParamKind {
                     .map_err(|_| "must contain exact circular arc records")
                     .and_then(|arcs| arcs.iter().try_for_each(|arc| arc.validate()).map_err(|_| "invalid circular arc geometry"))
             }
+            Self::TeardropEdits => board::teardrop::Batch::parse(value)
+                .map(|_| ())
+                .map_err(|_| "must contain bounded add and remove lists with valid teardrop dimensions"),
             Self::ZoneOptions => serde_json::from_value::<board::zones::Options>(value.clone())
                 .map_err(|_| "must contain complete zone options")
                 .and_then(|options| options.validate().map_err(|_| "zone option values are out of range")),
@@ -2093,6 +2098,22 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: board::teardrop::EDIT_TEARDROPS,
+        title: "Edit Straight Via Teardrops",
+        summary: "Add and remove board-owned straight-via teardrops in one undo step. Blocked sites report the rule and obstacle; dry_run never changes history.",
+        params: &[
+            Param { required: true, summary: "Board UUID from inspection; required even for a single board", ..BOARD },
+            Param { required: true, ..EXPECTED_REVISION },
+            Param {
+                name: "edits",
+                required: true,
+                summary: "Lists of authored records to add and intent UUIDs to remove",
+                kind: ParamKind::TeardropEdits,
+            },
+            Param { name: "dry_run", required: false, summary: "Report the full diff without changing revision or history", kind: ParamKind::Flag },
+        ],
+    },
+    Command {
         id: ADD_TRACKS,
         title: "Route Track",
         summary: "Add a path of straight copper segments, with a through via wherever it changes layer, in one undo step. Refused if its copper would join two different nets.",
@@ -3284,6 +3305,7 @@ impl Session {
             | SET_RULES
             | SET_PLACEMENT_ORIGIN
             | board::arc::SET_ARCS
+            | board::teardrop::EDIT_TEARDROPS
             | SET_ASSEMBLY_PROFILE
             | PREVIEW_ASSEMBLY_PROFILE
             | ADOPT_ASSEMBLY_PROFILE
@@ -3370,7 +3392,7 @@ impl Session {
                 "id": p.id(),
                 "name": p.name,
                 "assembly_profiles":p.assembly_profiles(),
-                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "arcs":board.arc_tracks(), "geometry_supported":board.arc_tracks().is_empty(), "vias":board.inspect_vias(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
+                "boards": p.boards().map(|board| json!({"id":board.target.board, "name":board.name(), "file":p.board_document_path(), "layers":board.layers(), "drawings":board.drawings(), "zones":p.inspect_zones(), "tracks":board.tracks().iter().map(board::track::Track::inspect).collect::<Vec<_>>(), "arcs":board.arc_tracks(), "teardrops":board.teardrops(), "geometry_supported":board.require_linear_copper().is_ok(), "vias":board.inspect_vias(), "rules":{"authored":board.authored_rules(),"effective":board.effective_rules()}, "placement_origin":{"authored":board.authored_placement_origin(),"effective":board.placement_origin().ok()}, "assembly_profiles":board.assembly_profiles()})).collect::<Vec<_>>(),
                 "sheets": p.sheets().map(|sheet| json!({"id":sheet.target.sheet, "name":sheet.name, "parent":p.parent_sheet(sheet.target).map(|s|s.id()), "file":format!("sheets/{}.json",sheet.target.sheet), "page":p.for_sheet(sheet.target).and_then(|sheet|sheet.page()).map(sheets::page::Page::inspect), "schematic":p.for_sheet(sheet.target).map(|sheet|sheet.inspect_schematic())})).collect::<Vec<_>>(),
                 "netlist":p.electrical_connectivity().inspect(),
                 "components": p.components.values().map(PartInstance::inspect).collect::<Vec<_>>(),
@@ -3435,9 +3457,9 @@ impl Session {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
-        if id == board::arc::SET_ARCS {
+        if matches!(id, board::arc::SET_ARCS | board::teardrop::EDIT_TEARDROPS) {
             let before = self.revision;
-            let result = self.set_arc_tracks(params)?;
+            let result = if id == board::arc::SET_ARCS { self.set_arc_tracks(params)? } else { self.edit_teardrops(params)? };
             if self.revision != before {
                 self.report_committed(id, params);
             }
@@ -3590,6 +3612,10 @@ impl Session {
             self.set_arc_tracks(params)?;
             return Ok(self.revision());
         }
+        if id == board::teardrop::EDIT_TEARDROPS {
+            self.edit_teardrops(params)?;
+            return Ok(self.revision());
+        }
         // A read-only query that needs no project: accepted like `execute`, changing nothing.
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3616,6 +3642,13 @@ impl Session {
         {
             project.resolve_board(params.get("board").and_then(Value::as_str))?;
             return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
+        }
+        if id.starts_with("pcb.")
+            && id != board::teardrop::EDIT_TEARDROPS
+            && let Some(project) = self.project().filter(|p| !p.board.teardrops.is_empty())
+        {
+            project.resolve_board(params.get("board").and_then(Value::as_str))?;
+            return Err(CommandError::Unavailable(board::teardrop::UNSUPPORTED.into()));
         }
         if id == ASSIGN_FOOTPRINT && params.get("board").is_some() {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
@@ -3665,7 +3698,7 @@ impl Session {
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
         }
-        if id == board::arc::SET_ARCS {
+        if matches!(id, board::arc::SET_ARCS | board::teardrop::EDIT_TEARDROPS) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
             return Ok(());
         }
@@ -4451,6 +4484,9 @@ impl Session {
             if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
                 return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
             }
+            if !previous.board.teardrops.is_empty() && previous.board.teardrops == project.board.teardrops && previous.board != project.board {
+                return Err(CommandError::Unavailable(board::teardrop::UNSUPPORTED.into()));
+            }
         }
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
@@ -4526,6 +4562,7 @@ impl Session {
             persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
         } else {
             board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
+            board::teardrop::validate(&project).map_err(CommandError::InvalidParams)?;
         }
         Ok((project, highest))
     }
