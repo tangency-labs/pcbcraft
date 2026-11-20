@@ -85,7 +85,7 @@ impl DependencyEncoding {
                 *self = Self::default();
                 return Ok(true);
             }
-            _ => unreachable!(),
+            _ => return Err("invalid pinned dependency encoding phase".into()),
         }
         self.phase += 1;
         Ok(false)

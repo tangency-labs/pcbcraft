@@ -140,7 +140,7 @@ impl BaselineValidation {
                 }
             }
             9 => return Ok(self.seen.pop_first().is_none()),
-            _ => unreachable!(),
+            _ => return Err("invalid accepted baseline validation phase".into()),
         }
         Ok(false)
     }
@@ -312,7 +312,7 @@ impl BaselineEncoding {
                     bytes.write_all(b"}\n")
                 }
             }
-            _ => unreachable!(),
+            _ => return Err("invalid accepted baseline encoding phase".into()),
         };
         result.map_err(|error| error.to_string())?;
         Ok(false)

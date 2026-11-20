@@ -76,7 +76,7 @@ impl RecordEncoding {
                 let ids = match &row.state {
                     State::Ambiguous { branches, .. } => branches,
                     State::Retired { successors, .. } => successors,
-                    State::Active {} => unreachable!(),
+                    State::Active {} => return Err("active net record has no history list".into()),
                 };
                 if let Some(id) = ids.get(self.item) {
                     array_item(out, self.item, id)?;
@@ -95,7 +95,7 @@ impl RecordEncoding {
                 *self = Self::default();
                 return Ok(true);
             }
-            _ => unreachable!(),
+            _ => return Err("invalid net record encoding phase".into()),
         }
         Ok(false)
     }
