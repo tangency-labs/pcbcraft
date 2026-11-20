@@ -108,18 +108,16 @@ fn invalid_mapping_and_pending_input_never_replace_published_records() {
     app.library_editors.close_part(id, true).unwrap();
     assert!(!app.library_editors.parts.contains_key(&id));
 }
-/// Losing a source with a pending bound leaves a visible way to discard just that text,
-/// without undoing or rewriting the authored range or discarding unrelated typed edits.
-#[test]
-fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
-    use egui_kittest::{Harness, kittest::Queryable};
+/// The fixture part bound to a synthetic symbol whose terminal 1 is a power input,
+/// published in its own removable native source.
+fn supply_fixture() -> (PcbApp, tempfile::TempDir, u64) {
     use pcbcraft_engine::{
         authoring::{Item, Kind as ItemKind, Primitive, publishing},
-        library::sources::{self, Documents, NativeSource},
+        library::sources::{Documents, NativeSource},
         schematic::ElectricalType,
     };
 
-    let (mut app, _temp, id) = fixture();
+    let (mut app, temp, id) = fixture();
     let manifest = publishing::new_library("test-drawings", "Synthetic drawings", "MIT OR Apache-2.0").unwrap();
     let mut item = Item::new(ItemKind::Symbol).unwrap();
     item.library = "test-drawings".into();
@@ -135,6 +133,16 @@ fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
     let reference = Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision };
     let revision = app.library_editors.parts[&id].session.revision();
     app.choose_part_reference(id, revision, &ReferenceField::Symbol, Some(reference)).unwrap();
+    (app, temp, id)
+}
+/// Losing a source with a pending bound leaves a visible way to discard just that text,
+/// without undoing or rewriting the authored range or discarding unrelated typed edits.
+#[test]
+fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::library::sources;
+
+    let (mut app, _temp, id) = supply_fixture();
     let doc = &app.library_editors.parts[&id];
     let revision = doc.session.revision();
     let mut record = doc.session.record().clone();
@@ -165,6 +173,69 @@ fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
     doc.pending.clear();
     let ctx = h.ctx.clone();
     h.state_mut().begin_part_reference(&ctx, id, ReferenceField::Symbol).unwrap();
+}
+
+/// A supply range applied while the draft sits at the native size limit is refused as a
+/// whole: the typed bounds stay pending and visible, and the draft and history are unchanged.
+/// Once the draft fits, the same Apply clears the text and is a single undo step.
+#[test]
+fn rejected_supply_range_at_the_size_limit_keeps_the_entered_text() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::library::sources::MAX_FILE_BYTES;
+
+    let (mut app, _temp, id) = supply_fixture();
+    let doc = &app.library_editors.parts[&id];
+    let revision = doc.session.revision();
+    let unrated = doc.session.record().clone();
+    let mut rated = unrated.clone();
+    let Record::Part(part) = &mut rated else { panic!() };
+    part.set_supply_range("1", "4.5 V", "36 V").unwrap();
+    let growth = serde_json::to_vec(&rated).unwrap().len() - serde_json::to_vec(&unrated).unwrap().len();
+    assert!(growth > 8, "a range must add more bytes than the slack below");
+    // Pad a field the form keeps collapsed until the unrated draft is just under the limit.
+    let mut padded = unrated.clone();
+    let Record::Part(part) = &mut padded else { panic!() };
+    part.license.push_str(&"x".repeat(MAX_FILE_BYTES - 8 - serde_json::to_vec(&unrated).unwrap().len()));
+    let mut padded_rated = padded.clone();
+    let Record::Part(part) = &mut padded_rated else { panic!() };
+    part.set_supply_range("1", "4.5 V", "36 V").unwrap();
+    assert!(serde_json::to_vec(&padded_rated).unwrap().len() > MAX_FILE_BYTES);
+    app.replace_part_document(id, revision, padded.clone()).unwrap();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    let revision = doc.session.revision();
+    let entered = BTreeMap::from([("supply/1/max".to_string(), "36 V".to_string()), ("supply/1/min".to_string(), "4.5 V".to_string())]);
+    doc.pending = entered.clone();
+
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Device supply ranges").click();
+    h.run();
+    h.get_by_label("Apply range").click();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending, entered);
+    assert_eq!(doc.session.record(), &padded);
+    assert_eq!(doc.session.revision(), revision);
+    assert!(doc.error.as_deref().is_some_and(|error| error.contains("1 MiB")), "{:?}", doc.error);
+    h.get_by_label("Apply range");
+
+    // Shrink the draft without touching the pending text; the retained entry now applies.
+    let doc = h.state_mut().library_editors.parts.get_mut(&id).unwrap();
+    doc.session.replace(revision, unrated.clone()).unwrap();
+    let revision = doc.session.revision();
+    h.run();
+    h.get_by_label("Apply range").click();
+    h.run();
+    let doc = h.state_mut().library_editors.parts.get_mut(&id).unwrap();
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+    assert_eq!(doc.error, None);
+    assert_eq!(doc.session.record(), &rated);
+    assert_eq!(doc.session.revision(), revision + 1);
+    doc.session.history(revision + 1, false).unwrap();
+    assert_eq!(doc.session.record(), &unrated);
 }
 
 /// Real workspace input creates a document and renders it in wide dark and compact light layouts.

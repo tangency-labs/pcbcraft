@@ -17,6 +17,7 @@ impl PcbApp {
         let mut edit_orderable = None;
         let mut browse = None;
         let mut clear_field = None;
+        let mut applied_supply = Vec::new();
         pcbcraft_chrome::part_form::document(ui, |ui, footer| {
             if footer {
                 let valid = record.validate(catalog);
@@ -73,7 +74,7 @@ impl PcbApp {
                                 ui.label(symbol.units().iter().map(|unit| unit.unit_id()).collect::<Vec<_>>().join(", "));
                             });
                         }
-                        supply_ranges(ui, part, symbol.as_deref(), &mut doc.pending, &mut doc.error);
+                        supply_ranges(ui, part, symbol.as_deref(), &mut doc.pending, &mut applied_supply, &mut doc.error);
                         match pcbcraft_chrome::part_form::reference(
                             ui,
                             "Category",
@@ -154,8 +155,17 @@ impl PcbApp {
                 }
             });
         });
-        if record != *doc.session.record() {
-            doc.error = doc.session.replace(doc.session.revision(), record).err();
+        // Applied supply text is cleared only once the draft accepts the edit, so a refused
+        // replacement (for example at the size limit) keeps what the user typed.
+        let accepted = record == *doc.session.record() || {
+            let result = doc.session.replace(doc.session.revision(), record);
+            doc.error = result.as_ref().err().cloned();
+            result.is_ok()
+        };
+        if accepted {
+            for key in applied_supply {
+                doc.pending.remove(&key);
+            }
         }
         self.library_editors.parts.insert(id, doc);
         if let Some(field) = browse {
@@ -210,13 +220,15 @@ impl PcbApp {
     }
 }
 /// Edit both bounds of one power input in one Apply/undo. Pending text is session UI,
-/// never a native value; errors leave the previous authored range untouched. Unavailable
-/// inputs expose a text-only discard even when the exact symbol no longer resolves.
+/// never a native value; errors leave the previous authored range untouched. Applied keys
+/// go to `applied` so the caller clears them only after the draft accepts the edit.
+/// Unavailable inputs expose a text-only discard even when the exact symbol no longer resolves.
 fn supply_ranges(
     ui: &mut egui::Ui,
     part: &mut PartDefinition,
     symbol: Option<&pcbcraft_engine::schematic::SymbolDefinition>,
     pending: &mut BTreeMap<String, String>,
+    applied: &mut Vec<String>,
     error: &mut Option<String>,
 ) {
     use pcbcraft_engine::schematic::ElectricalType::PowerIn;
@@ -262,8 +274,7 @@ fn supply_ranges(
                         if controls::button(ui, "Apply range").clicked() {
                             match part.set_supply_range(id, &min.1, &max.1) {
                                 Ok(()) => {
-                                    pending.remove(&min.0);
-                                    pending.remove(&max.0);
+                                    applied.extend([min.0.clone(), max.0.clone()]);
                                     *error = None;
                                 }
                                 Err(reason) => *error = Some(reason),
