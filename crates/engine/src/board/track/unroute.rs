@@ -154,6 +154,7 @@ async fn plan(view: BoardView<'_>, from: &Value, to: &Value) -> Result<Cut, Comm
                 center: footprint.point(pad.center),
                 shape: pad.shape,
                 corner_radius_nm: pad.corner_radius_nm,
+                size_nm: (pad.width_nm, pad.height_nm),
             });
         }
     }
