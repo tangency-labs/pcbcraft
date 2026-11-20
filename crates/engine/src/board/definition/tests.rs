@@ -145,7 +145,7 @@ fn schematic_clipboard_roundtrips_npth_with_a_designator_lock() {
     assert!(pasted.schematic_packages.definitions.values().any(|definition| !definition.non_plated_holes.is_empty()));
     envelope["format"] = json!("pcbcraft-clipboard/3");
     assert!(matches!(crate::clipboard::Fragment::from_text(&envelope.to_string()),
-        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned non-plated holes")));
+        Err(crate::CommandError::InvalidParams(message)) if message.contains("format does not match its pinned footprint holes")));
 }
 
 /// Make a legal thin track to a via on the right side of the opening. Optionally continue
