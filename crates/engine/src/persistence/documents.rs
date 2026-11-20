@@ -1648,6 +1648,7 @@ pub struct DocumentsEncoder {
     sheet_mirrored: bool,
     sheet_wire_index: BTreeMap<u64, usize>,
     live_generated_legs: Vec<usize>,
+    board_facts: BoardFacts,
     board_rows: BoardRows,
 }
 
@@ -1693,6 +1694,7 @@ impl DocumentsEncoder {
             sheet_mirrored: false,
             sheet_wire_index: BTreeMap::new(),
             live_generated_legs: Vec::new(),
+            board_facts: BoardFacts::default(),
             board_rows: BoardRows::default(),
         }
     }
@@ -2245,6 +2247,12 @@ impl DocumentsEncoder {
                         self.finish_sheet()?;
                     }
                 }
+                31 => {
+                    if self.board_facts.step(&self.project)? {
+                        board_metadata_header(&mut self.bytes, &self.project, &self.board_facts)?;
+                        self.phase = 30;
+                    }
+                }
                 30 => {
                     if self.board_rows.step(&mut self.bytes, &self.project.board)? {
                         self.phase = 7;
@@ -2440,10 +2448,9 @@ impl DocumentsEncoder {
         if self.sheet_cursor < self.project.sheets.len() {
             self.start_sheet();
         } else if self.project.board_target().is_some() {
-            self.phase = 30;
+            self.phase = 31;
             self.cursor = 0;
             self.first = true;
-            board_metadata_header(&mut self.bytes, &self.project)?;
         } else {
             self.phase = 9;
             self.cursor = 0;
@@ -2534,7 +2541,9 @@ impl Write for BoardByteCounter {
 /// native writer's header, record framing, serialized fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
     let mut bytes = BoardByteCounter::default();
-    board_metadata_header(&mut bytes, project)?;
+    let mut facts = BoardFacts::default();
+    while !facts.step(project)? {}
+    board_metadata_header(&mut bytes, project, &facts)?;
     let mut rows = BoardRows::default();
     while !rows.step(&mut bytes, &project.board)? {}
     let mut first = true;
@@ -2565,85 +2574,71 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
 /// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
-fn board_metadata_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
-    crate::board::zones::validate(project)?;
-    crate::board::arc::validate(project, &project.board.arcs)?;
+fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &BoardFacts) -> Result<(), String> {
     let board = &project.board;
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
     let outline = board.outline.as_ref();
     let assignments = !board.assignments.is_empty();
-    let rotated = board.footprints().iter().any(|footprint| footprint.rotation != 0);
     let physical = !board.definitions.is_empty();
-    let references = board.footprints().iter().any(|footprint| footprint.reference_offset.is_some() || footprint.reference_text.is_some());
-    let extended = board.footprints().iter().any(|footprint| {
-        footprint.mapping.as_ref().is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads))
-    }) || board
-        .assignments
-        .values()
-        .any(|assignment| crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads))
-        || board.baseline.as_ref().is_some_and(|baseline| {
-            baseline.components.values().any(|component| component.package.as_ref().is_some_and(|package| package.extended()))
-        });
-
-    let arc_or_lock_format = match (!board.arcs.is_empty(), board.footprints().iter().any(|footprint| footprint.locked)) {
+    let arc_or_lock_format = match (!board.arcs.is_empty(), facts.footprint_lock) {
         (true, true) => Some(ARC_LOCKED_FOOTPRINT_BOARD_FORMAT),
         (true, false) => Some(ARC_BOARD_FORMAT),
         (false, true) => Some(LOCKED_FOOTPRINT_BOARD_FORMAT),
         (false, false) => None,
     };
+    let format = if let Some(format) = arc_or_lock_format {
+        format
+    } else if setup.is_some_and(|setup| setup.requires_report_format()) {
+        REPORT_BOARD_FORMAT
+    } else if facts.assigned_via {
+        ASSIGNED_VIA_BOARD_FORMAT
+    } else if setup.is_some_and(|setup| setup.requires_stack_format()) {
+        STACK_BOARD_FORMAT
+    } else if !board.assembly_profiles.is_empty() {
+        PROFILE_BOARD_FORMAT
+    } else if board.placement_origin.is_some() {
+        ORIGIN_BOARD_FORMAT
+    } else if !board.zones.is_empty() {
+        ZONE_BOARD_FORMAT
+    } else if board.rules.is_some() {
+        RULES_BOARD_FORMAT
+    } else if facts.copper_lock {
+        LOCKED_COPPER_BOARD_FORMAT
+    } else if facts.extended {
+        MULTIPAD_BOARD_FORMAT
+    } else if facts.stroked {
+        STROKED_BOARD_FORMAT
+    } else if facts.references {
+        REFERENCE_BOARD_FORMAT
+    } else if facts.bottom {
+        SIDE_BOARD_FORMAT
+    } else if !board.vias.is_empty() {
+        VIA_BOARD_FORMAT
+    } else if !board.tracks.is_empty() {
+        TRACK_BOARD_FORMAT
+    } else if facts.pending {
+        INTENT_BOARD_FORMAT
+    } else if board.baseline.is_some() {
+        BASELINE_BOARD_FORMAT
+    } else if board.drawings.is_some() {
+        DRAWING_BOARD_FORMAT
+    } else if outline.is_some() {
+        OUTLINE_BOARD_FORMAT
+    } else if assignments {
+        ASSIGNED_BOARD_FORMAT
+    } else if silkscreen.is_some() {
+        SILKSCREEN_BOARD_FORMAT
+    } else if physical {
+        PHYSICAL_BOARD_FORMAT
+    } else if facts.rotated {
+        ROTATED_BOARD_FORMAT
+    } else if let Some(setup) = setup {
+        if setup.requires_material_format() { MATERIAL_BOARD_FORMAT } else { CONFIGURED_BOARD_FORMAT }
+    } else {
+        BOARD_FORMAT
+    };
     if let Some(setup) = setup {
-        let format = if let Some(format) = arc_or_lock_format {
-            format
-        } else if setup.requires_report_format() {
-            REPORT_BOARD_FORMAT
-        } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
-            ASSIGNED_VIA_BOARD_FORMAT
-        } else if setup.requires_stack_format() {
-            STACK_BOARD_FORMAT
-        } else if !board.assembly_profiles.is_empty() {
-            PROFILE_BOARD_FORMAT
-        } else if board.placement_origin.is_some() {
-            ORIGIN_BOARD_FORMAT
-        } else if !board.zones.is_empty() {
-            ZONE_BOARD_FORMAT
-        } else if board.rules.is_some() {
-            RULES_BOARD_FORMAT
-        } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
-            LOCKED_COPPER_BOARD_FORMAT
-        } else if extended {
-            MULTIPAD_BOARD_FORMAT
-        } else if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
-            STROKED_BOARD_FORMAT
-        } else if references {
-            REFERENCE_BOARD_FORMAT
-        } else if board.footprints().iter().any(|footprint| footprint.bottom) {
-            SIDE_BOARD_FORMAT
-        } else if !board.vias.is_empty() {
-            VIA_BOARD_FORMAT
-        } else if !board.tracks.is_empty() {
-            TRACK_BOARD_FORMAT
-        } else if board.has_pending_package_intent(project) {
-            INTENT_BOARD_FORMAT
-        } else if board.baseline.is_some() {
-            BASELINE_BOARD_FORMAT
-        } else if board.drawings.is_some() {
-            DRAWING_BOARD_FORMAT
-        } else if outline.is_some() {
-            OUTLINE_BOARD_FORMAT
-        } else if assignments {
-            ASSIGNED_BOARD_FORMAT
-        } else if silkscreen.is_some() {
-            SILKSCREEN_BOARD_FORMAT
-        } else if physical {
-            PHYSICAL_BOARD_FORMAT
-        } else if rotated {
-            ROTATED_BOARD_FORMAT
-        } else if setup.requires_material_format() {
-            MATERIAL_BOARD_FORMAT
-        } else {
-            CONFIGURED_BOARD_FORMAT
-        };
         bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes()).map_err(|error| error.to_string())?;
         if !setup.materials().is_empty() {
             bytes.write_all(b"    \"materials\": [\n").map_err(|error| error.to_string())?;
@@ -2676,51 +2671,6 @@ fn board_metadata_header(bytes: &mut impl Write, project: &Project) -> Result<()
         }
         bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
     } else {
-        let format = if let Some(format) = arc_or_lock_format {
-            format
-        } else if board.vias.iter().any(|via| via.net_assignment.is_some()) {
-            ASSIGNED_VIA_BOARD_FORMAT
-        } else if !board.assembly_profiles.is_empty() {
-            PROFILE_BOARD_FORMAT
-        } else if board.placement_origin.is_some() {
-            ORIGIN_BOARD_FORMAT
-        } else if !board.zones.is_empty() {
-            ZONE_BOARD_FORMAT
-        } else if board.rules.is_some() {
-            RULES_BOARD_FORMAT
-        } else if board.tracks.iter().any(|track| track.locked) || board.vias.iter().any(|via| via.locked) {
-            LOCKED_COPPER_BOARD_FORMAT
-        } else if extended {
-            MULTIPAD_BOARD_FORMAT
-        } else if board.drawings.as_ref().is_some_and(|data| data.items.iter().any(|item| item.stroke_nm.is_some())) {
-            STROKED_BOARD_FORMAT
-        } else if references {
-            REFERENCE_BOARD_FORMAT
-        } else if board.footprints().iter().any(|footprint| footprint.bottom) {
-            SIDE_BOARD_FORMAT
-        } else if !board.vias.is_empty() {
-            VIA_BOARD_FORMAT
-        } else if !board.tracks.is_empty() {
-            TRACK_BOARD_FORMAT
-        } else if board.has_pending_package_intent(project) {
-            INTENT_BOARD_FORMAT
-        } else if board.baseline.is_some() {
-            BASELINE_BOARD_FORMAT
-        } else if board.drawings.is_some() {
-            DRAWING_BOARD_FORMAT
-        } else if outline.is_some() {
-            OUTLINE_BOARD_FORMAT
-        } else if assignments {
-            ASSIGNED_BOARD_FORMAT
-        } else if silkscreen.is_some() {
-            SILKSCREEN_BOARD_FORMAT
-        } else if physical {
-            PHYSICAL_BOARD_FORMAT
-        } else if rotated {
-            ROTATED_BOARD_FORMAT
-        } else {
-            BOARD_FORMAT
-        };
         bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
     if let Some(baseline) = &board.baseline {
@@ -2753,6 +2703,137 @@ fn board_metadata_header(bytes: &mut impl Write, project: &Project) -> Result<()
         writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Select the native header without visiting all board records in one encoder step. The
+/// membership sets also validate zone and arc ownership before emitting their native rows.
+#[derive(Default)]
+struct BoardFacts {
+    phase: u8,
+    index: usize,
+    key: u64,
+    zones: crate::board::zones::ZoneValidation,
+    arc_ids: BTreeSet<uuid::Uuid>,
+    assigned_via: bool,
+    footprint_lock: bool,
+    copper_lock: bool,
+    extended: bool,
+    references: bool,
+    rotated: bool,
+    bottom: bool,
+    pending: bool,
+    stroked: bool,
+}
+
+impl BoardFacts {
+    fn step(&mut self, project: &Project) -> Result<bool, String> {
+        let board = &project.board;
+        match self.phase {
+            0 => {
+                self.zones.check_count(project)?;
+                self.advance();
+            }
+            1 => {
+                if let Some(zone) = board.zones.get(self.index) {
+                    self.zones.row(project, zone)?;
+                    self.index += 1;
+                } else {
+                    if board.arcs.len() > crate::board::arc::MAX_ARCS {
+                        return Err(format!("a board can hold at most {} circular arcs", crate::board::arc::MAX_ARCS));
+                    }
+                    self.advance();
+                }
+            }
+            2 => {
+                if let Some(track) = board.tracks.get(self.index) {
+                    self.copper_lock |= track.locked;
+                    if !board.arcs.is_empty() {
+                        self.arc_ids.insert(track.id);
+                    }
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            3 => {
+                if let Some(via) = board.vias.get(self.index) {
+                    self.copper_lock |= via.locked;
+                    self.assigned_via |= via.net_assignment.is_some();
+                    if !board.arcs.is_empty() {
+                        self.arc_ids.insert(via.id);
+                    }
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            4 => {
+                if let Some(arc) = board.arcs.get(self.index) {
+                    crate::board::arc::validate_row(project, arc, &mut self.arc_ids)?;
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            5 => {
+                if self.arc_ids.pop_first().is_none() {
+                    self.advance();
+                }
+            }
+            6 => {
+                if let Some(footprint) = board.footprints().get(self.index) {
+                    self.rotated |= footprint.rotation != 0;
+                    self.references |= footprint.reference_offset.is_some() || footprint.reference_text.is_some();
+                    self.extended |= footprint
+                        .mapping
+                        .as_ref()
+                        .is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads));
+                    self.footprint_lock |= footprint.locked;
+                    self.bottom |= footprint.bottom;
+                    self.index += 1;
+                } else {
+                    self.advance();
+                }
+            }
+            7 => {
+                if let Some((&id, assignment)) = board.assignments.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next() {
+                    self.extended |= crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads);
+                    self.pending |= board.has_pending_assignment(project, assignment);
+                    self.key = id;
+                } else {
+                    self.advance();
+                }
+            }
+            8 => {
+                let next = board
+                    .baseline
+                    .as_ref()
+                    .and_then(|baseline| baseline.components.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next());
+                if let Some((&id, component)) = next {
+                    self.extended |= component.package.as_ref().is_some_and(|package| package.extended());
+                    self.key = id;
+                } else {
+                    self.advance();
+                }
+            }
+            9 => {
+                if let Some(item) = board.drawings.as_ref().and_then(|drawing| drawing.items.get(self.index)) {
+                    self.stroked |= item.stroke_nm.is_some();
+                    self.index += 1;
+                } else {
+                    return Ok(true);
+                }
+            }
+            _ => return Err("Unexpected board format phase.".into()),
+        }
+        Ok(false)
+    }
+
+    fn advance(&mut self) {
+        self.phase += 1;
+        self.index = 0;
+        self.key = 0;
+    }
 }
 
 /// The native drawing and copper arrays are used both by Save and by the board byte meter.
