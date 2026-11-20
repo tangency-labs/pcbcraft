@@ -244,7 +244,7 @@ fn rejected_supply_range_at_the_size_limit_keeps_the_entered_text() {
 fn terminal_rating_limit_publishes_reopens_and_keeps_typed_bounds_on_overflow() {
     use egui_kittest::{Harness, kittest::Queryable};
     use pcbcraft_engine::{
-        authoring::{Item, Kind as ItemKind, Primitive, publishing},
+        authoring::{Action, Item, Kind as ItemKind, Primitive, Session as AuthoringSession, publishing},
         library::{
             parts::MAX_TERMINAL_RATINGS,
             sources::{Documents, NativeSource},
@@ -257,34 +257,37 @@ fn terminal_rating_limit_publishes_reopens_and_keeps_typed_bounds_on_overflow() 
     let mut symbol = Item::new(ItemKind::Symbol).unwrap();
     symbol.library = "test-drawings".into();
     symbol.id = "max-supply".into();
-    symbol.objects.retain(|_, primitive| !matches!(primitive, Primitive::Pin { .. }));
+    let mut symbol_editor = AuthoringSession::new(symbol, false).unwrap();
+    symbol_editor.execute(0, Action::Delete { objects: vec![1, 3] }).unwrap();
     for index in 1..=MAX_TERMINAL_RATINGS {
-        symbol.objects.insert(
-            index as u64 + 10,
-            Primitive::Pin {
-                number: index.to_string(),
-                name: Some(format!("VIN{index}")),
-                electrical_type: ElectricalType::PowerIn,
-                at: Point { x_nm: (index as i64 % 16) * 2_540_000, y_nm: (index as i64 / 16) * 2_540_000 },
-                appearance: None,
-            },
-        );
+        symbol_editor
+            .execute(
+                symbol_editor.revision(),
+                Action::Insert {
+                    primitive: Primitive::Pin {
+                        number: index.to_string(),
+                        name: Some(format!("VIN{index}")),
+                        electrical_type: ElectricalType::PowerIn,
+                        at: Point { x_nm: (index as i64 % 16) * 2_540_000, y_nm: (index as i64 / 16) * 2_540_000 },
+                        appearance: None,
+                    },
+                },
+            )
+            .unwrap();
     }
-    symbol.allocation.object = symbol.objects.keys().next_back().copied().unwrap_or(0);
     let mut footprint = Item::new(ItemKind::Footprint).unwrap();
     footprint.library = "test-drawings".into();
     footprint.id = "max-supply-package".into();
     let Primitive::Pad { pad: template } = footprint.objects[&1].clone() else { panic!("fixture needs a pad") };
-    footprint.objects.retain(|_, primitive| !matches!(primitive, Primitive::Pad { .. }));
-    for index in 1..=MAX_TERMINAL_RATINGS {
+    let mut footprint_editor = AuthoringSession::new(footprint, false).unwrap();
+    for index in 3..=MAX_TERMINAL_RATINGS {
         let mut pad = template.clone();
         pad.number = index.to_string();
-        pad.center = Point { x_nm: (index as i64 % 16) * 1_270_000, y_nm: (index as i64 / 16) * 1_270_000 };
-        footprint.objects.insert(index as u64 + 10, Primitive::Pad { pad });
+        pad.center = Point { x_nm: (index as i64 % 16) * 1_270_000, y_nm: (index as i64 / 16 + 1) * 1_270_000 };
+        footprint_editor.execute(footprint_editor.revision(), Action::Insert { primitive: Primitive::Pad { pad } }).unwrap();
     }
-    footprint.allocation.object = footprint.objects.keys().next_back().copied().unwrap_or(0);
-    let prepared_symbol = publishing::prepare(Arc::new(symbol), &manifest, 0, None, false).unwrap();
-    let prepared_footprint = publishing::prepare(Arc::new(footprint), &manifest, 0, None, false).unwrap();
+    let prepared_symbol = publishing::prepare(symbol_editor.snapshot(), &manifest, 0, None, false).unwrap();
+    let prepared_footprint = publishing::prepare(footprint_editor.snapshot(), &manifest, 0, None, false).unwrap();
     let mut documents = Documents::from([("library.json".into(), manifest)]);
     documents.extend(prepared_symbol.documents().clone());
     documents.extend(prepared_footprint.documents().clone());

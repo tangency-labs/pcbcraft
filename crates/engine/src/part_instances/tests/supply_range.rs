@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    authoring::{Item, Kind, Primitive, publishing::new_library},
+    authoring::{Action, Item, Kind, Primitive, Session as AuthoringSession, publishing::new_library},
     board::clipboard::{BoardFragment, BoardSelection},
     clipboard::Fragment,
     library::parts::{LEGACY_PART_FORMAT, MAX_TERMINAL_RATINGS, PART_FORMAT, Package, PartDefinition, RATED_PART_FORMAT, SupplyRange},
@@ -456,33 +456,36 @@ fn supply_range_limit_matches_draft_writer_reader_and_schema() {
     let mut symbol = Item::new(Kind::Symbol).unwrap();
     symbol.id = "max-supply".into();
     symbol.name = "Max supply symbol".into();
-    symbol.objects.retain(|_, primitive| !matches!(primitive, Primitive::Pin { .. }));
+    let mut symbol_editor = AuthoringSession::new(symbol, false).unwrap();
+    symbol_editor.execute(0, Action::Delete { objects: vec![1, 3] }).unwrap();
     for index in 1..=MAX_TERMINAL_RATINGS {
-        symbol.objects.insert(
-            index as u64 + 10,
-            Primitive::Pin {
-                number: index.to_string(),
-                name: Some(format!("VIN{index}")),
-                electrical_type: ElectricalType::PowerIn,
-                at: crate::schematic::Point { x_nm: (index as i64 % 16) * 2_540_000, y_nm: (index as i64 / 16) * 2_540_000 },
-                appearance: None,
-            },
-        );
+        symbol_editor
+            .execute(
+                symbol_editor.revision(),
+                Action::Insert {
+                    primitive: Primitive::Pin {
+                        number: index.to_string(),
+                        name: Some(format!("VIN{index}")),
+                        electrical_type: ElectricalType::PowerIn,
+                        at: crate::schematic::Point { x_nm: (index as i64 % 16) * 2_540_000, y_nm: (index as i64 / 16) * 2_540_000 },
+                        appearance: None,
+                    },
+                },
+            )
+            .unwrap();
     }
-    symbol.allocation.object = symbol.objects.keys().next_back().copied().unwrap_or(0);
     let mut footprint = Item::new(Kind::Footprint).unwrap();
     footprint.id = "max-supply-package".into();
     let Primitive::Pad { pad: template } = footprint.objects[&1].clone() else { panic!("fixture needs a pad") };
-    footprint.objects.retain(|_, primitive| !matches!(primitive, Primitive::Pad { .. }));
-    for index in 1..=MAX_TERMINAL_RATINGS {
+    let mut footprint_editor = AuthoringSession::new(footprint, false).unwrap();
+    for index in 3..=MAX_TERMINAL_RATINGS {
         let mut pad = template.clone();
         pad.number = index.to_string();
-        pad.center = crate::schematic::Point { x_nm: (index as i64 % 16) * 1_270_000, y_nm: (index as i64 / 16) * 1_270_000 };
-        footprint.objects.insert(index as u64 + 10, Primitive::Pad { pad });
+        pad.center = crate::schematic::Point { x_nm: (index as i64 % 16) * 1_270_000, y_nm: (index as i64 / 16 + 1) * 1_270_000 };
+        footprint_editor.execute(footprint_editor.revision(), Action::Insert { primitive: Primitive::Pad { pad } }).unwrap();
     }
-    footprint.allocation.object = footprint.objects.keys().next_back().copied().unwrap_or(0);
-    for item in [symbol, footprint] {
-        let prepared = session.execute(sources::PREPARE_PUBLICATION, &json!({"item":item,"documents":&documents})).unwrap();
+    for item in [symbol_editor.snapshot(), footprint_editor.snapshot()] {
+        let prepared = session.execute(sources::PREPARE_PUBLICATION, &json!({"item":item.as_ref(),"documents":&documents})).unwrap();
         documents.extend(serde_json::from_value::<sources::Documents>(prepared["documents"].clone()).unwrap());
     }
     load(&mut session, &documents);
