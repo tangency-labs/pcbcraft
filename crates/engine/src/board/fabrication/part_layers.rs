@@ -44,7 +44,7 @@ impl BoardView<'_> {
             }
             let definition = project.board.definition_for(placement);
             let (package, manufacturer) = package_metadata(placement, part.and_then(|part| part.part.as_ref()));
-            let at = frame.to_output(Point { x_nm: placement.x_nm, y_nm: placement.y_nm });
+            let at = frame.to_output(self.assembly_centroid(placement));
             // Ucamco rev. 2026.05 §5.6.16 defines an IPC-7351B zero, not the library zero.
             // The pinned footprint has no such datum, so don't emit .CRot.
             let writer = &mut writers[usize::from(placement.bottom)];
@@ -81,6 +81,20 @@ impl BoardView<'_> {
             })
             .collect();
         Ok(Fabrication { origin, files })
+    }
+
+    /// The Gerber export does not select a vendor profile. Use an explicit centroid from
+    /// the board's adopted revisions only when their supplied centroids agree.
+    fn assembly_centroid(self, placement: &Footprint) -> Point {
+        let origin = Point { x_nm: placement.x_nm, y_nm: placement.y_nm };
+        let mut centroids = self
+            .assembly_profiles()
+            .iter()
+            .filter_map(|adoption| self.project().assembly_profiles().get(adoption)?.correction_for(placement)?.centroid);
+        match centroids.next() {
+            Some(centroid) if centroids.all(|other| other == centroid) => placement.point(centroid),
+            _ => origin,
+        }
     }
 }
 

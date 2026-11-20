@@ -187,6 +187,55 @@ fn gerber_x3_places_one_main_flash_per_part_on_its_own_side() {
     assert!(std::sync::Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
 }
 
+/// An adopted, nonzero centroid follows the placed rotation and side, but Gerber
+/// stays in top view even if the profile's placement rows are viewed from below.
+#[test]
+fn gerber_x3_flashes_the_adopted_centroid_in_top_view() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
+    add_assembly_resistor(&mut s, 0, Point { x_nm: 40_000_000, y_nm: 25_000_000 }, 90);
+    let board = s.project().unwrap().board_target().unwrap().board;
+    let footprint = view(&s).footprint_ids().next().unwrap();
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"point","x_nm":10_000_000,"y_nm":30_000_000}}),
+    )
+    .unwrap();
+    let flash = |s: &Session| {
+        let layers = view(s).gerber_part_layers().unwrap();
+        let [file] = layers.files.as_slice() else { panic!("Expected one populated layer") };
+        file.contents.lines().find(|line| line.ends_with("D03*")).unwrap().to_owned()
+    };
+    let adopt = |s: &mut Session, profile, name, x_nm| {
+        s.apply(
+            crate::SET_ASSEMBLY_PROFILE,
+            &json!({"profile":profile,"expected_revision":s.revision(),"content":{"revision":1,"name":name,
+            "provenance":{"kind":"authored"},"bottom_side":"viewed_from_bottom","corrections":[
+                {"library":"basic-components","definition":"resistor-0402","centroid":{"x_nm":x_nm,"y_nm":-200_000}}
+            ]}}),
+        )
+        .unwrap();
+        let mut params = json!({"board":board,"expected_revision":s.revision(),"profile":profile,"revision":1});
+        let preview = s.execute(crate::PREVIEW_ASSEMBLY_PROFILE, &params).unwrap();
+        params["acceptance"] = preview["acceptance"].clone();
+        s.apply(crate::ADOPT_ASSEMBLY_PROFILE, &params).unwrap();
+    };
+    assert_eq!(flash(&s), "X30000000Y5000000D03*");
+    adopt(&mut s, uuid::Uuid::from_u128(1), "First house", 300_000);
+    // At 90 degrees, local (x, y) becomes (y, -x). The output frame then flips Y.
+    assert_eq!(flash(&s), "X29800000Y5300000D03*");
+    s.apply(
+        crate::SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":footprint,"x_nm":40_000_000,"y_nm":25_000_000,"rotation":90,"side":"back","expected_revision":s.revision()}),
+    )
+    .unwrap();
+    // A bottom footprint mirrors local X before rotating; the Gerber output does not mirror X.
+    assert_eq!(flash(&s), "X29800000Y4700000D03*");
+    adopt(&mut s, uuid::Uuid::from_u128(2), "Second house", 400_000);
+    assert_eq!(flash(&s), "X30000000Y5000000D03*");
+}
+
 /// Empty sides stay absent, and unavailable setup or origin produces a specific refusal.
 #[test]
 fn gerber_x3_requires_setup_and_a_resolvable_origin() {

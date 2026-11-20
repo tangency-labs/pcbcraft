@@ -172,8 +172,10 @@ the authored design dirty merely because they were generated.
 
 The engine's Gerber X3 assembly-layer writer reads one addressed board snapshot.
 It produces a file per populated side with one flash per placed footprint, in
-the generic placement frame (Y up, viewed from the top on both sides). Each
-flash uses the footprint's placed reference point, not a pad-derived centroid.
+the generic placement frame (Y up, viewed from the top on both sides). A flash
+uses the transformed centroid offset when the board's adopted assembly profiles
+supply one and agree. If absent or conflicting, it uses the footprint's placed
+reference point. The writer does not estimate a centroid from the pads.
 An ambiguous reference anywhere on the board prevents export, including when
 an accepted footprint remains pending removal. Orderable metadata appears
 only when the pinned selection still meets the part requirements. The writer
