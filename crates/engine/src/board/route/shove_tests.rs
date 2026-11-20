@@ -622,3 +622,72 @@ fn an_overlap_reaching_a_chain_end_keeps_its_joint() {
     let changed = commit_route(&mut s, &line);
     assert!(changed.contains(&chain.to_string()) && !changed.contains(&overlap.to_string()), "{changed:?}");
 }
+
+/// `pcb.shove_tracks` prepared as a copper job honours the host's bounded steps: obstacle
+/// preparation and the search advance over many steps, each charging at most eight exact
+/// probes, and the job's candidate is exactly the planned board. Dropping the job part way
+/// through the search changes nothing. The synchronous solver checks cancellation before every
+/// probe: canceled after `k` checks, it has charged fewer than `k` probes and moves nothing.
+#[test]
+fn a_prepared_shove_steps_in_bounded_units_and_cancels_between_them() {
+    let mut s = board();
+    track(&mut s, &[p(2 * MM, 10 * MM), p(18 * MM, 10 * MM)]);
+    track(&mut s, &[p(2 * MM, 9_550_000), p(18 * MM, 9_550_000)]);
+    via(&mut s, p(8 * MM, 10_900_000));
+    let line = [p(5 * MM, 10_400_000), p(15 * MM, 10_400_000)];
+    let mut params = route(&s, &line);
+    let planned = plan(&mut s, &params);
+    assert_eq!(kind(&planned), "reached", "{planned}");
+    let probes = planned["probes"].as_u64().unwrap() as usize;
+    assert!(probes > 16, "the case needs several search steps: {planned}");
+    params["expected_revision"] = json!(s.revision());
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
+
+    // Dropped while planning: nothing changes.
+    let mut job = s.prepare_copper_edit(SHOVE_TRACKS, &params).unwrap();
+    while job.progress().stage != "Planning shove" {
+        assert!(!job.step(1));
+    }
+    while job.progress().completed == 0 {
+        assert!(!job.step(1));
+    }
+    assert!(job.progress().completed < probes);
+    drop(job);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+
+    // Drained one unit at a time: bounded probes per step, then the planned board.
+    let before = copper(&s);
+    let mut job = s.prepare_copper_edit(SHOVE_TRACKS, &params).unwrap();
+    let (mut steps, mut charged) = (0, 0);
+    while !job.step(1) {
+        let progress = job.progress();
+        if progress.stage == "Planning shove" {
+            assert!(progress.completed - charged <= 8, "one step charged {} probes", progress.completed - charged);
+            charged = progress.completed;
+            steps += 1;
+        }
+    }
+    assert!(steps >= probes / 8, "{steps} planning steps for {probes} probes");
+    let prepared = job.take_result().unwrap().unwrap();
+    s.commit_copper_edit(prepared).unwrap();
+    let ((kept, kept_vias), new) = expected(&planned, layer(&s), &before);
+    let (after, after_vias) = copper(&s);
+    assert_eq!(after_vias, kept_vias);
+    assert_eq!(after.iter().filter(|(id, _)| before.0.contains_key(*id)).map(|(id, t)| (*id, t.clone())).collect::<BTreeMap<_, _>>(), kept);
+    let mut fresh: Vec<Track> = after.values().filter(|t| !before.0.contains_key(&t.id)).map(|t| Track { id: Uuid::nil(), ..t.clone() }).collect();
+    fresh.sort_by_key(|t| (t.start.x_nm, t.start.y_nm, t.end.x_nm, t.end.y_nm, t.width_nm));
+    assert_eq!(fresh, new);
+    s.apply("edit.undo", &json!({})).unwrap();
+
+    for k in [1, 2, 9, probes / 2] {
+        let checks = std::cell::Cell::new(0);
+        let cancel = || {
+            checks.set(checks.get() + 1);
+            checks.get() > k
+        };
+        let query = s.clearance_query_with_rules(view(&s).target, &json!({})).unwrap();
+        let canceled = s.plan_shove(&query, &request(&s, &line), DEFAULT_BUDGET, &cancel).unwrap();
+        assert_eq!((canceled.outcome, canceled.points.len(), canceled.moved), (Outcome::Canceled, 1, 0));
+        assert!(canceled.probes < k, "{} probes after {k} checks", canceled.probes);
+    }
+}

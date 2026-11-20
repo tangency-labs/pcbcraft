@@ -33,7 +33,16 @@ use crate::{
     schematic::Point,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    future::Future,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    task::{Context, Poll, Waker},
+};
 use uuid::Uuid;
 
 /// Most pushes in one chain of cause and effect: copper pushed by the shover is at depth 1.
@@ -148,6 +157,15 @@ impl Shove {
         Self::nothing(Vec::new(), Outcome::Stale, None, 0)
     }
 
+    /// The canceled answer: the route's head alone (nothing for a drag), nothing moved.
+    fn canceled(request: &Request, probes: usize) -> Self {
+        let head = match &request.shover {
+            Shover::Route { points, .. } => points.first().copied().into_iter().collect(),
+            Shover::Drag { .. } => Vec::new(),
+        };
+        Self::nothing(head, Outcome::Canceled, None, probes)
+    }
+
     /// Apply the whole result to copies of a board's tracks and vias: the route's segments (new
     /// identities from `fresh`), dragged and pushed ends, added and removed segments and moved
     /// vias. Returns the identities of every changed or added item. Unknown identities fail;
@@ -193,13 +211,66 @@ impl Shove {
     }
 }
 
+/// Copper walked between suspensions while confirming that exempt copper is still joined.
+const WALK_UNIT: usize = 64;
+
 /// Plan a shove over a captured board. Validates the request first (a copper layer of the
 /// query's board, bounded points, a supported width, known unlocked dragged tracks on the layer
 /// and a budget from 1 to [`super::MAX_BUDGET`]); an invalid request charges nothing. The result
-/// is a pure function of the query, request and budget unless `cancel` returns true.
+/// is a pure function of the query, request and budget unless `cancel` returns true: it is
+/// checked before every exact probe and every bounded connectivity walk, and a cancel returns
+/// `canceled` with the route's head alone and nothing moved.
 pub fn shove(query: &ClearanceQuery, request: &Request, budget: usize, cancel: &dyn Fn() -> bool) -> Result<Shove, CommandError> {
-    let mut solver = Solver::new(query, request, budget, cancel)?;
-    solver.run()
+    let progress = Arc::new(AtomicUsize::new(0));
+    let mut future = std::pin::pin!(solve(query, request, budget, progress.clone()));
+    let mut cx = Context::from_waker(Waker::noop());
+    loop {
+        if cancel() {
+            return Ok(Shove::canceled(request, progress.load(Ordering::Relaxed)));
+        }
+        if let Poll::Ready(plan) = future.as_mut().poll(&mut cx) {
+            return plan;
+        }
+    }
+}
+
+/// Validate and run one shove, suspending before every exact probe and bounded walk.
+async fn solve(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Shove, CommandError> {
+    let mut solver = Solver::new(query, request, budget, progress)?;
+    solver.run().await
+}
+
+/// An owned, resumable shove over a captured query, for hosts that advance work in bounded
+/// steps. Dropping it cancels the private work; nothing is published until it finishes.
+pub(crate) struct ShoveSearch {
+    future: Pin<Box<dyn Future<Output = Result<Shove, CommandError>> + Send>>,
+    progress: Arc<AtomicUsize>,
+}
+
+impl ShoveSearch {
+    /// Own the query and request so suspension borrows no session or editor.
+    pub(crate) fn new(query: Arc<ClearanceQuery>, request: Request, budget: usize) -> Self {
+        let progress = Arc::new(AtomicUsize::new(0));
+        let counter = progress.clone();
+        Self { future: Box::pin(async move { solve(&query, &request, budget, counter).await }), progress }
+    }
+
+    /// Exact probes charged so far.
+    pub(crate) fn probes(&self) -> usize {
+        self.progress.load(Ordering::Relaxed)
+    }
+
+    /// Advance at most `units` suspensions (each at most one exact probe or one bounded walk);
+    /// `None` while the shove is unfinished. A zero `units` does no work.
+    pub(crate) fn step(&mut self, units: usize) -> Option<Result<Shove, CommandError>> {
+        let mut cx = Context::from_waker(Waker::noop());
+        for _ in 0..units {
+            if let Poll::Ready(plan) = self.future.as_mut().poll(&mut cx) {
+                return Some(plan);
+            }
+        }
+        None
+    }
 }
 
 /// Why an attempt stopped.
@@ -210,7 +281,6 @@ enum Halt {
     Bound(Option<String>),
     /// The probe budget ran out.
     Budget,
-    Canceled,
     Failed(CommandError),
 }
 
@@ -307,12 +377,13 @@ struct Solver<'a> {
     joints: BTreeMap<usize, Option<Joint>>,
     budget: usize,
     probes: usize,
-    cancel: &'a dyn Fn() -> bool,
+    /// Probes charged so far, readable while the shove is suspended.
+    progress: Arc<AtomicUsize>,
 }
 
 impl<'a> Solver<'a> {
     /// Validate the request and capture the board's tracks, vias, outline and the shover's membership.
-    fn new(query: &'a ClearanceQuery, request: &'a Request, budget: usize, cancel: &'a dyn Fn() -> bool) -> Result<Self, CommandError> {
+    fn new(query: &'a ClearanceQuery, request: &'a Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Self, CommandError> {
         if !(1..=super::MAX_BUDGET).contains(&budget) {
             return Err(CommandError::InvalidParams(format!("A shove budget must be from 1 to {} probes.", super::MAX_BUDGET)));
         }
@@ -389,19 +460,19 @@ impl<'a> Solver<'a> {
             joints: BTreeMap::new(),
             budget,
             probes: 0,
-            cancel,
+            progress,
         })
     }
 
     /// Shove the whole shover; when a route is blocked, find its longest legal prefix by
     /// bisection along the path. Bounds and blockers of the whole shover are reported.
-    fn run(&mut self) -> Result<Shove, CommandError> {
+    async fn run(&mut self) -> Result<Shove, CommandError> {
         let full = match &self.request.shover {
             Shover::Route { points, .. } => points.clone(),
             Shover::Drag { .. } => Vec::new(),
         };
         let head = full.first().copied();
-        let blocker = match self.attempt(&full) {
+        let blocker = match self.attempt(&full).await {
             Ok(attempt) => return Ok(self.finish(attempt, Outcome::Reached)),
             Err(Halt::Blocked(blocker)) => blocker,
             Err(halt) => return self.halted(halt, head),
@@ -431,7 +502,7 @@ impl<'a> Solver<'a> {
         let (mut lo, mut hi, mut best) = (0, total, None);
         while hi - lo > 1 {
             let mid = lo + (hi - lo) / 2;
-            match self.attempt(&prefix(mid)) {
+            match self.attempt(&prefix(mid)).await {
                 Ok(attempt) => {
                     lo = mid;
                     best = Some(attempt);
@@ -451,12 +522,11 @@ impl<'a> Solver<'a> {
         }
     }
 
-    /// The result for an attempt stopped by the budget, a bound, cancellation or a refused probe.
+    /// The result for an attempt stopped by the budget, a bound or a refused probe.
     fn halted(&self, halt: Halt, head: Option<Point>) -> Result<Shove, CommandError> {
         let points: Vec<Point> = head.into_iter().collect();
         match halt {
             Halt::Failed(error) => Err(error),
-            Halt::Canceled => Ok(Shove::nothing(points, Outcome::Canceled, None, self.probes)),
             Halt::Bound(at) => Ok(Shove::nothing(points, Outcome::Incomplete, at, self.probes)),
             // `run` handles `Blocked` itself; only the budget reaches here in practice.
             Halt::Budget | Halt::Blocked(_) => Ok(Shove::nothing(points, Outcome::Incomplete, None, self.probes)),
@@ -464,7 +534,7 @@ impl<'a> Solver<'a> {
     }
 
     /// Lay `route` (or the dragged tracks) on a fresh overlay, settle every push and confirm the result.
-    fn attempt(&mut self, route: &[Point]) -> Result<Attempt<'a>, Halt> {
+    async fn attempt(&mut self, route: &[Point]) -> Result<Attempt<'a>, Halt> {
         let mut attempt = Attempt {
             overlay: self.query.overlay(),
             route: route.to_vec(),
@@ -490,19 +560,19 @@ impl<'a> Solver<'a> {
             attempt.overlay.replace(i, Contour::capsule(start, end, self.tracks[i - self.lands].width_nm as f64 / 2.), self.layer.to_vec())?;
             attempt.queue.push_back((Item::Dragged(i), 0));
         }
-        self.settle(&mut attempt)?;
-        self.confirm(&mut attempt)?;
+        self.settle(&mut attempt).await?;
+        self.confirm(&mut attempt).await?;
         Ok(attempt)
     }
 
     /// Push everything each queued item breaks clearance with, breadth first, until nothing is
     /// left to push. Copper that cannot move, or pushed copper with no legal place, blocks.
-    fn settle(&mut self, attempt: &mut Attempt<'a>) -> Result<(), Halt> {
+    async fn settle(&mut self, attempt: &mut Attempt<'a>) -> Result<(), Halt> {
         while let Some((item, depth)) = attempt.queue.pop_front() {
             for contour in self.contours(attempt, item) {
                 let mut last = None;
                 loop {
-                    let verdict = self.check(attempt, item, &contour)?;
+                    let verdict = self.check(attempt, item, &contour).await?;
                     if verdict.edge {
                         return Err(Halt::Blocked(None));
                     }
@@ -514,8 +584,8 @@ impl<'a> Solver<'a> {
                     }
                     last = Some(obstacle);
                     match self.item_of(attempt, obstacle)? {
-                        Some(Item::Chain(c)) if Item::Chain(c) != item => self.push_chain(attempt, c, item, &contour, clearance, depth + 1)?,
-                        Some(Item::Via(v)) if Item::Via(v) != item => self.push_via(attempt, v, item, &contour, clearance, depth + 1)?,
+                        Some(Item::Chain(c)) if Item::Chain(c) != item => self.push_chain(attempt, c, item, &contour, clearance, depth + 1).await?,
+                        Some(Item::Via(v)) if Item::Via(v) != item => self.push_via(attempt, v, item, &contour, clearance, depth + 1).await?,
                         _ => return Err(Halt::Blocked(self.name(attempt, obstacle))),
                     }
                 }
@@ -527,7 +597,7 @@ impl<'a> Solver<'a> {
     /// Recheck the settled result as a whole: every shover leg and every moved item must break
     /// no clearance, short or edge rule. The route is checked with the union of every net it
     /// touches, so legs touching different nets cannot each pass alone.
-    fn confirm(&mut self, attempt: &mut Attempt<'a>) -> Result<(), Halt> {
+    async fn confirm(&mut self, attempt: &mut Attempt<'a>) -> Result<(), Halt> {
         let mut items = vec![Item::Route];
         items.extend(self.dragged.iter().map(|(i, _, _)| Item::Dragged(*i)));
         items.extend(attempt.chains.keys().map(|c| Item::Chain(*c)));
@@ -538,9 +608,9 @@ impl<'a> Solver<'a> {
             let mut component = None;
             for contour in self.contours(attempt, item) {
                 let verdict = if item == Item::Route {
-                    self.check_with(attempt, &contour, &layer, &nets, &islands, Some(self.route_width_nm))?
+                    self.check_with(attempt, &contour, &layer, &nets, &islands, Some(self.route_width_nm)).await?
                 } else {
-                    self.check(attempt, item, &contour)?
+                    self.check(attempt, item, &contour).await?
                 };
                 if verdict.edge {
                     return Err(Halt::Blocked(None));
@@ -556,7 +626,7 @@ impl<'a> Solver<'a> {
                 for obstacle in verdict.joined {
                     let joined = match &component {
                         Some(joined) => joined,
-                        None => component.insert(self.component(attempt, item)?),
+                        None => component.insert(self.component(attempt, item).await?),
                     };
                     if !joined.contains(&obstacle) {
                         return Err(Halt::Blocked(self.name(attempt, obstacle)));
@@ -571,7 +641,8 @@ impl<'a> Solver<'a> {
     /// the item's own captured islands, starting from the item's obstacles. Copper of other
     /// islands is not walked, so a joint made only through another island does not count (a
     /// contact between islands is itself refused unless the nets agree).
-    fn component(&self, attempt: &Attempt<'a>, item: Item) -> Result<BTreeSet<ObstacleId>, Halt> {
+    /// The walk suspends every [`WALK_UNIT`] objects, so a large island is visited in bounded steps.
+    async fn component(&self, attempt: &Attempt<'a>, item: Item) -> Result<BTreeSet<ObstacleId>, Halt> {
         let (mut queue, islands): (Vec<ObstacleId>, Vec<usize>) = match item {
             Item::Route => (attempt.route_ids.iter().map(|u| ObstacleId::Added(*u)).collect(), self.route_islands.clone()),
             Item::Dragged(i) | Item::Via(i) => (vec![ObstacleId::Source(i)], vec![self.query.objects()[i].island]),
@@ -582,7 +653,12 @@ impl<'a> Solver<'a> {
             }
         };
         let mut seen: BTreeSet<ObstacleId> = queue.iter().copied().collect();
+        let mut walked = 0;
         while let Some(id) = queue.pop() {
+            if walked % WALK_UNIT == 0 {
+                super::search::yield_unit().await;
+            }
+            walked += 1;
             let Some(object) = attempt.overlay.object(id) else { continue };
             for next in attempt.overlay.candidates(&object.contour, &object.layers)? {
                 if seen.contains(&next) || !islands.contains(&self.island(attempt, next)) {
@@ -669,7 +745,15 @@ impl<'a> Solver<'a> {
     /// it meets is pushed when the chain's turn comes. When a side still meets other parts of
     /// `by` (another leg of the pushing route or chain), their hulls merge into the pusher's
     /// and the sides are chosen again, up to [`MAX_MERGES`] times.
-    fn push_chain(&mut self, attempt: &mut Attempt<'a>, c: usize, by: Item, pusher: &Contour, clearance: i64, depth: usize) -> Result<(), Halt> {
+    async fn push_chain(
+        &mut self,
+        attempt: &mut Attempt<'a>,
+        c: usize,
+        by: Item,
+        pusher: &Contour,
+        clearance: i64,
+        depth: usize,
+    ) -> Result<(), Halt> {
         self.bound(attempt, Item::Chain(c), depth)?;
         let (half, posture, original) = (self.shapes[c].half, self.shapes[c].posture, self.shapes[c].original.clone());
         let now = attempt.chains.get(&c).map_or_else(|| original.clone(), |(points, _)| points.clone());
@@ -688,7 +772,7 @@ impl<'a> Solver<'a> {
             let mut met: Vec<Contour> = Vec::new();
             for (index, (_, _, points)) in options.iter().enumerate() {
                 self.set_chain(attempt, c, points)?;
-                match self.admits(attempt, Item::Chain(c), by)? {
+                match self.admits(attempt, Item::Chain(c), by).await? {
                     Ok(()) => return self.accept(attempt, &[Item::Chain(c)], depth),
                     Err(name) => blocker = blocker.or(name),
                 }
@@ -713,7 +797,7 @@ impl<'a> Solver<'a> {
 
     /// Move via `v` the least distance, in a 45° multiple, that clears the hull of `pusher`;
     /// chains ending on it follow with an elbow. The nearest legal place wins.
-    fn push_via(&mut self, attempt: &mut Attempt<'a>, v: usize, by: Item, pusher: &Contour, clearance: i64, depth: usize) -> Result<(), Halt> {
+    async fn push_via(&mut self, attempt: &mut Attempt<'a>, v: usize, by: Item, pusher: &Contour, clearance: i64, depth: usize) -> Result<(), Halt> {
         self.bound(attempt, Item::Via(v), depth)?;
         let center = self.via_at(attempt, v);
         let radius = self.query.objects()[v].contour.radius;
@@ -748,7 +832,7 @@ impl<'a> Solver<'a> {
             items.extend(attached.iter().map(|(c, _)| Item::Chain(*c)));
             let mut admitted = true;
             for item in &items {
-                if let Err(name) = self.admits(attempt, *item, by)? {
+                if let Err(name) = self.admits(attempt, *item, by).await? {
                     blocker = blocker.or(name);
                     admitted = false;
                     break;
@@ -792,9 +876,9 @@ impl<'a> Solver<'a> {
 
     /// Whether `item`'s current geometry is clear of the board edge, of `by` and of every copper
     /// that cannot move. `Err` names what refuses it (absent for the edge or a rule).
-    fn admits(&mut self, attempt: &mut Attempt<'a>, item: Item, by: Item) -> Result<Result<(), Option<String>>, Halt> {
+    async fn admits(&mut self, attempt: &mut Attempt<'a>, item: Item, by: Item) -> Result<Result<(), Option<String>>, Halt> {
         for contour in self.contours(attempt, item) {
-            let verdict = self.check(attempt, item, &contour)?;
+            let verdict = self.check(attempt, item, &contour).await?;
             if verdict.edge {
                 return Ok(Err(None));
             }
@@ -827,7 +911,7 @@ impl<'a> Solver<'a> {
 
     /// Probe one contour of `item` with the item's membership, own islands and track width.
     /// The route uses its settling membership ([`Self::route_settle_nets`]).
-    fn check(&mut self, attempt: &mut Attempt<'a>, item: Item, contour: &Contour) -> Result<Verdict, Halt> {
+    async fn check(&mut self, attempt: &mut Attempt<'a>, item: Item, contour: &Contour) -> Result<Verdict, Halt> {
         let query = self.query;
         let objects = query.objects();
         let (nets, islands, layers, width) = match item {
@@ -838,7 +922,7 @@ impl<'a> Solver<'a> {
             Item::Via(i) => (objects[i].intended_nets.clone(), vec![objects[i].island], objects[i].layers.clone(), None),
             Item::Chain(c) => (self.shapes[c].nets.clone(), vec![self.shapes[c].island], self.layer.to_vec(), Some(self.shapes[c].width_nm)),
         };
-        self.check_with(attempt, contour, &layers, &nets, &islands, width)
+        self.check_with(attempt, contour, &layers, &nets, &islands, width).await
     }
 
     /// Charge one exact probe: overlay clearance and short decisions, then the outline and
@@ -846,8 +930,8 @@ impl<'a> Solver<'a> {
     /// copper of the item's own islands is exempt unless the contact joins distinct nets, and
     /// such copper that no longer touches the item is listed in [`Verdict::joined`]. A track
     /// `width` is illegal below the board minimum or the minimum of the net classes the probe
-    /// connects, by the same rule the copper commit applies.
-    fn check_with(
+    /// connects, by the same rule the copper commit applies. Suspends before charging the probe.
+    async fn check_with(
         &mut self,
         attempt: &Attempt<'a>,
         contour: &Contour,
@@ -856,13 +940,12 @@ impl<'a> Solver<'a> {
         islands: &[usize],
         width: Option<i64>,
     ) -> Result<Verdict, Halt> {
-        if (self.cancel)() {
-            return Err(Halt::Canceled);
-        }
+        super::search::yield_unit().await;
         if self.probes >= self.budget {
             return Err(Halt::Budget);
         }
         self.probes += 1;
+        self.progress.store(self.probes, Ordering::Relaxed);
         let results = attempt.overlay.probe_membership(contour, layers, nets, None)?;
         let mut verdict = Verdict { edge: false, offenders: Vec::new(), illegal: false, joined: Vec::new() };
         for decision in &results.decisions {

@@ -204,41 +204,90 @@ fn refusal(plan: &shove::Shove) -> CommandError {
     })
 }
 
-/// Build the copper candidate of `pcb.shove_tracks` from a captured source: plan the shove
-/// against that exact board and apply all of it. Anything but a reached shove is refused, so
-/// either every route segment, dragged track, pushed track and via lands or nothing changes.
-/// Returns the candidate (absent for a no-op) and the identities of changed copper.
-pub(crate) fn shove_candidate(source: &Source, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
-    let project: &Project = &source.snapshot;
-    let (target, request, width_nm, budget) = shove_request(project, params)?;
-    if target != source.target {
-        return Err(CommandError::InvalidParams("The shove addresses another board than its preparation.".into()));
-    }
-    let mut preparation = super::clearance::preparation::Preparation::new(source.clone());
-    let mut query = None;
-    for _ in 0..project.board.footprints.len() / 32 + 8 {
-        query = preparation.step(usize::MAX)?;
-        if query.is_some() {
-            break;
+/// The copper candidate of `pcb.shove_tracks`, built in bounded steps from a captured source:
+/// obstacle preparation, then the shove planned against that exact board, then all of it
+/// applied. Anything but a reached shove is refused, so either every route segment, dragged
+/// track, pushed track and via lands or nothing changes. Dropping it cancels the work.
+pub(crate) struct ShoveCandidate {
+    source: Source,
+    request: shove::Request,
+    width_nm: i64,
+    budget: usize,
+    preparation: Option<super::clearance::preparation::Preparation>,
+    search: Option<shove::ShoveSearch>,
+}
+
+/// A built copper candidate (absent for a no-op) and the identities of the copper it changes.
+type Built = (Option<Project>, BTreeSet<Uuid>);
+
+/// Search suspensions (each at most one exact probe or one bounded walk) per host step, as for
+/// walkaround planning.
+const SHOVE_UNITS_PER_STEP: usize = 8;
+
+impl ShoveCandidate {
+    /// Read the request and capture the source; no geometry is prepared yet. A request for
+    /// another board than the source's is refused.
+    pub(crate) fn new(source: &Source, params: &Value) -> Result<Self, CommandError> {
+        let (target, request, width_nm, budget) = shove_request(&source.snapshot, params)?;
+        if target != source.target {
+            return Err(CommandError::InvalidParams("The shove addresses another board than its preparation.".into()));
         }
+        Ok(Self {
+            source: source.clone(),
+            request,
+            width_nm,
+            budget,
+            preparation: Some(super::clearance::preparation::Preparation::new(source.clone())),
+            search: None,
+        })
     }
-    let query = query.ok_or_else(|| CommandError::Unavailable("Shove obstacle preparation did not finish.".into()))?;
-    let plan = shove::shove(&query, &request, budget, &|| false)?;
-    if plan.outcome != Outcome::Reached {
-        return Err(refusal(&plan));
+
+    /// Whether obstacle preparation is done and the shove is being planned.
+    pub(crate) fn planning(&self) -> bool {
+        self.search.is_some()
     }
-    let (mut tracks, mut vias) = (project.board.tracks.clone(), project.board.vias.clone());
-    let changed = plan.apply(request.layer, width_nm, &mut tracks, &mut vias, &mut crate::fresh_id)?;
-    super::track::validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
-    if tracks == project.board.tracks && vias == project.board.vias {
-        return Ok((None, changed));
+
+    /// Exact probes the shove has charged so far, and its probe budget.
+    pub(crate) fn probes(&self) -> (usize, usize) {
+        (self.search.as_ref().map_or(0, shove::ShoveSearch::probes), self.budget)
     }
-    let mut next = project.clone();
-    let board = std::sync::Arc::make_mut(&mut next.board);
-    board.tracks = tracks;
-    board.vias = vias;
-    super::track::protect_locked(project, &next)?;
-    Ok((Some(next), changed))
+
+    /// Advance one bounded unit of work: a preparation batch of at most `budget` units, or at
+    /// most [`SHOVE_UNITS_PER_STEP`] search suspensions. Returns the candidate (absent for a
+    /// no-op) and the identities of changed copper once the shove is planned and applied; a
+    /// zero budget does nothing. Applying and validating the reached plan is the final unit.
+    pub(crate) fn step(&mut self, budget: usize) -> Result<Option<Built>, CommandError> {
+        if budget == 0 {
+            return Ok(None);
+        }
+        if let Some(preparation) = &mut self.preparation {
+            if let Some(query) = preparation.step(budget)? {
+                self.preparation = None;
+                self.search = Some(shove::ShoveSearch::new(query, self.request.clone(), self.budget));
+            }
+            return Ok(None);
+        }
+        let search = self.search.as_mut().ok_or_else(|| CommandError::Unavailable("The shove has already finished.".into()))?;
+        let Some(plan) = search.step(budget.min(SHOVE_UNITS_PER_STEP)) else { return Ok(None) };
+        self.search = None;
+        let plan = plan?;
+        if plan.outcome != Outcome::Reached {
+            return Err(refusal(&plan));
+        }
+        let project: &Project = &self.source.snapshot;
+        let (mut tracks, mut vias) = (project.board.tracks.clone(), project.board.vias.clone());
+        let changed = plan.apply(self.request.layer, self.width_nm, &mut tracks, &mut vias, &mut crate::fresh_id)?;
+        super::track::validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
+        if tracks == project.board.tracks && vias == project.board.vias {
+            return Ok(Some((None, changed)));
+        }
+        let mut next = project.clone();
+        let board = std::sync::Arc::make_mut(&mut next.board);
+        board.tracks = tracks;
+        board.vias = vias;
+        super::track::protect_locked(project, &next)?;
+        Ok(Some((Some(next), changed)))
+    }
 }
 
 impl Session {

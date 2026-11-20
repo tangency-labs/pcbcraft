@@ -90,6 +90,8 @@ pub struct CopperEditJob {
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
     check_route_vias: bool,
+    /// A shove's candidate, built over several steps before the shared validation phases.
+    shove: Option<crate::board::route::ShoveCandidate>,
 }
 
 impl Session {
@@ -161,6 +163,7 @@ impl Session {
             result: None,
             class_islands: None,
             check_route_vias: false,
+            shove: None,
         }
     }
     /// Prepare one existing copper command without adopting any authored state. Headless callers
@@ -196,6 +199,14 @@ impl CopperEditJob {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
             n.saturating_mul(n.saturating_sub(1)) / 2
         });
+        if let Some(shove) = self.shove.as_ref().filter(|_| self.phase == 0) {
+            let (completed, total) = shove.probes();
+            return Progress {
+                stage: if shove.planning() { "Planning shove" } else { "Preparing shove obstacles" },
+                completed: completed.min(total),
+                total,
+            };
+        }
         Progress {
             stage: match self.phase {
                 0 => "Preparing copper edit",
@@ -236,9 +247,16 @@ impl CopperEditJob {
         match self.phase {
             0 => {
                 // A shove plans against this preparation's exact source, so the committed copper
-                // is the plan for the board that is validated and published.
+                // is the plan for the board that is validated and published. Its preparation and
+                // search advance in bounded steps; the host cancels by not stepping again.
                 let (candidate, added) = if self.command == super::super::route::SHOVE_TRACKS {
-                    super::super::route::shove_candidate(&self.context.source, &self.params)?
+                    let shove = match &mut self.shove {
+                        Some(shove) => shove,
+                        None => self.shove.insert(super::super::route::ShoveCandidate::new(&self.context.source, &self.params)?),
+                    };
+                    let Some(built) = shove.step(budget)? else { return Ok(false) };
+                    self.shove = None;
+                    built
                 } else {
                     edit_candidate(&self.context.source.snapshot, self.command, &self.params)?
                 };

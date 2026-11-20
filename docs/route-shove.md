@@ -102,6 +102,13 @@ refuses shorts and class-limit violations. Anything else is refused with nothing
 changed, naming the blocker and the last legal point; a blocked route's reported
 prefix can be submitted as its own shove.
 
+As a copper preparation job, `pcb.shove_tracks` keeps to the host's bounded steps:
+obstacle preparation advances in the same batches as walkaround planning, and the
+search suspends before every exact probe and every 64 objects of a connectivity
+walk, running at most eight of those units per step. A host cancels by not
+stepping the job again and dropping it, which changes nothing. The synchronous
+solver checks its cancellation callback at the same points.
+
 Both commands are in the engine catalog, so headless MCP discovers them. The live
 editor's adapter forwards engine commands to its session; whether to gate the edit
 differently there is left to the maintainers.
