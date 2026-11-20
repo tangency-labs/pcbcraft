@@ -17,17 +17,19 @@ pcbcraft-units = { workspace = true }
 [features]
 # Opt in to the kernel on wasm32. Browser builds leave it off: panics abort by default on
 # wasm32 and cannot then be caught. Native builds always have the kernel (docs/geometry-kernel.md).
-wasm-kernel = ["dep:solidcore-ops", "dep:solidcore-record", "dep:solidcore-step"]
+wasm-kernel = ["dep:solidcore-ops", "dep:solidcore-record", "dep:solidcore-step", "dep:solidcore-tess"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 solidcore-ops = { workspace = true }
 solidcore-record = { workspace = true }
 solidcore-step = { workspace = true }
+solidcore-tess = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 solidcore-ops = { workspace = true, optional = true }
 solidcore-record = { workspace = true, optional = true }
 solidcore-step = { workspace = true, optional = true }
+solidcore-tess = { workspace = true, optional = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

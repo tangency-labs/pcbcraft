@@ -44,9 +44,14 @@ moving that terminal from `unconnected` into `nets`. Board copper is not consult
 | `nets` | Every net with at least one part terminal, ordered by its first terminal. |
 | `unconnected` | Terminals of placed units that are on no net. In an `accepted` netlist, the accepted terminals on no accepted net. |
 
-Every object is closed: a reader may reject unknown fields. A field that may be
-null is still required; PCBcraft's reader refuses it when omitted, and refuses
-`board`, `package` or `pads` in a `schematic` netlist.
+Records are JSON objects, not positional arrays. A field that may be null is
+still required; PCBcraft's reader refuses it when omitted, and refuses `board`,
+`package` or `pads` in a `schematic` netlist. `Netlist::parse` also refuses
+repeated non-null net IDs, repeated component IDs, repeated terminal numbers
+within a component, and references in `nets` or `unconnected` to unknown or
+multiply listed terminals. These relational checks supplement the schemas.
+Exports omit empty nets; the reader permits them, and comparison counts them
+as net rows.
 UUIDs are written in the lowercase 36-character hyphenated form, and the reader
 accepts only that hyphenated form.
 Integers, such as a definition's or a package's `revision`, are written as plain digits.
@@ -165,9 +170,83 @@ and text `contents`) and `findings`. With `dry_run: true` each file has only its
 `name`. `apply` validates the request without changing the project, revision or
 undo history.
 
+## Comparing a file with the design
+
+`project.compare_netlist` reads a netlist file back, given as its text in
+`netlist` (at most 8 MiB of UTF-8 bytes), and compares it with what the open project exports
+now: the project netlist for a `schematic` file, or the accepted netlist of the
+board a file with `basis: accepted` names. A board the project does not have is
+refused. The command edits nothing; `execute` returns the current `revision` and
+`comparison`, and `apply` validates the request without changing the project,
+revision or undo history. The byte limit is checked before parsing. The discovery schema's
+`maxLength` counts Unicode characters and is only a coarse upper bound; the command also
+checks the encoded byte length, so multibyte text can reach the limit sooner.
+These are separate from the transport limits:
+
+- A live editor request must fit in the **64 KiB** authenticated first frame,
+  including the credential, envelope and JSON escaping. The encoded live reply
+  must fit in **16 MiB**, including its envelope.
+- MCP over stdio allows a **16 MiB** encoded request line, including the JSON
+  envelope and escaping. For a file that does not fit in the live first frame,
+  save the design and start a headless session with
+  `pcbcraft-cli mcp --project path/to/project.json`. Compare against that saved
+  snapshot. The engine's **8 MiB** limit on decoded netlist text still applies.
+
+The engine also refuses a comparison report that would exceed **16 MiB** of
+encoded JSON or **16,384** entries across `differences` and `notes`. It checks
+this as it assembles the report; it does not return a truncated comparison.
+
+The reader rejects duplicate definitions or persistent net IDs, and repeated
+or unknown placements. An accepted-board file must place every defined
+terminal in a net or in `unconnected`. A schematic file may leave terminals
+unlisted, for instance when their unit is not placed.
+
+Terminals are matched by their `{part, terminal}` address, never by net name or
+position in a list. Nets pair up by persistent `id` first, then by an identical
+terminal set. Remaining pairs are selected greedily by most shared terminals,
+then fewest unshared terminals, then design order and file order to break ties.
+Persistent IDs let the comparison identify a terminal moved between those nets.
+A board net whose export has a null ID, such as a pad-only net, pairs by terminal
+membership. Without persistent IDs, ambiguous edits need not identify which net
+or terminal originally moved.
+
+| Field | Meaning |
+| --- | --- |
+| `matches` | True when `differences` is empty. |
+| `identical` | True when the file equals the design's export in every field. |
+| `expected`, `found` | Counts for the design and the file: `components`, `terminals` in the components' tables, `nets`, `connections` (terminals listed across all nets) and `unconnected`. |
+| `differences` | Connectivity differences: project, basis and board first; then, for each design component in order, the component missing, or its missing and re-padded terminals in its terminal order, then its extra terminals, then its moved ones; then components only the file has; then design nets with no counterpart, in design order; then nets only the file has. |
+| `notes` | Differences that leave connectivity unchanged. |
+
+Each entry has a `kind` and a `message`, plus `part`, `terminal`, `field`,
+`expected` and `found` where they apply. Use the structured fields to identify
+what changed. Net-level rows have `expected_net`, `found_net` or both: the
+zero-based indices in the design export's and the file's `nets` arrays. A
+moved terminal's place is `"unconnected"`, `"unlisted"` (schematic only), or
+`{"net": {"id", "index"}}` on either side. The index is relative to that side's
+array, and `id` can be null. This identifies distinct nets even when their
+names are equal and their IDs are null. Moved-terminal rows do not repeat
+either net's display name.
+
+The difference kinds are `project` (another project ID), `basis`, `board`
+(another board, or a board on one side only), `part_missing`,
+`part_extra`, `terminal_missing`, `terminal_extra`, `terminal_moved` (between
+nets, `unconnected` or `unlisted`), `pads_changed` (pad membership changed), `net_missing`
+(a design net with no counterpart in the file) and `net_extra`. The note kinds
+are `net_renamed` (`field` is `name` or `names`), `net_id_changed`, `header`
+(`project.name`, `board.name` or `board.source`), `part_changed`
+(`reference`, `value`, `kind`, `definition`, `units` or `package`) and
+`terminal_changed` (`name` or `electrical_type`). A file whose nets were only
+renamed or reordered therefore matches, with the renames as notes. Reordering the
+component, terminal, net or pad lists alone can leave both result lists empty while
+`identical` is false.
+
 ## Not yet covered
 
 Board copper connectivity and other file formats are not part of format 1 or format 2.
+
+`project.compare_netlist` always takes the open design as the expected side. Comparing
+two files with each other, or a project file with a board file, has no command.
 
 Each sheet appears in the hierarchy once, because the editor refuses repeated sheet
 instances, so each unit has one `occurrence` path. When repeated instances arrive, a
