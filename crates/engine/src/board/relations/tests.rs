@@ -1047,8 +1047,8 @@ fn a_drc_relation_advisory_matches_sync_resumable_and_captured_history() {
     assert_eq!((s.revision(), s.undo.len(), s.redo.len()), (revision, undo, redo));
     assert_eq!(bytes(&s), saved);
     assert!(observer.0.lock().unwrap().is_empty());
-    let packed = crate::persistence::encode(snapshot.clone()).unwrap();
-    assert_eq!(encode_documents(crate::persistence::decode(&packed).unwrap()).unwrap(), saved);
+    let packed = crate::persistence::encode_packed(snapshot.clone()).unwrap();
+    assert_eq!(encode_documents(crate::persistence::decode_packed(&packed).unwrap().project).unwrap(), saved);
 
     run(&mut s, EDIT, json!({"id":suppressed,"edit":{"suppressed":false}})).unwrap();
     assert!(!captured.source().is_current(&s));
