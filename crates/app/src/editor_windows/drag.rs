@@ -263,8 +263,10 @@ impl PcbApp {
     /// Outside the source host's panes the list returns to the source header, where window
     /// destinations stay available even without desktop coordinates. The preview uses the
     /// same destination as release, including a peer's position after the source is removed.
+    /// A host needs multiple visible panes before it can offer a full-window move.
     pub(crate) fn editor_drag_targets(&mut self, ui: &Ui, panes: &[(ViewId, Rect)]) {
         let host = self.views.host;
+        let can_split_window = panes.len() > 1;
         if let Some(geometry) = self.windows.drag_geometry.get_mut(&host) {
             geometry.panes = panes.to_vec();
         }
@@ -293,6 +295,7 @@ impl PcbApp {
                 pcbcraft_chrome::editor::WindowDropState {
                     pointer,
                     can_detach: self.drag_can_detach(drag),
+                    can_split_window,
                     detaching: matches!(self.drag_destination(drag), Some(DropDestination::NewWindow)),
                 },
             );
@@ -369,7 +372,8 @@ impl PcbApp {
             );
         }
         for side in [pcbcraft_chrome::editor::DockSide::Top, pcbcraft_chrome::editor::DockSide::Bottom] {
-            let active = matches!(destination, Some(DropDestination::WindowSplit(target, selected)) if self.views.owner(target.view()) == Some(host) && selected == side);
+            let active = can_split_window
+                && matches!(destination, Some(DropDestination::WindowSplit(target, selected)) if self.views.owner(target.view()) == Some(host) && selected == side);
             if let Some(area) = panes.iter().map(|(_, rect)| *rect).reduce(Rect::union) {
                 pcbcraft_chrome::editor::window_split_preview(
                     ui,
@@ -377,7 +381,7 @@ impl PcbApp {
                     area,
                     side,
                     active,
-                    self.windows.drag.is_some(),
+                    can_split_window && self.windows.drag.is_some(),
                 );
             }
         }

@@ -1172,3 +1172,74 @@ fn detached_pane_edge_drop_moves_instead_of_leaving_the_old_window() {
     assert_eq!(ids.iter().filter(|id| **id == source).count(), 1);
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
 }
+
+/// A single-pane detached host offers working local splits without no-op window targets.
+#[test]
+fn window_split_rows_require_multiple_visible_panes() {
+    for multiple in [false, true] {
+        let (mut h, peers) = many_windows();
+        let root = h.state().views.active.id();
+        h.state_mut().views.open_window(root);
+        let child = h.state().views.hosts[&HostId(1)].focused;
+        if multiple {
+            h.state_mut().views.open_beside(child);
+        }
+        h.run();
+        let peer = peers.borrow()[&editor_windows::viewport(HostId(1))].clone();
+        child_drag(&mut h, &peer);
+        child_rect(&peer, "Split up");
+        child_rect(&peer, "Split down");
+        for label in ["Split window up", "Split window down"] {
+            assert_eq!(peer.borrow().nodes.values().any(|node| node.label() == Some(label)), multiple);
+        }
+        if !multiple {
+            for label in ["Split window above", "Split window below"] {
+                assert!(!peer.borrow().nodes.values().any(|node| node.label() == Some(label)));
+            }
+            let at = child_rect(&peer, "Split down").center();
+            peer.borrow_mut().events.push(Event::PointerMoved(at));
+            h.run();
+            peer.borrow_mut().events.push(Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            });
+            h.run();
+            assert_eq!(h.state().views.hosts[&HostId(1)].layout.visible_views().len(), 2);
+        } else {
+            let at = child_rect(&peer, "Split window down").center();
+            peer.borrow_mut().events.push(Event::PointerMoved(at));
+            h.run();
+            assert!(peer.borrow().nodes.values().any(|node| node.label() == Some("Split window below")));
+        }
+    }
+}
+
+/// A centre drop into a very narrow column reorders the existing pane instead of splitting it.
+#[test]
+fn narrow_pane_retains_a_centre_reorder_drop() {
+    let (mut h, _) = many_windows();
+    h.set_size(vec2(760.0, 650.0));
+    let ctx = h.ctx.clone();
+    for _ in 0..5 {
+        let target = *h.state().views.hosts[&HostId::ROOT].layout.visible_views().last().unwrap();
+        h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":target.0,"side":"right"})).unwrap();
+    }
+    h.run();
+    let ids = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+    let area = h.state().views.hosts[&HostId::ROOT].rects.last().unwrap().1;
+    assert!(area.width() < 40.0);
+    let before = h.state().session.snapshot().unwrap();
+    let moved = root_drag(&mut h, 0);
+    let at = pos2(area.center().x, area.bottom() - 40.0);
+    h.hover_at(at);
+    h.run();
+    assert!(area.contains(h.get_by_label("Move pane here").rect().center()));
+    h.drop_at(at);
+    h.run();
+    let after = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+    assert_eq!(after.len(), ids.len());
+    assert_eq!(after.last(), Some(&moved));
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}

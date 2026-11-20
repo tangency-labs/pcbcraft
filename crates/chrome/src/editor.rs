@@ -240,12 +240,13 @@ pub fn dock_region(rect: Rect) -> Rect {
 }
 
 /// Edge bands select explicit split placement; the centre retains ordinary pane movement.
-/// Use physical edge distance so wide panes do not make top/bottom drops harder to reach.
+/// Use physical edge distance while preserving an interior region even in very small panes.
 pub fn dock_side(rect: Rect, pointer: egui::Pos2) -> Option<DockSide> {
-    if !rect.contains(pointer) {
+    if !rect.is_positive() || !rect.contains(pointer) {
         return None;
     }
-    let band = (rect.width().min(rect.height()) * 0.22).clamp(20.0, 100.0);
+    let extent = rect.width().min(rect.height());
+    let band = (extent * 0.22).clamp(20.0, 100.0).min(extent * 0.4);
     [
         (DockSide::Top, pointer.y - rect.top()),
         (DockSide::Bottom, rect.bottom() - pointer.y),
@@ -323,10 +324,11 @@ pub enum WindowDrop {
     HostSide(u64, DockSide),
 }
 
-/// Current local pointer and new-window availability for a pane's destination list.
+/// Captured pointer and valid window-placement capabilities for a pane's destination list.
 pub struct WindowDropState {
     pub pointer: Option<egui::Pos2>,
     pub can_detach: bool,
+    pub can_split_window: bool,
     pub detaching: bool,
 }
 
@@ -362,8 +364,10 @@ pub fn window_drop_targets(
                 ui.set_width(width);
                 let mut choices =
                     vec![(WindowDrop::Split(DockSide::Top), "Split up".to_owned()), (WindowDrop::Split(DockSide::Bottom), "Split down".to_owned())];
-                choices.push((WindowDrop::WindowSplit(DockSide::Top), "Split window up".to_owned()));
-                choices.push((WindowDrop::WindowSplit(DockSide::Bottom), "Split window down".to_owned()));
+                if state.can_split_window {
+                    choices.push((WindowDrop::WindowSplit(DockSide::Top), "Split window up".to_owned()));
+                    choices.push((WindowDrop::WindowSplit(DockSide::Bottom), "Split window down".to_owned()));
+                }
                 if state.can_detach {
                     choices.push((WindowDrop::NewWindow, "Open in new window".to_owned()));
                 }
@@ -433,5 +437,31 @@ pub fn pane_drag_source(ui: &Ui, source: Rect, active: bool) {
         let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, id.with("source")));
         painter.rect_filled(source, 0, t.panel.gamma_multiply(0.28 * amount));
         painter.rect_stroke(source.shrink(t.space_4), t.control_radius, Stroke::new(1.0, t.accent.gamma_multiply(amount)), egui::StrokeKind::Inside);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Thin panes retain an interior drop region while their visible edges remain selectable.
+    #[test]
+    fn docking_keeps_a_centre_region_in_thin_and_short_panes() {
+        for size in [vec2(30.0, 400.0), vec2(400.0, 30.0), vec2(8.0, 8.0), vec2(100.0, 400.0)] {
+            let rect = Rect::from_min_size(pos2(50.0, 80.0), size);
+            assert_eq!(dock_side(rect, rect.center()), None);
+            for (point, side) in [
+                (pos2(rect.left() + 1.0, rect.center().y), DockSide::Left),
+                (pos2(rect.right() - 1.0, rect.center().y), DockSide::Right),
+                (pos2(rect.center().x, rect.top() + 1.0), DockSide::Top),
+                (pos2(rect.center().x, rect.bottom() - 1.0), DockSide::Bottom),
+            ] {
+                assert_eq!(dock_side(rect, point), Some(side));
+            }
+        }
+        let ordinary = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
+        assert_eq!(dock_side(ordinary, pos2(99.0, 350.0)), Some(DockSide::Left));
+        assert_eq!(dock_side(ordinary, pos2(101.0, 350.0)), None);
+        assert_eq!(dock_side(Rect::from_min_size(pos2(0.0, 0.0), vec2(0.0, 400.0)), pos2(0.0, 200.0)), None);
     }
 }
