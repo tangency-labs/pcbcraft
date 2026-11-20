@@ -33,6 +33,17 @@ fn name_terminal(s: &mut Session, symbol: usize, terminal: usize) {
     run(s, crate::net_labels::ADD, json!({"name":"SEPARATE","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm})).unwrap();
 }
 
+/// Name a terminal through a short stub so the label stays off any wire passing over the
+/// terminal: a label on a wire path joins that wire.
+fn name_terminal_off_wire(s: &mut Session, symbol: usize, terminal: usize) {
+    let p = s.project().unwrap();
+    let term = p.symbols[symbol].terminals()[terminal];
+    let at = p.terminal_position(term).unwrap();
+    let end = Point { x_nm: at.x_nm, y_nm: at.y_nm - 4 * crate::schematic::GRID_NM };
+    run(s, crate::DRAW_WIRE, json!({"from":term.inspect(),"to":end,"bends":[]})).unwrap();
+    run(s, crate::net_labels::ADD, json!({"name":"SEPARATE","style":"global","x_nm":end.x_nm,"y_nm":end.y_nm})).unwrap();
+}
+
 fn remote_split(s: &mut Session) {
     let p = s.project().unwrap();
     let term = p.symbols[2].terminals()[0];
@@ -75,7 +86,7 @@ fn a_net_locality_remote_peer_and_ordinal_reindex_leave_existing_short_unmarked(
         assert_eq!(n(&s, component, "1"), n(&s, remote, "1"));
         assert_ne!(n(&s, component, "1"), old_other);
         if reindex {
-            name_terminal(&mut s, 0, 1);
+            name_terminal_off_wire(&mut s, 0, 1);
         } else {
             remote_split(&mut s);
         }
