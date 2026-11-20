@@ -181,6 +181,67 @@ fn quarter_turned_fields_sit_beside_the_body() {
     assert!(unturned[0] < 20. * GRID_NM as f64 * PT_PER_NM);
 }
 
+/// A line-only body uses the centered two-grid canvas fallback, not the off-axis line bounds.
+#[test]
+fn zero_area_turned_body_uses_centered_field_fallback() {
+    let (session, target) = fixture();
+    let sheet = session.project().unwrap().for_sheet(target).unwrap();
+    let mut symbol = sheet.symbols()[0].clone();
+    symbol.rotation = 1;
+    let horizontal = Shape::Line(Point { x_nm: -GRID_NM, y_nm: -3 * GRID_NM }, Point { x_nm: GRID_NM, y_nm: -3 * GRID_NM });
+    let vertical = Shape::Line(Point { x_nm: 3 * GRID_NM, y_nm: -GRID_NM }, Point { x_nm: 3 * GRID_NM, y_nm: GRID_NM });
+    let centered = [add(symbol.position, -GRID_NM, -GRID_NM), add(symbol.position, GRID_NM, GRID_NM)];
+    assert_eq!(body_bounds(&symbol, &[horizontal]), centered);
+    assert_eq!(body_bounds(&symbol, &[vertical]), centered);
+}
+
+/// A saved net-name offset follows the contact's quarter-turn without turning the text itself.
+#[test]
+fn saved_net_name_offset_turns_with_contact() {
+    let (mut session, target) = fixture();
+    let (x, y) = (80 * GRID_NM, 40 * GRID_NM);
+    let text = Layout { offset: Some(Point { x_nm: GRID_NM, y_nm: 0 }), align: TextAlign::Start, ..Layout::default() };
+    apply(
+        &mut session,
+        crate::net_labels::ADD,
+        json!({"sheet":target.id(),"name":"TURNED_NET","style":"local","x_nm":x,"y_nm":y,"rotation":90,"text":text}),
+    );
+    let bytes = export(session.project().unwrap(), target).unwrap();
+    let runs = runs(&objects(&bytes));
+    let (_, [tx, ty]) = runs.iter().find(|(name, _)| name == "TURNED_NET").unwrap();
+    let contact_x = x as f64 * PT_PER_NM;
+    let contact_y = (210_000_000 - y) as f64 * PT_PER_NM;
+    let rise = (GRID_NM as f64 - text.height_nm as f64 / 2.) * PT_PER_NM;
+    assert!((tx - contact_x).abs() < 0.00001 && (ty - contact_y - rise).abs() < 0.00001, "unexpected text position: {tx}, {ty}");
+}
+
+/// Input and output names sit on opposite sides of open markers whose tips stay on the contacts.
+#[test]
+fn hierarchy_labels_point_to_their_contacts() {
+    let (mut session, target) = fixture();
+    let (x, y) = (80 * GRID_NM, 40 * GRID_NM);
+    let labels = [("INPUT_PORT", "input", y, -1.), ("OUTPUT_PORT", "output", y + 4 * GRID_NM, 1.)];
+    for (name, direction, y, _) in labels {
+        apply(&mut session, crate::hierarchy::ADD_LABEL, json!({"sheet":target.id(),"name":name,"direction":direction,"x_nm":x,"y_nm":y}));
+    }
+    let bytes = export(session.project().unwrap(), target).unwrap();
+    let objects = objects(&bytes);
+    let runs = runs(&objects);
+    let contact_x = x as f64 * PT_PER_NM;
+    let grid = GRID_NM as f64 * PT_PER_NM;
+    for (name, _, y, side) in labels {
+        let contact_y = (210_000_000 - y) as f64 * PT_PER_NM;
+        let back = contact_x + side * grid / 2.;
+        let top = contact_y + grid / 4.;
+        let bottom = contact_y - grid / 4.;
+        let marker = format!("{back:.5} {top:.5} m\n{contact_x:.5} {contact_y:.5} l\n{back:.5} {bottom:.5} l\nS\n");
+        assert!(objects[3].contains(&marker), "{name} marker does not meet the contact");
+        let (_, [tx, ty]) = runs.iter().find(|(text, _)| text == name).unwrap();
+        assert!((tx - back) * side > 0., "{name} is on the wrong side of its marker");
+        assert!((ty + grid / 2. - contact_y).abs() < 0.00001, "{name} is not centered at its contact height");
+    }
+}
+
 /// An independent viewer's text extractor can read the exact same command-built fixture.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

@@ -169,7 +169,7 @@ fn draw_symbol(sheet: &Project, page: &mut Drawing, symbol: &SymbolPlacement) ->
             // As on the canvas, a quarter-turned body keeps Reference and Value beside it,
             // left-aligned, so they do not sit on the vertical pin axis where wires continue.
             None if i < 2 && symbol.turns() % 2 == 1 => {
-                let [low, high] = body_bounds(symbol);
+                let [low, high] = body_bounds(symbol, &symbol.unit_definition().drawing);
                 let middle = (low.y_nm + high.y_nm) / 2;
                 let rise = FIELD_GAP_NM + layout.height_nm / 2;
                 let y_nm = if i == 0 { middle - rise } else { middle + rise };
@@ -195,10 +195,10 @@ fn draw_symbol(sheet: &Project, page: &mut Drawing, symbol: &SymbolPlacement) ->
 }
 
 /// Bound the posed body drawing without generated pin ink, as the canvas does for automatic
-/// field placement. A unit without body drawing uses a two-grid square around its center.
-fn body_bounds(symbol: &SymbolPlacement) -> [Point; 2] {
+/// field placement. An empty or zero-area drawing uses a two-grid square around the symbol center.
+fn body_bounds(symbol: &SymbolPlacement, drawing: &[Shape]) -> [Point; 2] {
     let mut points = Vec::new();
-    for shape in &symbol.unit_definition().drawing {
+    for shape in drawing {
         match shape {
             Shape::Line(a, b) | Shape::Rect(a, b) => points.extend([*a, *b]),
             Shape::Polyline(line) => points.extend_from_slice(line),
@@ -208,12 +208,15 @@ fn body_bounds(symbol: &SymbolPlacement) -> [Point; 2] {
         }
     }
     let mut points = points.into_iter().map(|p| posed(symbol, p));
-    let Some(first) = points.next() else {
-        return [add(symbol.position, -GRID_NM, -GRID_NM), add(symbol.position, GRID_NM, GRID_NM)];
-    };
-    points.fold([first; 2], |[low, high], p| {
-        [Point { x_nm: low.x_nm.min(p.x_nm), y_nm: low.y_nm.min(p.y_nm) }, Point { x_nm: high.x_nm.max(p.x_nm), y_nm: high.y_nm.max(p.y_nm) }]
-    })
+    if let Some(first) = points.next() {
+        let [low, high] = points.fold([first; 2], |[low, high], p| {
+            [Point { x_nm: low.x_nm.min(p.x_nm), y_nm: low.y_nm.min(p.y_nm) }, Point { x_nm: high.x_nm.max(p.x_nm), y_nm: high.y_nm.max(p.y_nm) }]
+        });
+        if low.x_nm < high.x_nm && low.y_nm < high.y_nm {
+            return [low, high];
+        }
+    }
+    [add(symbol.position, -GRID_NM, -GRID_NM), add(symbol.position, GRID_NM, GRID_NM)]
 }
 
 /// Reuse physical graphics polylines, but keep all lettering as PDF text rather than outlining it.
@@ -258,7 +261,8 @@ fn draw_shape(page: &mut Drawing, symbol: &SymbolPlacement, shape: &Shape, bound
     Ok(())
 }
 
-/// Draw saved net names and hierarchy interfaces on this sheet only; no links or child pages.
+/// Draw saved net names and hierarchy interfaces on this sheet only, including turned name
+/// offsets and directional child-side markers at their wire contacts.
 fn draw_labels(sheet: &Project, page: &mut Drawing) -> Result<(), PdfError> {
     for label in sheet.net_labels() {
         let global = label.style.global();
@@ -287,15 +291,17 @@ fn draw_labels(sheet: &Project, page: &mut Drawing) -> Result<(), PdfError> {
             pose(LABEL_NM / 3, -layout.height_nm)
         };
         if layout.visible {
-            let at = layout.offset.map_or(at, |offset| add(label.at, offset.x_nm, offset.y_nm));
+            let at = layout.offset.map_or(at, |offset| pose(offset.x_nm, offset.y_nm));
             let rotation = if global && label.text.is_none() { i32::from(label.rotation) } else { i32::from(layout.rotation) };
             let (degrees, align) = upright(rotation, layout.align);
             page.text(at, layout.height_nm, degrees, align, &shown)?;
         }
     }
     for label in sheet.hierarchical_labels() {
-        page.path([label.at, add(label.at, GRID_NM, 0)], STROKE_NM, false, Fill::None);
-        page.text(add(label.at, GRID_NM, -LABEL_NM), LABEL_NM, 0, TextAlign::Start, &label.name)?;
+        let (dx, align) = if label.direction.right() { (GRID_NM / 2, TextAlign::Start) } else { (-GRID_NM / 2, TextAlign::End) };
+        let wing = GRID_NM / 4;
+        page.path([add(label.at, dx, -wing), label.at, add(label.at, dx, wing)], STROKE_NM, false, Fill::None);
+        page.text(add(label.at, dx + dx / 2, 0), LABEL_NM, 0, align, &label.name)?;
     }
     for block in sheet.sheet_symbols() {
         let size = sheet.sheet_symbol_size(block);
