@@ -1648,6 +1648,7 @@ pub struct DocumentsEncoder {
     sheet_mirrored: bool,
     sheet_wire_index: BTreeMap<u64, usize>,
     live_generated_legs: Vec<usize>,
+    board_rows: BoardRows,
 }
 
 /// Identical shared pins are reusable, but one immutable address cannot discard a different body.
@@ -1692,6 +1693,7 @@ impl DocumentsEncoder {
             sheet_mirrored: false,
             sheet_wire_index: BTreeMap::new(),
             live_generated_legs: Vec::new(),
+            board_rows: BoardRows::default(),
         }
     }
 
@@ -2243,6 +2245,11 @@ impl DocumentsEncoder {
                         self.finish_sheet()?;
                     }
                 }
+                30 => {
+                    if self.board_rows.step(&mut self.bytes, &self.project.board)? {
+                        self.phase = 7;
+                    }
+                }
                 7 => {
                     if let Some((&id, assignment)) =
                         self.project.board.assignments.range((std::ops::Bound::Excluded(self.cursor), std::ops::Bound::Unbounded)).next()
@@ -2433,10 +2440,10 @@ impl DocumentsEncoder {
         if self.sheet_cursor < self.project.sheets.len() {
             self.start_sheet();
         } else if self.project.board_target().is_some() {
-            self.phase = 7;
+            self.phase = 30;
             self.cursor = 0;
             self.first = true;
-            board_header(&mut self.bytes, &self.project)?;
+            board_metadata_header(&mut self.bytes, &self.project)?;
         } else {
             self.phase = 9;
             self.cursor = 0;
@@ -2527,7 +2534,9 @@ impl Write for BoardByteCounter {
 /// native writer's header, record framing, serialized fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
     let mut bytes = BoardByteCounter::default();
-    board_header(&mut bytes, project)?;
+    board_metadata_header(&mut bytes, project)?;
+    let mut rows = BoardRows::default();
+    while !rows.step(&mut bytes, &project.board)? {}
     let mut first = true;
     for assignment in project.board.assignments.values() {
         record(&mut bytes, &mut first, assignment)?;
@@ -2556,7 +2565,7 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
 /// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
-fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
+fn board_metadata_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     crate::board::zones::validate(project)?;
     crate::board::arc::validate(project, &project.board.arcs)?;
     let board = &project.board;
@@ -2743,53 +2752,85 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
     if let Some(outline) = outline {
         writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    if let Some(graphics) = &board.drawings {
-        bytes.write_all(b"  \"graphics\": {\n    \"layers\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for layer in &graphics.layers {
-            record(bytes, &mut first, layer)?;
-        }
-        bytes.write_all(b"    ],\n    \"items\": [\n").map_err(|error| error.to_string())?;
-        first = true;
-        for item in &graphics.items {
-            record(bytes, &mut first, item)?;
-        }
-        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
-    }
-    if !board.zones.is_empty() {
-        bytes.write_all(b"  \"zones\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for zone in &board.zones {
-            record(bytes, &mut first, zone)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.arcs.is_empty() {
-        bytes.write_all(b"  \"arcs\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for arc in &board.arcs {
-            record(bytes, &mut first, arc)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.tracks.is_empty() {
-        bytes.write_all(b"  \"tracks\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for track in &board.tracks {
-            record(bytes, &mut first, track)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.vias.is_empty() {
-        bytes.write_all(b"  \"vias\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for via in &board.vias {
-            record(bytes, &mut first, via)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    bytes.write_all(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" }).map_err(|error| error.to_string())?;
     Ok(())
+}
+
+/// The native drawing and copper arrays are used both by Save and by the board byte meter.
+#[derive(Default)]
+struct BoardRows {
+    phase: u8,
+    index: usize,
+}
+
+impl BoardRows {
+    /// Advance by a single item or delimiter, maintaining the original field order.
+    fn step(&mut self, bytes: &mut impl Write, board: &crate::board::Board) -> Result<bool, String> {
+        match self.phase {
+            0 => {
+                if board.drawings.is_some() {
+                    bytes.write_all(b"  \"graphics\": {\n    \"layers\": [\n").map_err(|error| error.to_string())?;
+                    self.phase = 1;
+                } else {
+                    self.phase = 3;
+                }
+            }
+            1 => {
+                let graphics = board.drawings.as_ref().ok_or("Missing board graphics during encoding.")?;
+                if self.row(bytes, &graphics.layers)? {
+                    bytes.write_all(b"    ],\n    \"items\": [\n").map_err(|error| error.to_string())?;
+                    self.advance();
+                }
+            }
+            2 => {
+                let graphics = board.drawings.as_ref().ok_or("Missing board graphics during encoding.")?;
+                if self.row(bytes, &graphics.items)? {
+                    bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
+                    self.advance();
+                }
+            }
+            3 => self.optional_rows(bytes, b"  \"zones\": [\n", &board.zones)?,
+            4 => self.optional_rows(bytes, b"  \"arcs\": [\n", &board.arcs)?,
+            5 => self.optional_rows(bytes, b"  \"tracks\": [\n", &board.tracks)?,
+            6 => self.optional_rows(bytes, b"  \"vias\": [\n", &board.vias)?,
+            7 => {
+                let open: &[u8] = if board.assignments.is_empty() { b"  \"footprints\": [\n" } else { b"  \"assignments\": [\n" };
+                bytes.write_all(open).map_err(|error| error.to_string())?;
+                return Ok(true);
+            }
+            _ => return Err("Unexpected board array phase.".into()),
+        }
+        Ok(false)
+    }
+
+    /// A row in an always-present list; report when its closing delimiter is next.
+    fn row<T: Serialize>(&mut self, bytes: &mut impl Write, values: &[T]) -> Result<bool, String> {
+        let Some(row) = values.get(self.index) else { return Ok(true) };
+        record(bytes, &mut (self.index == 0), row)?;
+        self.index += 1;
+        Ok(false)
+    }
+
+    /// An optional list adds its native opening delimiter before doing any item work.
+    fn optional_rows<T: Serialize>(&mut self, bytes: &mut impl Write, prefix: &[u8], values: &[T]) -> Result<(), String> {
+        if values.is_empty() {
+            self.advance();
+        } else if self.index == 0 {
+            bytes.write_all(prefix).map_err(|error| error.to_string())?;
+            self.index = 1;
+        } else if let Some(row) = values.get(self.index - 1) {
+            record(bytes, &mut (self.index == 1), row)?;
+            self.index += 1;
+        } else {
+            bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            self.advance();
+        }
+        Ok(())
+    }
+
+    fn advance(&mut self) {
+        self.phase += 1;
+        self.index = 0;
+    }
 }
 
 const RECORD_INDENT: &[u8] = b"    ";
