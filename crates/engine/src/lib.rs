@@ -256,7 +256,7 @@ impl ParamKind {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
             Self::PartDraft => {
-                json!({"type":"object","description":"Bounded pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 native draft record"})
+                json!({"type":"object","description":"Bounded native reusable or manufacturer part draft record"})
             }
             Self::AuthoringItem => {
                 json!({"type":"object","description":"A bounded pcbcraft-library-item authoring envelope from the editor; not a filesystem path"})
@@ -1108,7 +1108,7 @@ const CATALOG: &[Command] = &[
                 name: "text",
                 required: true,
                 kind: ParamKind::ClipboardText,
-                summary: "pcbcraft-clipboard/1, /2 or /3 schematic UTF-8 envelope",
+                summary: "pcbcraft-clipboard/1, /2, /3, /6 or /8 schematic UTF-8 envelope",
             },
             SYMBOL_X,
             SYMBOL_Y,

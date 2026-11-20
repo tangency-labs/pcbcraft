@@ -435,15 +435,35 @@ impl PcbApp {
                     apply |= position_apply;
                 }
                 Tab::Terminals => {
-                    egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
+                    use pcbcraft_engine::schematic::ElectricalType::PowerIn;
+                    let selection = self
+                        .session
+                        .project()
+                        .and_then(|project| project.components().find(|part| part.id() == edit.component))
+                        .and_then(|part| part.part.as_ref());
+                    let pins = edit.definition.unit(&edit.unit).map_or(&[][..], |unit| unit.pins());
+                    let show_supply = selection.is_some() && pins.iter().any(|pin| pin.electrical_type == PowerIn);
+                    egui::Grid::new("property_terminals").num_columns(if show_supply { 5 } else { 3 }).show(ui, |ui| {
                         ui.strong("Terminal");
                         ui.strong("Name");
                         ui.strong("Electrical type");
+                        if show_supply {
+                            ui.strong("Supply minimum");
+                            ui.strong("Supply maximum");
+                        }
                         ui.end_row();
-                        for pin in edit.definition.unit(&edit.unit).into_iter().flat_map(|unit| unit.pins()) {
+                        for pin in pins {
                             ui.label(&pin.number);
                             ui.label(pin.name.as_deref().unwrap_or("—"));
                             ui.label(format!("{:?}", pin.electrical_type));
+                            if show_supply {
+                                let range = selection.and_then(|part| part.supply_range(&pin.number));
+                                let show = |bound: Option<&pcbcraft_engine::library::parts::Value>| {
+                                    bound.map_or_else(|| if pin.electrical_type == PowerIn { "Unknown" } else { "—" }.into(), |v| v.display())
+                                };
+                                ui.label(show(range.and_then(|range| range.supply_min.as_ref())));
+                                ui.label(show(range.and_then(|range| range.supply_max.as_ref())));
+                            }
                             ui.end_row();
                         }
                     });

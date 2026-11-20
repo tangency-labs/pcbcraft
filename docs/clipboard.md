@@ -92,6 +92,12 @@ placements reject the entire operation. The envelope is bounded to 8 MiB before
 JSON parsing; native project budgets still apply after insertion. Clipboard text
 never grants authority to write a file or execute a command.
 
+A schematic fragment that pins a part with [device supply ranges](part-schema.md#device-supply-range)
+requires `pcbcraft-clipboard/8`. It can carry flat content or rooted hierarchy
+content; `root_sheet` is present only in the latter case. A capture without a
+rated part keeps its previous version. Lower versions refuse embedded ranges
+rather than discarding them. Version 8 may also carry designator locks; they are optional.
+
 GUI and MCP use `schematic.copy`, `schematic.cut` and `schematic.paste`.
 Copy/Cut take `items` and `expected_revision`; `Session::execute` returns
 `clipboard` text and the resulting revision, including when MCP suppresses
@@ -135,19 +141,21 @@ ordinary Undo recovers it.
 one selected root and its complete reachable child tree, addressed by an explicit
 `root_sheet` UUID independently of native display order, with optional `cut_sheets`
 metadata. Orphan payload sheets/components, board owners, invalid
-records and oversized input are rejected. Without locks or non-plated holes,
-flat schematic exports retain version 1 and hierarchy exports retain version 2;
-older clients reject version 2. Copying does not change the source project's
-saved format. Clipboard metadata suggests
+records and oversized input are rejected. Without locks, non-plated holes or rated
+parts, flat schematic exports retain version 1 and hierarchy exports retain version 2;
+older clients reject versions they do not recognize. Copying does not change the source
+project's saved format. Clipboard metadata suggests
 relocation but never bypasses live ownership, cycle, revision or geometry checks.
 
 A schematic fragment with a locked part instance uses `pcbcraft-clipboard/3`
 unless it also carries pinned non-plated holes, which require
-`pcbcraft-clipboard/6`. Both keep locks in project/51 in the native document map.
+`pcbcraft-clipboard/6`; a fragment with a rated part uses `pcbcraft-clipboard/8`
+whether or not it has locks. All three keep locks in project/51 in the native document map.
 With a non-null, non-nil `root_sheet` UUID they use the closed-tree contract of
 version 2; an omitted or null root selects flat scope like version 1.
-Version 3 requires a lock and cannot carry non-plated holes. Version 6 requires
-non-plated holes and allows locks. Versions 1/2 refuse either feature. The
+Version 3 requires a lock and cannot carry non-plated holes or rated parts. Version 6
+requires non-plated holes and allows locks. Version 8 requires a rated part and allows
+locks and non-plated holes. Versions 1/2 refuse all three features. The
 `kind: "schematic"` field distinguishes these from board clipboard formats.
 The same size, identity, ownership and revision checks apply.
 
@@ -235,6 +243,9 @@ Existing source copper remains protected, and Cut/Delete refuse the whole
 selection if removing a locked track or via would be required. Board fragments
 with locked copper use `pcbcraft-clipboard/3` unless they have explicit via
 targets, which require `pcbcraft-clipboard/4` and can also carry copper locks.
+A board fragment whose circuit embeds a rated schematic fragment uses the board
+ladder's `pcbcraft-clipboard/9`. It can also carry the previously supported
+board content; board fragments without a rated part keep their earlier versions.
 Older readers do not support the newer envelopes. Via assignments are scoped to
 the source board; a foreign destination refuses the whole paste. See
 [via net assignments](via-net-assignments.md).
@@ -294,9 +305,9 @@ it does not flatten sheets or carry unrelated components. Source and destination
 projects need no shared library installation. The same 8 MiB bound applies.
 When a copied package carries circular non-plated holes, the board envelope
 uses `pcbcraft-clipboard/7`; a schematic envelope carrying those definitions
-uses `pcbcraft-clipboard/6`. Other fragments do not change versions for this
-feature. Paste preserves the holes as footprint geometry, not as terminals or
-copper items.
+uses `pcbcraft-clipboard/6`. If the same fragment also carries device supply
+ranges, the rated formats `/9` (board) and `/8` (schematic) carry both.
+Paste preserves the holes as footprint geometry, not as terminals or copper items.
 
 Ordinary PCB paste duplicates logical and physical objects together. It takes
 `text`, `x_nm`, `y_nm`, `board`, `expected_revision`, and a `schematic_targets`

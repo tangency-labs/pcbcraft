@@ -1,10 +1,13 @@
 //! Reusable generic parts link schematic, category and physical package definitions.
 use super::{
-    Category, CategoryBinding, LEGACY_PART_FORMAT, PART_FORMAT, Package, Reference, Value,
+    Category, CategoryBinding, LEGACY_PART_FORMAT, PART_FORMAT, Package, RATED_PART_FORMAT, Reference, SupplyRange, Value,
     codec::{decode, encode, header, unique_map},
     field_id,
 };
-use crate::board::definition::Source;
+use crate::{
+    board::definition::Source,
+    schematic::{ElectricalType, SymbolDefinition, wiring::PinNumber},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 /// A reusable generic part contains no drawings, manufacturer identity, stock or prices.
@@ -26,6 +29,9 @@ pub struct PartDefinition {
     pub fixed_parameters: BTreeMap<String, Value>,
     #[serde(deserialize_with = "unique_map")]
     pub packages: BTreeMap<String, Package>,
+    /// Device limits keyed by the exact symbol's logical terminal ID, never its display name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", deserialize_with = "rating_map")]
+    pub terminal_ratings: BTreeMap<String, SupplyRange>,
 }
 impl PartDefinition {
     /// Parse an actual native part file; unresolved dependencies are checked separately by the catalog.
@@ -38,10 +44,95 @@ impl PartDefinition {
     pub fn reference(&self) -> Reference {
         Reference { library: self.library.clone(), id: self.id.clone(), revision: self.revision }
     }
+    /// The authored range on one logical terminal, or `None` when both bounds are unknown.
+    pub fn supply_range(&self, terminal: &str) -> Option<&SupplyRange> {
+        self.terminal_ratings.get(terminal)
+    }
+
+    /// Change one range in a draft. Parse both bounds before mutation; two blanks remove
+    /// the rating. The normal publication validator checks the exact symbol dependency.
+    pub fn set_supply_range(&mut self, terminal: &str, min: &str, max: &str) -> Result<(), String> {
+        if PinNumber::new(terminal).is_none() {
+            return Err(format!("Invalid supply range terminal ID {terminal:?}."));
+        }
+        if let Some(range) = SupplyRange::parse(terminal, min, max)? {
+            if !self.terminal_ratings.contains_key(terminal) && self.terminal_ratings.len() >= crate::library::MAX_TERMINALS {
+                return Err(format!("A part supports at most {} terminal ratings.", crate::library::MAX_TERMINALS));
+            }
+            self.terminal_ratings.insert(terminal.into(), range);
+        } else {
+            self.terminal_ratings.remove(terminal);
+        }
+        self.select_rating_format();
+        Ok(())
+    }
+
+    /// Select the current rated envelope for an authored map. Otherwise retain the
+    /// original unrated format, or use /2 after the last rating was removed from /4.
+    /// Only draft transitions use this; native readers always enforce the declared header.
+    pub(crate) fn select_rating_format(&mut self) {
+        match self.format.as_str() {
+            LEGACY_PART_FORMAT | PART_FORMAT if !self.terminal_ratings.is_empty() => self.format = RATED_PART_FORMAT.into(),
+            RATED_PART_FORMAT if self.terminal_ratings.is_empty() => self.format = PART_FORMAT.into(),
+            _ => {}
+        }
+    }
+
+    /// Check bounds and map size without resolving the symbol or requiring other draft fields.
+    pub(crate) fn validate_rating_values(&self) -> Result<(), String> {
+        if self.terminal_ratings.len() > crate::library::MAX_TERMINALS {
+            return Err(format!("A part supports at most {} terminal ratings.", crate::library::MAX_TERMINALS));
+        }
+        for (terminal, range) in &self.terminal_ratings {
+            if PinNumber::new(terminal).is_none() {
+                return Err(format!("Invalid supply range terminal ID {terminal:?}."));
+            }
+            range.validate(terminal)?;
+        }
+        Ok(())
+    }
+
+    /// Validate ratings against the resolved exact logical terminal table, independent of
+    /// packages and graphical units. Callers supply the symbol resolved for this definition.
+    pub(crate) fn validate_rating_terminals(&self, symbol: Option<&SymbolDefinition>) -> Result<(), String> {
+        if self.terminal_ratings.is_empty() {
+            return Ok(());
+        }
+        let symbol = symbol.ok_or("Terminal ratings require an exact symbol.")?;
+        let mut found = 0;
+        for pin in symbol.pins() {
+            if self.terminal_ratings.contains_key(&pin.number) {
+                if pin.electrical_type != ElectricalType::PowerIn {
+                    return Err(format!("Terminal {} must be power_in to carry a supply range.", pin.number));
+                }
+                found += 1;
+            }
+        }
+        if found != self.terminal_ratings.len()
+            && let Some(terminal) = self.terminal_ratings.keys().find(|id| symbol.pin_index(id).is_none())
+        {
+            return Err(format!("Unknown supply range terminal {terminal} in the exact symbol."));
+        }
+        Ok(())
+    }
+
     /// Validate closed records and local invariants; empty package/category choices remain valid.
     pub fn validate(&self) -> Result<(), String> {
-        let expected = if self.format == LEGACY_PART_FORMAT { LEGACY_PART_FORMAT } else { PART_FORMAT };
+        let expected = match self.format.as_str() {
+            LEGACY_PART_FORMAT => LEGACY_PART_FORMAT,
+            RATED_PART_FORMAT => RATED_PART_FORMAT,
+            _ => PART_FORMAT,
+        };
         header(&self.format, expected, &self.reference(), &self.name, &self.license)?;
+        if (self.format == RATED_PART_FORMAT) == self.terminal_ratings.is_empty() {
+            return Err("Only pcbcraft-part/4 carries terminal_ratings, and it requires at least one entry.".into());
+        }
+        if self.symbol.is_none()
+            && let Some(terminal) = self.terminal_ratings.keys().next()
+        {
+            return Err(format!("Supply range for terminal {terminal} requires an exact symbol."));
+        }
+        self.validate_rating_values()?;
         if self.format == LEGACY_PART_FORMAT && self.symbol.is_none() {
             return Err("Format 1 parts require a symbol; use pcbcraft-part/2 for optional drawings.".into());
         }
@@ -102,6 +193,15 @@ impl PartDefinition {
         self.validate()?;
         encode(self)
     }
+}
+
+/// When present the rating map must have content and cannot repeat a terminal key.
+fn rating_map<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<String, SupplyRange>, D::Error> {
+    let ratings: BTreeMap<String, SupplyRange> = unique_map(deserializer)?;
+    if ratings.is_empty() {
+        return Err(serde::de::Error::custom("terminal_ratings must be omitted when empty"));
+    }
+    Ok(ratings)
 }
 
 /// An absent association is optional; explicit null is not an exact reference.

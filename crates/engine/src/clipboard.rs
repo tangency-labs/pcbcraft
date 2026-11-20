@@ -23,6 +23,7 @@ const FORMAT: &str = "pcbcraft-clipboard/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-clipboard/2";
 const DESIGNATOR_LOCK_FORMAT: &str = "pcbcraft-clipboard/3";
 const NPTH_FORMAT: &str = "pcbcraft-clipboard/6";
+const RATED_PART_FORMAT: &str = "pcbcraft-clipboard/8";
 mod hierarchy;
 mod preview;
 pub(crate) use hierarchy::hierarchy_objects;
@@ -216,16 +217,18 @@ impl Fragment {
 
     /// Decode bounded native text: version 1 is flat; version 2 contains a closed hierarchy tree
     /// or root interfaces. Version 3 requires locked parts; version 6 requires pinned non-plated
-    /// holes and can also carry locks. Versions 3 and 6 use flat scope when `root_sheet` is
-    /// omitted or null, otherwise an explicit non-nil hierarchy root. All versions reject board
-    /// owners, orphan scope and invalid records before destination edits or identity allocation.
+    /// holes and can also carry locks; version 8 requires an authored device supply range and can
+    /// also carry pinned non-plated holes and locks. Versions 3, 6 and 8 use flat scope when
+    /// `root_sheet` is omitted or null, otherwise an explicit non-nil hierarchy root. All versions
+    /// reject board owners, orphan scope and invalid records before destination edits or identity
+    /// allocation.
     pub fn from_text(text: &str) -> Result<Self, CommandError> {
         if text.len() > MAX_BYTES {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft design fragment."))?;
-        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT)
+        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT | RATED_PART_FORMAT)
             || envelope.kind != "schematic"
             || !crate::wire::valid_point(&envelope.anchor)
         {
@@ -233,12 +236,14 @@ impl Fragment {
         }
         let documents = envelope.documents.into_iter().map(|(path, text)| (path, text.into_bytes())).collect();
         let project = crate::persistence::decode_documents(&documents).map_err(invalid)?;
+        let rated = envelope.format == RATED_PART_FORMAT;
+        let npth = envelope.format == NPTH_FORMAT;
         let has_locks = project.components.values().any(|part| part.designator_locked);
-        if envelope.format != NPTH_FORMAT && (envelope.format == DESIGNATOR_LOCK_FORMAT) != has_locks {
-            return Err(invalid("Designator locks require clipboard format 3 and at least one locked part instance."));
+        let lock_capable = matches!(envelope.format.as_str(), DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT | RATED_PART_FORMAT);
+        if (envelope.format == DESIGNATOR_LOCK_FORMAT && !has_locks) || (has_locks && !lock_capable) {
+            return Err(invalid("Designator locks require clipboard format 3, 6 or 8, and format 3 requires at least one locked part instance."));
         }
-        let hierarchical = envelope.format == HIERARCHY_FORMAT
-            || (matches!(envelope.format.as_str(), DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT) && envelope.root_sheet.is_some());
+        let hierarchical = envelope.format == HIERARCHY_FORMAT || (lock_capable && envelope.root_sheet.is_some());
         let project = if hierarchical {
             let root =
                 envelope.root_sheet.filter(|id| !id.is_nil()).ok_or_else(|| invalid("hierarchy clipboard needs an explicit root sheet UUID"))?;
@@ -254,10 +259,13 @@ impl Fragment {
             project
         };
         let fragment = Self { project, anchor: envelope.anchor, cut_sheets: envelope.cut_sheets };
-        if (envelope.format == NPTH_FORMAT) != fragment.has_npth() {
+        if !rated && npth != fragment.has_npth() {
             return Err(invalid("clipboard format does not match its pinned non-plated holes"));
         }
         fragment.validate_scope(hierarchical)?;
+        if rated != fragment.has_rated_parts() {
+            return Err(invalid("Only schematic clipboard /8 carries device supply ranges, and it requires one."));
+        }
         Ok(fragment)
     }
 
@@ -283,7 +291,9 @@ impl Fragment {
             .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)).map_err(invalid))
             .collect::<Result<_, _>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.has_npth() {
+            format: if self.has_rated_parts() {
+                RATED_PART_FORMAT
+            } else if self.has_npth() {
                 NPTH_FORMAT
             } else if self.project.components.values().any(|part| part.designator_locked) {
                 DESIGNATOR_LOCK_FORMAT
@@ -304,6 +314,14 @@ impl Fragment {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         Ok(text)
+    }
+
+    /// Only a rating in the copied dependency closure requires the newer envelopes.
+    pub(crate) fn has_rated_parts(&self) -> bool {
+        self.project
+            .components
+            .values()
+            .any(|component| component.part.as_ref().is_some_and(|part| !part.resolved.definition.terminal_ratings.is_empty()))
     }
 
     /// Original anchor for Paste at Original Position, independent of the target camera.

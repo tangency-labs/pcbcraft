@@ -54,7 +54,11 @@ with #47/#245/#243.
 
 Typed quantities accept and display engineering prefixes from atto (`a`) through
 exa (`E`), including femto (`f`) and peta (`P`), with exact canonical values and
-round-trip editing. See the [quantity contract](part-schema.md).
+round-trip editing. See the [quantity contract](part-schema.md). Generic parts can author
+[device supply ranges](part-schema.md#device-supply-range) for their power inputs.
+The pinned limits appear in schematic Pin functions and part inspection, and
+carry through offline saves and native clipboard copies. Missing bounds are
+unknown; electrical rule checking does not yet consume them.
 
 This table starts from the baseline at `091adfd` (November 6, 2026), with the
 wiring and views rows updated for endpoint attachment, local healing, PCB inspection
