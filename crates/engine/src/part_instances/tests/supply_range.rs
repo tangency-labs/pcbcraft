@@ -344,6 +344,53 @@ fn supply_range_schematic_clipboard_is_content_gated_and_portable() {
     }
 }
 
+/// A rated part with a designator lock copies as /8 in either scope and pastes with both its
+/// supply range and lock intact; the lock-only /3 and NPTH /6 envelopes refuse the rating.
+#[test]
+fn rated_and_locked_part_round_trips_through_schematic_clipboard_8() {
+    for hierarchical in [false, true] {
+        let (mut session, mut documents, mut draft) = source(false);
+        part_mut(&mut draft).set_supply_range(TERMINAL, "4.5 V", "36 V").unwrap();
+        let root = session.project().unwrap().sheet_target();
+        let sheet = if hierarchical {
+            apply(&mut session, crate::hierarchy::CREATE_CHILD, json!({"sheet":root.id(),"name":"Supply","x_nm":0,"y_nm":0}));
+            session.project().unwrap().sheets().find(|sheet| sheet.name == "Supply").unwrap().target
+        } else {
+            root
+        };
+        place(&mut session, &mut documents, &draft, sheet);
+        let placed = session.project().unwrap().for_sheet(sheet).unwrap();
+        let symbol = &placed.symbols()[0];
+        let params = json!({"symbol":symbol.id(),"reference":placed.reference(symbol),"value":placed.value(symbol),
+            "designator_locked":true,"sheet":sheet.id()});
+        apply(&mut session, crate::SET_SYMBOL_FIELDS, params);
+        assert!(session.project().unwrap().components().next().unwrap().designator_locked());
+        let project = session.project().unwrap().for_sheet(root).unwrap();
+        let items = crate::selection::Selection { symbols: project.symbols().iter().map(|symbol| symbol.id()).collect(), ..Default::default() };
+        let objects: Vec<_> = project.subsheets.iter().map(|block| format!("sheet-symbol-{}", block.id)).collect();
+        let copy = session
+            .execute(crate::clipboard::COPY, &json!({"items":items,"objects":objects,"sheet":root.id(),"expected_revision":session.revision()}))
+            .unwrap();
+        let text = copy["clipboard"].as_str().unwrap();
+        let mut envelope: Json = serde_json::from_str(text).unwrap();
+        assert_eq!(envelope["format"], "pcbcraft-clipboard/8");
+        let fragment = Fragment::from_text(text).unwrap();
+        assert_eq!(fragment.has_hierarchy(), hierarchical);
+        assert_eq!(fragment.to_text().unwrap(), text);
+        for lower in ["pcbcraft-clipboard/1", "pcbcraft-clipboard/2", "pcbcraft-clipboard/3", "pcbcraft-clipboard/6"] {
+            envelope["format"] = json!(lower);
+            assert!(Fragment::from_text(&envelope.to_string()).is_err(), "{lower} must refuse a rated, locked fragment");
+        }
+        let mut target = Session::default();
+        target.apply("project.new", &json!({"create_board":false})).unwrap();
+        let sheet = target.project().unwrap().sheet_target().id();
+        apply(&mut target, crate::clipboard::PASTE, json!({"text":text,"sheet":sheet,"x_nm":0,"y_nm":0}));
+        let pasted = target.project().unwrap();
+        assert!(range(pasted).is_some());
+        assert!(pasted.components().next().unwrap().designator_locked());
+    }
+}
+
 /// Both clipboard ladders advance for copied rated parts, not for an unrelated part in the source.
 #[test]
 fn supply_range_board_clipboard_keeps_rated_and_unrated_footprints_separate() {

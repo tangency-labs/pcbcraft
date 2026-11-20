@@ -40,6 +40,8 @@ pub(super) struct Edit {
     available_units: Vec<String>,
     reference: String,
     value: String,
+    designator_locked: bool,
+    original_designator_locked: bool,
     metadata: pcbcraft_engine::schematic::fields::Metadata,
     original_metadata: pcbcraft_engine::schematic::fields::Metadata,
     original_layout: pcbcraft_engine::schematic::fields::Layouts,
@@ -76,6 +78,7 @@ impl Edit {
     fn changed(&self) -> bool {
         (&self.reference, &self.value, self.rotation) != (&self.original.0, &self.original.1, self.original.2)
             || self.position() != Ok(self.original_position)
+            || self.designator_locked != self.original_designator_locked
             || self.metadata != self.original_metadata
             || self.layouts().as_ref() != Ok(&self.original_layout)
     }
@@ -105,6 +108,12 @@ impl Edit {
         }
     }
 
+    /// Record intent for a future annotator without disabling deliberate reference edits.
+    fn designator_lock(&mut self, ui: &mut Ui) {
+        pcbcraft_chrome::controls::checkbox(ui, &mut self.designator_locked, "Lock designator")
+            .on_hover_text("Record a lock for future automatic annotation. Manual reference edits remain available.");
+    }
+
     /// Both forms edit the same placement draft. Enter in a coordinate field requests Apply.
     fn position_fields(ui: &mut Ui, x: &mut String, y: &mut String) -> bool {
         let x = chrome::text(ui, "X", x);
@@ -115,6 +124,7 @@ impl Edit {
     /// The compact and expanded forms share reference/value/orientation and coordinate drafts.
     fn fields(&mut self, ui: &mut Ui) -> bool {
         chrome::text(ui, "Reference", &mut self.reference);
+        self.designator_lock(ui);
         chrome::text(ui, "Value", &mut self.value);
         chrome::rotation(ui, &mut self.rotation);
         Self::position_fields(ui, &mut self.x, &mut self.y)
@@ -141,6 +151,8 @@ impl PcbApp {
             unit: symbol.unit_id().to_owned(),
             available_units: project.available_units(&component.id()).iter().map(|unit| unit.unit_id().to_owned()).collect(),
             original: (reference.clone(), value.clone(), rotation),
+            designator_locked: component.designator_locked(),
+            original_designator_locked: component.designator_locked(),
             metadata: component.metadata.clone(),
             original_metadata: component.metadata.clone(),
             original_layout: symbol.field_layout.clone(),
@@ -372,7 +384,7 @@ impl PcbApp {
         let position = edit.position()?;
         let layouts = edit.layouts()?;
         let mut params = json!({"symbol":edit.symbol,"reference":edit.reference,"value":edit.value,"rotation":edit.rotation,
-            "metadata":edit.metadata,"field_layout":layouts,
+            "metadata":edit.metadata,"field_layout":layouts,"designator_locked":edit.designator_locked,
             "x_nm":position.x_nm,"y_nm":position.y_nm,"auto_heal":self.preferences.auto_heal_wires,"expected_revision":edit.source.revision});
         if let Some(crate::editor_view::DocumentTarget::Sheet(sheet)) = self.views.active.target() {
             params["sheet"] = json!(sheet.id());

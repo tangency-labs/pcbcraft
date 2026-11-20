@@ -23,7 +23,10 @@ cancel leave the electrical revision, saved bytes and undo history unchanged.
 
 Copied objects receive new component, symbol, wire, junction and label IDs.
 References are renumbered by default; values, component metadata, field
-appearance and exact pinned definitions are preserved. No-connect intent follows
+appearance and exact pinned definitions are preserved. Part-instance designator
+locks survive Copy, Cut, Duplicate and Paste. A lock does not disable ordinary
+paste renumbering; use Paste Options to preserve the original reference, subject
+to the existing collision check. No-connect intent follows
 the copied part's new identity, with partial-unit copies retaining only flags on
 the captured terminals and whole-part copies retaining unresolved intent too.
 Partial-unit copy refuses unknown-terminal intent that cannot be assigned to one
@@ -93,7 +96,7 @@ A schematic fragment that pins a part with [device supply ranges](part-schema.md
 requires `pcbcraft-clipboard/8`. It can carry flat content or rooted hierarchy
 content; `root_sheet` is present only in the latter case. A capture without a
 rated part keeps its previous version. Lower versions refuse embedded ranges
-rather than discarding them.
+rather than discarding them. Version 8 may also carry designator locks; they are optional.
 
 GUI and MCP use `schematic.copy`, `schematic.cut` and `schematic.paste`.
 Copy/Cut take `items` and `expected_revision`; `Session::execute` returns
@@ -138,12 +141,23 @@ ordinary Undo recovers it.
 one selected root and its complete reachable child tree, addressed by an explicit
 `root_sheet` UUID independently of native display order, with optional `cut_sheets`
 metadata. Orphan payload sheets/components, board owners, invalid
-records and oversized input are rejected. Flat and rooted schematic fragments
-use versions 1 and 2 respectively unless pinned non-plated holes require `/6`
-or a rated part requires `/8`. Older clients reject versions they do not recognize.
-Clipboard versioning does
-not change saved project formats. Clipboard metadata suggests
+records and oversized input are rejected. Without locks, non-plated holes or rated
+parts, flat schematic exports retain version 1 and hierarchy exports retain version 2;
+older clients reject versions they do not recognize. Copying does not change the source
+project's saved format. Clipboard metadata suggests
 relocation but never bypasses live ownership, cycle, revision or geometry checks.
+
+A schematic fragment with a locked part instance uses `pcbcraft-clipboard/3`
+unless it also carries pinned non-plated holes, which require
+`pcbcraft-clipboard/6`; a fragment with a rated part uses `pcbcraft-clipboard/8`
+whether or not it has locks. All three keep locks in project/51 in the native document map.
+With a non-null, non-nil `root_sheet` UUID they use the closed-tree contract of
+version 2; an omitted or null root selects flat scope like version 1.
+Version 3 requires a lock and cannot carry non-plated holes or rated parts. Version 6
+requires non-plated holes and allows locks. Version 8 requires a rated part and allows
+locks and non-plated holes. Versions 1/2 refuse all three features. The
+`kind: "schematic"` field distinguishes these from board clipboard formats.
+The same size, identity, ownership and revision checks apply.
 
 Copy/Cut additionally accept optional `objects`, a unique array of root
 `sheet-symbol-N` and `label-N` IDs. `items` still supplies symbol/wire arrays,
