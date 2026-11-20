@@ -951,6 +951,35 @@ fn shove_refuses_to_overlap_an_earlier_fixed_vertex() {
     assert!(plan.replacements.is_empty());
 }
 
+/// Reserving all three returns together lets the gesture pass staggered bends
+/// where individually certified displacements can trap the next run.
+#[test]
+fn shove_coordinates_returns_across_staggered_runs() {
+    for sign in [-1, 1] {
+        let mut session = board();
+        let point = |(x, y): (i64, i64)| Point { x_nm: 1_000 * x, y_nm: sign * 1_000 * y };
+        let rails: &[&[(i64, i64)]] = &[
+            &[(-14_986, 18_034), (-14_986, -24_638)],
+            &[(-4_064, -31_242), (-11_176, -24_130), (-11_176, -10_414)],
+            &[(3_048, -36_830), (-6_350, -27_432), (-6_350, -18_796), (-7_874, -17_272), (-7_874, -14_224)],
+        ];
+        let tracks: BTreeSet<_> = rails.iter().flat_map(|rail| add(&mut session, rail.iter().copied().map(point).collect(), 250_000)).collect();
+        let head = point((-25_400, -14_986));
+        let mut previous =
+            [(-25_400, -14_986), (-20_574, -14_986), (-16_764, -18_796), (-7_620, -18_796), (-7_366, -19_050)].into_iter().map(point).collect();
+        for x in [-7_112, -5_080, -2_032] {
+            let target = point((x, -19_050));
+            let request = Request { head, target, previous, ..request(&session) };
+            let plan = session.plan_route(&query(&session), &request, request.mode.default_probe_budget(), &|| false).unwrap();
+            assert_eq!(plan.points.last(), Some(&target), "{plan:?}");
+            assert_eq!(plan.replacements.iter().map(|part| part.track).collect::<BTreeSet<_>>(), tracks);
+            commit(&mut session, &request, &plan);
+            session.apply("edit.undo", &Value::Null).unwrap();
+            previous = plan.points;
+        }
+    }
+}
+
 /// An incoming route can carry a shove across a wide row of unlocked copper.
 #[test]
 fn shove_displaces_more_than_ninety_six_rails_in_one_edit() {

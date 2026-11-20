@@ -194,12 +194,19 @@ neighbors when obstructed. Closed or longer-than-255-segment components retain
 per-segment anchors in this slice.
 
 The solver starts with the requested elbow. If its cascade blocks, it can try
-displaced intervals from their other ends or with a different elbow, continue a
-previously displayed guide to the new cursor, or change the incoming elbow. Each candidate must run from the
-same head to the requested target. The original pickup, fixed gesture copper,
-forward push constraints, and probe budget apply to all candidates. A previously
-displayed guide must be certified again before it can influence placement. This also
-checks that a returned path stays clear of its own earlier legs on the same layer.
+displaced intervals from their other ends or with a different elbow. When several
+runs hit by one approach get in each other's way, a fresh cascade can reserve
+ordered lanes and stagger their returns around the cursor. Neighboring runs can
+join as those lanes push into their clearance. If a return remains blocked, the
+solver can try moving the group farther ahead. Each edit widens across ordinary
+bends only as needed and is checked against the same clearance rules and
+protected contacts. The solver can also continue a previously displayed guide to
+the new cursor or change the incoming elbow.
+
+Each candidate runs from the same head to the requested target and shares the
+original pickup, fixed gesture copper and probe budget. A previously displayed
+guide must be certified again before it can influence placement, including
+checking that it stays clear of its own earlier legs on the same layer.
 
 The original pickup is checked against the original copper before any movable
 bodies are hidden. A free start inside an existing clearance band is refused,
