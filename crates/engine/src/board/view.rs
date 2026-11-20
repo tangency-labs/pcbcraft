@@ -82,6 +82,8 @@ pub struct PadView {
     pub center: Point,
     /// Land bounding corners in board coordinates; None denotes a legacy center-only marker.
     pub copper: Option<[Point; 4]>,
+    /// Authored land width and height before rotation; zero for a legacy marker.
+    pub size_nm: (i64, i64),
     /// None denotes a marker with no physical copper. Configured memberships contain layer UUIDs.
     pub copper_layers: Option<CopperLayers>,
     pub shape: super::definition::PadShape,
@@ -99,7 +101,7 @@ impl PadView {
     pub fn contains_point(&self, at: Point) -> bool {
         crate::wire::valid_point(&at)
             && self.copper.is_some_and(|corners| {
-                super::geometry::Contour::pad(self.center, corners, self.shape, self.corner_radius_nm).overlaps_segment(at, at, 0.)
+                super::geometry::Contour::pad(self.center, corners, self.shape, self.corner_radius_nm, self.size_nm).overlaps_segment(at, at, 0.)
             })
     }
 }
@@ -313,6 +315,9 @@ impl<'a> BoardView<'a> {
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
             let value = component.map(|component| component.display_value()).or_else(|| historical.map(|part| part.display_value()))?;
+            let definition = self.project.board.definition_for(footprint);
+            let pins = footprint.terminals_by_pad();
+            let live = accepted.is_none().then(|| self.project.first_component_terminals(footprint.component));
             Some(FootprintView {
                 board: self.target,
                 id: format!("footprint-{}", footprint.id),
@@ -322,51 +327,38 @@ impl<'a> BoardView<'a> {
                 definition: &footprint.definition,
                 position: Point { x_nm: footprint.x_nm, y_nm: footprint.y_nm },
                 rotation: footprint.rotation,
-                pads: self
-                    .project
-                    .board
-                    .pad_numbers(footprint)
-                    .into_iter()
-                    .filter_map(|pad| {
-                        let center = footprint.pad_position(pad, &self.project.board)?;
-                        let definition = self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.as_str()));
-                        let copper = definition.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
-                        let terminal = footprint.component_pin(pad).and_then(|(component, pin)| self.project.component_terminal(component, pin));
-                        let net = if let Some((baseline, index)) = &accepted {
-                            footprint
-                                .component_pin(pad)
-                                .and_then(|(component, pin)| index.get(&(component, pin)).and_then(|index| baseline.net_name(*index)))
-                        } else {
-                            terminal.and_then(|terminal| net_label(self.project, terminal))
-                        };
-                        Some(PadView {
+                pads: footprint
+                    .projected_pads(definition)
+                    .map(|(pad, center, physical)| {
+                        let copper = physical.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
+                        let net = pins.get(pad.as_str()).and_then(|&pin| {
+                            if let Some((baseline, index)) = &accepted {
+                                index.get(&(footprint.component, pin)).and_then(|index| baseline.net_name(*index))
+                            } else {
+                                live.as_ref()?.get(pin).and_then(|&terminal| net_label(self.project, terminal))
+                            }
+                        });
+                        PadView {
                             number: pad.as_str().to_owned(),
                             center,
                             copper,
-                            copper_layers: definition.map(|pad| CopperLayers::resolve(self.setup(), pad.copper, footprint.bottom)),
-                            shape: definition.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
-                            corner_radius_nm: definition.map_or(0, |p| p.corner_radius_nm),
-                            drill_nm: definition.and_then(|p| p.drill_nm),
-                            through_hole: definition.is_some_and(|p| p.copper == super::definition::CopperBinding::AllCopper),
+                            size_nm: physical.map_or((0, 0), |p| (p.width_nm, p.height_nm)),
+                            copper_layers: physical.map(|pad| CopperLayers::resolve(self.setup(), pad.copper, footprint.bottom)),
+                            shape: physical.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
+                            corner_radius_nm: physical.map_or(0, |p| p.corner_radius_nm),
+                            drill_nm: physical.and_then(|p| p.drill_nm),
+                            through_hole: physical.is_some_and(|p| p.copper == super::definition::CopperBinding::AllCopper),
                             net,
-                        })
+                        }
                     })
                     .collect(),
                 non_plated_holes: self.project.board.definition_for(footprint).into_iter().flat_map(|d| footprint.non_plated_holes(d)).collect(),
                 graphics: graphics(self.project, footprint, reference),
-                physical_reference: self
-                    .project
-                    .board
-                    .definition_for(footprint)
+                physical_reference: definition
                     .is_some_and(|d| d.reference.is_some() || footprint.reference_text.as_ref().is_some_and(|text| text.visible == Some(true))),
                 reference_offset: footprint.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET),
                 reference_text: footprint.reference_text.clone(),
-                reference_appearance: super::reference::Resolved::new(
-                    self.project.board.definition_for(footprint),
-                    reference,
-                    self.silkscreen(),
-                    footprint.reference_text.as_ref(),
-                ),
+                reference_appearance: super::reference::Resolved::new(definition, reference, self.silkscreen(), footprint.reference_text.as_ref()),
                 pending_removal: !self.project.component_is_board_eligible(footprint.component),
                 bottom: footprint.bottom,
                 locked: footprint.locked,
@@ -617,7 +609,7 @@ fn reference_graphics(project: &Project, footprint: &super::Footprint, reference
 
 /// Resolve rectangle corners from immutable local geometry, preserving exact odd dimensions
 /// before rotation. Pad and graphic orientation share the placement's transform.
-fn rectangle_points(footprint: &super::Footprint, center: Point, width: i64, height: i64, rotation: u16) -> [Point; 4] {
+pub(super) fn rectangle_points(footprint: &super::Footprint, center: Point, width: i64, height: i64, rotation: u16) -> [Point; 4] {
     let left = -width / 2;
     let top = -height / 2;
     [(left, top), (left + width, top), (left + width, top + height), (left, top + height)].map(|(x, y)| {

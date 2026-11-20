@@ -210,12 +210,26 @@ impl EditorViews {
 
     /// Create another view beside the addressed view, preserving the rest of its host layout.
     pub(super) fn open_beside(&mut self, source: ViewId) -> Option<ViewId> {
-        let host = self.owner(source)?;
+        self.open_at(source, None)
+    }
+
+    /// Divide only the addressed pane, copying its current view into the requested half.
+    /// Other panes and cached documents remain in place; no project data is duplicated.
+    /// Without an explicit side, retain the existing adaptive beside placement.
+    pub(super) fn open_at(&mut self, source: ViewId, side: Option<pcbcraft_chrome::editor::DockSide>) -> Option<ViewId> {
+        self.open_into(source, source, side)
+    }
+
+    /// Open a copy of the source's displayed document inside the destination pane.
+    /// Validate both addresses before copying; retain the original source placement and cameras.
+    pub(super) fn open_into(&mut self, source: ViewId, target: ViewId, side: Option<pcbcraft_chrome::editor::DockSide>) -> Option<ViewId> {
+        self.owner(source)?;
+        let host = self.owner(target)?;
         let id = self.duplicate(source, false)?;
         if let Some(layout) = self.hosts.get_mut(&host) {
-            layout.layout.insert(source, id);
+            layout.layout.insert_group_at(target, &Layout::View(id), side);
             if let Some(collapsed) = &mut layout.collapsed {
-                collapsed.insert(source, id);
+                collapsed.insert_group_at(target, &Layout::View(id), side);
             }
             layout.rects.clear();
         }
@@ -321,11 +335,34 @@ impl EditorViews {
     /// split trees are retained. The replacement inherits no pending navigation from the moved view.
     /// Keep that replacement in the remembered split too, so reopening preserves focus and saving.
     pub(super) fn move_beside(&mut self, id: ViewId, target: ViewId) -> bool {
+        self.move_to(id, target, None)
+    }
+
+    /// Move a whole pane to the requested edge, within a host or across native hosts.
+    /// Validate distinct groups before removal; adaptive moves retain the cross-host policy.
+    pub(super) fn move_to(&mut self, id: ViewId, target: ViewId, side: Option<pcbcraft_chrome::editor::DockSide>) -> bool {
+        self.move_group(id, target, crate::editor_layout::DockPlacement::Pane(side))
+    }
+
+    /// Move an existing pane to an outer edge of the destination window's entire layout.
+    pub(super) fn move_to_window(&mut self, id: ViewId, target: ViewId, side: pcbcraft_chrome::editor::DockSide) -> bool {
+        self.move_group(id, target, crate::editor_layout::DockPlacement::Window(side))
+    }
+
+    /// Validate placement before unplacing the source, sharing focus, cached groups and host cleanup.
+    fn move_group(&mut self, id: ViewId, target: ViewId, placement: crate::editor_layout::DockPlacement) -> bool {
+        use crate::editor_layout::DockPlacement;
         let (Some(source), Some(destination)) = (self.owner(id), self.owner(target)) else { return false };
-        if source == destination {
+        if source == destination && matches!(placement, DockPlacement::Pane(None)) {
             return false;
         }
         let Some(group) = self.hosts.get(&source).and_then(|host| host.layout.group(id)).cloned() else { return false };
+        if matches!(placement, DockPlacement::Pane(_)) && group.views().contains(&target) {
+            return false;
+        }
+        if matches!(placement, DockPlacement::Window(_)) && source == destination && self.hosts[&source].layout.visible_views().len() == 1 {
+            return false;
+        }
         if source == self.main && self.hosts.get(&source).is_some_and(|host| host.layout.visible_views().len() == 1) {
             let Some(replacement) = self.duplicate(id, true) else { return false };
             if let Some(host) = self.hosts.get_mut(&source) {
@@ -341,9 +378,9 @@ impl EditorViews {
             self.unplace(source, member);
         }
         if let Some(host) = self.hosts.get_mut(&destination) {
-            host.layout.insert_group(target, &group);
+            placement.insert(&mut host.layout, target, &group);
             if let Some(collapsed) = &mut host.collapsed {
-                collapsed.insert_group(target, &group);
+                placement.insert(collapsed, target, &group);
             }
             host.focused = focused;
             host.rects.clear();
@@ -1089,6 +1126,7 @@ impl PcbApp {
                         use editor::PaneAction;
                         let action = match action {
                             PaneAction::OpenBeside => Some(ViewAction::OpenBeside),
+                            PaneAction::Split(side) => Some(ViewAction::OpenAt(side)),
                             PaneAction::OpenWindow => Some(ViewAction::OpenWindow),
                             PaneAction::Detach => Some(ViewAction::Detach),
                             PaneAction::Dock => Some(ViewAction::Dock),
@@ -1124,6 +1162,9 @@ impl PcbApp {
                 }
                 let canvas = ui.available_rect_before_wrap();
                 let uncovered = workspace::catalog::uncovered(canvas, &covered);
+                if let Some(view) = self.views.view_mut(id) {
+                    view.canvas_cards = covered.iter().map(|card| card.intersect(canvas)).filter(|card| card.is_positive()).collect();
+                }
                 pcbcraft_chrome::automation::region(ui, format!("canvas:{}", id.0), uncovered, matches!(self.dialog, Dialog::None));
                 if self.views.view(id).is_some_and(|view| view.workspace == Workspace::Board) {
                     if let Some(view) = self.views.view_mut(id)

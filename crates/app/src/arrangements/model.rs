@@ -7,9 +7,20 @@ use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum SavedLayout {
-    View { view: usize },
-    Tabs { views: Vec<usize>, active: usize },
-    Split { first: Box<Self>, second: Box<Self>, ratio: f32 },
+    View {
+        view: usize,
+    },
+    Tabs {
+        views: Vec<usize>,
+        active: usize,
+    },
+    Split {
+        first: Box<Self>,
+        second: Box<Self>,
+        ratio: f32,
+        #[serde(default, skip_serializing_if = "pcbcraft_chrome::editor::SplitAxis::is_auto")]
+        axis: pcbcraft_chrome::editor::SplitAxis,
+    },
 }
 
 impl SavedLayout {
@@ -30,7 +41,7 @@ impl SavedLayout {
                 result.extend(views);
                 true
             }
-            Self::Split { first, second, ratio } => {
+            Self::Split { first, second, ratio, .. } => {
                 (0.25..=0.75).contains(ratio) && first.members(depth + 1, result) && second.members(depth + 1, result)
             }
         }

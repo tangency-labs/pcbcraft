@@ -363,6 +363,8 @@ pub(super) struct EditorView {
     sheet: Option<SheetTarget>,
     snapshot_root: Option<std::sync::Arc<pcbcraft_engine::Project>>,
     sheet_snapshot: Option<std::sync::Arc<pcbcraft_engine::Project>>,
+    /// Floating cards over this pane's canvas at its last paint, for UI automation coverage.
+    pub(super) canvas_cards: Vec<egui::Rect>,
 }
 
 impl Default for EditorView {
@@ -575,6 +577,7 @@ impl EditorView {
             sheet: None,
             snapshot_root: None,
             sheet_snapshot: None,
+            canvas_cards: Vec::new(),
         }
     }
 

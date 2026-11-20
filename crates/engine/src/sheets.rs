@@ -157,12 +157,14 @@ impl Project {
         Some(SheetTarget { project: self.id, sheet: sheet.sheet_id })
     }
 
-    /// Resolve explicit UUIDs. Omission is accepted only for legacy single-sheet callers.
+    /// Resolve explicit UUIDs by value, so every spelling the parameter check accepts (any case,
+    /// braced, URN or simple) finds the same sheet. Omission is accepted only for legacy
+    /// single-sheet callers.
     pub fn resolve_sheet(&self, id: Option<&str>) -> Result<SheetTarget, CommandError> {
         match id {
-            Some(id) => self
-                .sheets()
-                .find(|sheet| sheet.target.sheet.to_string() == id)
+            Some(id) => uuid::Uuid::parse_str(id)
+                .ok()
+                .and_then(|id| self.sheets().find(|sheet| sheet.target.sheet == id))
                 .map(|sheet| sheet.target)
                 .ok_or_else(|| CommandError::NotFound("unknown sheet ID".into())),
             None if self.sheets.len() == 1 => Ok(self.sheet_target()),
