@@ -158,6 +158,26 @@ fn annotation_preview_refuses_invalid_scope_or_revision() {
     assert_eq!(session.inspect(), before);
 }
 
+/// Every UUID spelling the parameter check accepts scopes the preview to the same sheet as the
+/// canonical lowercase form, instead of being reported as an unknown sheet.
+#[test]
+fn annotation_preview_resolves_every_accepted_sheet_uuid_spelling() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    place(&mut session, PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+    let second = second_sheet(&mut session);
+    let pending = place(&mut session, PLACE_RESISTOR, json!({"sheet":second.id(),"x_nm":2_000_000,"y_nm":0}));
+    let id = second.id();
+    let canonical = session.execute(PREVIEW, &json!({"sheet":id.to_string()})).unwrap();
+    let rows = canonical["annotation_preview"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["symbol"], pending);
+    for spelling in [id.to_string().to_uppercase(), id.braced().to_string(), id.urn().to_string(), id.simple().to_string().to_uppercase()] {
+        assert_ne!(spelling, id.to_string());
+        assert_eq!(session.execute(PREVIEW, &json!({"sheet":spelling})).unwrap(), canonical, "{spelling}");
+    }
+}
+
 /// Counts the shared command's work without a wall-clock requirement or non-test overhead.
 #[derive(Clone, Copy, Default)]
 pub(super) struct Work {
