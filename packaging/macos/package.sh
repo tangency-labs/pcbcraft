@@ -49,6 +49,16 @@ if [ "$SKIP_BUILD" = 1 ] && [ "$BUILD_ONLY" = 1 ]; then
   exit 2
 fi
 
+# Validate version and build SHA before Info.plist sed substitution and XML generation.
+for value in "$VERSION" "${PCBCRAFT_BUILD_SHA:-unknown}"; do
+  case "$value" in
+    *[!0-9A-Za-z._+-]*)
+      echo "error: version and build SHA may contain only letters, digits, '.', '_', '+' and '-': $value" >&2
+      exit 2
+      ;;
+  esac
+done
+
 # Keep in sync with LSMinimumSystemVersion in Info.plist.in.
 export MACOSX_DEPLOYMENT_TARGET=11.0
 IDENTITY="${MACOS_SIGN_IDENTITY:--}"
@@ -93,6 +103,7 @@ for bin in pcbcraft pcbcraft-cli; do
   lipo -info "$WORK/bin/$bin"
   for arch in "${WANT[@]}"; do lipo "$WORK/bin/$bin" -verify_arch "$arch"; done
 done
+
 
 # ---- signing helpers ---------------------------------------------------------------------------
 sign() {

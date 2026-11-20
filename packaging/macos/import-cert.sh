@@ -17,12 +17,21 @@ if [ -z "${APPLE_CERTIFICATE:-}" ]; then
 fi
 
 TMP="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
-KEYCHAIN="$TMP/pcbcraft-signing.keychain-db"
-CERT="$TMP/pcbcraft-signing.p12"
+KEYCHAIN="$TMP/pcbcraft-signing-$$.keychain-db"
+CERT="$TMP/pcbcraft-signing-$$.p12"
 KC_PASS="${KEYCHAIN_PASSWORD:-$(openssl rand -hex 24)}"
+KEEP_KEYCHAIN=0
 
-trap 'rm -f "$CERT"' EXIT
+cleanup() {
+  rm -f "$CERT"
+  if [ "$KEEP_KEYCHAIN" != 1 ]; then
+    security delete-keychain "$KEYCHAIN" 2>/dev/null || rm -f "$KEYCHAIN"
+  fi
+}
+trap cleanup EXIT
+
 printf '%s' "$APPLE_CERTIFICATE" | base64 --decode >"$CERT"
+security delete-keychain "$KEYCHAIN" 2>/dev/null || rm -f "$KEYCHAIN"
 security create-keychain -p "$KC_PASS" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"
 security unlock-keychain -p "$KC_PASS" "$KEYCHAIN"
@@ -40,6 +49,7 @@ if [ -z "$IDENTITY" ]; then
   echo "error: no 'Developer ID Application' identity in APPLE_CERTIFICATE" >&2
   exit 1
 fi
+KEEP_KEYCHAIN=1
 echo "Imported signing identity $IDENTITY"
 if [ -n "${GITHUB_ENV:-}" ]; then
   { echo "MACOS_SIGN_IDENTITY=$IDENTITY"; echo "MACOS_KEYCHAIN=$KEYCHAIN"; } >>"$GITHUB_ENV"

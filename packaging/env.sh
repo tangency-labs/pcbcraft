@@ -8,7 +8,7 @@
 #   DIST                    output directory for release artifacts (default: $ROOT/dist/release)
 #   PCBCRAFT_BUILD_SHA      git commit recorded in the macOS Info.plist
 #   PCBCRAFT_BUILD_DATE     UTC build date, YYYY-MM-DD
-#   CARGO_TARGET_DIR        cargo's target dir (default: $ROOT/target)
+#   CARGO_TARGET_DIR        absolute cargo target dir (default: $ROOT/target)
 #   APP_ID                  reverse-DNS macOS bundle identifier
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -38,7 +38,16 @@ PCBCRAFT_BUILD_SHA="${PCBCRAFT_BUILD_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev
 export PCBCRAFT_BUILD_SHA
 PCBCRAFT_BUILD_DATE="${PCBCRAFT_BUILD_DATE:-$(date -u +%Y-%m-%d)}"
 export PCBCRAFT_BUILD_DATE
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
+
+# Resolve any relative CARGO_TARGET_DIR override against the caller's working directory
+# before subshells cd into $ROOT for cargo build.
+case "${CARGO_TARGET_DIR:-}" in
+  "") CARGO_TARGET_DIR="$ROOT/target" ;;
+  /*) ;;
+  *) CARGO_TARGET_DIR="$PWD/$CARGO_TARGET_DIR" ;;
+esac
+export CARGO_TARGET_DIR
+
 APP_ID="io.tangencylabs.pcbcraft"
 export APP_ID
 
@@ -59,9 +68,6 @@ copy_docs() {
 # Copy bundled font licences (including optional CRAFT_FONTS_DIR embeds) into dest.
 copy_font_licences() {
   local dest="$1" f
-  if [ -f "$ROOT/crates/visuals/fonts/OFL.txt" ]; then
-    cp "$ROOT/crates/visuals/fonts/OFL.txt" "$dest/OFL-Inter.txt"
-  fi
   if [ -d "$ROOT/licenses/egui-default-fonts" ]; then
     mkdir -p "$dest/egui-default-fonts"
     for f in "$ROOT"/licenses/egui-default-fonts/*; do
