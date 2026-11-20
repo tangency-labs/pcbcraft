@@ -49,7 +49,6 @@ if [ -z "$IDENTITY" ]; then
   echo "error: no 'Developer ID Application' identity in APPLE_CERTIFICATE" >&2
   exit 1
 fi
-KEEP_KEYCHAIN=1
 echo "Imported signing identity $IDENTITY"
 if [ -n "${GITHUB_ENV:-}" ]; then
   { echo "MACOS_SIGN_IDENTITY=$IDENTITY"; echo "MACOS_KEYCHAIN=$KEYCHAIN"; } >>"$GITHUB_ENV"
@@ -57,3 +56,4 @@ else
   echo "MACOS_SIGN_IDENTITY=$IDENTITY"
   echo "MACOS_KEYCHAIN=$KEYCHAIN"
 fi
+KEEP_KEYCHAIN=1
