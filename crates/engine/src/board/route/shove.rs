@@ -19,6 +19,15 @@ use std::{
     },
 };
 
+mod corridor;
+
+/// A coordinated retry reopens the directly hit runs with shared spacing.
+#[derive(Clone, Copy)]
+enum Cascade {
+    Walk { reverse: bool, flipped: bool },
+    Shared { positive: bool, advance: i64 },
+}
+
 /// Track routing policy; walkaround preserves the pre-shove default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -255,6 +264,16 @@ fn push_order(object: &Object, push: Push) -> f64 {
         let length = mx * mx + my * my;
         if length == 0. { 0. } else { ((object.at.x_nm - push.from.x_nm) as f64 * mx + (object.at.y_nm - push.from.y_nm) as f64 * my) / length }
     }
+}
+
+/// Give individual walks and shared lanes the same collision order.
+fn compare_pushes(query: &ClearanceQuery, pushes: &BTreeMap<usize, Push>, a: &usize, b: &usize) -> std::cmp::Ordering {
+    let (first, second) = (pushes[a], pushes[b]);
+    first
+        .piece
+        .cmp(&second.piece)
+        .then_with(|| push_order(&query.objects()[first.hit], first).total_cmp(&push_order(&query.objects()[second.hit], second)))
+        .then(a.cmp(b))
 }
 
 /// Partition a certified chain into source-owned paths. Subdividing existing
@@ -551,8 +570,18 @@ impl<'a> Search<'a> {
             if !self.legal_incoming(&route, &proposed.points).await {
                 continue;
             }
-            for (reverse, flipped) in [(false, route.flipped), (true, route.flipped), (false, !route.flipped), (true, !route.flipped)] {
-                let mut attempt = self.propagate(&route, proposed.clone(), reverse, flipped).await?;
+            let walk = [(false, route.flipped), (true, route.flipped), (false, !route.flipped), (true, !route.flipped)]
+                .map(|(reverse, flipped)| Cascade::Walk { reverse, flipped });
+            // A short move can still need a deeper shove when a distant leg
+            // blocks the group's return. Sample room ahead in clearance-sized
+            // steps that grow with the approach and share its probe budget.
+            let first = route.width_nm + self.query.authority().clearance_nm() + 2;
+            let extent = (route.target.x_nm - route.head.x_nm).abs().max((route.target.y_nm - route.head.y_nm).abs());
+            let advances =
+                std::iter::once(0).chain(std::iter::successors(Some(first), |step| step.checked_mul(2)).take_while(|step| *step <= extent));
+            let shared = advances.flat_map(|advance| [true, false].map(move |positive| Cascade::Shared { positive, advance }));
+            for strategy in walk.into_iter().chain(shared) {
+                let mut attempt = self.propagate(&route, proposed.clone(), strategy).await?;
                 let mut attempt_stats = attempt.shove.take().unwrap_or_default();
                 let could_retry = attempt_stats.queued_tracks > 0 && self.progress.load(Ordering::Relaxed) < self.budget;
                 attempt_stats.include_previous(&stats);
@@ -642,15 +671,9 @@ impl<'a> Search<'a> {
         }
     }
 
-    /// Displace a finite queue around one certified incoming path. A failed cascade cannot
-    /// publish partial geometry. Return direction and elbow sense are independent choices.
-    async fn propagate(
-        &self,
-        request: &Request,
-        mut plan: Plan,
-        reverse_displacements: bool,
-        displacement_flipped: bool,
-    ) -> Result<Plan, CommandError> {
+    /// Displace a finite queue around one certified incoming path. Each strategy
+    /// starts with a fresh overlay, and failure discards every speculative displacement.
+    async fn propagate(&self, request: &Request, mut plan: Plan, strategy: Cascade) -> Result<Plan, CommandError> {
         let (query, chains, budget, progress) = (self.query, self.chains, self.budget, &self.progress);
         let Pickup { source: origin, nets, islands } = &self.pickup;
         let origin = *origin;
@@ -692,17 +715,17 @@ impl<'a> Search<'a> {
             .enqueue(query, &route, nets, islands)
             .await?;
         incomplete |= segment_count > MAX_TRACKS;
+        let (mut corridor, reverse_displacements, displacement_flipped) = match strategy {
+            Cascade::Walk { reverse, flipped } => (None, reverse, flipped),
+            Cascade::Shared { .. } => {
+                let corridor = corridor::Corridor::new(self, request, &plan, &route, &queue, &pushes, strategy);
+                legal &= corridor.is_some();
+                (corridor, false, request.flipped)
+            }
+        };
         while legal && !queue.is_empty() {
             super::search::yield_unit().await;
-            let Some(source) = queue.iter().copied().min_by(|a, b| {
-                pushes[a]
-                    .piece
-                    .cmp(&pushes[b].piece)
-                    .then_with(|| {
-                        push_order(&query.objects()[pushes[a].hit], pushes[a]).total_cmp(&push_order(&query.objects()[pushes[b].hit], pushes[b]))
-                    })
-                    .then(a.cmp(b))
-            }) else {
+            let Some(source) = queue.iter().copied().min_by(|a, b| compare_pushes(query, &pushes, a, b)) else {
                 break;
             };
             queue.remove(&source);
@@ -717,86 +740,104 @@ impl<'a> Search<'a> {
             let track = &chains.tracks[&source];
             let contacts = (!request.merge_same_net).then(|| chain.contacts.clone());
             let obstacles = overlay.routing_query(origin)?;
-            let mut retained = Vec::new();
-            for (position, anchor) in chain.anchors.iter().enumerate() {
-                if anchor.protected {
-                    retained.push(position);
-                    continue;
-                }
-                let probe = Request {
-                    head: anchor.point,
-                    target: anchor.point,
-                    layer: track.layer,
-                    width_nm: track.width_nm,
-                    previous: Vec::new(),
-                    origin: None,
-                    fixed: Vec::new(),
-                    mode: Mode::Walkaround,
-                    merge_same_net: request.merge_same_net,
-                    posture: request.posture,
-                    flipped: request.flipped,
-                };
-                let mut walker = super::walkaround::Walker::new(&obstacles, &probe, budget, progress.clone())?;
-                walker.inherit(object, contacts.clone());
-                match walker.displacement_anchor(anchor.point).await {
-                    Ok(true) => retained.push(position),
-                    Ok(false) => {}
-                    Err(super::walkaround::Stop::Failed(error)) => return Err(error),
+            let path = if let Some(shared) = corridor.as_mut().filter(|_| track.layer == request.layer) {
+                match shared.path(self, &obstacles, request, source, incoming).await {
+                    Ok(Some(path)) => path,
+                    Ok(None) => {
+                        plan.blocker = Some(object.name.clone());
+                        legal = false;
+                        break;
+                    }
                     Err(super::walkaround::Stop::Exhausted) => {
                         incomplete = true;
                         legal = false;
                         break;
                     }
+                    Err(super::walkaround::Stop::Failed(error)) => return Err(error),
                 }
-            }
-            if !legal {
-                break;
-            }
-            let Some(first) = retained.first() else {
-                incomplete = true;
-                legal = false;
-                break;
-            };
-            let mut path = vec![chain.anchors[*first].point];
-            for interval in retained.windows(2) {
-                let anchor = [chain.anchors[interval[0]].point, chain.anchors[interval[1]].point];
-                let mut displaced = Request {
-                    head: anchor[0],
-                    target: anchor[1],
-                    layer: track.layer,
-                    origin: None,
-                    width_nm: track.width_nm,
-                    posture: request.posture,
-                    flipped: displacement_flipped,
-                    previous: chain.anchors[interval[0]..=interval[1]].iter().map(|a| a.point).collect(),
-                    mode: Mode::Walkaround,
-                    merge_same_net: request.merge_same_net,
-                    fixed: Vec::new(),
-                };
-                if reverse_displacements {
-                    std::mem::swap(&mut displaced.head, &mut displaced.target);
-                    displaced.flipped = !displaced.flipped;
+            } else {
+                let mut retained = Vec::new();
+                for (position, anchor) in chain.anchors.iter().enumerate() {
+                    if anchor.protected {
+                        retained.push(position);
+                        continue;
+                    }
+                    let probe = Request {
+                        head: anchor.point,
+                        target: anchor.point,
+                        layer: track.layer,
+                        width_nm: track.width_nm,
+                        previous: Vec::new(),
+                        origin: None,
+                        fixed: Vec::new(),
+                        mode: Mode::Walkaround,
+                        merge_same_net: request.merge_same_net,
+                        posture: request.posture,
+                        flipped: request.flipped,
+                    };
+                    let mut walker = super::walkaround::Walker::new(&obstacles, &probe, budget, progress.clone())?;
+                    walker.inherit(object, contacts.clone());
+                    match walker.displacement_anchor(anchor.point).await {
+                        Ok(true) => retained.push(position),
+                        Ok(false) => {}
+                        Err(super::walkaround::Stop::Failed(error)) => return Err(error),
+                        Err(super::walkaround::Stop::Exhausted) => {
+                            incomplete = true;
+                            legal = false;
+                            break;
+                        }
+                    }
                 }
-                let mut result = self.displace(&obstacles, &displaced, object, contacts.clone(), incoming, &mut refinement_remaining).await?;
-                if result.outcome != Outcome::Reached {
-                    incomplete |= result.outcome == Outcome::Incomplete;
-                    plan.blocker = result.blocker.or_else(|| Some(object.name.clone()));
-                    legal = false;
+                if !legal {
                     break;
                 }
-                if reverse_displacements {
-                    result.points.reverse();
-                }
-                path.extend(result.points.into_iter().skip(1));
-                if path.len() > super::super::track::MAX_PATH_POINTS {
+                let Some(first) = retained.first() else {
                     incomplete = true;
                     legal = false;
                     break;
+                };
+                let mut path = vec![chain.anchors[*first].point];
+                for interval in retained.windows(2) {
+                    let anchor = [chain.anchors[interval[0]].point, chain.anchors[interval[1]].point];
+                    let mut displaced = Request {
+                        head: anchor[0],
+                        target: anchor[1],
+                        layer: track.layer,
+                        origin: None,
+                        width_nm: track.width_nm,
+                        posture: request.posture,
+                        flipped: displacement_flipped,
+                        previous: chain.anchors[interval[0]..=interval[1]].iter().map(|a| a.point).collect(),
+                        mode: Mode::Walkaround,
+                        merge_same_net: request.merge_same_net,
+                        fixed: Vec::new(),
+                    };
+                    if reverse_displacements {
+                        std::mem::swap(&mut displaced.head, &mut displaced.target);
+                        displaced.flipped = !displaced.flipped;
+                    }
+                    let mut result = self.displace(&obstacles, &displaced, object, contacts.clone(), incoming, &mut refinement_remaining).await?;
+                    if result.outcome != Outcome::Reached {
+                        incomplete |= result.outcome == Outcome::Incomplete;
+                        plan.blocker = result.blocker.or_else(|| Some(object.name.clone()));
+                        legal = false;
+                        break;
+                    }
+                    if reverse_displacements {
+                        result.points.reverse();
+                    }
+                    path.extend(result.points.into_iter().skip(1));
+                    if path.len() > super::super::track::MAX_PATH_POINTS {
+                        incomplete = true;
+                        legal = false;
+                        break;
+                    }
                 }
-            }
-            if !legal {
-                break;
-            }
+                if !legal {
+                    break;
+                }
+                path
+            };
             let Some(parts) = split_chain(chains, source, &path) else {
                 incomplete = true;
                 legal = false;
