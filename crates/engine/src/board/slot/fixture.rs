@@ -35,11 +35,16 @@ fn editor() -> crate::authoring::Session {
     editor
 }
 
-/// Exercise the ordinary assignment, net annotation, and board placement commands.
+/// Place the synthetic package through the shared command path.
 fn placed() -> Session {
-    let item = editor().snapshot();
+    place(&editor().snapshot(), "Synthetic slotted package")
+}
+
+/// Exercise the ordinary assignment, net annotation, and board placement commands. Pin 1
+/// maps to the four shell lands SH1 to SH4 and pin 2 to the signal land numbered 2.
+pub(super) fn place(item: &Item, name: &str) -> Session {
     let footprint = item.export_native().unwrap();
-    let manifest = json!({"format":crate::library::LIBRARY_FORMAT,"id":item.library,"name":"Synthetic slotted package","license":item.license});
+    let manifest = json!({"format":crate::library::LIBRARY_FORMAT,"id":item.library,"name":name,"license":item.license});
     let mut session = Session::default();
     session.apply("project.new", &json!({"create_board":true})).unwrap();
     session

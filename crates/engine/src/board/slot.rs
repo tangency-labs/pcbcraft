@@ -136,3 +136,5 @@ impl ResolvedPlatedSlot {
 mod fixture;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod usb4105;
