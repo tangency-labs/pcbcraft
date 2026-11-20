@@ -2,13 +2,16 @@
 
 use std::{ffi::OsString, path::Path, process::ExitCode};
 
+use pcbcraft_engine::SessionScope;
 use pcbcraft_mcp::{
     Backend, Headless, Server,
     live::{Remote, TOKEN_ENV},
 };
 
-const USAGE: &str = "Usage: pcbcraft-cli mcp [--project FILE_OR_FOLDER | --connect PORT [--token-file FILE] [--wait SECONDS]]
-                        Serve MCP on stdin and stdout. --connect reads the editor's credential from
+const USAGE: &str = "Usage: pcbcraft-cli mcp [--read-only] [--project FILE_OR_FOLDER]
+       pcbcraft-cli mcp --connect PORT [--token-file FILE] [--wait SECONDS]
+                        Serve MCP on stdin and stdout. --read-only applies only to headless sessions.
+                        --connect reads the editor's credential from
                         --token-file, or else from PCBCRAFT_CONTROL_TOKEN.
        pcbcraft-cli convert SOURCE DESTINATION
                         Convert a previous split project to a new destination. A .pc destination
@@ -32,14 +35,18 @@ fn main() -> ExitCode {
                 println!("Converted project written to {}", destination.display());
             })
         }
-        [command] if command == "mcp" => serve(Box::new(Headless::default())),
-        [command, flag, path] if command == "mcp" && flag == "--project" => {
-            load_project(Path::new(path)).and_then(|backend| serve(Box::new(backend)))
-        }
         [command, flag, port, options @ ..] if command == "mcp" && flag == "--connect" => match connect_options(options) {
             Some((token_file, wait)) => connect_editor(port, token_file, wait).and_then(|backend| serve(Box::new(backend))),
             None => Err(format!("unrecognized --connect options\n{USAGE}")),
         },
+        [command, options @ ..] if command == "mcp" => {
+            let Some((scope, path)) = headless_options(options) else {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            };
+            let project = path.map(|path| load_project(path, scope)).transpose();
+            project.and_then(|project| serve(Box::new(Headless::with_scope(scope, project))))
+        }
         [flag] if flag == "--help" || flag == "-h" => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -62,10 +69,33 @@ fn main() -> ExitCode {
     }
 }
 
-/// Validate a bounded native project before making it available to MCP.
-fn load_project(path: &Path) -> Result<Headless, String> {
-    let result = pcbcraft_storage::open(path).map(Headless::with_project);
-    result.map_err(|error| format!("could not open {}: {error}", path.display()))
+/// Read headless options in either order, refusing duplicates and all live-only options.
+fn headless_options(mut options: &[OsString]) -> Option<(SessionScope, Option<&Path>)> {
+    let (mut scope, mut path) = (SessionScope::Edit, None);
+    while let Some((flag, rest)) = options.split_first() {
+        match (flag, rest) {
+            (flag, _) if flag == "--read-only" && scope == SessionScope::Edit => {
+                scope = SessionScope::ReadOnly;
+                options = rest;
+            }
+            (flag, [project, tail @ ..]) if flag == "--project" && path.is_none() => {
+                path = Some(Path::new(project));
+                options = tail;
+            }
+            _ => return None,
+        }
+    }
+    Some((scope, path))
+}
+
+/// Validate a bounded native project before serving it. Read-only startup must not recover an
+/// interrupted folder save or create a writer lock; ask the owner to open such a folder first.
+fn load_project(path: &Path, scope: SessionScope) -> Result<std::sync::Arc<pcbcraft_engine::Project>, String> {
+    let project = match scope {
+        SessionScope::ReadOnly => pcbcraft_storage::preview(path),
+        SessionScope::Edit => pcbcraft_storage::open(path),
+    };
+    project.map_err(|error| format!("could not open {}: {error}", path.display()))
 }
 
 /// `--connect`'s optional `--token-file FILE` and `--wait SECONDS`, each at most once; `None`
@@ -111,6 +141,21 @@ mod tests {
 
     fn options(args: &[&str]) -> Vec<OsString> {
         args.iter().map(OsString::from).collect()
+    }
+
+    /// A headless scope and project may be given in either order but not repeated or mixed
+    /// with live options. The default headless scope remains editable.
+    #[test]
+    fn headless_options_keep_read_only_separate_from_live_connections() {
+        assert_eq!(headless_options(&[]), Some((SessionScope::Edit, None)));
+        for flags in [["--read-only", "--project", "example.pc"], ["--project", "example.pc", "--read-only"]] {
+            assert_eq!(headless_options(&options(&flags)), Some((SessionScope::ReadOnly, Some(Path::new("example.pc")))));
+        }
+        assert_eq!(headless_options(&options(&["--project", "--review.pc"])), Some((SessionScope::Edit, Some(Path::new("--review.pc")))));
+        for bad in [&["--read-only", "--read-only"][..], &["--project"], &["--project", "x", "--project", "y"], &["--read-only", "--connect", "10"]] {
+            assert_eq!(headless_options(&options(bad)), None, "{bad:?}");
+        }
+        assert_eq!(connect_options(&options(&["--read-only"])), None);
     }
 
     /// Connect takes a token file and a wait once each.

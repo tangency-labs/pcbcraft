@@ -64,20 +64,30 @@ pub fn load(root: &Path) -> Result<Documents, String> {
     Ok(documents)
 }
 
-/// Read a disposable, validated preview without recovering data or holding a writer lock
-/// during I/O. Probe existing locks and journals before/after reading; concurrent changes may
-/// make the picture stale, but can never make it authoritative editor state or block a save.
+/// Read a disposable preview without recovering data or holding a lock during I/O.
+/// Compare the raw document sets so a save that finishes between lock probes can be detected.
 pub(super) fn preview(root: &Path) -> Result<Documents, String> {
+    preview_with_reader(root, |root| read_documents(root, false))
+}
+
+/// Check the journal and existing lock around two bounded document reads. Refuse a changed
+/// set rather than retrying, and normalize legacy documents only after comparing raw bytes.
+fn preview_with_reader(root: &Path, mut read: impl FnMut(&Path) -> Result<Documents, String>) -> Result<Documents, String> {
     regular_directory(root)?;
     let path = lock_path(root)?;
     let had_lock = probe_preview_lock(&path)?;
     require_no_journal(root)?;
-    let documents = readable_documents(read_documents(root, false)?)?;
+    let baseline = read(root)?;
+    require_no_journal(root)?;
+    let changed = "Project changed while reading its preview.";
+    if read(root)? != baseline {
+        return Err(changed.to_owned());
+    }
     require_no_journal(root)?;
     if probe_preview_lock(&path)? && !had_lock {
-        return Err("Project changed while reading its preview.".to_owned());
+        return Err(changed.to_owned());
     }
-    Ok(documents)
+    readable_documents(baseline)
 }
 
 /// Read an old split folder for conversion without creating locks or replaying its journal.
@@ -672,6 +682,62 @@ mod tests {
             }
         }
         found
+    }
+
+    /// An external save after the first entry read can leave a valid-looking mixed snapshot.
+    /// Refuse it without creating a lock or writing anything beyond the fixture's two revisions.
+    #[test]
+    fn preview_refuses_mixed_documents_without_writing() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("project");
+        let lock = lock_path(&root).unwrap();
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name":"Before","create_board":true})).unwrap();
+        let project = session.snapshot().unwrap();
+        let board = project.board_document_path().unwrap();
+        let before = encode_documents(project).unwrap();
+        session.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":session.revision()})).unwrap();
+        session.apply("project.rename", &json!({"name":"After"})).unwrap();
+        let after = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_ne!(before[ENTRY_POINT], after[ENTRY_POINT]);
+        assert_ne!(before[&board], after[&board]);
+
+        let write_fixture = |documents: &Documents| {
+            for (path, bytes) in documents {
+                let path = root.join(path);
+                fs::create_dir_all(path.parent().unwrap()).unwrap();
+                fs::write(path, bytes).unwrap();
+            }
+        };
+        write_fixture(&before);
+        let initial = tree(parent.path());
+        let mut written = None;
+        let mut reads = 0;
+        let result = preview_with_reader(&root, |path| {
+            reads += 1;
+            if reads == 1 {
+                let old_entry = fs::read(path.join(ENTRY_POINT)).unwrap();
+                assert!(!lock.exists());
+                assert_eq!(tree(parent.path()), initial);
+                write_fixture(&after);
+                written = Some(tree(parent.path()));
+                // Model the rest of the first scan after publication, keeping the entry already read.
+                let mut mixed = read_documents(path, false)?;
+                mixed.insert(ENTRY_POINT.to_owned(), old_entry);
+                assert_eq!(mixed[&board], after[&board]);
+                assert_eq!(decode_documents(&mixed).unwrap().name, "Before");
+                return Ok(mixed);
+            }
+            read_documents(path, false)
+        });
+        assert_eq!(result.unwrap_err(), "Project changed while reading its preview.");
+        assert_eq!(reads, 2);
+        assert!(!lock.exists());
+        let written = written.unwrap();
+        assert_eq!(tree(parent.path()), written);
+        assert_eq!(preview(&root).unwrap(), after);
+        assert!(!lock.exists());
+        assert_eq!(tree(parent.path()), written);
     }
 
     /// Any part of a document path can name a device, judged by its text before the first dot.

@@ -181,15 +181,7 @@ impl CheckJob {
                             && d.clearance_violation
                         {
                             let (a, b) = (&g.items[i], &g.items[j]);
-                            let nets = match (&a.net, &b.net) {
-                                (Some(x), Some(y)) => format!(" between nets {x} and {y}"),
-                                _ => String::new(),
-                            };
-                            let message = if d.gap_nm <= 0. {
-                                format!("Copper touches{nets}")
-                            } else {
-                                format!("Clearance {} is below the {} rule{nets}", mm(d.gap_nm), mm(d.clearance_nm as f64))
-                            };
+                            let message = super::clearance_message(a, b, d.gap_nm, d.clearance_nm);
                             let mut names = vec![a.name.clone(), b.name.clone()];
                             names.sort();
                             self.found.push(Violation { kind: Kind::Clearance, message, at: midpoint(a.at, b.at), items: names, nets: Vec::new() });
