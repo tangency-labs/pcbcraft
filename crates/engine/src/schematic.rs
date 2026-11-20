@@ -1,5 +1,7 @@
 //! In-memory schematic placement. Positions are nanometers in schematic space.
 
+#[cfg(test)]
+mod designator_tests;
 pub(crate) mod wiring;
 
 pub mod fields;
@@ -352,6 +354,7 @@ pub struct PartInstance {
     pub(crate) reference_number: usize,
     pub(crate) reference: String,
     pub(crate) value: String,
+    pub(crate) designator_locked: bool,
     pub metadata: fields::Metadata,
     /// Optional reusable part and manufacturer selection, shared by every schematic unit.
     pub part: Option<crate::part_instances::Selection>,
@@ -368,6 +371,17 @@ impl PartInstance {
     /// Return the designator shared by this component's schematic units and board footprint.
     pub fn reference(&self) -> &str {
         &self.reference
+    }
+
+    /// Stored intent for a future annotator to retain this part instance's reference.
+    /// Explicit reference edits and clipboard duplication remain available.
+    pub fn designator_locked(&self) -> bool {
+        self.designator_locked
+    }
+
+    /// Eligibility predicate for a future annotator; no annotation operation is run here.
+    pub fn can_annotate_designator(&self) -> bool {
+        !self.designator_locked
     }
 
     /// Return the value shared by this component's schematic units.
@@ -387,7 +401,7 @@ impl PartInstance {
     /// Publish component-owned fields independently of schematic placement geometry.
     pub(crate) fn inspect(&self) -> Value {
         let mut value = json!({"id": self.id(), "definition": self.definition.id, "definition_revision": self.definition.revision(),
-            "reference": self.reference, "value": self.value, "metadata": self.metadata});
+            "reference": self.reference, "value": self.value, "designator_locked": self.designator_locked, "metadata": self.metadata});
         if let Some(part) = &self.part {
             value["part"] = part.inspect();
         }

@@ -437,6 +437,32 @@ fn pin_function_storage_preserves_differential_pairs() {
     }
 }
 
+/// A pin function choice and a designator lock on the same project select project/56,
+/// and both survive a save and reopen through the folder and packed codecs.
+#[test]
+fn pin_function_storage_with_designator_lock_writes_project_56() {
+    for board in [false, true] {
+        let mut session = fixture(board);
+        session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
+        let project = session.project().unwrap();
+        let placed = &project.symbols()[0];
+        let fields = json!({"symbol":placed.id(),"reference":project.reference(placed),"value":project.value(placed),
+            "designator_locked":true,"expected_revision":session.revision()});
+        session.apply(crate::SET_SYMBOL_FIELDS, &fields).unwrap();
+        let saved = session.snapshot().unwrap();
+        let docs = encode_documents(saved.clone()).unwrap();
+        let stored: Value = serde_json::from_slice(&docs[ENTRY_POINT]).unwrap();
+        assert_eq!(stored["format"], "pcbcraft-project/56");
+        assert_eq!(stored["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
+        assert_eq!(stored["components"][0]["designator_locked"], true);
+        let reopened = decode_documents(&docs).unwrap();
+        assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
+        assert!(reopened.components().next().unwrap().designator_locked());
+        assert_eq!(encode_documents(reopened).unwrap(), docs);
+        assert_eq!(encode_documents(decode_packed(&encode_packed(saved).unwrap()).unwrap().project).unwrap(), docs);
+    }
+}
+
 /// Edits stay on the new draft and symbol formats after removing alternates. Invalid
 /// edits do not advance history; Undo still restores the original snapshot.
 #[test]

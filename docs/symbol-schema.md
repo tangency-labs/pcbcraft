@@ -44,6 +44,14 @@ within the existing 128-terminal and per-unit drawing bounds; higher pin counts
 remain separate work under #251. The schema and engine validate the declared supported
 fields rather than accepting arbitrary extension properties.
 
+A placed part instance also owns `designator_locked`, independently of its
+symbol definition and unit drawings. All placed units share that flag; unit
+letters have no separate lock. Inspection includes false explicitly, and
+`schematic.set_symbol_fields` edits it through an existing placed symbol.
+[Project/51](native-project-storage.md#designator-locks) stores active locks
+without changing any library symbol schema. Manual reference edits remain
+available; automatic annotation itself is not implemented.
+
 ## Alternate pin functions
 
 A logical terminal may declare `"alternates": [{"name":"ADC_IN","electrical_type":"input"}]`
@@ -59,6 +67,7 @@ Removing the last alternate does not switch either record back.
 
 A placed part can select one alternate per terminal. Selection does not renumber,
 swap or move terminals or change connectivity. See [placed-part storage](native-project-storage.md#alternate-pin-function-records).
+A project with both a selected alternate and an active designator lock saves as project/56.
 
 ## Explicit category defaults
 
