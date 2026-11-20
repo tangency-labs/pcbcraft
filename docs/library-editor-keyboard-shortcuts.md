@@ -115,12 +115,13 @@ a chord runs copy, cut or paste once. Copy and paste are gated to a selection
 of the same document kind: pasting a symbol's objects into a footprint
 document reports "Paste into a definition of the same kind."
 
-All canvas command chords — **Ctrl+A**, **Ctrl+D** and the clipboard chords —
-match the pressed `Event::Key`'s own modifiers rather than the batch's ending
-state: a command released before batch end still fires, a command arriving
-after the letter cannot, and none fires without window focus. **Ctrl+D** arms
-the same cancellable preview as paste and resolves against a same-frame
-Escape in event order — a later Escape cancels it, an earlier one does not.
+For **Ctrl+A**, **Ctrl+D**, and raw clipboard key events, the canvas reads the
+modifiers from the pressed `Event::Key`. A chord still fires if the modifier is
+released later in the batch. Pressing the modifier after the letter is too
+late. Plain desktop clipboard shortcuts use the normalized events described
+above. All of these shortcuts require window focus. **Ctrl+D** arms the same
+preview as paste. A later **Escape** in the same input batch cancels the
+preview, and a duplicate chord after **Escape** can still arm it.
 
 ## Pending fields gate
 
