@@ -18,15 +18,17 @@ placement schema below remains frozen and does not accept this newer field.
 
 Board format 15 adds local reference position and print overrides. Earlier board
 formats retain their existing encodings when these fields are absent. Footprint
-library definitions continue to use their independently versioned format 1.
+library definitions are independently versioned: definitions without non-plated
+holes still write format 1; definitions with them write format 4.
 
 | Document | Format | Machine-readable schema |
 | --- | --- | --- |
-| Published footprint definition | `pcbcraft-footprint/1` | [Footprint schema](schemas/footprint-v1.schema.json) |
+| Published footprint without non-plated holes | `pcbcraft-footprint/1` | [Footprint schema](schemas/footprint-v1.schema.json) |
+| Published footprint with circular non-plated through holes | `pcbcraft-footprint/4` | [Footprint schema with holes](schemas/footprint-v4.schema.json) |
 | Physical placement inside a board | Enclosing `pcbcraft-board/15` | [Placement schema](schemas/footprint-placement-v15.schema.json) |
 
 The schemas use [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12/json-schema-core).
-Register both schemas locally by their `$id` URNs when validating placements.
+Register the schemas locally by their `$id` URNs when validating definitions and placements.
 Their references resolve from those registrations, with no network lookup.
 Application validation belongs in the shared command and storage codecs. These
 schema documents are also available to library tooling independently of the
@@ -34,7 +36,7 @@ application.
 
 With Python 3.10 or later and `jsonschema` 4.18 or later installed, run the schema
 check from the repository root. Version 4.18 introduced the registry API used for
-offline reference resolution. It checks both schemas and the bundled footprint
+offline reference resolution. It checks the schemas and the bundled footprint
 definitions.
 Additional arguments accept standalone native definitions. By default,
 `--placement` checks one historical format-15 physical placement record. Use
@@ -55,7 +57,7 @@ python3 -B -m unittest discover -s scripts -p 'test_footprint_schemas.py'
 
 ## Ownership and identity
 
-A footprint owns pads, physical artwork and a generated reference's default
+A footprint owns pads, mechanical holes, physical artwork and a generated reference's default
 position and font. A component instance owns its reference text, such as `R12`.
 A board placement owns its origin, orientation, side, terminal-to-pad mapping
 and optional reference displacement. Library previews substitute `REF` for the
@@ -82,12 +84,13 @@ also accept `null` for some optional Rust fields as a compatibility input.
 
 | Field | Type and constraint | Meaning |
 | --- | --- | --- |
-| `format` | Exact string `pcbcraft-footprint/1` | Native footprint field contract |
+| `format` | `pcbcraft-footprint/1` or `pcbcraft-footprint/4` | Native footprint field contract |
 | `library`, `id` | 1–64 lowercase ASCII letters, digits and internal hyphens | Stable library and item identity |
 | `revision` | Integer 1…4,294,967,295 | Immutable content revision |
 | `name`, `license` | Nonempty trimmed strings, at most 200 UTF-8 bytes each | Display name and license declaration |
 | `source` | Required `kind`, `reference`, `locator` strings | Provenance, preserved when pinned |
-| `pads` | 1…128 distinct numbered pads | Physical lands and optional plated drills |
+| `pads` | 1…128 distinct numbered pads in format 1; 0…128 in format 4 | Physical lands and optional plated drills |
+| `non_plated_holes` | Required 1…128 entries in format 4; forbidden in format 1 | Circular mechanical holes, each with a local `center` and a positive finished `diameter_nm` |
 | `graphics` | 0…64 rectangles | Fabrication, silkscreen or courtyard geometry |
 | `artwork` | Optional 1…128 parameterized objects | Lines, rectangles, circles, arcs, polylines or stroke text |
 | `silkscreen` | Optional 1…64 centerline paths | Physical paths clipped against pad clearance |
@@ -104,6 +107,12 @@ They contain 1…8 ASCII letters, digits, `+`, `-` or `_`. The
 defines the existing land shapes, copper bindings and drill relationships.
 Parameterized artwork uses the existing shared drawing geometry, with physical
 stroke width and `fill` equal to `none`.
+
+A `non_plated_holes` entry has exactly `center` and `diameter_nm` (1…100,000,000).
+The array implies a non-plated through hole with no copper land. It has no pad
+number and does not participate in terminal mappings or connectivity. Footprint
+rotation and side changes transform its center, not its diameter. An empty array
+is not a format-4 definition; removing the last hole restores the format-1 writer.
 
 ## Coordinates and generated reference
 
@@ -300,9 +309,13 @@ other fields or project state.
 - The board format agrees with the fields present. Retained legacy forms and
   no-op save bytes retain their existing compatibility behavior.
 
-Editable authoring documents use `pcbcraft-library-item/1`, with stable
-primitive IDs, draft state and revision allocation. A draft may have no pads.
-Export validates a complete published definition against the footprint contract.
+Editable authoring documents retain `pcbcraft-library-item/1` when there are no
+non-plated holes and use `pcbcraft-library-item/3` when a hole is present. Both
+keep stable primitive IDs, draft state and revision allocation. Drafts may have
+no pads; a footprint with at least one non-plated hole can also be exported with
+zero pads. Export validates the published definition against the footprint contract.
+Native board placement still uses an assigned schematic component and a pad mapping.
+A standalone board-owned footprint without a schematic component cannot be placed.
 The published schema therefore applies after export. Reopening the draft retains
 the default reference offset and subsequent exports retain its new revision.
 

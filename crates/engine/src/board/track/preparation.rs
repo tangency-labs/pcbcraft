@@ -81,6 +81,7 @@ pub struct CopperEditJob {
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
+    check_route_vias: bool,
 }
 
 impl Session {
@@ -113,6 +114,16 @@ impl Session {
         Ok(Self::copper_job(context, command, params))
     }
 
+    /// Prepare an interactive route with all its layer transitions checked against mechanical
+    /// openings at the sizes and net membership of the candidate that would be published.
+    /// Direct authored commands retain their ordinary validation, including for DRC fixtures.
+    pub fn prepare_interactive_route_with(&self, context: &CopperPreparation, params: &Value) -> Result<CopperEditJob, CommandError> {
+        let mut job = self.prepare_copper_edit_with(context, ADD_TRACKS, params)?;
+        job.check_route_vias = params.get("layer_changes").and_then(Value::as_array).is_some_and(|changes| !changes.is_empty())
+            && context.source.snapshot.board.definitions.values().any(|definition| !definition.non_plated_holes.is_empty());
+        Ok(job)
+    }
+
     /// Use project dispatch's validation order before resolving a preparation context.
     fn admit_copper_edit(&self, command: &str, params: &Value) -> Result<(&'static str, BoardTarget), CommandError> {
         self.refuse_stale(command, params)?;
@@ -140,6 +151,7 @@ impl Session {
             work: 0,
             result: None,
             class_islands: None,
+            check_route_vias: false,
         }
     }
     /// Prepare one existing copper command without adopting any authored state. Headless callers
@@ -263,7 +275,10 @@ impl CopperEditJob {
                     {
                         return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
                     }
-                    if candidate.has_dimensional_net_classes() || candidate.board.vias.iter().any(|v| v.net_assignment.is_some()) {
+                    if self.check_route_vias
+                        || candidate.has_dimensional_net_classes()
+                        || candidate.board.vias.iter().any(|v| v.net_assignment.is_some())
+                    {
                         self.builder = Some(IslandBuilder::pad_contacts(lands, &candidate.board.tracks, &candidate.board.vias, &members));
                         self.class_islands = Some((copper, members));
                     }
@@ -306,6 +321,21 @@ impl CopperEditJob {
                                 if let Some(via) = view.vias().iter().find(|via| via.id == id) {
                                     policy.via_sizes(Some(via.diameter_nm), Some(via.drill_nm))?;
                                 }
+                            }
+                        }
+                    }
+                    if self.check_route_vias {
+                        let via_start = lands.len() + view.tracks().len();
+                        let baseline = self.context.source.effective.values.clearance_nm;
+                        for (offset, via) in view.vias().iter().enumerate().filter(|(_, via)| self.added.contains(&via.id)) {
+                            let index = via_start + offset;
+                            let clearance =
+                                context.as_ref().and_then(|rules| rules.object(index)).map_or(Ok(baseline), |policy| policy.clearance_nm())?;
+                            if geometry.mechanical_violation(index, clearance) {
+                                return Err(CommandError::InvalidParams(format!(
+                                    "Via land at ({}, {}) is too close to a non-plated hole.",
+                                    via.at.x_nm, via.at.y_nm
+                                )));
                             }
                         }
                     }
