@@ -833,7 +833,9 @@ not a manufacturing sign-off.
 (suggested name `<project>-fabrication.zip`), with Gerber X2 files for each
 copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
-through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
+through-hole pads). Circular non-plated footprint holes, when present, go in a separate
+`-NPTH.drl` file (see [Fabrication drill files](pcb-layout-workflow.md#fabrication-drill-files)).
+Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
 with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Gerber coordinates
 are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves going up,

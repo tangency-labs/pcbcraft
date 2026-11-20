@@ -1,10 +1,12 @@
-//! Fabrication outputs: Gerber X2 layers and an Excellon drill file, written from one board
+//! Fabrication outputs: Gerber X2 layers and Excellon drill files, written from one board
 //! snapshot with deterministic content.
 //!
 //! Each copper layer, the top and bottom solder mask, paste and silkscreen, and the
 //! Board Outline get one Gerber file in millimeters with nanometer resolution (format 4.6).
-//! Plated holes (vias and through-hole pads) go in one Excellon file. Every coordinate is written
-//! in the board's output frame: measured from its placement origin with Y up, seen from the top.
+//! Plated holes (vias and through-hole pads) go in one Excellon file. Circular non-plated
+//! footprint holes, when present, go in a separate non-plated Excellon file. Every coordinate
+//! is written in the board's output frame: measured from its placement origin with Y up, seen
+//! from the top.
 //! Openings use the pad exporter without process expansion: mask includes pads on the outer
 //! copper layer, while paste excludes through-hole pads. Obround strokes and chorded corners
 //! retain their existing approximations. Vias receive no automatic mask opening; authored mask
@@ -579,7 +581,7 @@ impl BoardView<'_> {
         Ok(Fabrication { origin, files })
     }
 
-    /// Keep vias and plated pad bores out of the mechanical drill file.
+    /// Group via and plated pad drill hits by diameter for the plated drill file.
     fn plated_drill_hits(self) -> BTreeMap<i64, Vec<Point>> {
         let mut holes: BTreeMap<i64, Vec<Point>> = BTreeMap::new();
         for via in self.vias() {
