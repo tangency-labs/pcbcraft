@@ -28,6 +28,7 @@ enum DropDestination {
     Beside(ViewInput),
     Reorder(ViewInput),
     Split(ViewInput, pcbcraft_chrome::editor::DockSide),
+    Duplicate(ViewInput, pcbcraft_chrome::editor::DockSide),
 }
 
 #[cfg(test)]
@@ -195,16 +196,13 @@ impl PcbApp {
             drag.receiver == drag.host && self.windows.drag_geometry.get(&drag.host).is_some_and(|geometry| geometry.content.contains(drag.local));
         if inside_source {
             let source_group = self.views.hosts.get(&drag.host)?.layout.group(drag.source.view())?.views();
-            let target = self
-                .windows
-                .drag_geometry
-                .get(&drag.host)?
-                .panes
-                .iter()
-                .find(|(id, rect)| !source_group.contains(id) && rect.contains(drag.local))
-                .copied()?;
+            let target = self.windows.drag_geometry.get(&drag.host)?.panes.iter().find(|(_, rect)| rect.contains(drag.local)).copied()?;
             let input = self.views.view(target.0)?.control_input(&self.session)?;
-            return Some(match pcbcraft_chrome::editor::dock_side(target.1, drag.local) {
+            let side = pcbcraft_chrome::editor::dock_side(target.1, drag.local);
+            if source_group.contains(&target.0) {
+                return side.map(|side| DropDestination::Duplicate(input, side));
+            }
+            return Some(match side {
                 Some(side) => DropDestination::Split(input, side),
                 None => DropDestination::Reorder(input),
             });
@@ -323,7 +321,7 @@ impl PcbApp {
                 pcbcraft_chrome::editor::DockSide::Left,
                 pcbcraft_chrome::editor::DockSide::Right,
             ] {
-                let active = matches!(destination, Some(DropDestination::Split(target, selected)) if target.view() == *id && selected == side);
+                let active = matches!(destination, Some(DropDestination::Split(target, selected) | DropDestination::Duplicate(target, selected)) if target.view() == *id && selected == side);
                 pcbcraft_chrome::editor::split_preview(
                     ui,
                     ui.scope_id().with(("split_destination", id, side)),
@@ -355,8 +353,9 @@ impl PcbApp {
     }
 
     /// Commit only after every host has restored its render slots. A release in another pane
-    /// moves the original pane; a release outside native bounds detaches it. Drops elsewhere in
-    /// the source window do nothing. This queue uses the same handlers as other view controls.
+    /// moves the original pane; its own edge creates another view inside that pane. A release
+    /// outside native bounds detaches it. Other source-pane drops do nothing. This queue uses
+    /// the same handlers as other view controls.
     pub(crate) fn finish_editor_drag(&mut self, ctx: &Context) {
         self.windows.drag_geometry.retain(|host, _| self.views.hosts.contains_key(host));
         self.windows.spawn_positions.retain(|host, _| self.views.hosts.contains_key(host));
@@ -369,6 +368,7 @@ impl PcbApp {
             Some(DropDestination::Beside(target)) => Some(ViewAction::MoveBeside(target)),
             Some(DropDestination::Reorder(target)) => Some(ViewAction::Reorder(target)),
             Some(DropDestination::Split(target, side)) => Some(ViewAction::MoveTo(target, side)),
+            Some(DropDestination::Duplicate(_, side)) => Some(ViewAction::OpenAt(side)),
             Some(DropDestination::NewWindow) => {
                 let position = drag.desktop.and_then(|desktop| self.windows.drag_geometry.get(&drag.host).map(|geometry| desktop / geometry.scale));
                 Some(ViewAction::DetachAt(position))

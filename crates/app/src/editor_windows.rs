@@ -47,6 +47,7 @@ pub(super) enum ViewAction {
     Detach,
     Dock,
     OpenBeside,
+    OpenAt(pcbcraft_chrome::editor::DockSide),
     Close,
     MoveBeside(ViewInput),
     MoveTo(ViewInput, pcbcraft_chrome::editor::DockSide),
@@ -274,6 +275,9 @@ impl PcbApp {
             }
             ViewAction::OpenBeside => {
                 self.views.open_beside(id);
+            }
+            ViewAction::OpenAt(side) => {
+                self.views.open_at(id, Some(side));
             }
             ViewAction::Close => self.views.close_view(id),
             ViewAction::MoveBeside(target) => {

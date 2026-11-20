@@ -542,8 +542,11 @@ view**, **Dock in main window** or **Close view**, as applicable. These actions
 target that pane, including its remembered document navigation. Dividers resize
 panes, with narrow areas stacking vertically.
 
-On desktop, drag a pane header to the top, bottom, left or right edge of another
-pane to split there. The highlighted half is labelled **Split above**, **Split below**, **Split
+On desktop, drag a pane header to its own top or bottom edge to divide that pane
+into two stacked views, leaving other panes in place. Its left/right edges create
+two views side by side. The new half opens the same document at the same zoom.
+Dragging onto an edge of another pane moves the source pane there and closes its
+old slot. The highlighted half is labelled **Split above**, **Split below**, **Split
 left** or **Split right**. These explicit splits keep their direction when the
 window is resized, and saved layouts retain it. Existing adaptive splits still
 stack when their available width becomes narrow.
@@ -567,7 +570,8 @@ source `view` and destination `beside` view IDs from `inspect_editor`. An option
 `side` of `top`, `bottom`, `left` or `right` selects an explicit split in the same
 window or another one. The window destination list also offers **Above** and
 **Below**, including on compositors that do not expose window positions.
-`view.reorder` takes source `view` and destination `target` IDs for in-window movement.
+`view.open_beside` accepts the same optional `side` to create a new view within
+the addressed pane. `view.reorder` takes source `view` and destination `target` IDs for in-window movement.
 Opening another view copies the source camera and grid without copying its edit
 selection. Turning Split off keeps the focused pane; turning it back on restores
 the window's remembered split arrangement, seeding restored cameras from the

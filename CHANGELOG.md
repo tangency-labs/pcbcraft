@@ -2,8 +2,9 @@
 
 ## 0.1.0 (unreleased)
 
-Pane headers can be dragged to another pane's top, bottom, left or right edge to
-choose an explicit split direction. The preview shows the incoming half, and
+Dragging a pane header to its own top, bottom, left or right edge creates a new
+view within that pane. Dragging to another pane’s edge moves the existing pane
+there, with an explicit split direction. The preview shows the incoming half, and
 resizing or restoring a saved layout keeps that direction. Native window drop
 targets also offer Above and Below; live `view.dock` shares the placement options.
 

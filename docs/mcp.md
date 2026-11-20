@@ -207,7 +207,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 
 | Commands | Matching control |
 |---|---|
-| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Project and definition pane headers and **View → Split / Detach / New window**. `view.dock` accepts source `view`, destination `beside` and optional `side` (`top`, `bottom`, `left`, `right`) for an explicit split within or across windows. |
+| `view.focus`, `view.split`, `view.open_beside`, `view.close`, `view.open_window`, `view.detach`, `view.dock` | Project and definition pane headers and **View → Split / Detach / New window**. `view.open_beside` takes an optional `side` to subdivide only its addressed pane. `view.dock` accepts source `view`, destination `beside` and optional `side` (`top`, `bottom`, `left`, `right`) for an explicit split within or across windows. |
 | `view.fit`, `view.center`, `view.zoom` | **Fit**, Browser centering and wheel zoom |
 | `view.open_sheet` | A sheet row in the Browser; takes the view ID and sheet UUID |
 | `app.set_workspace` | Choose Schematic, PCB layout, Symbol Editor or Footprint Editor in an addressed pane, here/beside/in a native window; definition workspaces resume their last document |

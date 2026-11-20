@@ -210,12 +210,19 @@ impl EditorViews {
 
     /// Create another view beside the addressed view, preserving the rest of its host layout.
     pub(super) fn open_beside(&mut self, source: ViewId) -> Option<ViewId> {
+        self.open_at(source, None)
+    }
+
+    /// Divide only the addressed pane, copying its current view into the requested half.
+    /// Other panes and cached documents remain in place; no project data is duplicated.
+    /// Without an explicit side, retain the existing adaptive beside placement.
+    pub(super) fn open_at(&mut self, source: ViewId, side: Option<pcbcraft_chrome::editor::DockSide>) -> Option<ViewId> {
         let host = self.owner(source)?;
         let id = self.duplicate(source, false)?;
         if let Some(layout) = self.hosts.get_mut(&host) {
-            layout.layout.insert(source, id);
+            layout.layout.insert_group_at(source, &Layout::View(id), side);
             if let Some(collapsed) = &mut layout.collapsed {
-                collapsed.insert(source, id);
+                collapsed.insert_group_at(source, &Layout::View(id), side);
             }
             layout.rects.clear();
         }

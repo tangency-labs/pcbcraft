@@ -183,7 +183,7 @@
     "view.fit": {"params":{"additionalProperties":false,"properties":{"view":{"minimum":0,"type":"integer"}},"required":["view"],"type":"object"},"scope":"window"},
     "view.focus": {"params":{"additionalProperties":false,"properties":{"view":{"minimum":0,"type":"integer"}},"required":["view"],"type":"object"},"scope":"window"},
     "view.navigate_layer": {"params":{"additionalProperties":false,"properties":{"direction":{"enum":["next","previous","front","back"],"type":"string"},"view":{"minimum":0,"type":"integer"}},"required":["view","direction"],"type":"object"},"scope":"window"},
-    "view.open_beside": {"params":{"additionalProperties":false,"properties":{"view":{"minimum":0,"type":"integer"}},"required":["view"],"type":"object"},"scope":"window"},
+    "view.open_beside": {"params":{"additionalProperties":false,"properties":{"side":{"enum":["left","right","top","bottom"],"type":"string"},"view":{"minimum":0,"type":"integer"}},"required":["view"],"type":"object"},"scope":"window"},
     "view.open_sheet": {"params":{"additionalProperties":false,"properties":{"sheet":{"format":"uuid","type":"string"},"view":{"minimum":0,"type":"integer"}},"required":["view","sheet"],"type":"object"},"scope":"window"},
     "view.open_window": {"params":{"additionalProperties":false,"properties":{"view":{"minimum":0,"type":"integer"}},"required":["view"],"type":"object"},"scope":"window"},
     "view.reorder": {"params":{"additionalProperties":false,"properties":{"target":{"minimum":0,"type":"integer"},"view":{"minimum":0,"type":"integer"}},"required":["view","target"],"type":"object"},"scope":"window"},

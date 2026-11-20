@@ -782,3 +782,97 @@ fn cross_window_split_targets_choose_above_and_below_without_native_positions() 
         assert_eq!(panes[usize::from(!first)].0, moved);
     }
 }
+
+/// Splitting either half of a schematic/PCB pair subdivides that pane without moving its peer.
+#[test]
+fn dragging_to_a_panes_own_edge_creates_a_nested_view() {
+    for index in [0, 1] {
+        for side in ["top", "bottom", "left", "right"] {
+            let (mut h, _) = many_windows();
+            let ctx = h.ctx.clone();
+            h.state_mut().split_editors(&ctx, true);
+            let ids = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+            let app = h.state_mut();
+            app.views.switch_workspace(ids[1], crate::editor_view::Workspace::Board, &app.session);
+            h.run();
+            let source = root_drag(&mut h, index);
+            let peer = ids[1 - index];
+            let rects = &h.state().views.hosts[&HostId::ROOT].rects;
+            let area = rects.iter().find(|(id, _)| *id == source).unwrap().1;
+            let peer_area = rects.iter().find(|(id, _)| *id == peer).unwrap().1;
+            let source_view = h.state().views.view(source).unwrap();
+            let target = source_view.target();
+            let camera = source_view.camera.saved_state();
+            let peer_camera = h.state().views.view(peer).unwrap().camera.saved_state();
+            let snapshot = h.state().session.snapshot().unwrap();
+            let (at, caption) = match side {
+                "top" => (pos2(area.center().x, area.top() + 8.0), "Split above"),
+                "bottom" => (pos2(area.center().x, area.bottom() - 8.0), "Split below"),
+                "left" => (pos2(area.left() + 8.0, area.center().y), "Split left"),
+                _ => (pos2(area.right() - 8.0, area.center().y), "Split right"),
+            };
+            h.hover_at(at);
+            h.run();
+            let preview = h.get_by_label(caption).rect();
+            assert!(area.contains_rect(preview));
+            h.drop_at(at);
+            h.run();
+            let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+            assert_eq!(panes.len(), 3);
+            assert_eq!(panes.iter().find(|(id, _)| *id == peer).unwrap().1, peer_area);
+            let (new, placed) = panes.iter().find(|(id, _)| !ids.contains(id)).copied().unwrap();
+            assert_eq!(preview, placed.shrink(pcbcraft_chrome::Tokens::get().space_4));
+            assert_eq!(h.state().views.view(new).unwrap().target(), target);
+            assert_eq!(h.state().views.view(new).unwrap().camera.saved_state(), camera);
+            assert_eq!(h.state().views.view(source).unwrap().camera.saved_state(), camera);
+            assert_eq!(h.state().views.view(peer).unwrap().camera.saved_state(), peer_camera);
+            assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+        }
+    }
+}
+
+/// Own-edge splitting follows shared cancellation/stale-input policy; the centre stays a no-op.
+#[test]
+fn own_pane_split_drops_require_a_current_uncancelled_edge() {
+    for cancel in ["escape", "stale", "centre"] {
+        let (mut h, _) = many_windows();
+        let ctx = h.ctx.clone();
+        h.state_mut().split_editors(&ctx, true);
+        h.run();
+        let source = root_drag(&mut h, 1);
+        let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+        let area = panes.iter().find(|(id, _)| *id == source).unwrap().1;
+        let ids = h.state().views.hosts[&HostId::ROOT].layout.views();
+        let at = if cancel == "centre" { area.center() } else { pos2(area.center().x, area.bottom() - 8.0) };
+        h.hover_at(at);
+        h.run();
+        match cancel {
+            "escape" => h.key_press(Key::Escape),
+            "stale" => h.state_mut().views.suspend(),
+            _ => {}
+        }
+        h.drop_at(at);
+        h.run();
+        assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.views(), ids, "{cancel}");
+    }
+}
+
+/// The shared command splits the addressed pane and rejects invalid directions atomically.
+#[test]
+fn explicit_open_beside_subdivides_only_the_addressed_pane() {
+    let (mut h, _) = many_windows();
+    let ctx = h.ctx.clone();
+    h.state_mut().split_editors(&ctx, true);
+    h.run();
+    let ids = h.state().views.hosts[&HostId::ROOT].layout.visible_views();
+    let peer_area = h.state().views.hosts[&HostId::ROOT].rects[1].1;
+    assert!(h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":ids[0].0,"side":"diagonal"})).is_err());
+    assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.visible_views(), ids);
+    h.state_mut().run_window_command(&ctx, "view.open_beside", &json!({"view":ids[0].0,"side":"bottom"})).unwrap();
+    h.run();
+    let panes = &h.state().views.hosts[&HostId::ROOT].rects;
+    assert_eq!(panes.len(), 3);
+    assert_eq!(panes[2], (ids[1], peer_area));
+    assert_eq!(panes[0].0, ids[0]);
+    assert!(panes[0].1.bottom() < panes[1].1.top());
+}

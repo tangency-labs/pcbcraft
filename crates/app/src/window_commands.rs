@@ -314,6 +314,18 @@ mod live {
         Some(Point { x_nm: coordinate("x_nm")?, y_nm: coordinate("y_nm")? })
     }
 
+    /// Read an optional split edge after command parameter validation.
+    fn split_side(params: &Value) -> Option<pcbcraft_chrome::editor::DockSide> {
+        use pcbcraft_chrome::editor::DockSide;
+        match params.get("side").and_then(Value::as_str) {
+            Some("left") => Some(DockSide::Left),
+            Some("right") => Some(DockSide::Right),
+            Some("top") => Some(DockSide::Top),
+            Some("bottom") => Some(DockSide::Bottom),
+            _ => None,
+        }
+    }
+
     /// Read a list of distinct footprint IDs.
     fn footprints(value: &Value) -> Option<std::collections::BTreeSet<String>> {
         let items = value.as_array()?;
@@ -787,8 +799,11 @@ mod live {
         WindowCommand {
             id: "view.open_beside",
             title: "Open Beside",
-            summary: "Open another view of the same sheet beside this one.",
-            params: &[VIEW],
+            summary: "Split this pane with another view of its current document, leaving other panes in place. An optional side chooses a fixed split direction.",
+            params: &[
+                VIEW,
+                Param { name: "side", summary: "New view's split edge", required: false, kind: Kind::Choice(&["left", "right", "top", "bottom"]) },
+            ],
         },
         WindowCommand { id: "view.close", title: "Close View", summary: "Close the view. The main window always keeps one view.", params: &[VIEW] },
         WindowCommand {
@@ -1627,15 +1642,8 @@ mod live {
                     return Err(format!("View {} is the main window's only view, which stays open. Close another view or window instead.", view.0));
                 }
                 ("view.dock", Some((view, host)), _) if params.get("beside").is_some() || params.get("side").is_some() => {
-                    use pcbcraft_chrome::editor::DockSide;
                     let target = ViewId(params.get("beside").and_then(Value::as_u64).ok_or("Choose a destination pane with `beside`.")?);
-                    let side = match params.get("side").and_then(Value::as_str) {
-                        Some("left") => Some(DockSide::Left),
-                        Some("right") => Some(DockSide::Right),
-                        Some("top") => Some(DockSide::Top),
-                        Some("bottom") => Some(DockSide::Bottom),
-                        _ => None,
-                    };
+                    let side = split_side(params);
                     if self.view_window(target)? == host && side.is_none() {
                         return Err("Docking requires a destination pane in another window of this instance.".into());
                     }
@@ -1651,7 +1659,7 @@ mod live {
                 }
                 ("view.open_beside" | "view.close" | "view.open_window" | "view.detach" | "view.dock", Some((view, _)), _) => {
                     let action = match id {
-                        "view.open_beside" => ViewAction::OpenBeside,
+                        "view.open_beside" => split_side(params).map_or(ViewAction::OpenBeside, ViewAction::OpenAt),
                         "view.close" => ViewAction::Close,
                         "view.open_window" => ViewAction::OpenWindow,
                         "view.detach" => ViewAction::Detach,
