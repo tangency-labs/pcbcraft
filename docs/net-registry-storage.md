@@ -13,7 +13,8 @@ Current split saves write project/52; the ordinary first-save
 board-folder/occurrence migration still applies. For a board-owned registry the
 plain record vocabulary uses instances/2, [class bindings](net-class-assignments.md)
 without generated numbers use instances/3, and generated numbers use instances/4
-unless memberships or pairs require another header. A numbered registry requires
+unless memberships or pairs require another header;
+[designator locks](native-project-storage.md#designator-locks) do not change it. A numbered registry requires
 positive, unique numbers on every record; explicit null is invalid.
 [Part-group memberships](part-groups.md) use instances/5 for expanded records or
 instances/7 for compact records, unless pairs require instances/8. A part-group catalog without
@@ -68,7 +69,7 @@ successors or set a review state automatically.
 
 Under project/52 pair lists are optional. A nonempty list for a board-owned
 registry requires instances/8. Historical project/45 also requires pairs, and its
-predecessors reject them. An empty or null `pairs` field is invalid. Project/52 allows
+predecessors reject them. Historical project/51 permits pairs without requiring them. An empty or null `pairs` field is invalid. Project/52 allows
 both fully numbered and fully unnumbered registries, but not a mixture. Existing
 class catalogs and bindings, parameters, no-connect intent, part groups and
 assembly profiles keep their existing validation rules. Either expanded or

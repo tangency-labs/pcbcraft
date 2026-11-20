@@ -130,7 +130,8 @@ edits rather than reusing the example's number.
 ## Storage and follow-on boundaries
 
 Current split saves write `pcbcraft-project/52`; a class catalog is optional and
-can coexist with generated net numbers, bindings, part groups and pairs. The nonempty
+can coexist with generated net numbers, bindings, part groups, pairs and
+[designator locks](native-project-storage.md#designator-locks). The nonempty
 `net_classes` record is stored in `project.json`, with definitions sorted by UUID
 and one definition per line. It extends the existing folder/occurrence vocabulary
 and permits the supported optional no-connect and persistent-net records

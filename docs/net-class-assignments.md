@@ -81,7 +81,8 @@ Schematic-only bindings remain under `schematic_instances.net_registry`.
 For board-owned registries, bindings without generated numbers use
 `pcbcraft-instances/3`; numbered registries use instances/4. With [part groups](part-groups.md),
 board-owned registries use instances/5 or instances/7 for expanded or compact
-memberships. Registries with differential pairs use instances/8. A catalog without memberships retains
+memberships. Registries with differential pairs use instances/8. [Designator locks](native-project-storage.md#designator-locks) do not change
+this registry home or its instance header. A catalog without memberships retains
 the header its other records require. First-board creation moves
 the live registry and requalifies its anchors without changing net IDs or
 binding origins. Physical `board.json` bytes, accepted connectivity baselines and

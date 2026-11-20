@@ -311,3 +311,63 @@ fn reopened_pin_refuses_different_content_at_the_same_address() {
     assert_eq!(encode_documents(reopened.snapshot().unwrap()).unwrap(), saved);
     assert_eq!(reopened.snapshot().unwrap().lifecycle().disposition(&draft.target), Some(Disposition::Draft));
 }
+
+/// Lock the only placed part instance through the shared field command, keeping its visible fields.
+fn lock_first(session: &mut Session) {
+    let project = session.project().unwrap();
+    let symbol = project.symbols()[0].id();
+    let part = project.components().next().unwrap();
+    let params = json!({"symbol":symbol,"reference":part.reference,"value":part.value,"designator_locked":true,
+        "expected_revision":session.revision()});
+    session.apply(crate::SET_SYMBOL_FIELDS, &params).unwrap();
+}
+
+/// Project/52 carries a pinned assessment, a board folder and a designator lock together: Save
+/// writes /52, reopening keeps both and re-encodes the same bytes. A historical project/51 lock
+/// file opens and saves as /52; /51 cannot carry the lifecycle document.
+#[test]
+fn designator_lock_and_assessment_share_project_52_and_read_historical_51() {
+    for board in [false, true] {
+        let (documents, draft, _) = source();
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":board})).unwrap();
+        session.execute(LOAD, &json!({"source":"fixture","documents":documents})).unwrap();
+        let key = &draft.target;
+        let symbol = session.libraries().item(key).unwrap().symbol().unwrap();
+        let place = json!({"library":key.library,"definition":key.id,"definition_revision":key.revision,
+            "definition_digest":symbol_digest(&symbol).unwrap(),"expected_revision":session.revision(),"x_nm":0,"y_nm":0});
+        session.apply(PLACE_SYMBOL, &place).unwrap();
+        lock_first(&mut session);
+        let locked = encode_documents(session.snapshot().unwrap()).unwrap();
+        let entry: Value = serde_json::from_slice(&locked[crate::persistence::ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/52");
+        assert_eq!(entry.get("layout_root").is_some(), board);
+        assert!(!locked.contains_key("library/lifecycle.json"));
+        session.apply(ADOPT, &params(&session, &draft)).unwrap();
+        let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+        let entry: Value = serde_json::from_slice(&saved[crate::persistence::ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/52");
+        assert!(saved.contains_key("library/lifecycle.json"));
+        let reopened = decode_documents(&saved).unwrap();
+        assert!(reopened.components().next().unwrap().designator_locked());
+        assert_eq!(reopened.lifecycle(), session.snapshot().unwrap().lifecycle());
+        assert!(!reopened.lifecycle().is_empty());
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
+        let packed = crate::persistence::encode_packed(reopened).unwrap();
+        assert_eq!(crate::persistence::decode_packed(&packed).unwrap().documents, saved);
+
+        // Project/51 has no board_instances declaration; it infers the registered board's instance home.
+        let historical = edit_project_header(&locked, |header| {
+            header["format"] = json!("pcbcraft-project/51");
+            header.as_object_mut().unwrap().remove("board_instances");
+        });
+        let opened = decode_documents(&historical).unwrap();
+        assert!(opened.components().next().unwrap().designator_locked());
+        assert_eq!(encode_documents(opened).unwrap(), locked);
+        let lifecycle_51 = edit_project_header(&saved, |header| {
+            header["format"] = json!("pcbcraft-project/51");
+            header.as_object_mut().unwrap().remove("board_instances");
+        });
+        assert!(decode_documents(&lifecycle_51).unwrap_err().contains("requires project/52"));
+    }
+}

@@ -50,6 +50,7 @@ const CLASS_PROJECT_FORMAT: &str = "pcbcraft-project/20";
 const BINDING_PROJECT_FORMAT: &str = "pcbcraft-project/21";
 const PARAMETER_PROJECT_FORMAT: &str = "pcbcraft-project/22";
 const GENERATED_NET_PROJECT_FORMAT: &str = "pcbcraft-project/23";
+const DESIGNATOR_LOCK_PROJECT_FORMAT: &str = "pcbcraft-project/51";
 const PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/24";
 const ASSEMBLY_PROFILE_PROJECT_FORMAT: &str = "pcbcraft-project/36";
 const COMPACT_PART_GROUP_PROJECT_FORMAT: &str = "pcbcraft-project/39";
@@ -201,6 +202,7 @@ impl ProjectDocument {
                 | BINDING_PROJECT_FORMAT
                 | PARAMETER_PROJECT_FORMAT
                 | GENERATED_NET_PROJECT_FORMAT
+                | DESIGNATOR_LOCK_PROJECT_FORMAT
                 | ASSEMBLY_PROFILE_PROJECT_FORMAT
                 | PART_GROUP_PROJECT_FORMAT
                 | PAIR_PROJECT_FORMAT
@@ -301,6 +303,7 @@ pub fn project_instances_path(entry: &[u8]) -> Result<Option<String>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | DESIGNATOR_LOCK_PROJECT_FORMAT
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
@@ -429,6 +432,9 @@ pub fn is_document_path(path: &str) -> bool {
 /// Project/36 requires pinned assembly profiles and allows either group membership encoding.
 /// Project/45 requires differential pairs and board-owned instances/8; assembly profiles and
 /// either group membership encoding remain optional under those headers.
+/// Project/51 requires an active designator lock. Differential pairs are optional;
+/// board-owned pairs still use instances/8 with either group membership encoding.
+/// Project/51 is read only; current saves write project/52, where designator locks are optional.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
 /// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
@@ -449,15 +455,25 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     project.format = project.layout_format().to_owned();
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
+    let lock_format = project.format == DESIGNATOR_LOCK_PROJECT_FORMAT;
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
-    if (!current && !pair_format && profile_format != project.assembly_profiles.is_some())
-        || project.assembly_profiles.as_ref().is_some_and(|c| c.is_empty())
+    if (!current && !lock_format && !pair_format && profile_format != project.assembly_profiles.is_some())
+        || project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty())
     {
-        return Err("project.json: assembly profiles require project format 36, 45 or 52 and a nonempty identity catalog.".into());
+        return Err("project.json: assembly profiles require project format 36, 45, 51 or 52 and a nonempty identity catalog.".into());
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
+    // Project/51 requires an active lock; project/52 carries locks optionally.
+    if (!current && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
+        || project.components.iter().any(|part| part.designator_locked == Some(false))
+    {
+        return Err(
+            "Designator locks require project format 51 or 52, and project format 51 at least one true designator_locked flag; omit unlocked flags."
+                .into(),
+        );
+    }
     let instance_path = project_instances_path(&documents[ENTRY_POINT])?;
     let occurrences = (current && (project.schematic_instances.is_some() || instance_path.is_some()))
         || matches!(
@@ -469,6 +485,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | BINDING_PROJECT_FORMAT
                 | PARAMETER_PROJECT_FORMAT
                 | GENERATED_NET_PROJECT_FORMAT
+                | DESIGNATOR_LOCK_PROJECT_FORMAT
                 | ASSEMBLY_PROFILE_PROJECT_FORMAT
                 | PART_GROUP_PROJECT_FORMAT
                 | PAIR_PROJECT_FORMAT
@@ -479,7 +496,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Project/24 is a superset of project/23: it requires a nonempty part-group catalog,
     // and every record project/23 accepts is optional, including generated net numbers.
     let part_group_format = project.format == PART_GROUP_PROJECT_FORMAT;
-    let optional_part_groups = profile_format || pair_format || current;
+    let optional_part_groups = lock_format || profile_format || pair_format || current;
     let supports_part_groups = part_group_format || optional_part_groups;
     let superset_format = generated_net_format || supports_part_groups;
     let class_format = matches!(project.format.as_str(), CLASS_PROJECT_FORMAT | BINDING_PROJECT_FORMAT);
@@ -491,17 +508,18 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | BINDING_PROJECT_FORMAT
                 | PARAMETER_PROJECT_FORMAT
                 | GENERATED_NET_PROJECT_FORMAT
+                | DESIGNATOR_LOCK_PROJECT_FORMAT
                 | ASSEMBLY_PROFILE_PROJECT_FORMAT
                 | PART_GROUP_PROJECT_FORMAT
                 | PAIR_PROJECT_FORMAT
         );
     if !parameter_format && !superset_format && class_format != project.net_classes.is_some() {
-        return Err("Net-class catalog requires project format 20, 21, 22, 23, 24, 36, 39 or 45; any catalog must be nonempty.".into());
+        return Err("Net-class catalog requires project format 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52; any catalog must be nonempty.".into());
     }
     if (!superset_format && parameter_format != project.parameters.is_some())
         || (superset_format && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
     {
-        return Err("Project parameters require project format 22, 23, 24, 36, 39 or 45, with a nonempty list.".into());
+        return Err("Project parameters require project format 22, 23, 24, 36, 39, 45, 51 or 52, with a nonempty list.".into());
     }
     let project_parameters = project.parameters.take().unwrap_or_default();
     if parameter_format && project_parameters.is_empty() {
@@ -509,7 +527,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     crate::parameters::check(&project_parameters, crate::parameters::Scope::Project).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
     if !optional_part_groups && part_group_format != project.part_groups.is_some() {
-        return Err("Part-group catalog requires project format 24, 36, 39 or 45. Formats 24 and 39 require a nonempty catalog.".into());
+        return Err("Part-group catalog requires project format 24, 36, 39, 45, 51 or 52. Formats 24 and 39 require a nonempty catalog.".into());
     }
     let mut part_groups = project.part_groups.take();
     if let Some(catalog) = &mut part_groups {
@@ -528,7 +546,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         catalog.definitions.sort_by_key(|class| class.id);
     }
     if !no_connect_format && project.components.iter().any(|part| part.no_connects.is_some()) {
-        return Err("No-connect intent requires project format 19.".into());
+        return Err("No-connect intent requires project format 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52.".into());
     }
     let part_format = current
         || matches!(
@@ -541,6 +559,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | BINDING_PROJECT_FORMAT
                 | PARAMETER_PROJECT_FORMAT
                 | GENERATED_NET_PROJECT_FORMAT
+                | DESIGNATOR_LOCK_PROJECT_FORMAT
                 | ASSEMBLY_PROFILE_PROJECT_FORMAT
                 | PART_GROUP_PROJECT_FORMAT
                 | PAIR_PROJECT_FORMAT
@@ -552,7 +571,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45.".into());
+        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52.".into());
     }
     let registered = (part_format && project.boards.is_some())
         || matches!(
@@ -583,6 +602,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | BINDING_PROJECT_FORMAT
             | PARAMETER_PROJECT_FORMAT
             | GENERATED_NET_PROJECT_FORMAT
+            | DESIGNATOR_LOCK_PROJECT_FORMAT
             | ASSEMBLY_PROFILE_PROJECT_FORMAT
             | PART_GROUP_PROJECT_FORMAT
             | PAIR_PROJECT_FORMAT
@@ -604,27 +624,29 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         if project.schematic_instances.is_some() && registrations.as_ref().is_some_and(|items| !items.is_empty()) {
             return Err("Project/52 schematic_instances requires no registered board.".into());
         }
-        if !occurrences && (!profile_catalog.is_empty() || part_groups.is_some() || net_classes.is_some() || !project_parameters.is_empty()) {
-            return Err("Project/52 catalogs and project parameters require instance records.".into());
+        let locks = project.components.iter().any(|component| component.designator_locked.is_some());
+        if !occurrences && (locks || !profile_catalog.is_empty() || part_groups.is_some() || net_classes.is_some() || !project_parameters.is_empty())
+        {
+            return Err("Project/52 catalogs, project parameters and designator locks require instance records.".into());
         }
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45".into());
+        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52".into());
     }
     if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
         || (schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()))
         || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
     {
         return Err(
-            "project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45, no board and a nonempty bounded list"
+            "project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52, no board and a nonempty bounded list"
                 .into(),
         );
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45.".into());
+        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52.".into());
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45".into());
+        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52".into());
     }
     if !current
         && matches!(
@@ -643,13 +665,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | BINDING_PROJECT_FORMAT
                 | PARAMETER_PROJECT_FORMAT
                 | GENERATED_NET_PROJECT_FORMAT
+                | DESIGNATOR_LOCK_PROJECT_FORMAT
                 | ASSEMBLY_PROFILE_PROJECT_FORMAT
                 | PART_GROUP_PROJECT_FORMAT
                 | PAIR_PROJECT_FORMAT
         ) != project.numeric_id_high_water.is_some()
     {
         return Err(format!(
-            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45"
+            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52"
         ));
     }
     if project.sheets.is_empty()
@@ -672,11 +695,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 let optional_bindings =
                     (parameter_format || superset_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
                 let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
-                let pair_instances = pair_format || (current && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
+                let pair_instances =
+                    pair_format || ((current || lock_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
                 if pair_instances {
                     // Instances/8 keeps its header for either membership encoding.
                     compact_part_groups = instance.compact_part_group_memberships.is_some();
-                } else if current || profile_format {
+                } else if current || lock_format || profile_format {
+                    // Without pairs, the instance header distinguishes the two encodings.
                     compact_part_groups = instance.format == COMPACT_PART_GROUP_INSTANCES_FORMAT;
                 }
                 let expected = if pair_instances {
@@ -710,7 +735,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 )
             }
             (None, Some(records)) if !supports_part_groups && records.part_group_memberships.is_some() => {
-                return Err("Part-group memberships require project format 24, 36, 39 or 45.".into());
+                return Err("Part-group memberships require project format 24, 36, 39, 45, 51 or 52.".into());
             }
             (None, Some(records)) => {
                 if optional_part_groups {
@@ -728,12 +753,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if (!parameter_format && !superset_format && binding_format != has_bindings)
         || ((parameter_format || superset_format) && has_bindings && net_classes.is_none())
     {
-        return Err("Net class assignments require project format 21 and instances format 3 when board-owned, or a later project format with a net-class catalog; the new envelope requires nonempty assignments.".into());
+        return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 51 or 52 with a net-class catalog and the content-selected instance format when board-owned; project format 21 requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
-    if !current && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
+    if !current && !lock_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
         return Err(
-            "Differential pairs require project format 45 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list."
+            "Differential pairs require project format 45, 51 or 52 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
                 .into(),
         );
     }
@@ -744,13 +769,14 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
     {
         return Err(
-            "Generated net numbers require project format 23, 24, 36, 39 or 45 and instances format 4, 5, 7 or 8 when board-owned, with a number on every record."
+            "Generated net numbers require project format 23, 24, 36, 39, 45, 51 or 52 and instances format 4, 5, 7 or 8 when board-owned, with a number on every record."
                 .into(),
         );
     }
     if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
         return Err(
-            "Net registry records require project format 17, 19, 20, 21, 22, 23, 24, 36, 39 or 45 and the corresponding instance vocabulary.".into(),
+            "Net registry records require project format 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 51 or 52 and the corresponding instance vocabulary."
+                .into(),
         );
     }
     let mut layouts = Vec::new();
@@ -1379,8 +1405,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut reader = crate::part_instances::storage::Reader::default();
     let mut selections = BTreeMap::new();
     let mut no_connects = BTreeMap::new();
+    let mut designator_locks = BTreeSet::new();
     let mut marker_count = layouts.iter().map(|(_, _, _, _, _, ends)| ends.len()).sum::<usize>();
     for component in &mut project.components {
+        if component.designator_locked.take() == Some(true) {
+            designator_locks.insert(component.id);
+        }
         if let Some(records) = component.no_connects.take() {
             let intents = crate::no_connect::read_intents(records)?;
             marker_count += intents.len();
@@ -1467,6 +1497,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
     project_data.sheets = Arc::new(sheets);
+    for id in designator_locks {
+        let part = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing designator-locked part instance.")?;
+        part.designator_locked = true;
+    }
     for (id, intents) in no_connects {
         let part = Arc::make_mut(&mut project_data.components).get_mut(&id).ok_or("Missing no-connect part.")?;
         part.no_connects = intents;
@@ -1739,6 +1773,10 @@ impl DocumentsEncoder {
                     if has_parameters && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
                         return Err("Project parameters require adopted storage/occurrence metadata.".into());
                     }
+                    let has_locks = p.components.values().any(|part| part.designator_locked);
+                    if has_locks && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
+                        return Err("Designator locks require adopted storage/occurrence metadata.".into());
+                    }
                     p.part_groups.validate()?;
                     let has_part_groups = !p.part_groups.groups.is_empty();
                     if has_part_groups && (!p.has_sheet_occurrences() || p.layout.is_none() || p.numeric_id_high_water.is_none()) {
@@ -1839,6 +1877,7 @@ impl DocumentsEncoder {
                                 metadata: (!c.metadata.is_empty()).then(|| c.metadata.clone()),
                                 part: c.part.as_ref().map(|part| part.record()),
                                 no_connects: crate::no_connect::write_intents(&c.no_connects),
+                                designator_locked: c.designator_locked.then_some(true),
                             },
                         )?;
                         if let Some(part) = &c.part {

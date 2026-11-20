@@ -67,7 +67,7 @@ numbers.
 ## Storage
 
 `pcbcraft-project/52` supports both expanded and compact memberships, with or
-without assembly profiles. The catalog
+without assembly profiles or designator locks. The catalog
 is stored in `project.json` directly after any net-class catalog, with groups
 sorted by UUID and one per line. Readers accept the groups in any order and sort
 them by UUID, as for net classes:

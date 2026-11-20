@@ -15,7 +15,8 @@ project declares `board_instances: true` and owns an `instances.json` beside
 `board.json`. The instance document's `board` header must match the registered
 board UUID. A second storage home is rejected. The base instance header is
 `pcbcraft-instances/1`; a net registry or memberships can select a newer instance
-header without changing project/52.
+header without changing project/52. Designator locks do not change the
+instance header either.
 
 The instance payload contains `circuit_uses` and `sheet_occurrences`. There is
 exactly one circuit-use record, containing its non-nil UUID `id`. Every sheet

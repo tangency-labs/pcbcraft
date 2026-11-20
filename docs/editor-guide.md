@@ -537,28 +537,48 @@ its own panels. Every window's operating-system title, which the taskbar and
 window switcher show, names its focused document, such as
 `Dual LED · transistor flasher › Main — PCBCraft`; Home shows `PCBCraft` alone.
 
-Right-click a split pane's header for **Open beside**, **Open in new window**, **Detach
-view**, **Dock in main window** or **Close view**, as applicable. These actions
-target that pane, including its remembered document navigation. Dividers resize
-panes, with narrow areas stacking vertically.
+Right-click a pane's header for **Split up** or **Split down** to open another
+view above or below that pane. The same menu offers **Open beside**, **Open in
+new window**, **Detach view**, **Dock in main window** and **Close view**, as
+applicable. These actions target that pane, including its remembered document
+navigation. Dividers resize panes, with narrow areas stacking vertically.
+
+On desktop, drag a pane header over a destination pane and choose **Split up** or
+**Split down** beneath that pane's header. Between different panes this moves the
+existing view and its cached documents, then collapses the old slot. Neighbouring
+panes expand into the vacated space; with only two panes, the resulting split can
+span the window. Its top, bottom, left and right edges offer the same placement.
+Dropping onto the source pane itself, or choosing Split up/down in its context
+menu, opens another view there.
+
+The drag list also offers **Split window up** and **Split window down**. These move
+the existing pane above or below the window's entire remaining layout, closing
+its old slot. The preview is labelled **Split window above/below** and spans the
+window. Explicit pane and window splits keep their direction when resized or
+restored from a saved layout.
 
 On desktop, dragging a header shades its source pane and displays window
-destinations. Drop over another pane in the same window to move into that slot;
+destinations. Drop over the centre of another pane in the same window to move into that slot;
 intervening panes shift, so a two-pane layout exchanges its positions. The full
 slot highlights **Move pane here**, retaining divider ratios and cached documents.
 Release outside the window or over **Open in new window** to detach, retaining
 its remembered documents and camera.
 Detached panes retain a draggable header with a leading **Dock** button that
-returns the pane to the main window in one click. Drag destinations stay beside
-the initial header press, rather than at a possibly off-screen far edge. Drag
-onto **Dock in main window** or another window target; its row and destination
+returns the pane to the main window in one click. Window destinations remain
+available beside the initial header press when the pointer leaves the source
+window. Drag onto **Dock in main window** or another window target; its row and destination
 split region highlight before release. Direct drops over exposed panes in another
 window are also available where the compositor exposes window positions. Moving outside the
 client highlights **Open in new window**; the new OS window is created on release.
 There is no window preview outside the client. **Esc** cancels. Every target belongs
 to the same running instance and project session. Live MCP can address the same destination with `view.dock`, passing the
-source `view` and destination `beside` view IDs from `inspect_editor`.
-`view.reorder` takes source `view` and destination `target` IDs for in-window movement.
+source `view` and destination `beside` view IDs from `inspect_editor`. An optional
+`side` of `top`, `bottom`, `left` or `right` selects an explicit split in the same
+window or another one. The window destination list also offers **Above** and
+**Below**, including on compositors that do not expose window positions.
+`view.open_beside` accepts `side` and an optional destination `beside`, opening
+a copy of source `view` inside that pane. `view.dock` adds `scope: "window"` with
+`beside` and `side` for a full-window move; its default scope retains ordinary docking. `view.reorder` takes source `view` and destination `target` IDs for in-window movement.
 Opening another view copies the source camera and grid without copying its edit
 selection. Turning Split off keeps the focused pane; turning it back on restores
 the window's remembered split arrangement, seeding restored cameras from the

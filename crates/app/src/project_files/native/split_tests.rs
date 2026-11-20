@@ -1084,6 +1084,63 @@ fn migration_adoption_preserves_edits_made_while_the_worker_runs() {
     assert!(Arc::ptr_eq(&s.snapshot().unwrap(), &files.saved.as_ref().unwrap().snapshot));
 }
 
+/// A lock prepares the folder and occurrence metadata before Save, so the worker returns the
+/// same snapshot. Save still adopts that metadata across Undo, without keeping the undone lock.
+#[test]
+fn designator_lock_unchanged_save_adopts_layout_across_undo() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("project");
+    let flat = decode(include_bytes!("../../../tests/fixtures/two-resistors.pc")).unwrap();
+    folder::save(&root, None, &encode_documents(flat).unwrap(), &mut |_| Ok(())).unwrap();
+    let mut s = Session::default();
+    let mut files = ProjectFiles::default();
+    assert!(matches!(complete(&mut files, &mut s, load(&root).map(Outcome::Opened)), Some(Update::Opened)));
+    let legacy = s.snapshot().unwrap();
+    assert_eq!(legacy.board_document_path().as_deref(), Some("board.json"));
+    assert!(!legacy.has_sheet_occurrences());
+    let symbol = &legacy.symbols()[0];
+    let part = legacy.component(symbol).unwrap();
+    let lock = json!({"symbol":symbol.id(),"reference":part.reference(),"value":part.value(),"designator_locked":true});
+    apply(&mut s, pcbcraft_engine::SET_SYMBOL_FIELDS, lock.clone());
+    s.apply("edit.undo", &json!({})).unwrap();
+    let before_save = s.project().unwrap();
+    assert_eq!(before_save.board_document_path().as_deref(), Some("board.json"), "Undo before Save must not adopt the folder");
+    assert!(!before_save.has_sheet_occurrences());
+    assert!(before_save.components().all(|part| !part.designator_locked()));
+    apply(&mut s, pcbcraft_engine::SET_SYMBOL_FIELDS, lock);
+    let captured = s.snapshot().unwrap();
+    let board_path = captured.board_document_path().unwrap();
+    assert!(board_path.starts_with("boards/"));
+    let occurrences = captured.sheet_instances();
+    let revision = s.revision();
+
+    let previous = files.previous(&captured);
+    let result = save(captured.clone(), previous, None);
+    assert!(matches!(&result, Ok(Outcome::Saved(saved, _)) if Arc::ptr_eq(&saved.snapshot, &captured)));
+    assert!(matches!(complete(&mut files, &mut s, result), Some(Update::Message(_))));
+    assert!(!files.dirty(&s));
+    assert_eq!(s.revision(), revision);
+    let board_bytes = fs::read(root.join(&board_path)).unwrap();
+    assert!(!root.join("board.json").exists());
+
+    s.apply("edit.undo", &json!({})).unwrap();
+    let unlocked = s.snapshot().unwrap();
+    assert_eq!(unlocked.board_document_path().as_deref(), Some(board_path.as_str()), "Undo must keep the saved folder layout");
+    assert!(unlocked.has_sheet_occurrences());
+    assert_eq!(unlocked.sheet_instances(), occurrences);
+    assert!(unlocked.components().all(|part| !part.designator_locked()));
+    assert!(files.dirty(&s));
+
+    let previous = files.previous(&unlocked);
+    assert!(matches!(complete(&mut files, &mut s, save(unlocked, previous, None)), Some(Update::Message(_))));
+    assert!(!files.dirty(&s));
+    assert!(!root.join("board.json").exists());
+    assert_eq!(fs::read(root.join(&board_path)).unwrap(), board_bytes);
+    let reopened = load(&root).unwrap().snapshot;
+    assert_eq!(reopened.board_document_path().as_deref(), Some(board_path.as_str()));
+    assert!(reopened.components().all(|part| !part.designator_locked()));
+}
+
 /// A sheet created after capture retains its inspected identity when Save adopts metadata;
 /// undo reaches the saved snapshot and redo restores the same occurrence without a second use.
 #[test]

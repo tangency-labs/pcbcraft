@@ -71,6 +71,44 @@ fn pair_save_reopen_and_net_rename_preserve_identity_and_bytes() {
     }
 }
 
+/// A lock keeps the current project/52 pair envelope and its registry payload, and
+/// removing the last lock restores the previous bytes in both storage homes.
+#[test]
+fn designator_lock_migrates_pair_projects_without_changing_pair_intent() {
+    for board in [false, true] {
+        let (mut session, pair, _) = paired(board);
+        apply(&mut session, crate::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":25_400_000}));
+        let symbol = session.project().unwrap().symbols()[0].id();
+        let before = encode_documents(session.snapshot().unwrap()).unwrap();
+        let mut entry: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/52");
+        let embedded_registry = entry["schematic_instances"]["net_registry"].clone();
+        let instance_path = session.project().unwrap().instances_document_path();
+        session.open_snapshot(crate::persistence::decode_documents(&before).unwrap());
+        apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":symbol,"reference":"R1","value":"R","designator_locked":true}));
+        let locked = encode_documents(session.snapshot().unwrap()).unwrap();
+        entry = serde_json::from_slice(&locked[ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/52");
+        if let Some(path) = instance_path {
+            assert_eq!(locked[&path], before[&path]);
+            let mut instance: Value = serde_json::from_slice(&locked[&path]).unwrap();
+            assert_eq!(instance["format"], "pcbcraft-instances/8");
+            instance["format"] = json!("pcbcraft-instances/2");
+            assert!(crate::persistence::decode_documents(&replaced(&locked, &path, &instance)).is_err());
+        } else {
+            assert_eq!(entry["schematic_instances"]["net_registry"], embedded_registry);
+        }
+        let reopened = crate::persistence::decode_documents(&locked).unwrap();
+        assert_eq!(reopened.net_registry.pairs.as_ref(), &[Arc::new(pair)]);
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), locked);
+        entry["format"] = json!("pcbcraft-project/45");
+        assert!(crate::persistence::decode_documents(&replaced(&locked, ENTRY_POINT, &entry)).is_err());
+        session.open_snapshot(reopened);
+        apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"symbol":symbol,"reference":"R1","value":"R","designator_locked":false}));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// Review state carries bounded context, while an explicit active state canonicalizes to omission.
 #[test]
 fn pair_review_state_round_trips_and_active_is_omitted() {
