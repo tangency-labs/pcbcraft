@@ -54,9 +54,9 @@ save the schematic and board together with shared undo/redo.
   endpoint, connect an MCP client to the open editor, or run a headless session.
 
 Full ERC, broader DRC coverage, advanced routing, copper-zone fill
-and 3D/STEP workflows remain in development. Footprint slots, non-plated drills
-and independent footprint mask/paste controls are not yet supported. The current
-checks and exporters do not establish manufacturing readiness.
+and 3D/STEP workflows remain in development. Footprint slots, separate non-plated
+drill output and independent footprint mask/paste controls are not yet supported.
+The current checks and exporters do not establish manufacturing readiness.
 
 The [capability table](docs/capabilities.md) separates available features from
 remaining work. The [MVP milestone](https://github.com/tangency-labs/pcbcraft/milestone/1)
@@ -137,8 +137,10 @@ contributors and agents.
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers the build, code map, required checks
 and source rules. Find a bounded task in
-[GitHub issues](https://github.com/tangency-labs/pcbcraft/issues) and check
-[open pull requests](https://github.com/tangency-labs/pcbcraft/pulls) for work already underway.
+[GitHub issues](https://github.com/tangency-labs/pcbcraft/issues), check for
+existing claims and open PRs, and leave a **`claimed`** comment on the issue
+before starting. The first claimant gets merge priority under the
+[issue claim policy](CONTRIBUTING.md#claim-the-issue-before-starting).
 
 PCBCraft is an independent application in the Craft family. Development follows
 the [clean-room contribution rules](AGENTS.md): published specifications and

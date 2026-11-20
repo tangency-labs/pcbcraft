@@ -228,3 +228,11 @@ or live MCP. Undo, reopen and first-board creation preserve the decisions. The
 first record selects project/17 and board instances/2 in the existing folder/ZIP
 layout; reading an older project does not promote its nets. There is no new UI,
 and net classes and zones remain separate work.
+
+On desktop, `pcbcraft <path>` opens a project folder, its `project.json` or a
+`.pc` archive as the app starts, without a picker; the opened project enters the
+workspace and joins recent projects. A startup open that fails reports the error
+in the status bar, keeps Home usable and writes the same line once to stderr
+when available. Windows GUI release builds need stderr redirection to capture
+diagnostics. The launcher takes no options and at most one path, so a
+usage error prints one line and exits before any window opens.

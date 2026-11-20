@@ -22,6 +22,7 @@ pub const MAX_BYTES: usize = 8 << 20;
 const FORMAT: &str = "pcbcraft-clipboard/1";
 const HIERARCHY_FORMAT: &str = "pcbcraft-clipboard/2";
 const DESIGNATOR_LOCK_FORMAT: &str = "pcbcraft-clipboard/3";
+const NPTH_FORMAT: &str = "pcbcraft-clipboard/6";
 mod hierarchy;
 mod preview;
 pub(crate) use hierarchy::hierarchy_objects;
@@ -214,7 +215,8 @@ impl Fragment {
     }
 
     /// Decode bounded native text: version 1 is flat; version 2 contains a closed hierarchy tree
-    /// or root interfaces. Version 3 requires locked parts and uses flat scope when root_sheet is
+    /// or root interfaces. Version 3 requires locked parts; version 6 requires pinned non-plated
+    /// holes and can also carry locks. Versions 3 and 6 use flat scope when `root_sheet` is
     /// omitted or null, otherwise an explicit non-nil hierarchy root. All versions reject board
     /// owners, orphan scope and invalid records before destination edits or identity allocation.
     pub fn from_text(text: &str) -> Result<Self, CommandError> {
@@ -223,7 +225,7 @@ impl Fragment {
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft design fragment."))?;
-        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | DESIGNATOR_LOCK_FORMAT)
+        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT)
             || envelope.kind != "schematic"
             || !crate::wire::valid_point(&envelope.anchor)
         {
@@ -232,11 +234,12 @@ impl Fragment {
         let documents = envelope.documents.into_iter().map(|(path, text)| (path, text.into_bytes())).collect();
         let project = crate::persistence::decode_documents(&documents).map_err(invalid)?;
         let has_locks = project.components.values().any(|part| part.designator_locked);
-        if (envelope.format == DESIGNATOR_LOCK_FORMAT) != has_locks {
+        if envelope.format != NPTH_FORMAT && (envelope.format == DESIGNATOR_LOCK_FORMAT) != has_locks {
             return Err(invalid("Designator locks require clipboard format 3 and at least one locked part instance."));
         }
-        let hierarchy = envelope.format == HIERARCHY_FORMAT || (envelope.format == DESIGNATOR_LOCK_FORMAT && envelope.root_sheet.is_some());
-        let project = if hierarchy {
+        let hierarchical = envelope.format == HIERARCHY_FORMAT
+            || (matches!(envelope.format.as_str(), DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT) && envelope.root_sheet.is_some());
+        let project = if hierarchical {
             let root =
                 envelope.root_sheet.filter(|id| !id.is_nil()).ok_or_else(|| invalid("hierarchy clipboard needs an explicit root sheet UUID"))?;
             Arc::new(
@@ -251,12 +254,28 @@ impl Fragment {
             project
         };
         let fragment = Self { project, anchor: envelope.anchor, cut_sheets: envelope.cut_sheets };
-        fragment.validate_scope(hierarchy)?;
+        if (envelope.format == NPTH_FORMAT) != fragment.has_npth() {
+            return Err(invalid("clipboard format does not match its pinned non-plated holes"));
+        }
+        fragment.validate_scope(hierarchical)?;
         Ok(fragment)
     }
 
+    /// Include assigned footprints and the exact closure of selected native parts, even
+    /// when a hole belongs to an unselected package variant retained for offline paste.
+    pub(crate) fn has_npth(&self) -> bool {
+        self.project.schematic_packages.definitions.values().any(|footprint| !footprint.non_plated_holes.is_empty())
+            || self
+                .project
+                .components
+                .values()
+                .filter_map(|part| part.part.as_ref())
+                .any(|part| part.resolved.footprints.values().any(|footprint| !footprint.non_plated_holes.is_empty()))
+    }
+
     /// Serialize just the fragment; no paths, credentials, unused definitions or source files travel.
-    /// Locked references select format 3; unlocked flat/hierarchical fragments retain formats 1/2.
+    /// Pinned non-plated holes select format 6 even when the fragment also carries locks.
+    /// Otherwise locks select format 3; ordinary flat/hierarchical fragments retain formats 1/2.
     pub fn to_text(&self) -> Result<String, CommandError> {
         let documents = crate::persistence::encode_documents(self.project.clone())
             .map_err(invalid)?
@@ -264,7 +283,9 @@ impl Fragment {
             .map(|(path, bytes)| String::from_utf8(bytes).map(|text| (path, text)).map_err(invalid))
             .collect::<Result<_, _>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.project.components.values().any(|part| part.designator_locked) {
+            format: if self.has_npth() {
+                NPTH_FORMAT
+            } else if self.project.components.values().any(|part| part.designator_locked) {
                 DESIGNATOR_LOCK_FORMAT
             } else if self.has_hierarchy() {
                 HIERARCHY_FORMAT

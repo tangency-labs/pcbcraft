@@ -120,9 +120,15 @@ impl PcbApp {
 
     /// Stop waiting for a stalled open (see `ProjectFiles::abandon`): a live client names the
     /// job it observed, the person closing names none. A held action goes on as
-    /// [`Self::finish_waiting`] decides once no job runs.
+    /// [`Self::finish_waiting`] decides once no job runs. An abandoned startup open returns no
+    /// poll result, so its terminal-report arming is cleared here; a refused abandon leaves the
+    /// arming alone.
     pub(crate) fn stop_waiting_for_file(&mut self, expected: Option<u64>) -> Result<(), String> {
         self.message = Some(self.files.abandon(expected)?);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.startup_open_pending = false;
+        }
         self.file_notice = None;
         Ok(())
     }

@@ -135,18 +135,21 @@ ordinary Undo recovers it.
 one selected root and its complete reachable child tree, addressed by an explicit
 `root_sheet` UUID independently of native display order, with optional `cut_sheets`
 metadata. Orphan payload sheets/components, board owners, invalid
-records and oversized input are rejected. Unlocked flat schematic exports retain
-version 1, and unlocked hierarchy exports retain version 2; older clients reject
-version 2. Copying does not change the source project's saved format. Clipboard metadata suggests
+records and oversized input are rejected. Without locks or non-plated holes,
+flat schematic exports retain version 1 and hierarchy exports retain version 2;
+older clients reject version 2. Copying does not change the source project's
+saved format. Clipboard metadata suggests
 relocation but never bypasses live ownership, cycle, revision or geometry checks.
 
-A schematic fragment containing any locked part instance uses
-`pcbcraft-clipboard/3` with project/51 in its native document map. With
-a non-null, non-nil `root_sheet` UUID it has the same closed-tree contract as
-version 2; an omitted or null root selects flat scope like version 1. Lock-free fragments retain those lower versions.
-Version 3 requires at least one lock, and versions 1/2 refuse lock-bearing
-fragments. Its `kind: "schematic"` distinguishes this contract from board
-version 3. The same size, identity, ownership and revision checks apply.
+A schematic fragment with a locked part instance uses `pcbcraft-clipboard/3`
+unless it also carries pinned non-plated holes, which require
+`pcbcraft-clipboard/6`. Both keep locks in project/51 in the native document map.
+With a non-null, non-nil `root_sheet` UUID they use the closed-tree contract of
+version 2; an omitted or null root selects flat scope like version 1.
+Version 3 requires a lock and cannot carry non-plated holes. Version 6 requires
+non-plated holes and allows locks. Versions 1/2 refuse either feature. The
+`kind: "schematic"` field distinguishes these from board clipboard formats.
+The same size, identity, ownership and revision checks apply.
 
 Copy/Cut additionally accept optional `objects`, a unique array of root
 `sheet-symbol-N` and `label-N` IDs. `items` still supplies symbol/wire arrays,
@@ -289,6 +292,11 @@ fragment per source sheet. It includes wiring internal to selected components,
 connected named-net boundaries and related excluded native power annotations;
 it does not flatten sheets or carry unrelated components. Source and destination
 projects need no shared library installation. The same 8 MiB bound applies.
+When a copied package carries circular non-plated holes, the board envelope
+uses `pcbcraft-clipboard/7`; a schematic envelope carrying those definitions
+uses `pcbcraft-clipboard/6`. Other fragments do not change versions for this
+feature. Paste preserves the holes as footprint geometry, not as terminals or
+copper items.
 
 Ordinary PCB paste duplicates logical and physical objects together. It takes
 `text`, `x_nm`, `y_nm`, `board`, `expected_revision`, and a `schematic_targets`

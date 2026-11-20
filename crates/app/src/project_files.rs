@@ -70,6 +70,9 @@ pub(super) struct ProjectFiles {
     /// In tests, saves wait here for the test to finish them instead of opening a native picker.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     stand_in: Option<StandIn>,
+    /// In tests, the next open fails before a worker starts, without taking a job.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub(super) open_setup_fault: Option<String>,
 }
 
 /// A save waiting for a test to say how the person answered the picker.
@@ -200,6 +203,10 @@ impl ProjectFiles {
     pub(super) fn open_path(&mut self, path: std::path::PathBuf, revision: u64, ctx: &egui::Context) -> Result<(), String> {
         if self.busy() {
             return Err("A project file operation is already running".to_owned());
+        }
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        if let Some(fault) = self.open_setup_fault.take() {
+            return Err(fault);
         }
         let (send, receiver) = mpsc::channel();
         let destination = Some(path.display().to_string());

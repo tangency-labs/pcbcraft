@@ -61,6 +61,7 @@ impl Primitive {
             Self::Pad { pad } => {
                 Self::Pad { pad: footprint::RectPad { center: t.point(pad.center)?, rotation: t.angle(pad.rotation as i16), ..pad.clone() } }
             }
+            Self::NonPlatedHole { hole } => Self::NonPlatedHole { hole: footprint::CircularNpth { center: t.point(hole.center)?, ..*hole } },
             Self::Outline { graphic } => Self::Outline {
                 graphic: footprint::GraphicRect { center: t.point(graphic.center)?, rotation: t.angle(graphic.rotation as i16), ..graphic.clone() },
             },

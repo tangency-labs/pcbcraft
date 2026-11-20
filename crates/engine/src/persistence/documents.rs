@@ -2130,12 +2130,10 @@ impl DocumentsEncoder {
                 }
                 11 => {
                     if let Some(((library, id, revision), definition)) = self.footprint_definitions.pop_first() {
-                        let mut bytes = serde_json::to_vec_pretty(definition.as_ref()).map_err(|e| e.to_string())?;
-                        bytes.push(b'\n');
                         crate::part_instances::storage::insert(
                             &mut self.documents,
                             format!("library/footprints/{library}/{id}.r{revision}.json"),
-                            bytes,
+                            crate::board::definition::write_saved(&definition)?,
                         )?;
                     } else {
                         self.size_limit_exceeded = self.documents.values().map(Vec::len).sum::<usize>() > MAX_DOCUMENTS_BYTES;

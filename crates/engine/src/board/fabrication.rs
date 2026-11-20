@@ -356,9 +356,14 @@ impl BoardView<'_> {
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
     /// Circular copper is refused before generating any straight-only output.
+    /// Refuses projects with placed NPTH until their separate drill output is supported.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     pub fn fabrication(self) -> Result<Fabrication, String> {
         self.require_linear_copper()?;
+        let board = &self.project().board;
+        if board.footprints().iter().any(|footprint| board.definition_for(footprint).is_some_and(|d| !d.non_plated_holes.is_empty())) {
+            return Err("Fabrication output does not yet support non-plated holes; no drill data was generated.".into());
+        }
         let setup = self.setup().ok_or("Initialize the board setup before generating fabrication outputs.")?;
         let copper: Vec<_> = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).collect();
         // Copper layers in physical stack order, top first.

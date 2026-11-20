@@ -41,6 +41,8 @@ pub enum ErrorCode {
     InvalidRequest,
     /// The call states a version of the command other than the one this build runs.
     VersionMismatch,
+    /// The session's access scope does not allow the command.
+    OutOfScope,
 }
 
 impl ErrorCode {
@@ -60,6 +62,7 @@ impl ErrorCode {
         Self::ConnectionFailed,
         Self::InvalidRequest,
         Self::VersionMismatch,
+        Self::OutOfScope,
     ];
 
     /// The code as clients see it.
@@ -79,6 +82,7 @@ impl ErrorCode {
             Self::ConnectionFailed => "connection_failed",
             Self::InvalidRequest => "invalid_request",
             Self::VersionMismatch => "version_mismatch",
+            Self::OutOfScope => "out_of_scope",
         }
     }
 
