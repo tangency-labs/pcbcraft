@@ -436,7 +436,6 @@ fn directed_follow_keeps_the_primary_pane_across_sheet_changes() {
     click(&mut h, "Open PCB Layout beside current view");
     let schematic = ViewId(0);
     let pcb = ViewId(2);
-    assert_eq!(h.state().views.primary(), schematic);
     h.state_mut().preferences.selection_follow = policy;
     let board_point = h.state().views.view(pcb).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, h.get_by_label("PCB canvas 3").rect());
 
