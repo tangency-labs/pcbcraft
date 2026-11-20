@@ -1936,6 +1936,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[7],
     library::sources::COMMANDS[8],
     library::sources::COMMANDS[9],
+    library::sources::COMMANDS[10],
     library::sources::lifecycle::COMMANDS[0],
     library::sources::lifecycle::COMMANDS[1],
     library::sources::lifecycle::COMMANDS[2],
@@ -3146,7 +3147,9 @@ impl Session {
         if id == board::identity::CREATE_BOARD {
             return self.project.as_ref().is_some_and(|project| project.board_target().is_none());
         }
-        if id.starts_with("pcb.") && id != ASSIGN_FOOTPRINT && !self.project.as_ref().is_some_and(|project| project.board_target().is_some()) {
+        if ((id.starts_with("pcb.") && id != ASSIGN_FOOTPRINT) || id == library::sources::PREVIEW_FOOTPRINT_REVISION)
+            && !self.project.as_ref().is_some_and(|project| project.board_target().is_some())
+        {
             return false;
         }
         match id {
@@ -3183,6 +3186,7 @@ impl Session {
             | "project.rename"
             | netlist::EXPORT_NETLIST
             | library::sources::AVAILABLE_REVISIONS
+            | library::sources::PREVIEW_FOOTPRINT_REVISION
             | library::sources::lifecycle::ADOPT
             | library::sources::lifecycle::INSPECT
             | no_connect::SET

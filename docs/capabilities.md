@@ -232,6 +232,11 @@ loaded native revisions, including through live/headless MCP with `inspect: fals
 It preserves project pins and history, reports missing/conflicting/unresolved
 sources explicitly, and makes no compatibility or adoption decision; see
 [query available revisions](native-library-sources.md#query-available-revisions).
+[Preview footprint pad changes](native-library-sources.md#preview-footprint-pad-changes)
+reports altered pads and lost contact for straight track ends and through vias
+on one placed instance. It does not check standalone circular track ends, move
+copper, resolve pad maps or adopt revisions.
+
 [Lifecycle assertions](native-library-sources.md#lifecycle-assertions) are separate
 publisher records. With the publishing source loaded, projects can preview, adopt
 and undo an exact assessment through shared commands; inspecting an adopted

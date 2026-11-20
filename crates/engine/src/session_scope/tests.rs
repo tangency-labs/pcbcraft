@@ -184,6 +184,18 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
             sources::PARSE_QUANTITY => json!({"quantity":"resistance","value":"100 mΩ"}),
             sources::PREVIEW_PIN_REMAP => json!({"item":remap_item,"pins":[{"unit":"main","object":"1","number":"7"}]}),
+            sources::PREVIEW_FOOTPRINT_REVISION => {
+                // A read: this fixture has no library placement, so both hosts must give the same
+                // lookup failure, never a scope refusal. The successful read-only preview is in
+                // library::sources::updates::preview_tests.
+                let params = json!({"board":board,"part_instance":"absent"});
+                let expected = control.execute(id, &params).unwrap_err();
+                assert_eq!(expected.code(), ErrorCode::NotFound, "{id}: {expected}");
+                for error in [reader.execute(id, &params).unwrap_err(), reader.apply(id, &params).unwrap_err()] {
+                    assert_eq!((error.code(), error.to_string()), (expected.code(), expected.to_string()), "{id}");
+                }
+                continue;
+            }
             sources::PREPARE_PART_PUBLICATION => part_publication.clone(),
             sources::PREPARE_PUBLICATION => item_publication.clone(),
             sources::lifecycle::LOOKUP => json!({"library":"parts-demo","assertion":"resistor-assessment","assertion_revision":1}),

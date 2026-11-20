@@ -730,7 +730,12 @@ not refresh a library, change geometry or adopt a revision. Missing sources are
 unknown, and available does not imply compatible. Native parts compare the owning
 part rather than separately updating its drawing dependencies. See
 [query available revisions](native-library-sources.md#query-available-revisions)
-for the result contract; dedicated definition-update review and adoption remain future work.
+for the result contract. For one placed instance, pass the reported `board`
+and `part_instance` to `library.preview_footprint_revision`. The
+[pad preview](native-library-sources.md#preview-footprint-pad-changes) shows what
+would change and which straight track ends or through vias would lose contact;
+standalone circular track ends are not checked. Nothing is applied; pad map
+resolution and adoption remain future work.
 
 If a loaded source has a publisher lifecycle assertion, use
 [`library.lifecycle_assertion`](native-library-sources.md#lifecycle-assertions)

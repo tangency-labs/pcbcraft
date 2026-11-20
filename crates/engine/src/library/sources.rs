@@ -37,6 +37,8 @@ pub const LIST: &str = "library.list_sources";
 pub const SEARCH: &str = "library.search";
 /// Inspect later loaded revisions without changing project pins or history.
 pub const AVAILABLE_REVISIONS: &str = "library.available_revisions";
+/// Read-only pad geometry and endpoint preview for one placed part instance.
+pub const PREVIEW_FOOTPRINT_REVISION: &str = "library.preview_footprint_revision";
 /// Resolve a part's exact dependencies and validate its typed values and complete package maps.
 pub const RESOLVE_PART: &str = "library.resolve_part";
 /// Normalize typed quantity input into the canonical base-unit representation.
@@ -79,7 +81,7 @@ const SOURCE: Param = Param {
     required: true,
     kind: ParamKind::LibrarySource,
 };
-pub(crate) const COMMANDS: [Command; 10] = [
+pub(crate) const COMMANDS: [Command; 11] = [
     Command {
         id: PREVIEW_PIN_REMAP,
         title: "Preview symbol pin remap",
@@ -193,6 +195,16 @@ pub(crate) const COMMANDS: [Command; 10] = [
         title: "List available library revisions",
         summary: "Compare existing project instances with loaded native revisions. No adoption or network access; availability is not compatibility.",
         params: &[],
+    },
+    Command {
+        id: PREVIEW_FOOTPRINT_REVISION,
+        title: "Preview footprint revision",
+        summary: "Compare a placed footprint with its latest available library revision without editing the board or resolving pad maps.",
+        params: &[
+            Param { name: "board", summary: "Explicit physical board ID", required: true, kind: ParamKind::BoardId },
+            Param { name: "part_instance", summary: "Part instance ID from library.available_revisions", required: true, kind: ParamKind::Text },
+            Param { name: "pad", summary: "Limit the preview to this exact pad number", required: false, kind: ParamKind::Text },
+        ],
     },
     Command {
         id: PARSE_QUANTITY,
@@ -1186,6 +1198,10 @@ impl Session {
             AVAILABLE_REVISIONS => {
                 let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
                 updates::inspect(project, &self.libraries, self.revision()).map_err(CommandError::InvalidParams)
+            }
+            PREVIEW_FOOTPRINT_REVISION => {
+                let project = self.project.as_ref().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
+                updates::preview_footprint(project, &self.libraries, self.revision(), params)
             }
             PARSE_QUANTITY => {
                 let quantity: super::parts::Quantity =
