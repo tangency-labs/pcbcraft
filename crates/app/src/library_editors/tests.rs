@@ -1201,6 +1201,69 @@ fn library_cut_uses_the_pressed_event_modifiers() {
     }
 }
 
+/// A native input batch may end with different modifiers from its C press. Copy
+/// follows the pressed event and retains focus gating. Both event forms store the
+/// same immutable snapshot, so a duplicated chord cannot corrupt the clipboard.
+#[test]
+fn library_copy_uses_the_pressed_event_modifiers() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        for (command_at_press, command_at_end, focused, copied) in
+            [(true, false, true, true), (false, true, true, false), (true, false, false, false)]
+        {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let ctx = h.ctx.clone();
+            let doc = h.state_mut().library_editors.documents.get_mut(&id).unwrap();
+            let item = doc.session.snapshot();
+            let first = *item.objects.keys().next().unwrap();
+            let expected = item.objects[&first].clone();
+            // Seed the internal clipboard with a different object so a suppressed
+            // copy still leaves observable, wrong clipboard content.
+            let other = *item.objects.keys().find(|object| **object != first).unwrap();
+            let seeded = item.objects[&other].clone();
+            doc.selection = [other].into_iter().collect();
+            doc.copy(&ctx);
+            doc.selection = [first].into_iter().collect();
+            let area = h.get_by_label("Library canvas").rect();
+            h.hover_at(area.center());
+            h.run();
+            let modifiers = |command| egui::Modifiers { ctrl: command, command, shift: true, ..Default::default() };
+            h.input_mut().focused = focused;
+            h.input_mut().events.extend([
+                egui::Event::ModifiersChanged(modifiers(command_at_press)),
+                egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: Some(egui::Key::C),
+                    pressed: true,
+                    repeat: false,
+                    modifiers: modifiers(command_at_press),
+                },
+                egui::Event::Key {
+                    key: egui::Key::C,
+                    physical_key: Some(egui::Key::C),
+                    pressed: false,
+                    repeat: false,
+                    modifiers: modifiers(command_at_press),
+                },
+                egui::Event::ModifiersChanged(modifiers(command_at_end)),
+            ]);
+            h.run();
+            // The preview reveals exactly what the chord stored on the clipboard.
+            h.input_mut().focused = true;
+            h.event(egui::Event::Paste(String::new()));
+            h.run();
+            let expected_primitives = if copied { vec![expected.clone()] } else { vec![seeded.clone()] };
+            assert!(
+                matches!(&h.state().library_editors.documents[&id].tool, canvas::Tool::Paste { primitives, .. } if primitives == &expected_primitives),
+                "{kind:?}: press={command_at_press}, end={command_at_end}, focus={focused} must copy={copied}"
+            );
+        }
+    }
+}
+
 /// Native keyboard→clipboard translation drives the library paste op for every OS
 /// clipboard state: `egui-winit` emits `Paste("")` on an empty or unsupported read
 /// and `PasteImage` on an image-only read. Both arm the same internal preview —
