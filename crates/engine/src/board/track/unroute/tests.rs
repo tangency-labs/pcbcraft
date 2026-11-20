@@ -402,37 +402,46 @@ fn large_board_candidate_and_delta_work_is_bounded_per_step() {
 }
 
 /// Overlapping pads that both stay on the retained side don't block a cut on another arm.
+/// The overlap is made before any copper is routed, since a footprint move carries track ends.
 #[test]
 fn retained_side_pad_overlap_allows_cut() {
-    let Tee { mut session, mut args, arm, orphan, right, .. } = tee();
-    let pad_at = |session: &Session, end: &Value| {
-        let pad = crate::board::Pad::parse(end["footprint"].as_str().unwrap(), end["pad"].as_str().unwrap()).unwrap();
-        session.project().unwrap().board.pad_position(pad).unwrap()
-    };
-    let footprint = right["footprint"].as_str().unwrap();
-    // Turn the right part so its other pad clears the trunk, then set its routed pad on the
-    // retained left pad.
-    let place = |session: &mut Session, at: Point| {
+    let mut session = routed_fixture();
+    let ratsnest = view(&session).ratsnest().unwrap();
+    let (left, middle, right) = (ratsnest.lines[0].from.clone(), ratsnest.lines[0].to.clone(), ratsnest.lines[1].to.clone());
+    let board = view(&session).target.board;
+    let place = |session: &mut Session, footprint: &str, at: Point, rotation: u16| {
         session
             .apply(
                 SET_FOOTPRINT_TRANSFORM,
-                &json!({"board":args["board"],"footprint":footprint,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":90,"expected_revision":session.revision()}),
+                &json!({"board":board,"footprint":footprint,"x_nm":at.x_nm,"y_nm":at.y_nm,"rotation":rotation,"expected_revision":session.revision()}),
             )
             .unwrap();
     };
-    let center = view(&session).footprints().find(|f| f.id == footprint).unwrap().position;
-    place(&mut session, center);
-    let (target, current) = (pad_at(&session, &args["to"]), pad_at(&session, &right));
-    place(&mut session, Point { x_nm: center.x_nm + target.x_nm - current.x_nm, y_nm: center.y_nm + target.y_nm - current.y_nm });
-    assert_eq!(pad_at(&session, &right), pad_at(&session, &args["to"]));
-    args["expected_revision"] = json!(session.revision());
+    place(&mut session, &middle.footprint, Point { x_nm: middle.position.x_nm, y_nm: middle.position.y_nm + 4_000_000 }, 0);
+    // Turn the right part so its other pad stands clear of the trunk, then set its routed pad
+    // on the retained left pad.
+    let center = view(&session).footprints().find(|f| f.id == right.footprint).unwrap().position;
+    place(&mut session, &right.footprint, center, 90);
+    let pad_at = |session: &Session, pad: crate::board::Pad| session.project().unwrap().board.pad_position(pad).unwrap();
+    let (target, current) = (pad_at(&session, left.pad), pad_at(&session, right.pad));
+    let shifted = Point { x_nm: center.x_nm + target.x_nm - current.x_nm, y_nm: center.y_nm + target.y_nm - current.y_nm };
+    place(&mut session, &right.footprint, shifted, 90);
+    assert_eq!(pad_at(&session, right.pad), pad_at(&session, left.pad));
+    let tip = pad_at(&session, middle.pad);
+    let junction = Point { x_nm: tip.x_nm, y_nm: left.position.y_nm };
+    let front = copper_layers(&session)[0];
+    route(&mut session, front, &[left.position, Point { x_nm: tip.x_nm + 2_000_000, y_nm: junction.y_nm }]).unwrap();
+    let trunk = view(&session).tracks()[0].id;
+    route(&mut session, front, &[tip, junction]).unwrap();
+    let arm = view(&session).tracks().iter().find(|track| track.id != trunk).unwrap().id;
+    let mut args = json!({"board":board,"from":address(middle.pad),"to":address(left.pad),"expected_revision":session.revision()});
     for dry_run in [true, false] {
         args["dry_run"] = json!(dry_run);
         let report = session.execute(UNROUTE_CONNECTION, &args).unwrap();
-        assert_eq!(report["removed"], json!({"tracks":[arm],"vias":[orphan]}));
+        assert_eq!(report["removed"], json!({"tracks":[arm],"vias":[]}));
         assert_eq!(report["unrouted"].as_array().unwrap().len(), 1);
     }
-    assert!(view(&session).tracks().iter().all(|track| track.id != arm));
+    assert_eq!(view(&session).tracks().iter().map(|track| track.id).collect::<Vec<_>>(), vec![trunk]);
 }
 
 /// Replace the Tee branch with one that drops from the branch pad to back copper through a
