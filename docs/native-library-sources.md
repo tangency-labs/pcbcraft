@@ -193,8 +193,8 @@ accepted history that no longer has a placement.
 `library.where_used` takes `library`, `kind`, `definition` and
 `definition_revision`; `kind` is `symbol`, `footprint`, `part`, `category` or
 `manufacturer_part`. This is the same read-only query in live or headless MCP,
-including with `inspect: false`. The item address includes its exact revision;
-a later revision is not substituted. An unused or unknown address has no
+including with `inspect: false` and in read-only headless sessions. The item
+address includes its exact revision; a later revision is not substituted. An unused or unknown address has no
 instances. The query does not refresh sources or change project state or Undo.
 
 `instances` has one row per matching logical instance, even when multiple units

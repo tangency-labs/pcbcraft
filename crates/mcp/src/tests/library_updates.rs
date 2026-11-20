@@ -1,11 +1,11 @@
 //! Available-revision discovery is one shared, non-editing engine query.
 use super::{body, call, server};
 use crate::{
-    Backend, Failure, Headless,
+    Backend, Failure, Headless, Server,
     live::{Editor, call_editor},
 };
 use pcbcraft_engine::{
-    PLACE_SYMBOL, Session,
+    PLACE_RESISTOR, PLACE_SYMBOL, Session, SessionScope,
     authoring::{
         Item, Kind,
         publishing::{new_library, prepare},
@@ -109,6 +109,34 @@ fn available_revisions_and_where_used_match_live_and_headless() {
     editor.blocked = true;
     assert!(call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap_err().message().contains("dialog"));
     assert_eq!(editor.session.inspect(), before);
+}
+
+/// A read-only headless MCP session answers where-used through the ordinary execute tool in
+/// both return modes; project inspection, revision and history stay as opened.
+#[test]
+fn read_only_headless_where_used_keeps_project_and_history() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    setup.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let snapshot = setup.snapshot().unwrap();
+    let component = snapshot.components().next().unwrap();
+    let symbol = &component.definition;
+    let params = json!({"library":symbol.library,"kind":"symbol","definition":symbol.id,"definition_revision":symbol.revision()});
+    let mut s = Server::new(Box::new(Headless::with_scope(SessionScope::ReadOnly, Some(snapshot.clone()))));
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    assert_eq!(before["scope"], "read_only");
+    let mut reports = Vec::new();
+    for inspect in [true, false] {
+        let result = call(&mut s, "execute", json!({"command":WHERE_USED,"params":params,"inspect":inspect}));
+        assert_ne!(result["isError"], true, "{result}");
+        reports.push(body(&result));
+    }
+    assert_eq!(reports[0], reports[1]);
+    assert_eq!(reports[0]["instances"].as_array().map(Vec::len), Some(1));
+    assert_eq!(reports[0]["instances"][0]["part_instance"], component.id());
+    assert_eq!(reports[0]["instances"][0]["reference"], component.reference());
+    assert_eq!(reports[0]["revision"], before["revision"]);
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
 }
 
 /// Exercise the ordinary live ownership adapter without opening an OS window.
