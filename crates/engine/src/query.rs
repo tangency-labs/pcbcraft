@@ -47,6 +47,8 @@ pub enum Predicate {
 }
 
 /// Text-addressed query selectors. A reference names a placed part instance, not a definition.
+/// Selector values are filters, never object addresses: a value that looks like a UUID or a
+/// display id such as `symbol-3` stays text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum TextField {
@@ -151,7 +153,7 @@ struct Parser<'a> {
 impl<'a> Parser<'a> {
     /// Lex one token, bounding scanning and allocation by the input and token limits.
     fn advance(&mut self) -> Result<(), ParseError> {
-        while let Some(ch) = self.text[self.cursor..].chars().next().filter(|ch| ch.is_whitespace()) {
+        while let Some(ch) = self.rest().chars().next().filter(|ch| ch.is_whitespace()) {
             self.cursor += ch.len_utf8();
         }
         let start = self.cursor;
@@ -190,13 +192,13 @@ impl<'a> Parser<'a> {
                 while bytes.get(self.cursor).is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'+' | b'-')) {
                     self.cursor += 1;
                 }
-                TokenKind::Number(&self.text[start..self.cursor])
+                TokenKind::Number(self.slice(start))
             }
             b'a'..=b'z' | b'A'..=b'Z' | b'_' => {
                 while bytes.get(self.cursor).is_some_and(|b| b.is_ascii_alphanumeric() || *b == b'_') {
                     self.cursor += 1;
                 }
-                match &self.text[start..self.cursor] {
+                match self.slice(start) {
                     "and" => TokenKind::And,
                     "or" => TokenKind::Or,
                     "not" => TokenKind::Not,
@@ -209,14 +211,25 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Unlexed input after the cursor. The cursor only ever stops on a UTF-8 boundary, so the
+    /// checked lookup never falls back in practice; it keeps the lexer free of panicking slices.
+    fn rest(&self) -> &'a str {
+        self.text.get(self.cursor..).unwrap_or_default()
+    }
+
+    /// Source text of the token being lexed, from `start` to the cursor (both UTF-8 boundaries).
+    fn slice(&self, start: usize) -> &'a str {
+        self.text.get(start..self.cursor).unwrap_or_default()
+    }
+
     /// Read JSON-style quoted text; malformed escapes, unpaired surrogates and controls fail
     /// at the opening quote. The scanner advances by UTF-8 characters, never into a code point.
     fn quoted(&mut self, start: usize) -> Result<String, ParseError> {
         let mut escaped = false;
-        while let Some(ch) = self.text[self.cursor..].chars().next() {
+        while let Some(ch) = self.rest().chars().next() {
             self.cursor += ch.len_utf8();
             if !escaped && ch == '"' {
-                return serde_json::from_str(&self.text[start..self.cursor])
+                return serde_json::from_str(self.slice(start))
                     .map_err(|_| error(ParseErrorKind::InvalidString, start, "Invalid quoted text or escape."));
             }
             escaped = !escaped && ch == '\\';
@@ -227,16 +240,19 @@ impl<'a> Parser<'a> {
     /// Parse a flat chain at one precedence level, keeping long chains shallow to clone/drop.
     /// `conjunction` selects AND; OR delegates to AND for its operands.
     fn boolean(&mut self, conjunction: bool, depth: usize) -> Result<Expression, ParseError> {
+        let operator = if conjunction { TokenKind::And } else { TokenKind::Or };
         let first = self.operand(conjunction, depth)?;
+        if self.current.kind != operator {
+            return Ok(first);
+        }
+        let mut span = first.span.clone();
         let mut children = vec![first];
-        while if conjunction { self.current.kind == TokenKind::And } else { self.current.kind == TokenKind::Or } {
+        while self.current.kind == operator {
             self.advance()?;
-            children.push(self.operand(conjunction, depth)?);
+            let child = self.operand(conjunction, depth)?;
+            span.end = child.span.end;
+            children.push(child);
         }
-        if children.len() == 1 {
-            return Ok(children.remove(0));
-        }
-        let span = children[0].span.start..children[children.len() - 1].span.end;
         let kind = if conjunction { ExpressionKind::And(children) } else { ExpressionKind::Or(children) };
         Ok(Expression { span, kind })
     }

@@ -51,6 +51,9 @@ The parser retains their strings without resolving them. A syntactically valid
 query need not name an existing kind, layer, part group or property; that requires
 a future evaluator with explicit project and sheet/board targets. Parsing does
 not establish that an object kind or group exists in the current model.
+Selector values are filters, not object addresses. A value that looks like a
+UUID or a display id such as `symbol-3` is compared as text, like any other
+name; see [Object identity](object-identity.md#identity-forms).
 
 Numeric properties keep a nonempty identifier and an exact canonical decimal
 string. Numbers have an optional sign, at least one integer digit, an optional
@@ -103,9 +106,19 @@ snapshot or undo copy is retained by the parser.
 
 The syntax layer owns no object identity or revision. A later evaluator must
 resolve against an explicit immutable project/board/sheet snapshot and carry
-stable object IDs and the source revision in results, rather than use result
-positions, display names or paths as permanent identities. A parsed reference
-or name is a selector, not a new object ID. Rule-scope resolution, rectangle and
+the source revision in results. Each matched object carries the id that the
+[identity inventory](object-identity.md#current-inventory) lists for its kind
+today, and the result names that id's form: a UUID for boards, sheets, nets,
+net classes, part groups, tracks, vias, zones, board drawing items, layers and
+rule sets; a counter display id such as `component-3`, `symbol-3`, `wire-2` or
+`footprint-2` for components, symbol units, wires, junctions, net labels, ports,
+sheet symbols and footprint instances; and an owner token for pins and pads. A
+counter id is meaningful only with its project and source revision, because
+separately edited copies of a project can reuse it. Schematic kinds have no
+`uuid` field. If a later format step gives them UUIDs, that field is added next
+to the display id, so existing results stay valid. A result position, a display
+name or a path is never an identity, and a parsed reference or name is a
+selector, not an object ID. Rule-scope resolution, rectangle and
 polygon predicates, deterministic paging and bulk commands remain separate work.
 The non-exhaustive expression/predicate/selector enums leave room for those
 predicates without adding a second parser or changing saved documents.

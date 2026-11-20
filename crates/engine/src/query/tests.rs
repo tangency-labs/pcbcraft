@@ -245,6 +245,23 @@ fn selector_and_operator_rules_are_checked_row_by_row() {
     }
 }
 
+/// A UUID or display id in a selector value is a text filter, never resolved or rewritten.
+#[test]
+fn object_ids_in_selector_values_stay_text() {
+    for value in ["0d4c3f5e-8a2b-4c1d-9e7f-6a5b4c3d2e1f", "0D4C3F5E-8A2B-4C1D-9E7F-6A5B4C3D2E1F", "symbol-3", "footprint-2"] {
+        for field in ["part_reference", "footprint", "net"] {
+            let input = format!("{field} = \"{value}\"");
+            let query = parse(&input).unwrap();
+            assert_eq!(query.expression.span, 0..input.len(), "{input}");
+            let ExpressionKind::Predicate(Predicate::Text { value: parsed, comparison, .. }) = query.expression.kind else {
+                panic!("{input} did not parse as a text predicate");
+            };
+            assert_eq!(parsed, value, "{input}");
+            assert_eq!(comparison, Comparison::Equal, "{input}");
+        }
+    }
+}
+
 /// Parsing succeeds or fails without touching the command-created fixture, encoded bytes or undo.
 #[test]
 fn parsing_is_independent_of_project_state_and_history() {
