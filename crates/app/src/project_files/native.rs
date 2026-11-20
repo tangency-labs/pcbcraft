@@ -64,9 +64,15 @@ pub(super) fn open(pick_folder: bool) -> Result<Outcome, String> {
     load(&path).map(Outcome::Opened)
 }
 
-/// Load a project from a chosen path without changing the active editor.
+/// Load a project from a chosen path without changing the active editor. Resolve nameless
+/// directories (`..`, filesystem roots and Windows drive/share roots) on this worker, where
+/// filesystem lookup may block. Named targets keep the ordinary parent normalization.
 pub(super) fn load(path: &Path) -> Result<Saved, String> {
-    let path = normalize(path)?;
+    let path = if path.file_name().is_none() {
+        fs::canonicalize(path).map(folder::plain_path_if_equivalent).map_err(|error| error.to_string())?
+    } else {
+        normalize(path)?
+    };
     // Keep old recent-history entry paths usable after successful entry-point migration.
     if path.file_name().is_some_and(|name| name == "project.pc")
         && matches!(fs::symlink_metadata(&path), Err(e) if e.kind() == io::ErrorKind::NotFound)

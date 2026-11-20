@@ -32,23 +32,26 @@ def validate(definitions: list[Path], placements: list[Path], placement_version:
     root = Path(__file__).resolve().parent.parent
     schemas = [
         json.loads((root / "docs/schemas" / name).read_text(encoding="utf-8"))
-        for name in ("footprint-v1.schema.json", f"footprint-placement-v{placement_version}.schema.json", "library-common-v1.schema.json")
+        for name in ("footprint-v1.schema.json", "footprint-v4.schema.json",
+                     f"footprint-placement-v{placement_version}.schema.json", "library-common-v1.schema.json")
     ]
     for schema in schemas:
         Draft202012Validator.check_schema(schema)
     registry = Registry().with_resources(
         (schema["$id"], Resource.from_contents(schema)) for schema in schemas
     )
-    validators = [Draft202012Validator(schema, registry=registry) for schema in schemas]
+    legacy, npth, placement, _common = [Draft202012Validator(schema, registry=registry) for schema in schemas]
     bundled = sorted((root / "libraries/basic-components/footprints").glob("*.json"))
     if not bundled:
         raise ValueError("No bundled footprint definitions found.")
-    for validator, paths in zip(validators[:2], [bundled + definitions, placements], strict=True):
-        for path in paths:
-            try:
-                validator.validate(json.loads(path.read_text(encoding="utf-8")))
-            except (OSError, ValueError, ValidationError) as error:
-                raise ValueError(f"{path}: {error}") from error
+    for path, validator in [(p, legacy) for p in bundled + definitions] + [(p, placement) for p in placements]:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if validator is legacy and isinstance(value, dict) and value.get("format") == "pcbcraft-footprint/4":
+                validator = npth
+            validator.validate(value)
+        except (OSError, ValueError, ValidationError) as error:
+            raise ValueError(f"{path}: {error}") from error
     print(
         f"Validated {len(schemas)} schemas, {len(bundled) + len(definitions)} "
         f"footprint definitions and {len(placements)} physical placement records."
