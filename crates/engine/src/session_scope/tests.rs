@@ -143,6 +143,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             board::clipboard::COPY => json!({"items":{"drawings":[drawing]},"expected_revision":revision}),
             parameters::LIST => json!({"scope":"project"}),
             parameters::RESOLVE => json!({"text":"@project.Revision"}),
+            annotation::PREVIEW => json!({"expected_revision":revision}),
             PREVIEW_UPDATE => {
                 preview_and_cancel(
                     &mut reader,
@@ -203,6 +204,10 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             assert_eq!(actual["revision"], expected["revision"], "{id}");
         } else {
             assert_eq!(actual, expected, "{id}");
+        }
+        if id == annotation::PREVIEW {
+            assert_eq!(actual["annotation_preview"]["rows"].as_array().map(Vec::len), Some(1));
+            assert_eq!(actual["annotation_preview"]["errors"], json!([]));
         }
         if id == sources::PREVIEW_PIN_REMAP {
             assert_eq!(actual["changes"][0]["after"], "7");
