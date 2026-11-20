@@ -210,8 +210,6 @@ jobs:
           name: windows-lifecycle
           path: ci-artifacts
       - run: python -B scripts/ci/window_smoke.py ci-artifacts/native_window_lifecycle.exe
-      - name: GUI launcher console and redirection regressions
-        run: python -B scripts/check-startup-console.py --executable ci-artifacts/pcbcraft.exe
 
   web:
     needs: changes

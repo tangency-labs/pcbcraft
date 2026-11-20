@@ -240,6 +240,6 @@ On desktop, `pcbcraft <path>` opens a project folder, its `project.json` or a
 workspace and joins recent projects. The path may be a symlink to a project
 folder or archive; recent projects record its target. A startup open that fails reports the error
 in the status bar, keeps Home usable and writes the same line once to stderr
-when available. Windows GUI release builds can report to an existing launching
-console while preserving stderr redirection. The launcher takes no options and at most one path, so a
+when available. Windows GUI release builds need stderr redirection to capture
+diagnostics. The launcher takes no options and at most one path, so a
 usage error prints one line and exits before any window opens.

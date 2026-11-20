@@ -78,12 +78,7 @@ job stages the existing native-window lifecycle test from Cargo's JSON output.
 A separate GitHub Windows desktop runs that normally opt-in test with DX12/FXC
 and a 180-second deadline. Zero tests or a nonzero exit fail, and only the owned
 process is killed on timeout. This checks frame delivery, window lifetimes and
-close cancellation, not endurance or physical input latency. The artifact also
-includes the desktop launcher with its release GUI subsystem selected by disabling
-debug assertions in that binary only; dependencies reuse the CI profile. The same
-Windows desktop checks usage and failed startup-open diagnostics through a private
-parent console, redirected stderr, stdout-only redirection, NUL and a console-free
-launch, including Unicode paths. These checks never clear the runner's console.
+close cancellation, not endurance or physical input latency.
 
 The Cargo `ci` profile retains assertions and overflow checks, disables incremental
 builds, and uses reduced debug metadata with optimized dependencies. Shipping

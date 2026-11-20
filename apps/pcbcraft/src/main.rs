@@ -5,8 +5,6 @@ use std::{ffi::OsString, path::PathBuf};
 
 use pcbcraft_app::PcbApp;
 
-mod startup_console;
-
 /// The short one-line usage errors this launcher prints to stderr before any window exists.
 const NO_OPTIONS: &str = "PCBCraft has no options · usage: pcbcraft [PROJECT]";
 const ONE_PROJECT: &str = "PCBCraft opens one project · usage: pcbcraft [PROJECT]";
@@ -28,8 +26,6 @@ fn startup_project<I: IntoIterator<Item = OsString>>(args: I) -> Result<Option<P
 }
 
 fn main() -> eframe::Result {
-    // Keep the installed stderr handle alive until the native event loop has stopped.
-    let _startup_console = startup_console::attach();
     // Usage errors exit before the window is created, so a mistyped command line never opens one.
     let mut startup_project = match startup_project(std::env::args_os()) {
         Ok(project) => project,
