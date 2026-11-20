@@ -20,6 +20,7 @@ pub(super) enum Place {
     Text,
     Arc,
     Polyline,
+    Courtyard,
 }
 #[derive(Clone, Debug, Default)]
 pub(super) enum Tool {
@@ -47,6 +48,16 @@ pub(super) enum Tool {
     },
     Polyline {
         points: Vec<Point>,
+        revision: u64,
+    },
+    Courtyard {
+        points: Vec<Point>,
+        revision: u64,
+    },
+    DragCourtyardVertex {
+        object: u64,
+        vertex: usize,
+        original: Primitive,
         revision: u64,
     },
     Move {
@@ -90,6 +101,9 @@ fn graphic_icon(graphic: &pcbcraft_engine::library_graphics::Graphic) -> pcbcraf
 
 /// Human-readable browser labels keep electrical numbers visible beside stable primitive IDs.
 pub(super) fn name(primitive: &Primitive) -> String {
+    if pcbcraft_engine::authoring::courtyard::courtyard_polygon(primitive).is_some() {
+        return "Courtyard outline".into();
+    }
     match primitive {
         Primitive::Graphic { graphic } => graphic_name(graphic).into(),
         Primitive::Artwork { artwork } => format!("{:?} {}", artwork.purpose, graphic_name(&artwork.graphic).to_lowercase()),
@@ -331,24 +345,68 @@ impl Document {
                 }
             },
         );
+        if item.kind == Kind::Footprint {
+            workspace::ribbon_separator(ui);
+            let courtyard_tools = [
+                RibbonTool {
+                    icon: Icon::Rectangle,
+                    label: "Courtyard",
+                    description: "Draw closed courtyard outline (C)",
+                    shortcut: "C",
+                    enabled,
+                    active: matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. } | Tool::Courtyard { .. }),
+                    menu_check: Some(CheckKind::Choice),
+                },
+                RibbonTool {
+                    icon: Icon::Rules,
+                    label: "Generate…",
+                    description: "Generate courtyard outline from pads and body",
+                    shortcut: "",
+                    enabled,
+                    active: false,
+                    menu_check: None,
+                },
+            ];
+            if let Some(index) = workspace::ribbon_group(ui, "Courtyard", &courtyard_tools) {
+                match index {
+                    0 => {
+                        self.show_courtyard = true;
+                        self.start_tool(Place::Courtyard);
+                    }
+                    _ => self.courtyard_requested = true,
+                }
+            }
+        }
     }
     /// Navigation and panel visibility stay local to this definition, as do its grid and camera.
     pub(super) fn view_tools(&mut self, ui: &mut Ui) {
         use workspace::{RibbonTool, ToolIcon as Icon};
-        let tools = [(Icon::Fit, "Fit", false), (Icon::Browser, "Browser", !self.collapsed[0]), (Icon::Settings, "Properties", !self.collapsed[1])]
-            .map(|(icon, label, active)| RibbonTool {
+        let mut entries = vec![
+            (Icon::Fit, "Fit", "Fit definition to view", false),
+            (Icon::Browser, "Browser", "Show or hide Browser panel", !self.collapsed[0]),
+            (Icon::Settings, "Properties", "Show or hide Properties panel", !self.collapsed[1]),
+        ];
+        if self.session.snapshot().kind == Kind::Footprint {
+            entries.push((Icon::Rectangle, "Courtyard", "Show or hide the courtyard layer", self.show_courtyard));
+        }
+        let tools: Vec<_> = entries
+            .into_iter()
+            .map(|(icon, label, description, active)| RibbonTool {
                 icon,
                 label,
-                description: label,
+                description,
                 shortcut: "",
                 enabled: true,
                 active,
                 menu_check: (label != "Fit").then_some(CheckKind::Toggle),
-            });
+            })
+            .collect();
         if let Some(index) = workspace::ribbon_group(ui, "View", &tools) {
             match index {
                 0 => self.camera.request_fit(),
-                index => self.collapsed[index - 1] ^= true,
+                1 => self.collapsed[0] ^= true,
+                2 => self.collapsed[1] ^= true,
+                _ => self.show_courtyard ^= true,
             }
         }
         workspace::ribbon_separator(ui);
@@ -611,10 +669,18 @@ impl Document {
                 Primitive::Artwork { artwork: foot::Artwork { purpose, graphic } }
             }
         };
+        let show_courtyard = self.show_courtyard;
+        let visible = |p: &Primitive| show_courtyard || !pcbcraft_engine::authoring::courtyard::is_courtyard_primitive(p);
         if over && response.drag_started() && matches!(self.tool, Tool::Select) && !self.pending() {
             let start = ui.input(|i| i.pointer.press_origin()).unwrap_or_else(|| pointer.unwrap_or(area.center()));
-            let found = pick(&item, &self.camera, area, start);
-            if let Some(id) = found {
+            if show_courtyard
+                && let Some((object, pts, _)) = self.selected_courtyard(&item)
+                && let Some(vertex) = courtyard::pick_vertex(pts, &self.camera, area, start)
+                && let Some(original) = item.objects.get(&object).cloned()
+            {
+                self.selected_vertex = Some(vertex);
+                self.tool = Tool::DragCourtyardVertex { object, vertex, original, revision: self.session.revision() };
+            } else if let Some(id) = pick_visible(&item, &self.camera, area, start, show_courtyard) {
                 if !self.selection.contains(&id) {
                     let _ = self.select(Some(id));
                 }
@@ -629,6 +695,7 @@ impl Document {
             }
         }
         let mut preview = Vec::new();
+        let mut drag_invalid: Option<Point> = None;
         if let Some(point) = pointer.filter(|_| over) {
             let at = self.camera.snap(point, area);
             preview = match &self.tool {
@@ -639,6 +706,16 @@ impl Document {
                 Tool::MoveGroup { originals, anchor, .. } | Tool::Paste { primitives: originals, anchor, .. } => {
                     originals.iter().filter_map(|p| p.translated(Point { x_nm: at.x_nm - anchor.x_nm, y_nm: at.y_nm - anchor.y_nm }).ok()).collect()
                 }
+                Tool::DragCourtyardVertex { vertex, original, .. } => {
+                    match pcbcraft_engine::authoring::courtyard::with_moved_vertex(original, *vertex, at) {
+                        Ok(primitive) => vec![primitive],
+                        Err(_) => {
+                            drag_invalid = Some(at);
+                            Vec::new()
+                        }
+                    }
+                }
+                Tool::Draw { kind: Place::Courtyard, .. } => Vec::new(),
                 Tool::Draw { kind, start, .. } => self.placement_primitive(&item, *kind, start.unwrap_or(at), at).into_iter().collect(),
                 Tool::Polyline { points, .. } => {
                     let mut points = points.clone();
@@ -652,17 +729,56 @@ impl Document {
             if response.clicked() || response.drag_stopped() {
                 let result = match self.tool.clone() {
                     Tool::Select => {
-                        let found = pick(&item, &self.camera, area, point);
-                        let mut ids =
-                            if ui.input(|i| i.modifiers.shift || i.modifiers.command) { self.selection.clone() } else { Default::default() };
-                        if let Some(id) = found
-                            && !ids.insert(id)
+                        let modify = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+                        if show_courtyard
+                            && !modify
+                            && let Some((_, pts, _)) = self.selected_courtyard(&item)
+                            && let Some(vertex) = courtyard::pick_vertex(pts, &self.camera, area, point)
                         {
-                            ids.remove(&id);
+                            self.selected_vertex = Some(vertex);
+                            Ok(())
+                        } else if show_courtyard
+                            && !modify
+                            && !self.pending()
+                            && let Some((object, pts, _)) = self.selected_courtyard(&item)
+                            && pts.len() < pcbcraft_engine::authoring::courtyard::MAX_VERTICES
+                            && let Some(edge) = courtyard::pick_edge_midpoint(pts, &self.camera, area, point)
+                            && let Some(primitive) = item.objects.get(&object)
+                        {
+                            let mid = pcbcraft_engine::authoring::courtyard::edge_midpoint(pts, edge)
+                                .ok_or_else(|| "Unable to compute edge midpoint.".to_owned())?;
+                            let snapped = Point {
+                                x_nm: courtyard::snap_to_grid(mid.x_nm, self.camera.snap_nm()),
+                                y_nm: courtyard::snap_to_grid(mid.y_nm, self.camera.snap_nm()),
+                            };
+                            let candidate = pcbcraft_engine::authoring::courtyard::with_inserted_vertex(primitive, edge, snapped)
+                                .or_else(|_| pcbcraft_engine::authoring::courtyard::with_inserted_vertex(primitive, edge, mid))?;
+                            let inserted = self.execute(self.session.revision(), Action::Replace { object, primitive: candidate });
+                            if inserted.is_ok() {
+                                self.selected_vertex = Some(edge + 1);
+                            }
+                            inserted
+                        } else {
+                            let found = pick_visible(&item, &self.camera, area, point, show_courtyard);
+                            let mut ids = if modify { self.selection.clone() } else { Default::default() };
+                            if let Some(id) = found
+                                && !ids.insert(id)
+                            {
+                                ids.remove(&id);
+                            }
+                            let result = self.select_many(ids);
+                            if response.double_clicked() && found.is_some() {
+                                self.details_requested = true;
+                            }
+                            result
                         }
-                        let result = self.select_many(ids);
-                        if response.double_clicked() && found.is_some() {
-                            self.details_requested = true;
+                    }
+                    Tool::DragCourtyardVertex { object, vertex, original, revision } => {
+                        let result = pcbcraft_engine::authoring::courtyard::with_moved_vertex(&original, vertex, at)
+                            .and_then(|primitive| self.execute(revision, Action::Replace { object, primitive }));
+                        if result.is_ok() {
+                            self.selected_vertex = Some(vertex);
+                            self.tool = Tool::Select;
                         }
                         result
                     }
@@ -687,14 +803,42 @@ impl Document {
                             item.objects
                                 .iter()
                                 .filter(|(_, p)| {
-                                    let b = bounds(p, &self.camera, area);
-                                    if crossing { rect.intersects(b) } else { rect.contains_rect(b) }
+                                    visible(p) && {
+                                        let b = bounds(p, &self.camera, area);
+                                        if crossing { rect.intersects(b) } else { rect.contains_rect(b) }
+                                    }
                                 })
                                 .map(|(id, _)| *id),
                         );
                         let result = self.select_many(initial);
                         self.tool = Tool::Select;
                         result
+                    }
+                    Tool::Draw { kind: Place::Courtyard, revision, .. } => {
+                        self.tool = Tool::Courtyard { points: vec![at], revision };
+                        Ok(())
+                    }
+                    Tool::Courtyard { mut points, revision } => {
+                        let closing = points.len() >= pcbcraft_engine::authoring::courtyard::MIN_VERTICES
+                            && (points.first() == Some(&at) || response.double_clicked());
+                        if !closing && points.last() != Some(&at) {
+                            points.push(at);
+                        }
+                        if closing || points.len() >= pcbcraft_engine::authoring::courtyard::MAX_VERTICES {
+                            let result = pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(
+                                points,
+                                pcbcraft_engine::authoring::courtyard::DEFAULT_STROKE_NM,
+                            )
+                            .and_then(|primitive| self.execute(revision, Action::Insert { primitive }));
+                            if result.is_ok() {
+                                self.show_courtyard = true;
+                                self.tool = Tool::Select;
+                            }
+                            result
+                        } else {
+                            self.tool = Tool::Courtyard { points, revision };
+                            Ok(())
+                        }
                     }
                     Tool::Draw { kind: Place::Polyline, revision, .. } => {
                         self.tool = Tool::Polyline { points: vec![at], revision };
@@ -753,7 +897,7 @@ impl Document {
                             .iter()
                             .any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, pressed: true, modifiers, .. } if modifiers.command))
                 }) {
-                    let _ = self.select_many(item.objects.keys().copied().collect());
+                    let _ = self.select_many(item.objects.iter().filter(|(_, p)| visible(p)).map(|(id, _)| *id).collect());
                 }
                 // Command-only C/X/V arrive as normalized clipboard events on desktop; a raw
                 // key press only appears when another modifier bypasses that translation.
@@ -810,6 +954,10 @@ impl Document {
                 if !command && ui.input(|i| i.key_pressed(egui::Key::T)) {
                     self.start_tool(Place::Text);
                 }
+                if !command && item.kind == Kind::Footprint && ui.input(|i| i.key_pressed(egui::Key::C)) {
+                    self.show_courtyard = true;
+                    self.start_tool(Place::Courtyard);
+                }
                 if ui.input(|i| i.key_pressed(egui::Key::M)) {
                     self.begin_move();
                 }
@@ -819,30 +967,113 @@ impl Document {
                 if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
                     self.details_requested = true;
                 }
+                if ui.input(|i| i.key_pressed(egui::Key::Backspace))
+                    && self.show_courtyard
+                    && !self.pending()
+                    && let Some((object, pts, _)) = self.selected_courtyard(&item)
+                    && let Some(vertex) = self.selected_vertex
+                    && pts.len() > pcbcraft_engine::authoring::courtyard::MIN_VERTICES
+                    && let Some(primitive) = item.objects.get(&object)
+                {
+                    match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
+                        .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }))
+                    {
+                        Ok(()) => {
+                            let next_len = pts.len().saturating_sub(1);
+                            self.selected_vertex = (next_len > 0).then(|| vertex.min(next_len - 1));
+                        }
+                        Err(error) => self.error = Some(error),
+                    }
+                }
                 if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
                     self.delete();
                 }
-                if ui.input(|i| i.key_pressed(egui::Key::Enter))
-                    && let Tool::Polyline { points, revision } = self.tool.clone()
-                    && let Err(error) = self
-                        .execute(revision, Action::Insert { primitive: graphic_object(points, false, self.drawing_purpose, self.drawing_stroke_nm) })
-                {
-                    self.error = Some(error);
+                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    match self.tool.clone() {
+                        Tool::Polyline { points, revision } => {
+                            if let Err(error) = self.execute(
+                                revision,
+                                Action::Insert { primitive: graphic_object(points, false, self.drawing_purpose, self.drawing_stroke_nm) },
+                            ) {
+                                self.error = Some(error);
+                            }
+                        }
+                        Tool::Courtyard { points, revision } => {
+                            match pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(
+                                points,
+                                pcbcraft_engine::authoring::courtyard::DEFAULT_STROKE_NM,
+                            )
+                            .and_then(|primitive| self.execute(revision, Action::Insert { primitive }))
+                            {
+                                Ok(()) => {
+                                    self.show_courtyard = true;
+                                    self.tool = Tool::Select;
+                                }
+                                Err(error) => self.error = Some(error),
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
         // Body fills stay behind terminal labels regardless of insertion order.
+        // Courtyard primitives render on their own layer pass above body/copper when enabled.
+        let is_courtyard = |p: &&Primitive| pcbcraft_engine::authoring::courtyard::is_courtyard_primitive(p);
         let filled = |p: &&Primitive| matches!(p, Primitive::Graphic { graphic } if graphic.fill != Fill::None);
-        let objects = item.objects.iter().filter(|(_, p)| filled(p)).chain(item.objects.iter().filter(|(_, p)| !filled(p)));
+        let objects = item
+            .objects
+            .iter()
+            .filter(|(_, p)| !is_courtyard(p) && filled(p))
+            .chain(item.objects.iter().filter(|(_, p)| !is_courtyard(p) && !filled(p)));
+        let is_moving = |id: &u64| {
+            matches!(&self.tool, Tool::Move { object, .. } | Tool::DragCourtyardVertex { object, .. } if object == id)
+                || matches!(&self.tool, Tool::MoveGroup { objects, .. } if objects.contains(id))
+        };
         for (id, p) in objects {
-            let moving = matches!(&self.tool,Tool::Move {object,..} if object==id)
-                || matches!(&self.tool,Tool::MoveGroup {objects,..} if objects.contains(id));
-            if !moving || preview.is_empty() {
+            if !is_moving(id) || preview.is_empty() {
                 paint(&painter, p, &self.camera, area, self.selection.contains(id));
             }
         }
-        for p in preview {
-            paint(&painter, &p, &self.camera, area, true);
+        if self.show_courtyard {
+            for (id, p) in item.objects.iter().filter(|(_, p)| is_courtyard(p)) {
+                if !is_moving(id) || preview.is_empty() {
+                    paint(&painter, p, &self.camera, area, self.selection.contains(id));
+                }
+            }
+        }
+        for p in &preview {
+            paint(&painter, p, &self.camera, area, true);
+        }
+        if self.show_courtyard
+            && let Tool::Courtyard { points, .. } = &self.tool
+            && let Some(point) = pointer.filter(|_| over)
+        {
+            courtyard::paint_draw_preview(&painter, points, self.camera.snap(point, area), &self.camera, area);
+        }
+        if self.show_courtyard
+            && matches!(self.tool, Tool::Select | Tool::DragCourtyardVertex { .. })
+            && let Some((_, pts, _)) = self.selected_courtyard(&item)
+        {
+            let hovered_vertex = pointer.filter(|_| over).and_then(|p| courtyard::pick_vertex(pts, &self.camera, area, p));
+            let hovered_edge = if hovered_vertex.is_none() && pts.len() < pcbcraft_engine::authoring::courtyard::MAX_VERTICES {
+                pointer.filter(|_| over).and_then(|p| courtyard::pick_edge_midpoint(pts, &self.camera, area, p))
+            } else {
+                None
+            };
+            courtyard::paint_handles(
+                &painter,
+                pts,
+                self.selected_vertex,
+                hovered_vertex,
+                hovered_edge,
+                &self.camera,
+                area,
+                !self.pending() && pts.len() < pcbcraft_engine::authoring::courtyard::MAX_VERTICES,
+            );
+        }
+        if let Some(bad) = drag_invalid {
+            painter.circle_stroke(self.camera.screen(bad, area), courtyard::VERTEX_HANDLE_RADIUS + 3.0, egui::Stroke::new(2.0, t.error));
         }
         if let Some(paths) = &reference {
             let width = pcbcraft_engine::board::silkscreen::Settings::default().stroke_width_nm as f32 / pcbcraft_engine::schematic::GRID_NM as f32
@@ -861,8 +1092,10 @@ impl Document {
                 .objects
                 .values()
                 .filter(|p| {
-                    let b = bounds(p, &self.camera, area);
-                    if crossing { rect.intersects(b) } else { rect.contains_rect(b) }
+                    visible(p) && {
+                        let b = bounds(p, &self.camera, area);
+                        if crossing { rect.intersects(b) } else { rect.contains_rect(b) }
+                    }
                 })
                 .count();
             pcbcraft_chrome::selection::marquee(&painter, rect, crossing, count);
@@ -902,7 +1135,9 @@ fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primi
                 drill_nm: None,
             },
         },
-        Place::Arc | Place::Polyline | Place::NonPlatedHole => return Err("Choose drawing geometry through its parameterized tool.".into()),
+        Place::Arc | Place::Polyline | Place::NonPlatedHole | Place::Courtyard => {
+            return Err("Choose drawing geometry through its parameterized tool.".into());
+        }
         Place::Line => Primitive::Line { from: start, to: end },
         Place::Rectangle => Primitive::Rectangle { min, max },
         Place::Circle => {
@@ -1118,12 +1353,14 @@ fn hit(primitive: &Primitive, camera: &crate::canvas_camera::Camera, area: Rect,
 }
 
 /// Electrical objects win overlaps with body graphics so labels and lands remain directly editable.
-fn pick(item: &Item, camera: &crate::canvas_camera::Camera, area: Rect, at: egui::Pos2) -> Option<u64> {
+/// Hidden courtyard primitives are skipped so an invisible layer never intercepts clicks.
+fn pick_visible(item: &Item, camera: &crate::canvas_camera::Camera, area: Rect, at: egui::Pos2, show_courtyard: bool) -> Option<u64> {
+    let visible = |p: &&Primitive| show_courtyard || !pcbcraft_engine::authoring::courtyard::is_courtyard_primitive(p);
     item.objects
         .iter()
         .rev()
-        .filter(|(_, p)| matches!(p, Primitive::Pin { .. } | Primitive::Pad { .. }))
-        .chain(item.objects.iter().rev().filter(|(_, p)| !matches!(p, Primitive::Pin { .. } | Primitive::Pad { .. })))
+        .filter(|(_, p)| visible(p) && matches!(p, Primitive::Pin { .. } | Primitive::Pad { .. }))
+        .chain(item.objects.iter().rev().filter(|(_, p)| visible(p) && !matches!(p, Primitive::Pin { .. } | Primitive::Pad { .. })))
         .find(|(_, p)| hit(p, camera, area, at))
         .map(|(id, _)| *id)
 }
@@ -1173,5 +1410,74 @@ mod tests {
         let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900., 600.));
         let point = doc.camera.screen(Point { x_nm: 0, y_nm: 1_270_000 }, area);
         assert!(hit(&Primitive::Graphic { graphic: g }, &doc.camera, area, point));
+    }
+
+    /// Hidden courtyard outlines never intercept clicks; visible outlines expose vertex and
+    /// midpoint handles for direct dragging and insertion.
+    #[test]
+    fn courtyard_vertex_pick_and_hidden_layer_picking() {
+        let mut editors = super::super::Editors::default();
+        let id = editors.open(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let doc = editors.documents.get_mut(&id).unwrap();
+        doc.execute(
+            0,
+            Action::GenerateCourtyard {
+                clearance_nm: pcbcraft_engine::authoring::courtyard::DEFAULT_CLEARANCE_NM,
+                source: pcbcraft_engine::authoring::courtyard::CourtyardSource::PadsAndBody,
+                stroke_nm: pcbcraft_engine::authoring::courtyard::DEFAULT_STROKE_NM,
+                replace_existing: true,
+            },
+        )
+        .unwrap();
+        let item = doc.session.snapshot();
+        let (cy_id, pts, _) = doc.selected_courtyard(&item).unwrap();
+        let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900., 600.));
+        let v0_screen = doc.camera.screen(pts[0], area);
+        let mid0 = pcbcraft_engine::authoring::courtyard::edge_midpoint(pts, 0).unwrap();
+        let mid0_screen = doc.camera.screen(mid0, area);
+
+        assert_eq!(pick_visible(&item, &doc.camera, area, v0_screen, false), None);
+        assert_eq!(pick_visible(&item, &doc.camera, area, v0_screen, true), Some(cy_id));
+        assert_eq!(courtyard::pick_vertex(pts, &doc.camera, area, v0_screen), Some(0));
+        assert_eq!(courtyard::pick_edge_midpoint(pts, &doc.camera, area, mid0_screen), Some(0));
+    }
+
+    /// Dragging a courtyard vertex snaps to the active footprint grid, commits a single
+    /// undoable edit, and rejects moves that would make the outline self-intersect.
+    #[test]
+    fn courtyard_vertex_drag_snaps_to_grid_and_commits_one_edit() {
+        let mut editors = super::super::Editors::default();
+        let id = editors.open(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let doc = editors.documents.get_mut(&id).unwrap();
+        doc.camera.set_snap_nm(250_000);
+        doc.execute(
+            0,
+            Action::GenerateCourtyard {
+                clearance_nm: pcbcraft_engine::authoring::courtyard::DEFAULT_CLEARANCE_NM,
+                source: pcbcraft_engine::authoring::courtyard::CourtyardSource::PadsAndBody,
+                stroke_nm: pcbcraft_engine::authoring::courtyard::DEFAULT_STROKE_NM,
+                replace_existing: true,
+            },
+        )
+        .unwrap();
+        let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900., 600.));
+        let item = doc.session.snapshot();
+        let (cy_id, pts, _) = doc.selected_courtyard(&item).unwrap();
+        let original = item.objects[&cy_id].clone();
+        let target_screen = doc.camera.screen(Point { x_nm: -1_480_000, y_nm: -980_000 }, area);
+        let snapped = doc.camera.snap(target_screen, area);
+        assert_eq!(snapped.x_nm % 250_000, 0);
+        assert_eq!(snapped.y_nm % 250_000, 0);
+
+        // Moving vertex 0 diagonally past the opposite corner creates a self-intersection and is refused.
+        let crossed = Point { x_nm: pts[2].x_nm + 1_000_000, y_nm: pts[2].y_nm + 1_000_000 };
+        assert!(pcbcraft_engine::authoring::courtyard::with_moved_vertex(&original, 0, crossed).is_err());
+
+        let moved = pcbcraft_engine::authoring::courtyard::with_moved_vertex(&original, 0, snapped).unwrap();
+        let rev = doc.session.revision();
+        doc.execute(rev, Action::Replace { object: cy_id, primitive: moved }).unwrap();
+        let updated = doc.session.snapshot();
+        let (next_pts, _) = pcbcraft_engine::authoring::courtyard::courtyard_polygon(&updated.objects[&cy_id]).unwrap();
+        assert_eq!(next_pts[0], snapped);
     }
 }

@@ -1,6 +1,7 @@
 //! Native library-item documents own validation and history independently of projects.
 #[cfg(test)]
 mod basics_tests;
+pub mod courtyard;
 mod operations;
 pub mod publishing;
 #[cfg(test)]
@@ -347,6 +348,16 @@ pub enum Action {
         symbol_settings: Option<SymbolSettings>,
         #[serde(default)]
         footprint_reference: Option<FootprintReferenceSettings>,
+    },
+    /// Generate a closed courtyard polygon enclosing pads and optional body graphics.
+    GenerateCourtyard {
+        clearance_nm: i64,
+        #[serde(default)]
+        source: courtyard::CourtyardSource,
+        #[serde(default = "courtyard::default_stroke_nm")]
+        stroke_nm: i64,
+        #[serde(default = "courtyard::default_replace_existing")]
+        replace_existing: bool,
     },
     Undo,
     Redo,
@@ -972,6 +983,17 @@ impl Session {
                                 next.reference_offset = None;
                             }
                         }
+                    }
+                    Action::GenerateCourtyard { clearance_nm, source, stroke_nm, replace_existing } => {
+                        if next.kind != Kind::Footprint {
+                            return Err("Courtyard generation is only available for footprint definitions.".into());
+                        }
+                        let primitive = courtyard::generate(&next, clearance_nm, source, stroke_nm)?;
+                        if replace_existing {
+                            next.objects.retain(|_, existing| !courtyard::is_courtyard_primitive(existing));
+                        }
+                        next.objects.insert(cursor, primitive);
+                        cursor = cursor.checked_add(1).ok_or("Primitive ID limit reached.")?;
                     }
                     Action::Undo | Action::Redo => return Err("History operation cannot be nested.".into()),
                 }

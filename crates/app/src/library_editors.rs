@@ -1,5 +1,6 @@
 //! Library definitions are document workspaces, separate from project instances and history.
 mod canvas;
+pub(super) mod courtyard;
 pub(super) mod editing;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod export_tests;
@@ -54,7 +55,10 @@ struct Document {
     drawing_stroke_nm: i64,
     drawing_fill: pcbcraft_engine::library_graphics::Fill,
     array_requested: bool,
+    courtyard_requested: bool,
     details_requested: bool,
+    show_courtyard: bool,
+    selected_vertex: Option<usize>,
     draft: Option<form::Draft>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
@@ -271,7 +275,10 @@ impl Editors {
                 drawing_stroke_nm: 100_000,
                 drawing_fill: Default::default(),
                 array_requested: false,
+                courtyard_requested: false,
                 details_requested: false,
+                show_courtyard: true,
+                selected_vertex: None,
                 draft: None,
                 camera,
                 collapsed: [false, false],
@@ -369,6 +376,7 @@ impl Document {
             }
             self.selection = ids;
             self.selected = if self.selection.len() == 1 { self.selection.first().copied() } else { None };
+            self.selected_vertex = None;
             self.draft = None;
             self.tool = canvas::Tool::Select;
             self.error = None;
@@ -403,6 +411,15 @@ impl Document {
         self.tool = canvas::Tool::Select;
         if self.selected.is_some_and(|id| !self.session.snapshot().objects.contains_key(&id)) {
             self.selected = None;
+        }
+        if let Some(id) = self.selected
+            && let Some((points, _)) = next.objects.get(&id).and_then(pcbcraft_engine::authoring::courtyard::courtyard_polygon)
+        {
+            if self.selected_vertex.is_some_and(|idx| idx >= points.len()) {
+                self.selected_vertex = Some(points.len().saturating_sub(1));
+            }
+        } else {
+            self.selected_vertex = None;
         }
         self.error = None;
         Ok(())
@@ -448,6 +465,12 @@ impl Document {
             properties::identity(ui, &format!("{} objects", self.selection.len()), &self.session.snapshot().name);
             return;
         }
+        if let Some(id) = self.selected
+            && item.kind == Kind::Footprint
+            && self.courtyard_outline_inspector(ui, id, expanded)
+        {
+            return;
+        }
         if self.draft.as_ref().is_some_and(|draft| draft.revision != self.session.revision()) {
             if self.pending() {
                 self.error = Some("The library document changed; reset these fields before applying new edits.".into());
@@ -491,6 +514,10 @@ impl Document {
         } else if reset {
             self.draft = None;
             self.error = None;
+        }
+        if item.kind == Kind::Footprint && self.selected.is_none() {
+            ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
+            self.courtyard_summary_section(ui);
         }
     }
     /// Match project Browser row metrics, selection and disclosure behavior. Primitive identities
