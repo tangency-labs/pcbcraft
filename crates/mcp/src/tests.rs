@@ -982,7 +982,7 @@ fn headless_read_only_runs_the_assembly_check_without_changing_anything() {
         assert_ne!(response["isError"], true, "{response}");
         let result = body(&response);
         assert_eq!(result["revision"], before["revision"]);
-        assert_eq!(result["assembly_check"]["board"], board);
+        assert_eq!(result["assembly_check"]["board"], json!({"project":before["project"]["id"],"board":board}));
         assert_eq!(result["assembly_check"], body(&call(&mut control, "execute", args))["assembly_check"]);
         assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
     }
