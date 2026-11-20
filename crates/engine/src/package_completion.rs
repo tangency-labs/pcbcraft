@@ -4,7 +4,10 @@ use crate::{COMPLETE_PACKAGES, CommandError, Project, Session, SymbolPlacement, 
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 use uuid::Uuid;
 
@@ -28,11 +31,183 @@ struct Move<'a> {
 /// Prefer packages that already had multiple units, then stable instance order.
 type Slots = BTreeMap<usize, BTreeSet<(bool, u64)>>;
 
+/// Runtime authority for a deferred package completion, independent of display names or boards.
+#[derive(Clone, Debug)]
+pub struct PackageCompletionSource {
+    snapshot: Arc<Project>,
+    session: Arc<()>,
+    opening: u64,
+    revision: u64,
+    defer_net_reconciliation: bool,
+}
+
+impl PackageCompletionSource {
+    /// Revision captured when preparation started.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Reject a different session, project reopening, or any edit/Undo/Redo since capture.
+    pub fn is_current(&self, session: &Session) -> bool {
+        Arc::ptr_eq(&self.session, &session.clearance_identity)
+            && self.opening == session.history_root_revision()
+            && self.revision == session.revision()
+            && self.defer_net_reconciliation == session.defer_net_reconciliation
+            && session.snapshot().is_some_and(|p| Arc::ptr_eq(&p, &self.snapshot))
+    }
+}
+
+/// Engine-validated package completion ready for reply-size checks and atomic publication.
+/// For an effectful Apply, `report()` already carries the post-commit revision so live hosts
+/// can verify the exact reply frame size before committing.
+pub struct PreparedPackageCompletion {
+    source: PackageCompletionSource,
+    params: Value,
+    report: Value,
+    candidate: Option<(Project, u64)>,
+}
+
+impl PreparedPackageCompletion {
+    /// Snapshot authority validated during preparation.
+    pub fn source(&self) -> &PackageCompletionSource {
+        &self.source
+    }
+
+    /// The exact JSON report that will be returned if this preparation is accepted.
+    pub fn report(&self) -> &Value {
+        &self.report
+    }
+
+    /// Whether committing this preparation will publish a new snapshot and Undo step.
+    pub fn is_effectful(&self) -> bool {
+        self.candidate.is_some()
+    }
+}
+
+/// Immutable-snapshot package completion work that can run off the editor thread without
+/// mutating session state. Dropping or cancelling it leaves the project and history untouched.
+pub struct PackageCompletionJob {
+    source: PackageCompletionSource,
+    params: Value,
+    sheet: Option<Uuid>,
+    no_op: bool,
+    dry_run: bool,
+}
+
+impl PackageCompletionJob {
+    /// Captured snapshot authority for staleness checks while work is in flight.
+    pub fn source(&self) -> &PackageCompletionSource {
+        &self.source
+    }
+
+    /// Run preparation to completion synchronously.
+    pub fn finish(self) -> Result<PreparedPackageCompletion, CommandError> {
+        match self.run_inner(None)? {
+            Some(prepared) => Ok(prepared),
+            None => Err(CommandError::Unavailable("package completion canceled".into())),
+        }
+    }
+
+    /// Run preparation off the editor thread, stopping cooperatively if `cancelled` is set.
+    pub fn run_cancellable(self, cancelled: &AtomicBool) -> Result<Option<PreparedPackageCompletion>, CommandError> {
+        self.run_inner(Some(cancelled))
+    }
+
+    fn run_inner(self, cancelled: Option<&AtomicBool>) -> Result<Option<PreparedPackageCompletion>, CommandError> {
+        let is_cancelled = || cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed));
+        if is_cancelled() {
+            return Ok(None);
+        }
+        if self.no_op {
+            return Ok(Some(PreparedPackageCompletion {
+                report: json!({"revision": self.source.revision, "changes": [], "skipped": []}),
+                source: self.source,
+                params: self.params,
+                candidate: None,
+            }));
+        }
+        let before = &self.source.snapshot;
+        let owners = owners(before);
+        let Some((moves, skipped)) = plan_moves(before, &owners, self.sheet, cancelled)? else {
+            return Ok(None);
+        };
+        if is_cancelled() {
+            return Ok(None);
+        }
+        let changes: Vec<_> = moves.iter().map(Move::report).collect();
+        let mut report = json!({"revision": self.source.revision, "changes": changes, "skipped": skipped});
+        let candidate = if moves.is_empty() {
+            None
+        } else {
+            let (next, terminals) = transfer(before, &moves);
+            if is_cancelled() {
+                return Ok(None);
+            }
+            let (prepared, highest) =
+                Session::prepare_change_from_snapshot(Some(before), self.source.defer_net_reconciliation, next, |candidate, _| {
+                    candidate.rekey_nets(before, &terminals)
+                })?;
+            if self.dry_run {
+                None
+            } else {
+                let next_revision = (self.source.revision + 1).max(highest);
+                report["revision"] = json!(next_revision);
+                Some((prepared, highest))
+            }
+        };
+        Ok(Some(PreparedPackageCompletion { source: self.source, params: self.params, report, candidate }))
+    }
+}
+
 impl Session {
     /// Plan and validate against the current revision, then optionally publish as one undo step.
     /// `scope` must explicitly enable completion. Preview and no-ops never publish an edit.
     pub(crate) fn complete_packages(&mut self, params: &Value) -> Result<Value, CommandError> {
         self.complete_packages_with_commit(params, || Ok(()))
+    }
+
+    /// Validate scope, revision and parameters synchronously, capturing an immutable snapshot
+    /// job whose planning and net reconciliation can run off the editor thread.
+    pub fn prepare_package_completion(&self, params: &Value) -> Result<PackageCompletionJob, CommandError> {
+        self.authorize_command(COMPLETE_PACKAGES)?;
+        self.refuse_stale(COMPLETE_PACKAGES, params)?;
+        self.validate_project_command(COMPLETE_PACKAGES, params)?;
+        let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
+        let sheet_arg = params.get("sheet").and_then(Value::as_str);
+        let (no_op, sheet) = match params["scope"].as_str().unwrap_or("none") {
+            "sheet" => (false, Some(snapshot.resolve_sheet(sheet_arg)?.id())),
+            _ if sheet_arg.is_some() => return Err(CommandError::InvalidParams("`sheet` is only allowed with sheet scope.".into())),
+            "none" => (true, None),
+            _ => (false, None),
+        };
+        Ok(PackageCompletionJob {
+            source: PackageCompletionSource {
+                snapshot,
+                session: self.clearance_identity.clone(),
+                opening: self.history_root_revision(),
+                revision: self.revision(),
+                defer_net_reconciliation: self.defer_net_reconciliation,
+            },
+            params: params.clone(),
+            sheet,
+            no_op,
+            dry_run: params["dry_run"].as_bool() == Some(true),
+        })
+    }
+
+    /// Adopt a prepared package completion atomically after rechecking session scope and
+    /// snapshot currency. A stale or unauthorized session returns an error without mutating state.
+    pub fn commit_package_completion(&mut self, mut prepared: PreparedPackageCompletion) -> Result<Value, CommandError> {
+        self.authorize_command(COMPLETE_PACKAGES)?;
+        if !prepared.source.is_current(self) {
+            return Err(CommandError::StaleRevision { current: self.revision() });
+        }
+        if let Some((candidate, highest)) = prepared.candidate {
+            self.publish_change(candidate, highest);
+            self.report_committed(COMPLETE_PACKAGES, &prepared.params);
+            prepared.report["revision"] = json!(self.revision());
+        }
+        Ok(prepared.report)
     }
 
     /// Run package completion with host authorization immediately before publication.
@@ -43,32 +218,11 @@ impl Session {
         params: &Value,
         authorize: impl FnOnce() -> Result<(), E>,
     ) -> Result<Value, E> {
-        self.authorize_command(COMPLETE_PACKAGES)?;
-        self.refuse_stale(COMPLETE_PACKAGES, params)?;
-        self.validate_project_command(COMPLETE_PACKAGES, params)?;
-        let before = self.open_project()?;
-        let sheet_arg = params.get("sheet").and_then(Value::as_str);
-        let sheet = match params["scope"].as_str().unwrap_or("none") {
-            "sheet" => Some(before.resolve_sheet(sheet_arg)?.id()),
-            _ if sheet_arg.is_some() => return Err(CommandError::InvalidParams("`sheet` is only allowed with sheet scope.".into()).into()),
-            "none" => return Ok(json!({"revision":self.revision(), "changes":[], "skipped":[]})),
-            _ => None,
-        };
-        let owners = owners(before);
-        let (moves, skipped) = plan_moves(before, &owners, sheet)?;
-        let changes: Vec<_> = moves.iter().map(Move::report).collect();
-        let mut report = json!({"revision":self.revision(), "changes":changes, "skipped":skipped});
-        if !moves.is_empty() {
-            let (candidate, terminals) = transfer(before, &moves);
-            let (candidate, highest) = self.prepare_change_with_nets(candidate, |next, _| next.rekey_nets(before, &terminals))?;
-            if params["dry_run"].as_bool() != Some(true) {
-                authorize()?;
-                self.publish_change(candidate, highest);
-                self.report_committed(COMPLETE_PACKAGES, params);
-                report["revision"] = json!(self.revision());
-            }
+        let prepared = self.prepare_package_completion(params)?.finish()?;
+        if prepared.is_effectful() {
+            authorize()?;
         }
-        Ok(report)
+        self.commit_package_completion(prepared).map_err(Into::into)
     }
 }
 
@@ -193,7 +347,13 @@ fn pin_map(symbol: &SymbolPlacement, slot: usize) -> Option<Vec<(Terminal, Termi
 
 /// Use indexed free slots rather than repeatedly searching all peers. A loose part can join an
 /// established package or an earlier loose part, but an established package is never dismantled.
-fn plan_moves<'a>(project: &Project, owners: &BTreeMap<u64, Owner<'a>>, sheet: Option<Uuid>) -> Result<(Vec<Move<'a>>, Vec<Value>), CommandError> {
+fn plan_moves<'a>(
+    project: &Project,
+    owners: &BTreeMap<u64, Owner<'a>>,
+    sheet: Option<Uuid>,
+    cancelled: Option<&AtomicBool>,
+) -> Result<Option<(Vec<Move<'a>>, Vec<Value>)>, CommandError> {
+    let is_cancelled = || cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed));
     let mut pools = BTreeMap::<Vec<u8>, Slots>::new();
     let mut loose = Vec::new();
     let mut skipped = Vec::new();
@@ -206,6 +366,9 @@ fn plan_moves<'a>(project: &Project, owners: &BTreeMap<u64, Owner<'a>>, sheet: O
         .filter(|id| !project.board.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(id)))
         .collect();
     for (&id, owner) in owners {
+        if is_cancelled() {
+            return Ok(None);
+        }
         if sheet.is_some_and(|sheet| sheet != owner.sheet || owner.across_sheets) {
             continue;
         }
@@ -222,6 +385,9 @@ fn plan_moves<'a>(project: &Project, owners: &BTreeMap<u64, Owner<'a>>, sheet: O
     }
     let mut moves = Vec::new();
     for (key, id, source) in loose {
+        if is_cancelled() {
+            return Ok(None);
+        }
         let slots = pools.entry(key).or_default();
         let mut choices: Vec<_> = slots
             .iter()
@@ -239,7 +405,7 @@ fn plan_moves<'a>(project: &Project, owners: &BTreeMap<u64, Owner<'a>>, sheet: O
             offer(slots, id, source);
         }
     }
-    Ok((moves, skipped))
+    Ok(Some((moves, skipped)))
 }
 
 /// Apply only to a detached candidate. Rewrite exact wire and generated-leg endpoints while keeping

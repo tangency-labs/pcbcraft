@@ -27,7 +27,7 @@ pub mod net_labels;
 pub mod netlist;
 pub mod nets;
 pub mod no_connect;
-mod package_completion;
+pub mod package_completion;
 pub mod parameters;
 pub mod part_authoring;
 pub mod part_groups;
@@ -4520,14 +4520,25 @@ impl Session {
     /// defer reconciliation until they rejoin the canonical project; whole-project edits do not.
     fn prepare_change_with_nets(
         &self,
+        project: Project,
+        reconcile: impl FnOnce(&mut Project, Option<&Project>) -> Result<(), CommandError>,
+    ) -> Result<(Project, u64), CommandError> {
+        Self::prepare_change_from_snapshot(self.project.as_ref(), self.defer_net_reconciliation, project, reconcile)
+    }
+
+    /// Validate and reconcile a detached candidate against a captured immutable snapshot, so
+    /// preparation can run off the editor thread without mutating session state.
+    pub(crate) fn prepare_change_from_snapshot(
+        previous: Option<&Arc<Project>>,
+        defer_net_reconciliation: bool,
         mut project: Project,
         reconcile: impl FnOnce(&mut Project, Option<&Project>) -> Result<(), CommandError>,
     ) -> Result<(Project, u64), CommandError> {
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
-        if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
+        if !previous.is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
         }
-        if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
+        if let Some(previous) = previous.filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
             if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
                 return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
@@ -4538,9 +4549,7 @@ impl Session {
         }
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
-        let physical_changed = self
-            .project
-            .as_ref()
+        let physical_changed = previous
             .is_some_and(|previous| previous.id == project.id && !Arc::ptr_eq(&previous.board, &project.board) && previous.board != project.board);
         if physical_changed
             && matches!(project.board.ownership, board::identity::Ownership::Legacy)
@@ -4557,7 +4566,7 @@ impl Session {
         project.refresh_board_folder();
         // Whole-project presentation is snapshot-owned. Sheet caches may retain unchanged
         // topology/metadata, but component names and occurrence paths invalidate their labels.
-        let topology_changed = self.project.as_ref().is_none_or(|old| {
+        let topology_changed = previous.is_none_or(|old| {
             old.net_scope() != project.net_scope()
                 || old.sheets.len() != project.sheets.len()
                 || old
@@ -4566,7 +4575,7 @@ impl Session {
                     .zip(project.sheets.iter())
                     .any(|(before, after)| before.sheet_id != after.sheet_id || !Arc::ptr_eq(&before.connectivity, &after.connectivity))
         });
-        let presentation_changed = self.project.as_ref().is_none_or(|old| {
+        let presentation_changed = previous.is_none_or(|old| {
             old.net_scope() != project.net_scope()
                 || (!Arc::ptr_eq(&old.components, &project.components)
                     && (old.components.len() != project.components.len()
@@ -4582,26 +4591,26 @@ impl Session {
             project.named_graph = Arc::default();
         }
         // Named anchors can attach to moving geometry and join other sheets.
-        if presentation_changed || project.requires_project_graph() || self.project.as_ref().is_some_and(|p| p.requires_project_graph()) {
+        if presentation_changed || project.requires_project_graph() || previous.is_some_and(|p| p.requires_project_graph()) {
             project.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut project.sheets) {
                 sheet.connectivity = Arc::default();
             }
         }
         let highest = project.highest_id();
-        let previous_highest = self.project.as_ref().filter(|old| old.same_document(&project)).map_or(0, |old| old.highest_id());
+        let previous_highest = previous.filter(|old| old.same_document(&project)).map_or(0, |old| old.highest_id());
         if project.numeric_id_high_water.is_some()
             || highest != previous_highest
             || project.components.values().any(|component| !component.metadata.is_empty())
         {
             project.numeric_id_high_water = Some(project.numeric_id_high_water.unwrap_or(0).max(highest).max(previous_highest));
         }
-        if !self.defer_net_reconciliation {
-            reconcile(&mut project, self.project.as_deref())?;
+        if !defer_net_reconciliation {
+            reconcile(&mut project, previous.map(Arc::as_ref))?;
         }
         // Copper and package maps can exhaust the native board document even before the
         // record-count limits. Check the changed board before publishing snapshot or history.
-        if self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+        if previous.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
             && (!project.board.tracks.is_empty()
                 || !project.board.vias.is_empty()
                 || !project.board.assignments.is_empty()

@@ -487,3 +487,48 @@ fn package_completion_is_refused_in_a_read_only_session() {
     assert_eq!(reader.inspect(), before);
     assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
 }
+
+/// Detached preparation predicts the post-commit revision before publication, stops cooperatively
+/// on cancellation, and refuses to commit once the session advances.
+#[test]
+fn prepared_package_completion_rejects_stale_and_cancelled_runs_without_mutating_history() {
+    use std::sync::atomic::AtomicBool;
+
+    let mut session = quad();
+    place_loose(&mut session, 1, None);
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let undo = session.undo.len();
+    let params = json!({"scope":"project","expected_revision":revision});
+
+    let cancelled = session.prepare_package_completion(&params).unwrap();
+    assert!(cancelled.run_cancellable(&AtomicBool::new(true)).unwrap().is_none());
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!((session.revision(), session.undo.len()), (revision, undo));
+
+    let prepared = session.prepare_package_completion(&params).unwrap().finish().unwrap();
+    assert!(prepared.is_effectful());
+    assert_eq!(prepared.report()["revision"], revision + 1);
+    assert_eq!(prepared.report()["changes"].as_array().unwrap().len(), 1);
+    assert_eq!((session.revision(), session.undo.len()), (revision, undo));
+
+    let stale_job = session.prepare_package_completion(&params).unwrap().finish().unwrap();
+    session.apply("project.rename", &json!({"name":"Concurrent edit"})).unwrap();
+    let after_rename = session.snapshot().unwrap();
+    let renamed_rev = session.revision();
+    let renamed_undo = session.undo.len();
+    let err = session.commit_package_completion(stale_job).unwrap_err();
+    assert!(matches!(err, CommandError::StaleRevision { current } if current == renamed_rev), "{err}");
+    assert!(Arc::ptr_eq(&after_rename, &session.snapshot().unwrap()));
+    assert_eq!((session.revision(), session.undo.len()), (renamed_rev, renamed_undo));
+
+    let current_params = json!({"scope":"project","expected_revision":renamed_rev});
+    let current = session.prepare_package_completion(&current_params).unwrap().finish().unwrap();
+    let expected_report = current.report().clone();
+    let committed = session.commit_package_completion(current).unwrap();
+    assert_eq!(committed, expected_report);
+    assert_eq!(session.revision(), renamed_rev + 1);
+    assert_eq!(session.undo.len(), renamed_undo + 1);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&after_rename, &session.snapshot().unwrap()));
+}
