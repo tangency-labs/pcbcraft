@@ -742,7 +742,6 @@ impl Document {
             self.tool = Tool::Select;
         }
         if active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() {
-            let command = ui.input(|i| i.modifiers.command);
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 self.tool = Tool::Select;
             }
@@ -801,20 +800,44 @@ impl Document {
                     Some(Preview::Duplicate) => self.duplicate(),
                     None => {}
                 }
-                if !command && ui.input(|i| i.key_pressed(egui::Key::P)) {
+                // Tool letters and R's direction read the pressed event's own modifiers,
+                // like the command chords above: a command released before batch end
+                // cannot leak a chord into a tool start, and a shift released early
+                // cannot flip the rotation direction.
+                let tool_key = |key: egui::Key| {
+                    ui.input(|i| {
+                        i.focused
+                            && i.events.iter().any(|event| {
+                                matches!(
+                                    event,
+                                    egui::Event::Key { key: letter, pressed: true, modifiers, .. }
+                                        if *letter == key && !modifiers.command
+                                )
+                            })
+                    })
+                };
+                if tool_key(egui::Key::P) {
                     self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad });
                 }
-                if !command && ui.input(|i| i.key_pressed(egui::Key::L)) {
+                if tool_key(egui::Key::L) {
                     self.start_tool(Place::Line);
                 }
-                if !command && ui.input(|i| i.key_pressed(egui::Key::T)) {
+                if tool_key(egui::Key::T) {
                     self.start_tool(Place::Text);
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::M)) {
                     self.begin_move();
                 }
-                if ui.input(|i| i.key_pressed(egui::Key::R)) {
-                    self.rotate_by(if ui.input(|i| i.modifiers.shift) { 1 } else { -1 });
+                if let Some(shifted) = ui.input(|i| {
+                    if !i.focused {
+                        return None;
+                    }
+                    i.events.iter().find_map(|event| match event {
+                        egui::Event::Key { key: egui::Key::R, pressed: true, modifiers, .. } => Some(modifiers.shift),
+                        _ => None,
+                    })
+                }) {
+                    self.rotate_by(if shifted { 1 } else { -1 });
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
                     self.details_requested = true;
