@@ -509,7 +509,8 @@ fn set_pitch_refuses_locked_attached_copper_then_carries_it_unlocked() {
     let layer = copper_layers(&s)[0];
     route(&mut s, layer, &[pad, free]).unwrap();
     let track = view(&s).tracks()[0].id;
-    let mut lock = json!({"tracks":[track],"locked":true,"expected_revision":s.revision()});
+    let board = s.project().unwrap().board_target().unwrap().board;
+    let mut lock = json!({"board":board,"tracks":[track],"locked":true,"expected_revision":s.revision()});
     s.apply(crate::SET_COPPER_LOCKED, &lock).unwrap();
     let mut params = json!({"footprints":[mover, anchor],"mode":"distribute_x","pitch_nm":22_000_000,"expected_revision":s.revision()});
     assert_pitch_refused(&mut s, &params, ErrorCode::InvalidParams, &format!("Track {track} is locked"));
