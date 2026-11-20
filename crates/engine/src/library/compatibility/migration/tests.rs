@@ -127,7 +127,7 @@ fn custom_footprints_and_conflicting_physical_destinations_keep_their_bytes() {
 fn f1_open_only_rewrites_proven_placed_binding_and_keeps_lost_history() {
     use crate::board::relations::{
         commands::{EDIT, LIST},
-        tests::{add, origin, pick, run},
+        tests::{add, pick, run},
     };
     for conflict in [false, true] {
         let mut s = fixture(true);
@@ -143,12 +143,15 @@ fn f1_open_only_rewrites_proven_placed_binding_and_keeps_lost_history() {
             Arc::make_mut(&mut p_mut.board).definitions.insert(key, custom);
             s.open_snapshot(p);
         }
+        // The migrated footprint sits on the board origin, so measure from the other
+        // placement: a horizontal distance must be nonzero.
+        let partner = pick(&mut s, 1, "fp.origin", None);
         let a = pick(&mut s, 0, "fp.origin", None);
         let b = pick(&mut s, 0, "pad.center", Some("1"));
         assert_eq!(a["def"]["library"], "starter");
-        let id = add(&mut s, "horizontal", origin(), a);
+        let id = add(&mut s, "horizontal", partner.clone(), a);
         run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
-        let lost = add(&mut s, "horizontal", origin(), b);
+        let lost = add(&mut s, "horizontal", partner, b);
         // Fixture-only historical state under an intact placed pin; ingestion must not resolve it.
         let mut docs = encode_documents(s.snapshot().unwrap()).unwrap();
         let path = crate::persistence::test_board_path(&docs);
