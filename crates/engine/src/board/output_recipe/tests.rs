@@ -123,7 +123,7 @@ fn invalid_or_stale_command_does_not_change_history() {
     let layer = content["gerber_layers"][0].clone();
     assert!(matches!(set(&mut session, Uuid::nil(), &content), Err(CommandError::InvalidParams(msg)) if msg.contains("non-nil UUID")));
     let stale = session.apply(SET_OUTPUT_RECIPE, &json!({"recipe":ID,"expected_revision":revision - 1,"content":content}));
-    assert!(matches!(stale, Err(CommandError::Unavailable(msg)) if msg.contains("project changed")));
+    assert!(matches!(&stale, Err(CommandError::StaleRevision { current }) if *current == revision), "{stale:?}");
     for (field, value) in [
         ("name", json!("a".repeat(MAX_RECIPE_NAME + 1))),
         ("board", json!(Uuid::from_u128(9))),
