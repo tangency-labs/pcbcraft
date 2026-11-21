@@ -177,7 +177,7 @@ pub(crate) fn call_session(session: &mut Session, method: &str, params: &Value) 
 }
 
 /// Dispatch with the serving backend's version before invoking engine handlers.
-/// Symbol-field previews return the engine result even when inspection is disabled.
+/// Symbol-field and net-label previews return the engine result even when inspection is disabled.
 fn serve_session(session: &mut Session, method: &str, params: &Value, api_version: u32) -> Result<Value, Failure> {
     match method {
         "engine.commands" => Ok(Value::Array(describe_engine_commands(DEPRECATIONS))),
@@ -190,7 +190,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                 command_api::check_version(id, &params["version"], api_version)?;
             }
             if params["inspect"].as_bool() == Some(false)
-                && !(id == pcbcraft_engine::SET_SYMBOL_FIELDS && params["params"]["dry_run"].as_bool() == Some(true))
+                && !pcbcraft_engine::is_document_preview(id, &params["params"])
                 && !matches!(
                     id,
                     pcbcraft_engine::nets::INSPECT_CLASSES

@@ -126,8 +126,8 @@ const CAPTURE: &[Group] = &[
         tools: &[
             tool(Action::Wire, "Wire", Icon::Wire, "Draw wire (W)", "W"),
             tool(Action::NoConnect, "No connect", Icon::NoConnect, "Mark unused pins or wire ends (Q)", "Q"),
-            tool(Action::Bus, "Bus", Icon::Bus, "Buses are not available yet.", ""),
-            tool(Action::Label, "Net label", Icon::NetLabel, "Place local label (L); set Scope to Global or press Ctrl+L", "L"),
+            tool(Action::Bus, "Bus", Icon::Bus, "Bus wires are not available yet; for a bus label, set a net label's Scope to Bus.", ""),
+            tool(Action::Label, "Net label", Icon::NetLabel, "Place local label (L); set Scope to Global or Bus, or press Ctrl+L for Global", "L"),
         ],
         extras: &[],
     },

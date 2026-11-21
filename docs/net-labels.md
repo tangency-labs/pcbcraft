@@ -37,6 +37,28 @@ readable names. A net with authored names uses the UTF-8 bytewise smallest name;
 inspection retains all aliases. This presentation choice does not resolve an
 electrical conflict or change which labels connect.
 
+## Buses
+
+A bus label names a range of signals with one label. Choose **Bus** as the
+label's scope and write the name as `PREFIX[FIRST..LAST]`: `D[0..7]` stands for
+the members D0, D1 … D7, and `ADDR[15..0]` lists ADDR15 down to ADDR0 in that order.
+The prefix cannot contain brackets, whitespace or control characters and cannot
+end in a digit, so `A1[0..3]` is refused rather than confused with `A[10..13]`.
+Indices run from 0 to 9999 without leading zeros, and one bus holds 2 to 64
+members. The label form explains a refused name before placement starts.
+
+Each member joins the net of the same name on the bus label's sheet: place
+ordinary local labels D0 … D7 on the pins, and the bus groups them. A bus label
+is drawn as its name over a short heavy stroke. It makes no contact of its own,
+touches no pin and cannot end a wire, and it creates no net named `D[0..7]`, so
+the netlist holds exactly the member nets. Renaming the bus to `D[0..3]` shrinks
+its members; D4 … D7 keep their own nets. A local or global label whose text is
+`D[0..7]` stays one ordinary net with that literal name.
+
+Inspection lists a bus label's `members` with the net each one joins on the
+sheet, or `null` when no ordinary label, hierarchical label or power symbol of
+that name exists there.
+
 ## Generated names and copper labels
 
 Meaningful unnamed nets use neutral names such as **Net-0001**. The number belongs
@@ -97,17 +119,21 @@ for power definitions. Optional `value` overrides the initial Value. Standard
 component field, movement, deletion and history commands apply to these instances.
 The definition's `behavior` explicitly identifies the globally named terminal.
 
-`schematic.place_net_label` creates text labels with `name`, `style` (`local` or
-`global`), `x_nm`, `y_nm`, optional quarter-turn `rotation`, optional `text` and
+`schematic.place_net_label` creates text labels with `name`, `style` (`local`,
+`global` or `bus`), `x_nm`, `y_nm`, optional quarter-turn `rotation`, optional `text` and
 `expected_revision`. `schematic.set_net_label` accepts the same properties plus
 `id`; `keep_connected: true` retains physical contacts when moving. The GUI uses
 connected movement. Optional `auto_heal` controls route cleanup and defaults on.
 The `text` layout uses the existing visibility, offset, size, alignment and angle
 vocabulary; omitting it preserves an existing appearance. `schematic.delete_net_label`
 removes the label and directly attached wires in one undoable transaction.
+Each of the three accepts `dry_run: true`: the edit is validated, nothing changes,
+and the reply lists every native document the edit would change, before and after,
+with any new identities marked provisional.
 
 Supply the sheet UUID when more than one sheet exists. Inspect `net_labels` for
-text-label records and endpoints such as `{"net_label":"net-label-7"}`. Power
+text-label records and endpoints such as `{"net_label":"net-label-7"}`; a bus
+label has `members` instead of an endpoint. Power
 instances instead have ordinary symbol/component IDs and terminal endpoints.
 Both the live editor and headless MCP use these same schemas and transactions.
 
@@ -116,7 +142,8 @@ Both the live editor and headless MCP use these same schemas and transactions.
 Each sheet supports 256 text labels, with names of 1–200 characters without
 surrounding whitespace or control characters. Named labels require at least sheet
 format 3. Symbol field layouts select format 4, including the defaults of a bundled
-GND symbol on the same sheet; an explicit label text layout selects format 5.
+GND symbol on the same sheet; an explicit label text layout selects format 5. A sheet holding a bus label
+is saved as sheet format 16, and other sheets keep their format.
 Power uses the normal component budget
 and project-pinned native definitions, including offline reopening and Home
 previews. The former `power`, `power_bar` and `ground` net-label styles and their

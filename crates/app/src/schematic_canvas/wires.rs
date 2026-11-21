@@ -321,7 +321,9 @@ pub(super) fn paint(
         }
         match ends.get(&id).copied().unwrap_or_default() {
             2 => {}
-            0 | 1 if !project.net_labels().iter().any(|label| label.at == point) => paint_dangling(painter, pos, tokens.schematic_wire),
+            0 | 1 if !project.net_labels().iter().any(|label| label.style.contact() && label.at == point) => {
+                paint_dangling(painter, pos, tokens.schematic_wire)
+            }
             0 | 1 => {}
             _ => {
                 painter.circle_filled(pos, theme::SCHEMATIC_JUNCTION_RADIUS, tokens.schematic_wire);
@@ -532,7 +534,7 @@ pub(super) fn preview(
 /// coincident contact, because it deliberately joins those identities; unrelated ties remain ambiguous.
 fn endpoints(project: &Project, camera: &Camera, rect: Rect) -> Vec<(WireEndpoint, Pos2)> {
     let mut named = std::collections::BTreeMap::new();
-    for label in project.net_labels() {
+    for label in project.net_labels().iter().filter(|label| label.style.contact()) {
         named.entry((label.at.x_nm, label.at.y_nm)).or_insert(WireEndpoint::NetLabel(label.id));
     }
     for (end, _, at) in project.power_terminals() {

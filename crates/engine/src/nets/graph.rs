@@ -128,7 +128,8 @@ impl Graph {
                     add(WireEndpoint::Terminal(terminal), AnchorKind::Terminal, symbol.component, terminal.number().into(), None)?;
                 }
             }
-            for label in own.net_labels() {
+            // A bus label is no net of its own; its members are the nets of their own anchors.
+            for label in own.net_labels().iter().filter(|label| label.style.contact()) {
                 add(WireEndpoint::NetLabel(label.id), AnchorKind::Label, label.id, String::new(), Some(&label.name))?;
             }
             for port in own.hierarchical_labels() {

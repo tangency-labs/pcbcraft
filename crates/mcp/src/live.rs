@@ -257,13 +257,11 @@ pub fn call_editor(editor: &mut dyn Editor, request: &Value) -> Result<Value, Fa
                 let result = call_session(editor.session(), method, params)?;
                 // This dry run cannot publish an edit. Refuse an oversized reply before the
                 // host writes its frame, rather than truncating the proposed documents.
-                if id == pcbcraft_engine::SET_SYMBOL_FIELDS
-                    && params["params"]["dry_run"].as_bool() == Some(true)
-                    && check_reply_size(&result).is_err()
-                {
+                if pcbcraft_engine::is_document_preview(id, &params["params"]) && check_reply_size(&result).is_err() {
+                    let what = if id == pcbcraft_engine::SET_SYMBOL_FIELDS { "symbol-field" } else { "net-label" };
                     return Err(Failure::new(
                         ErrorCode::CapExceeded,
-                        "The symbol-field preview exceeds the 16 MiB live reply limit; no edit was applied.",
+                        format!("The {what} preview exceeds the 16 MiB live reply limit; no edit was applied."),
                     ));
                 }
                 return match id {

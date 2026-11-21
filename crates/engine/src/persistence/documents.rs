@@ -70,6 +70,8 @@ const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
 const GENERATED_SHEET_FORMAT: &str = "pcbcraft-sheet/7";
 const WIRE_END_SHEET_FORMAT: &str = "pcbcraft-sheet/8";
 const PAGE_SHEET_FORMAT: &str = "pcbcraft-sheet/9";
+/// Version 9 plus vector bus labels; paper stays optional so an older sheet can gain a bus.
+const BUS_SHEET_FORMAT: &str = "pcbcraft-sheet/16";
 const MIRROR_SHEET_FORMAT: &str = "pcbcraft-sheet/6";
 const TEXT_LAYOUT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
@@ -739,24 +741,33 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | (MIRROR_SHEET_FORMAT, true, true, true)
             | (GENERATED_SHEET_FORMAT, true, true, true)
             | (WIRE_END_SHEET_FORMAT, true, true, true)
-            | (PAGE_SHEET_FORMAT, true, true, true) => {}
+            | (PAGE_SHEET_FORMAT, true, true, true)
+            | (BUS_SHEET_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
         if !matches!(
             sheet.format.as_str(),
-            FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
+            FIELDS_SHEET_FORMAT
+                | TEXT_LAYOUT_FORMAT
+                | MIRROR_SHEET_FORMAT
+                | GENERATED_SHEET_FORMAT
+                | WIRE_END_SHEET_FORMAT
+                | PAGE_SHEET_FORMAT
+                | BUS_SHEET_FORMAT
         ) && sheet.symbols.iter().any(|s| s.field_layout.is_some())
         {
             return Err(format!("{}: field appearance requires sheet format 4", reference.file));
         }
-        if !matches!(sheet.format.as_str(), MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT)
-            && sheet.symbols.iter().any(|s| s.mirrored.is_some())
+        if !matches!(
+            sheet.format.as_str(),
+            MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT | BUS_SHEET_FORMAT
+        ) && sheet.symbols.iter().any(|s| s.mirrored.is_some())
         {
             return Err(format!("{}: mirrored placements require sheet format 6", reference.file));
         }
         if !matches!(
             sheet.format.as_str(),
-            TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
+            TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT | BUS_SHEET_FORMAT
         ) && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some()))
         {
             return Err(format!("{}: net-name appearance requires sheet format 5", reference.file));
@@ -764,7 +775,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         if sheet.format == GENERATED_SHEET_FORMAT && sheet.generated_legs.as_ref().is_none_or(|records| records.is_empty()) {
             return Err(format!("{}: sheet format 7 requires generated contact legs", reference.file));
         }
-        if !matches!(sheet.format.as_str(), GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT) && sheet.generated_legs.is_some() {
+        if !matches!(sheet.format.as_str(), GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT | BUS_SHEET_FORMAT)
+            && sheet.generated_legs.is_some()
+        {
             return Err(format!("{}: generated contact legs require sheet format 7", reference.file));
         }
         if let Some(records) = &sheet.generated_legs {
@@ -785,7 +798,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 }
             }
         }
-        if sheet.format == WIRE_END_SHEET_FORMAT || (sheet.format == PAGE_SHEET_FORMAT && sheet.no_connect_ends.is_some()) {
+        if sheet.format == WIRE_END_SHEET_FORMAT
+            || (matches!(sheet.format.as_str(), PAGE_SHEET_FORMAT | BUS_SHEET_FORMAT) && sheet.no_connect_ends.is_some())
+        {
             let records = sheet.no_connect_ends.as_ref().ok_or("Sheet format 8 requires no-connect wire ends.")?;
             let unique: BTreeSet<_> = records.iter().copied().collect();
             let junctions: BTreeSet<_> = sheet.junctions.iter().map(|junction| junction.id).collect();
@@ -799,15 +814,21 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         } else if sheet.no_connect_ends.is_some() {
             return Err("No-connect wire ends require sheet format 8.".into());
         }
-        if (sheet.format == PAGE_SHEET_FORMAT) != sheet.page.is_some() {
-            return Err(format!("{}: sheet format 9 and only sheet format 9 requires paper", reference.file));
+        if (sheet.format == PAGE_SHEET_FORMAT && sheet.page.is_none())
+            || (!matches!(sheet.format.as_str(), PAGE_SHEET_FORMAT | BUS_SHEET_FORMAT) && sheet.page.is_some())
+        {
+            return Err(format!("{}: sheet format 9 requires paper, and only sheet formats 9 and 16 may record it", reference.file));
+        }
+        let buses = sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.style == crate::net_labels::Style::Bus));
+        if (sheet.format == BUS_SHEET_FORMAT) != buses {
+            return Err(format!("{}: bus labels require sheet format 16, and sheet format 16 requires a bus label", reference.file));
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
         metadata.page =
             sheet.page.clone().map(crate::sheets::page::Page::try_from).transpose().map_err(|error| format!("{}: {error}", reference.file))?;
         if let Some(parameters) = sheet.parameters.take() {
-            if sheet.format != PAGE_SHEET_FORMAT || parameters.is_empty() {
-                return Err(format!("{}: sheet parameters require sheet format 9 and a nonempty list", reference.file));
+            if sheet.page.is_none() || parameters.is_empty() {
+                return Err(format!("{}: sheet parameters require sheet paper and a nonempty list", reference.file));
             }
             crate::parameters::check(&parameters, crate::parameters::Scope::Sheet).map_err(|error| format!("{}: {error}", reference.file))?;
             metadata.parameters = Arc::new(parameters);
@@ -885,6 +906,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 | GENERATED_SHEET_FORMAT
                 | WIRE_END_SHEET_FORMAT
                 | PAGE_SHEET_FORMAT
+                | BUS_SHEET_FORMAT
         ) || sheet.id != reference.id
         {
             return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
@@ -2663,7 +2685,8 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
 /// provenance version 7; wire-end intent uses version 8. Paper uses version 9, a superset of 8
 /// whose generated-leg and wire-end arrays are optional. Every sheet with paper is version 9;
 /// only a sheet decoded from an older version and not yet adopted keeps its earlier version.
-/// Versions 4 through 9 retain all three hierarchy/named arrays, including when empty.
+/// A sheet holding a vector bus label uses version 16, a superset of 9 whose paper is optional.
+/// Versions 4 through 9 and 16 retain all three hierarchy/named arrays, including when empty.
 /// Write a nonempty parameter list as a top-level field, one parameter per line so a changed
 /// value changes one line. An empty list writes nothing.
 fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Parameters) -> Result<(), String> {
@@ -2679,6 +2702,8 @@ fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Paramet
     Ok(())
 }
 
+/// Write a sheet's opening fields and return its format version: the lowest version that can
+/// hold the sheet's contents, so a sheet keeps its old format until it gains a newer feature.
 fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<u8, String> {
     let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
     let fields = sheet.symbols.iter().any(|s| !s.field_layout.is_empty());
@@ -2686,7 +2711,10 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
     let mirrored = sheet.symbols.iter().any(|s| s.mirrored);
     let generated = sheet.has_live_generated_legs();
     let ends = !sheet.no_connect_ends.is_empty();
-    let format = if sheet.page.is_some() {
+    let buses = sheet.net_labels.iter().any(|l| l.style == crate::net_labels::Style::Bus);
+    let format = if buses {
+        BUS_SHEET_FORMAT
+    } else if sheet.page.is_some() {
         PAGE_SHEET_FORMAT
     } else if ends {
         WIRE_END_SHEET_FORMAT

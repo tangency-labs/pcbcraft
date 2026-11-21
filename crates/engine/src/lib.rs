@@ -72,7 +72,13 @@ const NET_STYLE: Param = Param {
     name: "style",
     kind: ParamKind::NetLabelStyle,
     required: true,
-    summary: "Local sheet label or global text label; power symbols use schematic.place_symbol.",
+    summary: "Local sheet label, global text label, or a sheet-local bus label such as D[0..7] naming members D0 to D7; power symbols use schematic.place_symbol.",
+};
+const PASTE_STYLE: Param = Param {
+    name: "style",
+    kind: ParamKind::PasteLabelStyle,
+    required: true,
+    summary: "Local sheet label or global text label for every pasted line.",
 };
 const NET_OBJECT: Param = Param { name: "id", kind: ParamKind::NetLabelId, required: true, summary: "Stable label ID from inspection." };
 const NET_ROTATION: Param =
@@ -110,6 +116,7 @@ enum ParamKind {
     ReferenceText,
     TextLayout,
     NetLabelStyle,
+    PasteLabelStyle,
     NetLabelId,
     LibrarySource,
     LibraryDocuments,
@@ -351,7 +358,8 @@ impl ParamKind {
                 "net_labels": {"type":"array", "maxItems":net_labels::MAX_LABELS, "uniqueItems":true, "items":Self::NetLabelId.schema()},
                 "no_connects": {"type":"array", "maxItems":no_connect::MAX_MARKERS, "uniqueItems":true, "items":Self::PartTerminal.schema()}
             }, "required":["symbols","wires"], "additionalProperties":false}),
-            Self::NetLabelStyle => json!({"type":"string","enum":["local","global"]}),
+            Self::NetLabelStyle => json!({"type":"string","enum":["local","global","bus"]}),
+            Self::PasteLabelStyle => json!({"type":"string","enum":["local","global"]}),
             Self::NetLabelId => json!({"type":"string","pattern":"^net-label-[1-9][0-9]*$"}),
             Self::Name | Self::Text => json!({"type": "string"}),
             Self::BoardRotation => json!({"type":"integer", "minimum":0, "maximum":359}),
@@ -757,6 +765,7 @@ impl ParamKind {
             Self::ResolveExistingFootprints if value.is_boolean() => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
             Self::NetLabelStyle if serde_json::from_value::<net_labels::Style>(value.clone()).is_ok() => Ok(()),
+            Self::PasteLabelStyle if matches!(value.as_str(), Some("local" | "global")) => Ok(()),
             Self::NetLabelId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "net-label-")).is_some() => Ok(()),
             Self::Name | Self::Text if value.is_string() => Ok(()),
             Self::SymbolId if value.as_str().and_then(schematic::parse_symbol_id).is_some() => Ok(()),
@@ -800,7 +809,8 @@ impl ParamKind {
             Self::FootprintIds => Err("must contain unique placed footprint IDs within the symbol limit"),
             Self::ResolveExistingFootprints => Err("must be a boolean"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
-            Self::NetLabelStyle => Err("must be local or global"),
+            Self::NetLabelStyle => Err("must be local, global or bus"),
+            Self::PasteLabelStyle => Err("must be local or global"),
             Self::NetLabelId => Err("must identify a named net label"),
             Self::Name | Self::Text => Err("must be a string"),
             Self::SymbolId => Err("must identify a placed symbol"),
@@ -954,6 +964,12 @@ const UPDATE_PLAN_TOKEN: Param = Param {
     summary: "Opaque token returned by the current session's board-update preview",
     kind: ParamKind::Text,
 };
+const LABEL_DRY_RUN: Param = Param {
+    required: false,
+    name: "dry_run",
+    summary: "Validate without editing; return every changed native document before and after, with provisional identities",
+    kind: ParamKind::Flag,
+};
 const AUTO_HEAL: Param = Param {
     required: false,
     name: "auto_heal",
@@ -1019,7 +1035,7 @@ const CATALOG: &[Command] = &[
         summary: "Convert 1–256 plain net-name lines into a portable fragment without editing the destination. Labels are electrical, with explicit scope and spacing.",
         params: &[
             EXPECTED_REVISION,
-            NET_STYLE,
+            PASTE_STYLE,
             Param { name: "text", required: true, kind: ParamKind::ExternalText, summary: "Plain net-name lines, one column" },
             Param { name: "spacing_nm", required: true, kind: ParamKind::Coordinate, summary: "Positive vertical label spacing in nanometers" },
             Param { name: "net_name_suffix", required: false, kind: ParamKind::Text, summary: "Suffix added to every prepared net name" },
@@ -1217,7 +1233,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: net_labels::ADD,
         title: "Place Net Label",
-        summary: "Place a local or global text label. Matching names connect by scope; a label on a pin or wire connects at its anchor. Undoable.",
+        summary: "Place a local, global or bus text label. Matching names connect by scope; a local or global label on a pin or wire connects at its anchor. A bus label such as D[0..7] names members D0 to D7, each joining that name's net on the same sheet. Undoable.",
         params: &[
             NET_NAME,
             NET_STYLE,
@@ -1230,6 +1246,7 @@ const CATALOG: &[Command] = &[
                 kind: ParamKind::TextLayout,
                 summary: "Optional net-name appearance; omission preserves existing text",
             },
+            LABEL_DRY_RUN,
             EXPECTED_REVISION,
         ],
     },
@@ -1257,6 +1274,7 @@ const CATALOG: &[Command] = &[
                 kind: ParamKind::TextLayout,
                 summary: "Optional net-name appearance; omission preserves existing text",
             },
+            LABEL_DRY_RUN,
             EXPECTED_REVISION,
         ],
     },
@@ -1264,7 +1282,7 @@ const CATALOG: &[Command] = &[
         id: net_labels::DELETE,
         title: "Delete Net Label",
         summary: "Remove a named anchor and its directly attached wires. Undoable.",
-        params: &[NET_OBJECT, EXPECTED_REVISION],
+        params: &[NET_OBJECT, LABEL_DRY_RUN, EXPECTED_REVISION],
     },
     Command {
         id: hierarchy::ADD_LABEL,
@@ -2976,7 +2994,7 @@ impl Project {
                 if self.no_connect_ends.contains(&id) { value["no_connect"] = json!(true); }
                 value
             }).collect::<Vec<_>>(),
-            "net_labels": self.net_labels.iter().map(|label| label.inspect()).collect::<Vec<_>>(),
+            "net_labels": self.net_labels.iter().map(|label| self.inspect_net_label(label)).collect::<Vec<_>>(),
             "netlist": self.connectivity().inspect(),
             "sheet_symbols": self.subsheets.iter().map(|block| json!({"id":format!("sheet-symbol-{}",block.id), "child":block.child,"name":self.child_name(block),"at":block.at,"size":self.sheet_symbol_size(block),"pins":self.sheet_pins(block).map(|pin| json!({"endpoint":WireEndpoint::SheetPin(pin.label.id).inspect(),"name":pin.label.name,"direction":pin.label.direction,"at":pin.at})).collect::<Vec<_>>()})).collect::<Vec<_>>(),
             "hierarchical_labels":self.labels.iter().map(|label|json!({"id":format!("label-{}",label.id),"name":label.name,"direction":label.direction,"at":label.at,"endpoint":WireEndpoint::Label(label.id).inspect()})).collect::<Vec<_>>(),
@@ -3465,8 +3483,8 @@ impl Session {
             }
             return Ok(result);
         }
-        if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
-            return self.preview_symbol_fields(params);
+        if is_document_preview(id, params) {
+            return self.preview_edit(id, params);
         }
         if id == annotation::PREVIEW {
             self.validate_project_command(id, params)?;
@@ -3575,8 +3593,8 @@ impl Session {
             self.cut_board(params)?;
             return Ok(self.revision);
         }
-        if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
-            self.preview_symbol_fields(params)?;
+        if is_document_preview(id, params) {
+            self.preview_edit(id, params)?;
             return Ok(self.revision);
         }
         let before = self.revision;
@@ -4199,15 +4217,15 @@ impl Session {
         Ok(())
     }
 
-    /// Validate the ordinary property transaction in a disposable session. Return complete
+    /// Validate a symbol-field or net-label transaction in a disposable session. Return complete
     /// proposed document changes without publishing state or history. Newly allocated net and
     /// capture identities are provisional; a later Apply allocates its own identities.
     /// Ordinary validation precedes encoding; native size limits can still refuse the preview.
-    fn preview_symbol_fields(&self, params: &Value) -> Result<Value, CommandError> {
+    fn preview_edit(&self, id: &str, params: &Value) -> Result<Value, CommandError> {
         let mut candidate = Self { project: self.project.clone(), revision: self.revision, ..Self::default() };
         let mut params = params.clone();
         params["dry_run"] = json!(false);
-        candidate.apply(SET_SYMBOL_FIELDS, &params)?;
+        candidate.apply(id, &params)?;
         let before =
             persistence::encode_documents(self.snapshot().ok_or_else(|| CommandError::Unavailable("Create or open a project first.".into()))?)
                 .map_err(CommandError::InvalidParams)?;
@@ -4609,6 +4627,12 @@ impl Session {
         let previous = self.project.as_ref().filter(|old| old.same_document(&project)).and_then(|old| old.numeric_id_high_water);
         Project::with_allocation_watermark(project, previous)
     }
+}
+
+/// Whether this call is an edit's dry run, answered with the proposed native document changes
+/// instead of a new revision: symbol fields and net labels with `dry_run: true`.
+pub fn is_document_preview(id: &str, params: &Value) -> bool {
+    matches!(id, SET_SYMBOL_FIELDS | net_labels::ADD | net_labels::SET | net_labels::DELETE) && params["dry_run"].as_bool() == Some(true)
 }
 
 /// Generate a persistent document or board-record ID and report unavailable system entropy.
