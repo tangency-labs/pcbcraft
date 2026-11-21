@@ -482,6 +482,7 @@ mod tests {
         multipad_part.package =
             Some(Package { library: Some("basic".into()), definition: "0603".into(), revision: 1, mapping, unconnected_pads: vec!["4".into()] });
         let mut quantity_part = base_part();
+        quantity_part.value = "10000 Ohm".into();
         quantity_part.primary_quantity = Some(Value::Quantity { value: "10000".into(), unit: "Ohm".into() });
 
         let cases = [
@@ -503,7 +504,7 @@ mod tests {
                 project: Uuid::from_u128(1),
                 board: Uuid::from_u128(2),
                 source: source.clone(),
-                components: BTreeMap::from([(1, multipad_part)]),
+                components: BTreeMap::from([(1, multipad_part.clone())]),
                 nets: vec![NetState {
                     display_name: None,
                     terminals: vec![TerminalKey { component: 1, terminal: "1".into() }],
@@ -542,10 +543,10 @@ mod tests {
                 project: Uuid::from_u128(1),
                 board: Uuid::from_u128(2),
                 source,
-                components: BTreeMap::from([(1, base_part())]),
+                components: BTreeMap::from([(1, multipad_part)]),
                 nets: vec![NetState {
-                    display_name: Some("Net-R1-1".into()),
-                    terminals: vec![TerminalKey { component: 1, terminal: "1".into() }],
+                    display_name: Some("Net-R1-2".into()),
+                    terminals: vec![TerminalKey { component: 1, terminal: "2".into() }],
                     names: Vec::new(),
                     origin: Some(NetOrigin::Schematic),
                 }],
