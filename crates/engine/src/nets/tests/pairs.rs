@@ -333,12 +333,19 @@ fn pair_resource_edges_are_bounded_and_history_shares_records() {
     registry.pairs = Arc::new(
         (0..MAX_PAIRS)
             .map(|index| {
+                // Keep the first pair at maximum multibyte length while keeping MAX_RECORDS + MAX_PAIRS
+                // within the 8 MiB serialized registry byte budget.
+                let (name, reason) = if index == 0 {
+                    ("界".repeat(MAX_PAIR_NAME_CHARS), "界".repeat(MAX_PAIR_NAME_CHARS))
+                } else {
+                    (format!("P{index}"), "review".into())
+                };
                 Arc::new(Pair {
                     id: Uuid::from_u128(10_000 + index as u128),
                     positive: Uuid::from_u128(2 * index as u128 + 1),
                     negative: Uuid::from_u128(2 * index as u128 + 2),
-                    name: "界".repeat(MAX_PAIR_NAME_CHARS),
-                    state: PairState::NeedsReview { reason: "界".repeat(MAX_PAIR_NAME_CHARS) },
+                    name,
+                    state: PairState::NeedsReview { reason },
                 })
             })
             .collect(),

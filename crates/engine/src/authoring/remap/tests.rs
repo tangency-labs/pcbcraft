@@ -171,10 +171,13 @@ fn add_ballast(project: &mut crate::Session, sheet: crate::SheetTarget, target: 
 /// Seed adversarial markers in one disposable snapshot rather than warming the named graph
 /// repeatedly through hundreds of intermediate topology commits. Earlier fixtures use real edits.
 fn graph_marker_fixture(project: &Project, target: crate::SheetTarget, at: crate::schematic::Point) -> Project {
+    // Keep a fixed 256-marker ballast so the direct-contact and route fixtures continue to
+    // bracket the remap graph preparation ceiling independently of higher per-sheet label limits.
+    const BALLAST_MARKERS: usize = 256;
     let mut next = project.clone();
     let sheet = Arc::make_mut(&mut next.sheets).iter_mut().find(|sheet| sheet.sheet_id == target.id()).unwrap();
     sheet.net_labels = Arc::new(
-        (0..crate::net_labels::MAX_LABELS)
+        (0..BALLAST_MARKERS)
             .map(|index| crate::net_labels::Label {
                 id: 20_000 + index as u64,
                 name: format!("BALLAST-{index}"),
