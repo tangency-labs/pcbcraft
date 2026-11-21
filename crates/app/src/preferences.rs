@@ -159,8 +159,9 @@ pub struct Preferences {
     pub panel_style: PanelStyle,
     /// Minutes between recovery snapshots of unsaved work, one of
     /// [`INTERVAL_MINUTES`]. They go to the recovery recorder, not the ordinary project save.
-    /// 0 still requests one after a synchronous GUI edit timed by `PcbApp::run` takes at least
-    /// 1.5 s; live/Assistant, direct session and asynchronous edits are not timed by that hook.
+    /// 0, the default, attaches no recorder and records nothing; a long synchronous GUI edit
+    /// requests an early snapshot only when an interval is set (live/Assistant, direct session
+    /// and asynchronous edits are not timed by that hook).
     pub autosave_minutes: u8,
     /// Minutes between automatic saves of a project that already has a folder or `.pc` file,
     /// through the ordinary save; one of [`INTERVAL_MINUTES`]. 0, the default, never saves on
@@ -199,8 +200,9 @@ impl Default for Preferences {
 
 /// The intervals, in minutes, a person may choose for timed snapshots or saves. 0 is Off.
 pub(crate) const INTERVAL_MINUTES: [u8; 4] = [0, 1, 5, 10];
-/// Recovery snapshots are on by default every five minutes, as in SolidCraft.
-const DEFAULT_SNAPSHOT_MINUTES: u8 = 5;
+/// Recovery snapshots are Off by default until PCBCraft can offer the recorded work back after a
+/// crash; until then an entry would only take up space.
+const DEFAULT_SNAPSHOT_MINUTES: u8 = 0;
 
 /// Whether `minutes` is one of the intervals Preferences offers for snapshots and saves.
 pub(crate) fn valid_interval(minutes: u8) -> bool {
@@ -568,7 +570,7 @@ fn saving(ui: &mut Ui, data: &mut PageData<'_>) {
         });
         settings::hint(
             ui,
-            "Records unsaved work in the recovery folder. Off still requests snapshots after slow synchronous editor commands, but not live/Assistant or background edits. Opening recovery entries after a crash is not available yet.",
+            "Keeps a copy of unsaved work in a recovery folder outside the project, renewed at this interval and right after a slow change. Off keeps nothing. Copies left by earlier sessions are removed after 14 days. Restoring a copy after a crash is not available yet.",
         );
     });
     settings::section(ui, "Project", |ui| {
@@ -969,19 +971,18 @@ mod tests {
     }
 
     /// Unoffered u8 intervals reset only that setting; unreadable types reset the whole file.
-    /// Settings saved before these fields existed get snapshots every 5 minutes and no timed
-    /// save.
+    /// Settings saved before these fields existed get neither snapshots nor a timed save.
     #[test]
     fn saving_intervals_keep_only_the_offered_values() {
         let older = Preferences::parse("{\"grid_opacity_percent\":40}");
-        assert_eq!((older.autosave_minutes, older.save_to_project_minutes), (5, 0));
+        assert_eq!((older.autosave_minutes, older.save_to_project_minutes), (0, 0));
         for minutes in [0u8, 1, 5, 10] {
             let parsed = Preferences::parse(&format!("{{\"autosave_minutes\":{minutes},\"save_to_project_minutes\":{minutes}}}"));
             assert_eq!((parsed.autosave_minutes, parsed.save_to_project_minutes), (minutes, minutes));
         }
         for bad in [2u8, 4, 6, 11, 255] {
             let parsed = Preferences::parse(&format!("{{\"autosave_minutes\":{bad},\"grid_opacity_percent\":40}}"));
-            assert_eq!((parsed.autosave_minutes, parsed.grid_opacity_percent), (5, 40), "{bad}");
+            assert_eq!((parsed.autosave_minutes, parsed.grid_opacity_percent), (0, 40), "{bad}");
             let parsed = Preferences::parse(&format!("{{\"save_to_project_minutes\":{bad},\"grid_opacity_percent\":40}}"));
             assert_eq!((parsed.save_to_project_minutes, parsed.grid_opacity_percent), (0, 40), "{bad}");
         }
@@ -1024,13 +1025,13 @@ mod tests {
             selection_follow: SelectionFollow::Both,
             units: Unit::Mm,
             panel_style: PanelStyle::Compact,
-            autosave_minutes: 0,
+            autosave_minutes: 10,
             save_to_project_minutes: 10,
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
             restore_page_defaults(&mut preferences, SAVING);
-            assert_eq!((preferences.autosave_minutes, preferences.save_to_project_minutes), (5, 0));
+            assert_eq!((preferences.autosave_minutes, preferences.save_to_project_minutes), (0, 0));
             assert_eq!(preferences.theme, ThemeChoice::Light, "the Saving reset leaves other pages alone");
         }
         restore_page_defaults(&mut preferences, NAVIGATION);

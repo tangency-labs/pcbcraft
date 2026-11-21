@@ -1526,7 +1526,12 @@ impl PcbApp {
             |ui| {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let Some(notice) = self.autosave.notice() {
-                    ui.label("Recovery warning").on_hover_text(notice);
+                    // The notice is shown in the bar, cut short past 360 points so the grid and
+                    // unit controls keep their room; hovering shows all of it.
+                    ui.scope(|ui| {
+                        ui.set_max_width(ui.available_width().min(360.0));
+                        ui.add(egui::Label::new(shell::error(notice)).truncate()).on_hover_text(notice);
+                    });
                 }
                 // Right to left: units, then grid, then the pointer's coordinates. With no
                 // schematic showing there is nothing to measure, so none of them appear.

@@ -1158,7 +1158,7 @@ mod live {
                 setting("panel_style", "How the ribbon and edge panels are framed", Kind::Choice(PANEL_STYLES)),
                 setting(
                     "autosave_minutes",
-                    "Minutes between recovery snapshot requests in the recovery folder; 0 requests snapshots only after a long operation",
+                    "Minutes between recovery snapshots in the recovery folder; 0 (the default) records nothing",
                     Kind::Minutes,
                 ),
                 setting(

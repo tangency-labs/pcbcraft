@@ -1,5 +1,5 @@
-//! Recovery snapshots go to the per-user recovery folder and never touch the project; the timed
-//! save to the project is off until chosen, then saves through the ordinary Save and is refused
+//! Recovery snapshots are off until chosen, then go to the per-user recovery folder and never
+//! touch the project; the timed save to the project is off until chosen, then saves through the ordinary Save and is refused
 //! like it when the folder changed on disk. Time is driven through the frame clock, so nothing
 //! here waits a real minute.
 
@@ -77,8 +77,9 @@ fn snapshots_never_touch_the_project_and_the_timed_save_is_opt_in() {
     assert_eq!(h.state().session.project().unwrap().name, "Autosave");
     let opened = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let saved = tree(&root);
-    assert_eq!(h.state().preferences.autosave_minutes, 5, "snapshots are on by default");
+    assert_eq!(h.state().preferences.autosave_minutes, 0, "snapshots are off by default");
     assert_eq!(h.state().preferences.save_to_project_minutes, 0, "saving to the project is off by default");
+    assert!(h.state().recovery_entry().is_none(), "nothing records while snapshots are off");
     let ctx = h.ctx.clone();
     h.state_mut().run_window_command(&ctx, "app.set_preferences", &json!({"autosave_minutes": 1})).unwrap();
     run_at(&mut h, 70.0);
@@ -229,24 +230,25 @@ fn a_dialog_and_a_running_save_hold_back_the_timed_save() {
     assert_eq!(pcbcraft_storage::load(&root).unwrap(), encode_documents(h.state().session.snapshot().unwrap()).unwrap());
 }
 
-/// An edit that runs for a long time is followed by a snapshot at once, even with timed
-/// snapshots Off; with nothing changed, Off writes nothing.
+/// An edit that runs for a long time is followed by a snapshot at once, without waiting for
+/// the interval; an ordinary edit waits for it.
 #[test]
-fn a_long_operation_takes_a_snapshot_when_snapshots_are_off() {
+fn a_long_operation_takes_a_snapshot_before_the_interval() {
     let work = tempfile::tempdir().unwrap();
     let mut h = harness();
     h.state_mut().autosave.dir = Some(work.path().to_path_buf());
-    h.state_mut().preferences.autosave_minutes = 0;
+    h.state_mut().preferences.autosave_minutes = 10;
     h.state_mut().start_new_project();
     run_at(&mut h, 1.0);
     let created = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     assert_eq!(snapshot_documents(&h), created);
     place(&mut h, 0);
-    run_at(&mut h, 10_000.0);
-    assert_eq!(snapshot_documents(&h), created, "Off waits for a long operation");
+    run_at(&mut h, 2.0);
+    run_at(&mut h, 60.0);
+    assert_eq!(snapshot_documents(&h), created, "an ordinary edit waits for the interval");
     place(&mut h, 20);
     h.state_mut().autosave.command_took(pcbcraft_storage::recovery::LONG_OPERATION);
-    run_at(&mut h, 10_001.0);
+    run_at(&mut h, 61.0);
     assert_eq!(snapshot_documents(&h), encode_documents(h.state().session.snapshot().unwrap()).unwrap());
     eframe::App::on_exit(h.state_mut());
 }
@@ -257,7 +259,7 @@ fn a_long_operation_without_a_change_does_not_make_a_later_edit_urgent() {
     let work = tempfile::tempdir().unwrap();
     let mut h = harness();
     h.state_mut().autosave.dir = Some(work.path().to_path_buf());
-    h.state_mut().preferences.autosave_minutes = 0;
+    h.state_mut().preferences.autosave_minutes = 10;
     h.state_mut().start_new_project();
     run_at(&mut h, 1.0);
     let created = snapshot_documents(&h);
@@ -269,11 +271,54 @@ fn a_long_operation_without_a_change_does_not_make_a_later_edit_urgent() {
     eframe::App::on_exit(h.state_mut());
 }
 
+/// The names of the files in `dir`.
+fn file_names(dir: &Path) -> Vec<String> {
+    let mut names: Vec<_> = std::fs::read_dir(dir).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    names.sort();
+    names
+}
+
+/// Off attaches no recorder and writes nothing, even after a long operation; turning snapshots
+/// Off removes the running project's entry.
+#[test]
+fn snapshots_off_record_nothing_and_remove_the_entry() {
+    let work = tempfile::tempdir().unwrap();
+    let mut h = harness();
+    h.state_mut().autosave.dir = Some(work.path().to_path_buf());
+    assert_eq!(h.state().preferences.autosave_minutes, 0, "Off by default");
+    h.state_mut().start_new_project();
+    run_at(&mut h, 1.0);
+    place(&mut h, 0);
+    h.state_mut().autosave.command_took(pcbcraft_storage::recovery::LONG_OPERATION);
+    run_at(&mut h, 2.0);
+    run_at(&mut h, 10_000.0);
+    assert!(h.state().recovery_entry().is_none());
+    assert!(file_names(work.path()).is_empty(), "nothing is written with snapshots Off");
+
+    let ctx = h.ctx.clone();
+    h.state_mut().run_window_command(&ctx, "app.set_preferences", &json!({"autosave_minutes": 5})).unwrap();
+    run_at(&mut h, 10_001.0);
+    let (_, id) = h.state().recovery_entry().unwrap();
+    h.state().sync_recovery().unwrap();
+    assert!(work.path().join(format!("{id}.pc")).exists());
+
+    h.state_mut().run_window_command(&ctx, "app.set_preferences", &json!({"autosave_minutes": 0})).unwrap();
+    run_at(&mut h, 10_002.0);
+    assert!(h.state().recovery_entry().is_none());
+    if let Some(finished) = h.state_mut().wait_for_recovery_retirement() {
+        finished.unwrap();
+    }
+    assert_eq!(file_names(work.path()), [".entries.lock"], "turning Off removes the entry");
+    assert_eq!(h.state().autosave.notice(), None);
+    eframe::App::on_exit(h.state_mut());
+}
+
 /// Replacing the open project starts a new entry and removes the old one off the frame.
 #[test]
 fn replacing_the_project_removes_its_entry_in_the_background() {
     let work = tempfile::tempdir().unwrap();
     let mut h = harness();
+    h.state_mut().preferences.autosave_minutes = 5;
     h.state_mut().autosave.dir = Some(work.path().to_path_buf());
     h.state_mut().start_new_project();
     run_at(&mut h, 1.0);
@@ -319,6 +364,7 @@ fn only_an_approved_exit_discards_recovery() {
         pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
         let mut h = harness();
         h.state_mut().autosave.dir = Some(dir.clone());
+        h.state_mut().preferences.autosave_minutes = 5;
         let rev = h.state().session.revision();
         h.state_mut().files.open_path_for_test(&root.join("project.json"), rev);
         run_at(&mut h, 1.0);
@@ -354,6 +400,7 @@ fn closing_without_waiting_for_a_save_keeps_recovery() {
     pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
     let mut h = harness();
     h.state_mut().autosave.dir = Some(dir.clone());
+    h.state_mut().preferences.autosave_minutes = 5;
     let rev = h.state().session.revision();
     h.state_mut().files.open_path_for_test(&root.join("project.json"), rev);
     run_at(&mut h, 1.0);
@@ -409,7 +456,7 @@ fn a_logic_only_pass_retries_recovery_without_another_edit() {
     std::fs::write(&dir, b"not a directory").unwrap();
     let mut h = harness();
     h.state_mut().autosave.dir = Some(dir.clone());
-    h.state_mut().preferences.autosave_minutes = 0;
+    h.state_mut().preferences.autosave_minutes = 10;
     h.state_mut().start_new_project();
     let ctx = h.ctx.clone();
     h.state_mut().native_project_tick(&ctx, Duration::ZERO);
@@ -469,4 +516,107 @@ fn interval_settings_take_only_the_offered_minutes() {
             assert_eq!(h.state().preferences, before, "{name} {bad}");
         }
     }
+}
+
+/// Open Preferences on the Saving page through the app bar and the page list.
+fn open_saving_page(h: &mut Harness<'_, PcbApp>) {
+    click(h, "Preferences");
+    // The page list is left of the page heading of the same name.
+    h.get_all_by_label("Saving").min_by(|a, b| a.rect().left().total_cmp(&b.rect().left())).unwrap().click();
+    h.run();
+    assert!(h.query_by_label("Recovery snapshots").is_some());
+}
+
+/// The segment `label` in the Saving page's `row`: 0 for Recovery snapshots, 1 for Save to project.
+fn interval_segment<'a>(h: &'a Harness<'_, PcbApp>, row: usize, label: &'a str) -> egui_kittest::Node<'a> {
+    let mut segments: Vec<_> = h.get_all_by_label(label).collect();
+    assert_eq!(segments.len(), 2, "{label} appears once in each row");
+    segments.sort_by(|a, b| a.rect().top().total_cmp(&b.rect().top()));
+    segments.swap_remove(row)
+}
+
+fn intervals(h: &Harness<'_, PcbApp>) -> (u8, u8) {
+    (h.state().preferences.autosave_minutes, h.state().preferences.save_to_project_minutes)
+}
+
+fn apply_enabled(h: &Harness<'_, PcbApp>) -> bool {
+    !h.get_by_label("Apply").accesskit_node().is_disabled()
+}
+
+/// Preferences → Saving changes nothing until Apply or OK; Cancel drops an unapplied choice and
+/// Restore page defaults turns both intervals Off again.
+#[test]
+fn the_saving_page_takes_effect_only_on_apply() {
+    let mut h = harness();
+    open_saving_page(&mut h);
+    assert!(!apply_enabled(&h));
+    interval_segment(&h, 0, "5 min").click();
+    h.run();
+    interval_segment(&h, 1, "10 min").click();
+    h.run();
+    assert!(apply_enabled(&h), "a changed interval enables Apply");
+    assert_eq!(intervals(&h), (0, 0), "nothing changes before Apply");
+    click(&mut h, "Apply");
+    assert_eq!(intervals(&h), (5, 10));
+    assert!(!apply_enabled(&h));
+
+    interval_segment(&h, 0, "1 min").click();
+    h.run();
+    assert!(apply_enabled(&h));
+    click(&mut h, "Cancel");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(intervals(&h), (5, 10), "Cancel drops the unapplied choice");
+
+    open_saving_page(&mut h);
+    click(&mut h, "Restore page defaults");
+    assert!(apply_enabled(&h));
+    assert_eq!(intervals(&h), (5, 10), "defaults are a draft until applied");
+    click(&mut h, "OK");
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(intervals(&h), (0, 0), "both are Off by default");
+}
+
+/// Each interval segment takes keyboard focus and is chosen with Space.
+#[test]
+fn the_saving_intervals_work_from_the_keyboard() {
+    let mut h = harness();
+    open_saving_page(&mut h);
+    interval_segment(&h, 0, "10 min").focus();
+    h.run();
+    assert!(interval_segment(&h, 0, "10 min").is_focused());
+    h.key_press(Key::Space);
+    h.run();
+    assert!(apply_enabled(&h), "Space chose the focused interval");
+    click(&mut h, "OK");
+    assert_eq!(intervals(&h), (10, 0));
+}
+
+/// When recovery cannot be recorded the status bar says so in words, and the notice goes once a
+/// retry succeeds.
+#[test]
+fn the_status_bar_says_when_unsaved_work_is_not_kept() {
+    const SHOWN: &str = "Unsaved work isn’t being kept";
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("blocked");
+    std::fs::write(&dir, b"not a directory").unwrap();
+    let mut h = harness();
+    h.state_mut().autosave.dir = Some(dir.clone());
+    h.state_mut().preferences.autosave_minutes = 10;
+    h.state_mut().start_new_project();
+    run_at(&mut h, 1.0);
+    assert!(h.state().sync_recovery().unwrap_err().contains("Could not create the recovery folder"));
+    run_at(&mut h, 2.0);
+    run_at(&mut h, 2.5);
+    let notice = h.state().autosave.notice().unwrap().to_owned();
+    assert!(notice.starts_with("Unsaved work isn’t being kept for recovery: Could not create the recovery folder"), "{notice}");
+    assert!(h.query_by_label_contains(SHOWN).is_some(), "the reason is shown in the status bar, not only on hover");
+
+    std::fs::remove_file(&dir).unwrap();
+    run_at(&mut h, 7.5);
+    h.state().sync_recovery().unwrap();
+    run_at(&mut h, 8.0);
+    run_at(&mut h, 8.5);
+    assert_eq!(h.state().autosave.notice(), None);
+    assert!(h.query_by_label_contains(SHOWN).is_none());
+    eframe::App::on_exit(h.state_mut());
 }

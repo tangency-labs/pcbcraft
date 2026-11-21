@@ -14,13 +14,16 @@ use pcbcraft_engine::{
     Project, Session,
     edits::{CommittedEdit, EditObserver},
 };
-use pcbcraft_storage::recovery::{self, JournalRecorder, RecorderExit, Schedule};
+use pcbcraft_storage::recovery::{self, JournalRecorder, RecorderExit, RecorderOptions, Retention, Schedule};
 
 use crate::{Dialog, PcbApp};
 
 const HELD_RECHECK: Duration = Duration::from_millis(500);
 const RETRY: Duration = Duration::from_secs(5);
 const EXIT_BUDGET: Duration = Duration::from_secs(2);
+/// Entries left by earlier runs that no running window holds are kept this long, and at most
+/// this many, until the startup offer to restore them exists.
+const RETENTION: Retention = Retention { max_age: Duration::from_secs(14 * 24 * 60 * 60), max_entries: 16 };
 
 /// A recorder sees only its attached project. File opens invalidate it synchronously, including
 /// same-UUID opens; cross-project edits or Undo/Redo also invalidate it before anything is queued.
@@ -138,7 +141,7 @@ impl PcbApp {
         }
         if let Some(recorder) = &autosave.recorder {
             let fault = recorder.writer.fault();
-            autosave.notice = fault.as_ref().map(|fault| format!("Recovery unavailable: {}", fault.message));
+            autosave.notice = fault.as_ref().map(|fault| format!("Unsaved work isn’t being kept for recovery: {}", fault.message));
             let removed = fault.as_ref().is_some_and(|fault| fault.removed);
             if removed {
                 autosave.retry_at = None;
@@ -193,8 +196,10 @@ impl PcbApp {
 
     /// Detach an outgoing observer before retiring it. If retirement stalls we don't multiply
     /// workers; when it completes, attach to the newest state, not to an obsolete intermediate
-    /// project. A failed worker spawn is retried even without a new edit.
+    /// project. A failed worker spawn is retried even without a new edit. With snapshots Off no
+    /// recorder is attached, and turning them Off removes this window's entry.
     fn follow_project(&mut self, ctx: &egui::Context, now: Duration) {
+        let enabled = self.preferences.autosave_minutes > 0;
         let autosave = &mut self.autosave;
         if !autosave.resolved {
             autosave.resolved = true;
@@ -202,7 +207,7 @@ impl PcbApp {
                 autosave.dir = recovery::default_dir();
             }
         }
-        let target = self.session.project().map(|project| (project.id(), self.session.history_root_revision()));
+        let target = self.session.project().filter(|_| enabled).map(|project| (project.id(), self.session.history_root_revision()));
         if let Some(recorder) = &autosave.recorder {
             if target == Some((recorder.id, recorder.root)) && !recorder.obsolete.load(Ordering::Relaxed) {
                 return;
@@ -217,11 +222,16 @@ impl PcbApp {
         }
         if let Some(retiring) = &autosave.retiring {
             let Some(result) = retiring.poll() else {
-                autosave.notice = Some("Recovery waiting for the previous project’s recorder".into());
+                autosave.notice = enabled.then(|| "Recovery resumes when the previous project finishes closing.".into());
                 return;
             };
             log_retire(result);
             autosave.retiring = None;
+        }
+        if !enabled {
+            autosave.notice = None;
+            autosave.retry_at = None;
+            return;
         }
         let (Some(project), Some((id, root)), Some(dir)) = (self.session.project(), target, autosave.dir.clone()) else { return };
         if autosave.retry_at.is_some_and(|retry| now < retry) || self.close_allowed {
@@ -229,7 +239,8 @@ impl PcbApp {
         }
         let entry = recovery::new_entry_id(project);
         let wake = ctx.clone();
-        match JournalRecorder::start_notifying(dir, entry, move || wake.request_repaint_of(egui::ViewportId::ROOT)) {
+        let options = RecorderOptions { coalesce_edits: true, retention: Some(RETENTION) };
+        match JournalRecorder::start_with(dir, entry, options, move || wake.request_repaint_of(egui::ViewportId::ROOT)) {
             Ok(writer) => {
                 let recorder = Arc::new(ProjectRecorder { id, root, obsolete: AtomicBool::new(false), writer });
                 self.session.observe_edits(Some(recorder.clone()));
@@ -238,7 +249,7 @@ impl PcbApp {
                 autosave.notice = None;
             }
             Err(error) => {
-                autosave.notice = Some(format!("Recovery unavailable: {error}"));
+                autosave.notice = Some(format!("Unsaved work isn’t being kept for recovery: {error}"));
                 autosave.retry_at = Some(now.saturating_add(RETRY));
             }
         }
