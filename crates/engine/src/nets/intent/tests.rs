@@ -280,7 +280,7 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
         }
         refused(
             &altered(&both, ENTRY_POINT, |v| {
-                v["net_classes"]["definitions"][0]["authored_intent"]["voltage"]["reference"]["net"] = json!(Uuid::nil());
+                v["net_classes"]["definitions"][0]["authored_intent"]["voltage"]["reference"] = json!({"kind":"net","net":Uuid::nil()});
             }),
             "distinct reference",
         );
@@ -748,12 +748,21 @@ fn wire(session: &mut Session, a: &Value, b: &Value) -> String {
     session.project().unwrap().wires().last().unwrap().id()
 }
 
-/// Promote the network of one terminal and return its persistent net target.
+/// Promote the network of one terminal and return its persistent net target. Connecting pins
+/// already numbers the net and promotion is idempotent, so the identity is the active record on
+/// the terminal's network, found as the registry tests find it.
 fn promoted(session: &mut Session, pin: &Value) -> Value {
-    let before: Vec<_> = session.project().unwrap().net_registry.records.iter().map(|record| record.id).collect();
     apply(session, crate::nets::PROMOTE, json!({"anchor":pin}));
     let project = session.project().unwrap();
-    let net = project.net_registry.records.iter().map(|record| record.id).find(|id| !before.contains(id)).unwrap();
+    let graph = crate::nets::graph::Graph::build(project).unwrap();
+    let network = graph.network(&graph.target(project.sheet_target(), pin).unwrap());
+    let net = project
+        .net_registry
+        .records
+        .iter()
+        .find(|record| matches!(record.state, State::Active {}) && graph.network(&record.primary) == network)
+        .unwrap()
+        .id;
     json!({"kind":"net","address":NetAddress { project: project.id(), scope: project.net_scope(), net }})
 }
 
