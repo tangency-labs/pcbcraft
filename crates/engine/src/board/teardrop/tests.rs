@@ -961,6 +961,7 @@ mod regeneration {
             }
             baseline.nets.sort_by(|left, right| left.terminals.cmp(&right.terminals));
         }
+        project.numeric_id_high_water = Some(project.allocation_high_water());
         let saved = encode_documents(Arc::new(project)).unwrap();
         session.open_snapshot(decode_documents(&saved).unwrap());
         session.apply("project.rename", &json!({"name":"Large baseline board"})).unwrap();
@@ -1247,6 +1248,7 @@ mod regeneration {
             baseline.nets.sort_by(|left, right| left.terminals.cmp(&right.terminals));
         }
 
+        project.numeric_id_high_water = Some(project.allocation_high_water());
         let saved = encode_documents(Arc::new(project)).unwrap();
         session.open_snapshot(decode_documents(&saved).unwrap());
         session.apply("project.rename", &json!({"name":"Single wide baseline net"})).unwrap();
