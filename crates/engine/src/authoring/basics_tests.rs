@@ -164,7 +164,7 @@ fn metadata_omission_preserves_category_while_null_clears_it() {
     }
 }
 
-/// Done test: a 26 x 26 BGA (0.8 mm pitch, JEDEC skip set on per JEDEC JEP95 / IPC-SM-782A §14.1.3)
+/// Done test: a 26 x 26 BGA (0.8 mm pitch, JEDEC skip set on per IPC-SM-782A Section 14.0 ¶4.5 / IPC-7351 §14.2.5)
 /// generates A1..AF26 in one undoable step, previews via dry run, round-trips through save/reopen,
 /// maps every ball to a matching terminal, and lists pads in natural order (A2 before A10, Y26 before AA1).
 #[test]
