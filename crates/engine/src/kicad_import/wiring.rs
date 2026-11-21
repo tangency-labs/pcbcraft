@@ -40,7 +40,8 @@ pub(super) fn segments(wires: &[Vec<Point>]) -> Result<Vec<Segment>, Point> {
 }
 
 /// Split every segment at each point in `cuts` that lies inside it, plus every other segment's
-/// end that does: the pieces connect there in KiCad. Points are indexed by line, so the work
+/// end that does: the pieces connect there in KiCad. Overlapping runs on one line are merged
+/// first, since every point inside them is shared; points are indexed by line, so the work
 /// follows the number of segments and points rather than their product.
 pub(super) fn split(segments: &[Segment], cuts: &BTreeSet<Point>) -> Vec<Segment> {
     let mut on_x: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
@@ -49,23 +50,44 @@ pub(super) fn split(segments: &[Segment], cuts: &BTreeSet<Point>) -> Vec<Segment
         on_x.entry(p.x_nm).or_default().insert(p.y_nm);
         on_y.entry(p.y_nm).or_default().insert(p.x_nm);
     }
-    let mut out = BTreeSet::new();
+    // Each line's runs as (start, end) along it; segments are ordered from their lesser end.
+    let mut vertical: BTreeMap<i64, Vec<(i64, i64)>> = BTreeMap::new();
+    let mut horizontal: BTreeMap<i64, Vec<(i64, i64)>> = BTreeMap::new();
     for &(a, b) in segments {
-        // Segments are ordered from their lesser end, so `a` comes first along the line.
-        let mut stops = vec![a];
         if a.x_nm == b.x_nm {
-            let inside = on_x.get(&a.x_nm).into_iter().flat_map(|ys| ys.range(a.y_nm + 1..b.y_nm));
-            stops.extend(inside.map(|&y| Point { x_nm: a.x_nm, y_nm: y }));
+            vertical.entry(a.x_nm).or_default().push((a.y_nm, b.y_nm));
         } else {
-            let inside = on_y.get(&a.y_nm).into_iter().flat_map(|xs| xs.range(a.x_nm + 1..b.x_nm));
-            stops.extend(inside.map(|&x| Point { x_nm: x, y_nm: a.y_nm }));
-        }
-        stops.push(b);
-        for pair in stops.windows(2) {
-            out.insert((pair[0], pair[1]));
+            horizontal.entry(a.y_nm).or_default().push((a.x_nm, b.x_nm));
         }
     }
-    out.into_iter().collect()
+    let mut out = Vec::new();
+    for (lines, points, vertical) in [(&mut vertical, &on_x, true), (&mut horizontal, &on_y, false)] {
+        for (line, runs) in lines.iter_mut() {
+            let at = |along: i64| if vertical { Point { x_nm: *line, y_nm: along } } else { Point { x_nm: along, y_nm: *line } };
+            for (start, end) in merged(runs) {
+                let inside = points.get(line).into_iter().flat_map(|stops| stops.range(start..=end));
+                let stops: Vec<i64> = inside.copied().collect();
+                for pair in stops.windows(2) {
+                    out.push((at(pair[0]), at(pair[1])));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Overlapping or touching runs on one line as single runs, in order.
+fn merged(runs: &mut [(i64, i64)]) -> Vec<(i64, i64)> {
+    runs.sort_unstable();
+    let mut out: Vec<(i64, i64)> = Vec::new();
+    for &(start, end) in runs.iter() {
+        match out.last_mut() {
+            Some(last) if start <= last.1 => last.1 = last.1.max(end),
+            _ => out.push((start, end)),
+        }
+    }
+    out
 }
 
 /// Join pieces into routes. A route ends at every point in `stops` (pins, labels, junction dots

@@ -200,3 +200,15 @@ fn symbol_text_angles_read_tenths_unless_only_degrees_make_a_quarter_turn() {
     assert_eq!(angles, [90_000, 90_000, 45_500]);
     assert_eq!(s.texts[0].rotation_mdeg, 90_000);
 }
+
+#[test]
+fn symbols_extending_one_parent_share_its_drawing() {
+    let pins: String = (0..1000).map(|i| format!("(pin passive line (at 0 {i} 0) (length 1) (number \"{i}\"))")).collect();
+    let derived: String = (0..2000).map(|i| format!("(symbol \"L:D{i}\" (extends \"L:Base\"))")).collect();
+    let s = read_schematic(&file(&format!("(lib_symbols (symbol \"L:Base\" (symbol \"Base_1_1\" {pins})) {derived})"))).unwrap();
+    assert_eq!(s.lib_symbols.len(), 2001);
+    // One drawing, held once: every derived symbol points at the base's.
+    let base = &s.lib_symbols["L:Base"].units;
+    assert!(s.lib_symbols.values().all(|symbol| Arc::ptr_eq(&symbol.units, base)));
+    assert_eq!(base[0].pins.len(), 1000);
+}

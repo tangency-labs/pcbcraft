@@ -182,12 +182,13 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     for (what, count) in schematic.lost.iter() {
         refusals.add(if count > 1 { format!("{what} ({count}×)") } else { what.to_owned() });
     }
-    // Power flags only tell KiCad's electrical rules check that a net is driven; they have no
-    // part or connection of their own, so they are left out rather than refusing their contacts.
-    let before = schematic.symbols.len();
+    // Power flags only tell KiCad's electrical rules check that a net is driven and have no part
+    // of their own, so they are left out; one whose pin joins wires that would otherwise stay
+    // apart is refused below.
     let lib_symbols = &schematic.lib_symbols;
+    let flags: Vec<PlacedSymbol> = schematic.symbols.iter().filter(|s| lib_symbols.get(&s.lib_symbol).is_some_and(is_power_flag)).cloned().collect();
     schematic.symbols.retain(|s| !lib_symbols.get(&s.lib_symbol).is_some_and(is_power_flag));
-    report.add("power flags (KiCad electrical-rules markers) left out", before - schematic.symbols.len());
+    report.add("power flags (KiCad electrical-rules markers) left out", flags.len());
     for (count, limit, what) in
         [(schematic.symbols.len(), MAX_SYMBOLS, "placed symbols"), (schematic.labels.len(), crate::net_labels::MAX_LABELS, "labels")]
     {
@@ -238,6 +239,11 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
             Vec::new()
         }
     };
+    if !flags.is_empty() && segments.len() <= MAX_WIRE_PIECES {
+        for flag in flags_that_join(&schematic, &flags, &segments, &converted)? {
+            refusals.add(format!("power flag {flag} sits on a crossing without a dot and joins its wires; left out, they would come apart"));
+        }
+    }
     if segments.len() > MAX_WIRE_PIECES {
         return Err(CommandError::CapExceeded(format!(
             "This KiCad schematic has {} wire pieces; an import takes at most {MAX_WIRE_PIECES} for now.",
@@ -252,6 +258,99 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     let project = builder.session.snapshot().ok_or_else(|| CommandError::InvalidParams("the imported project is missing".into()))?;
     check_nets(&schematic, &segments, &placed, &converted, &project)?;
     Ok(Imported { project, report })
+}
+
+/// The order to place symbols in: first every symbol that keeps its KiCad reference, then the
+/// ones numbered automatically (unannotated, invalid, a copy of a unit already placed, or a
+/// reference another library symbol claimed first). Automatic numbers then can't take a
+/// reference a later symbol keeps. Each group stays in file order.
+fn placement_order(schematic: &Schematic) -> Vec<usize> {
+    let mut claimed: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut units: BTreeSet<(&str, u32)> = BTreeSet::new();
+    let (mut keep, mut renumber) = (Vec::new(), Vec::new());
+    for (index, symbol) in schematic.symbols.iter().enumerate() {
+        let reference = symbol.reference.as_str();
+        let keeps = !reference.ends_with('?')
+            && check_reference(reference).is_ok()
+            && *claimed.entry(reference).or_insert(symbol.lib_symbol.as_str()) == symbol.lib_symbol
+            && units.insert((reference, symbol.unit));
+        if keeps { keep.push(index) } else { renumber.push(index) }
+    }
+    keep.extend(renumber);
+    keep
+}
+
+/// The file's nets as groups of `(symbol index, pin number)`, worked out from its geometry with
+/// [`wiring::kicad_nets`], with `extra` pins (keyed past the placed symbols) joining in too.
+fn file_nets(
+    schematic: &Schematic,
+    segments: &[wiring::Segment],
+    converted: &BTreeMap<&str, symbols::Converted>,
+    extra: &[(usize, String, Point)],
+) -> Result<BTreeSet<BTreeSet<(usize, String)>>, CommandError> {
+    let mut contacts = wiring::Contacts { pins: Vec::new(), labels: Vec::new(), power: Vec::new() };
+    let mut cuts: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).collect();
+    for (index, symbol) in schematic.symbols.iter().enumerate() {
+        let power = converted.get(symbol.lib_symbol.as_str()).and_then(|c| c.power_terminal.as_deref());
+        for (number, at) in pins_of(symbol, schematic, converted)? {
+            if power == Some(number.as_str())
+                && let Some(value) = symbol.property("Value")
+            {
+                contacts.power.push(((index, number.clone()), value.to_owned()));
+            }
+            cuts.insert(at);
+            contacts.pins.push(((index, number), at));
+        }
+    }
+    for (key, number, at) in extra {
+        cuts.insert(*at);
+        contacts.pins.push(((*key, number.clone()), *at));
+    }
+    for label in &schematic.labels {
+        contacts.labels.push((if label.kind == LabelKind::Global { "global" } else { "local" }, label.name.clone(), label.at));
+        cuts.insert(label.at);
+    }
+    Ok(wiring::kicad_nets(&wiring::split(segments, &cuts), &contacts))
+}
+
+/// The references of power flags whose pin joins pins that would otherwise stay apart, as a
+/// flag sitting on a crossing without a dot does; leaving such a flag out would change the nets.
+/// One pass with every flag's pins under keys of their own finds the groups that join nets;
+/// each flag in such a group (at most 20) is then checked alone, so only culprits are named.
+fn flags_that_join(
+    schematic: &Schematic,
+    flags: &[PlacedSymbol],
+    segments: &[wiring::Segment],
+    converted: &BTreeMap<&str, symbols::Converted>,
+) -> Result<Vec<String>, CommandError> {
+    let without = file_nets(schematic, segments, converted, &[])?;
+    let net_of: BTreeMap<&(usize, String), usize> = without.iter().enumerate().flat_map(|(i, group)| group.iter().map(move |pin| (pin, i))).collect();
+    let first_extra = schematic.symbols.len();
+    let mut extra = Vec::new();
+    for (i, flag) in flags.iter().enumerate() {
+        extra.extend(pins_of(flag, schematic, converted)?.into_iter().map(|(number, at)| (first_extra + i, number, at)));
+    }
+    let mut joining = BTreeSet::new();
+    for group in file_nets(schematic, segments, converted, &extra)? {
+        let nets: BTreeSet<usize> = group.iter().filter_map(|pin| net_of.get(pin).copied()).collect();
+        if nets.len() > 1 {
+            joining.extend(group.iter().filter(|(index, _)| *index >= first_extra).map(|(index, _)| index - first_extra));
+        }
+    }
+    // A harmless flag elsewhere on a net a culprit joined lands in the same group; check each
+    // candidate (at most 20) alone so only the flags that join wires themselves are named.
+    let mut culprits = Vec::new();
+    for i in joining.into_iter().take(20) {
+        let Some(flag) = flags.get(i) else { continue };
+        let pins: Vec<(usize, String, Point)> = extra.iter().filter(|(index, _, _)| *index == first_extra + i).cloned().collect();
+        let joins = file_nets(schematic, segments, converted, &pins)?
+            .iter()
+            .any(|group| group.iter().filter_map(|pin| net_of.get(pin)).collect::<BTreeSet<_>>().len() > 1);
+        if joins {
+            culprits.push(flag.reference.clone());
+        }
+    }
+    Ok(culprits)
 }
 
 /// Whether a library symbol is a power flag: marked as a power symbol, with a single pin that
@@ -283,11 +382,27 @@ fn refuse_name_clashes(schematic: &Schematic, converted: &BTreeMap<&str, symbols
     }
 }
 
-/// Refuse a power symbol whose Value, its net name, can't be kept exactly; note other Values
-/// that had to be shortened or that fall back to the symbol's default.
+/// Refuse a power symbol whose Value, its net name, can't be kept exactly or differs from its
+/// power pin's name; note other Values that had to be shortened or that fall back to the
+/// symbol's default.
 fn check_values(schematic: &Schematic, converted: &BTreeMap<&str, symbols::Converted>, refusals: &mut Refusals, report: &mut Report) {
     for symbol in &schematic.symbols {
         let raw = symbol.property("Value").unwrap_or_default();
+        // KiCad 6 and 7 name a power symbol's net after its power pin; KiCad 8 and later after
+        // its Value, as this import does. A file that doesn't say it comes from KiCad 8 or later
+        // refuses where the two names differ.
+        let terminal = converted.get(symbol.lib_symbol.as_str()).and_then(|c| c.power_terminal.as_deref());
+        let pin_name = terminal.and_then(|terminal| {
+            let library = schematic.lib_symbols.get(&symbol.lib_symbol)?;
+            library.units.iter().filter(|u| u.style <= 1).flat_map(|u| &u.pins).find(|p| p.number == terminal).map(|p| p.name.as_str())
+        });
+        if let Some(name) = pin_name.filter(|name| !value_names_power_nets(schematic) && !name.is_empty() && *name != raw) {
+            refusals.add(format!(
+                "power symbol {}'s Value `{raw}` differs from its power pin's name `{name}`; KiCad 6–7 and 8–9 name the net differently",
+                symbol.reference
+            ));
+            continue;
+        }
         if native_value(symbol).as_deref() == Some(raw) {
             continue;
         }
@@ -297,6 +412,13 @@ fn check_values(schematic: &Schematic, converted: &BTreeMap<&str, symbols::Conve
             report.note("values that are blank, multi-line or longer than 64 characters shortened or set to the symbol's default");
         }
     }
+}
+
+/// Whether the file says it was written by KiCad 8 or later, whose power symbols take their net
+/// name from their Value (KiCad 8.0 release notes). Files that don't say are treated as older.
+fn value_names_power_nets(schematic: &Schematic) -> bool {
+    let major = schematic.generator_version.as_deref().and_then(|v| v.split('.').next()).and_then(|m| m.trim().parse::<u32>().ok());
+    major.is_some_and(|major| major >= 8)
 }
 
 /// A placed symbol's Value as a native Value: printable, trimmed, at most 64 characters, valid.
@@ -413,7 +535,8 @@ impl Builder {
         // Annotated units of one component share a reference and a library symbol.
         let mut components: BTreeMap<(String, String), (u64, BTreeSet<u32>)> = BTreeMap::new();
         let mut references: BTreeSet<String> = BTreeSet::new();
-        for (source, (symbol, pose)) in schematic.symbols.iter().zip(poses).enumerate() {
+        for source in placement_order(schematic) {
+            let (Some(symbol), Some(pose)) = (schematic.symbols.get(source), poses.get(source)) else { continue };
             let (Some(c), Some((turns, mirrored))) = (converted.get(symbol.lib_symbol.as_str()), *pose) else { continue };
             let unit = c.units.get(&symbol.unit).cloned().unwrap_or_else(|| "main".into());
             // Place unturned when mirrored, then mirror left to right: that composes to `turns`.
@@ -672,7 +795,7 @@ fn pins_of(
     let library = schematic.lib_symbols.get(&symbol.lib_symbol);
     let single = converted.get(symbol.lib_symbol.as_str()).is_some_and(|c| c.units.len() == 1);
     let mut pins = Vec::new();
-    for unit in library.into_iter().flat_map(|l| &l.units) {
+    for unit in library.into_iter().flat_map(|l| l.units.iter()) {
         let here = unit.style <= 1 && (unit.unit == 0 || unit.unit == symbol.unit || (single && unit.unit != 0));
         for pin in unit.pins.iter().filter(|_| here) {
             let at =

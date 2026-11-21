@@ -99,7 +99,9 @@ fn file(items: &str) -> String {
 /// A placed symbol line for [`file`].
 fn place(lib: &str, reference: &str, x: f64, y: f64, angle: u32, mirror: &str) -> String {
     let mirror = if mirror.is_empty() { String::new() } else { format!("(mirror {mirror})") };
-    format!(r#"(symbol (lib_id "{lib}") (at {x} {y} {angle}) {mirror} (unit 1) (property "Reference" "{reference}") (property "Value" "v"))"#)
+    // A power symbol's Value is its net name, the same as its pin's.
+    let value = lib.strip_prefix("power:").unwrap_or("v");
+    format!(r#"(symbol (lib_id "{lib}") (at {x} {y} {angle}) {mirror} (unit 1) (property "Reference" "{reference}") (property "Value" "{value}"))"#)
 }
 
 /// A wire line for [`file`] through the given points in millimetres.
@@ -386,8 +388,7 @@ fn a_copied_reference_becomes_a_second_renumbered_part() {
 fn a_name_used_by_a_label_and_a_power_symbol_is_refused_with_its_name() {
     let items =
         [place("T:R", "R1", 0.0, 0.0, 0, ""), place("power:GND", "#PWR01", 0.0, 3.81, 0, ""), r#"(global_label "GND" (at 0 -3.81 0))"#.into()]
-            .concat()
-            .replace(r#"(property "Value" "v"))"#, r#"(property "Value" "GND"))"#);
+            .concat();
     let refused = import(&file(&items), "Clash");
     assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("`GND`") && m.contains("power symbol")), "{refused:?}");
 }
@@ -477,4 +478,133 @@ fn a_wire_ending_where_the_other_mirror_order_puts_a_pin_refuses_the_pose() {
     let (x, y) = mm(here);
     let attached = [place("T:Tri", "Q1", 0.0, 0.0, 90, "x"), wire(&[(x, y), (x + 10.16, y)])].concat();
     assert!(import(&file(&attached), "Attached").is_ok());
+}
+
+#[test]
+fn nested_collinear_wires_split_once_and_still_connect() {
+    // 3,000 nested runs along one line and 3,000 junction dots on it: one merged run, cut once
+    // at every distinct point, rather than every run cut at every point inside it.
+    let p = |mm: f64| Point { x_nm: 0, y_nm: (mm * 1e6).round() as i64 };
+    let segments: Vec<wiring::Segment> = (0..3000).map(|i| (p(-(i as f64) * 0.01), p(10.0 + i as f64 * 0.01))).collect();
+    let cuts: BTreeSet<Point> = (0..3000).map(|i| p(i as f64 * 0.003)).collect();
+    let pieces = wiring::split(&segments, &cuts);
+    // One merged run, cut at every distinct point on it: as many pieces as points less one.
+    let points: BTreeSet<Point> = segments.iter().flat_map(|(a, b)| [*a, *b]).chain(cuts.iter().copied()).collect();
+    assert_eq!(pieces.len(), points.len() - 1);
+    // And through the import, overlapping wires join the pins at both ends.
+    let items = [
+        place("T:R", "R1", 0.0, 0.0, 0, ""),
+        place("T:R", "R2", 0.0, 20.32, 180, ""),
+        wire(&[(0.0, 3.81), (0.0, 12.7)]),
+        wire(&[(0.0, 7.62), (0.0, 16.51)]),
+    ]
+    .concat();
+    let found = nets(&import(&file(&items), "Overlap").unwrap().project);
+    assert!(found.contains(&net(&["R1.2", "R2.2"])), "{found:?}");
+}
+
+#[test]
+fn a_power_symbol_whose_value_and_pin_name_differ_is_refused() {
+    // The library GND symbol's hidden pin is named GND; a Value of AGND would name another net in
+    // KiCad 8 than in KiCad 7.
+    let items = [place("T:R", "R1", 0.0, 0.0, 0, ""), place("power:GND", "#PWR01", 0.0, 3.81, 0, "")]
+        .concat()
+        .replace(r##"(property "Reference" "#PWR01") (property "Value" "GND")"##, r##"(property "Reference" "#PWR01") (property "Value" "AGND")"##);
+    let refused = import(&file(&items), "Names");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("`AGND`") && m.contains("`GND`")), "{refused:?}");
+}
+
+#[test]
+fn automatic_numbers_never_take_a_reference_a_later_symbol_keeps() {
+    // An unannotated R? first, then R1; and a copy of R1 before R2.
+    let items = [
+        place("T:R", "R?", 0.0, 0.0, 0, ""),
+        place("T:R", "R1", 10.16, 0.0, 0, ""),
+        place("T:R", "R1", 20.32, 0.0, 0, ""),
+        place("T:R", "R2", 30.48, 0.0, 0, ""),
+    ]
+    .concat();
+    let imported = import(&file(&items), "Order").unwrap();
+    let project = &imported.project;
+    let at = |x_nm: i64| project.symbols().iter().find(|s| s.position.x_nm == x_nm).map(|s| project.reference(s)).unwrap();
+    assert_eq!((at(10_160_000), at(30_480_000)), ("R1".to_owned(), "R2".to_owned()));
+    let mut all: Vec<String> = project.symbols().iter().map(|s| project.reference(s)).collect();
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), 4, "{all:?}");
+}
+
+#[test]
+fn a_power_flag_that_joins_crossing_wires_refuses_but_one_on_a_net_does_not() {
+    // Two wires cross at (0, 7.62) with no dot; a power flag sits right on the crossing.
+    let crossing = [
+        place("T:R", "R1", 0.0, 0.0, 0, ""),
+        place("T:R", "R2", -10.16, 7.62, 90, ""),
+        wire(&[(0.0, 3.81), (0.0, 12.7)]),
+        wire(&[(-6.35, 7.62), (6.35, 7.62)]),
+        place("power:PWR_FLAG", "#FLG01", 0.0, 7.62, 0, ""),
+    ]
+    .concat();
+    // A second, harmless flag at the far end of the vertical wire lands in the group the crossing
+    // flag joins; only the crossing flag is named.
+    let crossing = crossing + &place("power:PWR_FLAG", "#FLG02", 0.0, 12.7, 0, "");
+    let refused = import(&file(&crossing), "Flag");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("#FLG01") && !m.contains("#FLG02")), "{refused:?}");
+    // On the end of a wire it joins nothing else and is still left out.
+    let on_net =
+        [place("T:R", "R1", 0.0, 0.0, 0, ""), wire(&[(0.0, 3.81), (0.0, 7.62)]), place("power:PWR_FLAG", "#FLG01", 0.0, 7.62, 0, "")].concat();
+    assert!(import(&file(&on_net), "Flag").is_ok());
+}
+
+#[test]
+fn a_kicad_8_file_names_power_nets_by_value_even_when_the_pin_says_otherwise() {
+    // KiCad 8 and later name the net after the Value, so AGND on a GND-pinned symbol is AGND.
+    let items = [
+        r#"(generator_version "9.0")"#.to_owned(),
+        place("T:R", "R1", 0.0, 0.0, 0, ""),
+        place("power:GND", "#PWR01", 0.0, 3.81, 0, ""),
+        place("T:R", "R2", 10.16, 0.0, 0, ""),
+        place("power:GND", "#PWR02", 10.16, 3.81, 0, ""),
+    ]
+    .concat()
+    .replace(r##"(property "Reference" "#PWR01") (property "Value" "GND")"##, r##"(property "Reference" "#PWR01") (property "Value" "AGND")"##);
+    let found = nets(&import(&file(&items), "Eight").unwrap().project);
+    // R1 joins AGND alone; R2 joins GND; the two don't meet.
+    assert!(found.contains(&net(&["#PWR01.1", "R1.2"])) && found.contains(&net(&["#PWR02.1", "R2.2"])), "{found:?}");
+}
+
+#[test]
+fn an_alternate_body_style_that_hides_a_pin_refuses_its_symbol() {
+    let text = r#"(kicad_sch (version 20231120) (lib_symbols (symbol "L:G" (property "Reference" "U")
+        (symbol "G_1_1" (pin input line (at -2.54 0 0) (length 1.27) (number "1")))
+        (symbol "G_1_2" (pin input line (at -2.54 0 0) (length 1.27) hide (number "1")))))
+        (symbol (lib_id "L:G") (at 0 0 0) (unit 1) (property "Reference" "U1")))"#;
+    let refused = import(text, "x");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("hides pins")), "{refused:?}");
+}
+
+#[test]
+fn power_flags_in_the_middle_of_a_wire_or_on_a_dotted_crossing_are_left_out() {
+    // In the middle of a wire from R1 to R2: it joins nothing the wire doesn't.
+    let mid = [
+        place("T:R", "R1", 0.0, 0.0, 0, ""),
+        place("T:R", "R2", 0.0, 20.32, 180, ""),
+        wire(&[(0.0, 3.81), (0.0, 16.51)]),
+        place("power:PWR_FLAG", "#FLG01", 0.0, 10.16, 0, ""),
+    ]
+    .concat();
+    let found = nets(&import(&file(&mid), "Mid").unwrap().project);
+    assert!(found.contains(&net(&["R1.2", "R2.2"])), "{found:?}");
+    // On a crossing that already has a dot: the dot joins the wires anyway.
+    let dotted = [
+        place("T:R", "R1", 0.0, 0.0, 0, ""),
+        place("T:R", "R2", -10.16, 7.62, 90, ""),
+        wire(&[(0.0, 3.81), (0.0, 12.7)]),
+        wire(&[(-6.35, 7.62), (6.35, 7.62)]),
+        "(junction (at 0 7.62))".into(),
+        place("power:PWR_FLAG", "#FLG01", 0.0, 7.62, 0, ""),
+    ]
+    .concat();
+    let found = nets(&import(&file(&dotted), "Dotted").unwrap().project);
+    assert!(found.contains(&net(&["R1.2", "R2.2"])), "{found:?}");
 }

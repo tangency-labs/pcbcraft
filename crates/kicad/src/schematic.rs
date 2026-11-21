@@ -19,6 +19,7 @@
 use crate::sexp::{Node, Reader};
 use crate::{Error, Notes, Point, millidegrees, nm};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[cfg(test)]
 mod tests;
@@ -41,6 +42,8 @@ const MAX_EXTENDS: usize = 16;
 pub struct Schematic {
     /// The file format version, a date such as `20231120`.
     pub version: Option<u64>,
+    /// The writing program's version, such as `8.0`, which KiCad 8 and later write.
+    pub generator_version: Option<String>,
     /// The file's own identity, lowercase.
     pub uuid: Option<String>,
     /// The sheet's paper, when the file names a known size.
@@ -101,7 +104,8 @@ pub struct LibSymbol {
     /// Whether the symbol hides its pins' numbers.
     pub pin_numbers_hidden: bool,
     /// The drawing, by unit and body style. Unit 0 is common to every unit. Symbol frame.
-    pub units: Vec<SymbolUnit>,
+    /// Symbols that `extends` one parent share its drawing rather than copying it.
+    pub units: Arc<Vec<SymbolUnit>>,
 }
 
 impl LibSymbol {
@@ -442,7 +446,7 @@ struct RawLibSymbol {
     properties: Vec<Property>,
     pin_names_hidden: bool,
     pin_numbers_hidden: bool,
-    units: Vec<SymbolUnit>,
+    units: Arc<Vec<SymbolUnit>>,
 }
 
 impl State {
@@ -466,6 +470,7 @@ impl State {
                 self.schematic.version = version.filter(|v| *v >= 0.0 && v.fract() == 0.0 && *v <= u64::MAX as f64).map(|v| v as u64);
             }
             "uuid" => self.schematic.uuid = uuid(node),
+            "generator_version" => self.schematic.generator_version = node.text(0).map(str::to_owned),
             "paper" => self.schematic.paper = self.paper(node),
             "lib_symbols" => self.lib_symbols(node)?,
             kind @ ("junction" | "no_connect") => match point(node.child("at"), 0) {
@@ -515,7 +520,7 @@ impl State {
             "netclass_flag" | "directive_label" => self.schematic.notes.add("net class directive left out"),
             "rule_area" => self.schematic.notes.add("rule area left out"),
             "table" => self.schematic.notes.add("table left out"),
-            "generator" | "generator_version" | "title_block" | "sheet_instances" | "embedded_fonts" | "embedded_files" => {}
+            "generator" | "title_block" | "sheet_instances" | "embedded_fonts" | "embedded_files" => {}
             other => self.schematic.lost.add(&format!("{} left out", other.chars().take(40).collect::<String>())),
         }
         Ok(())
@@ -613,7 +618,7 @@ impl State {
             properties,
             pin_names_hidden: node.child("pin_names").is_some_and(hidden),
             pin_numbers_hidden: node.child("pin_numbers").is_some_and(hidden),
-            units,
+            units: Arc::new(units),
         })
     }
 
@@ -817,7 +822,8 @@ impl State {
 
     /// A library symbol with its drawing taken from the end of its `extends` chain and its own
     /// fields kept. `None`, with a note, when the chain breaks or is longer than
-    /// [`MAX_EXTENDS`].
+    /// [`MAX_EXTENDS`]. Symbols extending one parent share its drawing, so however many there
+    /// are, the drawing is held once.
     fn resolved(&mut self, name: &str) -> Option<LibSymbol> {
         let own = self.raw_lib.get(name)?;
         let mut drawn = own;
@@ -829,12 +835,11 @@ impl State {
                     properties: own.properties.clone(),
                     pin_names_hidden: drawn.pin_names_hidden,
                     pin_numbers_hidden: drawn.pin_numbers_hidden,
-                    units: drawn.units.clone(),
+                    units: Arc::clone(&drawn.units),
                 });
             };
             // A parent is named by its full name, or by its entry name within the same library.
-            let library = name.rsplit_once(':').map(|(library, _)| library);
-            let full = library.map(|library| format!("{library}:{parent}"));
+            let full = name.rsplit_once(':').map(|(library, _)| format!("{library}:{parent}"));
             match self.raw_lib.get(parent.as_str()).or_else(|| full.and_then(|f| self.raw_lib.get(&f))) {
                 Some(next) => drawn = next,
                 None => break,

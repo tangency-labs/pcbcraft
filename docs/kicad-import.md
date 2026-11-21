@@ -34,7 +34,7 @@ There is no desktop menu entry yet.
 | Placed symbols, rotated by quarter turns and mirrored | Placed parts and units in the same pose |
 | References and units from the instance records (KiCad 7 and later) or `symbol_instances` (KiCad 6) | Part references; units of one reference share a part. A unit placed twice under one reference (a copy) becomes a second part with a new reference, as do unannotated (`R?`) and invalid references; each is reported |
 | Value, Datasheet, Description and other fields; DNP, in-BOM and on-board flags | Value, standard and custom fields, and the part's fitting attributes. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
-| Power symbols | Parts whose power terminal joins the global net their Value names. Power flags (`PWR_FLAG`: a power symbol without a power input) only drive KiCad's electrical rules check and are left out, reported |
+| Power symbols | Parts whose power terminal joins the global net their Value names. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; a flag sitting on a crossing without a dot, so that it joins those wires, refuses the file instead |
 | Wires, junction dots, local and global labels | Native wire routes, junctions and net labels |
 | No-connect marks on pins or wire ends | No-connect intent on that terminal or wire end |
 
@@ -52,6 +52,11 @@ There is no desktop menu entry yet.
   power symbol), such as a global label `+3V3` beside a `+3V3` power symbol.
   PCBcraft joins every marker of a name on a sheet; KiCad's rule across those
   kinds isn't confirmed.
+- In a file that doesn't say it comes from KiCad 8 or later (through its
+  `generator_version`), a power symbol whose Value differs from its power pin's
+  name: KiCad 6 and 7 name the net after the pin, KiCad 8 and later after the
+  Value, as the import does. Power symbols whose two names match import from any
+  version.
 - A power symbol whose Value, its net name, isn't a valid one-line Value of at
   most 64 characters. Other Values are shortened or fall back to the symbol's
   default, reported.
@@ -60,7 +65,8 @@ There is no desktop menu entry yet.
   numbers other than 1 to 8 letters, digits, `+`, `-` or `_`, a number with a
   different name or type in different units, more than 32 units, hidden power
   pins on ordinary symbols, which KiCad joins to a net by name, and an alternate
-  (De Morgan) body style that puts pins elsewhere than the normal one.
+  (De Morgan) body style that places, names, types or hides pins differently from
+  the normal one.
 - More than 1,000 placed symbols (this slice's own limit; a sheet holds 4,096),
   4,000 straight wire pieces, 256 labels or 4,096 native wires, for now: the import runs every placement and wire through the ordinary commands
   and can't be cancelled, so this slice keeps it within seconds, and a sheet holds
@@ -86,7 +92,7 @@ also what a misplaced pin would leave behind.
 
 Sheet text and drawings, images, text boxes and tables; field text positions,
 which use the native defaults; global label shapes; alternate (De Morgan) body
-styles that place, name and type their pins like the normal one, and any further
+styles that place, name, type and hide their pins like the normal one, and any further
 styles; power flags; no-connect marks that are not
 on a pin or wire end; and drawing details the native format holds differently. Curves are drawn
 as polylines, fills are kept only on convex outlines, and very long pin names are

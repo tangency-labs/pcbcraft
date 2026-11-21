@@ -53,20 +53,20 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, report: &mut Report) -> Re
     // Which style a placed symbol shows isn't read, so an alternate style is accepted only when
     // it puts exactly the same pins in the same places.
     if symbol.units.iter().any(|unit| unit.style == 2) {
-        let pins = |style: u32| -> BTreeSet<(u32, &str, &str, i64, i64, String)> {
+        let pins = |style: u32| -> BTreeSet<(u32, &str, &str, i64, i64, String, bool)> {
             symbol
                 .units
                 .iter()
                 .filter(|unit| unit.style == 0 || unit.style == style)
                 .flat_map(|unit| {
                     unit.pins.iter().map(move |pin| {
-                        (unit.unit, pin.number.as_str(), pin.name.as_str(), pin.at.x_nm, pin.at.y_nm, format!("{:?}", pin.electrical))
+                        (unit.unit, pin.number.as_str(), pin.name.as_str(), pin.at.x_nm, pin.at.y_nm, format!("{:?}", pin.electrical), pin.hidden)
                     })
                 })
                 .collect()
         };
         if pins(1) != pins(2) {
-            return Err("its alternate (De Morgan) body style places, names or types pins differently".into());
+            return Err("its alternate (De Morgan) body style places, names, types or hides pins differently".into());
         }
         report.note("alternate (De Morgan) body styles of symbols left out");
     }
