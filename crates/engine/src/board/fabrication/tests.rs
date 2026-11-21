@@ -1366,10 +1366,12 @@ fn rounded_pad_flashes_keep_copper_object_attributes() {
 
 /// Two rotations can snap a tiny inner box onto three edges without clamping its radius.
 /// Keep that pad's original closed region rather than writing a malformed quad primitive.
+/// The second land is a plain rectangle: the same rounded land 2 mm along the rotated pitch
+/// snaps to a strictly convex 2 nm-diameter sliver, which export refuses by design.
 #[test]
 fn tiny_rounded_pad_with_non_strict_core_retains_region() {
     let s = aperture_fixture_at(
-        &[(PadShape::RoundedRectangle, 3, 3, 165); 2],
+        &[(PadShape::RoundedRectangle, 3, 3, 165), (PadShape::Rectangle, 3, 3, 165)],
         45,
         false,
         Point { x_nm: -1, y_nm: 1 },
@@ -1384,6 +1386,7 @@ fn tiny_rounded_pad_with_non_strict_core_retains_region() {
     let at = Point { x_nm: first.center.x_nm, y_nm: -first.center.y_nm };
     let read = read_gerber(&view(&s).fabrication_outputs().unwrap(), TOP_COPPER);
     assert!(!read.rounded_flashes.iter().any(|(center, _)| *center == at));
+    assert_eq!(read.regions.len(), 2, "the rectangular second land keeps its region too");
     assert_eq!(read.regions[0].len(), 29, "the positive fallback radius still produces four chorded corners");
     assert_eq!(read.regions[0].first(), read.regions[0].last());
 }
