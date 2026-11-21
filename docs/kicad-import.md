@@ -34,7 +34,7 @@ There is no desktop menu entry yet.
 | Placed symbols, rotated by quarter turns and mirrored | Placed parts and units in the same pose |
 | References and units from the instance records (KiCad 7 and later) or `symbol_instances` (KiCad 6) | Part references; units of one reference share a part. A unit placed twice under one reference (a copy) becomes a second part with a new reference, as do unannotated (`R?`) and invalid references; each is reported |
 | Value, Datasheet, Description and other fields; DNP, in-BOM and on-board flags | Value, standard and custom fields, and the part's fitting attributes. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
-| Power symbols | Parts whose power terminal joins the global net their Value names. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; a flag sitting on a crossing without a dot, so that it joins those wires, refuses the file instead |
+| Power symbols | Parts whose power terminal joins the global net their Value names. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; flags sitting on crossings without a dot, so that alone or together they join those wires, refuse the file instead |
 | Wires, junction dots, local and global labels | Native wire routes, junctions and net labels |
 | No-connect marks on pins or wire ends | No-connect intent on that terminal or wire end |
 
@@ -70,7 +70,14 @@ There is no desktop menu entry yet.
 - More than 1,000 placed symbols (this slice's own limit; a sheet holds 4,096),
   4,000 straight wire pieces, 256 labels or 4,096 native wires, for now: the import runs every placement and wire through the ordinary commands
   and can't be cancelled, so this slice keeps it within seconds, and a sheet holds
-  at most 256 named labels and 4,096 wires. These refusals use the `cap_exceeded` error code.
+  at most 256 named labels and 4,096 wires. Symbols may also take at most
+  2,000,000 points of conversion work in all, counting a common part once for each
+  unit it is drawn in: each drawing costs its points, and each text and pin one.
+  Drawing beyond a unit's 256 entries is left out unconverted and costs nothing,
+  except a long polyline that crosses the limit, which costs all its points.
+  The converted symbols may come to at most 32 MiB less 64 KiB as native documents,
+  and one symbol to 1 MiB, the library loader's limits. These refusals use the
+  `cap_exceeded` error code, except a single oversized symbol, which is refused by name.
 - A symbol both mirrored and turned a quarter, when a wire ends where its pins
   would be if KiCad mirrored before turning: the one case the turning order
   matters, refused rather than guessed.

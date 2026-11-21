@@ -325,7 +325,9 @@ fn the_net_check_refuses_a_project_whose_connections_differ_from_the_file() {
     let converted: BTreeMap<&str, symbols::Converted> = schematic
         .lib_symbols
         .iter()
-        .map(|(name, symbol)| (name.as_str(), symbols::convert(symbol, symbols::native_id(name), &mut report).unwrap()))
+        .map(|(name, symbol)| {
+            (name.as_str(), symbols::convert(symbol, symbols::native_id(name), &mut symbols::MAX_DRAWING_WORK.clone(), &mut report).unwrap())
+        })
         .collect();
     // The import places symbols in file order, so the n-th native placement is the n-th KiCad one.
     let mut natives: Vec<_> = imported.project.symbols().iter().collect();
@@ -607,4 +609,128 @@ fn power_flags_in_the_middle_of_a_wire_or_on_a_dotted_crossing_are_left_out() {
     .concat();
     let found = nets(&import(&file(&dotted), "Dotted").unwrap().project);
     assert!(found.contains(&net(&["R1.2", "R2.2"])), "{found:?}");
+}
+
+#[test]
+fn power_flags_that_join_wires_only_together_refuse() {
+    // A pinless wire crosses the wires from R1 and R2 with no dots; a flag on each crossing
+    // reaches only one part's net alone, but the two together join R1 and R2.
+    let items = [
+        place("T:R", "R1", 0.0, 0.0, 0, ""),
+        place("T:R", "R2", 10.16, 0.0, 0, ""),
+        wire(&[(0.0, 3.81), (0.0, 12.7)]),
+        wire(&[(10.16, 3.81), (10.16, 12.7)]),
+        wire(&[(-5.08, 7.62), (15.24, 7.62)]),
+        place("power:PWR_FLAG", "#FLG01", 0.0, 7.62, 0, ""),
+        place("power:PWR_FLAG", "#FLG02", 10.16, 7.62, 0, ""),
+    ]
+    .concat();
+    let refused = import(&file(&items), "Together");
+    assert!(
+        matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("join wires together") && m.contains("#FLG01, #FLG02")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_joining_flag_behind_twenty_harmless_ones_still_refuses() {
+    // R1's wire crosses R2's at (0, 7.62) with no dot; #FLG21 sits on the crossing.
+    let base = [
+        place("T:R", "R1", 0.0, 0.0, 0, ""),
+        place("T:R", "R2", -10.16, 7.62, 90, ""),
+        wire(&[(0.0, 3.81), (0.0, 12.7)]),
+        wire(&[(-6.35, 7.62), (6.35, 7.62)]),
+    ]
+    .concat();
+    let culprit = place("power:PWR_FLAG", "#FLG21", 0.0, 7.62, 0, "");
+    // Twenty flags first at the wire's end, where wires already meet: they aren't checked one
+    // by one, so the culprit is still named.
+    let at_end: String = (1..=20).map(|n| place("power:PWR_FLAG", &format!("#FLG{n:02}"), 0.0, 12.7, 0, "")).collect();
+    let refused = import(&file(&(base.clone() + &at_end + &culprit)), "End");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("power flag #FLG21 sits") && !m.contains("#FLG01")), "{refused:?}");
+    // Twenty flags first in the middle of the wire, each harmless alone: the culprit is past
+    // the twenty checked, and the file is refused all the same.
+    let mid_wire: String = (1..=20).map(|n| place("power:PWR_FLAG", &format!("#FLG{n:02}"), 0.0, 4.0 + 0.15 * n as f64, 0, "")).collect();
+    let refused = import(&file(&(base + &mid_wire + &culprit)), "Middle");
+    assert!(
+        matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("join wires alone or together") && m.contains("and 1 more")),
+        "{refused:?}"
+    );
+}
+
+#[test]
+fn a_flag_joining_a_wire_to_a_labelled_wire_without_pins_refuses() {
+    // R1's wire crosses a pinless wire carrying the label SENSE, with no dot; the flag on the
+    // crossing would give R1's net that name.
+    let items = [
+        place("T:R", "R1", 0.0, 0.0, 0, ""),
+        wire(&[(0.0, 3.81), (0.0, 12.7)]),
+        wire(&[(-6.35, 7.62), (6.35, 7.62)]),
+        r#"(label "SENSE" (at -6.35 7.62 0))"#.to_owned(),
+        place("power:PWR_FLAG", "#FLG01", 0.0, 7.62, 0, ""),
+    ]
+    .concat();
+    let refused = import(&file(&items), "Label");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("#FLG01")), "{refused:?}");
+}
+
+#[test]
+fn a_unit_drawing_stops_at_the_native_limit_and_the_whole_import_has_a_budget() {
+    // 300 rectangles in one unit: the first 256 are kept and the rest are never converted.
+    let rectangles = "(rectangle (start -1.27 -1.27) (end 1.27 1.27))".repeat(300);
+    let text = format!(
+        r#"(kicad_sch (version 20231120) (lib_symbols (symbol "L:Box" (property "Reference" "U")
+        (symbol "Box_1_1" {rectangles} (pin input line (at -2.54 0 0) (length 1.27) (number "1")))))
+        (symbol (lib_id "L:Box") (at 0 0 0) (unit 1) (property "Reference" "U1")))"#
+    );
+    let imported = import(&text, "Box").unwrap();
+    assert!(imported.report.notes().any(|(what, n)| what.contains("beyond 256 strokes") && n == 1));
+    let schematic = pcbcraft_kicad::read_schematic(&text).unwrap();
+    let mut budget = symbols::MAX_DRAWING_WORK;
+    let converted = symbols::convert(&schematic.lib_symbols["L:Box"], "box".into(), &mut budget, &mut Report::default()).unwrap();
+    let document: serde_json::Value = serde_json::from_str(&converted.text).unwrap();
+    assert_eq!(document["units"][0]["drawing"].as_array().unwrap().len(), 256);
+    // Only what was converted is paid for: 256 rectangles of two points and one pin.
+    assert_eq!(budget, symbols::MAX_DRAWING_WORK - 256 * 2 - 1);
+
+    // A common part drawn again in each of 32 units: 70,000 points each come to more than the
+    // import's drawing budget, which refuses the file before anything is built.
+    let points = (0..70_000).map(|i| format!("(xy {} 0)", i % 2)).collect::<String>();
+    let units = (1..=32).map(|u| format!(r#"(symbol "Big_{u}_1" (pin input line (at -2.54 0 0) (length 1.27) (number "{u}")))"#)).collect::<String>();
+    let text = format!(
+        r#"(kicad_sch (version 20231120) (lib_symbols (symbol "L:Big" (property "Reference" "U")
+        (symbol "Big_0_1" (polyline (pts {points}))) {units}))
+        (symbol (lib_id "L:Big") (at 0 0 0) (unit 1) (property "Reference" "U1")))"#
+    );
+    let refused = import(&text, "Big");
+    assert!(matches!(&refused, Err(CommandError::CapExceeded(m)) if m.contains("points in all")), "{refused:?}");
+}
+
+/// A file whose symbol `L:Big` has `rectangles` rectangles in its common part and 32 units of
+/// one pin each, with `derived` more symbols extending it; each is placed once.
+fn big_symbols(rectangles: usize, derived: usize) -> String {
+    let drawing = "(rectangle (start -1.27 -1.27) (end 1.27 1.27))".repeat(rectangles);
+    let units = (1..=32).map(|u| format!(r#"(symbol "Big_{u}_1" (pin input line (at -2.54 0 0) (length 1.27) (number "{u}")))"#)).collect::<String>();
+    let extending = (1..=derived).map(|n| format!(r#"(symbol "L:D{n}" (extends "L:Big"))"#)).collect::<String>();
+    let placed = (0..=derived)
+        .map(|n| {
+            let lib = if n == 0 { "L:Big".to_owned() } else { format!("L:D{n}") };
+            format!(r#"(symbol (lib_id "{lib}") (at {} 0 0) (unit 1) (property "Reference" "U{}"))"#, n as f64 * 12.7, n + 1)
+        })
+        .collect::<String>();
+    format!(
+        r#"(kicad_sch (version 20231120) (lib_symbols (symbol "L:Big" (property "Reference" "U") (symbol "Big_0_1" {drawing}) {units}) {extending})
+        {placed})"#
+    )
+}
+
+#[test]
+fn symbols_beyond_the_library_loaders_sizes_are_refused() {
+    // One symbol whose 32 units each draw 256 rectangles: more than a library file holds.
+    let refused = import(&big_symbols(256, 0), "One");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("`L:Big`") && m.contains("library file holds")), "{refused:?}");
+    // Symbols each within a file's size, sharing one drawing, that together pass a source's
+    // size, well within the drawing budget.
+    let refused = import(&big_symbols(150, 45), "Many");
+    assert!(matches!(&refused, Err(CommandError::CapExceeded(m)) if m.contains("MiB as native documents")), "{refused:?}");
 }

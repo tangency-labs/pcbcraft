@@ -38,6 +38,9 @@ pub const MAX_TEXT_BYTES: usize = 8 << 20;
 /// commands, which cost a few milliseconds each; the bound keeps an import within seconds in a
 /// window that can't cancel it.
 pub const MAX_SYMBOLS: usize = 1000;
+/// The most bytes the converted symbol documents may take together: a library source's limit,
+/// less room for its manifest.
+const MAX_SYMBOL_BYTES: usize = crate::library::sources::MAX_SOURCE_BYTES - (64 << 10);
 /// The most straight wire pieces this slice imports, for the same reason.
 pub const MAX_WIRE_PIECES: usize = 4000;
 
@@ -183,8 +186,8 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
         refusals.add(if count > 1 { format!("{what} ({count}×)") } else { what.to_owned() });
     }
     // Power flags only tell KiCad's electrical rules check that a net is driven and have no part
-    // of their own, so they are left out; one whose pin joins wires that would otherwise stay
-    // apart is refused below.
+    // of their own, so they are left out; flags that, alone or together, join wires that would
+    // otherwise stay apart are refused below.
     let lib_symbols = &schematic.lib_symbols;
     let flags: Vec<PlacedSymbol> = schematic.symbols.iter().filter(|s| lib_symbols.get(&s.lib_symbol).is_some_and(is_power_flag)).cloned().collect();
     schematic.symbols.retain(|s| !lib_symbols.get(&s.lib_symbol).is_some_and(is_power_flag));
@@ -204,6 +207,10 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
     let mut converted: BTreeMap<&str, symbols::Converted> = BTreeMap::new();
     let mut ids: BTreeSet<String> = BTreeSet::new();
     let used: BTreeSet<&str> = schematic.symbols.iter().map(|s| s.lib_symbol.as_str()).collect();
+    // One more than the limit, as the budget must stay above zero: a file costing exactly the
+    // limit imports.
+    let mut budget = symbols::MAX_DRAWING_WORK + 1;
+    let mut bytes = 0usize;
     for name in used {
         let Some(symbol) = schematic.lib_symbols.get(name) else {
             refusals.add(format!("placed symbols use `{name}`, which the file's symbol library doesn't hold"));
@@ -212,11 +219,25 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
         let base = symbols::native_id(name);
         let id = (1..).map(|n| if n == 1 { base.clone() } else { format!("{base}-{n}") }).find(|id| !ids.contains(id)).unwrap_or(base);
         ids.insert(id.clone());
-        match symbols::convert(symbol, id, &mut report) {
+        match symbols::convert(symbol, id, &mut budget, &mut report) {
             Ok(symbol) => {
+                bytes = bytes.saturating_add(symbol.text.len());
                 converted.insert(name, symbol);
             }
             Err(reason) => refusals.add(format!("symbol `{name}`: {reason}")),
+        }
+        if budget == 0 {
+            return Err(CommandError::CapExceeded(
+                "This KiCad schematic's symbols draw more than 2,000,000 points in all, counting each unit; an import takes at most that for now."
+                    .into(),
+            ));
+        }
+        // The converted symbols load as one library source, which holds at most this much.
+        if bytes > MAX_SYMBOL_BYTES {
+            return Err(CommandError::CapExceeded(format!(
+                "This KiCad schematic's symbols come to more than {} MiB as native documents; an import takes at most that for now.",
+                MAX_SYMBOL_BYTES >> 20
+            )));
         }
     }
     refuse_name_clashes(&schematic, &converted, &mut refusals);
@@ -240,8 +261,20 @@ pub fn import(text: &str, name: &str) -> Result<Imported, CommandError> {
         }
     };
     if !flags.is_empty() && segments.len() <= MAX_WIRE_PIECES {
-        for flag in flags_that_join(&schematic, &flags, &segments, &converted)? {
-            refusals.add(format!("power flag {flag} sits on a crossing without a dot and joins its wires; left out, they would come apart"));
+        match flags_that_join(&schematic, &flags, &segments, &converted)? {
+            Joining::None => {}
+            Joining::Each(culprits) => {
+                for flag in culprits {
+                    refusals.add(format!("power flag {flag} sits on a crossing without a dot and joins its wires; left out, they would come apart"));
+                }
+            }
+            Joining::Together { named, more } => {
+                let (how, more) = if more > 0 { ("alone or together", format!(" and {more} more")) } else { ("together", String::new()) };
+                refusals.add(format!(
+                    "power flags on crossings without a dot join wires {how}; left out, they would come apart (flags that could: {}{more})",
+                    named.join(", ")
+                ));
+            }
         }
     }
     if segments.len() > MAX_WIRE_PIECES {
@@ -313,20 +346,41 @@ fn file_nets(
     Ok(wiring::kicad_nets(&wiring::split(segments, &cuts), &contacts))
 }
 
-/// The references of power flags whose pin joins pins that would otherwise stay apart, as a
-/// flag sitting on a crossing without a dot does; leaving such a flag out would change the nets.
-/// One pass with every flag's pins under keys of their own finds the groups that join nets;
-/// each flag in such a group (at most 20) is then checked alone, so only culprits are named.
+/// Which power flags join pins that would otherwise stay apart, as a flag sitting on a crossing
+/// without a dot does. Leaving such flags out would change the nets.
+enum Joining {
+    /// The flags join nothing; leaving them out keeps the nets.
+    None,
+    /// These flags (at most 20 checked) each join pins on their own; the file is refused
+    /// whatever other flags do.
+    Each(Vec<String>),
+    /// The flags join pins, but none of the first 20 that could does it alone: `named` are
+    /// those flags, `more` how many others could.
+    Together { named: Vec<String>, more: usize },
+}
+
+/// Whether leaving out `flags` would change the file's nets, and which flags to name. One pass
+/// with every flag's pins under keys of their own decides it: adding pins can only merge nets,
+/// so the flags change the nets exactly when a group of that pass spans more than one net of
+/// the pass without them. Labels take part as pins of their own in both passes, so a flag
+/// joining a wire to a wire that only carries a label counts too.
+///
+/// Flags in such a group are then checked alone, so only culprits are named when there are any.
+/// A flag whose pins all sit where wires already meet (a wire end, pin, label or dot) joins
+/// nothing new alone and isn't checked; of the rest, at most 20 are.
 fn flags_that_join(
     schematic: &Schematic,
     flags: &[PlacedSymbol],
     segments: &[wiring::Segment],
     converted: &BTreeMap<&str, symbols::Converted>,
-) -> Result<Vec<String>, CommandError> {
-    let without = file_nets(schematic, segments, converted, &[])?;
-    let net_of: BTreeMap<&(usize, String), usize> = without.iter().enumerate().flat_map(|(i, group)| group.iter().map(move |pin| (pin, i))).collect();
+) -> Result<Joining, CommandError> {
     let first_extra = schematic.symbols.len();
-    let mut extra = Vec::new();
+    let first_label = first_extra + flags.len();
+    let labels: Vec<(usize, String, Point)> =
+        schematic.labels.iter().enumerate().map(|(j, label)| (first_label + j, String::new(), label.at)).collect();
+    let without = file_nets(schematic, segments, converted, &labels)?;
+    let net_of: BTreeMap<&(usize, String), usize> = without.iter().enumerate().flat_map(|(i, group)| group.iter().map(move |pin| (pin, i))).collect();
+    let mut extra = labels.clone();
     for (i, flag) in flags.iter().enumerate() {
         extra.extend(pins_of(flag, schematic, converted)?.into_iter().map(|(number, at)| (first_extra + i, number, at)));
     }
@@ -334,15 +388,27 @@ fn flags_that_join(
     for group in file_nets(schematic, segments, converted, &extra)? {
         let nets: BTreeSet<usize> = group.iter().filter_map(|pin| net_of.get(pin).copied()).collect();
         if nets.len() > 1 {
-            joining.extend(group.iter().filter(|(index, _)| *index >= first_extra).map(|(index, _)| index - first_extra));
+            joining.extend(group.iter().filter(|(index, _)| (first_extra..first_label).contains(index)).map(|(index, _)| index - first_extra));
         }
     }
-    // A harmless flag elsewhere on a net a culprit joined lands in the same group; check each
-    // candidate (at most 20) alone so only the flags that join wires themselves are named.
+    if joining.is_empty() {
+        return Ok(Joining::None);
+    }
+    // Where wires already meet, a flag adds nothing; leave those out of the one-by-one checks.
+    let mut met: BTreeSet<Point> = schematic.junctions.iter().map(|m| m.at).chain(schematic.labels.iter().map(|l| l.at)).collect();
+    met.extend(segments.iter().flat_map(|(a, b)| [*a, *b]));
+    for symbol in &schematic.symbols {
+        met.extend(pins_of(symbol, schematic, converted)?.into_iter().map(|(_, at)| at));
+    }
+    let could_join = |i: &usize| extra.iter().any(|(index, _, at)| *index == first_extra + i && !met.contains(at));
+    let possible: Vec<usize> = joining.iter().copied().filter(could_join).collect();
+    let possible = if possible.is_empty() { joining.into_iter().collect() } else { possible };
+    let more = possible.len().saturating_sub(20);
+    let candidates: Vec<&PlacedSymbol> = possible.into_iter().take(20).filter_map(|i| flags.get(i)).collect();
     let mut culprits = Vec::new();
-    for i in joining.into_iter().take(20) {
-        let Some(flag) = flags.get(i) else { continue };
-        let pins: Vec<(usize, String, Point)> = extra.iter().filter(|(index, _, _)| *index == first_extra + i).cloned().collect();
+    for flag in &candidates {
+        let mut pins = labels.clone();
+        pins.extend(pins_of(flag, schematic, converted)?.into_iter().map(|(number, at)| (first_extra, number, at)));
         let joins = file_nets(schematic, segments, converted, &pins)?
             .iter()
             .any(|group| group.iter().filter_map(|pin| net_of.get(pin)).collect::<BTreeSet<_>>().len() > 1);
@@ -350,7 +416,11 @@ fn flags_that_join(
             culprits.push(flag.reference.clone());
         }
     }
-    Ok(culprits)
+    Ok(if culprits.is_empty() {
+        Joining::Together { named: candidates.iter().map(|flag| flag.reference.clone()).collect(), more }
+    } else {
+        Joining::Each(culprits)
+    })
 }
 
 /// Whether a library symbol is a power flag: marked as a power symbol, with a single pin that
@@ -475,7 +545,7 @@ impl Builder {
         let name = symbols::clip(name, 64).unwrap_or_else(|| "Imported".to_owned());
         session.apply("project.new", &json!({"name": name})).map_err(step("creating the project"))?;
         let mut documents: BTreeMap<String, String> =
-            converted.values().map(|symbol| (format!("symbols/{}.json", symbol.id), symbol.document.to_string())).collect();
+            converted.values().map(|symbol| (format!("symbols/{}.json", symbol.id), symbol.text.clone())).collect();
         let mut digest = <sha2::Sha256 as sha2::Digest>::new();
         for (path, text) in &documents {
             for part in [path.as_bytes(), &[0], text.as_bytes(), &[0]] {

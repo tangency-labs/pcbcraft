@@ -28,16 +28,29 @@ const DEFAULT_STROKE_NM: i64 = 152_400;
 const MAX_STROKE_NM: i64 = 2_000_000;
 /// How many straight pieces a Bézier curve is drawn with.
 const CURVE_STEPS: usize = 16;
+/// The most bytes one native library file holds.
+const MAX_FILE_BYTES: usize = crate::library::sources::MAX_FILE_BYTES;
+/// How many drawing points one import may convert, over every symbol and unit. A common part is
+/// drawn again in each unit and symbols can share one drawing through `extends`, so the work
+/// isn't bounded by the file's size alone.
+///
+/// Each pin of each unit costs one point too.
+pub(super) const MAX_DRAWING_WORK: usize = 2_000_000;
 
 /// A converted symbol: its native document and how to place it.
 pub(super) struct Converted {
     pub(super) id: String,
-    pub(super) document: Value,
+    /// The native document as JSON text, at most a library file's size.
+    pub(super) text: String,
     /// The native unit ID for each KiCad unit number that can be placed.
     pub(super) units: BTreeMap<u32, String>,
     /// For a power symbol, the terminal whose net the placed Value names.
     pub(super) power_terminal: Option<String>,
 }
+
+/// What an alternate body style must keep of a pin: unit, number, name as imported, position,
+/// electrical type and whether it is hidden.
+type StylePin<'a> = (u32, &'a str, Option<String>, i64, i64, String, bool);
 
 /// A native unit being built: its pins in order and its drawing.
 struct NativeUnit {
@@ -47,20 +60,25 @@ struct NativeUnit {
 }
 
 /// Convert `symbol` under the native ID `id`. Fails with the reason when its electrical content
-/// can't be represented exactly.
-pub(super) fn convert(symbol: &LibSymbol, id: String, report: &mut Report) -> Result<Converted, String> {
+/// can't be represented exactly, or when its document would exceed a library file's size. Each
+/// unit's drawing stops at [`MAX_DRAWING`] entries, with a note, before anything past the limit
+/// is converted. Every pin, drawing and text visited is paid for from `budget`, in points; when
+/// it runs short, it is set to zero and the drawing stops there, and the caller refuses the
+/// import.
+pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report: &mut Report) -> Result<Converted, String> {
     // Style 0 is drawn in every body style, 1 is the normal style and 2 the alternate one.
     // Which style a placed symbol shows isn't read, so an alternate style is accepted only when
     // it puts exactly the same pins in the same places.
     if symbol.units.iter().any(|unit| unit.style == 2) {
-        let pins = |style: u32| -> BTreeSet<(u32, &str, &str, i64, i64, String, bool)> {
+        // Names compare as imported (at most 32 characters), so a huge name costs no more.
+        let pins = |style: u32| -> BTreeSet<StylePin<'_>> {
             symbol
                 .units
                 .iter()
                 .filter(|unit| unit.style == 0 || unit.style == style)
                 .flat_map(|unit| {
                     unit.pins.iter().map(move |pin| {
-                        (unit.unit, pin.number.as_str(), pin.name.as_str(), pin.at.x_nm, pin.at.y_nm, format!("{:?}", pin.electrical), pin.hidden)
+                        (unit.unit, pin.number.as_str(), clip(&pin.name, 32), pin.at.x_nm, pin.at.y_nm, format!("{:?}", pin.electrical), pin.hidden)
                     })
                 })
                 .collect()
@@ -100,6 +118,9 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, report: &mut Report) -> Re
         let mut positions: BTreeMap<(i64, i64), &str> = BTreeMap::new();
         let mut numbers_here: BTreeSet<&str> = BTreeSet::new();
         for pin in parts.iter().flat_map(|unit| &unit.pins) {
+            // Pins can't be left out; a short budget only makes the caller refuse. Each unit
+            // holds few pins, as positions may not repeat on the bounded grid.
+            pay(budget, 1);
             let terminal = terminal(pin, symbol, power_terminal.as_deref(), report)?;
             match terminals.get(&pin.number) {
                 Some(existing) if *existing != terminal => {
@@ -131,18 +152,35 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, report: &mut Report) -> Re
         if native.pins.is_empty() {
             return Err(format!("unit {number} has no pins"));
         }
-        for unit in &parts {
+        // Stop at the native limit rather than converting everything and cutting it back: a
+        // common part is drawn again in every unit, and a file can share one large drawing
+        // among many symbols.
+        let mut full = false;
+        'parts: for unit in &parts {
             for graphic in &unit.graphics {
-                drawing(graphic, &mut native.drawing, report);
+                if native.drawing.len() >= MAX_DRAWING {
+                    full = true;
+                    break 'parts;
+                }
+                if !pay(budget, cost(graphic)) {
+                    break 'parts;
+                }
+                full |= drawing(graphic, &mut native.drawing, report);
             }
             for text in &unit.texts {
+                if native.drawing.len() >= MAX_DRAWING {
+                    full = true;
+                    break 'parts;
+                }
+                if !pay(budget, 1) {
+                    break 'parts;
+                }
                 if let Some(entry) = text_entry(text, report) {
                     native.drawing.push(entry);
                 }
             }
         }
-        if native.drawing.len() > MAX_DRAWING {
-            native.drawing.truncate(MAX_DRAWING);
+        if full {
             report.note("symbol drawing beyond 256 strokes per unit left out");
         }
         units.insert(*number, unit_id);
@@ -173,7 +211,11 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, report: &mut Report) -> Re
     if let Some(terminal) = &power_terminal {
         document["behavior"] = json!({"type": "power", "terminal": terminal});
     }
-    Ok(Converted { id, document, units, power_terminal })
+    let text = document.to_string();
+    if text.len() > MAX_FILE_BYTES {
+        return Err(format!("its native document would take {} KiB; a library file holds at most {} KiB", text.len() >> 10, MAX_FILE_BYTES >> 10));
+    }
+    Ok(Converted { id, text, units, power_terminal })
 }
 
 /// A pin's logical terminal: its name and native electrical type. Fails for a number the native
@@ -204,7 +246,9 @@ fn terminal(pin: &Pin, symbol: &LibSymbol, power_terminal: Option<&str>, report:
             "unspecified"
         }
     };
-    let name = if pin.name.chars().count() > 32 {
+    // A name of more than 128 bytes is longer than 32 characters; checked first so a huge name
+    // isn't counted through.
+    let name = if pin.name.len() > 128 || pin.name.chars().count() > 32 {
         report.note("pin names longer than 32 characters shortened");
         clip(&pin.name, 32)
     } else {
@@ -259,10 +303,36 @@ fn appearance(pin: &Pin, at: (i64, i64), symbol: &LibSymbol, report: &mut Report
     }))
 }
 
+/// How many points converting `graphic` visits.
+fn cost(graphic: &Graphic) -> usize {
+    match &graphic.shape {
+        Shape::Rectangle { .. } | Shape::Circle { .. } => 2,
+        Shape::Arc { .. } => 3,
+        Shape::Polyline(points) => points.len().max(1),
+        Shape::Bezier(_) => CURVE_STEPS + 1,
+    }
+}
+
+/// Take `cost` from `budget`, which must stay above zero. When it is short, empties it and
+/// returns false, so an empty budget always means the drawing stopped.
+fn pay(budget: &mut usize, cost: usize) -> bool {
+    match budget.checked_sub(cost).filter(|left| *left > 0) {
+        Some(left) => {
+            *budget = left;
+            true
+        }
+        None => {
+            *budget = 0;
+            false
+        }
+    }
+}
+
 /// Append the native entries for one KiCad drawing, in the y-down frame. Drawings out of reach
 /// are left out; curves, long polylines and fills the native format can't hold are converted
-/// with a note.
-fn drawing(graphic: &Graphic, out: &mut Vec<Value>, report: &mut Report) {
+/// with a note. Returns whether pieces of a long polyline were left out because `out` reached
+/// [`MAX_DRAWING`] entries.
+fn drawing(graphic: &Graphic, out: &mut Vec<Value>, report: &mut Report) -> bool {
     let flip = |p: pcbcraft_kicad::Point| (p.x_nm, -p.y_nm);
     let stroke = match graphic.stroke_nm {
         0 => DEFAULT_STROKE_NM,
@@ -289,7 +359,7 @@ fn drawing(graphic: &Graphic, out: &mut Vec<Value>, report: &mut Report) {
             let (a, b) = (flip(*start), flip(*end));
             if !within(&[a, b]) || a.0 == b.0 || a.1 == b.1 {
                 report.note("symbol drawings that are empty or beyond 100 mm left out");
-                return;
+                return false;
             }
             let (min, max) = ((a.0.min(b.0), a.1.min(b.1)), (a.0.max(b.0), a.1.max(b.1)));
             out.push(entry(json!({"type": "rectangle", "min": point(min), "max": point(max)}), fill));
@@ -298,7 +368,7 @@ fn drawing(graphic: &Graphic, out: &mut Vec<Value>, report: &mut Report) {
             let c = flip(*center);
             if !within(&[(c.0 - radius_nm, c.1 - radius_nm), (c.0 + radius_nm, c.1 + radius_nm)]) {
                 report.note("symbol drawings that are empty or beyond 100 mm left out");
-                return;
+                return false;
             }
             out.push(entry(json!({"type": "circle", "center": point(c), "radius_nm": radius_nm}), fill));
         }
@@ -318,7 +388,7 @@ fn drawing(graphic: &Graphic, out: &mut Vec<Value>, report: &mut Report) {
                 _ => report.note("symbol drawings that are empty or beyond 100 mm left out"),
             }
         }
-        Shape::Polyline(points) => polyline(points.iter().copied().map(flip).collect(), fill, &entry, out, report),
+        Shape::Polyline(points) => return polyline(points.iter().copied().map(flip).collect(), fill, &entry, out, report),
         Shape::Bezier(control) => {
             report.note("symbol curves drawn as polylines");
             let [p0, p1, p2, p3] = control.map(flip);
@@ -332,18 +402,20 @@ fn drawing(graphic: &Graphic, out: &mut Vec<Value>, report: &mut Report) {
                     (mix(p0.0, p1.0, p2.0, p3.0), mix(p0.1, p1.1, p2.1, p3.1))
                 })
                 .collect();
-            polyline(points, "none", &entry, out, report);
+            return polyline(points, "none", &entry, out, report);
         }
     }
+    false
 }
 
 /// Append a polyline, closed when its ends meet. A fill is kept only on a closed convex outline
-/// of at most [`MAX_POINTS`] corners; longer runs are split into joined pieces.
-fn polyline(mut points: Vec<(i64, i64)>, fill: &str, entry: &dyn Fn(Value, &str) -> Value, out: &mut Vec<Value>, report: &mut Report) {
+/// of at most [`MAX_POINTS`] corners; longer runs are split into joined pieces. Pieces stop once
+/// `out` holds [`MAX_DRAWING`] entries; returns whether any were left out for that reason.
+fn polyline(mut points: Vec<(i64, i64)>, fill: &str, entry: &dyn Fn(Value, &str) -> Value, out: &mut Vec<Value>, report: &mut Report) -> bool {
     points.dedup();
     if points.len() < 2 || points.iter().any(|(x, y)| x.abs() > DRAWING_REACH_NM || y.abs() > DRAWING_REACH_NM) {
         report.note("symbol drawings that are empty or beyond 100 mm left out");
-        return;
+        return false;
     }
     let point = |&(x, y): &(i64, i64)| json!({"x_nm": x, "y_nm": y});
     let closed = points.len() >= 4 && points.first() == points.last();
@@ -356,18 +428,22 @@ fn polyline(mut points: Vec<(i64, i64)>, fill: &str, entry: &dyn Fn(Value, &str)
             fill
         };
         out.push(entry(json!({"type": "polyline", "points": points.iter().map(point).collect::<Vec<_>>(), "closed": true}), fill));
-        return;
+        return false;
     }
     if fill != "none" {
         report.note("fills of open or very long symbol outlines left out");
     }
     let mut start = 0;
     while start + 1 < points.len() {
+        if out.len() >= MAX_DRAWING {
+            return true;
+        }
         let end = (start + MAX_POINTS).min(points.len());
         let piece = points.get(start..end).unwrap_or_default();
         out.push(entry(json!({"type": "polyline", "points": piece.iter().map(point).collect::<Vec<_>>(), "closed": false}), "none"));
         start = end - 1;
     }
+    false
 }
 
 /// Whether a closed outline (without its repeated first point) turns the same way at every
@@ -420,7 +496,8 @@ fn text_entry(text: &Text, report: &mut Report) -> Option<Value> {
         return None;
     }
     let at = (text.at.x_nm, -text.at.y_nm);
-    let printable = !text.text.chars().any(char::is_control) && (1..=128).contains(&text.text.chars().count());
+    // More than 512 bytes is more than 128 characters; checked first so a huge text isn't scanned.
+    let printable = text.text.len() <= 512 && !text.text.chars().any(char::is_control) && (1..=128).contains(&text.text.chars().count());
     if !printable || at.0.abs() > DRAWING_REACH_NM || at.1.abs() > DRAWING_REACH_NM {
         report.note("symbol texts that are multi-line, longer than 128 characters or beyond 100 mm left out");
         return None;
@@ -443,16 +520,19 @@ fn unit_letters(index: usize) -> String {
     if index < 26 { letter(index).to_string() } else { format!("{}{}", letter(index / 26 - 1), letter(index)) }
 }
 
-/// The native reference prefix: the capital letters of KiCad's reference prefix, at most four;
-/// `U` when it has none.
+/// The native reference prefix: the capital letters among the first 64 characters of KiCad's
+/// reference prefix, at most four; `U` when there are none.
 fn reference_prefix(kicad: &str) -> String {
-    let letters: String = kicad.chars().filter(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase()).take(4).collect();
+    let letters: String = kicad.chars().take(64).filter(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase()).take(4).collect();
     if letters.is_empty() { "U".to_owned() } else { letters }
 }
 
-/// `text` without control characters, at most `limit` characters; `None` when that leaves it blank.
+/// `text` without control characters, at most `limit` characters taken from its first
+/// 4 × `limit`; `None` when that leaves it blank, as it does for a text that starts with that
+/// many control characters.
 pub(super) fn clip(text: &str, limit: usize) -> Option<String> {
-    let clipped: String = text.chars().filter(|c| !c.is_control()).take(limit).collect();
+    // Look at a bounded prefix only, so a huge text costs no more than a short one.
+    let clipped: String = text.chars().take(limit.saturating_mul(4)).filter(|c| !c.is_control()).take(limit).collect();
     let trimmed = clipped.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
