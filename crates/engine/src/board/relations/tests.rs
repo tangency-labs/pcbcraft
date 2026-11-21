@@ -1320,12 +1320,12 @@ fn a_net_eco_local_split_short_and_disconnected_control() {
 }
 
 /// Compare the complete retained v1 base and require the only changes to existing contracts
-/// to be optional ECO inputs. Contents are the exact main snapshot at `fc05e64a`, the pin P1.1 merges onto, not reconstructed.
+/// to be optional ECO inputs. Contents are the exact main snapshot at `a1eed6bd`, the pin P1.1 merges onto, not reconstructed.
 #[test]
 fn a_eco_compat_exact_base_command_contracts() {
     use sha2::{Digest, Sha256};
     let frozen = include_bytes!("base-command-contracts.json");
-    assert_eq!(format!("{:x}", Sha256::digest(frozen)), "7c599fc445265ac499b7dd16d540417ac5ad4bdb5f277349d424af2361f803c7");
+    assert_eq!(format!("{:x}", Sha256::digest(frozen)), "2aab209dc9f9e350437ff774bc63fd0ff61836eeb7537c56245cd8d2039b2914");
     let base: Value = serde_json::from_slice(frozen).unwrap();
     let current: Value = serde_json::from_str(include_str!("../../../../../docs/schemas/command-contracts.json")).unwrap();
     let described: Vec<_> = crate::CATALOG.iter().map(crate::Command::to_json).collect();
