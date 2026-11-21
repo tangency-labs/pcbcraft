@@ -544,18 +544,26 @@ transforms") and #86's model record uses; it follows the model-frame proposal in
   changes the board publishes; a no-op save publishes nothing and changes no
   bytes.
 - `revision` is the target's counter. Each save that changes a board with a
-  target increases it by one, in that save; publishing itself never changes it.
-  Publishing a saved state therefore always writes the same revision and the same
-  bytes, and if the file already holds them, nothing is written. The manifest also
-  carries the content hash and the snapshot's capture ID. Revisions only increase;
-  saves that are not published leave gaps, which are harmless.
+  target increases it by one in that save. Ordinary publishing uses the saved
+  revision and produces the same bytes for the same saved state. The manifest
+  also carries the content hash and the snapshot's capture ID. Revisions only
+  increase, and unpublished saves can leave gaps.
 - One publish job runs per target at a time. Publish requests made while a job
-  runs collapse into one follow-up job for the newest saved state. Just before
-  its rename, a job reads the file's revision again and stops without writing if
-  the file already holds the same or a newer one, and reports a newer one. The
-  linked path therefore never goes back to an older revision. A project restored
-  from an older copy is behind its own file in this way; **Replace** then
-  publishes it with the next revision above the file's.
+  runs collapse into one follow-up job for the newest saved state. Serialize the
+  final manifest check and rename for each exchange path, including across
+  PCBCraft instances. If the file has a newer revision, report both revisions
+  and leave the file in place. If the revisions match, compare the content
+  hashes. Matching hashes need no write. If they differ, report the conflict,
+  keep the existing file, and offer **Replace** for the same `source_id` or
+  **Publish as Separate Board** for a copy.
+- **Replace** keeps the existing `source_id` and uses the greater of the saved
+  target counter and one more than the file's revision. It persists that counter
+  in the project before publishing the saved board at that revision, so the next
+  edited save continues from the new baseline. If saving the counter fails, leave
+  the exchange file in place. If writing the exchange fails after saving the
+  counter, keep the saved baseline and report the failed publish. Retrying
+  **Replace** reuses that revision if neither the saved board nor the exchange
+  file has changed.
 - The file is written under a temporary name and renamed over the previous one, so
   a reader sees a whole revision or the previous one, never part of one.
   Publishing runs as a bounded job off the editor thread and never waits for
@@ -706,8 +714,15 @@ and leaves the file unchanged until Publish as Separate Board gives it its own
 `source_id` and file; Save As gives the copy a new `source_id` by itself; a board
 without a declared thickness and a model whose bytes do not match their hash are
 refused, naming the cause, and the previous file stays; a crash between writing
-and renaming leaves the previous file whole; publishing changes no board data and
-no undo history.
+and renaming leaves the previous file whole. Publishing changes no authored
+board data or undo history.
+
+For recovery, publish a saved board at the exchange file's revision with a
+different hash and check that the conflict is reported and the file stays
+unchanged. With an exchange at revision 10 and a restored target at revision 5,
+**Replace** publishes revision 11. Reopen the project and make an edit to verify
+the next save publishes revision 12. Repeat with a failed exchange write after
+the counter has been saved and check that **Replace** can retry revision 11.
 
 #### Slice 2: the linked board updated in the open assembly
 
@@ -718,7 +733,8 @@ side this slice adds only the fixtures and the run.
 *Acceptance scenario*, on the slice 1 fixture and an original enclosure:
 
 1. Publish revision 1. In SolidCraft, insert it into the enclosure assembly, add
-   a joint between mounting hole MH1 and a boss, and save the assembly.
+   a joint between mounting hole MH1 and a boss, and create an enclosure sketch
+   that references MH4. Save the assembly.
 2. In PCBCraft, move the right outline edge 5 mm, move connector J1 3 mm along
    that edge, change the finished thickness from 1.6 mm to 1.2 mm, delete mounting
    hole MH4, and save. Revision 2 is published.
