@@ -2606,25 +2606,19 @@ struct BoardHeaderSteps {
     first: bool,
     zone_validation: Option<crate::board::zones::ZoneValidationSteps>,
     baseline: Option<crate::board::update::BaselineSteps>,
-    baseline_total: std::sync::OnceLock<usize>,
+    baseline_extra_units: usize,
 }
 
 impl BoardHeaderSteps {
     /// Start before budgeted zone validation and the validated opening.
     fn new() -> Self {
-        Self {
-            phase: HEADER_VALIDATE_ZONES,
-            cursor: 0,
-            first: true,
-            zone_validation: None,
-            baseline: None,
-            baseline_total: std::sync::OnceLock::new(),
-        }
+        Self { phase: HEADER_VALIDATE_ZONES, cursor: 0, first: true, zone_validation: None, baseline: None, baseline_extra_units: 0 }
     }
 
-    /// Header units: zone-validation batches, the opening and field units, cached baseline units,
-    /// and one per variable-sized header record. Baseline units are computed once and reused across
-    /// progress polls so each poll remains O(1).
+    /// Header units: zone-validation batches, the opening and field units, baseline units, and
+    /// one per variable-sized header record. Baseline units start from the O(1) metadata lower
+    /// bound ([`crate::board::update::BaselineSteps::base_total`]) and accumulate multi-batch net
+    /// units as nets are stepped, so every progress poll—including the first—stays O(1).
     fn total(&self, project: &Project) -> usize {
         let board = &project.board;
         let zone_validation = crate::board::zones::ZoneValidationSteps::total(project);
@@ -2632,7 +2626,10 @@ impl BoardHeaderSteps {
             .setup
             .as_ref()
             .map_or(0, |setup| setup.materials().len().saturating_add(setup.layers().len()).saturating_add(setup.stackup().strata.len()));
-        let baseline = *self.baseline_total.get_or_init(|| board.baseline.as_deref().map_or(0, crate::board::update::BaselineSteps::total));
+        let baseline = board
+            .baseline
+            .as_deref()
+            .map_or(0, |baseline| crate::board::update::BaselineSteps::base_total(baseline).saturating_add(self.baseline_extra_units));
         let graphics = board.drawings.as_ref().map_or(0, |graphics| graphics.layers.len().saturating_add(graphics.items.len()));
         2usize
             .saturating_add(zone_validation)
@@ -2745,7 +2742,9 @@ impl BoardHeaderSteps {
                         self.first = false;
                     }
                     let steps = self.baseline.get_or_insert_with(crate::board::update::BaselineSteps::new);
-                    if !steps.step_indented(bytes, baseline, budget)? {
+                    let done = steps.step_indented(bytes, baseline, budget)?;
+                    self.baseline_extra_units = steps.extra_net_units();
+                    if !done {
                         return Ok(false);
                     }
                     self.baseline = None;
@@ -3111,9 +3110,10 @@ mod tests {
         },
     };
 
-    /// Polling [`BoardSizeCheck::progress`] across every step of a large baseline computes the
-    /// baseline work total once and reuses it in O(1) without rescanning baseline nets on each
-    /// poll, while keeping `(completed, total)` monotonic and exact.
+    /// Polling [`BoardSizeCheck::progress`] across every step of a large baseline—including the
+    /// very first poll—never scans `baseline.nets`: it starts from O(1) metadata and refines
+    /// multi-batch net units incrementally as nets are stepped, keeping `(completed, total)`
+    /// monotonic and exact at completion.
     #[test]
     fn board_size_check_progress_caches_baseline_total_across_polls() {
         const COMPONENT_COUNT: usize = 512;
@@ -3165,11 +3165,14 @@ mod tests {
             nets,
         };
         let _ = take_baseline_total_net_scans();
+        assert_eq!(BaselineSteps::base_total(&baseline), 1 + COMPONENT_COUNT + net_count);
+        assert_eq!(take_baseline_total_net_scans(), 0);
         assert_eq!(BaselineSteps::total(&baseline), expected_baseline_units);
         assert_eq!(take_baseline_total_net_scans(), net_count);
 
+        let expected_initial_total = 2 + BaselineSteps::base_total(&baseline) + project.board.footprints().len();
         Arc::make_mut(&mut project.board).baseline = Some(Arc::new(baseline));
-        let expected_total = 2 + expected_baseline_units + project.board.footprints().len();
+        let expected_final_total = 2 + expected_baseline_units + project.board.footprints().len();
         let saved_documents = encode_documents(Arc::new(project.clone())).unwrap();
         let saved_board_len = saved_documents[&project_board_path(&saved_documents[ENTRY_POINT]).unwrap().unwrap()].len();
 
@@ -3179,23 +3182,27 @@ mod tests {
 
         let mut check = BoardSizeCheck::new(true);
         let _ = take_baseline_total_net_scans();
-        assert_eq!(check.progress(&project), (0, expected_total));
-        assert_eq!(take_baseline_total_net_scans(), net_count);
+        assert_eq!(check.progress(&project), (0, expected_initial_total));
+        assert_eq!(take_baseline_total_net_scans(), 0);
 
         let mut previous_completed = 0usize;
+        let mut previous_total = expected_initial_total;
         let mut steps = 0usize;
         while !check.step(&project, 1).unwrap() {
             steps += 1;
             let (completed, total) = check.progress(&project);
-            assert_eq!(total, expected_total);
             assert_eq!(completed, steps);
             assert!(completed >= previous_completed);
+            assert!(total >= previous_total);
+            assert!(completed <= total);
+            assert!(total <= expected_final_total);
             previous_completed = completed;
+            previous_total = total;
             assert_eq!(take_baseline_total_net_scans(), 0);
         }
-        assert_eq!(check.progress(&project), (expected_total, expected_total));
+        assert_eq!(check.progress(&project), (expected_final_total, expected_final_total));
         assert_eq!(take_baseline_total_net_scans(), 0);
-        assert_eq!(steps, expected_total);
+        assert_eq!(steps, expected_final_total);
         assert_eq!(check.byte_count(), saved_board_len);
     }
 

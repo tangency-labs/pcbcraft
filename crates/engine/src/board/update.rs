@@ -143,6 +143,7 @@ pub(crate) struct BaselineSteps {
     saw_origin_net: bool,
     seen_terminals: BTreeSet<TerminalKey>,
     baseline_bytes: usize,
+    extra_net_units: usize,
 }
 
 impl BaselineSteps {
@@ -158,13 +159,28 @@ impl BaselineSteps {
             saw_origin_net: false,
             seen_terminals: BTreeSet::new(),
             baseline_bytes: 0,
+            extra_net_units: 0,
         }
+    }
+
+    /// O(1) lower bound on baseline work units from metadata alone: one opening unit, one per
+    /// component, and at least one per net, without scanning `baseline.nets`.
+    pub(crate) fn base_total(baseline: &Baseline) -> usize {
+        1usize.saturating_add(baseline.components.len()).saturating_add(baseline.nets.len())
+    }
+
+    /// Additional work units discovered so far for multi-batch nets (>
+    /// [`BASELINE_NET_TERMINALS_PER_UNIT`] terminals). Adding this to [`Self::base_total`] yields
+    /// a monotonically non-decreasing total in O(1) per poll that reaches the exact step count
+    /// once all baseline nets have been visited.
+    pub(crate) fn extra_net_units(&self) -> usize {
+        self.extra_net_units
     }
 
     /// Work units for this baseline: one opening unit, one per component, and one per
     /// [`BASELINE_NET_TERMINALS_PER_UNIT`]-terminal batch (minimum one per net).
+    #[cfg(test)]
     pub(crate) fn total(baseline: &Baseline) -> usize {
-        #[cfg(test)]
         BASELINE_TOTAL_NET_SCANS.with(|count| count.set(count.get().saturating_add(baseline.nets.len())));
         baseline.nets.iter().fold(1usize.saturating_add(baseline.components.len()), |acc, net| acc.saturating_add(baseline_net_units(net)))
     }
@@ -244,6 +260,7 @@ impl BaselineSteps {
                         };
                         if self.terminal_cursor == 0 {
                             baseline.validate_net_header(self.net_cursor, net, &mut self.saw_origin_net)?;
+                            self.extra_net_units = self.extra_net_units.saturating_add(baseline_net_units(net).saturating_sub(1));
                             if !self.first {
                                 out.write_all(b"    ,\n").map_err(|error| error.to_string())?;
                             }
