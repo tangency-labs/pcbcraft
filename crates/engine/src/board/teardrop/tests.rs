@@ -1075,7 +1075,13 @@ mod regeneration {
 
         // Whole-step, budget-1, and mid-baseline-resumed board size checks all match the saved board.
         let documents = encode_documents(committed.clone()).unwrap();
-        let saved_board = documents[&project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()].len();
+        let saved_board_bytes = &documents[&project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()];
+        let mut expected_embedded = Vec::with_capacity(stepped_bytes.len() + 18);
+        expected_embedded.extend_from_slice(b"  \"baseline\": ");
+        expected_embedded.extend_from_slice(&stepped_bytes);
+        expected_embedded.extend_from_slice(b",\n");
+        assert!(saved_board_bytes.windows(expected_embedded.len()).any(|window| window == expected_embedded.as_slice()));
+        let saved_board = saved_board_bytes.len();
         let mut whole = BoardSizeCheck::new(true);
         assert!(whole.step(&committed, usize::MAX).unwrap());
         assert_eq!(whole.byte_count(), saved_board);
@@ -1122,5 +1128,217 @@ mod regeneration {
             }
         }
         assert!(error.unwrap().contains("canonical"));
+    }
+
+    /// A single baseline net with 8,192 terminals validates and writes at most
+    /// `BASELINE_NET_TERMINALS_PER_UNIT` terminals per budget unit, cancels cleanly mid-net
+    /// without mutating project state, and emits bytes identical to `serde_json`, single-shot
+    /// `Baseline::encode`, and the saved `board.json` document.
+    #[test]
+    fn board_size_check_single_large_baseline_net_is_bounded_resumable_and_byte_exact() {
+        use crate::board::track::{
+            Track, Via,
+            tests::{copper_layers, routed_fixture},
+        };
+        use crate::board::update::{
+            BASELINE_NET_TERMINALS_PER_UNIT, BaselineSteps, DISPLAY_FORMAT, NET_ORIGIN_FORMAT, NetState, PartInstanceState, TerminalKey,
+            take_baseline_terminals_stepped,
+        };
+        use crate::library::MAX_TERMINALS;
+        use crate::persistence::{BoardSizeCheck, ENTRY_POINT, decode_documents, project_board_path, take_board_record_writes};
+        use std::sync::Arc;
+
+        const WIDE_PARTS: usize = 8;
+        const WIDE_TERMINALS: usize = WIDE_PARTS * MAX_TERMINALS;
+        assert_eq!(WIDE_TERMINALS, 8_192);
+        let wide_net_units = WIDE_TERMINALS.div_ceil(BASELINE_NET_TERMINALS_PER_UNIT);
+        assert_eq!(wide_net_units, 32);
+
+        let mut session = routed_fixture();
+        let board = view(&session).target.board;
+        let copper_layer = copper_layers(&session)[0];
+        let outline_layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+        let corners =
+            [point(-5_000_000, -5_000_000), point(265_000_000, -5_000_000), point(265_000_000, 155_000_000), point(-5_000_000, 155_000_000)];
+        session
+            .apply(ADD_DRAWING, &json!({"board":board,"layer":outline_layer,"points":corners,"closed":true,"expected_revision":session.revision()}))
+            .unwrap();
+        let rules = Values { clearance_nm: 35_000, ..Values::default() };
+        session.apply(SET_RULES, &json!({"board":board,"rules":rules,"expected_revision":session.revision()})).unwrap();
+
+        let mut project = session.project().unwrap().clone();
+        let via = Uuid::from_u128(0x40_0001);
+        let track = Uuid::from_u128(0x40_0002);
+        let teardrop_id = Uuid::from_u128(0x40_0003);
+        let first_record;
+        {
+            let board_data = Arc::make_mut(&mut project.board);
+            let at = point(10_000_000, 20_000_000);
+            board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+            board_data.tracks.push(Track {
+                id: track,
+                locked: false,
+                layer: copper_layer,
+                width_nm: 100_000,
+                start: at,
+                end: point(at.x_nm + 600_000, at.y_nm),
+            });
+            first_record = Record { id: teardrop_id, via, track, parameters: PARAMS };
+            board_data.teardrops.push(first_record);
+            board_data.vias.sort_by_key(|item| item.id);
+            board_data.tracks.sort_by_key(|item| item.id);
+            board_data.teardrops.sort_by_key(|item| item.id);
+
+            let baseline = Arc::make_mut(board_data.baseline.as_mut().unwrap());
+            let template = baseline.components.values().next().unwrap().clone();
+            let stores_display = matches!(baseline.format.as_str(), DISPLAY_FORMAT | NET_ORIGIN_FORMAT);
+            let pins: Vec<String> = (1..=MAX_TERMINALS).map(|pin| format!("P{pin:04}")).collect();
+            let mut wide_terminals = Vec::with_capacity(WIDE_TERMINALS);
+            for part_index in 0..WIDE_PARTS {
+                let id = 20_000 + part_index as u64;
+                baseline.components.insert(
+                    id,
+                    PartInstanceState {
+                        library: template.library.clone(),
+                        definition: template.definition.clone(),
+                        revision: template.revision,
+                        reference: format!("U{id}"),
+                        value: template.value.clone(),
+                        primary_quantity: template.primary_quantity.clone(),
+                        terminals: pins.clone(),
+                        package: None,
+                    },
+                );
+                for pin in &pins {
+                    wide_terminals.push(TerminalKey { component: id, terminal: pin.clone() });
+                }
+            }
+            baseline.nets.push(NetState {
+                display_name: stores_display.then(|| "WIDE_NET".to_string()),
+                terminals: wide_terminals,
+                names: vec!["WIDE_NET".to_string()],
+                origin: None,
+            });
+            baseline.nets.sort_by(|left, right| left.terminals.cmp(&right.terminals));
+        }
+
+        let saved = encode_documents(Arc::new(project)).unwrap();
+        session.open_snapshot(decode_documents(&saved).unwrap());
+        session.apply("project.rename", &json!({"name":"Single wide baseline net"})).unwrap();
+
+        let before = session.snapshot().unwrap();
+        let baseline = before.board.baseline.as_ref().unwrap();
+        let wide_index = baseline.nets.iter().position(|net| net.terminals.len() == WIDE_TERMINALS).unwrap();
+        let units_before_wide: usize =
+            baseline.nets[..wide_index].iter().map(|net| net.terminals.len().div_ceil(BASELINE_NET_TERMINALS_PER_UNIT).max(1)).sum();
+        let expected_baseline_units: usize = 1
+            + baseline.components.len()
+            + baseline.nets.iter().map(|net| net.terminals.len().div_ceil(BASELINE_NET_TERMINALS_PER_UNIT).max(1)).sum::<usize>();
+        assert_eq!(BaselineSteps::total(baseline), expected_baseline_units);
+
+        let setup_units = {
+            let setup = before.board.setup.as_ref().unwrap();
+            1 + setup.materials().len() + setup.layers().len() + setup.stackup().strata.len()
+        };
+        let mid_wide_net = setup_units + 1 + baseline.components.len() + units_before_wide + (wide_net_units / 2);
+
+        let before_bytes = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        let first = first_record.on(view(&session).target);
+        let params = json!({"tracks":[first.track],"vias":[first.via],"dx_nm":200_000,"dy_nm":200_000,"expected_revision":revision});
+
+        // Cancel in the middle of the 8,192-terminal net: each step(1) bounds terminals to <= K,
+        // and dropping leaves snapshot, saved bytes, revision, and Undo/Redo unchanged.
+        let mut canceled = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        for _ in 0..50_000 {
+            if canceled.progress().stage == "Checking board size" {
+                break;
+            }
+            assert!(!canceled.step(256));
+        }
+        assert_eq!(canceled.progress().stage, "Checking board size");
+        let mut terminals_seen_before_cancel = 0usize;
+        for expected in 1..=mid_wide_net {
+            let _ = (take_derive_calls(), take_board_record_writes(), take_baseline_terminals_stepped());
+            assert!(!canceled.step(1));
+            assert_eq!(take_derive_calls(), 0);
+            assert!(take_board_record_writes() <= 1);
+            let stepped = take_baseline_terminals_stepped();
+            assert!(stepped <= BASELINE_NET_TERMINALS_PER_UNIT);
+            terminals_seen_before_cancel += stepped;
+            assert_eq!(canceled.progress().completed, expected);
+        }
+        assert!(terminals_seen_before_cancel >= (wide_net_units / 2) * BASELINE_NET_TERMINALS_PER_UNIT);
+        assert!(
+            terminals_seen_before_cancel
+                < WIDE_TERMINALS + baseline.nets.iter().filter(|n| n.terminals.len() != WIDE_TERMINALS).map(|n| n.terminals.len()).sum::<usize>()
+        );
+        assert!(canceled.take_result().unwrap().is_none());
+        drop(canceled);
+
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
+        assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+
+        // Resumable budget-1 encoding bounds every step to <= K terminals, counts every terminal,
+        // matches single-shot `Baseline::encode()`, matches `serde_json::to_vec` for the wide net,
+        // and appears verbatim inside the saved `board.json`.
+        let single_shot = baseline.encode().unwrap();
+        let serde_wide = serde_json::to_vec(&baseline.nets[wide_index]).unwrap();
+        let mut expected_wide_line = Vec::with_capacity(serde_wide.len() + 5);
+        expected_wide_line.extend_from_slice(b"    ");
+        expected_wide_line.extend_from_slice(&serde_wide);
+        expected_wide_line.push(b'\n');
+        assert!(single_shot.windows(expected_wide_line.len()).any(|window| window == expected_wide_line.as_slice()));
+
+        let mut expected_indented = Vec::with_capacity(single_shot.len() + 4096);
+        for (index, line) in single_shot.split(|byte| *byte == b'\n').enumerate() {
+            if index != 0 {
+                expected_indented.extend_from_slice(b"\n  ");
+            }
+            expected_indented.extend_from_slice(line);
+        }
+
+        let mut stepped_bytes = Vec::with_capacity(expected_indented.len());
+        let mut baseline_steps = BaselineSteps::new();
+        let mut step_count = 0usize;
+        let mut total_terminals_stepped = 0usize;
+        let expected_total_terminals: usize = baseline.nets.iter().map(|net| net.terminals.len()).sum();
+        loop {
+            let mut budget = 1usize;
+            let _ = (take_board_record_writes(), take_baseline_terminals_stepped());
+            let done = baseline_steps.step_indented(&mut stepped_bytes, baseline, &mut budget).unwrap();
+            assert!(take_board_record_writes() <= 1);
+            let stepped = take_baseline_terminals_stepped();
+            assert!(stepped <= BASELINE_NET_TERMINALS_PER_UNIT);
+            total_terminals_stepped += stepped;
+            assert_eq!(budget, 0);
+            step_count += 1;
+            if done {
+                break;
+            }
+        }
+        assert_eq!(step_count, expected_baseline_units);
+        assert_eq!(total_terminals_stepped, expected_total_terminals);
+        assert_eq!(stepped_bytes, expected_indented);
+
+        let saved_board_bytes = &before_bytes[&project_board_path(&before_bytes[ENTRY_POINT]).unwrap().unwrap()];
+        let mut expected_embedded = Vec::with_capacity(stepped_bytes.len() + 18);
+        expected_embedded.extend_from_slice(b"  \"baseline\": ");
+        expected_embedded.extend_from_slice(&stepped_bytes);
+        expected_embedded.extend_from_slice(b",\n");
+        assert!(saved_board_bytes.windows(expected_embedded.len()).any(|window| window == expected_embedded.as_slice()));
+
+        let mut single = BoardSizeCheck::new(true);
+        let _ = (take_board_record_writes(), take_baseline_terminals_stepped());
+        while !single.step(&before, 1).unwrap() {
+            assert!(take_board_record_writes() <= 1);
+            assert!(take_baseline_terminals_stepped() <= BASELINE_NET_TERMINALS_PER_UNIT);
+        }
+        assert!(take_board_record_writes() <= 1);
+        assert!(take_baseline_terminals_stepped() <= BASELINE_NET_TERMINALS_PER_UNIT);
+        assert_eq!(single.byte_count(), saved_board_bytes.len());
     }
 }

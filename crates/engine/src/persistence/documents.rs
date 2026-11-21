@@ -2617,7 +2617,7 @@ impl BoardHeaderSteps {
             .setup
             .as_ref()
             .map_or(0, |setup| setup.materials().len().saturating_add(setup.layers().len()).saturating_add(setup.stackup().strata.len()));
-        let baseline = board.baseline.as_ref().map_or(0, crate::board::update::BaselineSteps::total);
+        let baseline = board.baseline.as_deref().map_or(0, crate::board::update::BaselineSteps::total);
         let graphics = board.drawings.as_ref().map_or(0, |graphics| graphics.layers.len().saturating_add(graphics.items.len()));
         2usize
             .saturating_add(setup)

@@ -18,6 +18,12 @@ use uuid::Uuid;
 #[cfg(test)]
 std::thread_local! {
     pub(super) static TERMINAL_NET_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BASELINE_TERMINALS_STEPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_baseline_terminals_stepped() -> usize {
+    BASELINE_TERMINALS_STEPPED.with(|count| count.replace(0))
 }
 
 /// Explicitly adopt current supported logical inputs before retaining physical removals.
@@ -104,17 +110,27 @@ const BASELINE_OPEN: u8 = 0;
 const BASELINE_COMPONENTS: u8 = 1;
 const BASELINE_NETS: u8 = 2;
 const BASELINE_DONE: u8 = 3;
+/// Maximum baseline net terminals validated and serialized per budget unit.
+pub(crate) const BASELINE_NET_TERMINALS_PER_UNIT: usize = 256;
+
+/// Work units required for one baseline net: at least one unit, plus one per
+/// [`BASELINE_NET_TERMINALS_PER_UNIT`] terminals.
+fn baseline_net_units(net: &NetState) -> usize {
+    net.terminals.len().div_ceil(BASELINE_NET_TERMINALS_PER_UNIT).max(1)
+}
 
 /// Resumable validator and encoder for [`Baseline`].
 ///
 /// The opening header/source check and write take one unit, each component takes one unit, and
-/// each net takes one unit. Standalone [`Baseline::encode`] and embedded board-header writing
-/// share this state machine so counted and saved bytes stay identical.
+/// each net takes one unit per [`BASELINE_NET_TERMINALS_PER_UNIT`] terminals (minimum one).
+/// Standalone [`Baseline::encode`] and embedded board-header writing share this state machine so
+/// counted and saved bytes stay identical.
 pub(crate) struct BaselineSteps {
     phase: u8,
     last_component: Option<u64>,
     component_cursor: usize,
     net_cursor: usize,
+    terminal_cursor: usize,
     first: bool,
     saw_origin_net: bool,
     seen_terminals: BTreeSet<TerminalKey>,
@@ -129,6 +145,7 @@ impl BaselineSteps {
             last_component: None,
             component_cursor: 0,
             net_cursor: 0,
+            terminal_cursor: 0,
             first: true,
             saw_origin_net: false,
             seen_terminals: BTreeSet::new(),
@@ -136,9 +153,10 @@ impl BaselineSteps {
         }
     }
 
-    /// Work units for this baseline: one opening unit plus one per component and one per net.
+    /// Work units for this baseline: one opening unit, one per component, and one per
+    /// [`BASELINE_NET_TERMINALS_PER_UNIT`]-terminal batch (minimum one per net).
     pub(crate) fn total(baseline: &Baseline) -> usize {
-        1usize.saturating_add(baseline.components.len()).saturating_add(baseline.nets.len())
+        baseline.nets.iter().fold(1usize.saturating_add(baseline.components.len()), |acc, net| acc.saturating_add(baseline_net_units(net)))
     }
 
     /// Advance at most `budget` units, writing the baseline indented by two spaces for `board.json`.
@@ -207,31 +225,57 @@ impl BaselineSteps {
                     self.first = true;
                 }
                 BASELINE_NETS => {
-                    if self.net_cursor < baseline.nets.len() && *budget == 0 {
-                        return Ok(false);
-                    }
-                    let end = self.net_cursor.saturating_add(*budget).min(baseline.nets.len());
-                    if let Some(slice) = baseline.nets.get(self.net_cursor..end) {
-                        for (offset, net) in slice.iter().enumerate() {
-                            let index = self.net_cursor + offset;
-                            baseline.validate_net(index, net, &mut self.seen_terminals, &mut self.saw_origin_net)?;
-                            #[cfg(test)]
-                            if indent {
-                                crate::persistence::count_board_record_write();
-                            }
+                    while self.net_cursor < baseline.nets.len() {
+                        if *budget == 0 {
+                            return Ok(false);
+                        }
+                        let Some(net) = baseline.nets.get(self.net_cursor) else {
+                            break;
+                        };
+                        if self.terminal_cursor == 0 {
+                            baseline.validate_net_header(self.net_cursor, net, &mut self.saw_origin_net)?;
                             if !self.first {
                                 out.write_all(b"    ,\n").map_err(|error| error.to_string())?;
                             }
                             self.first = false;
-                            out.write_all(b"    ").map_err(|error| error.to_string())?;
-                            serde_json::to_writer(&mut out, net).map_err(|error| error.to_string())?;
-                            out.write_all(b"\n").map_err(|error| error.to_string())?;
+                            out.write_all(b"    {").map_err(|error| error.to_string())?;
+                            if let Some(display_name) = &net.display_name {
+                                out.write_all(b"\"display_name\":").map_err(|error| error.to_string())?;
+                                serde_json::to_writer(&mut out, display_name).map_err(|error| error.to_string())?;
+                                out.write_all(b",").map_err(|error| error.to_string())?;
+                            }
+                            out.write_all(b"\"terminals\":[").map_err(|error| error.to_string())?;
                         }
-                    }
-                    *budget -= end - self.net_cursor;
-                    self.net_cursor = end;
-                    if self.net_cursor < baseline.nets.len() {
-                        return Ok(false);
+                        let end = self.terminal_cursor.saturating_add(BASELINE_NET_TERMINALS_PER_UNIT).min(net.terminals.len());
+                        if let Some(slice) = net.terminals.get(self.terminal_cursor..end) {
+                            for (offset, terminal) in slice.iter().enumerate() {
+                                let terminal_index = self.terminal_cursor + offset;
+                                baseline.validate_net_terminal(net, terminal_index, &mut self.seen_terminals)?;
+                                #[cfg(test)]
+                                BASELINE_TERMINALS_STEPPED.with(|count| count.set(count.get() + 1));
+                                if terminal_index > 0 {
+                                    out.write_all(b",").map_err(|error| error.to_string())?;
+                                }
+                                serde_json::to_writer(&mut out, terminal).map_err(|error| error.to_string())?;
+                            }
+                        }
+                        #[cfg(test)]
+                        if indent {
+                            crate::persistence::count_board_record_write();
+                        }
+                        self.terminal_cursor = end;
+                        *budget -= 1;
+                        if self.terminal_cursor >= net.terminals.len() {
+                            out.write_all(b"],\"names\":").map_err(|error| error.to_string())?;
+                            serde_json::to_writer(&mut out, &net.names).map_err(|error| error.to_string())?;
+                            if let Some(origin) = &net.origin {
+                                out.write_all(b",\"origin\":").map_err(|error| error.to_string())?;
+                                serde_json::to_writer(&mut out, origin).map_err(|error| error.to_string())?;
+                            }
+                            out.write_all(b"}\n").map_err(|error| error.to_string())?;
+                            self.net_cursor += 1;
+                            self.terminal_cursor = 0;
+                        }
                     }
                     if baseline.format == NET_ORIGIN_FORMAT && !self.saw_origin_net {
                         return Err("board baseline format 5 requires an unnamed singleton net".into());
@@ -697,6 +741,16 @@ impl Baseline {
     /// Validate one historical net record, its canonical ordering against the previous net, and
     /// cross-net terminal uniqueness.
     fn validate_net(&self, index: usize, net: &NetState, seen: &mut BTreeSet<TerminalKey>, saw_origin_net: &mut bool) -> Result<(), String> {
+        self.validate_net_header(index, net, saw_origin_net)?;
+        for terminal_index in 0..net.terminals.len() {
+            self.validate_net_terminal(net, terminal_index, seen)?;
+        }
+        Ok(())
+    }
+
+    /// Validate per-net metadata, canonical net ordering, and names without walking the terminal
+    /// list so large nets can validate terminals incrementally.
+    fn validate_net_header(&self, index: usize, net: &NetState, saw_origin_net: &mut bool) -> Result<(), String> {
         if let Some(previous) = index.checked_sub(1).and_then(|prev| self.nets.get(prev))
             && previous.terminals >= net.terminals
         {
@@ -726,7 +780,6 @@ impl Baseline {
                         .is_some_and(|pads| pads.pads().len() > 1)
                 }))
             || net.terminals.len() > MAX_SYMBOLS * crate::library::MAX_TERMINALS
-            || !strictly_sorted(&net.terminals)
             || net.names.len() > crate::net_labels::MAX_LABELS * crate::sheets::MAX_SHEETS
         {
             return Err("invalid accepted net membership".into());
@@ -737,12 +790,22 @@ impl Baseline {
                 return Err("invalid accepted net name".into());
             }
         }
-        for terminal in &net.terminals {
-            if !seen.insert(terminal.clone())
-                || !self.components.get(&terminal.component).is_some_and(|component| component.terminals.binary_search(&terminal.terminal).is_ok())
-            {
-                return Err("accepted net has a duplicate or unknown component terminal".into());
-            }
+        Ok(())
+    }
+
+    /// Validate one terminal entry of a historical net: strict intra-net ordering, cross-net
+    /// uniqueness, and membership in its historical component.
+    fn validate_net_terminal(&self, net: &NetState, terminal_index: usize, seen: &mut BTreeSet<TerminalKey>) -> Result<(), String> {
+        let terminal = net.terminals.get(terminal_index).ok_or_else(|| "invalid accepted net membership".to_string())?;
+        if let Some(previous) = terminal_index.checked_sub(1).and_then(|prev| net.terminals.get(prev))
+            && previous >= terminal
+        {
+            return Err("invalid accepted net membership".into());
+        }
+        if !seen.insert(terminal.clone())
+            || !self.components.get(&terminal.component).is_some_and(|component| component.terminals.binary_search(&terminal.terminal).is_ok())
+        {
+            return Err("accepted net has a duplicate or unknown component terminal".into());
         }
         Ok(())
     }
