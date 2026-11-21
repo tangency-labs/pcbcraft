@@ -722,9 +722,9 @@ fn documents_encoder_steps_large_net_lineage_incrementally_and_matches_serde() {
             large_steps += 1;
         };
         assert!(build_graph_steps > 1);
-        assert!(validate_record_steps >= LINEAGE_LEN);
+        assert!(validate_record_steps >= 2 * LINEAGE_LEN);
         assert!(meter_record_steps >= LINEAGE_LEN);
-        assert_eq!(large_steps, small_steps + 3 * LINEAGE_LEN + 4);
+        assert_eq!(large_steps, small_steps + 4 * LINEAGE_LEN + 4);
 
         for target_stage in ["validate_records", "meter_records"] {
             let mut cancelled = DocumentsEncoder::new(large.clone());

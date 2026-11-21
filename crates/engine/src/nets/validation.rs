@@ -33,7 +33,8 @@ fn history_ids(state: &State) -> Option<&[Uuid]> {
 /// Incremental validator and compact byte meter for [`Registry`] so native Save encoding can
 /// yield between frames without allocating an 8 MiB buffer. Per-item stages step one record
 /// ID/number check, differential pair, sheet anchor item, network index entry, record header,
-/// lineage item, branch/successor UUID, or [`RecordEncoding`] byte-metering fragment per call.
+/// class binding, lineage item, seen-lineage cleanup entry, branch/successor UUID, or
+/// [`RecordEncoding`] byte-metering fragment per call.
 /// Three whole-project units remain single isolated steps that yield before and after: warming
 /// `project.borrowed_electrical_connectivity()` (`GraphBuilder` phase 0, once per snapshot if not
 /// already cached), sorting derived networks (`GraphBuilder` phase 3), and `numbering::plan`
@@ -108,7 +109,8 @@ impl RegistryValidation {
             }
             1 => {
                 if let Some(record) = registry.records.get(self.cursor) {
-                    if record.id.is_nil() || self.prev_id.is_some_and(|prev| prev >= record.id) || !self.ids.insert(record.id) {
+                    let unique = self.ids.insert(record.id);
+                    if record.id.is_nil() || self.prev_id.is_some_and(|prev| prev >= record.id) || !unique {
                         self.id_error = true;
                     }
                     self.prev_id = Some(record.id);
@@ -166,13 +168,7 @@ impl RegistryValidation {
                         {
                             return Err("Duplicate or excessive net anchors/lineage.".into());
                         }
-                        if record.class_bindings.len() > super::classes::MAX_BINDINGS
-                            || record.class_bindings.windows(2).any(|pair| pair.first() >= pair.get(1))
-                            || record
-                                .class_bindings
-                                .iter()
-                                .any(|binding| project.net_classes.get(binding.class).is_none() || !self.ids.contains(&binding.origin))
-                        {
+                        if record.class_bindings.len() > super::classes::MAX_BINDINGS {
                             return Err("Invalid, dangling, duplicate or excessive net class bindings.".into());
                         }
                         for anchor in record.anchors() {
@@ -202,18 +198,40 @@ impl RegistryValidation {
                                 snapshot.validate()?;
                             }
                         }
-                        self.seen_lineage.clear();
                         self.item_index = 0;
                         self.prev_successor = None;
-                        if !record.lineage.is_empty() {
+                        if !record.class_bindings.is_empty() {
                             self.substep = 1;
-                        } else if history_ids(&record.state).is_some_and(|ids| !ids.is_empty()) {
+                        } else if !record.lineage.is_empty() {
                             self.substep = 2;
+                        } else if history_ids(&record.state).is_some_and(|ids| !ids.is_empty()) {
+                            self.substep = 4;
                         } else {
                             self.cursor += 1;
                         }
                     }
                     1 => {
+                        if let Some(binding) = record.class_bindings.get(self.item_index) {
+                            let ordered =
+                                self.item_index.checked_sub(1).and_then(|prev| record.class_bindings.get(prev)).is_none_or(|prev| prev < binding);
+                            if !ordered || project.net_classes.get(binding.class).is_none() || !self.ids.contains(&binding.origin) {
+                                return Err("Invalid, dangling, duplicate or excessive net class bindings.".into());
+                            }
+                            self.item_index += 1;
+                        }
+                        if self.item_index >= record.class_bindings.len() {
+                            self.item_index = 0;
+                            if !record.lineage.is_empty() {
+                                self.substep = 2;
+                            } else if history_ids(&record.state).is_some_and(|ids| !ids.is_empty()) {
+                                self.substep = 4;
+                            } else {
+                                self.substep = 0;
+                                self.cursor += 1;
+                            }
+                        }
+                    }
+                    2 => {
                         if let Some(source) = record.lineage.get(self.item_index) {
                             source.snapshot.validate()?;
                             anchor_owner(&source.anchor, project, true)?;
@@ -225,18 +243,24 @@ impl RegistryValidation {
                             self.item_index += 1;
                         }
                         if self.item_index >= record.lineage.len() {
-                            self.seen_lineage.clear();
+                            self.item_index = 0;
+                            self.substep = 3;
+                        }
+                    }
+                    3 => {
+                        let _ = self.seen_lineage.pop_first();
+                        if self.seen_lineage.is_empty() {
                             self.item_index = 0;
                             self.prev_successor = None;
                             if history_ids(&record.state).is_some_and(|ids| !ids.is_empty()) {
-                                self.substep = 2;
+                                self.substep = 4;
                             } else {
                                 self.substep = 0;
                                 self.cursor += 1;
                             }
                         }
                     }
-                    2 => {
+                    4 => {
                         let ids = history_ids(&record.state).unwrap_or(&[]);
                         if let Some(&id) = ids.get(self.item_index) {
                             let ordered = !self.prev_successor.is_some_and(|prev| prev >= id);
@@ -425,5 +449,174 @@ impl Project {
             AnchorKind::Port => Some(crate::WireEndpoint::Label(anchor.object)),
             AnchorKind::Junction => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Session,
+        board::update::SourceCapture,
+        net_classes,
+        nets::{ClassBinding, Lineage, Pair, PairState},
+    };
+    use std::sync::Arc;
+
+    /// Build a project with two promoted active nets so validation tests can mutate records,
+    /// pairs, class bindings, and lineage without hand-building schematic fixtures.
+    fn two_net_project() -> Project {
+        let mut session = Session::default();
+        session.apply("project.new", &serde_json::json!({})).unwrap();
+        let mut pins = Vec::new();
+        for index in 0..4 {
+            let revision = session.revision();
+            session
+                .apply(crate::PLACE_RESISTOR, &serde_json::json!({"x_nm": index as i64 * 25_400_000, "y_nm": 0, "expected_revision": revision}))
+                .unwrap();
+            let id = session.project().unwrap().symbols().last().unwrap().id();
+            pins.push(serde_json::json!({"symbol": id, "terminal": "1"}));
+        }
+        for (from, to) in [(&pins[0], &pins[1]), (&pins[2], &pins[3])] {
+            let revision = session.revision();
+            session.apply(crate::CONNECT_PINS, &serde_json::json!({"from": from, "to": to, "expected_revision": revision})).unwrap();
+        }
+        for pin in [&pins[0], &pins[2]] {
+            let revision = session.revision();
+            session.apply(crate::nets::PROMOTE, &serde_json::json!({"anchor": pin, "expected_revision": revision})).unwrap();
+        }
+        (*session.snapshot().unwrap()).clone()
+    }
+
+    /// Out-of-order records `[2, 1]` still populate the pair membership set so a valid pair
+    /// `(1, 2)` passes pair membership checks and reports the UUID canonical-order error rather
+    /// than a false missing-member error.
+    #[test]
+    fn out_of_order_records_with_valid_pair_report_uuid_order_error() {
+        let mut project = two_net_project();
+        let registry = Arc::make_mut(&mut project.net_registry);
+        assert_eq!(registry.records.len(), 2);
+        let first_id = registry.records[0].id;
+        let second_id = registry.records[1].id;
+        assert!(first_id < second_id);
+        registry.records.swap(0, 1);
+
+        let mut pair_id = Uuid::from_u128(1);
+        while pair_id == first_id || pair_id == second_id {
+            pair_id = Uuid::from_u128(pair_id.as_u128() + 1);
+        }
+        registry.pairs = Arc::new(vec![Arc::new(Pair {
+            id: pair_id,
+            positive: first_id,
+            negative: second_id,
+            name: "DIFF_0".into(),
+            state: PairState::Active {},
+        })]);
+
+        let error = project.net_registry.validate(&project).unwrap_err();
+        assert_eq!(error, "Net records require unique non-nil UUIDs in canonical order.");
+    }
+
+    /// Large `class_bindings` lists validate one binding per [`RegistryValidation::step`] before
+    /// lineage/state substeps and reject out-of-order, dangling-class, and dangling-origin entries.
+    #[test]
+    fn class_bindings_validate_one_item_per_step_and_reject_invalid_entries() {
+        const BINDING_COUNT: usize = 64;
+        let mut project = two_net_project();
+        let first_id = project.net_registry.records[0].id;
+        let second_id = project.net_registry.records[1].id;
+
+        let catalog = Arc::make_mut(&mut project.net_classes);
+        catalog.definitions = (0..BINDING_COUNT)
+            .map(|index| net_classes::Definition {
+                id: Uuid::from_u128(1000 + index as u128),
+                revision: 1,
+                name: format!("Class{index}"),
+                rules: Default::default(),
+            })
+            .collect();
+
+        let bindings: Vec<_> =
+            (0..BINDING_COUNT).map(|index| ClassBinding { class: Uuid::from_u128(1000 + index as u128), origin: first_id }).collect();
+        Arc::make_mut(&mut project.net_registry).records[0].class_bindings = bindings;
+
+        let mut validation = RegistryValidation::default();
+        while !(validation.phase == 4 && validation.cursor == 0 && validation.substep == 1) {
+            assert!(!validation.step(&project.net_registry, &project).unwrap());
+        }
+        assert_eq!(validation.item_index, 0);
+        for expected_index in 1..=BINDING_COUNT {
+            assert!(!validation.step(&project.net_registry, &project).unwrap());
+            if expected_index < BINDING_COUNT {
+                assert_eq!((validation.phase, validation.cursor, validation.substep, validation.item_index), (4, 0, 1, expected_index));
+            } else {
+                assert_eq!((validation.phase, validation.cursor, validation.substep, validation.item_index), (4, 1, 0, 0));
+            }
+        }
+        while !validation.step(&project.net_registry, &project).unwrap() {}
+
+        let mut out_of_order = project.clone();
+        Arc::make_mut(&mut out_of_order.net_registry).records[0].class_bindings.swap(10, 11);
+        assert_eq!(out_of_order.net_registry.validate(&out_of_order).unwrap_err(), "Invalid, dangling, duplicate or excessive net class bindings.");
+
+        let mut dangling_class = project.clone();
+        Arc::make_mut(&mut dangling_class.net_registry).records[0].class_bindings[BINDING_COUNT - 1].class = Uuid::from_u128(999_999);
+        assert_eq!(
+            dangling_class.net_registry.validate(&dangling_class).unwrap_err(),
+            "Invalid, dangling, duplicate or excessive net class bindings."
+        );
+
+        let mut missing_origin = Uuid::from_u128(2);
+        while missing_origin == first_id || missing_origin == second_id {
+            missing_origin = Uuid::from_u128(missing_origin.as_u128() + 1);
+        }
+        let mut dangling_origin = project.clone();
+        Arc::make_mut(&mut dangling_origin.net_registry).records[0].class_bindings[BINDING_COUNT - 1].origin = missing_origin;
+        assert_eq!(
+            dangling_origin.net_registry.validate(&dangling_origin).unwrap_err(),
+            "Invalid, dangling, duplicate or excessive net class bindings."
+        );
+    }
+
+    /// After validating a record's lineage items, [`RegistryValidation::step`] drains
+    /// `seen_lineage` one entry per step rather than clearing the whole set on the last lineage
+    /// item.
+    #[test]
+    fn seen_lineage_drains_one_entry_per_step_after_lineage_validation() {
+        const LINEAGE_COUNT: usize = 64;
+        let mut project = two_net_project();
+        let registry = Arc::make_mut(&mut project.net_registry);
+        let second_id = registry.records[1].id;
+        let anchor = registry.records[0].primary.clone();
+        registry.records[0].lineage = (0..LINEAGE_COUNT)
+            .map(|index| Lineage {
+                snapshot: SourceCapture { capture_id: Uuid::from_u128(100 + index as u128), content_digest: "a".repeat(64) },
+                net: (index % 2 == 0).then_some(second_id),
+                anchor: anchor.clone(),
+            })
+            .collect();
+
+        let mut validation = RegistryValidation::default();
+        while !(validation.phase == 4 && validation.cursor == 0 && validation.substep == 2) {
+            assert!(!validation.step(&project.net_registry, &project).unwrap());
+        }
+        assert!(validation.seen_lineage.is_empty());
+        for expected_len in 1..=LINEAGE_COUNT {
+            assert!(!validation.step(&project.net_registry, &project).unwrap());
+            assert_eq!(validation.seen_lineage.len(), expected_len);
+        }
+        assert_eq!((validation.phase, validation.cursor, validation.substep), (4, 0, 3));
+        assert_eq!(validation.seen_lineage.len(), LINEAGE_COUNT);
+
+        for remaining in (0..LINEAGE_COUNT).rev() {
+            assert!(!validation.step(&project.net_registry, &project).unwrap());
+            assert_eq!(validation.seen_lineage.len(), remaining);
+            if remaining > 0 {
+                assert_eq!((validation.phase, validation.cursor, validation.substep), (4, 0, 3));
+            } else {
+                assert_eq!((validation.phase, validation.cursor, validation.substep), (4, 1, 0));
+            }
+        }
+        while !validation.step(&project.net_registry, &project).unwrap() {}
     }
 }
