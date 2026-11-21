@@ -1812,7 +1812,7 @@ fn no_connect_show_focuses_the_detached_source_window() {
     focus(&mut h, &peer, true);
     let source = h.state().views.hosts[&HostId(1)].focused;
     h.state_mut().bind_editor_host(HostId(1));
-    h.state_mut().inspect_no_connects();
+    h.state_mut().run_erc();
     h.state_mut().bind_editor_host(HostId::ROOT);
     h.run();
     focus(&mut h, &peer, false);

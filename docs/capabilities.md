@@ -50,7 +50,9 @@ read-only check with navigable missing, incompatible and connected-target
 findings, including unmarked dangling wire ends. Marker edits preserve the actual
 netlist and physical DRC findings. Marked targets block new wires and endpoint
 attachments through both GUI and MCP until the mark is removed; automatic wire
-hover/start is suppressed throughout their magnetic target area. Full type-conflict/power-driver ERC and incremental scheduling remain
+hover/start is suppressed throughout their magnetic target area. The on-demand ERC report
+(**Analyze → ERC**, `schematic.run_erc`/`schematic.erc_report`) runs a shared rule registry whose
+only rule so far is this no-connect check; type-conflict/power-driver rules and incremental scheduling remain
 with #47/#245/#243.
 
 Typed quantities accept and display engineering prefixes from atto (`a`) through

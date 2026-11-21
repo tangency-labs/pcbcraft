@@ -64,7 +64,6 @@ enum Action {
     Subsheet,
     Wire,
     NoConnect,
-    NoConnectCheck,
     Bus,
     Label,
     Move,
@@ -164,11 +163,11 @@ const ANALYZE: &[Group] = &[
     Group {
         title: "Electrical",
         tools: &[
-            tool(Action::Erc, "ERC", Icon::Erc, "Electrical rule checking is not available yet.", ""),
+            tool(Action::Erc, "ERC", Icon::Erc, "Run electrical rules check", ""),
             tool(Action::Rules, "Rules", Icon::Rules, "Edit net classes, assignments and board defaults.", ""),
             tool(Action::Annotate, "Annotate", Icon::Annotate, "Automatic annotation is not available yet.", ""),
         ],
-        extras: &[tool(Action::NoConnectCheck, "No-connect check", Icon::Erc, "Inspect unused pins, wire ends and marker conflicts", "")],
+        extras: &[],
     },
     Group {
         title: "Reports",
@@ -207,7 +206,7 @@ impl Action {
         matches!(
             self,
             Self::NoConnect
-                | Self::NoConnectCheck
+                | Self::Erc
                 | Self::Rules
                 | Self::Ground
                 | Self::Label
@@ -387,7 +386,7 @@ impl PcbApp {
             }
             Action::Wire => self.begin_wire(),
             Action::NoConnect => self.begin_no_connect(),
-            Action::NoConnectCheck => self.inspect_no_connects(),
+            Action::Erc => self.run_erc(),
             Action::Move | Action::Rotate => {
                 if let Some(label) = self
                     .views

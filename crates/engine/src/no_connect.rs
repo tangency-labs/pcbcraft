@@ -317,9 +317,11 @@ impl Session {
         self.change(project)
     }
 
-    /// Return one source-revision-qualified focused check through the normal shared query path.
+    /// Return one source-revision-qualified focused check through the shared ERC rule registry.
+    /// Only the no-connect rule runs, and the response keeps its original shape and keys.
     pub(crate) fn no_connect_report(&self) -> Result<Value, CommandError> {
-        Ok(json!({"revision": self.revision(), "no_connect_check": self.open_project()?.check_no_connects(self.revision())}))
+        let crate::erc::RuleResult::NoConnectCheck(check) = crate::erc::NO_CONNECT.evaluate(self.open_project()?, self.revision());
+        Ok(json!({"revision": self.revision(), "no_connect_check": check}))
     }
 }
 

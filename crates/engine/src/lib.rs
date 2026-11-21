@@ -14,6 +14,7 @@ pub mod clipboard;
 pub mod clipboard_text;
 pub mod command_api;
 pub mod edits;
+pub mod erc;
 pub mod error_codes;
 pub mod hierarchy;
 #[cfg(test)]
@@ -1011,6 +1012,18 @@ const CATALOG: &[Command] = &[
         id: no_connect::CHECK,
         title: "Check No Connects",
         summary: "Read-only focused check for unmarked unconnected pins, dangling wire ends and connected, missing or incompatible no-connect intent. Full power/type ERC remains separate.",
+        params: &[],
+    },
+    Command {
+        id: erc::RUN,
+        title: "Run ERC",
+        summary: "Run every registered electrical rule on the current revision and keep the result as the session's ERC report. Read-only: no project edit or undo step. The first rule is the no-connect check, with its existing finding keys.",
+        params: &[],
+    },
+    Command {
+        id: erc::REPORT,
+        title: "ERC Report",
+        summary: "Read the latest ERC report. A report from an older revision is stale and returns no findings until schematic.run_erc runs again.",
         params: &[],
     },
     Command {
@@ -3056,6 +3069,9 @@ pub struct Session {
     update_plan: Option<board::update::CachedPlan>,
     /// One runtime-only setup review, never retained by authored history snapshots.
     setup_preview: Option<board::setup::preview::CachedPreview>,
+    /// The latest on-demand ERC run of this opening. Edits keep it so it can be reported
+    /// stale; never part of a document or history snapshot.
+    erc: Option<Arc<erc::Report>>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
     defer_net_reconciliation: bool,
     /// Told about each new history root and committed edit; never part of the project.
@@ -3077,6 +3093,7 @@ impl Default for Session {
             history_root_revision: 0,
             update_plan: None,
             setup_preview: None,
+            erc: None,
             defer_net_reconciliation: false,
             observer: None,
         }
@@ -3115,6 +3132,7 @@ impl Session {
         self.clearance_cache = std::sync::Mutex::new(None);
         self.update_plan = None;
         self.setup_preview = None;
+        self.erc = None;
         let project = self.retain_allocation_watermark(project);
         let highest = project.highest_id();
         self.revision = self.revision.max(highest) + 1;
@@ -3263,6 +3281,8 @@ impl Session {
             | library::sources::PREVIEW_FOOTPRINT_REVISION
             | no_connect::SET
             | no_connect::CHECK
+            | erc::RUN
+            | erc::REPORT
             | net_classes::CREATE
             | net_classes::UPDATE
             | net_classes::REMOVE
@@ -3542,6 +3562,9 @@ impl Session {
         if id == no_connect::CHECK {
             return self.no_connect_report();
         }
+        if matches!(id, erc::RUN | erc::REPORT) {
+            return self.erc_reply();
+        }
         if id == PREVIEW_UPDATE {
             return Ok(json!({"revision":self.revision,"board_update_preview":self.board_update_report()}));
         }
@@ -3728,6 +3751,8 @@ impl Session {
                 | netlist::COMPARE_NETLIST
                 | no_connect::SET
                 | no_connect::CHECK
+                | erc::RUN
+                | erc::REPORT
                 | net_classes::CREATE
                 | net_classes::UPDATE
                 | net_classes::REMOVE
@@ -3838,9 +3863,10 @@ impl Session {
             }
             board::identity::CREATE_BOARD => self.create_board(params)?,
             no_connect::SET => self.set_no_connect(params)?,
-            no_connect::CHECK => {
+            no_connect::CHECK | erc::REPORT => {
                 self.open_project()?;
             }
+            erc::RUN => self.run_erc()?,
             net_classes::CREATE | net_classes::UPDATE | net_classes::REMOVE => self.edit_net_class(id, params)?,
             net_classes::INSPECT | net_classes::RESOLVE => {
                 self.net_class_query(id, params)?;

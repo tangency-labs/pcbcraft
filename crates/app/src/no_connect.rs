@@ -1,19 +1,19 @@
-//! Pin- and wire-attached original schematic marks and a focused read-only intent report.
+//! Pin- and wire-attached original schematic marks and the read-only ERC report dialog.
 use crate::{Dialog, PcbApp, Selection, Tool, ViewInput, Workspace, editor_view::DocumentTarget, schematic_canvas::Camera};
 use egui::{Painter, Pos2, Rect, Stroke, StrokeKind, Ui, vec2};
 use pcbcraft_chrome::{Tokens, controls, shell};
 use pcbcraft_engine::{
-    Project,
+    Project, erc,
     no_connect::{Appearance, Attachment, Report, WireAppearance},
     schematic::{Point, Shape, Terminal},
 };
 use serde_json::json;
 
-/// One report is tied to its initiating view, opening and revision; it cannot navigate stale data.
+/// The ERC dialog remembers only the view that asked for it. Its findings are always the
+/// session's one ERC report, the same results MCP reads, so the two cannot disagree.
 #[derive(Debug)]
 pub(super) struct Inspection {
-    source: ViewInput,
-    report: Report,
+    pub(super) source: ViewInput,
 }
 
 /// Report navigation carries a sheet-local selection, independently of which marker kind owns it.
@@ -284,27 +284,47 @@ impl PcbApp {
         }
     }
 
-    /// Capture a focused report without touching authored state or claiming full ERC coverage.
-    pub(super) fn inspect_no_connects(&mut self) {
+    /// Run ERC through the shared read-only command and show its report. The run changes no
+    /// project data, history or revision; MCP's `schematic.erc_report` then returns the same report.
+    pub(super) fn run_erc(&mut self) {
         let Some(source) = self.views.active.input(&self.session) else { return };
-        let Some(project) = self.session.project() else { return };
-        self.dialog = Dialog::NoConnects(Box::new(Inspection { source, report: project.check_no_connects(self.session.revision()) }));
+        self.run(erc::RUN, &json!({}));
+        if self.message.is_none() {
+            self.dialog = Dialog::NoConnects(Box::new(Inspection { source }));
+        }
     }
 
-    /// Shared modal chrome contains bounded report rows and guards navigation/removal against
-    /// stale opening/revision authority. Successful navigation focuses the target host;
-    /// inspecting or navigating never edits the document.
-    pub(super) fn no_connect_dialog(&mut self, ctx: &egui::Context, inspection: Box<Inspection>) {
-        let current = self.views.view(inspection.source.view()).is_some_and(|view| view.accepts(inspection.source, &self.session));
-        let report = &inspection.report;
-        let rows = self.no_connect_rows(report);
-        let (mut navigate, mut remove, mut close) = (None::<Navigation>, None::<Attachment>, false);
-        let closing = shell::dialog_width(ctx, "no_connect_check", "No-connect check", 540., |ui| {
-            ui.label(format!("No-connect markers: {} · Findings: {}", report.total_markers, report.total_findings));
-            if !current {
-                ui.label(shell::error("The project changed. Reopen the check to inspect current targets."));
+    /// Shared modal chrome shows the session's ERC report. A report from an older revision, or
+    /// a source view that no longer accepts input, shows no rows: it says the schematic changed
+    /// and offers Rerun. Navigation focuses the target host; nothing here edits the document
+    /// except the explicit Remove marker action, which uses the ordinary revision-checked edit.
+    pub(super) fn no_connect_dialog(&mut self, ctx: &egui::Context, mut inspection: Box<Inspection>) {
+        let accepted = self.views.view(inspection.source.view()).is_some_and(|view| view.accepts(inspection.source, &self.session));
+        let ran = self.session.erc_report();
+        let current = accepted && ran.as_ref().is_some_and(|(_, status)| *status == erc::Status::Current);
+        let report = ran.as_ref().filter(|_| current).and_then(|(report, _)| report.no_connect());
+        let rows = report.map(|report| self.no_connect_rows(report)).unwrap_or_default();
+        let (mut navigate, mut remove, mut close, mut rerun) = (None::<Navigation>, None::<Attachment>, false, false);
+        let closing = shell::dialog_width(ctx, "erc_report", "Electrical rules check", 540., |ui| {
+            match (&ran, report) {
+                (Some((ran, _)), Some(report)) => {
+                    ui.label(shell::dim(format!("Revision {} · {}", ran.revision, erc::NO_CONNECT.title)));
+                    ui.label(format!("No-connect markers: {} · Findings: {}", report.total_markers, report.total_findings));
+                    if report.total_findings == 0 && report.total_markers == 0 {
+                        ui.label("No problems found.");
+                    }
+                }
+                (Some((ran, _)), None) => {
+                    ui.label(shell::error("The schematic changed since this check ran. Rerun the check to see current results."));
+                    ui.label(shell::dim(format!("Checked revision {} · current revision {}", ran.revision, self.session.revision())));
+                }
+                (None, _) => {
+                    ui.label(shell::dim("Not run"));
+                }
             }
-            if report.truncated {
+            if let Some(report) = report
+                && report.truncated
+            {
                 ui.label(format!(
                     "Showing {} marker records and {} findings.",
                     report.markers.len() + report.wire_markers.len(),
@@ -318,19 +338,29 @@ impl PcbApp {
                     let Row { target, label, positions, issue } = &rows[index];
                     ui.add(egui::Label::new(format!("{label} · {}", issue.map_or("Intentionally unconnected", rule_label))).truncate());
                     ui.horizontal(|ui| {
-                        if ui.add_enabled_ui(current && !positions.is_empty(), |ui| controls::button(ui, format!("Show {label}"))).inner.clicked() {
+                        if ui.add_enabled_ui(!positions.is_empty(), |ui| controls::button(ui, format!("Show {label}"))).inner.clicked() {
                             navigate = positions.first().cloned();
                         }
-                        if !matches!(issue, Some("unconnected_pin" | "dangling_wire"))
-                            && ui.add_enabled_ui(current, |ui| controls::button(ui, "Remove marker")).inner.clicked()
-                        {
+                        if !matches!(issue, Some("unconnected_pin" | "dangling_wire")) && controls::button(ui, "Remove marker").clicked() {
                             remove = Some(target.clone());
                         }
                     });
                 }
             });
-            close = controls::button(ui, "Close").clicked();
+            ui.horizontal(|ui| {
+                rerun = controls::button(ui, if current { "Run again" } else { "Rerun" }).clicked();
+                close = controls::button(ui, "Close").clicked();
+            });
         });
+        if rerun {
+            // A rerun reads the current revision, so the same view's current input replaces the old one.
+            let view = self.views.view(inspection.source.view());
+            let Some(source) = view.and_then(|view| view.input(&self.session)).or_else(|| self.views.active.input(&self.session)) else { return };
+            inspection.source = source;
+            self.run(erc::RUN, &json!({}));
+            self.dialog = Dialog::NoConnects(inspection);
+            return;
+        }
         if current && let Some(target) = remove {
             self.set_no_connect(inspection.source, target, false);
             return;

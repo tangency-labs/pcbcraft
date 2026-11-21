@@ -127,6 +127,8 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             netlist::EXPORT_BOARD_NETLIST => json!({"board":board}),
             netlist::COMPARE_NETLIST => json!({"netlist":netlist_text}),
             no_connect::CHECK
+            | erc::RUN
+            | erc::REPORT
             | sheets::page::LIST_TEMPLATES
             | netlist::EXPORT_NETLIST
             | CHECK_DESIGN
