@@ -592,6 +592,9 @@ pub struct Catalog {
     conflicts: BTreeSet<Key>,
     assertion_conflicts: BTreeSet<Reference>,
     changed_assertions: BTreeMap<String, BTreeSet<Reference>>,
+    /// Retain prior assertions seen for each registration across refreshes that omit a revision,
+    /// until the registration is explicitly removed.
+    seen_assertions: BTreeMap<String, BTreeMap<Reference, Arc<lifecycle::Assertion>>>,
     assertions: BTreeMap<Reference, Arc<lifecycle::Assertion>>,
     /// Exact available definitions are indexed once per source generation.
     index: BTreeMap<Key, (String, usize)>,
@@ -827,25 +830,26 @@ impl Catalog {
         if changed.len() > MAX_FILES {
             return Err("Too many conflicting revisions in this source registration; correct the source or remove it".into());
         }
+        let mut seen_assertions = self.seen_assertions.get(id).cloned().unwrap_or_default();
         let mut changed_assertions = self.changed_assertions.get(id).cloned().unwrap_or_default();
-        if let Some(previous) = self.sources.get(id) {
-            let mut old = BTreeMap::new();
-            for (_, assertion) in &previous.assertions {
-                if old.insert(&assertion.address, assertion).is_some_and(|other| other != assertion) {
+        for (_, assertion) in &source.assertions {
+            if let Some(previous) = seen_assertions.get(&assertion.address) {
+                if previous != assertion {
                     changed_assertions.insert(assertion.address.clone());
                 }
-            }
-            for (_, assertion) in &source.assertions {
-                if old.get(&assertion.address).is_some_and(|previous| *previous != assertion) {
-                    changed_assertions.insert(assertion.address.clone());
-                }
+            } else {
+                seen_assertions.insert(assertion.address.clone(), assertion.clone());
             }
         }
         if changed_assertions.len() > MAX_FILES {
             return Err("Too many conflicting lifecycle assertions in this source registration".into());
         }
+        if seen_assertions.len() > MAX_FILES {
+            return Err("Too many lifecycle assertions tracked for this source registration; remove and re-add the source".into());
+        }
         self.changed.insert(id.into(), changed);
         self.changed_assertions.insert(id.into(), changed_assertions);
+        self.seen_assertions.insert(id.into(), seen_assertions);
         self.sources.insert(id.into(), source);
         self.unavailable.remove(id);
         self.rebuild_conflicts();
@@ -860,6 +864,7 @@ impl Catalog {
         }
         self.changed.remove(id);
         self.changed_assertions.remove(id);
+        self.seen_assertions.remove(id);
         self.unavailable.remove(id);
         self.rebuild_conflicts();
         self.generation = self.generation.wrapping_add(1);

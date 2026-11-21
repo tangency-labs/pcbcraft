@@ -2,7 +2,7 @@ use super::*;
 use crate::{
     PLACE_SYMBOL, Session,
     authoring::{Item, Kind as DraftKind, publishing},
-    library::sources::{Documents, Kind, LOAD, symbol_digest},
+    library::sources::{Catalog, Documents, Kind, LOAD, NativeSource, symbol_digest},
     persistence::{decode_documents, encode_documents},
 };
 use serde_json::{Value, json};
@@ -749,4 +749,44 @@ fn pre_folder_projects_adopt_lifecycle_and_reopen_project_52() {
         session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before, "{label}");
     }
+}
+
+/// Retaining assertion history per registration ensures that a refresh omitting a revision cannot
+/// erase its previously seen content: re-introducing the same content succeeds, re-introducing
+/// mutated content quarantines the address, and explicit removal clears the history.
+#[test]
+fn refresh_omitting_assertion_retains_history_and_quarantines_mutated_reintroduction() {
+    let (documents, draft, released) = source();
+    let mut omitted = documents.clone();
+    assert!(omitted.remove("lifecycle-assertions/drawing-assessment.r1.json").is_some());
+
+    let mut mutated_assertion = draft.clone();
+    mutated_assertion.reason = "Silently altered after omission".into();
+    let mut mutated = documents.clone();
+    mutated.insert("lifecycle-assertions/drawing-assessment.r1.json".into(), mutated_assertion.encode().unwrap());
+
+    let mut catalog = Catalog::default();
+    catalog.install("fixture", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap().as_ref(), &draft);
+    assert_eq!(catalog.lifecycle_assertion(&released.address).unwrap().as_ref(), &released);
+
+    // Refresh omitting r1 hides r1 while retaining its seen history for future refreshes.
+    catalog.install("fixture", Arc::new(NativeSource::load(&omitted).unwrap())).unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap_err(), "Lifecycle assertion revision is unavailable");
+    assert_eq!(catalog.lifecycle_assertion(&released.address).unwrap().as_ref(), &released);
+
+    // Re-introducing identical content for r1 restores availability without false conflict.
+    catalog.install("fixture", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap().as_ref(), &draft);
+
+    // Omitting r1 and then re-introducing mutated content quarantines the address.
+    catalog.install("fixture", Arc::new(NativeSource::load(&omitted).unwrap())).unwrap();
+    catalog.install("fixture", Arc::new(NativeSource::load(&mutated).unwrap())).unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap_err(), "Conflicting content at this immutable lifecycle assertion address");
+    assert_eq!(catalog.lifecycle_assertion(&released.address).unwrap().as_ref(), &released);
+
+    // Explicit removal clears retained assertion history for the registration.
+    catalog.remove("fixture").unwrap();
+    catalog.install("fixture", Arc::new(NativeSource::load(&mutated).unwrap())).unwrap();
+    assert_eq!(catalog.lifecycle_assertion(&draft.address).unwrap().as_ref(), &mutated_assertion);
 }
