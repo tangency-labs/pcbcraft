@@ -192,30 +192,48 @@ impl BoardView<'_> {
                 });
             }
             // Untracked terminals get their own island past every copper island index.
-            let mut islands = Vec::with_capacity(endpoints.len());
+            let mut compact = BTreeMap::new();
+            let mut parent = Vec::new();
+            let mut rank = Vec::new();
+            let mut nodes = Vec::with_capacity(endpoints.len());
             for (index, endpoint) in endpoints.iter().enumerate() {
                 if COOPERATIVE {
                     yield_unit().await;
                 }
-                islands.push(
-                    copper.pads.get(&(endpoint.footprint.clone(), endpoint.pad.number.as_str().to_owned())).copied().unwrap_or(usize::MAX - index),
-                );
+                let raw =
+                    copper.pads.get(&(endpoint.footprint.clone(), endpoint.pad.number.as_str().to_owned())).copied().unwrap_or(usize::MAX - index);
+                let node = *compact.entry(raw).or_insert_with(|| {
+                    let next = parent.len();
+                    parent.push(next);
+                    rank.push(0_u8);
+                    next
+                });
+                nodes.push(node);
             }
             for (index, pair) in endpoints.windows(2).enumerate() {
                 if COOPERATIVE {
                     yield_unit().await;
                 }
-                let (a, b) = (islands[index], islands[index + 1]);
+                let (Some(from), Some(to), Some(&left), Some(&right)) = (pair.first(), pair.get(1), nodes.get(index), nodes.get(index + 1)) else {
+                    continue;
+                };
+                let a = find_root(&mut parent, left);
+                let b = find_root(&mut parent, right);
                 if a != b {
-                    result.lines.push(Airwire { net, from: pair[0].clone(), to: pair[1].clone() });
-                    for batch in islands.chunks_mut(32) {
-                        if COOPERATIVE {
-                            yield_unit().await;
+                    result.lines.push(Airwire { net, from: from.clone(), to: to.clone() });
+                    let (ra, rb) = (rank.get(a).copied().unwrap_or(0), rank.get(b).copied().unwrap_or(0));
+                    if ra < rb {
+                        if let Some(slot) = parent.get_mut(a) {
+                            *slot = b;
                         }
-                        for island in batch {
-                            if *island == b {
-                                *island = a;
-                            }
+                    } else {
+                        if let Some(slot) = parent.get_mut(b) {
+                            *slot = a;
+                        }
+                        if ra == rb
+                            && let Some(slot) = rank.get_mut(a)
+                        {
+                            *slot = ra.saturating_add(1);
                         }
                     }
                 }
@@ -223,6 +241,24 @@ impl BoardView<'_> {
         }
         Ok(result)
     }
+}
+
+/// Resolve a disjoint-set root with path halving and checked indexing.
+fn find_root(parent: &mut [usize], mut node: usize) -> usize {
+    while let Some(&next) = parent.get(node) {
+        if next == node {
+            break;
+        }
+        if let Some(&grand) = parent.get(next) {
+            if let Some(slot) = parent.get_mut(node) {
+                *slot = grand;
+            }
+            node = grand;
+        } else {
+            node = next;
+        }
+    }
+    node
 }
 
 #[cfg(test)]

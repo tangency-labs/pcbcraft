@@ -5,7 +5,9 @@ use super::{
 use crate::{
     SET_FOOTPRINT_TRANSFORM,
     board::{
+        drawing::{Drawing, Drawings},
         ratsnest::TERMINALS_BUILT,
+        setup::{Layer, LayerPurpose},
         update::{NetState, TerminalKey},
         via_nets::SET_VIA_NET,
     },
@@ -360,11 +362,27 @@ fn large_board_candidate_and_delta_work_is_bounded_per_step() {
         board.tracks.push(Track { id: Uuid::from_u128(i as u128 + 1), locked: false, layer: front, width_nm: trunk.width_nm, start, end });
     }
     board.tracks.sort_by_key(|track| track.id);
+    let drawing_layer = Uuid::from_u128(10_000);
+    let drawing_items: Vec<Drawing> = (0..128_i64)
+        .map(|i| Drawing {
+            id: Uuid::from_u128(20_000 + i as u128),
+            layer: drawing_layer,
+            points: (0..8_i64).map(|p| Point { x_nm: i * 1_000_000 + p * 100_000, y_nm: -50_000_000 }).collect(),
+            closed: false,
+            stroke_nm: Some(150_000),
+        })
+        .collect();
+    let drawing_count = drawing_items.len();
+    let drawing_points: usize = drawing_items.iter().map(|drawing| drawing.points.len()).sum();
+    board.drawings = Some(Drawings {
+        layers: vec![Layer { id: drawing_layer, name: "Notes".into(), purpose: LayerPurpose::User, side: None }],
+        items: drawing_items,
+    });
     let baseline = Arc::make_mut(board.baseline.as_mut().unwrap());
     let terminals = baseline.nets[net].terminals.len();
     let unrelated = (0..4096).map(|i| TerminalKey { component: u64::MAX - i, terminal: "1".into() }).collect();
     baseline.nets.insert(0, NetState { display_name: None, terminals: unrelated, names: vec!["UNRELATED".into()], origin: None });
-    let items = board.tracks.len() + board.vias.len() + board.footprints().len();
+    let items = board.tracks.len() + board.vias.len() + board.footprints().len() + 1 + drawing_count + drawing_points;
     session.open_snapshot(Arc::new(project));
     args["expected_revision"] = json!(session.revision());
     args["dry_run"] = json!(true);
@@ -372,6 +390,7 @@ fn large_board_candidate_and_delta_work_is_bounded_per_step() {
     let counts = || (CANDIDATE_ITEMS.with(Cell::get), TERMINALS_BUILT.with(Cell::get));
     CANDIDATE_ITEMS.with(|count| count.set(0));
     TERMINALS_BUILT.with(|count| count.set(0));
+    DELTA_WALKS.with(|count| count.set(0));
     let mut job = session.prepare_copper_edit(UNROUTE_CONNECTION, &args).unwrap();
     loop {
         let before = counts();
@@ -386,6 +405,7 @@ fn large_board_candidate_and_delta_work_is_bounded_per_step() {
     let (candidate, built) = counts();
     assert!(candidate >= items, "candidate construction must visit every board item cooperatively: {candidate} < {items}");
     assert_eq!(built, 2 * terminals, "only the net containing the detached pad is built, once before and once after");
+    assert_eq!(DELTA_WALKS.with(Cell::get), 0, "unrelated pads outside the affected nets must not seed island walks");
     let (_, preview) = session.commit_copper_edit_with_report(job.take_result().unwrap().unwrap()).unwrap();
     let preview = preview.unwrap();
     assert_eq!(preview["removed"], json!({"tracks":[arm],"vias":[orphan]}));

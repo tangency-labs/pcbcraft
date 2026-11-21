@@ -20,11 +20,12 @@ use serde_json::Map;
 
 type Prepared = Result<(Option<Project>, Value), CommandError>;
 
-// Counts candidate items copied or checked, so a regression can bound the work in each step.
-// The count applies only to the calling test thread.
+// Counts candidate items copied or checked and extra delta walks, so a regression can
+// bound per-step work and verify unrelated nets are skipped. Calling test thread only.
 #[cfg(test)]
 std::thread_local! {
     static CANDIDATE_ITEMS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static DELTA_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Own the immutable inputs while any native or browser work queue advances the planner.
@@ -188,7 +189,7 @@ async fn delete_candidate(project: &Project, tracks: &[Uuid], vias: &[Uuid]) -> 
         baseline: source.baseline.clone(),
         assignments: copy_map(&source.assignments).await,
         outline: source.outline,
-        drawings: source.drawings.clone(),
+        drawings: copy_drawings(source.drawings.as_ref()).await,
         setup: source.setup.clone(),
         silkscreen: source.silkscreen,
         rules: source.rules.clone(),
@@ -225,6 +226,25 @@ async fn copy_map<K: Clone + Ord, V: Clone>(map: &BTreeMap<K, V>) -> BTreeMap<K,
         copy.insert(key.clone(), value.clone());
     }
     copy
+}
+
+/// Copy authored board drawings, their layers, and their vertices one item per unit.
+async fn copy_drawings(drawings: Option<&crate::board::drawing::Drawings>) -> Option<crate::board::drawing::Drawings> {
+    let drawings = drawings?;
+    let layers = copy_items(&drawings.layers).await;
+    let mut items = Vec::with_capacity(drawings.items.len());
+    for drawing in &drawings.items {
+        candidate_unit().await;
+        let points = copy_items(&drawing.points).await;
+        items.push(crate::board::drawing::Drawing {
+            id: drawing.id,
+            layer: drawing.layer,
+            points,
+            closed: drawing.closed,
+            stroke_nm: drawing.stroke_nm,
+        });
+    }
+    Some(crate::board::drawing::Drawings { layers, items })
 }
 
 struct Cut {
@@ -574,18 +594,35 @@ async fn airwire_delta(
     if affected.is_empty() || !view.has_accepted_connectivity() {
         return Vec::new();
     }
+    let Some(baseline) = &view.project().board.baseline else {
+        return Vec::new();
+    };
+    let mut affected_terminals = BTreeSet::new();
+    for &net in affected {
+        yield_unit().await;
+        let Some(state) = baseline.nets.get(net) else { continue };
+        for terminal in &state.terminals {
+            yield_unit().await;
+            affected_terminals.insert((terminal.component, terminal.terminal.as_str()));
+        }
+    }
     // Canonical display islands depend only on equality, not on the numeric IDs.
     let mut copper = Copper::default();
     for (node, land) in lands.iter().enumerate() {
         yield_unit().await;
-        if parent[node].is_some() {
+        if parent.get(node).copied().flatten().is_some() {
             // Before any other walk, these are precisely the original component.
             copper.pads.insert(land.key.clone(), to);
         }
     }
-    for node in 0..lands.len() {
+    for (node, land) in lands.iter().enumerate() {
         yield_unit().await;
-        if parent[node].is_none() {
+        let in_affected = super::super::Pad::parse(&land.key.0, &land.key.1)
+            .and_then(|pad| view.project().board.component_pin_for(pad))
+            .is_some_and(|terminal| affected_terminals.contains(&terminal));
+        if in_affected && parent.get(node).copied().flatten().is_none() {
+            #[cfg(test)]
+            DELTA_WALKS.with(|walks| walks.set(walks.get() + 1));
             for member in contacts.walk(node, no_removals, parent).await {
                 yield_unit().await;
                 if let Some(land) = lands.get(member) {
@@ -600,7 +637,9 @@ async fn airwire_delta(
         yield_unit().await;
         old.insert((line.net, edge(&line.from, &line.to)));
     }
-    copper.pads.insert(lands[from].key.clone(), lands.len());
+    if let Some(land) = lands.get(from) {
+        copper.pads.insert(land.key.clone(), lands.len());
+    }
     let address = |end: &Endpoint| json!({"footprint":end.footprint,"pad":end.pad.number.as_str()});
     let mut delta = Vec::new();
     for line in view.build_ratsnest::<true>(&copper, Some(affected)).await.into_iter().flat_map(|r| r.lines) {
