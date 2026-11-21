@@ -730,6 +730,9 @@ impl Document {
             };
             if response.clicked() || response.drag_stopped() {
                 let result = match self.tool.clone() {
+                    // A release that ends a drag with no live tool (Escape cancelled the move,
+                    // box or vertex drag, or pending fields kept one from starting) is not a
+                    // click: it never selects, toggles or inserts at the release point.
                     Tool::Select if !response.clicked() => Ok(()),
                     Tool::Select => {
                         let modify = ui.input(|i| i.modifiers.shift || i.modifiers.command);
@@ -984,14 +987,16 @@ impl Document {
                             matches!(event, egui::Event::Key { key: egui::Key::Backspace, pressed: true, modifiers, .. } if modifiers.is_none())
                         })
                 }) {
+                    // With a courtyard vertex selected, Backspace only ever targets that vertex:
+                    // pending property edits refuse it instead of falling through to deleting
+                    // the whole outline. Without a selected vertex it deletes the selection.
                     if self.show_courtyard
-                        && !self.pending()
                         && let Some((object, pts, _)) = self.selected_courtyard(&item)
                         && let Some(vertex) = self.selected_vertex
                         && let Some(primitive) = item.objects.get(&object)
                     {
-                        if pts.len() <= pcbcraft_engine::authoring::courtyard::MIN_VERTICES {
-                            self.error = Some("A courtyard outline needs at least 3 vertices.".into());
+                        if self.pending() {
+                            self.error = Some("Apply or reset the property fields before removing a vertex.".into());
                         } else {
                             match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
                                 .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }))
@@ -1432,6 +1437,79 @@ mod tests {
         let area = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900., 600.));
         let point = doc.camera.screen(Point { x_nm: 0, y_nm: 1_270_000 }, area);
         assert!(hit(&Primitive::Graphic { graphic: g }, &doc.camera, area, point));
+    }
+
+    /// Shared Select behaviour in both library editors, shown in the Symbol editor: releasing
+    /// over another pin after Escape cancelled a group move keeps the selection and revision,
+    /// while a real click there selects it; unmodified Backspace deletes the selection in one
+    /// undoable edit and Command+Backspace does not.
+    #[test]
+    fn symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        /// Press or release the primary button at `pos`. Each press first idles past the
+        /// double-click interval in logical time, so consecutive clicks never pair up into a
+        /// double-click (which would open the item properties dialog).
+        fn press(h: &mut Harness<'_, crate::PcbApp>, pos: egui::Pos2, pressed: bool) {
+            if pressed {
+                h.run_steps(30);
+            }
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run();
+        }
+        let mut app = crate::PcbApp::default();
+        app.new_library_item(Kind::Symbol);
+        let id = app.library_editors.active.unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut crate::PcbApp| app.frame(ui), app);
+        h.run();
+        let area = h.get_by_label("Library canvas").rect();
+        let (pin_in, pin_out) = {
+            let doc = &h.state().library_editors.documents[&id];
+            let item = doc.session.snapshot();
+            let at = |object: u64| match item.objects.get(&object) {
+                Some(Primitive::Pin { at, .. }) => doc.camera.screen(*at, area),
+                other => panic!("expected pin {object}, found {other:?}"),
+            };
+            (at(1), at(3))
+        };
+        for pos in [pin_in, pin_out] {
+            assert!(area.contains(pos));
+        }
+        h.hover_at(pin_in);
+        h.run();
+        press(&mut h, pin_in, true);
+        press(&mut h, pin_in, false);
+        assert_eq!(h.state().library_editors.documents[&id].selection.iter().copied().collect::<Vec<_>>(), vec![1]);
+        let rev = h.state().library_editors.documents[&id].session.revision();
+
+        // Drag pin 1 toward pin 2, cancel with Escape, release over pin 2.
+        press(&mut h, pin_in, true);
+        h.hover_at(pin_out);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, Tool::MoveGroup { .. }));
+        h.key_press(egui::Key::Escape);
+        h.run();
+        press(&mut h, pin_out, false);
+        let doc = &h.state().library_editors.documents[&id];
+        assert!(matches!(doc.tool, Tool::Select));
+        assert_eq!(doc.selection.iter().copied().collect::<Vec<_>>(), vec![1]);
+        assert_eq!(doc.session.revision(), rev);
+
+        // Positive control: a real click at the same point selects pin 2.
+        press(&mut h, pin_out, true);
+        press(&mut h, pin_out, false);
+        assert_eq!(h.state().library_editors.documents[&id].selection.iter().copied().collect::<Vec<_>>(), vec![3]);
+        assert!(matches!(h.state().dialog, Dialog::None));
+
+        // Command+Backspace leaves the pin; plain Backspace deletes it as one undoable edit.
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Backspace);
+        h.run();
+        assert!(h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&3));
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        assert!(!h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&3));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev + 1);
+        crate::tests::click(&mut h, "Undo Library Edit");
+        assert!(h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&3));
     }
 
     /// Hidden courtyard outlines never intercept clicks; visible outlines expose vertex and

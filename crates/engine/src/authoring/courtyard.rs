@@ -552,4 +552,29 @@ mod tests {
         let (pts, _) = courtyard_polygon(&session.snapshot().objects[&restored_id]).unwrap();
         assert_eq!(metrics(pts).unwrap().width_nm, 2_100_000);
     }
+
+    /// The live `generate_courtyard` operation needs only a clearance: source, stroke and
+    /// replacement take their documented defaults, and unknown fields are refused.
+    #[test]
+    fn generate_courtyard_action_parses_from_live_json_with_defaults() {
+        let action: Action = serde_json::from_value(serde_json::json!({"operation": "generate_courtyard", "clearance_nm": 250_000})).unwrap();
+        let Action::GenerateCourtyard { clearance_nm, source, stroke_nm, replace_existing } = action else {
+            panic!("expected a courtyard generation action, found {action:?}");
+        };
+        assert_eq!(clearance_nm, DEFAULT_CLEARANCE_NM);
+        assert_eq!(source, CourtyardSource::PadsAndBody);
+        assert_eq!(stroke_nm, DEFAULT_STROKE_NM);
+        assert!(replace_existing);
+        let explicit: Action =
+            serde_json::from_value(serde_json::json!({"operation": "generate_courtyard", "clearance_nm": 100_000, "source": "pads_only", "stroke_nm": 120_000, "replace_existing": false})).unwrap();
+        assert!(matches!(
+            explicit,
+            Action::GenerateCourtyard { clearance_nm: 100_000, source: CourtyardSource::PadsOnly, stroke_nm: 120_000, replace_existing: false }
+        ));
+        assert!(
+            serde_json::from_value::<Action>(serde_json::json!({"operation": "generate_courtyard", "clearance_nm": 250_000, "margin_nm": 1}))
+                .is_err()
+        );
+        assert!(serde_json::from_value::<Action>(serde_json::json!({"operation": "generate_courtyard"})).is_err());
+    }
 }
