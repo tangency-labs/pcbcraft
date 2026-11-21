@@ -20,6 +20,8 @@ pub(super) struct Plan {
     wires: Vec<Value>,
     junctions: Vec<Value>,
     net_labels: Vec<Value>,
+    /// Selected wires with neither end moving; they stay on this sheet.
+    staying_wires: Vec<Value>,
     ports: Vec<PortRow>,
     global_nets: Vec<GlobalRow>,
     split_part_instances: Vec<SplitRow>,
@@ -49,7 +51,7 @@ struct SplitRow {
 pub(super) struct Edit {
     pub(super) source: ViewInput,
     sheet: SheetTarget,
-    items: Selection,
+    pub(super) items: Selection,
     name: String,
     /// The engine's answer for `previewed`: its plan, or why it refuses.
     preview: Result<Plan, String>,
@@ -84,7 +86,8 @@ impl PcbApp {
             return;
         };
         let items = self.views.active.schematic.selection.clone();
-        if items.symbols.is_empty() && items.wires.is_empty() {
+        // Wires and markers follow what they attach to, so they cannot be moved on their own.
+        if items.symbols.is_empty() && items.net_labels.is_empty() {
             return;
         }
         let mut number = project.sheets().len() + 1;
@@ -155,7 +158,13 @@ impl PcbApp {
                     .filter(|(n, _, _)| *n > 0)
                     .map(|(n, one, many)| count(n, one, many))
                     .collect();
-                    ui.label(format!("Moves {} to a new sheet placed here as a sheet symbol.", moved.join(", ")));
+                    if !moved.is_empty() {
+                        ui.label(format!("Moves {} to a new sheet; a sheet symbol takes its place here.", moved.join(", ")));
+                    }
+                    if !plan.staying_wires.is_empty() {
+                        let wires = count(plan.staying_wires.len(), "selected wire stays", "selected wires stay");
+                        ui.label(format!("{wires} on this sheet; a wire moves only with an end that moves."));
+                    }
                     if plan.ports.is_empty() {
                         ui.label("No net crosses the new sheet's edge, so it needs no ports.");
                     } else {

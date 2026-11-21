@@ -57,18 +57,21 @@ single-parent model and do not introduce repeated sheet instances.
 ## Preview a split to a new sheet
 
 `schematic.preview_split_sheet` reviews moving selected objects from one sheet
-onto a new child sheet without editing anything. Give it the sheet, the `items`
-selection used by Copy and Move (symbols, wires, named-net anchors and
-no-connect markers) and the new sheet's `name`, which must be free without case.
-The reply lists:
+onto a new child sheet without editing anything. Give it the sheet, an `items`
+selection in the shape Copy and Move take, and the new sheet's `name`, which
+must be free without case. Symbols and net labels decide what moves; wires,
+junctions and no-connect markers follow what they attach to and cannot be moved
+on their own. The reply lists:
 
 - the selected symbols with their part instances and designators, which a split
   would keep, and parts whose other units stay behind (units of one part may sit
   on different sheets, so this is reported, not refused);
 - the wires and junctions that would travel, and the `cut_wires` with one end on
   each side. Wires follow their ends: a wire travels when both ends do, and a
-  junction travels only when every wire meeting it leads inside, so a selected
-  wire with an end outside is cut;
+  junction travels only when every wire meeting it leads inside. A wire with an
+  end outside is cut even when it is selected, and a selected wire with neither
+  end inside is listed in `staying_wires`; selected no-connect markers whose pin
+  or wire end stays are listed in `staying_no_connects`;
 - the `ports`: each net with members on both sides becomes one hierarchical
   label and sheet pin, named with the net's authored name (the first in
   alphabetical order when it has several), without the sheet path that may be
@@ -82,19 +85,20 @@ The reply lists:
   not carry its name inside, so that net is listed as a port.
 
 More than 64 ports, two boundary nets with the same name, an empty or unknown
-selection, a taken or blank name, a full project and a stale `expected_revision`
+selection, a selection with no symbol or net label, a taken or blank name, a full project and a stale `expected_revision`
 are refused. The revision, undo history and project files do not change, and
 read-only sessions may run it.
 
 ## Move a selection to a new sheet
 
-In the schematic, select the symbols and wires to move, then choose
-**Move to New Sheet…** from the canvas context menu or the **Sheets** ribbon
+In the schematic, select the symbols and net labels to move (wires follow their
+ends), then choose **Move to New Sheet…** from the canvas context menu or the **Sheets** ribbon
 group's menu. The form suggests a free sheet name and shows the preview for the
 name in the field: how many symbols, wires, junctions and net labels move, the
 ports with their names and directions (generated names are marked), the nets
 that stay connected by a global or power name, and any part whose units end up
-on two sheets. A taken or empty name shows the reason and offers no move. Nothing
+on two sheets. Selected wires that stay behind are counted. Without a selected
+symbol or net label the command is unavailable. A taken or empty name shows the reason and offers no move. Nothing
 changes until **Move to Sheet**; Cancel leaves the project as it was.
 
 `schematic.split_sheet` applies the same plan with the same parameters plus

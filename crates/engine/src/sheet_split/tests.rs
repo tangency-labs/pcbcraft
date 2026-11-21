@@ -191,7 +191,9 @@ fn invalid_requests_are_refused_without_changing_the_project() {
     let project = s.snapshot().unwrap();
     let revision = s.revision();
     let taken = project.sheets().next().unwrap().name.to_uppercase();
+    let wire = project.wires().first().unwrap().id();
     let cases = [
+        (json!({"items":{"symbols":[],"wires":[wire]},"name":"Filter"}), ErrorCode::InvalidParams, "at least one symbol or net label"),
         (json!({"items":{"symbols":[],"wires":[]},"name":"Filter"}), ErrorCode::InvalidParams, "selection must contain"),
         (json!({"items":{"symbols":["symbol-999999"],"wires":[]},"name":"Filter"}), ErrorCode::InvalidParams, "selection must contain"),
         (json!({"items":{"symbols":["R1"],"wires":[]},"name":"Filter"}), ErrorCode::InvalidParams, ""),
@@ -314,10 +316,36 @@ fn junctions_travel_only_when_every_branch_stays_inside() {
     assert_eq!(cut.len(), 3);
     assert!(cut.iter().all(|wire| wire["outside"] == junction.inspect()), "{preview}");
     assert!(cut.iter().any(|wire| wire["wire"] == json!(first)));
+    assert_eq!(preview["staying_wires"], json!([]));
     let ports = preview["ports"].as_array().unwrap();
     assert_eq!(ports.len(), 1, "{preview}");
     assert_eq!(ports[0]["inside"].as_array().unwrap().len(), 3);
     assert_eq!(ports[0]["outside"], json!([pin(&outside, "1")]));
+}
+
+/// Wires and no-connect markers follow what they attach to. A selected wire whose ends both
+/// stay, and the marker on its dangling end, are reported as staying rather than moving.
+#[test]
+fn selected_wires_and_markers_that_stay_are_reported() {
+    let mut f = fixture();
+    let s = &mut f.session;
+    let stub = resistor(s, 80 * GRID_NM, 0);
+    let start = terminal(&stub, "1");
+    let at = s.project().unwrap().endpoint_position(start).unwrap();
+    let end = Point { x_nm: at.x_nm - 5 * GRID_NM, y_nm: at.y_nm };
+    apply(s, DRAW_WIRE, json!({"from":start.inspect(),"to":end,"bends":[],"auto_heal":false}));
+    let wire = s.project().unwrap().wires().last().unwrap().id();
+    let id = s.project().unwrap().junctions().find(|(_, point)| *point == end).unwrap().0;
+    let marker = json!({"junction":format!("junction-{id}")});
+    apply(s, crate::no_connect::SET, json!({"target":marker,"marked":true}));
+
+    let items = json!({"symbols":[f.inside[0]],"wires":[wire],"no_connects":[marker]});
+    let report = s.execute(PREVIEW, &json!({"items":items,"name":"Stub"})).unwrap();
+    let preview = &report["split_preview"];
+    assert_eq!(preview["staying_wires"], json!([wire]));
+    assert_eq!(preview["staying_no_connects"], json!([marker]));
+    assert_eq!(preview["no_connects"], json!([]));
+    assert!(!preview["wires"].as_array().unwrap().contains(&json!(wire)));
 }
 
 /// A port takes the net's authored name even when the same name on another sheet makes the
@@ -523,7 +551,15 @@ fn split_places_the_sheet_symbol_and_refuses_bad_requests() {
     let project = s.snapshot().unwrap();
     let revision = s.revision();
     let taken = project.sheets().next().unwrap().name.to_owned();
+    let wire = project.wires().first().unwrap().id();
+    let only_wires = json!({"symbols":[],"wires":[wire]});
     let cases = [
+        (json!({"items":only_wires,"name":"Filter","expected_revision":revision}), ErrorCode::InvalidParams, "at least one symbol or net label"),
+        (
+            json!({"items":only_wires,"name":"Filter","x_nm":0,"y_nm":0,"expected_revision":revision}),
+            ErrorCode::InvalidParams,
+            "at least one symbol or net label",
+        ),
         (json!({"items":items,"name":"Filter","x_nm":0,"expected_revision":revision}), ErrorCode::InvalidParams, "must be given together"),
         (json!({"items":items,"name":"Filter","expected_revision":revision + 1}), ErrorCode::StaleRevision, "revision"),
         (json!({"items":items,"name":taken,"expected_revision":revision}), ErrorCode::InvalidParams, "already exists"),

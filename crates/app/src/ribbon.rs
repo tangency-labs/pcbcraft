@@ -201,7 +201,7 @@ const LIBRARIES: &[Group] = &[
     },
 ];
 const SHEET_EXTRAS: &[ToolSpec] =
-    &[tool(Action::MoveToNewSheet, "Move to new sheet…", Icon::Sheet, "Move the selected symbols and wires to a new child sheet", "")];
+    &[tool(Action::MoveToNewSheet, "Move to New Sheet…", Icon::Sheet, "Move the selected symbols and net labels to a new child sheet", "")];
 const SHEET_GROUPS: &[Group] = &[Group { title: "Sheets", tools: SHEETS, extras: SHEET_EXTRAS }];
 
 impl Action {
@@ -281,7 +281,7 @@ impl Action {
             Self::MoveToNewSheet => {
                 schematic
                     && app.views.active.schematic.tool.is_none()
-                    && (!app.views.active.schematic.selection.symbols.is_empty() || !app.views.active.schematic.selection.wires.is_empty())
+                    && (!app.views.active.schematic.selection.symbols.is_empty() || !app.views.active.schematic.selection.net_labels.is_empty())
             }
             Self::Move | Self::Rotate => {
                 schematic

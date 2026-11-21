@@ -1,8 +1,10 @@
 //! Moving a selection to a new sheet through its form: opening it from the ribbon and the
-//! canvas menu, a typed name, a refused name, an empty name and keyboard use.
+//! canvas menu, a typed name, a refused name, an empty name, keyboard use, a richer plan
+//! and a refusal when moving.
 use super::*;
 use pcbcraft_engine::{
     CONNECT_PINS, PLACE_RESISTOR,
+    library::sources,
     persistence::{Documents, encode_documents},
     selection::Selection,
 };
@@ -28,7 +30,7 @@ fn split_harness() -> Harness<'static, PcbApp> {
 fn open(h: &mut Harness<'_, PcbApp>) {
     click_tab(h, "Sheets");
     click(h, "Sheets menu");
-    click(h, "Move to new sheet…");
+    click(h, "Move to New Sheet…");
     assert!(matches!(h.state().dialog, Dialog::SplitSheet(_)));
 }
 
@@ -46,7 +48,7 @@ fn split_form_opens_with_the_preview_for_the_suggested_name() {
     let revision = h.state().session.revision();
     open(&mut h);
     assert_eq!(h.get_by_label("Name").value().as_deref(), Some("Sheet 2"));
-    h.get_by_label("Moves 1 symbol to a new sheet placed here as a sheet symbol.");
+    h.get_by_label("Moves 1 symbol to a new sheet; a sheet symbol takes its place here.");
     h.get_by_label("Ports (1)");
     assert!(!h.get_by_label("Move to Sheet").accesskit_node().is_disabled());
     assert_eq!(h.state().session.revision(), revision);
@@ -175,4 +177,129 @@ fn open_from_canvas(h: &mut Harness<'_, PcbApp>) {
     }
     click(h, "Move to New Sheet…");
     assert!(matches!(h.state().dialog, Dialog::SplitSheet(_)));
+}
+
+/// Wires and markers follow what they attach to, so with only a wire selected, or nothing,
+/// Move to New Sheet… is unavailable in the Sheets menu and the form does not open.
+#[test]
+fn move_to_new_sheet_needs_a_symbol_or_net_label() {
+    let mut h = split_harness();
+    let wire = h.state().session.project().unwrap().wires().first().unwrap().id();
+    for selection in [Selection { wires: [wire].into(), ..Selection::default() }, Selection::default()] {
+        h.state_mut().select(selection);
+        h.run();
+        click_tab(&mut h, "Sheets");
+        click(&mut h, "Sheets menu");
+        assert!(h.get_by_label("Move to New Sheet…").accesskit_node().is_disabled());
+        h.key_press(Key::Escape);
+        h.run();
+        h.state_mut().begin_split_sheet();
+        assert!(matches!(h.state().dialog, Dialog::None));
+    }
+}
+
+/// Place a bundled ground symbol whose value names its global net.
+fn power(app: &mut PcbApp, value: &str, x_nm: i64, y_nm: i64) -> String {
+    let d = app.session.libraries().latest_symbol("power", "gnd").unwrap();
+    let digest = sources::symbol_digest(&d).unwrap();
+    let revision = app.session.revision();
+    app.run(
+        pcbcraft_engine::PLACE_SYMBOL,
+        &json!({"library":"power","definition":"gnd","definition_revision":d.revision(),"definition_digest":digest,"value":value,"x_nm":x_nm,"y_nm":y_nm,"expected_revision":revision}),
+    );
+    app.session.project().unwrap().symbols().last().unwrap().id()
+}
+
+/// Place a resistor and return its symbol.
+fn resistor(app: &mut PcbApp, x_nm: i64, y_nm: i64) -> String {
+    app.run(PLACE_RESISTOR, &json!({"x_nm":x_nm,"y_nm":y_nm,"expected_revision":app.session.revision()}));
+    app.session.project().unwrap().symbols().last().unwrap().id()
+}
+
+/// Join two terminals with a wire.
+fn wire(app: &mut PcbApp, from: (&str, &str), to: (&str, &str)) {
+    let (from, to) = (json!({"symbol":from.0,"terminal":from.1}), json!({"symbol":to.0,"terminal":to.1}));
+    app.run(CONNECT_PINS, &json!({"from":from,"to":to,"expected_revision":app.session.revision()}));
+    assert!(app.message.is_none(), "{:?}", app.message);
+}
+
+/// Unit A of a dual amplifier, a resistor and a ground symbol selected; unit B, a resistor,
+/// another ground and an AGND symbol outside. Unit A's output crosses on an unnamed net, the
+/// resistor reaches AGND outside, and the two grounds share the global GND net.
+fn rich_harness() -> Harness<'static, PcbApp> {
+    let grid = pcbcraft_engine::schematic::GRID_NM;
+    let mut app = PcbApp::default();
+    app.run("project.new", &json!({"name":"Split"}));
+    app.run(
+        sources::LOAD,
+        &json!({"source":"units","documents":{
+            "library.json":include_str!("../../../../examples/native-parts/library.json"),
+            "symbols/dual.json":include_str!("../../../../examples/native-parts/symbols/dual-amplifier.json"),
+        }}),
+    );
+    let definition = app.session.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+    let revision = app.session.revision();
+    app.place_catalog_symbol(&definition, json!({"x_nm":0,"y_nm":0,"expected_revision":revision}));
+    let amplifier = app.session.project().unwrap().symbols().first().unwrap().clone();
+    let revision = app.session.revision();
+    app.run(
+        pcbcraft_engine::PLACE_UNIT,
+        &json!({"component":amplifier.component_id(),"unit":"b","x_nm":100 * grid,"y_nm":0,"expected_revision":revision}),
+    );
+    let inner = resistor(&mut app, 0, 20 * grid);
+    let load = resistor(&mut app, 50 * grid, 0);
+    let ground_in = power(&mut app, "GND", 0, 40 * grid);
+    let ground_out = power(&mut app, "GND", 50 * grid, 40 * grid);
+    let analog = power(&mut app, "AGND", 70 * grid, 20 * grid);
+    let unit_a = amplifier.id();
+    wire(&mut app, (&unit_a, "1"), (&load, "1"));
+    wire(&mut app, (&inner, "2"), (&analog, "1"));
+    wire(&mut app, (&inner, "1"), (&ground_in, "1"));
+    wire(&mut app, (&load, "2"), (&ground_out, "1"));
+    assert!(app.message.is_none(), "{:?}", app.message);
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(40).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    h.state_mut().select(Selection { symbols: [unit_a, inner, ground_in].into(), ..Selection::default() });
+    h.run();
+    h
+}
+
+/// Rich plan state: several ports, one with a generated name and one named by the AGND
+/// symbol outside, the ground net that keeps connecting by name, and the amplifier whose
+/// other unit stays behind.
+#[test]
+fn split_form_lists_ports_global_nets_and_split_parts() {
+    let mut h = rich_harness();
+    let before = documents(&h);
+    open(&mut h);
+    assert!(h.query_by_label_contains("Moves 3 symbols").is_some());
+    assert!(h.query_by_label_contains("Ports (").is_some());
+    assert!(h.query_by_label_contains("AGND · ").is_some());
+    assert!(h.query_by_label_contains("(generated name)").is_some());
+    h.get_by_label("Connected by name, no port needed");
+    assert!(h.query_all_by_label("GND").next().is_some());
+    assert!(h.query_by_label_contains("keeps other units on this sheet").is_some());
+    assert!(!h.get_by_label("Move to Sheet").accesskit_node().is_disabled());
+    assert_eq!(documents(&h), before);
+}
+
+/// Apply refusal state: when the engine refuses the move itself, its reason shows under the
+/// plan, the form stays open with the name kept, and nothing changes. The form's selection
+/// is swapped for one wire after its preview, which the engine refuses on Move to Sheet.
+#[test]
+fn split_form_shows_a_refusal_from_the_move_under_the_plan() {
+    let mut h = split_harness();
+    let before = documents(&h);
+    let wire = h.state().session.project().unwrap().wires().first().unwrap().id();
+    open(&mut h);
+    h.get_by_label("Ports (1)");
+    if let Dialog::SplitSheet(edit) = &mut h.state_mut().dialog {
+        edit.items = Selection { wires: [wire].into(), ..Selection::default() };
+    }
+    click(&mut h, "Move to Sheet");
+    assert!(matches!(h.state().dialog, Dialog::SplitSheet(_)));
+    assert!(h.query_by_label_contains("Select at least one symbol or net label to move.").is_some());
+    h.get_by_label("Ports (1)");
+    assert_eq!(h.get_by_label("Name").value().as_deref(), Some("Sheet 2"));
+    assert_eq!(documents(&h), before);
 }

@@ -118,6 +118,10 @@ struct Preview {
     junctions: Vec<String>,
     net_labels: Vec<String>,
     no_connects: Vec<Attachment>,
+    /// Selected wires that stay on this sheet, because neither of their ends moves.
+    staying_wires: Vec<String>,
+    /// Selected no-connect markers whose pin or junction stays on this sheet.
+    staying_no_connects: Vec<Attachment>,
     ports: Vec<Port>,
     global_nets: Vec<GlobalNet>,
     cut_wires: Vec<CutWire>,
@@ -205,6 +209,10 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
         moved.net_labels.insert(label.id);
         inside.insert(WireEndpoint::NetLabel(label.id));
     }
+    // Wires and markers follow what they attach to, so they cannot be split off on their own.
+    if moved.symbols.is_empty() && moved.net_labels.is_empty() {
+        return Err(CommandError::InvalidParams("Select at least one symbol or net label to move.".into()));
+    }
 
     let mut units_of: BTreeMap<u64, Vec<_>> = BTreeMap::new();
     for symbol in project.all_symbols().filter(|symbol| parts.contains(&symbol.component)) {
@@ -272,6 +280,7 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
     };
     let mut wires = Vec::new();
     let mut cut_wires = Vec::new();
+    let mut staying_wires = Vec::new();
     for wire in project.wires() {
         let [from, to] = wire.endpoints();
         match (within(&from), within(&to)) {
@@ -281,10 +290,22 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
             }
             (true, false) => cut_wires.push(cut(wire, from, to)),
             (false, true) => cut_wires.push(cut(wire, to, from)),
+            // A cut wire moves with its inside end; one with neither end inside stays.
+            (false, false) if items.wires.contains(&wire.id()) => staying_wires.push(wire.id()),
             (false, false) => {}
         }
     }
     moved.junctions = junctions.clone();
+    let moved_terminals: BTreeSet<(String, String)> = project
+        .symbols()
+        .iter()
+        .filter(|symbol| moved.symbols.contains(&symbol.ordinal))
+        .flat_map(|symbol| symbol.terminals().into_iter().map(move |terminal| (symbol.component_id(), terminal.number().to_owned())))
+        .collect();
+    let (travelling_markers, staying_markers): (Vec<_>, Vec<_>) = items.no_connects.iter().cloned().partition(|marker| match marker {
+        Attachment::Pin(target) => moved_terminals.contains(&(target.part.clone(), target.terminal.clone())),
+        Attachment::WireEnd(target) => target.ordinal().is_some_and(|id| junctions.contains(&id)),
+    });
 
     let types = terminal_types(project);
     let globals = global_anchors(project);
@@ -366,7 +387,9 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
         wires,
         junctions: junctions.iter().map(|id| format!("junction-{id}")).collect(),
         net_labels: items.net_labels.iter().cloned().collect(),
-        no_connects: items.no_connects.iter().cloned().collect(),
+        no_connects: travelling_markers,
+        staying_wires,
+        staying_no_connects: staying_markers,
         ports,
         global_nets,
         cut_wires,
