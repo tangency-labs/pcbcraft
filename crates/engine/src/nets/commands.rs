@@ -1,6 +1,6 @@
 //! Shared revision-checked authored promotion and explicit ambiguity resolution.
 
-use super::{MAX_RECORDS, Registry, Retirement, State, graph::Graph, reconcile::allocate};
+use super::{MAX_RECORDS, Pair, PairState, Registry, Retirement, State, graph::Graph, reconcile::allocate};
 use crate::{CommandError, Project, Session};
 use serde_json::Value;
 use std::{
@@ -82,7 +82,28 @@ impl Session {
         if records.len() > MAX_RECORDS {
             return Err(CommandError::Unavailable("Net identity registry is full.".into()));
         }
-        project.net_registry = Arc::new(Registry { records: Arc::new(records.into_values().collect()), pairs: original.net_registry.pairs.clone() });
+        let pairs = if original.net_registry.pairs.iter().any(|pair| pair.positive == selected.id || pair.negative == selected.id) {
+            Arc::new(
+                original
+                    .net_registry
+                    .pairs
+                    .iter()
+                    .map(|pair| {
+                        if pair.positive == selected.id || pair.negative == selected.id {
+                            Arc::new(Pair {
+                                state: PairState::NeedsReview { reason: "Member net resolved to another net; review endpoints.".into() },
+                                ..Pair::clone(pair)
+                            })
+                        } else {
+                            pair.clone()
+                        }
+                    })
+                    .collect(),
+            )
+        } else {
+            original.net_registry.pairs.clone()
+        };
+        project.net_registry = Arc::new(Registry { records: Arc::new(records.into_values().collect()), pairs });
         project.net_registry.validate(&project).map_err(CommandError::InvalidParams)?;
         self.change(project)
     }

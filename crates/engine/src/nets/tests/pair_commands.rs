@@ -590,3 +590,41 @@ fn class_only_edit_revalidates_bindings_and_refuses_dangling_class() {
     let err = dangling.reconcile_nets(Some(&updated)).unwrap_err();
     assert_eq!(err.code(), crate::error_codes::ErrorCode::InvalidParams);
 }
+
+/// Resolving an ambiguous net onto a provisional branch retires that branch with `Resolution`
+/// and immediately flags any pair referencing it as `NeedsReview`, round-tripping Save and Undo/Redo.
+#[test]
+fn pair_on_provisional_branch_flags_needs_review_on_resolve_ambiguity() {
+    let (mut session, pins) = circuit(6, false);
+    connect(&mut session, &pins[0], &pins[1]);
+    let source = promote(&mut session, &pins[0]);
+    connect(&mut session, &pins[0], &pins[2]);
+    connect(&mut session, &pins[2], &pins[3]);
+    connect(&mut session, &pins[0], &pins[4]);
+    connect(&mut session, &pins[4], &pins[5]);
+    let selected = Selection {
+        symbols: [pins[0]["symbol"].as_str().unwrap().into(), pins[1]["symbol"].as_str().unwrap().into()].into(),
+        ..Selection::default()
+    };
+    apply(&mut session, crate::DELETE_ITEMS, json!({"items":selected}));
+    let provisional = id_for(&session, &pins[2]);
+    let other = id_for(&session, &pins[4]);
+    let pair = new_pair_id().unwrap();
+    apply(&mut session, CREATE_PAIR, json!({"pair":pair,"name":"BRANCH","positive":provisional,"negative":other}));
+    assert_eq!(session.project().unwrap().differential_pairs()[0].state, PairState::Active {});
+
+    apply(&mut session, RESOLVE_AMBIGUITY, json!({"net":source,"anchor":pins[2]}));
+    assert!(matches!(
+        session.project().unwrap().net_registry.record(provisional).unwrap().state,
+        State::Retired { reason: Retirement::Resolution, .. }
+    ));
+    let current = &session.project().unwrap().differential_pairs()[0];
+    assert_eq!((current.id, current.positive, current.negative), (pair, provisional, other));
+    assert!(matches!(&current.state, PairState::NeedsReview { reason } if reason.contains("resolved")));
+    round_trip(&session);
+
+    apply(&mut session, "edit.undo", json!({}));
+    assert_eq!(session.project().unwrap().differential_pairs()[0].state, PairState::Active {});
+    apply(&mut session, "edit.redo", json!({}));
+    assert!(matches!(&session.project().unwrap().differential_pairs()[0].state, PairState::NeedsReview { reason } if reason.contains("resolved")));
+}
