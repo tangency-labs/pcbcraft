@@ -2076,7 +2076,7 @@ fn fabrication_requires_a_closed_loop_and_plots_open_outline_paths_as_drawn() {
 }
 
 /// Read the profile's exact move and draw sequence at its existing nanometre resolution.
-/// See Ucamco Gerber Layer Format Specification 2026.05 sections 4.5–4.6 for plotting modes and operations.
+/// See Ucamco Gerber Layer Format Specification 2026.05 sections 4.7–4.8 for plotting modes and operations.
 #[test]
 fn fabrication_emits_one_closed_profile_path_per_outline_loop() {
     let mut s = routed_fixture();
