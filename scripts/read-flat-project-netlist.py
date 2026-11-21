@@ -8,6 +8,21 @@ from pathlib import Path
 import re
 
 
+def require_int_id(value, label):
+    """Require an integer counter ID; floats and booleans must not alias integers."""
+    if type(value) is not int:
+        raise ValueError(f"expected integer {label}: {value!r}")
+    return value
+
+
+def unique_object(pairs):
+    """Reject duplicate JSON object keys rather than keeping the last value."""
+    fields = dict(pairs)
+    if len(fields) != len(pairs):
+        raise ValueError("JSON object must not contain duplicate keys")
+    return fields
+
+
 def read_netlist(read_document):
     """Project the saved parts, pins and wire membership, without engine code."""
     project = read_document("project.json")
@@ -40,21 +55,30 @@ def read_netlist(read_document):
         pins = set(pin_ids)
         if len(terminal_ids) != len(terminals) or len(pins) != len(pin_ids) or pins != terminal_ids:
             raise ValueError("expected each logical terminal to appear once in the definition and unit")
-        part = component["id"]
+        part = require_int_id(component["id"], "component ID")
         if part in parts:
             raise ValueError("duplicate component ID")
         parts[part] = [part, component["reference"], component["value"], sorted(terminals, key=lambda pin: pin[0])]
         pins_by_part[part] = (unit["id"], pins)
 
-    owners = {symbol["id"]: symbol["component"] for symbol in sheet["symbols"]}
-    if len(owners) != len(sheet["symbols"]) or sorted(owners.values()) != sorted(parts):
+    owners = {}
+    for symbol in sheet["symbols"]:
+        symbol_id = require_int_id(symbol["id"], "symbol ID")
+        owner_id = require_int_id(symbol["component"], "symbol component ID")
+        if symbol_id in owners:
+            raise ValueError("expected exactly one placement per part")
+        owners[symbol_id] = owner_id
+    if sorted(owners.values()) != sorted(parts):
         raise ValueError("expected exactly one placement per part")
     if any(symbol["unit"] != pins_by_part[symbol["component"]][0] for symbol in sheet["symbols"]):
         raise ValueError("placement names an unknown unit")
     placed_pins = {(part, pin) for part, (_, pins) in pins_by_part.items() for pin in pins}
-    junctions = {junction["id"] for junction in sheet["junctions"]}
-    if len(junctions) != len(sheet["junctions"]):
-        raise ValueError("duplicate junction ID")
+    junctions = set()
+    for junction in sheet["junctions"]:
+        junction_id = require_int_id(junction["id"], "junction ID")
+        if junction_id in junctions:
+            raise ValueError("duplicate junction ID")
+        junctions.add(junction_id)
     edges = defaultdict(set)
     for wire in sheet["wires"]:
         a, b = (endpoint(wire[end], owners, placed_pins, junctions) for end in ("from", "to"))
@@ -80,12 +104,13 @@ def read_netlist(read_document):
 
 def endpoint(record, owners, placed_pins, junctions):
     """Translate an explicit saved endpoint; coordinates and bends do not join wires."""
-    if record.keys() == {"symbol", "pin"} and record["symbol"] in owners:
-        terminal = owners[record["symbol"]], record["pin"]
-        if terminal in placed_pins:
-            return ("pin", *terminal)
-    if record.keys() == {"junction"} and record["junction"] in junctions:
-        return ("junction", record["junction"])
+    if isinstance(record, dict):
+        if record.keys() == {"symbol", "pin"} and type(record["symbol"]) is int and record["symbol"] in owners:
+            terminal = owners[record["symbol"]], record["pin"]
+            if terminal in placed_pins:
+                return ("pin", *terminal)
+        if record.keys() == {"junction"} and type(record["junction"]) is int and record["junction"] in junctions:
+            return ("junction", record["junction"])
     raise ValueError(f"unsupported or unresolved wire endpoint: {record!r}")
 
 
@@ -95,7 +120,9 @@ def main():
     parser.add_argument("folder", type=Path, help="trusted project directory, not a .pc archive")
     args = parser.parse_args()
     try:
-        result = read_netlist(lambda path: json.loads((args.folder / path).read_text(encoding="utf-8")))
+        result = read_netlist(
+            lambda path: json.loads((args.folder / path).read_text(encoding="utf-8"), object_pairs_hook=unique_object)
+        )
     except (OSError, ValueError, TypeError, KeyError) as error:
         parser.exit(1, f"{parser.prog}: {error}\n")
     print(json.dumps(result, ensure_ascii=True, indent=2))

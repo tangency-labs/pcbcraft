@@ -114,15 +114,85 @@ class FlatProjectNetlist(unittest.TestCase):
                         READER(read)
 
     def test_refuses_an_endpoint_it_cannot_interpret(self):
-        with ZipFile(ARCHIVE) as archive:
-            def read(path):
-                document = json.loads(archive.read(path))
-                if path.startswith("sheets/"):
-                    document["wires"][0]["to"] = {"junction": -1}
-                return document
+        cases = (
+            ("unknown junction", {"junction": -1}),
+            ("null endpoint", None),
+            ("list endpoint", [1]),
+            ("float symbol endpoint", {"symbol": 2.0, "pin": "1"}),
+            ("bool symbol endpoint", {"symbol": True, "pin": "1"}),
+        )
+        for label, bad_endpoint in cases:
+            with self.subTest(case=label), ZipFile(ARCHIVE) as archive:
+                def read(path):
+                    document = json.loads(archive.read(path))
+                    if path.startswith("sheets/"):
+                        document["wires"][0]["to"] = bad_endpoint
+                    return document
 
-            with self.assertRaisesRegex(ValueError, "unsupported or unresolved wire endpoint"):
-                READER(read)
+                with self.assertRaisesRegex(ValueError, "unsupported or unresolved wire endpoint"):
+                    READER(read)
+
+    def test_cli_refuses_null_endpoint_and_duplicate_keys_without_traceback(self):
+        with TemporaryDirectory(prefix="pcbcraft flat project ") as directory:
+            folder = Path(directory)
+            with ZipFile(ARCHIVE) as archive:
+                archive.extractall(folder)
+            project = json.loads((folder / "project.json").read_text(encoding="utf-8"))
+            sheet_file = folder / project["sheets"][0]["file"]
+            original_sheet = sheet_file.read_text(encoding="utf-8")
+            command = [sys.executable, "-B", str(SCRIPT), str(folder)]
+
+            sheet = json.loads(original_sheet)
+            sheet["wires"][0]["to"] = None
+            sheet_file.write_text(json.dumps(sheet), encoding="utf-8")
+            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=10)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("unsupported or unresolved wire endpoint", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+            sheet_file.write_text(original_sheet, encoding="utf-8")
+            project_file = folder / "project.json"
+            project_file.write_text(
+                project_file.read_text(encoding="utf-8").replace('"format":', '"format":"pcbcraft-project/6","format":', 1),
+                encoding="utf-8",
+            )
+            result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=10)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertEqual(result.stdout, "")
+            self.assertIn("duplicate keys", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+
+    def test_refuses_non_integer_counter_ids(self):
+        with ZipFile(ARCHIVE) as archive:
+            project = json.loads(archive.read("project.json"))
+            sheet_path = project["sheets"][0]["file"]
+            sheet = json.loads(archive.read(sheet_path))
+            cases = (
+                ("float component id", "project.json", ("components", 0, "id"), float(project["components"][0]["id"]),
+                 "expected integer component ID"),
+                ("bool component id", "project.json", ("components", 0, "id"), True,
+                 "expected integer component ID"),
+                ("float symbol id", sheet_path, ("symbols", 0, "id"), float(sheet["symbols"][0]["id"]),
+                 "expected integer symbol ID"),
+                ("float symbol component id", sheet_path, ("symbols", 0, "component"), float(sheet["symbols"][0]["component"]),
+                 "expected integer symbol component ID"),
+                ("float junction id", sheet_path, ("junctions", 0, "id"), float(sheet["junctions"][0]["id"]),
+                 "expected integer junction ID"),
+            )
+            for label, target, keys, value, message in cases:
+                with self.subTest(case=label):
+                    def read(path):
+                        document = json.loads(archive.read(path))
+                        if path == target:
+                            record = document
+                            for key in keys[:-1]:
+                                record = record[key]
+                            record[keys[-1]] = value
+                        return document
+
+                    with self.assertRaisesRegex(ValueError, f"^{message}"):
+                        READER(read)
 
     def test_refuses_duplicate_logical_terminal_and_unit_pin(self):
         for field in ("terminals", "pins"):
