@@ -351,3 +351,87 @@ fn pair_form_respects_modal_ownership_and_expires_on_revision_change() {
     assert_eq!(h.state().session.revision(), before + 1);
     assert!(h.state().session.project().unwrap().differential_pairs().is_empty());
 }
+
+/// The Rules dialog renders the NeedsReview conflict banner with an undoable Mark reviewed
+/// action (enabled only while both endpoints are live), keeps retained endpoints selectable
+/// on the selected pair, and filters retired and already-paired nets out of New pair choosers.
+#[test]
+fn pair_editor_needs_review_mark_reviewed_and_chooser_filtering() {
+    let (mut h, choices) = fixture().unwrap();
+    let pair = nets::new_pair_id().unwrap();
+    let (positive, negative, spare) = (choices[0].0, choices[1].0, choices[2].0);
+    mcp(h.state_mut(), nets::CREATE_PAIR, json!({"pair":pair,"name":"Data","positive":positive,"negative":negative})).unwrap();
+
+    // Add a third pin to `positive`: both members stay Active, while endpoint membership changes -> NeedsReview.
+    let (sheet, sym0, wire1) = {
+        let project = h.state().session.project().unwrap();
+        (project.sheet_target().id(), project.symbols()[0].id(), project.wires()[1].id())
+    };
+    let rev = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::PLACE_RESISTOR, &json!({"sheet":sheet,"x_nm":152_400_000,"y_nm":0,"expected_revision":rev}));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let extra = h.state().session.project().unwrap().symbols().last().unwrap().id();
+    let rev = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::CONNECT_PINS,
+        &json!({"sheet":sheet,"from":{"symbol":sym0,"terminal":"1"},"to":{"symbol":extra,"terminal":"1"},"expected_revision":rev}),
+    );
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let live_reason = match &h.state().session.project().unwrap().differential_pairs()[0].state {
+        nets::PairState::NeedsReview { reason } => reason.clone(),
+        other => panic!("expected NeedsReview after endpoint change, got {other:?}"),
+    };
+    h.run();
+
+    // Open Rules -> Differential pairs and select "Data": conflict banner visible, Mark reviewed enabled.
+    let pair_label = choice_label("Data", pair);
+    open(&mut h);
+    select(&mut h, "Existing pair", &pair_label);
+    h.get_by_label(&format!("Needs review: {live_reason}"));
+    assert!(!h.get_by_role_and_label(egui::Role::Button, "Mark reviewed").accesskit_node().is_disabled());
+
+    // Clicking Mark reviewed clears NeedsReview -> Active through the shared undoable edit path.
+    let before_review = h.state().session.revision();
+    click(&mut h, "Mark reviewed");
+    wait_for_pair(&mut h, before_review + 1).unwrap();
+    assert_eq!(h.state().session.project().unwrap().differential_pairs()[0].state, nets::PairState::Active {});
+    h.state_mut().run("edit.undo", &json!({}));
+    assert!(matches!(h.state().session.project().unwrap().differential_pairs()[0].state, nets::PairState::NeedsReview { .. }));
+    h.state_mut().run("edit.redo", &json!({}));
+    assert_eq!(h.state().session.project().unwrap().differential_pairs()[0].state, nets::PairState::Active {});
+
+    // Retire `negative`: NeedsReview returns, Mark reviewed is disabled, retained endpoint stays selectable.
+    let rev = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::DELETE_WIRE, &json!({"wire":wire1,"expected_revision":rev}));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let retired_reason = match &h.state().session.project().unwrap().differential_pairs()[0].state {
+        nets::PairState::NeedsReview { reason } => reason.clone(),
+        other => panic!("expected NeedsReview after retiring negative member, got {other:?}"),
+    };
+    h.run();
+
+    open(&mut h);
+    select(&mut h, "Existing pair", &pair_label);
+    h.get_by_label(&format!("Needs review: {retired_reason}"));
+    assert!(h.get_by_role_and_label(egui::Role::Button, "Mark reviewed").accesskit_node().is_disabled());
+    let retained_label = choice_label("Retained net", negative);
+    h.get_by_role_and_label(egui::Role::ComboBox, "Negative net").click();
+    h.run();
+    h.get_by_role_and_label(egui::Role::RadioButton, &retained_label).click();
+    h.run();
+
+    // Switching to New pair filters out both the already-paired positive net and the retired negative net.
+    click(&mut h, "New pair");
+    h.get_by_role_and_label(egui::Role::ComboBox, "Positive net").click();
+    h.run();
+    assert!(h.query_by_label(&choices[2].1).is_some(), "expected active unpaired net {spare}");
+    assert!(h.query_by_label(&choices[0].1).is_none(), "already-paired positive net must be filtered out");
+    assert!(h.query_by_label(&retained_label).is_none(), "retired negative net must be filtered out");
+    click(&mut h, &choices[2].1);
+    click(&mut h, "Discard pair changes");
+
+    // End on the NeedsReview state so the harness leaves the conflict banner and disabled button visible.
+    select(&mut h, "Existing pair", &pair_label);
+    h.get_by_label(&format!("Needs review: {retired_reason}"));
+    assert!(h.get_by_role_and_label(egui::Role::Button, "Mark reviewed").accesskit_node().is_disabled());
+}
