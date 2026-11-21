@@ -2606,6 +2606,17 @@ const CATALOG: &[Command] = &[
         }],
     },
     Command {
+        id: nets::SHEET_OVERVIEW,
+        title: "Inter-Sheet Net Overview",
+        summary: "List each net that reaches more than one sheet, with its pages and how it reaches each one: global label, power symbol, hierarchical label, sheet pin or shared part terminal. Edits nothing.",
+        params: &[Param {
+            name: "sheet",
+            kind: ParamKind::SheetId,
+            required: false,
+            summary: "Optional sheet UUID; list only nets that reach this sheet",
+        }],
+    },
+    Command {
         id: part_groups::CREATE,
         title: "Create Part Group",
         summary: "Create a project-wide part group without assigning part instances or allocating a board.",
@@ -3270,6 +3281,7 @@ impl Session {
             | net_classes::RESOLVE
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
+            | nets::SHEET_OVERVIEW
             | part_groups::CREATE
             | part_groups::UPDATE
             | part_groups::REMOVE
@@ -3518,6 +3530,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.inspect_net_class_target(params);
         }
+        if id == nets::SHEET_OVERVIEW {
+            self.validate_project_command(id, params)?;
+            return self.sheet_overview_query(params);
+        }
         if id == board::class_rules::ROUTE_RULES {
             self.validate_project_command(id, params)?;
             return self.route_rule_query(params);
@@ -3735,6 +3751,7 @@ impl Session {
                 | net_classes::RESOLVE
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
+                | nets::SHEET_OVERVIEW
                 | part_groups::CREATE
                 | part_groups::UPDATE
                 | part_groups::REMOVE
@@ -3848,6 +3865,9 @@ impl Session {
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
+            }
+            nets::SHEET_OVERVIEW => {
+                self.sheet_overview_query(params)?;
             }
             part_groups::CREATE | part_groups::UPDATE | part_groups::REMOVE => self.edit_part_group(id, params)?,
             part_groups::SET_GROUPS => self.set_part_instance_groups(params)?,

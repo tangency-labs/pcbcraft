@@ -1,7 +1,11 @@
 //! Inspect the engine's resolved nets using the same card and tree primitives as Properties/Browser.
 use egui::{Rect, Ui};
 use pcbcraft_chrome::{properties, shell, workspace};
-use pcbcraft_engine::{Project, schematic::Terminal};
+use pcbcraft_engine::{
+    Project,
+    nets::{SheetOverview, Via},
+    schematic::Terminal,
+};
 use std::{collections::BTreeSet, sync::Arc};
 
 #[derive(Debug)]
@@ -13,11 +17,27 @@ pub(super) struct NetInspector {
     folded: BTreeSet<usize>,
     project: Option<Arc<Project>>,
     snapshot: Option<Snapshot>,
+    /// Cross-sheet nets folded by the user, by net name, kept while the project changes.
+    folded_sheets: BTreeSet<String>,
+    /// Snapshot the inter-sheet overview was read from; any sheet's edits refresh it.
+    overview_project: Option<Arc<Project>>,
+    overview: Option<Result<SheetOverview, String>>,
 }
 impl Default for NetInspector {
     /// Match the Properties card's initial state without reserving a sidebar in the workspace.
     fn default() -> Self {
-        Self { open: false, rect: Rect::NOTHING, collapsed: false, query: String::new(), folded: BTreeSet::new(), project: None, snapshot: None }
+        Self {
+            open: false,
+            rect: Rect::NOTHING,
+            collapsed: false,
+            query: String::new(),
+            folded: BTreeSet::new(),
+            project: None,
+            snapshot: None,
+            folded_sheets: BTreeSet::new(),
+            overview_project: None,
+            overview: None,
+        }
     }
 }
 #[derive(Debug)]
@@ -60,12 +80,36 @@ impl Snapshot {
 /// Tree rows use the Browser's actual metrics, disclosure control and typography.
 fn row(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, label: &str, depth: usize, open: Option<bool>, tip: &str) -> bool {
     let accessible = open.is_some().then(|| format!("Net {label}"));
+    tree_row(ui, key, label, accessible.as_deref(), depth, open, tip, false)
+}
+
+/// One Browser-style tree row; returns whether it was clicked or its disclosure toggled.
+#[allow(clippy::too_many_arguments)]
+fn tree_row(
+    ui: &mut Ui,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    label: &str,
+    accessibility_label: Option<&str>,
+    depth: usize,
+    open: Option<bool>,
+    tip: &str,
+    selected: bool,
+) -> bool {
     let response = workspace::tree_row(
         ui,
         ui.scope_id().with(key),
-        &workspace::TreeRow { depth, fold: open, icon: None, label, accessibility_label: accessible.as_deref(), tip, selected: false },
+        &workspace::TreeRow { depth, fold: open, icon: None, label, accessibility_label, tip, selected },
     );
     response.fold || response.clicked
+}
+
+/// Sheet row text: page number, sheet name and how the net arrives there.
+fn sheet_line(page: usize, name: &str, via: &[Via]) -> String {
+    if via.is_empty() {
+        format!("{page} · {name}")
+    } else {
+        format!("{page} · {name} — {}", via.iter().map(|via| via.label()).collect::<Vec<_>>().join(", "))
+    }
 }
 impl NetInspector {
     /// Float a stable Craft card inside its pane, sharing the Properties inspector
@@ -75,7 +119,12 @@ impl NetInspector {
             self.rect = Rect::NOTHING;
             return;
         }
+        let active = project.as_ref().map(|project| project.sheet_target().id());
         if let Some(project) = project {
+            if !self.overview_project.as_ref().is_some_and(|p| p.same_sheet_overview(&project)) {
+                self.overview = Some(project.sheet_overview(None));
+                self.overview_project = Some(project.clone());
+            }
             if !self.project.as_ref().is_some_and(|p| p.same_connectivity(&project)) {
                 self.snapshot = Some(Snapshot::read(&project));
                 self.project = Some(project);
@@ -84,6 +133,8 @@ impl NetInspector {
         } else {
             self.project = None;
             self.snapshot = None;
+            self.overview_project = None;
+            self.overview = None;
         }
         let width = if area.width() < 600. { area.width() } else { 260. };
         let (rect, collapse) =
@@ -123,6 +174,44 @@ impl NetInspector {
                         }
                     }
                 }
+                match &self.overview {
+                    Some(Err(error)) => {
+                        pcbcraft_chrome::library_sources::heading(ui, "Across sheets", 0);
+                        ui.label(shell::dim(format!("Can't list nets across sheets: {error}")));
+                    }
+                    Some(Ok(overview)) => {
+                        pcbcraft_chrome::library_sources::heading(ui, "Across sheets", overview.nets.len());
+                        if overview.nets.is_empty() {
+                            ui.label(shell::dim("No nets cross sheets"));
+                        }
+                        for (index, net) in overview.nets.iter().enumerate().filter(|(_, net)| {
+                            query.is_empty()
+                                || net.name.to_lowercase().contains(&query)
+                                || net.sheets.iter().any(|sheet| sheet.name.to_lowercase().contains(&query))
+                        }) {
+                            let expanded = !self.folded_sheets.contains(&net.name) || !query.is_empty();
+                            let accessible = format!("Cross-sheet net {}", net.name);
+                            let tip = if net.names.len() > 1 {
+                                format!("{} sheets; electrical names: {}", net.sheets.len(), net.names.join(", "))
+                            } else {
+                                format!("{} sheets", net.sheets.len())
+                            };
+                            if tree_row(ui, ("sheet_net", index), &net.name, Some(&accessible), 0, Some(expanded), &tip, false)
+                                && !self.folded_sheets.remove(&net.name)
+                            {
+                                self.folded_sheets.insert(net.name.clone());
+                            }
+                            if expanded {
+                                for sheet in &net.sheets {
+                                    let line = sheet_line(sheet.page, &sheet.name, &sheet.via);
+                                    let tip = format!("{} part pins on this sheet", sheet.terminals);
+                                    tree_row(ui, ("sheet_net_page", index, sheet.sheet), &line, None, 1, None, &tip, active == Some(sheet.sheet));
+                                }
+                            }
+                        }
+                    }
+                    None => {}
+                }
                 properties::section(ui, "Unconnected pins");
                 if snapshot.unconnected.is_empty() {
                     ui.label(shell::dim("No unconnected pins"));
@@ -140,11 +229,159 @@ impl NetInspector {
 
 #[cfg(test)]
 mod tests {
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
     use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR};
     use serde_json::json;
 
     use crate::{PcbApp, tests::click};
+
+    /// A three-sheet project with a CAN_H global label on pages 1 and 3 only.
+    fn three_sheets() -> PcbApp {
+        use pcbcraft_engine::{net_labels, sheets};
+        let mut app = PcbApp::default();
+        app.session.execute("project.new", &json!({"name": "bus"})).unwrap();
+        for name in ["Bus", "Radio"] {
+            let revision = app.session.revision();
+            app.session.execute(sheets::CREATE_SHEET, &json!({"name": name, "expected_revision": revision})).unwrap();
+        }
+        let pages = app.session.project().unwrap().page_order();
+        for sheet in [pages[0], pages[2]] {
+            let revision = app.session.revision();
+            app.session.execute(PLACE_RESISTOR, &json!({"sheet": sheet.id(), "x_nm": 0, "y_nm": 0, "expected_revision": revision})).unwrap();
+            let projection = app.session.project().unwrap().for_sheet(sheet).unwrap();
+            let at = projection.terminal_position(projection.symbols()[0].terminals()[0]).unwrap();
+            let revision = app.session.revision();
+            let label =
+                json!({"sheet": sheet.id(), "name": "CAN_H", "style": "global", "x_nm": at.x_nm, "y_nm": at.y_nm, "expected_revision": revision});
+            app.session.execute(net_labels::ADD, &label).unwrap();
+        }
+        app
+    }
+
+    /// The Across sheets section lists CAN_H on pages 1 and 3, marks the active sheet, filters by
+    /// sheet name, folds by mouse and keyboard, and never edits the project.
+    #[test]
+    fn net_inspector_lists_nets_across_sheets() {
+        use egui::accesskit::Toggled;
+        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), three_sheets());
+        harness.run();
+        let revision = harness.state().session.revision();
+        click(&mut harness, "Toggle Net Inspector");
+        harness.get_by_label("Cross-sheet net CAN_H");
+        let main = "1 · Main — global label";
+        let radio = "3 · Radio — global label";
+        assert_eq!(harness.get_by_label(main).accesskit_node().toggled(), Some(Toggled::True));
+        assert_eq!(harness.get_by_label(radio).accesskit_node().toggled(), Some(Toggled::False));
+        assert!(harness.query_by_label_contains("2 · Bus").is_none());
+
+        click(&mut harness, "Cross-sheet net CAN_H");
+        assert!(harness.query_by_label(radio).is_none());
+        harness.get_by_label("Cross-sheet net CAN_H").focus();
+        harness.run();
+        assert!(harness.get_by_label("Cross-sheet net CAN_H").is_focused());
+        harness.key_press(egui::Key::Enter);
+        harness.run();
+        harness.get_by_label(radio);
+
+        click(&mut harness, "Search nets or pins");
+        harness.get_by_label("Search nets or pins").type_text("radio");
+        harness.run();
+        harness.get_by_label("Cross-sheet net CAN_H");
+        harness.get_by_label(radio);
+        harness.get_by_label("Search nets or pins").type_text("x");
+        harness.run();
+        assert!(harness.query_by_label("Cross-sheet net CAN_H").is_none());
+        assert_eq!(harness.state().session.revision(), revision);
+    }
+
+    /// One sheet has nothing to cross; undoing the label that joined two sheets empties the list.
+    #[test]
+    fn net_inspector_across_sheets_empty_and_after_undo() {
+        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), three_sheets());
+        harness.run();
+        click(&mut harness, "Toggle Net Inspector");
+        harness.get_by_label("Cross-sheet net CAN_H");
+        click(&mut harness, "Undo");
+        harness.get_by_label("No nets cross sheets");
+        assert!(harness.query_by_label("Cross-sheet net CAN_H").is_none());
+        click(&mut harness, "Redo");
+        harness.get_by_label("Cross-sheet net CAN_H");
+    }
+
+    /// The three-sheet project with the Net Inspector open on page 1.
+    fn across_sheets_open() -> Harness<'static, PcbApp> {
+        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), three_sheets());
+        harness.run();
+        click(&mut harness, "Toggle Net Inspector");
+        harness
+    }
+
+    /// Visual state `filled`: CAN_H expanded with pages 1 and 3, page 1 highlighted.
+    #[test]
+    fn across_sheets_shot_filled() {
+        let harness = across_sheets_open();
+        harness.get_by_label("Cross-sheet net CAN_H");
+        harness.get_by_label("1 · Main — global label");
+        harness.get_by_label("3 · Radio — global label");
+    }
+
+    /// Visual state `empty`: a one-sheet project has no nets that cross sheets.
+    #[test]
+    fn across_sheets_shot_empty() {
+        let mut app = PcbApp::default();
+        app.session.execute("project.new", &json!({"name": "single"})).unwrap();
+        app.session.execute(PLACE_RESISTOR, &json!({"x_nm": 0, "y_nm": 0, "expected_revision": 1})).unwrap();
+        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        harness.run();
+        click(&mut harness, "Toggle Net Inspector");
+        harness.get_by_label("No nets cross sheets");
+        assert!(harness.query_by_label_contains("Cross-sheet net").is_none());
+    }
+
+    /// Visual state `search`: a sheet name in the search box keeps the net and its sheets.
+    #[test]
+    fn across_sheets_shot_search() {
+        let mut harness = across_sheets_open();
+        click(&mut harness, "Search nets or pins");
+        harness.get_by_label("Search nets or pins").type_text("radio");
+        harness.run();
+        harness.get_by_label("Cross-sheet net CAN_H");
+        harness.get_by_label("3 · Radio — global label");
+    }
+
+    /// Visual state `folded`: CAN_H collapsed to its heading row.
+    #[test]
+    fn across_sheets_shot_folded() {
+        let mut harness = across_sheets_open();
+        click(&mut harness, "Cross-sheet net CAN_H");
+        harness.get_by_label("Cross-sheet net CAN_H");
+        assert!(harness.query_by_label("1 · Main — global label").is_none());
+    }
+
+    /// Visual state `keyboard-focus`: keyboard focus on the CAN_H row.
+    #[test]
+    fn across_sheets_shot_keyboard_focus() {
+        let mut harness = across_sheets_open();
+        harness.get_by_label("Cross-sheet net CAN_H").focus();
+        harness.run();
+        assert!(harness.get_by_label("Cross-sheet net CAN_H").is_focused());
+        harness.get_by_label("3 · Radio — global label");
+    }
+
+    /// Visual state `error`: the overview could not be read, so the section says why and
+    /// keeps the rest of the inspector.
+    #[test]
+    fn across_sheets_shot_error() {
+        let mut harness = across_sheets_open();
+        harness.state_mut().net_inspector.overview = Some(Err("Missing net anchor while building the sheet overview.".into()));
+        harness.run();
+        harness.get_by_label("Can't list nets across sheets: Missing net anchor while building the sheet overview.");
+        assert!(harness.query_by_label("Cross-sheet net CAN_H").is_none());
+        harness.get_by_label("Unconnected pins");
+    }
 
     /// The ribbon toggle leaves the project alone while app bar history updates the displayed nets.
     #[test]

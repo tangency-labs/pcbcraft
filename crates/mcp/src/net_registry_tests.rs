@@ -89,6 +89,46 @@ fn part_group_commands_share_live_and_headless_behavior() {
     );
 }
 
+/// The inter-sheet overview answers the same in the live editor and headless, with inspection
+/// disabled, and leaves the live snapshot, revision and Undo history untouched.
+#[test]
+fn sheet_overview_is_shared_by_live_and_headless_clients() {
+    use pcbcraft_engine::{net_labels, sheets};
+    let mut setup = Session::default();
+    apply(&mut setup, "project.new", json!({}));
+    apply(&mut setup, sheets::CREATE_SHEET, json!({"name":"Bus"}));
+    let targets = setup.project().unwrap().page_order();
+    for sheet in &targets {
+        apply(&mut setup, PLACE_RESISTOR, json!({"sheet":sheet.id(),"x_nm":0,"y_nm":0}));
+        let projection = setup.project().unwrap().for_sheet(*sheet).unwrap();
+        let at = projection.terminal_position(projection.symbols()[0].terminals()[0]).unwrap();
+        apply(&mut setup, net_labels::ADD, json!({"sheet":sheet.id(),"name":"CAN_H","style":"global","x_nm":at.x_nm,"y_nm":at.y_nm}));
+    }
+    let snapshot = setup.snapshot().unwrap();
+    let mut headless = Headless::with_project(snapshot.clone());
+    let mut session = Session::default();
+    session.open_snapshot(snapshot.clone());
+    let mut editor = OpenEditor { session, blocked: false };
+    let catalog = headless.call("engine.commands", json!({})).unwrap();
+    assert!(catalog.as_array().unwrap().iter().any(|entry| entry["id"] == nets::SHEET_OVERVIEW));
+    let revision = editor.session.revision();
+    for params in [json!({}), json!({"sheet":targets[1].id()})] {
+        let request = json!({"command":nets::SHEET_OVERVIEW,"inspect":false,"params":params});
+        let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+        assert_eq!(live, headless.call("engine.execute", request).unwrap());
+        assert!(live.get("project").is_none());
+        let pages: Vec<_> = live["sheet_overview"]["nets"][0]["sheets"].as_array().unwrap().iter().map(|sheet| sheet["page"].clone()).collect();
+        assert_eq!(pages, [json!(1), json!(2)]);
+    }
+    let unknown = json!({"command":nets::SHEET_OVERVIEW,"inspect":false,"params":{"sheet":"6f1c2b9e-0000-4000-8000-000000000001"}});
+    let live_error = call_editor(&mut editor, &json!({"method":"engine.execute","params":unknown})).unwrap_err();
+    assert_eq!(live_error, headless.call("engine.execute", unknown).unwrap_err());
+    assert_eq!(live_error.code(), "not_found");
+    assert!(Arc::ptr_eq(&snapshot, &editor.session.snapshot().unwrap()));
+    assert_eq!(editor.session.revision(), revision);
+    assert!(!editor.session.available("edit.undo"));
+}
+
 /// Model the real live adapter's ownership/refusal boundary without opening an OS window.
 struct OpenEditor {
     session: Session,
