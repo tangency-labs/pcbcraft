@@ -459,6 +459,7 @@ fn supply_range_limit_matches_draft_writer_reader_and_schema() {
     let mut symbol_editor = AuthoringSession::new(symbol, false).unwrap();
     symbol_editor.execute(0, Action::Delete { objects: vec![1, 3] }).unwrap();
     for index in 1..=MAX_TERMINAL_RATINGS {
+        let grid = index as i64 - 1;
         symbol_editor
             .execute(
                 symbol_editor.revision(),
@@ -467,7 +468,7 @@ fn supply_range_limit_matches_draft_writer_reader_and_schema() {
                         number: index.to_string(),
                         name: Some(format!("VIN{index}")),
                         electrical_type: ElectricalType::PowerIn,
-                        at: crate::schematic::Point { x_nm: (index as i64 % 16) * 2_540_000, y_nm: (index as i64 / 16) * 2_540_000 },
+                        at: crate::schematic::Point { x_nm: (grid % 16 - 8) * 1_270_000, y_nm: (grid / 16 - 4) * 1_270_000 },
                         appearance: None,
                     },
                 },

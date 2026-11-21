@@ -260,6 +260,7 @@ fn terminal_rating_limit_publishes_reopens_and_keeps_typed_bounds_on_overflow() 
     let mut symbol_editor = AuthoringSession::new(symbol, false).unwrap();
     symbol_editor.execute(0, Action::Delete { objects: vec![1, 3] }).unwrap();
     for index in 1..=MAX_TERMINAL_RATINGS {
+        let grid = index as i64 - 1;
         symbol_editor
             .execute(
                 symbol_editor.revision(),
@@ -268,7 +269,7 @@ fn terminal_rating_limit_publishes_reopens_and_keeps_typed_bounds_on_overflow() 
                         number: index.to_string(),
                         name: Some(format!("VIN{index}")),
                         electrical_type: ElectricalType::PowerIn,
-                        at: Point { x_nm: (index as i64 % 16) * 2_540_000, y_nm: (index as i64 / 16) * 2_540_000 },
+                        at: Point { x_nm: (grid % 16 - 8) * 1_270_000, y_nm: (grid / 16 - 4) * 1_270_000 },
                         appearance: None,
                     },
                 },
