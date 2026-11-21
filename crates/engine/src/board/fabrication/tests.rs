@@ -343,8 +343,6 @@ struct ReadRounded {
     circles: Vec<(i64, Point)>,
     strips: Vec<(i64, Point, Point)>,
     outline: Vec<Point>,
-    // Width and height in nanometers, center coordinates in half-nanometer units.
-    rectangles: Vec<(i64, i64, i64, i64)>,
     function: Option<&'static str>,
 }
 
@@ -434,17 +432,7 @@ fn read_macro_coordinate(value: &str) -> Result<i64, &'static str> {
     if let Some(magnitude) = value.strip_prefix('-') { read_mm(magnitude).map(|n| -n) } else { read_mm(value) }
 }
 
-/// Parse a center-line coordinate without losing an exact half-grid rectangle center.
-fn read_macro_half_nm(value: &str) -> Result<i64, &'static str> {
-    let (sign, magnitude) = value.strip_prefix('-').map_or((1, value), |s| (-1, s));
-    if magnitude.split_once('.').is_some_and(|(_, fraction)| fraction.len() == 7) {
-        let whole_nm = magnitude.strip_suffix('5').ok_or("invalid half-nanometer coordinate")?;
-        return Ok(sign * (2 * read_macro_coordinate(whole_nm)? + 1));
-    }
-    Ok(2 * read_macro_coordinate(value)?)
-}
-
-/// Decode only the emitted fixed-parameter macro subset (Ucamco Gerber 2026.05 §§4.5.1.3–4.5.1.6).
+/// Decode only the emitted fixed-parameter macro subset (Ucamco Gerber 2026.05 §§4.5.1.3, 4.5.1.4 and 4.5.1.6).
 /// Exposure must be on; zero rotation means coordinates are already
 /// in the aperture's axes. Refuse unsupported primitive parameters rather than ignoring them.
 fn read_rounded_macro(lines: &mut std::str::Lines<'_>) -> Result<ReadRounded, &'static str> {
@@ -457,17 +445,14 @@ fn read_rounded_macro(lines: &mut std::str::Lines<'_>) -> Result<ReadRounded, &'
         let fields: Vec<_> = line.strip_suffix('*').ok_or("invalid macro primitive")?.split(',').collect();
         match fields.as_slice() {
             ["1", "1", diameter, x, y, "0"] => read.circles.push((read_mm(diameter)?, point(x, y)?)),
-            ["20", "1", width, x, y, end_x, end_y, "0"] if read.rectangles.is_empty() => {
+            ["20", "1", width, x, y, end_x, end_y, "0"] => {
                 let (start, end) = (point(x, y)?, point(end_x, end_y)?);
                 if start == end {
                     return Err("collapsed macro strip");
                 }
                 read.strips.push((read_mm(width)?, start, end));
             }
-            ["21", "1", width, height, x, y, "0"] if read.rectangles.len() < 2 && read.strips.is_empty() && read.outline.is_empty() => {
-                read.rectangles.push((read_mm(width)?, read_mm(height)?, read_macro_half_nm(x)?, read_macro_half_nm(y)?));
-            }
-            ["4", "1", "4", xy @ .., "0"] if read.rectangles.is_empty() && read.outline.is_empty() && xy.len() == 10 => {
+            ["4", "1", "4", xy @ .., "0"] if read.outline.is_empty() && xy.len() == 10 => {
                 for &[x, y] in xy.as_chunks::<2>().0 {
                     read.outline.push(point(x, y)?);
                 }
@@ -1283,40 +1268,67 @@ fn rounded_pad_macros_keep_the_outline_when_strip_overlap_is_too_small() {
             assert!(read.regions.is_empty() && read.strokes.is_empty() && read.flashes.is_empty());
             assert_eq!(read.rounded_flashes.len(), 2);
             let aperture = &read.rounded[&read.rounded_flashes[0].1];
-            assert!(aperture.rectangles.is_empty());
             assert_eq!((aperture.circles.len(), aperture.strips.len()), (4, 4));
             assert_eq!(aperture.outline.len(), if keep_outline { 5 } else { 0 }, "height {height} at {local}");
         }
     }
 }
 
-/// Narrow axis-aligned cores that are wider than the edge strips but too narrow for an outline
-/// under Gerber §4.14.2 use two overlapping center-line rectangles sharing the exact center,
-/// replacing the core and all four edge strips with no core-to-strip seams (§4.5.1.5).
+/// Axis-aligned narrow cores that cannot use an outline and are not covered by opposite edge
+/// strips cannot keep non-coincident corner circles connected to center-line rectangles under
+/// Gerber §4.14.2 coordinate and size tolerances, so export refuses them without partial files.
 #[test]
-fn rounded_pad_macro_fills_a_900_nm_core_without_an_outline() {
-    for (height, radius) in [(1_500, 300), (1_501, 300), (1_000, 200)] {
-        let diameter = 2 * radius;
-        let pads = [(PadShape::RoundedRectangle, 600_000, height, 0, radius); 2];
-        let s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
-        let outputs = view(&s).fabrication_outputs().unwrap();
-        for output in surface_files(false) {
-            let read = read_gerber(&outputs, output);
-            assert!(read.regions.is_empty() && read.strokes.is_empty() && read.flashes.is_empty());
-            assert_eq!(read.rounded_flashes.len(), 2);
-            for &(_, code) in &read.rounded_flashes {
-                let aperture = &read.rounded[&code];
-                assert!(aperture.outline.is_empty() && aperture.strips.is_empty());
-                assert_eq!(aperture.rectangles.len(), 2);
-                let (w0, h0, x0, y0) = aperture.rectangles[0];
-                let (w1, h1, x1, y1) = aperture.rectangles[1];
-                assert_eq!((w0, h0, x0), (600_000 - diameter, height, 0));
-                assert_eq!((w1, h1, x1, y1), (600_000, height - diameter, 0, y0));
-                assert_eq!(aperture.circles.len(), 4);
-                for &(circle_diameter, corner) in &aperture.circles {
-                    assert_eq!(circle_diameter, diameter);
-                    assert_eq!((2 * corner.x_nm - x0).abs(), 600_000 - diameter);
-                    assert_eq!((2 * corner.y_nm - y0).abs(), height - diameter);
+fn fabrication_refuses_axis_aligned_narrow_cores_where_corner_circles_can_separate() {
+    for local in [0, 90] {
+        for (height, radius) in [(1_500, 300), (1_501, 300), (1_000, 200), (1_600, 300), (3_300, 1_200)] {
+            let pads = [(PadShape::RoundedRectangle, 600_000, height, local, radius); 2];
+            let mut s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
+            let before = s.revision();
+            let error = view(&s).fabrication_outputs().unwrap_err();
+            assert!(error.starts_with("Cannot export rounded pad at ("), "{error} (height={height}, r={radius}, local={local})");
+            assert!(
+                error.ends_with("its core has no supported exact Gerber fill and its outline can self-intersect."),
+                "{error} (height={height}, r={radius}, local={local})"
+            );
+            assert!(matches!(s.execute(EXPORT_FABRICATION, &json!({})), Err(CommandError::Unavailable(message)) if message == error));
+            assert!(matches!(s.export_fabrication_archive(&json!({})), Err(CommandError::Unavailable(message)) if message == error));
+            assert_eq!(s.revision(), before);
+        }
+    }
+}
+
+/// Immediately outside the narrow-core refusal band—once opposite strips cover the core
+/// (diameter - 0.5 µm > min core span + 1 µm) or opposite outline edges stay > 1 µm apart—
+/// the macro emits strips (and outline when needed) whose endpoints coincide with every corner
+/// circle center, so every corner circle stays connected under Gerber §4.14.2 perturbations.
+#[test]
+fn rounded_pad_macro_emits_when_corner_circles_stay_connected_at_narrow_core_boundary() {
+    for local in [0, 90] {
+        for (height, radius, expect_outline) in [(3_302, 1_201, false), (1_601, 300, true)] {
+            let diameter = 2 * radius;
+            let pads = [(PadShape::RoundedRectangle, 600_000, height, local, radius); 2];
+            let s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
+            let outputs = view(&s).fabrication_outputs().unwrap();
+            for output in surface_files(false) {
+                let read = read_gerber(&outputs, output);
+                assert!(read.regions.is_empty() && read.strokes.is_empty() && read.flashes.is_empty());
+                assert_eq!(read.rounded_flashes.len(), 2);
+                for &(_, code) in &read.rounded_flashes {
+                    let aperture = &read.rounded[&code];
+                    assert_eq!((aperture.circles.len(), aperture.strips.len()), (4, 4));
+                    assert_eq!(aperture.outline.len(), if expect_outline { 5 } else { 0 }, "height {height} at {local}");
+                    for &(circle_diameter, corner) in &aperture.circles {
+                        assert_eq!(circle_diameter, diameter);
+                        let anchored_strips = aperture
+                            .strips
+                            .iter()
+                            .filter(|&&(strip_diameter, start, end)| strip_diameter == diameter && (start == corner || end == corner))
+                            .count();
+                        assert_eq!(anchored_strips, 2, "corner {corner:?} must coincide with two strip endpoints");
+                        if expect_outline {
+                            assert!(aperture.outline.contains(&corner), "corner {corner:?} must coincide with an outline vertex");
+                        }
+                    }
                 }
             }
         }

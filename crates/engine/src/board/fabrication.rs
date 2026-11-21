@@ -173,7 +173,6 @@ enum RoundedCore {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum RoundedFill {
     StripsOnly,
-    AxisAlignedRectangles,
     Outline,
 }
 
@@ -394,10 +393,9 @@ impl Gerber {
 }
 
 /// Add a strip along each edge and a circle at each vertex, and fill the inner polygon unless
-/// the strips already cover it safely, or use two overlapping center-line rectangles when an
-/// axis-aligned core has no safe outline.
+/// the strips already cover it safely.
 /// Their union is the core expanded by half the emitted diameter, without chord approximations.
-/// Ucamco Gerber 2026.05 §§4.5.1.3–4.5.1.6 define these primitives. Their
+/// Ucamco Gerber 2026.05 §§4.5.1.3, 4.5.1.4 and 4.5.1.6 define these primitives. Their
 /// rotation is about the macro origin, not each primitive's center: use zero because
 /// the core already includes pad rotation, placement mirroring/rotation and the Y flip.
 fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: RoundedCore, fill: RoundedFill) {
@@ -414,31 +412,15 @@ fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: Roun
             points.as_slice()
         }
         RoundedCore::Quad(points) => {
-            match fill {
-                RoundedFill::AxisAlignedRectangles => {
-                    // Combine the core and opposite edge strips into two center-line rectangles
-                    // sharing the exact half-grid center, eliminating core-to-strip seams (§4.5.1.5).
-                    let (a, c) = (points[0], points[2]);
-                    let (width, height) = ((c.0 - a.0).abs(), (c.1 - a.1).abs());
-                    let center = half_nm_pair(a, c);
-                    let _ = writeln!(text, "21,1,{},{},{center},0*", mm(width, 6), mm(height + diameter, 6));
-                    let _ = writeln!(text, "21,1,{},{},{center},0*", mm(width + diameter, 6), mm(height, 6));
+            for (a, b) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)) {
+                edge(text, a, b);
+            }
+            if fill == RoundedFill::Outline {
+                text.push_str("4,1,4");
+                for &point in points.iter().chain(&points[..1]) {
+                    let _ = write!(text, ",{}", pair(point));
                 }
-                RoundedFill::StripsOnly => {
-                    for (a, b) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)) {
-                        edge(text, a, b);
-                    }
-                }
-                RoundedFill::Outline => {
-                    for (a, b) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)) {
-                        edge(text, a, b);
-                    }
-                    text.push_str("4,1,4");
-                    for &point in points.iter().chain(&points[..1]) {
-                        let _ = write!(text, ",{}", pair(point));
-                    }
-                    text.push_str(",0*\n");
-                }
+                text.push_str(",0*\n");
             }
             points.as_slice()
         }
@@ -450,24 +432,18 @@ fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: Roun
 }
 
 /// Choose a fill before emitting any pad artwork, keeping every primitive overlap and
-/// outline separation safe under Gerber §4.14.2 coordinate perturbations.
+/// outline separation safe under Gerber §4.14.2 coordinate and size perturbations.
+/// Every accepted macro anchors each corner circle on the exact vertex shared with its
+/// adjacent edge strips (and outline when present), so coincident coordinates move together.
+/// Center-line rectangles cannot guarantee corner-circle connectivity in the remaining narrow
+/// band (min core span <= 1 µm and diameter <= min core span + 1.5 µm <= 2.5 µm) under §4.14.2,
+/// so those narrow cores are refused.
 fn rounded_quad_fill(points: &[MacroPoint; 4], diameter: i64) -> Option<RoundedFill> {
     if strips_cover_core(points, diameter) {
         return Some(RoundedFill::StripsOnly);
     }
     let [a, b, c, d] = *points;
-    if perturbed_edges_separate(a, b, c, d) && perturbed_edges_separate(b, c, d, a) {
-        return Some(RoundedFill::Outline);
-    }
-    // For a strictly convex axis-aligned quad, two center-line rectangles sharing the exact
-    // same half-grid center replace the core and all four edge strips. Coincident centers
-    // move together under §4.14.2, so their core overlap stays positive with no outline.
-    (0..4)
-        .all(|i| {
-            let (a, b) = (points[i], points[(i + 1) % 4]);
-            (a.0 == b.0) != (a.1 == b.1)
-        })
-        .then_some(RoundedFill::AxisAlignedRectangles)
+    (perturbed_edges_separate(a, b, c, d) && perturbed_edges_separate(b, c, d, a)).then_some(RoundedFill::Outline)
 }
 
 /// Endpoints can move within ±0.5 µm boxes (§4.14.2). The swept segment is the segment
@@ -480,20 +456,6 @@ fn perturbed_edges_separate(a: MacroPoint, b: MacroPoint, c: MacroPoint, d: Macr
         let gap = (a.min(b) - c.max(d)).max(c.min(d) - a.max(b));
         gap > i128::from(OUTLINE_CLEARANCE_NM) * (i128::from(nx.abs()) + i128::from(ny.abs()))
     })
-}
-
-fn half_nm_pair(a: MacroPoint, c: MacroPoint) -> String {
-    format!("{},{}", half_nm_mm(a.0 + c.0), half_nm_mm(a.1 + c.1))
-}
-
-/// Exact millimeters for a center lying on the half-nanometer grid.
-fn half_nm_mm(twice_nm: i64) -> String {
-    let magnitude = twice_nm.abs();
-    if magnitude % 2 == 0 {
-        return mm(twice_nm / 2, 6);
-    }
-    let sign = if twice_nm < 0 { "-" } else { "" };
-    format!("{sign}{}5", mm(magnitude / 2, 6))
 }
 
 /// Whether the diameter-wide strips along a strictly convex core's edges still cover all of it

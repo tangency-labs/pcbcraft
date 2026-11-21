@@ -888,11 +888,9 @@ with zero area. Rounded rectangles flash a Gerber aperture macro with circular
 corners when the inner shape is a convex quadrilateral, a line or a point and the
 emitted radius is within 1 nm of the authored radius. The diameter is rounded to
 the nearest nanometre after projection. The macro uses the placed pad's geometry,
-including rotation and side. If a narrow axis-aligned core needs a fill and its outline could cross under
-Gerber coordinate perturbation, the macro replaces the core and edge strips with
-two overlapping center-line rectangles sharing the exact center. Export stops
-without a file set if a convex macro core needs a fill, its outline could cross,
-and the core is not an axis-aligned rectangle.
+including rotation and side. Export stops without a file set if a convex macro
+core is not covered by its edge strips under Gerber coordinate and size
+tolerances and its outline could cross under coordinate perturbation.
 Rounded pads that do not qualify for the macro retain resolved polygon regions.
 This changes only generated pad artwork, not saved pad geometry, track or Board
 Outline output.
