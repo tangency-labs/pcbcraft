@@ -551,11 +551,16 @@ transforms") and #86's model record uses; it follows the model-frame proposal in
 - One publish job runs per target at a time. Publish requests made while a job
   runs collapse into one follow-up job for the newest saved state. Serialize the
   final manifest check and rename for each exchange path, including across
-  PCBCraft instances. If the file has a newer revision, report both revisions
-  and leave the file in place. If the revisions match, compare the content
-  hashes. Matching hashes need no write. If they differ, report the conflict,
-  keep the existing file, and offer **Replace** for the same `source_id` or
-  **Publish as Separate Board** for a copy.
+  PCBCraft instances. Under that same lock, re-read any existing manifest and
+  check its `source_id` and publishing location before comparing revisions.
+  If the `source_id` differs, report the conflicting board and ask for another
+  path. A changed publishing location leaves the file in place unless the user
+  confirmed **Replace** for that location and the same `source_id`.
+  **Publish as Separate Board** gives a copy its own identity and path. For an
+  ordinary publish, a newer revision is refused with both revisions reported.
+  At equal revisions, matching hashes need no write and differing hashes are
+  reported as a conflict, with **Replace** or **Publish as Separate Board**
+  offered as above. An older revision for the same target is replaced.
 - **Replace** keeps the existing `source_id` and uses the greater of the saved
   target counter and one more than the file's revision. It persists that counter
   in the project before publishing the saved board at that revision, so the next
@@ -627,7 +632,7 @@ stated, with nothing removed quietly:
 | Case | Outcome |
 |---|---|
 | The file holds a lower revision than the accepted one (a restored copy) | Refused as stale, naming both revisions; **Take This Revision** accepts it explicitly |
-| The same revision with a different hash (two writers) | Refused as a conflict, naming both; nothing changes |
+| The same revision with a different hash (two writers or a replaced file) | Keep the current representation and report both hashes. **Take This Revision** previews and confirms the file's exact revision and hash for the same `source_id`, then refreshes in place with the normal reference checks. If the file changes before confirmation, show the new state for review. |
 | A notice for a revision the file no longer holds | Ignored; the file is read instead |
 | Several revisions published while SolidCraft was closed or in the background | Only the newest file is read |
 | PCBCraft closed, or SolidCraft closed while PCBCraft publishes | Nothing waits on the other app; SolidCraft takes the newest file when it next opens the assembly |
@@ -723,6 +728,8 @@ unchanged. With an exchange at revision 10 and a restored target at revision 5,
 **Replace** publishes revision 11. Reopen the project and make an edit to verify
 the next save publishes revision 12. Repeat with a failed exchange write after
 the counter has been saved and check that **Replace** can retry revision 11.
+Before a publish job takes the path lock, put a different board's older
+revision at the path. The final identity check refuses to overwrite it.
 
 #### Slice 2: the linked board updated in the open assembly
 
@@ -754,12 +761,19 @@ side this slice adds only the fixtures and the run.
    is shown with no change marker and no PCBCraft running.
 
 Failure fixtures, each with the outcome in 6.7's table: revision 2's file restored
-over revision 3 (stale, refused, explicit Take This Revision); two writers with
-the same revision and different hashes (conflict); a late notice for revision 2
-(ignored); revisions 4 and 5 published while SolidCraft is closed (5 is read);
-the file deleted (missing, bodies kept, Relink); another board's file at the path
-(refused, Relink offered); a file requiring an unknown capability (refused). No
-case moves a reference to a different item.
+over revision 3 (stale, refused, explicit Take This Revision); a late notice for
+revision 2 (ignored); revisions 4 and 5 published while SolidCraft is closed
+(5 is read); the file deleted (missing, bodies kept, Relink); another board's
+file at the path (refused, Relink offered); a file requiring an unknown
+capability (refused). No case moves a reference to a different item.
+
+With SolidCraft still showing revision 11, restore an older exchange at the
+linked path and use **Replace** in PCBCraft to publish revision 11 with a different
+hash and the same `source_id`. SolidCraft reports a conflict and keeps its current
+geometry. Confirm **Take This Revision** and check that the same component refreshes
+to the confirmed geometry, keeping its assembly placement and re-resolving its
+references as above. If the exchange file changes during confirmation, applying
+the earlier preview leaves the current geometry in place.
 
 ### Parametric board
 
