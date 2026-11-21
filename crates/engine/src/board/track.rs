@@ -707,18 +707,28 @@ fn for_each_pad_contact(lands: &[Land], contours: &[PadContour], bounds: &[[f64;
 /// do not block unrelated routes.
 #[cfg(test)]
 fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> {
-    short_for_copper_edit(project, added, &BTreeSet::new())
+    short_for_copper_edit(project, added, &BTreeSet::new()).unwrap()
 }
 
 /// Check the islands touching edited tracks, vias, circular arcs or footprint lands for shorts.
 /// Footprint edits use pad contours and include direct pad contacts on a shared layer.
-/// Unrelated pre-existing islands remain outside the check.
-pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> Option<(String, String)> {
-    let view = project.board_view(project.board_target()?)?;
+/// Unrelated pre-existing islands remain outside the check. Fails closed if any circular arc
+/// fails geometric validation.
+pub(crate) fn short_for_copper_edit(
+    project: &Project,
+    added: &BTreeSet<Uuid>,
+    footprints: &BTreeSet<String>,
+) -> Result<Option<(String, String)>, String> {
+    let Some(target) = project.board_target() else {
+        return Ok(None);
+    };
+    let Some(view) = project.board_view(target) else {
+        return Ok(None);
+    };
     let lands = lands(view);
     let items = CopperItems { lands: &lands, tracks: view.tracks(), vias: view.vias(), arcs: view.arc_tracks() };
-    let (_, members) = build_islands(items, !footprints.is_empty() || items.vias.iter().any(|v| v.net_assignment.is_some())).ok()?;
-    short_from_members_with_arcs(project, items, &members, added, footprints)
+    let (_, members) = build_islands(items, !footprints.is_empty() || items.vias.iter().any(|v| v.net_assignment.is_some()))?;
+    Ok(short_from_members_with_arcs(project, items, &members, added, footprints))
 }
 
 /// Apply the existing short policy to completed contact groups, without recomputing islands.
@@ -871,7 +881,7 @@ pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSe
             }
         }
     }
-    if let Some((a, b)) = short_for_copper_edit(next, &added, moved) {
+    if let Some((a, b)) = short_for_copper_edit(next, &added, moved).map_err(CommandError::InvalidParams)? {
         return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
     }
     Ok(())

@@ -372,11 +372,6 @@ impl ArcGeometry {
         let min_dist = contour.edges().map(|(a, b)| self.distance_to_segment(a, b)).fold(f64::INFINITY, f64::min);
         min_dist <= self.half_width + contour.radius + CONTACT_TOLERANCE_NM
     }
-
-    /// Exact contact test: arc copper vs a zero-width zone polygon boundary edge `(a, b)`.
-    pub fn touches_zone_edge(&self, a: Point, b: Point) -> bool {
-        self.distance_to_segment(a, b) <= self.half_width + CONTACT_TOLERANCE_NM
-    }
 }
 
 /// Euclidean distance between two floating-point points.
@@ -679,16 +674,5 @@ mod tests {
         };
         assert!(a.touches_contour(&oval(5_600_000)));
         assert!(!a.touches_contour(&oval(5_600_001)));
-    }
-
-    #[test]
-    fn arc_vs_zone_edge_tangency_crossing_and_near_miss() {
-        let a = ArcGeometry::from_track(&make_arc(pt(0, 0), pt(0, -5_000_000), pt(0, 5_000_000), 200_000, Direction::Clockwise)).unwrap();
-        // Zero-width zone edge tangent to outer copper at x = 5_100_000.
-        assert!(a.touches_zone_edge(pt(5_100_000, -2_000_000), pt(5_100_000, 2_000_000)));
-        // Near-miss by 1 nm.
-        assert!(!a.touches_zone_edge(pt(5_100_001, -2_000_000), pt(5_100_001, 2_000_000)));
-        // Crossing edge through the arc centerline.
-        assert!(a.touches_zone_edge(pt(4_000_000, 0), pt(6_000_000, 0)));
     }
 }

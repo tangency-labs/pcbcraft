@@ -158,8 +158,28 @@ fn arc_touching_foreign_copper_reports_short_and_omits_display_net() {
     assert!(shorts.violations[0].items.contains(&format!("{}:{}", pad_a.key.0, pad_a.key.1)));
     assert!(shorts.violations[0].items.contains(&format!("{}:{}", pad_b.key.0, pad_b.key.1)));
 
-    let edit_short = short_for_copper_edit(s.project().unwrap(), &BTreeSet::from([arc.id]), &BTreeSet::new());
+    let edit_short = short_for_copper_edit(s.project().unwrap(), &BTreeSet::from([arc.id]), &BTreeSet::new()).unwrap();
     assert!(edit_short.is_some());
+}
+
+/// `short_for_copper_edit` fails closed when a snapshot carries an invalid circular arc rather
+/// than reporting "no short" and allowing the edit.
+#[test]
+fn short_for_copper_edit_fails_closed_on_invalid_arc() {
+    let s = routed_fixture();
+    let front = copper_layers(&s)[0];
+    let mut project = s.snapshot().unwrap().as_ref().clone();
+    let bad_arc = ArcTrack {
+        id: Uuid::from_u128(0xc099),
+        layer: front,
+        width_nm: 250_000,
+        center: Point { x_nm: 0, y_nm: 0 },
+        start: Point { x_nm: 0, y_nm: 0 },
+        end: Point { x_nm: 0, y_nm: 0 },
+        direction: Direction::Clockwise,
+    };
+    Arc::make_mut(&mut project.board).arcs.push(bad_arc.clone());
+    assert!(short_for_copper_edit(&project, &BTreeSet::from([bad_arc.id]), &BTreeSet::new()).is_err());
 }
 
 /// Pairwise and four-axis indexed island building produce identical islands with arcs,
