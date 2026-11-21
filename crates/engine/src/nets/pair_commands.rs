@@ -123,13 +123,18 @@ fn pair_edit(project: &Project, command: &str, params: &Value) -> Result<(Edit, 
         if (check_positive && !is_active_net(registry, positive)) || (check_negative && !is_active_net(registry, negative)) {
             return Err(CommandError::InvalidParams("Differential pair members must be active nets in the owning registry.".into()));
         }
-        Some(Arc::new(Pair {
-            id: pair_id,
-            name: name.into(),
-            positive,
-            negative,
-            state: before.as_ref().map_or_else(Default::default, |pair| pair.state.clone()),
-        }))
+        let state = match before.as_ref() {
+            None => PairState::default(),
+            Some(pair)
+                if (pair.positive != positive || pair.negative != negative)
+                    && is_active_net(registry, positive)
+                    && is_active_net(registry, negative) =>
+            {
+                PairState::Active {}
+            }
+            Some(pair) => pair.state.clone(),
+        };
+        Some(Arc::new(Pair { id: pair_id, name: name.into(), positive, negative, state }))
     };
     let draft = (before != after).then(|| PairDraft {
         index: index.unwrap_or_else(|index| index),

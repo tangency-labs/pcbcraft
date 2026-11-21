@@ -154,17 +154,16 @@ fn reconcile_pairs(
     let updated: Vec<Arc<Pair>> = pairs
         .iter()
         .map(|pair| {
-            if !matches!(pair.state, PairState::Active {}) {
-                return pair.clone();
-            }
             let reason = member_invalidation_reason(pair.positive, result, old, after, &old_index_by_id, &after_index_by_id, targets)
                 .or_else(|| member_invalidation_reason(pair.negative, result, old, after, &old_index_by_id, &after_index_by_id, targets));
             if let Some(reason) = reason {
-                changed = true;
-                Arc::new(Pair { state: PairState::NeedsReview { reason: reason.into() }, ..(**pair).clone() })
-            } else {
-                pair.clone()
+                let next_state = PairState::NeedsReview { reason: reason.into() };
+                if pair.state != next_state {
+                    changed = true;
+                    return Arc::new(Pair { state: next_state, ..(**pair).clone() });
+                }
             }
+            pair.clone()
         })
         .collect();
     if changed { Arc::new(updated) } else { pairs }
@@ -192,11 +191,13 @@ impl Project {
             && Arc::ptr_eq(&before.sheets, &self.sheets)
             && Arc::ptr_eq(&before.units, &self.units)
             && Arc::ptr_eq(&before.components, &self.components)
-            && Arc::ptr_eq(&before.net_classes, &self.net_classes)
             && Arc::ptr_eq(&before.net_registry, &self.net_registry)
         {
             if self.net_registry.records.is_empty() || self.net_registry.has_records_proof(self) {
                 return Ok(());
+            }
+            if before.net_registry.has_records_proof(before) && !Arc::ptr_eq(&before.net_classes, &self.net_classes) {
+                return self.net_registry.revalidate_class_bindings(self).map_err(CommandError::InvalidParams);
             }
             return self.net_registry.validate(self).map_err(CommandError::InvalidParams);
         }

@@ -122,6 +122,16 @@ impl Registry {
         project.net_records_proof.contains(&RecordsProof::new(self, project))
     }
 
+    /// Re-verify only class bindings when the net-class catalog changed without altering
+    /// topology or net records, avoiding an O(project) graph rebuild on catalog edits.
+    pub(super) fn revalidate_class_bindings(&self, project: &Project) -> Result<(), String> {
+        if self.records.iter().any(|record| record.class_bindings.iter().any(|binding| project.net_classes.get(binding.class).is_none())) {
+            return Err("Invalid, dangling, duplicate or excessive net class bindings.".into());
+        }
+        project.net_records_proof.remember(RecordsProof::new(self, project));
+        Ok(())
+    }
+
     /// Validate the complete graph and every non-pair record against it. Pair relationships
     /// cannot change the record anchors, number allocation, scope or owning catalogs.
     fn validate_records(&self, project: &Project) -> Result<(), String> {

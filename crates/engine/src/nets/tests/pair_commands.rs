@@ -255,6 +255,9 @@ fn large_net_history_row_retains_exact_serde_bytes() {
     let mut row = project.net_registry.records[0].clone();
     let snapshot = crate::board::update::capture_source(&project).unwrap();
     let identities: Vec<_> = (1..=128).map(Uuid::from_u128).collect();
+    row.generated_number = Some(42);
+    row.fallbacks = vec![project.net_registry.records[1].primary.clone()];
+    row.class_bindings = vec![crate::nets::ClassBinding { class: Uuid::from_u128(99), origin: row.id }];
     row.lineage = identities.iter().map(|&id| Lineage { snapshot: snapshot.clone(), net: Some(id), anchor: row.primary.clone() }).collect();
     for state in [
         State::Active {},
@@ -480,12 +483,17 @@ fn pair_commands_require_live_members_for_new_or_changed_endpoints() {
     // Creating a new pair with a retired UUID must be refused (both normal and dry_run).
     let revision = session.revision();
     let undo = session.undo.len();
+    let redo = session.redo.len();
+    let before_snap = session.snapshot().unwrap();
+    let before_bytes = bytes(&session);
     let fresh = new_pair_id().unwrap();
     for dry_run in [false, true] {
         let params = json!({"pair":fresh,"name":"Bad","positive":positive,"negative":spare,"expected_revision":revision,"dry_run":dry_run});
         let err = if dry_run { session.execute(CREATE_PAIR, &params).unwrap_err() } else { session.apply(CREATE_PAIR, &params).unwrap_err() };
         assert_eq!(err.code(), crate::error_codes::ErrorCode::InvalidParams);
-        assert_eq!((session.revision(), session.undo.len()), (revision, undo));
+        assert_eq!((session.revision(), session.undo.len(), session.redo.len()), (revision, undo, redo));
+        assert!(Arc::ptr_eq(&before_snap, &session.snapshot().unwrap()));
+        assert_eq!(bytes(&session), before_bytes);
     }
 
     // Renaming without changing endpoints keeps the retained member UUID and review state.
@@ -493,13 +501,19 @@ fn pair_commands_require_live_members_for_new_or_changed_endpoints() {
     assert_eq!(session.project().unwrap().differential_pairs()[0].name, "CLK_RENAMED");
     assert!(matches!(session.project().unwrap().differential_pairs()[0].state, PairState::NeedsReview { .. }));
 
-    // Updating the retired endpoint to a live net succeeds; changing an endpoint back to a retired net is refused.
+    // Updating the retired endpoint to a live net clears NeedsReview to Active; changing back to a retired net is refused.
     apply(&mut session, UPDATE_PAIR, json!({"pair":pair,"name":"CLK_LIVE","positive":spare,"negative":negative}));
+    assert_eq!(session.project().unwrap().differential_pairs()[0].state, PairState::Active {});
     let rev_live = session.revision();
     let undo_live = session.undo.len();
+    let redo_live = session.redo.len();
+    let live_snap = session.snapshot().unwrap();
+    let live_bytes = bytes(&session);
     let err = session
         .apply(UPDATE_PAIR, &json!({"pair":pair,"name":"CLK_BAD","positive":positive,"negative":negative,"expected_revision":rev_live}))
         .unwrap_err();
     assert_eq!(err.code(), crate::error_codes::ErrorCode::InvalidParams);
-    assert_eq!((session.revision(), session.undo.len()), (rev_live, undo_live));
+    assert_eq!((session.revision(), session.undo.len(), session.redo.len()), (rev_live, undo_live, redo_live));
+    assert!(Arc::ptr_eq(&live_snap, &session.snapshot().unwrap()));
+    assert_eq!(bytes(&session), live_bytes);
 }
