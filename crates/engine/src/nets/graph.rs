@@ -373,13 +373,24 @@ mod tests {
         }
         apply(&mut session, CONNECT_PINS, json!({"from": pins[0], "to": pins[1]}));
         apply(&mut session, CONNECT_PINS, json!({"from": pins[1], "to": pins[2]}));
-        apply(&mut session, crate::net_labels::ADD, json!({"name": "SIG_A", "style": "local", "x_nm": 0, "y_nm": 25_400_000}));
-        apply(&mut session, crate::net_labels::ADD, json!({"name": "SIG_B", "style": "local", "x_nm": 25_400_000, "y_nm": 25_400_000}));
-        apply(&mut session, crate::net_labels::ADD, json!({"name": "ISOLATED", "style": "local", "x_nm": 76_200_000, "y_nm": 25_400_000}));
+        let pin_pos = |session: &Session, idx: usize| {
+            let project = session.project().unwrap();
+            let terminal = project.symbols()[idx].terminals()[0];
+            project.terminal_position(terminal).unwrap()
+        };
+        let p0 = pin_pos(&session, 0);
+        let p2 = pin_pos(&session, 2);
+        apply(&mut session, crate::net_labels::ADD, json!({"name": "SIG_A", "style": "local", "x_nm": p0.x_nm, "y_nm": p0.y_nm + 25_400_000}));
+        apply(&mut session, crate::net_labels::ADD, json!({"name": "SIG_B", "style": "local", "x_nm": p2.x_nm, "y_nm": p2.y_nm + 25_400_000}));
+        apply(
+            &mut session,
+            crate::net_labels::ADD,
+            json!({"name": "ISOLATED", "style": "local", "x_nm": p2.x_nm + 25_400_000, "y_nm": p2.y_nm + 25_400_000}),
+        );
         let labels: Vec<u64> = session.project().unwrap().net_labels().iter().map(|label| label.id).collect();
         assert_eq!(labels.len(), 3);
-        apply(&mut session, DRAW_WIRE, json!({"from": {"net_label": format!("net-label-{}", labels[0])}, "to": pins[0]}));
-        apply(&mut session, DRAW_WIRE, json!({"from": {"net_label": format!("net-label-{}", labels[1])}, "to": pins[2]}));
+        apply(&mut session, DRAW_WIRE, json!({"from": {"net_label": format!("net-label-{}", labels[0])}, "to": pins[0], "bends": []}));
+        apply(&mut session, DRAW_WIRE, json!({"from": {"net_label": format!("net-label-{}", labels[1])}, "to": pins[2], "bends": []}));
 
         let project = session.project().unwrap();
         let mut builder = GraphBuilder::default();

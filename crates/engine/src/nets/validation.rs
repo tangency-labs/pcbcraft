@@ -36,9 +36,9 @@ fn history_ids(state: &State) -> Option<&[Uuid]> {
 /// class binding, lineage item, seen-lineage cleanup entry, branch/successor UUID, or
 /// [`RecordEncoding`] byte-metering fragment per call.
 /// Three whole-project units remain single isolated steps that yield before and after: warming
-/// `project.borrowed_electrical_connectivity()` (`GraphBuilder` phase 0, once per snapshot if not
-/// already cached), sorting derived networks (`GraphBuilder` phase 3), and `numbering::plan`
-/// (phase 5).
+/// `project.borrowed_electrical_connectivity()` and indexing every net's label/port endpoints
+/// (`GraphBuilder` phase 0, building connectivity once per snapshot if not already cached),
+/// sorting derived networks (`GraphBuilder` phase 3), and `numbering::plan` (phase 5).
 #[derive(Default)]
 pub(crate) struct RegistryValidation {
     phase: u8,
