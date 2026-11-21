@@ -2,7 +2,7 @@
 //!
 //! Row labels follow the standard bijective alphabetic sequence (`A..Z`, then `AA..`),
 //! optionally omitting the six JEDEC skip letters (`I`, `O`, `Q`, `S`, `X`, `Z`) per
-//! JEDEC JEP95 / IPC-SM-782A §14.1.3 practice. Natural ordering is for presentation,
+//! IPC-SM-782A Section 14.0 ¶4.5 / IPC-7351 §14.2.5 practice. Natural ordering is for presentation,
 //! browsing and inspection only; stored package maps retain their canonical key order.
 
 use std::cmp::Ordering;
@@ -21,8 +21,8 @@ pub const JEDEC_SKIP_LETTERS: [char; 6] = ['I', 'O', 'Q', 'S', 'X', 'Z'];
 /// Convert a zero-based row index into a ball-grid row label (`A..Z`, then `AA..`).
 ///
 /// When `skip_jedec` is `true`, the 20-letter alphabet omitting `I`, `O`, `Q`, `S`, `X` and `Z`
-/// is used in both single-letter and multi-letter labels (so row 20 is `Y`, row 21 is `AA`,
-/// and row 26 is `AF`). When `false`, all 26 letters `A..Z` are used before wrapping to `AA`.
+/// is used in both single-letter and multi-letter labels (so index 19 is `Y`, index 20 is `AA`,
+/// and index 25 is `AF`). When `false`, all 26 letters `A..Z` are used before wrapping to `AA`.
 pub fn row_label(row: usize, skip_jedec: bool) -> String {
     let alphabet = if skip_jedec { JEDEC_ALPHABET } else { FULL_ALPHABET };
     let base = alphabet.len();
