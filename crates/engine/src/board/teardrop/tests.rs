@@ -612,11 +612,11 @@ mod regeneration {
         assert!(transitioned_on_step_one);
         assert_eq!(job.progress().stage, "Checking board size");
 
-        // Header prefix step (constant overhead, zero teardrop re-derivation).
+        // First header unit (validated opening, zero teardrop re-derivation).
         let _ = (take_derive_calls(), take_board_record_writes());
         assert!(!job.step(1));
         assert_eq!(take_derive_calls(), 0);
-        assert!(take_board_record_writes() < 100);
+        assert!(take_board_record_writes() <= 1);
 
         let mut size_check_yields = 1usize;
         let mut finished = false;
@@ -625,7 +625,10 @@ mod regeneration {
         let mut final_step_records = usize::MAX;
         for _ in 0..50_000 {
             let progress = job.progress();
-            let budget = if progress.total.saturating_sub(progress.completed) <= 8 { 1 } else { 256 };
+            // Batches of at most 256 stop exactly 8 units short of the total, so the final
+            // steps always run at budget 1 whatever the header and footprint unit counts are.
+            let remaining = progress.total.saturating_sub(progress.completed);
+            let budget = if remaining <= 8 { 1 } else { (remaining - 8).min(256) };
             let _ = (take_derive_calls(), take_board_record_writes());
             let done = job.step(budget);
             let derives = take_derive_calls();
