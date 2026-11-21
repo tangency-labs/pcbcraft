@@ -108,15 +108,15 @@ The syntax layer owns no object identity or revision. A later evaluator must
 resolve against an explicit immutable project/board/sheet snapshot and carry
 the source revision in results. Each matched object carries the id that the
 [identity inventory](object-identity.md#current-inventory) lists for its kind
-today, and the result names that id's form: a UUID for boards, sheets, nets,
-net classes, part groups, tracks, vias, zones, board drawing items, layers and
-rule sets; a counter display id such as `component-3`, `symbol-3`, `wire-2` or
-`footprint-2` for components, symbol units, wires, junctions, net labels, ports,
-sheet symbols and footprint instances; and an owner token for pins and pads. A
-counter id is meaningful only with its project and source revision, because
-separately edited copies of a project can reuse it. Schematic kinds have no
-`uuid` field. If a later format step gives them UUIDs, that field is added next
-to the display id, so existing results stay valid. A result position, a display
+today, and the result names that id's form: a UUID for boards, sheets, sheet
+occurrences, nets, net classes, part groups, tracks, vias, zones, board drawing
+items, layers and rule sets; a counter display id such as `component-3`,
+`symbol-3`, `wire-2` or `footprint-2` for components, symbol units, power ports,
+wires, junctions, net labels, ports, sheet symbols and footprint instances; an
+owner token for pins and pads; and the authored library, id and revision for
+library items. A counter id is meaningful only with its project and source
+revision, because separately edited copies of a project can reuse it. If the
+identity inventory changes, results follow it. A result position, a display
 name or a path is never an identity, and a parsed reference or name is a
 selector, not an object ID. Rule-scope resolution, rectangle and
 polygon predicates, deterministic paging and bulk commands remain separate work.

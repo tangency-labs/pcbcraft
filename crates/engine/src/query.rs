@@ -107,7 +107,7 @@ impl std::error::Error for ParseError {}
 /// Refuses malformed input, unsupported syntax and resource limits without accessing state.
 pub fn parse(text: &str) -> Result<Query, ParseError> {
     if text.len() > MAX_QUERY_BYTES {
-        return Err(error(ParseErrorKind::LimitExceeded, 0, "Query exceeds 16384 UTF-8 bytes."));
+        return Err(error(ParseErrorKind::LimitExceeded, 0, format!("Query exceeds {MAX_QUERY_BYTES} UTF-8 bytes.")));
     }
     let mut parser = Parser { text, cursor: 0, tokens: 0, current: Token { kind: TokenKind::End, span: 0..0 } };
     parser.advance()?;
@@ -119,8 +119,8 @@ pub fn parse(text: &str) -> Result<Query, ParseError> {
 }
 
 /// Construct a diagnostic at a caller-supplied byte boundary.
-fn error(kind: ParseErrorKind, offset: usize, message: &str) -> ParseError {
-    ParseError { kind, offset, message: message.to_owned() }
+fn error(kind: ParseErrorKind, offset: usize, message: impl Into<String>) -> ParseError {
+    ParseError { kind, offset, message: message.into() }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -163,7 +163,7 @@ impl<'a> Parser<'a> {
             return Ok(());
         };
         if self.tokens == MAX_QUERY_TOKENS {
-            return Err(error(ParseErrorKind::LimitExceeded, start, "Query exceeds 4096 tokens."));
+            return Err(error(ParseErrorKind::LimitExceeded, start, format!("Query exceeds {MAX_QUERY_TOKENS} tokens.")));
         }
         self.tokens += 1;
         self.cursor += 1;
@@ -267,7 +267,7 @@ impl<'a> Parser<'a> {
         let start = self.current.span.start;
         if matches!(self.current.kind, TokenKind::Not | TokenKind::Open) {
             if depth == MAX_QUERY_DEPTH {
-                return Err(error(ParseErrorKind::LimitExceeded, start, "Query exceeds 32 nested parentheses or negations."));
+                return Err(error(ParseErrorKind::LimitExceeded, start, format!("Query exceeds {MAX_QUERY_DEPTH} nested parentheses or negations.")));
             }
             let negate = self.current.kind == TokenKind::Not;
             self.advance()?;
