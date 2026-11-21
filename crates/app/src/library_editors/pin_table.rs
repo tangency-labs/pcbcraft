@@ -444,7 +444,9 @@ impl PcbApp {
                     .desired_width(f32::INFINITY)
                     .hint_text("Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n2,SDA/GPIO2,I/O,main,left")
                     .show(ui);
-                let response = editor.response.labelled_by(source_label.id);
+                // egui 0.37 wraps the text field's response in a WidgetAtomResponse; take the owned
+                // inner Response, because `labelled_by` consumes it.
+                let response = editor.response.response.labelled_by(source_label.id);
                 if response.changed() {
                     draft.source_name = None;
                     draft.io_error = None;
