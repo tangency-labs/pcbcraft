@@ -83,7 +83,7 @@ impl CourtyardDraft {
         let primitive = courtyard::generate(item, clearance_nm, source, stroke_nm)?;
         let (points, _) = courtyard::courtyard_polygon(&primitive).ok_or("Generated courtyard is unavailable.")?;
         let m = courtyard::metrics(points).ok_or("Generated courtyard has no extents.")?;
-        Ok(format!("Result: {} × {} mm ({} vertices)", format_mm(m.width_nm), format_mm(m.height_nm), m.vertex_count))
+        Ok(format!("Result: {} × {} mm · {} vertices", format_mm(m.width_nm), format_mm(m.height_nm), m.vertex_count))
     }
 }
 
@@ -253,7 +253,7 @@ impl Document {
             let summary = match item.objects.get(&first_id).and_then(courtyard::courtyard_polygon) {
                 Some((points, _)) => match courtyard::metrics(points) {
                     Some(m) => {
-                        format!("{count} {outline_word} · {} × {} mm ({} vertices)", format_mm(m.width_nm), format_mm(m.height_nm), m.vertex_count)
+                        format!("{count} {outline_word} · {} × {} mm · {} vertices", format_mm(m.width_nm), format_mm(m.height_nm), m.vertex_count)
                     }
                     None => format!("{count} courtyard {outline_word}"),
                 },
@@ -262,10 +262,6 @@ impl Document {
             ui.label(shell::dim(summary));
         } else {
             ui.label(shell::dim("No courtyard outline"));
-        }
-        let mut show = self.show_courtyard;
-        if controls::checkbox(ui, &mut show, "Show courtyard layer").changed() {
-            self.set_show_courtyard(show);
         }
         ui.horizontal(|ui| {
             if controls::enabled_button(ui, !self.pending(), "Generate courtyard…").clicked() {
@@ -291,8 +287,8 @@ impl Document {
             return false;
         };
         let count = points.len();
-        let active_vertex = self.selected_vertex.filter(|&i| i < count).unwrap_or(0);
-        self.selected_vertex = Some(active_vertex);
+        let active_vertex = self.selected_vertex.filter(|&i| i < count);
+        self.selected_vertex = active_vertex;
 
         if self.draft.as_ref().is_some_and(|draft| draft.revision != self.session.revision()) {
             if self.pending() {
@@ -312,14 +308,12 @@ impl Document {
                 ui.label(shell::error("Outline intersects itself; move a vertex to fix."));
             }
         }
-        let mut show = self.show_courtyard;
-        if controls::checkbox(ui, &mut show, "Show courtyard layer").changed() {
-            self.set_show_courtyard(show);
-        }
         ui.add_space(Tokens::get().space_4);
 
-        let mut chosen = active_vertex.to_string();
-        let options: Vec<(String, String)> = (0..count).map(|i| (i.to_string(), format!("Vertex {}", i + 1))).collect();
+        let mut chosen = active_vertex.map(|i| i.to_string()).unwrap_or_default();
+        let mut options: Vec<(String, String)> = Vec::with_capacity(count + 1);
+        options.push((String::new(), "No vertex selected".into()));
+        options.extend((0..count).map(|i| (i.to_string(), format!("Vertex {}", i + 1))));
         let option_refs: Vec<(&str, String)> = options.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
         let _ = self.draft.get_or_insert_with(|| form::Draft::new(&snapshot, Some(object_id), self.session.revision()));
 
@@ -337,13 +331,16 @@ impl Document {
         ui.add_enabled_ui(!pending, |ui| {
             properties::choice(ui, "Vertex", egui::Id::unique(("courtyard_vertex", object_id)), &mut chosen, &option_refs);
         });
-        if !pending
-            && let Ok(parsed) = chosen.parse::<usize>()
-            && parsed < count
-        {
-            self.selected_vertex = Some(parsed);
+        if !pending {
+            if chosen.is_empty() {
+                self.selected_vertex = None;
+            } else if let Ok(parsed) = chosen.parse::<usize>()
+                && parsed < count
+            {
+                self.selected_vertex = Some(parsed);
+            }
         }
-        let vertex_index = self.selected_vertex.unwrap_or(0).min(count.saturating_sub(1));
+        let selected_vertex = self.selected_vertex.filter(|&i| i < count);
 
         let apply_payload = if let Some(draft) = self.draft.as_mut() {
             if expanded {
@@ -353,23 +350,29 @@ impl Document {
                         enter_apply = true;
                     }
                 }
-            } else if draft.show_courtyard_vertex(ui, vertex_index) {
-                enter_apply = true;
+            } else if let Some(vertex_index) = selected_vertex {
+                if draft.show_courtyard_vertex(ui, vertex_index) {
+                    enter_apply = true;
+                }
+            } else {
+                ui.label(shell::dim("Click a vertex handle or choose one above to edit coordinates."));
             }
             let dirty = draft.dirty();
             let mut apply_clicked = false;
             ui.horizontal(|ui| {
-                add_vertex = controls::enabled_button(ui, !dirty && count < courtyard::MAX_VERTICES, "Add vertex")
+                add_vertex = controls::enabled_button(ui, !dirty && selected_vertex.is_some() && count < courtyard::MAX_VERTICES, "Add vertex")
                     .on_hover_text("Insert a vertex at the exact midpoint of the next edge")
                     .clicked();
-                remove_vertex = controls::enabled_button(ui, !dirty && count > courtyard::MIN_VERTICES, "Remove vertex")
+                remove_vertex = controls::enabled_button(ui, !dirty && selected_vertex.is_some() && count > courtyard::MIN_VERTICES, "Remove vertex")
                     .on_hover_text("Remove the selected vertex (Backspace)")
                     .clicked();
             });
             ui.horizontal(|ui| {
+                regenerate = controls::enabled_button(ui, !dirty, "Regenerate…").clicked();
+            });
+            ui.horizontal(|ui| {
                 apply_clicked = controls::enabled_button(ui, dirty, "Apply").clicked() || (enter_apply && dirty);
                 reset_clicked = controls::button(ui, "Reset").clicked();
-                regenerate = controls::enabled_button(ui, !dirty, "Regenerate…").clicked();
             });
             apply_clicked.then(|| (draft.revision, draft.action()))
         } else {
@@ -389,7 +392,7 @@ impl Document {
         } else if reset_clicked {
             self.draft = None;
             self.error = None;
-        } else if add_vertex {
+        } else if add_vertex && let Some(vertex_index) = selected_vertex {
             let result = courtyard::edge_midpoint(points, vertex_index)
                 .ok_or_else(|| "Unable to compute edge midpoint.".to_owned())
                 .and_then(|mid| courtyard::with_inserted_vertex(primitive, vertex_index, mid))
@@ -398,7 +401,7 @@ impl Document {
                 Ok(()) => self.selected_vertex = Some(vertex_index + 1),
                 Err(error) => self.error = Some(error),
             }
-        } else if remove_vertex {
+        } else if remove_vertex && let Some(vertex_index) = selected_vertex {
             match courtyard::with_removed_vertex(primitive, vertex_index)
                 .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object: object_id, primitive: candidate }))
             {
@@ -477,7 +480,7 @@ impl PcbApp {
                 (None, None) => {}
             }
             ui.horizontal(|ui| {
-                apply |= ui.add(controls::action("Generate", true)).clicked();
+                apply |= controls::button(ui, "Generate").clicked();
                 cancel = controls::button(ui, "Cancel").clicked();
             });
         });
@@ -489,7 +492,15 @@ impl PcbApp {
                 self.library_editors.edit(draft.document, draft.revision, action)
             });
             if let Err(error) = result {
-                draft.error = Some(error);
+                if let Some(doc) = self.library_editors.documents.get(&draft.document)
+                    && doc.session.revision() != draft.revision
+                {
+                    draft.revision = doc.session.revision();
+                    draft.has_existing = doc.session.snapshot().objects.values().any(courtyard::is_courtyard_primitive);
+                    draft.error = Some("The footprint changed; check the preview and press Generate again.".into());
+                } else {
+                    draft.error = Some(error);
+                }
                 self.dialog = Dialog::LibraryCourtyard(draft);
             } else {
                 if let Some(doc) = self.library_editors.documents.get_mut(&draft.document) {
@@ -528,8 +539,21 @@ mod tests {
         h.run();
     }
 
+    fn select_vertex_on_canvas(h: &mut Harness<'_, PcbApp>, id: u64, object: u64, vertex: usize) {
+        let area = h.get_by_label("Library canvas").rect();
+        let pos = {
+            let doc = &h.state().library_editors.documents[&id];
+            let snap = doc.session.snapshot();
+            let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&object]).unwrap();
+            doc.camera.screen(pts[vertex], area)
+        };
+        click_at(h, pos);
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(vertex));
+    }
+
     /// Generate Courtyard dialog rejects invalid clearance, clears stale errors when edited,
-    /// generates the default 0.25 mm outline, and inserts an exact midpoint without changing area.
+    /// generates the default 0.25 mm outline, requires explicit vertex selection, and inserts an
+    /// exact midpoint without changing area.
     #[test]
     fn generate_courtyard_dialog_creates_editable_outline_and_protects_invalid_input() {
         let mut app = PcbApp::default();
@@ -575,7 +599,12 @@ mod tests {
         assert_eq!(before.width_nm, 2_100_000);
         assert_eq!(before.height_nm, 1_300_000);
 
-        // Properties panel now displays the Courtyard outline editor with vertex controls.
+        // No vertex is implicitly selected until the user clicks one or chooses it.
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, None);
+        assert!(h.query_by_label("Vertex X (mm)").is_none());
+
+        // Selecting vertex 0 on the canvas reveals vertex coordinate fields and actions.
+        select_vertex_on_canvas(&mut h, id, selected, 0);
         assert!(h.query_by_label("Vertex X (mm)").is_some());
         assert!(h.query_by_label("Vertex Y (mm)").is_some());
         assert!(h.query_by_label("Add vertex").is_some());
@@ -652,14 +681,14 @@ mod tests {
         assert!(all_hidden.contains(&1) && all_hidden.contains(&2));
         assert!(!all_hidden.contains(&cy_id));
 
-        // Re-enable via Properties checkbox (clear selection first so Footprint summary is shown).
-        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select_many(Default::default()).unwrap();
-        h.run();
-        crate::tests::click(&mut h, "Show courtyard layer");
+        // Re-enable via the View ribbon button ("Courtyard layer").
+        crate::tests::click(&mut h, "Courtyard layer");
         assert!(h.state().library_editors.documents[&id].show_courtyard);
         assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev);
 
         // Positive control with the layer visible: the exact same marquee and Cmd+A select cy_id.
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select_many(Default::default()).unwrap();
+        h.run();
         drag_at(&mut h, box_rect.left_top(), box_rect.right_bottom());
         let marquee_visible = &h.state().library_editors.documents[&id].selection;
         assert!(marquee_visible.contains(&1) && marquee_visible.contains(&2) && marquee_visible.contains(&cy_id));
@@ -674,8 +703,8 @@ mod tests {
         assert!(all_visible.contains(&1) && all_visible.contains(&2) && all_visible.contains(&cy_id));
     }
 
-    /// Pending property edits refuse switching vertices or activating C (without turning the
-    /// courtyard layer on), while Apply commits atomically and supports Undo.
+    /// Pending property edits refuse switching vertices or activating C with explicit error
+    /// messages (verified with Reset positive controls), while Apply commits atomically with Undo.
     #[test]
     fn courtyard_vertex_coordinate_edit_validates_supports_undo_and_refuses_while_pending() {
         let mut app = PcbApp::default();
@@ -696,6 +725,7 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
         let selected = h.state().library_editors.documents[&id].selected.unwrap();
+        select_vertex_on_canvas(&mut h, id, selected, 0);
 
         h.get_by_label("Vertex X (mm)").click();
         h.run();
@@ -704,7 +734,7 @@ mod tests {
         h.run();
         assert!(h.state().library_editors.documents[&id].pending());
 
-        // Clicking vertex 1 on the canvas while edits are pending refuses to switch vertex.
+        // Clicking vertex 1 on the canvas while edits are pending refuses with an explicit error.
         let area = h.get_by_label("Library canvas").rect();
         let v1_screen = {
             let doc = &h.state().library_editors.documents[&id];
@@ -714,17 +744,41 @@ mod tests {
         };
         click_at(&mut h, v1_screen);
         assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(0));
+        assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some("Apply or reset the property fields before switching vertices."));
 
-        // Pressing C while edits are pending refuses to start the tool and keeps show_courtyard unchanged.
+        // Pressing C while edits are pending refuses with an explicit error and keeps show_courtyard false.
         h.state_mut().library_editors.documents.get_mut(&id).unwrap().show_courtyard = false;
         h.hover_at(area.center());
         h.run();
         h.key_press(egui::Key::C);
         h.run();
+        assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some("Apply or reset the property fields before changing tools."));
         assert!(!h.state().library_editors.documents[&id].show_courtyard);
         assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
         h.state_mut().library_editors.documents.get_mut(&id).unwrap().show_courtyard = true;
 
+        // Positive controls after Reset: the same click selects vertex 1 and the same C arms Courtyard.
+        crate::tests::click(&mut h, "Reset");
+        assert!(!h.state().library_editors.documents[&id].pending());
+        click_at(&mut h, v1_screen);
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(1));
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().show_courtyard = false;
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Draw { kind: canvas::Place::Courtyard, .. }));
+        assert!(h.state().library_editors.documents[&id].show_courtyard);
+        h.key_press(egui::Key::Escape);
+        h.run();
+
+        // Apply commits vertex 0 edit atomically and Undo restores the original coordinate.
+        select_vertex_on_canvas(&mut h, id, selected, 0);
+        h.get_by_label("Vertex X (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Vertex X (mm)").type_text("-1.5");
+        h.run();
         crate::tests::click(&mut h, "Apply");
         let snap = h.state().library_editors.documents[&id].session.snapshot();
         let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&selected]).unwrap();
@@ -736,8 +790,9 @@ mod tests {
         assert_eq!(pts[0].x_nm, -1_050_000);
     }
 
-    /// Drive the footprint canvas directly for C draw (Escape + Enter), vertex dragging with grid
-    /// snap and one-step undo, midpoint click insertion, and Backspace vertex removal.
+    /// Drive the footprint canvas directly for C draw (Escape, Enter + Undo, first-vertex close,
+    /// double-click close), vertex dragging with grid snap and one-step undo, midpoint click
+    /// insertion, and Backspace vertex removal.
     #[test]
     fn courtyard_canvas_draw_drag_midpoint_and_backspace_interactions() {
         let mut app = PcbApp::default();
@@ -778,6 +833,39 @@ mod tests {
         let drawn_id = h.state().library_editors.documents[&id].selected.unwrap();
         let drawn_snap = h.state().library_editors.documents[&id].session.snapshot();
         assert_eq!(courtyard::courtyard_polygon(&drawn_snap.objects[&drawn_id]).unwrap().0.len(), 3);
+        crate::tests::click(&mut h, "Undo Library Edit");
+        assert!(!h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&drawn_id));
+
+        // Close a drawn courtyard by clicking back on the first vertex.
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        click_at(&mut h, p0);
+        click_at(&mut h, p1);
+        click_at(&mut h, p2);
+        click_at(&mut h, p0);
+        let first_close_id = h.state().library_editors.documents[&id].selected.unwrap();
+        assert_eq!(
+            courtyard::courtyard_polygon(&h.state().library_editors.documents[&id].session.snapshot().objects[&first_close_id]).unwrap().0.len(),
+            3
+        );
+        crate::tests::click(&mut h, "Undo Library Edit");
+
+        // Close a drawn courtyard by double-clicking the final vertex.
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        click_at(&mut h, p0);
+        click_at(&mut h, p1);
+        click_at(&mut h, p2);
+        click_at(&mut h, p2);
+        let dbl_close_id = h.state().library_editors.documents[&id].selected.unwrap();
+        assert_eq!(
+            courtyard::courtyard_polygon(&h.state().library_editors.documents[&id].session.snapshot().objects[&dbl_close_id]).unwrap().0.len(),
+            3
+        );
 
         // Generate default 0.25 mm courtyard replacing the drawn one.
         let rev = h.state().library_editors.documents[&id].session.revision();
@@ -811,14 +899,15 @@ mod tests {
             )
         };
 
-        // Click edge midpoint handle: inserts exact midpoint without changing area.
+        // Click edge midpoint handle: inserts exact midpoint without changing area and selects it.
         click_at(&mut h, mid_screen);
         let after_mid = h.state().library_editors.documents[&id].session.snapshot();
         let (mid_pts, _) = courtyard::courtyard_polygon(&after_mid.objects[&cy_id]).unwrap();
         assert_eq!(mid_pts.len(), 5);
         assert_eq!(courtyard::metrics(mid_pts).unwrap().area_nm2, before_area);
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(2));
 
-        // Press Backspace over canvas: removes the selected 5th vertex back to 4.
+        // Press Backspace over canvas: removes the explicitly selected 5th vertex back to 4.
         h.hover_at(area.center());
         h.run();
         h.key_press(egui::Key::Backspace);
@@ -840,7 +929,8 @@ mod tests {
         assert_eq!(courtyard::courtyard_polygon(&after_undo.objects[&cy_id]).unwrap().0[0], orig_v0);
     }
 
-    /// Generate Courtyard dialog refuses to apply when the document revision changed underneath it.
+    /// Generate Courtyard dialog refuses a stale revision, rebases to the current document
+    /// revision with guidance, and succeeds on the second Generate click.
     #[test]
     fn courtyard_dialog_refuses_stale_revision() {
         let mut app = PcbApp::default();
@@ -869,8 +959,213 @@ mod tests {
         let rev_after_bg = h.state().library_editors.documents[&id].session.revision();
 
         crate::tests::click(&mut h, "Generate");
-        assert!(matches!(h.state().dialog, Dialog::LibraryCourtyard(..)));
         assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_after_bg);
+        if let Dialog::LibraryCourtyard(draft) = &h.state().dialog {
+            assert_eq!(draft.revision, rev_after_bg);
+            assert!(draft.has_existing);
+            assert_eq!(draft.error.as_deref(), Some("The footprint changed; check the preview and press Generate again."));
+        } else {
+            panic!("expected courtyard dialog to remain open after stale revision");
+        }
+
+        // Pressing Generate again now applies cleanly against the rebased revision.
+        crate::tests::click(&mut h, "Generate");
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_after_bg + 1);
+    }
+
+    /// Cmd+C copy chord (even when Cmd is released within the same input batch) and Shift+C must
+    /// not arm the Courtyard draw tool or turn on the courtyard layer.
+    #[test]
+    fn courtyard_c_shortcut_ignores_copy_chord_and_shift_c() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().show_courtyard = false;
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+
+        // Simulate Cmd+C where Command is released in the same input batch.
+        h.input_mut().modifiers = egui::Modifiers::NONE;
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::C,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::COMMAND,
+        });
+        h.input_mut().events.push(egui::Event::Key {
+            key: egui::Key::C,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+        assert!(!h.state().library_editors.documents[&id].show_courtyard);
+
+        // Shift+C must also not arm Courtyard.
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::C);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+        assert!(!h.state().library_editors.documents[&id].show_courtyard);
+    }
+
+    /// Backspace on a freshly selected courtyard (with no vertex explicitly selected) deletes the
+    /// object rather than silently dropping vertex 0, and Cmd+Backspace never removes a vertex.
+    #[test]
+    fn courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, None);
+
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        assert!(!h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&cy_id));
+
+        // Undo restores the intact 4-vertex courtyard outline.
+        crate::tests::click(&mut h, "Undo Library Edit");
+        let snap = h.state().library_editors.documents[&id].session.snapshot();
+        assert_eq!(courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap().0.len(), 4);
+
+        // With vertex 0 explicitly selected, Cmd+Backspace must not remove the vertex.
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select(Some(cy_id)).unwrap();
+        h.run();
+        select_vertex_on_canvas(&mut h, id, cy_id, 0);
+        h.hover_at(area.center());
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Backspace);
+        h.run();
+        let after_cmd_bs = h.state().library_editors.documents[&id].session.snapshot();
+        assert_eq!(courtyard::courtyard_polygon(&after_cmd_bs.objects[&cy_id]).unwrap().0.len(), 4);
+    }
+
+    /// Pressing Escape during a vertex drag cancels it cleanly so releasing over a midpoint handle
+    /// does not insert a vertex or mutate the document.
+    #[test]
+    fn courtyard_escape_mid_drag_ignores_release_over_midpoint() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
+        let rev_before = h.state().library_editors.documents[&id].session.revision();
+        let area = h.get_by_label("Library canvas").rect();
+        let (v0_screen, mid_screen) = {
+            let doc = &h.state().library_editors.documents[&id];
+            let snap = doc.session.snapshot();
+            let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+            (doc.camera.screen(pts[0], area), doc.camera.screen(courtyard::edge_midpoint(pts, 1).unwrap(), area))
+        };
+
+        h.hover_at(v0_screen);
+        h.run();
+        h.event(egui::Event::PointerButton { pos: v0_screen, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run();
+        h.hover_at(mid_screen);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::DragCourtyardVertex { .. }));
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.event(egui::Event::PointerButton {
+            pos: mid_screen,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_before);
+        let snap = h.state().library_editors.documents[&id].session.snapshot();
+        assert_eq!(courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap().0.len(), 4);
+    }
+
+    /// Enter submits Generate Courtyard from Clearance and Stroke fields, and the inspector
+    /// enforces the 0.001..=2 mm stroke range and commits valid Stroke edits on Enter.
+    #[test]
+    fn courtyard_dialog_enter_and_inspector_stroke_validation() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+
+        // Enter in Clearance (mm) submits the dialog.
+        crate::tests::click(&mut h, "Generate courtyard…");
+        h.get_by_label("Clearance (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Clearance (mm)").type_text("0.5");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
+
+        // Enter in Stroke (mm) submits the dialog.
+        crate::tests::click(&mut h, "Regenerate…");
+        h.get_by_label("Stroke (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Stroke (mm)").type_text("0.15");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
+        let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
+        assert_eq!(courtyard::courtyard_polygon(&h.state().library_editors.documents[&id].session.snapshot().objects[&cy_id]).unwrap().1, 150_000);
+
+        // Inspector Stroke rejects out-of-range values with the exact range message.
+        h.get_by_label("Stroke (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Stroke (mm)").type_text("5");
+        h.run();
+        crate::tests::click(&mut h, "Apply");
+        assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some("Stroke (mm) must be between 0.001 and 2 mm."));
+
+        // Valid inspector Stroke commits on Enter.
+        h.get_by_label("Stroke (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Stroke (mm)").type_text("0.2");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(courtyard::courtyard_polygon(&h.state().library_editors.documents[&id].session.snapshot().objects[&cy_id]).unwrap().1, 200_000);
     }
 
     /// Snapshot state: courtyard draw tool active on a footprint with no courtyard yet.
@@ -918,7 +1213,7 @@ mod tests {
         assert!(matches!(&h.state().library_editors.documents[&id].tool, canvas::Tool::Courtyard { points, .. } if points.len() == 2));
     }
 
-    /// Snapshot state: generated courtyard outline selected with vertex handles and vertex properties panel.
+    /// Snapshot state: generated courtyard outline with vertex 0 explicitly selected and vertex properties panel open.
     #[test]
     fn courtyard_shot_vertex_selected_with_panel() {
         let mut app = PcbApp::default();
@@ -938,7 +1233,8 @@ mod tests {
             .unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
-        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(0));
+        let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
+        select_vertex_on_canvas(&mut h, id, cy_id, 0);
         assert!(h.query_by_label("Vertex X (mm)").is_some());
         assert!(h.query_by_label("Vertex Y (mm)").is_some());
     }
@@ -985,7 +1281,7 @@ mod tests {
         assert!(h.state().library_editors.documents[&id].selected.is_none());
     }
 
-    /// Snapshot state: Generate Courtyard dialog open with a stale-revision refusal error.
+    /// Snapshot state: Generate Courtyard dialog open with the stale-revision rebase error.
     #[test]
     fn courtyard_shot_stale_revision_dialog() {
         let mut app = PcbApp::default();
@@ -1031,9 +1327,223 @@ mod tests {
             .unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
+        let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
+        select_vertex_on_canvas(&mut h, id, cy_id, 0);
         h.get_by_label("Vertex X (mm)").click();
         h.run();
-        assert!(h.ctx.memory(|m| m.focused().is_some()));
+        assert!(h.get_by_label("Vertex X (mm)").is_focused());
         assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(0));
+    }
+
+    /// Snapshot state: Generate Courtyard dialog open with default settings and live size preview.
+    #[test]
+    fn courtyard_shot_dialog_default_preview() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        crate::tests::click(&mut h, "Generate courtyard…");
+        assert!(matches!(&h.state().dialog, Dialog::LibraryCourtyard(draft) if draft.error.is_none() && !draft.has_existing));
+    }
+
+    /// Snapshot state: Generate Courtyard dialog open when an existing courtyard is present,
+    /// showing the "Replace existing courtyard" checkbox.
+    #[test]
+    fn courtyard_shot_dialog_replace_existing() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        crate::tests::click(&mut h, "Regenerate…");
+        assert!(matches!(&h.state().dialog, Dialog::LibraryCourtyard(draft) if draft.has_existing && draft.error.is_none()));
+        assert!(h.query_by_label("Replace existing courtyard").is_some());
+    }
+
+    /// Snapshot state: keyboard focus on Clearance (mm) inside the Generate Courtyard dialog.
+    #[test]
+    fn courtyard_shot_dialog_keyboard_focus() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        crate::tests::click(&mut h, "Generate courtyard…");
+        h.get_by_label("Clearance (mm)").click();
+        h.run();
+        assert!(h.get_by_label("Clearance (mm)").is_focused());
+    }
+
+    /// Snapshot state: populated Courtyard summary in Footprint Definition properties with
+    /// "Select courtyard" action visible.
+    #[test]
+    fn courtyard_shot_summary_populated() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select_many(Default::default()).unwrap();
+        h.run();
+        assert!(h.state().library_editors.documents[&id].selected.is_none());
+        assert!(h.query_by_label("Select courtyard").is_some());
+    }
+
+    /// Snapshot state: Courtyard outline inspector displaying a self-intersection validation error
+    /// after clicking Apply.
+    #[test]
+    fn courtyard_shot_inspector_self_intersection_error() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
+        select_vertex_on_canvas(&mut h, id, cy_id, 0);
+        h.get_by_label("Vertex X (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Vertex X (mm)").type_text("0.5");
+        h.run();
+        h.get_by_label("Vertex Y (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Vertex Y (mm)").type_text("1.5");
+        h.run();
+        crate::tests::click(&mut h, "Apply");
+        assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some("A courtyard outline cannot intersect itself."));
+    }
+
+    /// Snapshot state: Courtyard outline inspector with pending edits (Apply enabled, Vertex
+    /// choice and Add/Remove vertex buttons disabled).
+    #[test]
+    fn courtyard_shot_inspector_pending_edits() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
+        select_vertex_on_canvas(&mut h, id, cy_id, 0);
+        h.get_by_label("Vertex X (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Vertex X (mm)").type_text("-1.5");
+        h.run();
+        assert!(h.state().library_editors.documents[&id].pending());
+    }
+
+    /// Snapshot state: expanded Library Properties dialog showing "All vertices" rows.
+    #[test]
+    fn courtyard_shot_expanded_all_vertices() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::E);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryProperties(..)));
+        assert!(h.query_by_label("Vertex 1 X (mm)").is_some());
+    }
+
+    /// Snapshot state: canvas mid-drag of vertex 0 into a self-intersecting position showing the
+    /// red invalid-drag warning ring.
+    #[test]
+    fn courtyard_shot_invalid_drag_and_hover_midpoint() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
+        let area = h.get_by_label("Library canvas").rect();
+        let (v0_screen, invalid_screen) = {
+            let doc = &h.state().library_editors.documents[&id];
+            let snap = doc.session.snapshot();
+            let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+            (doc.camera.screen(pts[0], area), doc.camera.screen(Point { x_nm: 500_000, y_nm: 1_500_000 }, area))
+        };
+        h.hover_at(v0_screen);
+        h.run();
+        h.event(egui::Event::PointerButton { pos: v0_screen, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run();
+        h.hover_at(invalid_screen);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::DragCourtyardVertex { .. }));
     }
 }

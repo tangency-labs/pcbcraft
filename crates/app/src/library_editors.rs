@@ -486,6 +486,7 @@ impl Document {
             ui.label(shell::error(error));
         }
         draft.show(ui, expanded);
+        let dirty = draft.dirty();
         if expanded
             && self.selected.is_none()
             && let Some(source) = &snapshot.original_source
@@ -496,28 +497,31 @@ impl Document {
                 ui.add(egui::Label::new(&source.locator).wrap());
             });
         }
+        if item.kind == Kind::Footprint && self.selected.is_none() {
+            ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
+            self.courtyard_summary_section(ui);
+            ui.add_space(pcbcraft_chrome::Tokens::get().space_4);
+        }
         let (mut apply, mut reset) = (false, false);
         ui.horizontal(|ui| {
-            apply = pcbcraft_chrome::controls::enabled_button(ui, draft.dirty(), "Apply").clicked();
+            apply = pcbcraft_chrome::controls::enabled_button(ui, dirty, "Apply").clicked();
             reset = pcbcraft_chrome::controls::button(ui, "Reset").clicked();
         });
         if apply {
-            let result = draft.action().and_then(|action| self.session.execute(draft.revision, action));
-            match result {
-                Ok(_) => {
-                    self.draft = None;
-                    self.tool = canvas::Tool::Select;
-                    self.error = None;
+            if let Some((revision, action_result)) = self.draft.as_ref().map(|d| (d.revision, d.action())) {
+                let result = action_result.and_then(|action| self.session.execute(revision, action));
+                match result {
+                    Ok(_) => {
+                        self.draft = None;
+                        self.tool = canvas::Tool::Select;
+                        self.error = None;
+                    }
+                    Err(error) => self.error = Some(error),
                 }
-                Err(error) => self.error = Some(error),
             }
         } else if reset {
             self.draft = None;
             self.error = None;
-        }
-        if item.kind == Kind::Footprint && self.selected.is_none() {
-            ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
-            self.courtyard_summary_section(ui);
         }
     }
     /// Match project Browser row metrics, selection and disclosure behavior. Primitive identities

@@ -37,7 +37,8 @@ pub(crate) const fn default_replace_existing() -> bool {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CourtyardSource {
-    /// Include all copper pads, non-plated holes and fabrication body graphics (excludes silkscreen).
+    /// Include all copper pads, non-plated holes and non-text fabrication body graphics
+    /// (excludes silkscreen and text legends).
     #[default]
     PadsAndBody,
     /// Include only copper pads.
@@ -338,6 +339,7 @@ fn primitive_extents(primitive: &Primitive) -> Vec<Point> {
         Primitive::Pad { pad } => rect_corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation),
         Primitive::NonPlatedHole { hole } => rect_corners(hole.center, hole.diameter_nm, hole.diameter_nm, 0),
         Primitive::Outline { graphic } => rect_corners(graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation),
+        Primitive::Artwork { artwork } if matches!(artwork.graphic.geometry, Geometry::Text { .. }) => Vec::new(),
         Primitive::Artwork { artwork } => artwork.graphic.paths().into_iter().flatten().collect(),
         _ => Vec::new(),
     }
@@ -380,6 +382,36 @@ mod tests {
                     purpose: GraphicPurpose::Silkscreen,
                     graphic: Graphic {
                         geometry: Geometry::Line { from: pt(-5_000_000, 0), to: pt(5_000_000, 0) },
+                        stroke_nm: 120_000,
+                        fill: Fill::None,
+                    },
+                },
+            },
+        );
+        let primitive = generate(&item, DEFAULT_CLEARANCE_NM, CourtyardSource::PadsAndBody, DEFAULT_STROKE_NM).unwrap();
+        let (points, _) = courtyard_polygon(&primitive).unwrap();
+        let m = metrics(points).unwrap();
+        assert_eq!(m.width_nm, 2_100_000);
+        assert_eq!(m.height_nm, 1_300_000);
+    }
+
+    /// Pads-and-body generation ignores wide fabrication text labels (e.g. `${REFERENCE}`).
+    #[test]
+    fn generate_pads_and_body_ignores_fabrication_text() {
+        let mut item = Item::new(Kind::Footprint).unwrap();
+        item.objects.insert(
+            91,
+            Primitive::Artwork {
+                artwork: footprint::Artwork {
+                    purpose: GraphicPurpose::Fabrication,
+                    graphic: Graphic {
+                        geometry: Geometry::Text {
+                            at: pt(0, 0),
+                            text: "${REFERENCE}_LONG_FAB_LABEL".into(),
+                            height_nm: 2_000_000,
+                            rotation: 0,
+                            align: crate::library_graphics::TextAlign::Middle,
+                        },
                         stroke_nm: 120_000,
                         fill: Fill::None,
                     },

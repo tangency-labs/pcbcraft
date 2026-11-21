@@ -351,7 +351,7 @@ impl Document {
                 RibbonTool {
                     icon: Icon::Rectangle,
                     label: "Courtyard",
-                    description: "Draw closed courtyard outline (C)",
+                    description: "Courtyard",
                     shortcut: "",
                     enabled,
                     active: matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. } | Tool::Courtyard { .. }),
@@ -384,12 +384,12 @@ impl Document {
     pub(super) fn view_tools(&mut self, ui: &mut Ui) {
         use workspace::{RibbonTool, ToolIcon as Icon};
         let mut entries = vec![
-            (Icon::Fit, "Fit", "Fit definition to view", false),
-            (Icon::Browser, "Browser", "Show or hide Browser panel", !self.collapsed[0]),
-            (Icon::Settings, "Properties", "Show or hide Properties panel", !self.collapsed[1]),
+            (Icon::Fit, "Fit", "Fit", false),
+            (Icon::Browser, "Browser", "Browser", !self.collapsed[0]),
+            (Icon::Settings, "Properties", "Properties", !self.collapsed[1]),
         ];
         if self.session.snapshot().kind == Kind::Footprint {
-            entries.push((Icon::Rectangle, "Courtyard layer", "Show or hide the courtyard layer", self.show_courtyard));
+            entries.push((Icon::Rectangle, "Courtyard layer", "Courtyard layer", self.show_courtyard));
         }
         let tools: Vec<_> = entries
             .into_iter()
@@ -730,6 +730,7 @@ impl Document {
             };
             if response.clicked() || response.drag_stopped() {
                 let result = match self.tool.clone() {
+                    Tool::Select if !response.clicked() => Ok(()),
                     Tool::Select => {
                         let modify = ui.input(|i| i.modifiers.shift || i.modifiers.command);
                         if show_courtyard
@@ -955,7 +956,14 @@ impl Document {
                 if !command && ui.input(|i| i.key_pressed(egui::Key::T)) {
                     self.start_tool(Place::Text);
                 }
-                if !command && item.kind == Kind::Footprint && ui.input(|i| i.key_pressed(egui::Key::C)) {
+                if item.kind == Kind::Footprint
+                    && ui.input(|i| {
+                        i.focused
+                            && i.events.iter().any(
+                                |event| matches!(event, egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } if modifiers.is_none()),
+                            )
+                    })
+                {
                     self.start_tool(Place::Courtyard);
                     if matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. }) {
                         self.set_show_courtyard(true);
@@ -970,22 +978,33 @@ impl Document {
                 if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
                     self.details_requested = true;
                 }
-                if ui.input(|i| i.key_pressed(egui::Key::Backspace))
-                    && self.show_courtyard
-                    && !self.pending()
-                    && let Some((object, pts, _)) = self.selected_courtyard(&item)
-                    && let Some(vertex) = self.selected_vertex
-                    && pts.len() > pcbcraft_engine::authoring::courtyard::MIN_VERTICES
-                    && let Some(primitive) = item.objects.get(&object)
-                {
-                    match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
-                        .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }))
+                if ui.input(|i| {
+                    i.focused
+                        && i.events.iter().any(|event| {
+                            matches!(event, egui::Event::Key { key: egui::Key::Backspace, pressed: true, modifiers, .. } if modifiers.is_none())
+                        })
+                }) {
+                    if self.show_courtyard
+                        && !self.pending()
+                        && let Some((object, pts, _)) = self.selected_courtyard(&item)
+                        && let Some(vertex) = self.selected_vertex
+                        && let Some(primitive) = item.objects.get(&object)
                     {
-                        Ok(()) => {
-                            let next_len = pts.len().saturating_sub(1);
-                            self.selected_vertex = (next_len > 0).then(|| vertex.min(next_len - 1));
+                        if pts.len() <= pcbcraft_engine::authoring::courtyard::MIN_VERTICES {
+                            self.error = Some("A courtyard outline needs at least 3 vertices.".into());
+                        } else {
+                            match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
+                                .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }))
+                            {
+                                Ok(()) => {
+                                    let next_len = pts.len().saturating_sub(1);
+                                    self.selected_vertex = (next_len > 0).then(|| vertex.min(next_len - 1));
+                                }
+                                Err(error) => self.error = Some(error),
+                            }
                         }
-                        Err(error) => self.error = Some(error),
+                    } else {
+                        self.delete();
                     }
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
