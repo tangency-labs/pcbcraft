@@ -369,7 +369,7 @@ impl PcbApp {
         let staged = self.library_editors.documents.get(&draft.document).and_then(|doc| doc.staged_pin_table.as_ref());
         let has_staged = staged.is_some();
         let has_unsaved_edits = draft.has_unsaved_edits(staged);
-        let source_id = egui::Id::new(SOURCE_TEXT_ID);
+        let source_id = egui::Id::unique(SOURCE_TEXT_ID);
         // egui drops keyboard focus on an unmodified Escape when the pass begins, before this code
         // runs, so `focused()` can no longer tell that the press was meant for the source field.
         // Read the previous frame's focus instead and consume that Escape, so leaving the text field
@@ -859,7 +859,7 @@ mod tests {
     }
 
     fn tab_to_source_field(h: &mut Harness<'_, PcbApp>) -> egui::Id {
-        let source_id = egui::Id::new(SOURCE_TEXT_ID);
+        let source_id = egui::Id::unique(SOURCE_TEXT_ID);
         for _ in 0..12 {
             if h.ctx.memory(|mem| mem.focused() == Some(source_id)) {
                 return source_id;
@@ -1060,7 +1060,7 @@ mod tests {
         h.run();
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
         assert_footer_without_discard_question(&h);
-        assert_eq!(h.ctx.memory(|mem| mem.focused()), Some(egui::Id::new(SOURCE_TEXT_ID)));
+        assert_eq!(h.ctx.memory(|mem| mem.focused()), Some(egui::Id::unique(SOURCE_TEXT_ID)));
         assert_eq!(draft_text(&h), "Signal\tPin\tType\nTXD\t1\toutput\nRXD\t2\tinput\n");
 
         // Explicit Cancel discards cleanly.
@@ -1071,7 +1071,7 @@ mod tests {
         assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
         // Let egui drop focus from the source field that no longer exists.
         h.run_steps(2);
-        assert_ne!(h.ctx.memory(|mem| mem.focused()), Some(egui::Id::new(SOURCE_TEXT_ID)));
+        assert_ne!(h.ctx.memory(|mem| mem.focused()), Some(egui::Id::unique(SOURCE_TEXT_ID)));
 
         // Reopening an empty dialog allows Escape to close immediately.
         h.state_mut().begin_library_pin_table(doc_id).unwrap();
