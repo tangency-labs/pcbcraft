@@ -193,7 +193,7 @@ impl Session {
 
 impl ClearanceQuery {
     /// Resolve policy over prepared contacts, preserving the source's session and board authority.
-    fn from_geometry(source: &super::work::Source, geometry: Arc<BoardGeometry>) -> Result<Self, CommandError> {
+    pub(super) fn from_geometry(source: &super::work::Source, geometry: Arc<BoardGeometry>) -> Result<Self, CommandError> {
         let view = source.snapshot.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable".into()))?;
         let rules = source.effective.clone();
         let copper_layers = view.layers().into_iter().filter(|l| l.purpose == super::setup::LayerPurpose::Copper).map(|l| l.id).collect();

@@ -18,7 +18,9 @@ use crate::{
 mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
-pub(crate) use documents::check_board_document_size;
+pub(crate) use documents::{BoardSizeCheck, check_board_document_size};
+#[cfg(test)]
+pub(crate) use documents::{count_board_record_write, take_board_record_writes};
 pub mod layout;
 mod part_group_storage;
 pub use documents::{

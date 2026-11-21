@@ -16,6 +16,9 @@ pub(crate) use command::{Batch, schema};
 
 /// Error for operations that cannot consume authored teardrop copper yet.
 pub(crate) const UNSUPPORTED: &str = "straight via teardrops are stored but unsupported by this geometry operation";
+/// Default dimensions from physical contacts are unavailable until the query includes teardrops.
+pub(super) const EXPLICIT_DIMENSIONS: &str = "supply explicit copper dimensions on boards with straight via teardrops";
+pub(super) use command::Regeneration;
 #[cfg(test)]
 mod tests;
 
@@ -160,11 +163,24 @@ pub enum Error {
     UnrepresentableContour,
 }
 
+#[cfg(test)]
+thread_local! {
+    static DERIVE_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Return and reset the current test thread's teardrop derivation count.
+#[cfg(test)]
+pub(crate) fn take_derive_calls() -> usize {
+    DERIVE_CALLS.with(|count| count.replace(0))
+}
+
 impl ViaTeardrop {
     /// Resolve both source objects on the addressed immutable board. The view and its
     /// backing project must both identify that board. This only constructs an outline;
     /// it does not check clearance, fit to other objects, or change state.
     pub fn derive(self, board: BoardView<'_>) -> Result<StraightCopper, Error> {
+        #[cfg(test)]
+        DERIVE_CALLS.with(|count| count.set(count.get().saturating_add(1)));
         self.parameters.validate()?;
         if self.id.is_nil() || self.track.is_nil() || self.via.is_nil() || self.id == self.track || self.id == self.via || self.track == self.via {
             return Err(Error::InvalidIdentity);

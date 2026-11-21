@@ -1,6 +1,9 @@
 //! Resumable preparation of existing copper commands against one immutable board snapshot.
 use super::*;
 use crate::board::{
+    class_rules::{Context, NetRules},
+    clearance::BoardGeometry,
+    teardrop,
     view::BoardTarget,
     work::{Progress, Source},
 };
@@ -27,6 +30,7 @@ struct BaseProjection {
 pub struct CopperPreparation {
     source: Source,
     base: Arc<Mutex<BaseProjection>>,
+    defer_net_reconciliation: bool,
 }
 impl std::fmt::Debug for CopperPreparation {
     /// Do not format project contents or lock a worker's projection state for diagnostics.
@@ -46,6 +50,8 @@ impl CopperPreparation {
 pub struct PreparedCopperEdit {
     source: Source,
     candidate: Option<Arc<Project>>,
+    /// Present when the worker already validated the publication candidate after regeneration.
+    prepared_highest: Option<u64>,
     command: &'static str,
     /// The parameters the edit was prepared with, reported with it once committed.
     params: Value,
@@ -67,6 +73,29 @@ impl PreparedCopperEdit {
     }
 }
 
+const PHASE_DONE: u8 = 6;
+
+struct PendingRegeneration {
+    state: teardrop::Regeneration,
+    highest: u64,
+    class_rules: Option<Context>,
+}
+
+/// Bounded final validation before adopting a regenerated copper edit.
+enum FinalCheck {
+    /// Full native board byte-limit check (includes budgeted zone validation).
+    Size(crate::persistence::BoardSizeCheck),
+    /// Budgeted zone validation when the final board skips the native document-size check.
+    Zones { steps: crate::board::zones::ZoneValidationSteps, completed: usize, total: usize },
+}
+
+struct PendingFinalize {
+    project: Project,
+    highest: u64,
+    class_rules: Option<Context>,
+    final_check: FinalCheck,
+}
+
 /// Candidate construction, reusable pad projection and bounded contact validation for a copper
 /// command. Dropping unfinished work never changes the source project, revision or history.
 pub struct CopperEditJob {
@@ -81,15 +110,30 @@ pub struct CopperEditJob {
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
+    regeneration: Option<PendingRegeneration>,
+    finalize: Option<PendingFinalize>,
     check_route_vias: bool,
 }
 
+/// A cooperative browser job runs on the editor thread. Refuse active intents before
+/// allocating work, rather than doing the final teardrop verification there in one step.
+fn check_teardrop_preparation(has_teardrops: bool, cooperative: bool) -> Result<(), CommandError> {
+    if has_teardrops && cooperative {
+        return Err(CommandError::Unavailable("copper edits with active teardrops are not supported in the browser".into()));
+    }
+    Ok(())
+}
+
 impl Session {
-    /// Capture a board's immutable preparation context without projecting pads or copying project files.
+    /// Capture a straight board's preparation context without projecting pads. Native jobs
+    /// can check teardrops before publication; browser jobs refuse active intents up front.
     pub fn copper_preparation(&self, target: BoardTarget) -> Result<CopperPreparation, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
-        view.require_linear_copper().map_err(CommandError::Unavailable)?;
+        view.require_no_arcs().map_err(CommandError::Unavailable)?;
+        // The browser cooperatively polls on the frame thread. The WASI runner
+        // uses the headless engine and can prepare active intents like native builds.
+        check_teardrop_preparation(!view.teardrops().is_empty(), cfg!(all(target_arch = "wasm32", target_os = "unknown")))?;
         let effective = view.effective_rules();
         Ok(CopperPreparation {
             source: Source {
@@ -101,6 +145,7 @@ impl Session {
                 effective,
             },
             base: Arc::default(),
+            defer_net_reconciliation: self.defer_net_reconciliation,
         })
     }
     /// Validate catalog parameters, source and revision before queuing work. Reusing a context
@@ -152,6 +197,8 @@ impl Session {
             work: 0,
             result: None,
             class_islands: None,
+            regeneration: None,
+            finalize: None,
             check_route_vias: false,
         }
     }
@@ -164,14 +211,18 @@ impl Session {
     }
     /// Consume an engine-validated candidate in one shared history transaction. Another session,
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
-    /// A committed candidate is reported to the edit observer as its prepared command.
+    /// A regenerated candidate is already validated; publication does not rebuild its geometry.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
         self.authorize_command(prepared.command)?;
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
         }
         if let Some(candidate) = prepared.candidate {
-            self.change((*candidate).clone())?;
+            if let Some(highest) = prepared.prepared_highest {
+                self.adopt_change(candidate, highest);
+            } else {
+                self.change((*candidate).clone())?;
+            }
             self.report_committed(prepared.command, &prepared.params);
         }
         Ok(self.revision())
@@ -184,6 +235,26 @@ impl CopperEditJob {
     }
     /// Report work progress without treating partial validation as a valid candidate.
     pub fn progress(&self) -> Progress {
+        if self.phase == 4
+            && let Some(regeneration) = &self.regeneration
+        {
+            let (completed, total) = regeneration.state.progress();
+            return Progress { stage: "Regenerating teardrops", completed, total };
+        }
+        if self.phase == 5
+            && let Some(finalize) = &self.finalize
+        {
+            return match &finalize.final_check {
+                FinalCheck::Size(check) => {
+                    let (completed, total) = check.progress(&finalize.project);
+                    Progress { stage: "Checking board size", completed, total }
+                }
+                FinalCheck::Zones { completed, total, .. } => {
+                    let (completed, total) = if *total == 0 { (1, 1) } else { ((*completed).min(*total), *total) };
+                    Progress { stage: "Validating board zones", completed, total }
+                }
+            };
+        }
         let total = self.lands.as_ref().map_or(1, |lands| {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
             n.saturating_mul(n.saturating_sub(1)) / 2
@@ -194,6 +265,8 @@ impl CopperEditJob {
                 1 => "Preparing pad contacts",
                 2 => "Checking copper contacts",
                 3 => "Validating route",
+                4 => "Regenerating teardrops",
+                5 => "Checking board size",
                 _ => "Prepared",
             },
             completed: self.work.min(total),
@@ -203,7 +276,7 @@ impl CopperEditJob {
     /// Advance bounded contact/placement batches, yielding between preparation phases. Errors
     /// terminate the job without a candidate; a zero budget performs no work.
     pub fn step(&mut self, budget: usize) -> bool {
-        if self.phase == 4 {
+        if self.phase == PHASE_DONE {
             return true;
         }
         if budget == 0 {
@@ -212,8 +285,10 @@ impl CopperEditJob {
         match self.advance(budget) {
             Ok(done) => done,
             Err(error) => {
+                self.regeneration = None;
+                self.finalize = None;
                 self.result = Some(Err(error));
-                self.phase = 4;
+                self.phase = PHASE_DONE;
                 true
             }
         }
@@ -223,6 +298,59 @@ impl CopperEditJob {
     pub fn take_result(&mut self) -> Result<Option<PreparedCopperEdit>, CommandError> {
         self.result.take().transpose()
     }
+    /// Capture and enforce class dimensions using the same candidate contacts as regeneration.
+    fn candidate_class_rules(&self, view: BoardView<'_>, geometry: &BoardGeometry) -> Result<Option<Context>, CommandError> {
+        let context = NetRules::new(view, self.context.source.effective.clone())?.map(|rules| rules.capture(view, geometry)).transpose()?;
+        if let Some(context) = &context {
+            for item in &geometry.items {
+                let Ok(id) = Uuid::parse_str(&item.name) else { continue };
+                if !self.added.contains(&id) {
+                    continue;
+                }
+                if item.intended_nets.len() > 1 {
+                    return Err(CommandError::InvalidParams("This copper would connect distinct intended nets.".into()));
+                }
+                if let Some(policy) = context.rules_for(&item.name).filter(|policy| policy.has_dimensions()) {
+                    if let Ok(index) = view.tracks().binary_search_by_key(&id, |track| track.id) {
+                        policy.track_width(Some(view.tracks()[index].width_nm))?;
+                    }
+                    if let Ok(index) = view.vias().binary_search_by_key(&id, |via| via.id) {
+                        let via = &view.vias()[index];
+                        policy.via_sizes(Some(via.diameter_nm), Some(via.drill_nm))?;
+                    }
+                }
+            }
+        }
+        Ok(context)
+    }
+
+    /// For an interactive route with layer changes, refuse an added via land too close to a
+    /// non-plated hole at the candidate's final sizes and resolved net clearance.
+    fn check_route_via_holes(
+        &self,
+        land_count: usize,
+        view: BoardView<'_>,
+        geometry: &BoardGeometry,
+        context: Option<&Context>,
+    ) -> Result<(), CommandError> {
+        if !self.check_route_vias {
+            return Ok(());
+        }
+        let via_start = land_count + view.tracks().len();
+        let baseline = self.context.source.effective.values.clearance_nm;
+        for (offset, via) in view.vias().iter().enumerate().filter(|(_, via)| self.added.contains(&via.id)) {
+            let index = via_start + offset;
+            let clearance = context.and_then(|rules| rules.object(index)).map_or(Ok(baseline), |policy| policy.clearance_nm())?;
+            if geometry.mechanical_violation(index, clearance) {
+                return Err(CommandError::InvalidParams(format!(
+                    "Via land at ({}, {}) is too close to a non-plated hole.",
+                    via.at.x_nm, via.at.y_nm
+                )));
+            }
+        }
+        Ok(())
+    }
+
     /// Shared native/browser phases use exactly the synchronous command's geometry and short policy.
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
         match self.phase {
@@ -230,11 +358,12 @@ impl CopperEditJob {
                 let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
                 self.added = added;
                 self.candidate = candidate.map(Arc::new);
-                if self.candidate.is_none() || self.added.is_empty() {
-                    self.phase = 4;
+                if self.candidate.as_ref().is_none_or(|candidate| self.added.is_empty() && candidate.board.teardrops.is_empty()) {
+                    self.phase = PHASE_DONE;
                     self.result = Some(Ok(PreparedCopperEdit {
                         source: self.context.source.clone(),
                         candidate: self.candidate.take(),
+                        prepared_highest: None,
                         command: self.command,
                         params: self.params.clone(),
                         class_rules: None,
@@ -278,6 +407,7 @@ impl CopperEditJob {
                         return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
                     }
                     if self.check_route_vias
+                        || !candidate.board.teardrops.is_empty()
                         || candidate.has_dimensional_net_classes()
                         || candidate.board.vias.iter().any(|v| v.net_assignment.is_some())
                     {
@@ -294,70 +424,117 @@ impl CopperEditJob {
                     self.work = self.work.saturating_add(budget);
                     return Ok(false);
                 }
-                let class_rules = if let (Some(candidate), Some(lands), Some(builder), Some((copper, members))) =
-                    (&self.candidate, &self.lands, self.builder.take(), self.class_islands.take())
+                let source = &self.context.source;
+                let candidate = self.candidate.take();
+                let mut class_rules = None;
+                if let (Some(project), Some(lands), Some(builder), Some((copper, members))) =
+                    (&candidate, &self.lands, self.builder.take(), self.class_islands.take())
                 {
-                    let view =
-                        candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+                    let view = project.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
                     let (_, merged) = builder.finish(lands, view.tracks(), view.vias());
-                    if let Some((a, b)) = short_from_members(candidate, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
+                    if let Some((a, b)) = short_from_members(project, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
                         return Err(CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")));
                     }
-                    let geometry = crate::board::clearance::BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
-                    let context = crate::board::class_rules::NetRules::new(view, self.context.source.effective.clone())?
-                        .map(|rules| rules.capture(view, &geometry))
-                        .transpose()?;
-                    if let Some(context) = &context {
-                        for item in &geometry.items {
-                            let Ok(id) = Uuid::parse_str(&item.name) else { continue };
-                            if !self.added.contains(&id) {
-                                continue;
-                            }
-                            if item.intended_nets.len() > 1 {
-                                return Err(CommandError::InvalidParams("This copper would connect distinct intended nets.".into()));
-                            }
-                            if let Some(policy) = context.rules_for(&item.name).filter(|policy| policy.has_dimensions()) {
-                                if let Some(track) = view.tracks().iter().find(|track| track.id == id) {
-                                    policy.track_width(Some(track.width_nm))?;
-                                }
-                                if let Some(via) = view.vias().iter().find(|via| via.id == id) {
-                                    policy.via_sizes(Some(via.diameter_nm), Some(via.drill_nm))?;
-                                }
-                            }
+                    if view.teardrops().is_empty() {
+                        let geometry = BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
+                        class_rules = self.candidate_class_rules(view, &geometry)?;
+                        self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
+                    } else {
+                        // Reuse the worker's contact batches. Map candidate memberships after
+                        // reconciliation and validate teardrops in bounded phase-4 batches.
+                        let (next, highest) = Session::prepare_change_before_regeneration(
+                            Some(&source.snapshot),
+                            self.context.defer_net_reconciliation,
+                            (**project).clone(),
+                            true,
+                        )?;
+                        let view = next.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+                        let geometry = Arc::new(BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged));
+                        if self.check_route_vias || next.has_dimensional_net_classes() || view.vias().iter().any(|via| via.net_assignment.is_some()) {
+                            class_rules = self.candidate_class_rules(view, &geometry)?;
                         }
+                        self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
+                        self.regeneration =
+                            Some(PendingRegeneration { state: teardrop::Regeneration::new(next, source.clone(), geometry), highest, class_rules });
+                        self.phase = 4;
+                        self.work = 0;
+                        return Ok(false);
                     }
-                    if self.check_route_vias {
-                        let via_start = lands.len() + view.tracks().len();
-                        let baseline = self.context.source.effective.values.clearance_nm;
-                        for (offset, via) in view.vias().iter().enumerate().filter(|(_, via)| self.added.contains(&via.id)) {
-                            let index = via_start + offset;
-                            let clearance =
-                                context.as_ref().and_then(|rules| rules.object(index)).map_or(Ok(baseline), |policy| policy.clearance_nm())?;
-                            if geometry.mechanical_violation(index, clearance) {
-                                return Err(CommandError::InvalidParams(format!(
-                                    "Via land at ({}, {}) is too close to a non-plated hole.",
-                                    via.at.x_nm, via.at.y_nm
-                                )));
-                            }
-                        }
-                    }
-                    context
-                } else {
-                    None
-                };
+                }
                 self.result = Some(Ok(PreparedCopperEdit {
-                    source: self.context.source.clone(),
-                    candidate: self.candidate.take(),
+                    source: source.clone(),
+                    candidate,
+                    prepared_highest: None,
                     command: self.command,
                     params: self.params.clone(),
                     class_rules,
                 }));
+                self.phase = PHASE_DONE;
+                self.work = 0;
+                return Ok(true);
+            }
+            4 => {
+                let Some(regeneration) = self.regeneration.as_mut() else {
+                    return Err(CommandError::Unavailable("teardrop regeneration state is unavailable".into()));
+                };
+                if !regeneration.state.step(budget)? {
+                    return Ok(false);
+                }
+                let Some(regeneration) = self.regeneration.take() else {
+                    return Err(CommandError::Unavailable("teardrop regeneration state is unavailable".into()));
+                };
+                let next = regeneration.state.finish();
+                let source = &self.context.source;
+                let final_check = if Session::needs_board_size_check(Some(&source.snapshot), &next) {
+                    // Regeneration already checked every surviving teardrop invariant and derivation.
+                    FinalCheck::Size(crate::persistence::BoardSizeCheck::new(false))
+                } else {
+                    let total = crate::board::zones::ZoneValidationSteps::total(&next);
+                    FinalCheck::Zones { steps: crate::board::zones::ZoneValidationSteps::new(), completed: 0, total }
+                };
+                self.finalize =
+                    Some(PendingFinalize { project: next, highest: regeneration.highest, class_rules: regeneration.class_rules, final_check });
+                self.phase = 5;
+                self.work = 0;
+                return Ok(false);
+            }
+            5 => {
+                let Some(finalize) = self.finalize.as_mut() else {
+                    return Err(CommandError::Unavailable("board finalization state is unavailable".into()));
+                };
+                let done = match &mut finalize.final_check {
+                    FinalCheck::Size(size_check) => size_check.step(&finalize.project, budget).map_err(CommandError::InvalidParams)?,
+                    FinalCheck::Zones { steps, completed, .. } => {
+                        let mut remaining = budget;
+                        let done = steps.step(&finalize.project, &mut remaining).map_err(CommandError::InvalidParams)?;
+                        *completed = completed.saturating_add(budget - remaining);
+                        done
+                    }
+                };
+                if !done {
+                    return Ok(false);
+                }
+                let Some(finalize) = self.finalize.take() else {
+                    return Err(CommandError::Unavailable("board finalization state is unavailable".into()));
+                };
+                let source = &self.context.source;
+                self.result = Some(Ok(PreparedCopperEdit {
+                    source: source.clone(),
+                    candidate: Some(Arc::new(finalize.project)),
+                    prepared_highest: Some(finalize.highest),
+                    command: self.command,
+                    params: self.params.clone(),
+                    class_rules: finalize.class_rules,
+                }));
+                self.phase = PHASE_DONE;
+                self.work = 0;
+                return Ok(true);
             }
             _ => {}
         }
         self.phase += 1;
         self.work = 0;
-        Ok(self.phase == 4)
+        Ok(self.phase == PHASE_DONE)
     }
 }
 
@@ -366,6 +543,21 @@ mod tests {
     use super::*;
     use crate::board::track::tests::{copper_layers, routed_fixture, view};
     use crate::persistence::encode_documents;
+
+    /// Cooperative preparation only refuses boards that would need teardrop regeneration.
+    /// Headless WASI coverage also runs the active-intent move through actual admission.
+    #[test]
+    fn cooperative_preparation_refuses_active_teardrops() {
+        for (has_teardrops, cooperative, refused) in [(false, false, false), (true, false, false), (false, true, false), (true, true, true)] {
+            let result = check_teardrop_preparation(has_teardrops, cooperative);
+            if refused {
+                assert!(matches!(result, Err(CommandError::Unavailable(message)) if message ==
+                    "copper edits with active teardrops are not supported in the browser"));
+            } else {
+                assert!(result.is_ok());
+            }
+        }
+    }
 
     /// A small off-board segment isolates publication and cancellation from pad geometry.
     fn params(s: &Session) -> Value {
@@ -554,5 +746,183 @@ mod tests {
         s.commit_copper_edit(prepared).unwrap();
         assert_eq!(view(&s).tracks().len(), 1);
         assert_eq!(view(&s).tracks()[0].start.x_nm, -17_000_000);
+    }
+
+    /// Build a strictly convex `count`-vertex polygon in nanometres for zone validation tests.
+    fn regular_zone_polygon(count: usize, offset_x_nm: i64) -> Vec<Point> {
+        const RADIUS_NM: f64 = 5_000_000.0;
+        (0..count)
+            .map(|index| {
+                let angle = 2.0 * std::f64::consts::PI * (index as f64) / (count as f64);
+                Point { x_nm: offset_x_nm + (RADIUS_NM * angle.cos()).round() as i64, y_nm: (RADIUS_NM * angle.sin()).round() as i64 }
+            })
+            .collect()
+    }
+
+    /// Deleting the final track and via on a zone-heavy board without assignments or mapped
+    /// footprints skips `BoardSizeCheck` yet still validates all zones in bounded, cancellable
+    /// batches before publishing the edit.
+    #[test]
+    fn deleting_final_copper_on_zone_heavy_board_validates_zones_in_bounded_cancellable_batches() {
+        use crate::board::teardrop::{Length, Parameters, Record};
+        use crate::board::zones::{ADD_ZONE, MAX_POINTS, ZONE_VALIDATION_EDGES_PER_UNIT, ZoneValidationSteps, take_zone_edges_stepped};
+        use crate::persistence::decode_documents;
+
+        const ZONES: usize = 32;
+        let mut session = routed_fixture();
+        let board = view(&session).target.board;
+        let copper_layer = copper_layers(&session)[0];
+        let nets = session.project().unwrap().inspect_net_registry().unwrap();
+        let square = [
+            Point { x_nm: 0, y_nm: 0 },
+            Point { x_nm: 10_000_000, y_nm: 0 },
+            Point { x_nm: 10_000_000, y_nm: 10_000_000 },
+            Point { x_nm: 0, y_nm: 10_000_000 },
+        ];
+        session
+            .apply(
+                ADD_ZONE,
+                &json!({
+                    "board": board,
+                    "layer": copper_layer,
+                    "target": { "kind": "derived", "anchor": nets["nets"][0]["anchor"] },
+                    "points": square,
+                    "expected_revision": session.revision(),
+                }),
+            )
+            .unwrap();
+
+        let at = Point { x_nm: 10_000_000, y_nm: 20_000_000 };
+        let via = Uuid::from_u128(0x10_0000);
+        let track = Uuid::from_u128(0x20_0000);
+        let teardrop_id = Uuid::from_u128(0x30_0000);
+        let mut project = session.project().unwrap().clone();
+        {
+            let board_data = Arc::make_mut(&mut project.board);
+            board_data.footprints.clear();
+            board_data.assignments.clear();
+            board_data.definitions.clear();
+            board_data.baseline = None;
+            board_data.vias = vec![Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 }];
+            board_data.tracks = vec![Track {
+                id: track,
+                locked: false,
+                layer: copper_layer,
+                width_nm: 100_000,
+                start: at,
+                end: Point { x_nm: at.x_nm + 600_000, y_nm: at.y_nm },
+            }];
+            board_data.teardrops = vec![Record {
+                id: teardrop_id,
+                via,
+                track,
+                parameters: Parameters { length: Length::Percent(20), max_length_nm: None, width_pct: 80, max_width_nm: None },
+            }];
+            let template = board_data.zones[0].clone();
+            board_data.zones = (0..ZONES)
+                .map(|index| {
+                    let mut zone = template.clone();
+                    zone.id = Uuid::from_u128(0x80_0000 + index as u128);
+                    zone.points = regular_zone_polygon(MAX_POINTS, (index as i64) * 12_000_000);
+                    zone
+                })
+                .collect();
+        }
+        let saved = encode_documents(Arc::new(project)).unwrap();
+        session.open_snapshot(decode_documents(&saved).unwrap());
+        session.apply("project.rename", &json!({ "name": "Zone-heavy empty-copper board" })).unwrap();
+
+        let before = session.snapshot().unwrap();
+        assert!(before.board.assignments.is_empty());
+        assert!(before.board.footprints().is_empty());
+        assert_eq!(before.board.tracks.len(), 1);
+        assert_eq!(before.board.vias.len(), 1);
+        assert_eq!(before.board.teardrops.len(), 1);
+        assert_eq!(before.board.zones.len(), ZONES);
+        let expected_zone_units = ZoneValidationSteps::total(&before);
+        assert_eq!(expected_zone_units, ZONES * MAX_POINTS.div_ceil(ZONE_VALIDATION_EDGES_PER_UNIT));
+
+        let before_bytes = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        assert!(history.0 > 0);
+        let delete_params = json!({ "tracks": [track], "vias": [via], "expected_revision": revision });
+
+        // Cancel halfway through budgeted zone validation and drop the job.
+        let mut canceled = session.prepare_copper_edit(DELETE_TRACKS, &delete_params).unwrap();
+        let _ = take_zone_edges_stepped();
+        for _ in 0..10_000 {
+            if canceled.progress().stage == "Validating board zones" {
+                break;
+            }
+            assert!(!canceled.step(1));
+            assert_eq!(take_zone_edges_stepped(), 0);
+        }
+        let entered = canceled.progress();
+        assert_eq!(entered.stage, "Validating board zones");
+        assert_eq!(entered.completed, 0);
+        assert_eq!(entered.total, expected_zone_units);
+
+        assert!(!canceled.step(0));
+        assert_eq!(take_zone_edges_stepped(), 0);
+        assert_eq!(canceled.progress().completed, 0);
+
+        for expected in 1..=(expected_zone_units / 2) {
+            assert!(!canceled.step(1));
+            let edges = take_zone_edges_stepped();
+            assert!(edges > 0 && edges <= ZONE_VALIDATION_EDGES_PER_UNIT);
+            let progress = canceled.progress();
+            assert_eq!(progress.stage, "Validating board zones");
+            assert_eq!(progress.completed, expected);
+            assert_eq!(progress.total, expected_zone_units);
+        }
+        assert!(canceled.take_result().unwrap().is_none());
+        drop(canceled);
+
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
+        assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+
+        // Drain a fresh job at budget 1: every zone-validation step stays within the per-unit
+        // edge budget, all 8,192 edges are checked, and committing removes the final copper.
+        let mut job = session.prepare_copper_edit(DELETE_TRACKS, &delete_params).unwrap();
+        let _ = take_zone_edges_stepped();
+        for _ in 0..10_000 {
+            if job.progress().stage == "Validating board zones" {
+                break;
+            }
+            assert!(!job.step(1));
+            assert_eq!(take_zone_edges_stepped(), 0);
+        }
+        assert_eq!(job.progress().stage, "Validating board zones");
+        let mut zone_steps = 0usize;
+        let mut total_zone_edges = 0usize;
+        loop {
+            let done = job.step(1);
+            let edges = take_zone_edges_stepped();
+            assert!(edges > 0 && edges <= ZONE_VALIDATION_EDGES_PER_UNIT);
+            zone_steps += 1;
+            total_zone_edges += edges;
+            if done {
+                break;
+            }
+            let progress = job.progress();
+            assert_eq!(progress.stage, "Validating board zones");
+            assert_eq!(progress.completed, zone_steps);
+            assert_eq!(progress.total, expected_zone_units);
+        }
+        assert_eq!(zone_steps, expected_zone_units);
+        assert_eq!(total_zone_edges, ZONES * MAX_POINTS);
+
+        let prepared = job.take_result().unwrap().unwrap();
+        session.commit_copper_edit(prepared).unwrap();
+        assert_eq!(session.revision(), revision + 1);
+        let committed = session.snapshot().unwrap();
+        assert!(!Session::needs_board_size_check(Some(&before), &committed));
+        assert!(view(&session).tracks().is_empty());
+        assert!(view(&session).vias().is_empty());
+        assert!(view(&session).teardrops().is_empty());
+        assert_eq!(view(&session).zones().len(), ZONES);
     }
 }
