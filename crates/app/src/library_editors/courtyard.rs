@@ -545,8 +545,21 @@ mod tests {
         h.run();
     }
 
+    /// Zoom the definition view out by `factor` about its centre, as the user would with the
+    /// wheel. Fit fills the usable canvas with a margin of only 28 px, so without this a
+    /// courtyard generated after the first frame, a hand-drawn outline or a point outside an edge
+    /// falls off the canvas or under a panel, where the pointer never reaches the canvas.
+    fn zoom_out(h: &mut Harness<'_, PcbApp>, id: u64, factor: f32) {
+        if let Some(doc) = h.state_mut().library_editors.documents.get_mut(&id) {
+            let zoom = doc.camera.zoom();
+            doc.camera.set_zoom(zoom / factor);
+        }
+        h.run();
+    }
+
     /// A footprint editor whose default pads carry a generated 0.25 mm courtyard, selected with
-    /// no vertex chosen. Returns the harness, the document ID and the courtyard object ID.
+    /// no vertex chosen, zoomed out to half the fitted size so points outside the outline stay on
+    /// the canvas. Returns the harness, the document ID and the courtyard object ID.
     fn harness_with_generated_courtyard() -> (Harness<'static, PcbApp>, u64, u64) {
         let mut app = PcbApp::default();
         app.new_library_item(Kind::Footprint);
@@ -565,6 +578,7 @@ mod tests {
             .unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
+        zoom_out(&mut h, id, 2.0);
         let cy_id = h.state().library_editors.documents[&id].selected.unwrap();
         (h, id, cy_id)
     }
@@ -633,6 +647,8 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
         let id = h.state().library_editors.active.unwrap();
+        // The first frame fits the pads; the 0.25 mm courtyard generated below is larger.
+        zoom_out(&mut h, id, 2.0);
         let before_rev = h.state().library_editors.documents[&id].session.revision();
 
         crate::tests::click(&mut h, "Generate courtyard…");
@@ -722,6 +738,7 @@ mod tests {
         let rev = h.state().library_editors.documents[&id].session.revision();
 
         // Hide via the View ribbon button ("Courtyard layer"): clears selection, preserves revision.
+        crate::tests::click(&mut h, "View");
         crate::tests::click(&mut h, "Courtyard layer");
         assert!(!h.state().library_editors.documents[&id].show_courtyard);
         assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev);
@@ -875,6 +892,8 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
         let id = h.state().library_editors.active.unwrap();
+        // The first frame fits the pads; the triangle and the generated outline reach beyond them.
+        zoom_out(&mut h, id, 4.0);
         let area = h.get_by_label("Library canvas").rect();
 
         // Press C to arm Courtyard draw tool, then Escape cancels cleanly.
@@ -891,9 +910,9 @@ mod tests {
         let (p0, p1, p2) = {
             let doc = &h.state().library_editors.documents[&id];
             (
-                doc.camera.screen(Point { x_nm: -2_000_000, y_nm: -1_000_000 }, area),
-                doc.camera.screen(Point { x_nm: 2_000_000, y_nm: -1_000_000 }, area),
-                doc.camera.screen(Point { x_nm: 0, y_nm: 2_000_000 }, area),
+                doc.camera.screen(Point { x_nm: -1_000_000, y_nm: -500_000 }, area),
+                doc.camera.screen(Point { x_nm: 1_000_000, y_nm: -500_000 }, area),
+                doc.camera.screen(Point { x_nm: 0, y_nm: 1_000_000 }, area),
             )
         };
         h.hover_at(area.center());
@@ -1203,6 +1222,7 @@ mod tests {
         assert!(h.state().library_editors.documents[&id].pending());
         let before = doc_state(h.state(), id);
 
+        crate::tests::click(&mut h, "View");
         crate::tests::click(&mut h, "Courtyard layer");
         let doc = &h.state().library_editors.documents[&id];
         assert_eq!(doc.error.as_deref(), Some("Apply or reset the property fields before changing selection."));
@@ -1408,6 +1428,8 @@ mod tests {
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
         let id = h.state().library_editors.active.unwrap();
+        // The first frame fits the pads; the outline being drawn reaches beyond them.
+        zoom_out(&mut h, id, 4.0);
         let area = h.get_by_label("Library canvas").rect();
         let (p0, p1, p2) = {
             let doc = &h.state().library_editors.documents[&id];
@@ -1491,6 +1513,7 @@ mod tests {
             .unwrap();
         let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
         h.run();
+        crate::tests::click(&mut h, "View");
         crate::tests::click(&mut h, "Courtyard layer");
         assert!(!h.state().library_editors.documents[&id].show_courtyard);
         assert!(h.state().library_editors.documents[&id].selected.is_none());
