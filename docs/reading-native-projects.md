@@ -19,9 +19,9 @@ power symbols and hierarchy without requiring you to implement those rules.
 
 Read each document’s `format` before applying its field rules. Keep the ID
 namespaces separate: a component counter, a symbol counter and a pin number
-are not interchangeable. In versions that store [object UUIDs](native-project-storage.md#object-uuid-records),
-read `uuid` as the persisted object identity; references that use counters still
-need to be resolved as specified by their document. A designator, display name,
+are not interchangeable. See the [object identity inventory](object-identity.md)
+for which records carry persistent UUIDs and which use counters; references that
+use counters still need to be resolved as specified by their document. A designator, display name,
 file order or coordinate is not an identity.
 
 ## Worked example: one flat sheet
