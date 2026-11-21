@@ -78,11 +78,14 @@ Undo/Redo and native save/reopen.
 
 Open **Analyze → Rules → Differential pairs…** in the schematic or PCB editor.
 For a new pair, enter a name and choose the positive and negative nets explicitly.
-The pickers list current persistent nets in the project, not suffix matches; IDs
-shown with the names distinguish nets with the same display text. If a derived
-net has no persistent ID yet, promote it before pairing. To edit or remove an
-existing pair, select it from the pair picker. A retained member without a current
-name is shown by UUID, and a stored review reason remains visible after editing.
+The net pickers list active nets that are not already in another pair; an existing
+pair's own endpoints stay selectable even when retired. If a derived net has no
+persistent ID yet, promote it before pairing. To edit or remove an existing pair,
+select it from the pair picker. A retained member without a current name is shown
+by UUID. A pair that needs review shows its reason. Renaming keeps it; saving with
+a changed member, or **Mark reviewed** (enabled only when both members are live),
+clears it. **New pair** explains when fewer than two active unpaired nets are
+available.
 
 **Save pair** and **Remove pair** each apply one edit and close the form. Removal
 leaves both nets intact. Cancel discards the draft, and Undo restores the exact
