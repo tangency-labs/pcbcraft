@@ -169,36 +169,42 @@ fn gcd(mut a: i128, mut b: i128) -> i128 {
     a.max(1)
 }
 
-/// Canonical key for the infinite line through two distinct doubled points: a primitive
-/// direction `(ux, uy)` with `ux > 0` or `(ux, uy) == (0, 1)`, and the signed offset
-/// `ux * y - uy * x` that is constant along the line.
-fn line_key(a: Doubled, b: Doubled) -> (i128, i128, i128) {
+/// Canonical key for strokes sharing an ink style on the same infinite line:
+/// ink style, primitive direction `(ux, uy)` with `ux > 0` or `(ux, uy) == (0, 1)`,
+/// and signed offset `ux * y - uy * x`.
+type StrokeLine = (Ink, i128, i128, i128);
+
+/// Ordered endpoints of a collinear segment in doubled local coordinates.
+type Span = (Doubled, Doubled);
+
+/// Canonical key for strokes of `ink` on the infinite line through two distinct doubled points.
+fn line_key(ink: Ink, a: Doubled, b: Doubled) -> StrokeLine {
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
     let g = gcd(dx, dy);
     let (ux, uy) = if dx < 0 || (dx == 0 && dy < 0) { (-dx / g, -dy / g) } else { (dx / g, dy / g) };
-    (ux, uy, ux * a.1 - uy * a.0)
+    (ink, ux, uy, ux * a.1 - uy * a.0)
 }
 
 /// Normalize duplicate marks and overlapping or touching collinear strokes on the same layer
 /// with the same stroke width and fill, so equivalent drawings compare equal regardless of how
 /// strokes were split or repeated.
 fn normalize_marks(inked: Vec<(Ink, Mark)>) -> Vec<(Ink, Mark)> {
-    let mut lines: BTreeMap<(Ink, (i128, i128, i128)), Vec<(Doubled, Doubled)>> = BTreeMap::new();
+    let mut lines: BTreeMap<StrokeLine, Vec<Span>> = BTreeMap::new();
     let mut normalized = Vec::with_capacity(inked.len());
     for (ink, mark) in inked {
         match mark {
             Mark::Segment(a, b) if a == b => {}
             Mark::Segment(a, b) => {
                 let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
-                lines.entry((ink, line_key(lo, hi))).or_default().push((lo, hi));
+                lines.entry(line_key(ink, lo, hi)).or_default().push((lo, hi));
             }
             other => normalized.push((ink, other)),
         }
     }
-    for ((ink, _), mut spans) in lines {
+    for ((ink, ..), mut spans) in lines {
         spans.sort_unstable();
-        let mut merged: Vec<(Doubled, Doubled)> = Vec::new();
+        let mut merged: Vec<Span> = Vec::new();
         for (lo, hi) in spans {
             if let Some((_, cur_hi)) = merged.last_mut()
                 && lo <= *cur_hi
