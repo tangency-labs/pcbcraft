@@ -88,6 +88,8 @@ pub struct CopperEditJob {
     candidate: Option<Arc<Project>>,
     added: BTreeSet<Uuid>,
     moved_footprints: BTreeSet<String>,
+    pitch_next: usize,
+    pitch_lands: Vec<Land>,
     lands: Option<Arc<Vec<Land>>>,
     builder: Option<IslandBuilder>,
     work: usize,
@@ -160,6 +162,8 @@ impl Session {
             candidate: None,
             added: BTreeSet::new(),
             moved_footprints: BTreeSet::new(),
+            pitch_next: 0,
+            pitch_lands: Vec::new(),
             lands: None,
             builder: None,
             work: 0,
@@ -267,10 +271,17 @@ impl CopperEditJob {
                 }
             }
             1 if !self.moved_footprints.is_empty() => {
-                // The native live worker projects the new placements once, not the stationary source.
+                // Project the moved candidate's footprints in bounded batches before building contacts.
                 let candidate = self.candidate.as_ref().ok_or_else(|| CommandError::Unavailable("missing pitch candidate".into()))?;
                 let view = candidate.board_view(self.context.source.target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
-                let projected = lands(view);
+                let next = self.pitch_next;
+                let count = budget.min(32);
+                self.pitch_lands.extend(lands_from_footprints(view.footprints_range(next, count)));
+                self.pitch_next = next.saturating_add(count);
+                if self.pitch_next < candidate.board.footprints.len() {
+                    return Ok(false);
+                }
+                let projected = std::mem::take(&mut self.pitch_lands);
                 self.builder = Some(IslandBuilder::new(&projected, view.tracks(), view.vias()));
                 self.lands = Some(Arc::new(projected));
             }
@@ -625,5 +636,34 @@ mod tests {
         s.commit_copper_edit(prepared).unwrap();
         assert_eq!(view(&s).tracks().len(), 1);
         assert_eq!(view(&s).tracks()[0].start.x_nm, -17_000_000);
+    }
+
+    /// Pitch preparation projects moved footprints in bounded batches before building contacts.
+    #[test]
+    fn pitch_preparation_budgets_footprint_projection() {
+        let mut s = routed_fixture();
+        let footprints: Vec<_> = view(&s).footprint_ids().collect();
+        assert_eq!(footprints.len(), 3);
+        let p = json!({
+            "board": view(&s).target.board,
+            "footprints": footprints,
+            "mode": "distribute_x",
+            "pitch_nm": 15_000_000,
+            "expected_revision": s.revision(),
+        });
+        let mut job = s.prepare_copper_edit(ALIGN_FOOTPRINTS, &p).unwrap();
+        assert!(!job.step(1));
+        assert_eq!(job.phase, 1);
+        assert!(!job.step(1));
+        assert_eq!(job.phase, 1);
+        assert_eq!(job.pitch_next, 1);
+        assert!(!job.step(1));
+        assert_eq!(job.phase, 1);
+        assert_eq!(job.pitch_next, 2);
+        let prepared = finish(job);
+        s.commit_copper_edit(prepared).unwrap();
+        let mut xs: Vec<i64> = view(&s).footprints().map(|f| f.position.x_nm).collect();
+        xs.sort_unstable();
+        assert_eq!(xs, [0, 15_000_000, 30_000_000]);
     }
 }
