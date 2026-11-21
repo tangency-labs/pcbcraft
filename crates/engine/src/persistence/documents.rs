@@ -2859,6 +2859,8 @@ struct BoardFacts {
     bottom: bool,
     pending: bool,
     stroked: bool,
+    #[cfg(test)]
+    pending_checks: usize,
 }
 
 impl BoardFacts {
@@ -2960,7 +2962,13 @@ impl BoardFacts {
             8 => {
                 if let Some((&id, assignment)) = board.assignments.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next() {
                     self.extended |= crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads);
-                    self.pending |= board.has_pending_assignment(project, assignment);
+                    if !self.pending && board.tracks.is_empty() && board.vias.is_empty() {
+                        #[cfg(test)]
+                        {
+                            self.pending_checks += 1;
+                        }
+                        self.pending = board.has_pending_assignment(project, assignment);
+                    }
                     self.key = id;
                 } else {
                     self.advance();
@@ -3185,5 +3193,98 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet, fiel
     } else {
         bytes.extend_from_slice(b"  \"symbols\": [\n");
         Ok(4)
+    }
+}
+
+#[cfg(test)]
+mod board_facts_tests {
+    use serde_json::{Value, json};
+
+    use super::{BoardFacts, Project};
+    use crate::{
+        ADD_TRACKS, ADD_VIA, ASSIGN_FOOTPRINT, INITIALIZE_BOARD_SETUP, INITIALIZE_UPDATE_BASELINE, PLACE_RESISTOR, Session,
+        board::setup::LayerPurpose,
+    };
+
+    fn apply(session: &mut Session, command: &str, mut params: Value) {
+        params["expected_revision"] = json!(session.revision());
+        session.apply(command, &params).unwrap();
+    }
+
+    fn scan(project: &Project) -> BoardFacts {
+        let mut facts = BoardFacts::default();
+        while !facts.step(project).unwrap() {}
+        facts
+    }
+
+    fn two_pending_assignments() -> (Session, u64, u64) {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name": "BoardFacts pending scan", "create_board": true})).unwrap();
+        apply(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers": 2}));
+        apply(&mut session, PLACE_RESISTOR, json!({"x_nm": 0, "y_nm": 0}));
+        apply(&mut session, PLACE_RESISTOR, json!({"x_nm": 10_000_000, "y_nm": 0}));
+        apply(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+        let ids: Vec<u64> = session.project().unwrap().components.keys().copied().collect();
+        assert_eq!(ids.len(), 2);
+        let definition = crate::board::definition::basic_components("resistor-0402").unwrap();
+        for &id in &ids {
+            apply(
+                &mut session,
+                ASSIGN_FOOTPRINT,
+                json!({
+                    "component": format!("component-{id}"),
+                    "library": definition.library,
+                    "definition": definition.id,
+                    "definition_revision": definition.revision,
+                    "mapping": {"1": "1", "2": "2"},
+                }),
+            );
+        }
+        (session, ids[0], ids[1])
+    }
+
+    #[test]
+    fn board_facts_skips_pending_check_when_routed_and_stops_after_first_pending() {
+        let (base_session, first_id, second_id) = two_pending_assignments();
+        let base_snapshot = base_session.snapshot().unwrap();
+        let make_project = |session: &Session| {
+            let mut project = (*session.snapshot().unwrap()).clone();
+            project.board.assignments.get_mut(&second_id).unwrap().unconnected_pads.push("NC".to_owned());
+            project
+        };
+
+        // Unrouted with two pending assignments (first plain, second extended):
+        // stops checking pending after the first pending assignment while still scanning `extended`.
+        let unrouted = make_project(&base_session);
+        assert!(unrouted.board.has_pending_assignment(&unrouted, &unrouted.board.assignments[&first_id]));
+        assert!(unrouted.board.has_pending_assignment(&unrouted, &unrouted.board.assignments[&second_id]));
+        let facts = scan(&unrouted);
+        assert!(facts.pending);
+        assert!(facts.extended);
+        assert_eq!(facts.pending_checks, 1);
+
+        // Track present: routing takes priority, so pending checks are skipped while `extended` is still scanned.
+        let mut with_track = Session::default();
+        with_track.open_snapshot(base_snapshot.clone());
+        let copper =
+            with_track.project().unwrap().board_setup().unwrap().layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper).unwrap().id;
+        apply(
+            &mut with_track,
+            ADD_TRACKS,
+            json!({"layer": copper, "width_nm": 250_000, "points": [{"x_nm": 0, "y_nm": 0}, {"x_nm": 5_000_000, "y_nm": 0}]}),
+        );
+        let track_facts = scan(&make_project(&with_track));
+        assert!(!track_facts.pending);
+        assert!(track_facts.extended);
+        assert_eq!(track_facts.pending_checks, 0);
+
+        // Via present (no tracks): routing takes priority, so pending checks are skipped while `extended` is still scanned.
+        let mut with_via = Session::default();
+        with_via.open_snapshot(base_snapshot);
+        apply(&mut with_via, ADD_VIA, json!({"at": {"x_nm": 5_000_000, "y_nm": 0}, "via_diameter_nm": 600_000, "via_drill_nm": 300_000}));
+        let via_facts = scan(&make_project(&with_via));
+        assert!(!via_facts.pending);
+        assert!(via_facts.extended);
+        assert_eq!(via_facts.pending_checks, 0);
     }
 }
