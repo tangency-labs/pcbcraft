@@ -1141,10 +1141,10 @@ mod regeneration {
             tests::{copper_layers, routed_fixture},
         };
         use crate::board::update::{
-            BASELINE_NET_TERMINALS_PER_UNIT, BaselineSteps, DISPLAY_FORMAT, NET_ORIGIN_FORMAT, NetState, PartInstanceState, TerminalKey,
+            BASELINE_NET_TERMINALS_PER_UNIT, BaselineSteps, DISPLAY_FORMAT, NET_ORIGIN_FORMAT, NetState, Package, PartInstanceState, TerminalKey,
             take_baseline_terminals_stepped,
         };
-        use crate::library::MAX_TERMINALS;
+        use crate::library::{MAX_TERMINALS, parts::PadIds};
         use crate::persistence::{BoardSizeCheck, ENTRY_POINT, decode_documents, project_board_path, take_board_record_writes};
         use std::sync::Arc;
 
@@ -1189,10 +1189,35 @@ mod regeneration {
             board_data.tracks.sort_by_key(|item| item.id);
             board_data.teardrops.sort_by_key(|item| item.id);
 
+            let base_def = board_data.definitions.values().next().unwrap().as_ref().clone();
+            let base_pad = base_def.pads[0].clone();
+            let pins: Vec<String> = (1..=MAX_TERMINALS).map(|pin| format!("P{pin:04}")).collect();
+            let mut wide_def = base_def;
+            wide_def.id = "wide-1024".into();
+            wide_def.name = "Wide 1024".into();
+            wide_def.pads = pins
+                .iter()
+                .enumerate()
+                .map(|(index, pin)| {
+                    let mut pad = base_pad.clone();
+                    pad.number = pin.clone();
+                    pad.center = point((index % 32) as i64 * 1_000_000, (index / 32) as i64 * 1_000_000);
+                    pad
+                })
+                .collect();
+            let wide_key = (wide_def.library.clone(), wide_def.id.clone(), wide_def.revision);
+            board_data.definitions.insert(wide_key.clone(), Arc::new(wide_def));
+            let wide_package = Package {
+                library: Some(wide_key.0),
+                definition: wide_key.1,
+                revision: wide_key.2,
+                mapping: pins.iter().map(|pin| (pin.clone(), PadIds::One(pin.clone()))).collect(),
+                unconnected_pads: Vec::new(),
+            };
+
             let baseline = Arc::make_mut(board_data.baseline.as_mut().unwrap());
             let template = baseline.components.values().next().unwrap().clone();
             let stores_display = matches!(baseline.format.as_str(), DISPLAY_FORMAT | NET_ORIGIN_FORMAT);
-            let pins: Vec<String> = (1..=MAX_TERMINALS).map(|pin| format!("P{pin:04}")).collect();
             let mut wide_terminals = Vec::with_capacity(WIDE_TERMINALS);
             for part_index in 0..WIDE_PARTS {
                 let id = 20_000 + part_index as u64;
@@ -1206,7 +1231,7 @@ mod regeneration {
                         value: template.value.clone(),
                         primary_quantity: template.primary_quantity.clone(),
                         terminals: pins.clone(),
-                        package: None,
+                        package: Some(wide_package.clone()),
                     },
                 );
                 for pin in &pins {
