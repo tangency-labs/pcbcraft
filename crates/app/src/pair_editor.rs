@@ -229,24 +229,24 @@ impl PcbApp {
             if !current {
                 edit.preparation.cancel();
             }
-            if let Some(done) = edit.preparation.poll()
-                && current
-                && done.source.is_current(&self.session)
-            {
-                let result = done.report.and_then(|prepared| {
-                    let prepared = prepared.ok_or_else(|| "Pair preparation canceled".to_owned())?.map_err(|error| error.to_string())?;
-                    self.session.complete_pair_edit(prepared, false).map_err(|error| error.to_string())
-                });
-                match result {
-                    Ok(_) => {
-                        self.file_notice = None;
-                        self.message = None;
-                        self.views.sync(&self.session);
-                        self.repaint_editors(ctx);
-                        return;
+            if let Some(done) = edit.preparation.poll() {
+                if current && done.source.is_current(&self.session) {
+                    let result = done.report.and_then(|prepared| {
+                        let prepared = prepared.ok_or_else(|| "Pair preparation canceled".to_owned())?.map_err(|error| error.to_string())?;
+                        self.session.complete_pair_edit(prepared, false).map_err(|error| error.to_string())
+                    });
+                    match result {
+                        Ok(_) => {
+                            self.file_notice = None;
+                            self.message = None;
+                            self.views.sync(&self.session);
+                            self.repaint_editors(ctx);
+                            return;
+                        }
+                        Err(error) => edit.error = Some(error),
                     }
-                    Err(error) => edit.error = Some(error),
                 }
+                ctx.request_repaint();
             }
         } else if current && (discard || selected != edit.selected) {
             edit.select(selected);

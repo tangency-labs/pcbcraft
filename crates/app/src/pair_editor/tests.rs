@@ -478,3 +478,38 @@ fn pair_editor_new_pair_explains_fewer_than_two_active_unpaired_nets_while_exist
     open(&mut h);
     assert!(h.query_by_label(NOTICE).is_none());
 }
+
+/// A deferred pair-edit error completes after the current frame has rendered the busy banner
+/// and disabled form controls, so the dialog must request an immediate repaint instead of
+/// leaving an idle editor stuck in the busy state.
+#[test]
+fn deferred_pair_error_requests_repaint_after_rendering_busy_state() {
+    let (mut h, choices) = fixture().unwrap();
+    open(&mut h);
+    name(&mut h, " leading");
+    select(&mut h, "Positive net", &choices[0].1);
+    select(&mut h, "Negative net", &choices[1].1);
+    let revision = h.state().session.revision();
+    h.get_by_role_and_label(egui::Role::Button, "Save pair").click();
+
+    let mut saw_error_after_busy = false;
+    for _ in 0..32 {
+        h.step();
+        let finished_with_error = matches!(&h.state().dialog, Dialog::Pairs(edit) if !edit.preparation.busy() && edit.error.is_some());
+        if finished_with_error {
+            assert!(h.query_by_label("Checking native document capacity…").is_some());
+            assert!(h.get_by_role_and_label(egui::Role::Button, "Discard pair changes").accesskit_node().is_disabled());
+            assert_eq!(h.output().viewport_output[&egui::ViewportId::ROOT].repaint_delay, Duration::ZERO);
+            saw_error_after_busy = true;
+            break;
+        }
+    }
+    assert!(saw_error_after_busy, "deferred pair edit did not store an error: {:?}", h.state().dialog);
+
+    h.step();
+    assert!(h.query_by_label("Checking native document capacity…").is_none());
+    h.get_by_label("Pair names must be trimmed, nonempty, control-free and at most 200 characters.");
+    assert!(!h.get_by_role_and_label(egui::Role::Button, "Discard pair changes").accesskit_node().is_disabled());
+    assert_eq!(h.state().session.revision(), revision);
+    assert!(h.state().session.project().unwrap().differential_pairs().is_empty());
+}
