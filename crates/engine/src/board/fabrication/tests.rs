@@ -1869,8 +1869,9 @@ struct ReadXnc {
 
 /// Read one drill file with the XNC 2021.11 grammar (§2.10, §3): M48 first, one METRIC unit
 /// in the header before the tool table, `%` ends the header, G05 drill mode, tool selections
-/// and hits, and M30 last. `FMAT,2` and `G90` are the IPC-NC-349 commands legacy readers
-/// expect; they are accepted where they appear and change nothing. Anything else fails.
+/// and hits, and M30 last. `FMAT,2`, `G90` and one-digit tool numbers in declarations are the
+/// IPC-NC-349 forms legacy readers expect; they are accepted where they appear and change
+/// nothing. Anything else fails.
 fn read_xnc(text: &str) -> Result<ReadXnc, String> {
     let mut read = ReadXnc::default();
     let mut lines = text.lines();
