@@ -595,7 +595,8 @@ mod tests {
             .unwrap();
         assert_eq!(session.snapshot().objects.values().filter(|p| is_courtyard_primitive(p)).count(), 1);
         let generated_id = *session.snapshot().objects.iter().find(|(_, p)| is_courtyard_primitive(p)).unwrap().0;
-        let (pts, _) = courtyard_polygon(&session.snapshot().objects[&generated_id]).unwrap();
+        let generated = session.snapshot();
+        let (pts, _) = courtyard_polygon(&generated.objects[&generated_id]).unwrap();
         assert_eq!(metrics(pts).unwrap().width_nm, 2_600_000);
 
         // Round-trip through Item encode/decode and FootprintDefinition.
@@ -608,7 +609,8 @@ mod tests {
         // Undo restores the 0.25 mm courtyard in one step.
         session.execute(rev, Action::Undo).unwrap();
         let restored_id = *session.snapshot().objects.iter().find(|(_, p)| is_courtyard_primitive(p)).unwrap().0;
-        let (pts, _) = courtyard_polygon(&session.snapshot().objects[&restored_id]).unwrap();
+        let restored = session.snapshot();
+        let (pts, _) = courtyard_polygon(&restored.objects[&restored_id]).unwrap();
         assert_eq!(metrics(pts).unwrap().width_nm, 2_100_000);
     }
 

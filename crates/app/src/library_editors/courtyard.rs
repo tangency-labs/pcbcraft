@@ -520,7 +520,10 @@ impl PcbApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
 
     fn click_at(h: &mut Harness<'_, PcbApp>, pos: Pos2) {
         h.hover_at(pos);
@@ -1061,8 +1064,8 @@ mod tests {
         h.hover_at(area.center());
         h.run();
 
-        // Simulate Cmd+C where Command is released in the same input batch.
-        h.input_mut().modifiers = egui::Modifiers::NONE;
+        // Simulate Cmd+C where Command is released in the same input batch: the C press still
+        // carries Command, while no modifier is held by the time the batch is read.
         h.input_mut().events.push(egui::Event::Key {
             key: egui::Key::C,
             physical_key: None,
