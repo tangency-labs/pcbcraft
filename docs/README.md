@@ -60,7 +60,7 @@ supported versions and deferred work before extending a format or consumer.
 | Typed quantities | [Quantities and units](quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](hierarchical-clipboard-contract.md) |
 | Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Exact circular copper records](circular-copper-records.md) · [Straight via teardrop records](teardrop-records.md) · [Walkaround route planning](route-planning.md) |
-| Solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) |
+| Solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) · [3D model records, bindings and frames](3d-model-records.md) (proposed) · [Model record schema](schemas/model-v1.schema.json) |
 | Shared interface toolkit | [Craft UI migration and current pin](shared-ui-migration.md) |
 | Local transport | [Craft control protocol](../crates/craft-control/README.md) |
 
