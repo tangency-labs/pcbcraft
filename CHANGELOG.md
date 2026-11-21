@@ -2,6 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
+A self-contained KiCad 6–9 schematic can be imported as a new project, through
+`project.import_kicad_schematic` or `pcbcraft-cli import-kicad`. Symbols, units,
+references, values, fields, power symbols, wires, labels and no-connects carry
+over; the import refuses, with reasons, anything that would change which pins
+connect, and lists what it left out. See [KiCad schematic import](docs/kicad-import.md) (#60).
+
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
 its old slot. Splitting a pane itself opens another view. Separate Split window

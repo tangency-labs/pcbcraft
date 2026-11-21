@@ -1836,3 +1836,21 @@ integrated `solidcraft-ui-text` Hebrew catalogs (`crates/chrome/assets/shared-ui
 added RTL arrow/label positioning in `controls::collapsing`, and wired language
 selection into `crates/app/src/preferences.rs`. No GPL, KiCad, or `pcbcraft-gpl`
 source code or binary font assets were copied or added.
+
+## Adapted from CircuitCraft
+
+[CircuitCraft](https://github.com/slafebre/circuitcraft), revision
+`83532ab648d58de49adc0a73714b5c37594ee4d8`. Copyright (c) 2026 The CircuitCraft
+contributors. MIT OR Apache-2.0, the same texts as [LICENSE-MIT](LICENSE-MIT) and
+[LICENSE-APACHE](LICENSE-APACHE). CircuitCraft's KiCad readers were written from KiCad's
+published file format documentation and from reading schematic and board files of public
+designs saved by KiCad (listed in the pull request); no KiCad or other GPL EDA source was
+consulted, and none of those files is included here.
+
+| PCBCraft file | CircuitCraft source | What changed |
+|---|---|---|
+| `crates/kicad/src/sexp.rs` | `crates/import/src/sexp.rs` | Kept the bounded one-item-at-a-time reader and node accessors. Uses this crate's error type. Tests rewritten. |
+| `crates/kicad/src/schematic.rs` | `crates/import/src/kicad_sch.rs` | Kept the item dispatch, paper sizes, unit/style naming, pin, label, drawing and text reading, the `extends` resolution and the reference lookup order. Reads one file into a KiCad-shaped model instead of CircuitCraft's schematic model; sheet files are not followed. Tests and fixtures are new. |
+
+The test fixtures in `crates/kicad/tests/fixtures/` are original, written by hand for
+PCBCraft; see the README there.
