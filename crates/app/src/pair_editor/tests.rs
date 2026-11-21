@@ -435,3 +435,46 @@ fn pair_editor_needs_review_mark_reviewed_and_chooser_filtering() {
     h.get_by_label(&format!("Needs review: {retired_reason}"));
     assert!(h.get_by_role_and_label(egui::Role::Button, "Mark reviewed").accesskit_node().is_disabled());
 }
+
+/// New pair counts active unpaired nets rather than all retained members, explains cleanly when
+/// fewer than two active unpaired nets are available, and keeps existing pairs editable and removable.
+#[test]
+fn pair_editor_new_pair_explains_fewer_than_two_active_unpaired_nets_while_existing_pair_stays_editable() {
+    const NOTICE: &str = "At least two active unpaired nets are needed to create a new pair.";
+    let (mut h, choices) = fixture().unwrap();
+    let pair = nets::new_pair_id().unwrap();
+    let rev = h.state().session.revision();
+    h.state_mut().run(nets::CREATE_PAIR, &json!({"pair":pair,"name":"Data","positive":choices[0].0,"negative":choices[1].0,"expected_revision":rev}));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    h.run();
+
+    // Three active nets exist, but two are already paired, leaving only one active unpaired net.
+    open(&mut h);
+    h.get_by_label(NOTICE);
+    assert!(h.get_by_role_and_label(egui::Role::Button, "Save pair").accesskit_node().is_disabled());
+
+    // Selecting the existing pair hides the new-pair notice and still allows editing and saving.
+    let pair_label = choice_label("Data", pair);
+    select(&mut h, "Existing pair", &pair_label);
+    assert!(h.query_by_label(NOTICE).is_none());
+    let before_rename = h.state().session.revision();
+    name(&mut h, "DataRenamed");
+    click(&mut h, "Save pair");
+    wait_for_pair(&mut h, before_rename + 1).unwrap();
+    assert_eq!(h.state().session.project().unwrap().differential_pairs()[0].name, "DataRenamed");
+
+    // Reopening and selecting the renamed pair still allows removing it.
+    let renamed_label = choice_label("DataRenamed", pair);
+    open(&mut h);
+    h.get_by_label(NOTICE);
+    select(&mut h, "Existing pair", &renamed_label);
+    assert!(h.query_by_label(NOTICE).is_none());
+    let before_remove = h.state().session.revision();
+    click(&mut h, "Remove pair");
+    wait_for_pair(&mut h, before_remove + 1).unwrap();
+    assert!(h.state().session.project().unwrap().differential_pairs().is_empty());
+
+    // Once all three active nets are unpaired again, New pair shows no shortage notice.
+    open(&mut h);
+    assert!(h.query_by_label(NOTICE).is_none());
+}

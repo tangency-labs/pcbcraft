@@ -187,8 +187,9 @@ impl PcbApp {
                                 .clicked();
                         }
                     });
-                    if edit.members.len() < 2 {
-                        ui.label("At least two persistent nets are needed to create a pair.");
+                    let active_unpaired = edit.active_members.iter().filter(|id| !other_paired.contains(id)).count();
+                    if edit.selected.is_none() && active_unpaired < 2 {
+                        ui.label("At least two active unpaired nets are needed to create a new pair.");
                     }
                     if let Some(pair) = current_pair.as_ref()
                         && let nets::PairState::NeedsReview { reason } = &pair.state
