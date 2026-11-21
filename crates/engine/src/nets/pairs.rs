@@ -149,25 +149,31 @@ impl Registry {
         let mut members = BTreeSet::new();
         let mut previous = None;
         for pair in self.pairs.iter() {
-            if pair.id.is_nil() || previous.is_some_and(|id| id >= pair.id) || nets.contains(&pair.id) {
-                return Err("Pairs require unique non-nil UUIDs in canonical order, distinct from net identities.".into());
-            }
-            if pair.positive == pair.negative || !nets.contains(&pair.positive) || !nets.contains(&pair.negative) {
-                return Err("Pair members must be distinct persistent nets in the owning registry.".into());
-            }
-            if !members.insert(pair.positive) || !members.insert(pair.negative) {
-                return Err("A net may belong to at most one differential pair.".into());
-            }
-            if !valid_text(&pair.name) {
-                return Err("Pair names must be trimmed, nonempty, control-free and at most 200 characters.".into());
-            }
-            if let PairState::NeedsReview { reason } = &pair.state
-                && !valid_text(reason)
-            {
-                return Err("Pair review reasons must be trimmed, nonempty, control-free and at most 200 characters.".into());
-            }
-            previous = Some(pair.id);
+            validate_pair(pair, &nets, &mut members, &mut previous)?;
         }
         Ok(())
     }
+}
+
+/// Validate one differential pair row against the registry's known net IDs and canonical order.
+pub(super) fn validate_pair(pair: &Pair, nets: &BTreeSet<Uuid>, members: &mut BTreeSet<Uuid>, previous: &mut Option<Uuid>) -> Result<(), String> {
+    if pair.id.is_nil() || previous.is_some_and(|id| id >= pair.id) || nets.contains(&pair.id) {
+        return Err("Pairs require unique non-nil UUIDs in canonical order, distinct from net identities.".into());
+    }
+    if pair.positive == pair.negative || !nets.contains(&pair.positive) || !nets.contains(&pair.negative) {
+        return Err("Pair members must be distinct persistent nets in the owning registry.".into());
+    }
+    if !members.insert(pair.positive) || !members.insert(pair.negative) {
+        return Err("A net may belong to at most one differential pair.".into());
+    }
+    if !valid_text(&pair.name) {
+        return Err("Pair names must be trimmed, nonempty, control-free and at most 200 characters.".into());
+    }
+    if let PairState::NeedsReview { reason } = &pair.state
+        && !valid_text(reason)
+    {
+        return Err("Pair review reasons must be trimmed, nonempty, control-free and at most 200 characters.".into());
+    }
+    *previous = Some(pair.id);
+    Ok(())
 }

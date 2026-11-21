@@ -132,6 +132,11 @@ impl Report {
     }
 }
 
+/// The identical terminal-intent rule used by transactions and the folder writer.
+pub(crate) fn valid_terminal_markers(part: &crate::schematic::PartInstance) -> bool {
+    part.no_connects.len() <= MAX_TERMINALS && part.no_connects.keys().all(|token| PinNumber::new(token).is_some())
+}
+
 impl Project {
     /// Validate marker ownership and adopt the metadata required to encode authored intent.
     /// Marker-free legacy projects retain their representation. Call this on a disposable
@@ -153,10 +158,7 @@ impl Project {
 
     /// Enforce intent budgets at every publication/encoding boundary, including compound pastes.
     pub(crate) fn validate_no_connects(&self) -> Result<(), String> {
-        if self
-            .components
-            .values()
-            .any(|part| part.no_connects.len() > MAX_TERMINALS || part.no_connects.keys().any(|token| PinNumber::new(token).is_none()))
+        if !self.components.values().all(valid_terminal_markers)
             || self.no_connect_count() > MAX_MARKERS
             || self.sheets.iter().any(|sheet| sheet.no_connect_ends.iter().any(|id| !sheet.junctions.contains_key(id)))
         {

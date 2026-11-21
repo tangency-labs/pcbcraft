@@ -472,12 +472,16 @@ impl Board {
 
     /// Distinguish physically eligible desired intent from accepted packages;
     /// excluded live choices remain authored without requiring a physical update.
+    #[cfg(test)]
     pub(crate) fn has_pending_package_intent(&self, project: &crate::Project) -> bool {
-        self.baseline.as_ref().is_some_and(|baseline| {
-            self.assignments
-                .values()
-                .any(|assignment| project.component_is_board_eligible(assignment.component) && !baseline.validate_assignment(assignment))
-        })
+        self.assignments.values().any(|assignment| self.has_pending_assignment(project, assignment))
+    }
+
+    /// Compare one eligible desired choice with the accepted baseline.
+    pub(crate) fn has_pending_assignment(&self, project: &crate::Project, assignment: &assignment::Assignment) -> bool {
+        self.baseline
+            .as_ref()
+            .is_some_and(|baseline| project.component_is_board_eligible(assignment.component) && !baseline.validate_assignment(assignment))
     }
     /// Find the instance's physical placement without scanning other footprints.
     pub(crate) fn footprint_for_part_instance(&self, instance: u64) -> Option<&Footprint> {

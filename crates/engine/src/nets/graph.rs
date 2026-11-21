@@ -84,80 +84,216 @@ impl Project {
     }
 }
 
+/// Incremental builder for [`Graph`] so native Save validation yields between sheets,
+/// symbols, labels, ports, sheet symbols and network anchor indexing. Phase 0 warms
+/// `project.borrowed_electrical_connectivity()` without cloning it (building the snapshot's
+/// `OnceLock` connectivity once if not yet cached) and indexes label/port endpoints to their
+/// connectivity group; phase 3 sorts the derived networks vector in one step; all other phases
+/// advance one sheet item or one network anchor entry per step.
+#[derive(Default)]
+pub(super) struct GraphBuilder {
+    phase: u8,
+    substep: u8,
+    endpoint_groups: BTreeMap<WireEndpoint, usize>,
+    groups: BTreeMap<Group, Network>,
+    endpoints: BTreeMap<(uuid::Uuid, WireEndpoint), Anchor>,
+    sheet_index: usize,
+    current_occurrence: Option<uuid::Uuid>,
+    item_index: usize,
+    networks: Vec<Network>,
+    current_anchor: Option<Anchor>,
+    by_anchor: BTreeMap<Anchor, usize>,
+}
+
+impl GraphBuilder {
+    fn add_anchor(
+        &mut self,
+        graph: &crate::schematic::Connectivity,
+        sheet_id: uuid::Uuid,
+        endpoint: WireEndpoint,
+        anchor: Anchor,
+        name: Option<&str>,
+    ) -> Result<(), String> {
+        anchor.validate_form()?;
+        let index = match endpoint {
+            WireEndpoint::Terminal(pin) => graph.net_index_for(pin),
+            WireEndpoint::NetLabel(_) | WireEndpoint::Label(_) => self.endpoint_groups.get(&endpoint).copied(),
+            _ => graph.net_index_for_endpoint(endpoint),
+        };
+        let group = index.map_or_else(|| Group::Isolated(anchor.clone()), Group::Connected);
+        let network = self.groups.entry(group).or_insert_with(|| {
+            let names = index.map_or_else(BTreeSet::new, |idx| graph.net_names(idx).iter().cloned().collect());
+            Network { anchors: BTreeSet::new(), names }
+        });
+        network.anchors.insert(anchor.clone());
+        if let Some(name) = name {
+            network.names.insert(name.to_owned());
+        }
+        self.endpoints.insert((sheet_id, endpoint), anchor);
+        Ok(())
+    }
+
+    /// Advance one graph-construction step, returning `Some(graph)` when complete.
+    pub(super) fn step(&mut self, project: &Project) -> Result<Option<Graph>, String> {
+        match self.phase {
+            0 => {
+                let graph = project.borrowed_electrical_connectivity();
+                self.endpoint_groups.clear();
+                for index in 0..graph.nets.len() {
+                    for endpoint in graph.endpoints(index) {
+                        if matches!(endpoint, WireEndpoint::NetLabel(_) | WireEndpoint::Label(_)) {
+                            self.endpoint_groups.entry(endpoint).or_insert(index);
+                        }
+                    }
+                }
+                self.phase = 1;
+            }
+            1 => {
+                let Some(sheet) = project.sheets.get(self.sheet_index) else {
+                    self.sheet_index = 0;
+                    self.item_index = 0;
+                    self.current_occurrence = None;
+                    self.endpoint_groups.clear();
+                    self.phase = 2;
+                    return Ok(None);
+                };
+                let occurrence = match self.current_occurrence {
+                    Some(id) => id,
+                    None => {
+                        let target = SheetTarget { project: project.id, sheet: sheet.sheet_id };
+                        let id = project.sheet_occurrence(target).ok_or("Missing occurrence while resolving net anchors.")?.id;
+                        self.current_occurrence = Some(id);
+                        id
+                    }
+                };
+                let graph = project.borrowed_electrical_connectivity();
+                let scope = project.net_scope();
+                let sheet_id = sheet.sheet_id;
+                match self.substep {
+                    0 => {
+                        if let Some(symbol) = sheet.symbols.get(self.item_index) {
+                            for terminal in symbol.terminals() {
+                                // Bare pins are not networks. Avoid allocating persistent-address groups for
+                                // every unused pin on large devices; a connected appearance includes aliases.
+                                if graph.net_index_for(terminal).is_none() {
+                                    continue;
+                                }
+                                let anchor = Anchor {
+                                    kind: AnchorKind::Terminal,
+                                    project: project.id,
+                                    scope,
+                                    occurrence: uuid::Uuid::nil(),
+                                    object: symbol.component,
+                                    terminal: terminal.number().into(),
+                                };
+                                self.add_anchor(graph, sheet_id, WireEndpoint::Terminal(terminal), anchor, None)?;
+                            }
+                            self.item_index += 1;
+                        } else {
+                            self.item_index = 0;
+                            self.substep = 1;
+                        }
+                    }
+                    1 => {
+                        if let Some(label) = sheet.net_labels.get(self.item_index) {
+                            let anchor =
+                                Anchor { kind: AnchorKind::Label, project: project.id, scope, occurrence, object: label.id, terminal: String::new() };
+                            self.add_anchor(graph, sheet_id, WireEndpoint::NetLabel(label.id), anchor, Some(&label.name))?;
+                            self.item_index += 1;
+                        } else {
+                            self.item_index = 0;
+                            self.substep = 2;
+                        }
+                    }
+                    2 => {
+                        if let Some(port) = sheet.labels.get(self.item_index) {
+                            let anchor =
+                                Anchor { kind: AnchorKind::Port, project: project.id, scope, occurrence, object: port.id, terminal: String::new() };
+                            self.add_anchor(graph, sheet_id, WireEndpoint::Label(port.id), anchor, Some(&port.name))?;
+                            self.item_index += 1;
+                        } else {
+                            self.item_index = 0;
+                            self.substep = 0;
+                            self.current_occurrence = None;
+                            self.sheet_index += 1;
+                        }
+                    }
+                    _ => return Err("invalid net graph build substep".into()),
+                }
+            }
+            2 => {
+                // A parent pin and its child port have one sheet-owned logical identity.
+                let Some(sheet) = project.sheets.get(self.sheet_index) else {
+                    self.sheet_index = 0;
+                    self.item_index = 0;
+                    self.phase = 3;
+                    return Ok(None);
+                };
+                if let Some(block) = sheet.subsheets.get(self.item_index) {
+                    for pin in project.sheet_pins(block) {
+                        let anchor = self.endpoints.get(&(block.child, WireEndpoint::Label(pin.label.id))).cloned().ok_or("Missing port anchor.")?;
+                        self.endpoints.insert((sheet.sheet_id, WireEndpoint::SheetPin(pin.label.id)), anchor);
+                    }
+                    self.item_index += 1;
+                } else {
+                    self.item_index = 0;
+                    self.sheet_index += 1;
+                }
+            }
+            3 => {
+                let mut networks: Vec<_> = std::mem::take(&mut self.groups).into_values().collect();
+                networks.sort_by(|a, b| a.anchors.first().cmp(&b.anchors.first()));
+                self.networks = networks;
+                self.item_index = 0;
+                self.current_anchor = None;
+                self.phase = 4;
+            }
+            4 => {
+                if let Some(network) = self.networks.get(self.item_index) {
+                    let next_anchor = match &self.current_anchor {
+                        None => network.anchors.first(),
+                        Some(prev) => network.anchors.range((std::ops::Bound::Excluded(prev), std::ops::Bound::Unbounded)).next(),
+                    };
+                    if let Some(anchor) = next_anchor {
+                        if self.by_anchor.insert(anchor.clone(), self.item_index).is_some() {
+                            return Err("A physical-terminal identity appears in different electrical networks.".into());
+                        }
+                        if network.anchors.last() == Some(anchor) {
+                            self.current_anchor = None;
+                            self.item_index += 1;
+                        } else {
+                            self.current_anchor = Some(anchor.clone());
+                        }
+                    } else {
+                        self.current_anchor = None;
+                        self.item_index += 1;
+                    }
+                } else {
+                    let graph = Graph {
+                        networks: std::mem::take(&mut self.networks),
+                        by_anchor: std::mem::take(&mut self.by_anchor),
+                        endpoints: std::mem::take(&mut self.endpoints),
+                    };
+                    *self = Self::default();
+                    return Ok(Some(graph));
+                }
+            }
+            _ => return Err("invalid net graph build phase".into()),
+        }
+        Ok(None)
+    }
+}
+
 impl Graph {
     /// Build from the existing complete project graph, deduplicating repeated physical-terminal
     /// appearances and including standalone authored labels/ports. Does not allocate net IDs.
     pub fn build(project: &Project) -> Result<Self, String> {
-        let graph = project.electrical_connectivity();
-        let scope = project.net_scope();
-        let mut groups = BTreeMap::<Group, Network>::new();
-        let mut endpoints = BTreeMap::new();
-        for sheet in project.sheets() {
-            let own = project.for_sheet(sheet.target).ok_or("Unknown sheet while resolving net anchors.")?;
-            let occurrence = project.sheet_occurrence(sheet.target).ok_or("Missing occurrence while resolving net anchors.")?.id;
-            let mut add = |endpoint: WireEndpoint, kind: AnchorKind, object: u64, terminal: String, name: Option<&str>| -> Result<(), String> {
-                let anchor = Anchor {
-                    kind,
-                    project: project.id,
-                    scope,
-                    occurrence: if kind == AnchorKind::Terminal { uuid::Uuid::nil() } else { occurrence },
-                    object,
-                    terminal,
-                };
-                anchor.validate_form()?;
-                let index = graph.net_index_for_endpoint(endpoint);
-                let group = index.map_or_else(|| Group::Isolated(anchor.clone()), Group::Connected);
-                let network = groups.entry(group).or_insert_with(|| Network { anchors: BTreeSet::new(), names: BTreeSet::new() });
-                network.anchors.insert(anchor.clone());
-                if let Some(index) = index {
-                    network.names.extend(graph.net_names(index).iter().cloned());
-                }
-                if let Some(name) = name {
-                    network.names.insert(name.to_owned());
-                }
-                endpoints.insert((sheet.target.id(), endpoint), anchor);
-                Ok(())
-            };
-            for symbol in own.symbols() {
-                for terminal in symbol.terminals() {
-                    // Bare pins are not networks. Avoid allocating persistent-address groups for
-                    // every unused pin on large devices; a connected appearance includes aliases.
-                    if graph.net_index_for(terminal).is_none() {
-                        continue;
-                    }
-                    add(WireEndpoint::Terminal(terminal), AnchorKind::Terminal, symbol.component, terminal.number().into(), None)?;
-                }
-            }
-            for label in own.net_labels() {
-                add(WireEndpoint::NetLabel(label.id), AnchorKind::Label, label.id, String::new(), Some(&label.name))?;
-            }
-            for port in own.hierarchical_labels() {
-                add(WireEndpoint::Label(port.id), AnchorKind::Port, port.id, String::new(), Some(&port.name))?;
+        let mut builder = GraphBuilder::default();
+        loop {
+            if let Some(graph) = builder.step(project)? {
+                return Ok(graph);
             }
         }
-        // A parent pin and its child port have one sheet-owned logical identity.
-        for sheet in project.sheets() {
-            let own = project.for_sheet(sheet.target).ok_or("Unknown parent sheet while resolving net anchors.")?;
-            for block in own.sheet_symbols() {
-                for pin in own.sheet_pins(block) {
-                    let child =
-                        project.sheets.iter().find(|sheet| sheet.labels.iter().any(|label| label.id == pin.label.id)).ok_or("Missing child port.")?;
-                    let anchor = endpoints.get(&(child.sheet_id, WireEndpoint::Label(pin.label.id))).cloned().ok_or("Missing port anchor.")?;
-                    endpoints.insert((sheet.target.id(), WireEndpoint::SheetPin(pin.label.id)), anchor);
-                }
-            }
-        }
-        let mut networks: Vec<_> = groups.into_values().collect();
-        networks.sort_by(|a, b| a.anchors.first().cmp(&b.anchors.first()));
-        let mut by_anchor = BTreeMap::new();
-        for (index, network) in networks.iter().enumerate() {
-            for anchor in &network.anchors {
-                if by_anchor.insert(anchor.clone(), index).is_some() {
-                    return Err("A physical-terminal identity appears in different electrical networks.".into());
-                }
-            }
-        }
-        Ok(Self { networks, by_anchor, endpoints })
     }
 
     /// Resolve a validated terminal/label/port command target in its explicit sheet context.
@@ -210,5 +346,116 @@ impl Graph {
             .enumerate()
             .flat_map(|(index, network)| network.anchors.iter().cloned().map(move |anchor| (anchor, index)))
             .collect();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CONNECT_PINS, DRAW_WIRE, PLACE_RESISTOR, Session};
+    use serde_json::{Value, json};
+
+    fn apply(session: &mut Session, command: &str, mut params: Value) {
+        params["expected_revision"] = json!(session.revision());
+        session.apply(command, &params).unwrap();
+    }
+
+    /// `GraphBuilder` indexes label/port groups once, populates connected group names on creation,
+    /// preserves isolated labels, and yields once per anchor during phase 4 indexing.
+    #[test]
+    fn graph_builder_yields_per_anchor_and_preserves_connected_and_isolated_names() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board": false})).unwrap();
+        let mut pins = Vec::new();
+        for index in 0..3 {
+            apply(&mut session, PLACE_RESISTOR, json!({"x_nm": index as i64 * 25_400_000, "y_nm": 0}));
+            pins.push(json!({"symbol": session.project().unwrap().symbols().last().unwrap().id(), "terminal": "1"}));
+        }
+        apply(&mut session, CONNECT_PINS, json!({"from": pins[0], "to": pins[1]}));
+        apply(&mut session, CONNECT_PINS, json!({"from": pins[1], "to": pins[2]}));
+        let pin_pos = |session: &Session, idx: usize| {
+            let project = session.project().unwrap();
+            let terminal = project.symbols()[idx].terminals()[0];
+            project.terminal_position(terminal).unwrap()
+        };
+        let p0 = pin_pos(&session, 0);
+        let p2 = pin_pos(&session, 2);
+        apply(&mut session, crate::net_labels::ADD, json!({"name": "SIG_A", "style": "local", "x_nm": p0.x_nm, "y_nm": p0.y_nm + 25_400_000}));
+        apply(&mut session, crate::net_labels::ADD, json!({"name": "SIG_B", "style": "local", "x_nm": p2.x_nm, "y_nm": p2.y_nm + 25_400_000}));
+        apply(
+            &mut session,
+            crate::net_labels::ADD,
+            json!({"name": "ISOLATED", "style": "local", "x_nm": p2.x_nm + 25_400_000, "y_nm": p2.y_nm + 25_400_000}),
+        );
+        let labels: Vec<u64> = session.project().unwrap().net_labels().iter().map(|label| label.id).collect();
+        assert_eq!(labels.len(), 3);
+        apply(&mut session, DRAW_WIRE, json!({"from": {"net_label": format!("net-label-{}", labels[0])}, "to": pins[0], "bends": []}));
+        apply(&mut session, DRAW_WIRE, json!({"from": {"net_label": format!("net-label-{}", labels[1])}, "to": pins[2], "bends": []}));
+
+        let project = session.project().unwrap();
+        let mut builder = GraphBuilder::default();
+        let mut phase4_steps = 0usize;
+        let graph = loop {
+            let in_phase4 = builder.phase == 4;
+            let done = builder.step(project).unwrap();
+            if in_phase4 {
+                phase4_steps += 1;
+            }
+            if let Some(graph) = done {
+                break graph;
+            }
+        };
+
+        let total_anchors: usize = graph.networks.iter().map(|network| network.anchors.len()).sum();
+        assert!(total_anchors >= 6);
+        assert!(phase4_steps > graph.networks.len());
+        assert_eq!(phase4_steps, total_anchors + 1);
+
+        let root_sheet = project.sheets().next().unwrap().target;
+        let label_a = graph.endpoint_anchor(root_sheet, WireEndpoint::NetLabel(labels[0])).unwrap();
+        let label_b = graph.endpoint_anchor(root_sheet, WireEndpoint::NetLabel(labels[1])).unwrap();
+        let isolated = graph.endpoint_anchor(root_sheet, WireEndpoint::NetLabel(labels[2])).unwrap();
+        let connected_idx = graph.network(label_a).unwrap();
+        assert_eq!(graph.network(label_b), Some(connected_idx));
+        let connected = &graph.networks[connected_idx];
+        assert_eq!(connected.anchors.len(), 5);
+        assert!(connected.names.contains("SIG_A"));
+        assert!(connected.names.contains("SIG_B"));
+
+        let isolated_idx = graph.network(isolated).unwrap();
+        assert_ne!(isolated_idx, connected_idx);
+        assert_eq!(graph.networks[isolated_idx].anchors.len(), 1);
+        assert!(graph.networks[isolated_idx].names.contains("ISOLATED"));
+
+        let built = Graph::build(project).unwrap();
+        assert_eq!(graph.networks, built.networks);
+        assert_eq!(graph.by_anchor, built.by_anchor);
+        assert_eq!(graph.endpoints, built.endpoints);
+    }
+
+    /// Phase 2 resolves parent sheet pins directly via `block.child` and retains the missing-anchor error.
+    #[test]
+    fn graph_builder_phase2_resolves_sheet_pin_and_rejects_missing_port_anchor() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board": false})).unwrap();
+        apply(&mut session, crate::hierarchy::CREATE_CHILD, json!({"name": "Child", "x_nm": 0, "y_nm": 0}));
+        let root = session.project().unwrap().sheets().next().unwrap().target;
+        let child = session.project().unwrap().sheets().nth(1).unwrap().target;
+        apply(&mut session, crate::hierarchy::ADD_LABEL, json!({"sheet": child.id(), "name": "IN", "direction": "input", "x_nm": 0, "y_nm": 0}));
+
+        let project = session.project().unwrap();
+        let label_id = project.sheets[1].labels[0].id;
+        let graph = Graph::build(project).unwrap();
+        let port_anchor = graph.endpoint_anchor(child, WireEndpoint::Label(label_id)).unwrap();
+        let pin_anchor = graph.endpoint_anchor(root, WireEndpoint::SheetPin(label_id)).unwrap();
+        assert_eq!(pin_anchor, port_anchor);
+
+        let mut builder = GraphBuilder::default();
+        while builder.phase < 2 {
+            assert!(builder.step(project).unwrap().is_none());
+        }
+        assert!(builder.endpoints.remove(&(child.id(), WireEndpoint::Label(label_id))).is_some());
+        let error = builder.step(project).unwrap_err();
+        assert_eq!(error, "Missing port anchor.");
     }
 }

@@ -11,11 +11,14 @@ mod numbering;
 mod pairs;
 pub use pairs::{MAX_PAIR_NAME_CHARS, MAX_PAIRS, Pair, PairState};
 mod reconcile;
+mod record_encoding;
+pub(crate) use record_encoding::RecordEncoding;
 mod selection;
 mod validation;
 pub(crate) use anchor::schema as anchor_schema;
 pub use anchor::{Anchor, AnchorKind, Scope, ScopeKind};
 pub use commands::{PROMOTE, RESOLVE_AMBIGUITY};
+pub(crate) use validation::RegistryValidation;
 
 use crate::board::update::SourceCapture;
 use serde::{Deserialize, Serialize};
@@ -141,6 +144,12 @@ impl Registry {
             .max()
             .unwrap_or(0)
     }
+    /// Check a validated registry's canonical UUID order without scanning the full list.
+    /// Historical records count as registered; callers needing authority check state separately.
+    pub(crate) fn has_canonical_record(&self, id: Uuid) -> bool {
+        self.records.binary_search_by_key(&id, |record| record.id).is_ok()
+    }
+
     /// Resolve an exact identity, including historical reservations, without promoting a net.
     pub fn record(&self, id: Uuid) -> Option<&Record> {
         self.records.iter().find(|record| record.id == id)

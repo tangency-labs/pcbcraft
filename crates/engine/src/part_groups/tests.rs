@@ -152,6 +152,21 @@ fn legacy_memberships_keep_their_bytes_above_four_thousand_records() {
             if let Some(path) = s.project().unwrap().instances_document_path() {
                 assert_eq!(document(&docs, &path)["format"], "pcbcraft-instances/5");
             }
+            let mut writer = crate::persistence::DocumentsEncoder::new(s.snapshot().unwrap());
+            assert!((0..256).any(|_| {
+                assert!(writer.step(1).unwrap().is_none());
+                writer.grouped_rows_checked() == Some(0)
+            }));
+            for row in 1..=count.div_ceil(MAX_GROUPS) {
+                assert!(writer.step(1).unwrap().is_none());
+                assert_eq!(writer.grouped_rows_checked(), Some(row));
+            }
+            loop {
+                if let Some(incremental) = writer.step(128).unwrap() {
+                    assert_eq!(incremental, docs);
+                    break;
+                }
+            }
         }
     }
 }
