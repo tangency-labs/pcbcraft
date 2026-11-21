@@ -857,4 +857,132 @@ mod tests {
         assert!(matches!(h.state().dialog, Dialog::None));
         assert_eq!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.as_ref().unwrap().plan.base_revision, 1);
     }
+
+    /// Snapshot state: empty dialog on open, showing only the empty-state prompt with no red findings.
+    #[test]
+    fn shot_empty_dialog() {
+        let (h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        assert!(h.query_by_label("Show findings only (1)").is_none());
+        assert!(h.query_by_label("Previous").is_none());
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
+        assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").accesskit_node().is_disabled());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: pasted valid multi-unit CSV rows ready to stage.
+    #[test]
+    fn shot_pasted_valid_rows() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type,Unit,Side\n\
+                              1,VCC,power_in,power,top\n\
+                              2,GND,power_in,power,bottom\n\
+                              3,SDA/GPIO2,I/O,io,left\n\
+                              4,SCL/GPIO3,I/O,io,left\n\
+                              5,TXD,output,io,right\n\
+                              6,RXD,input,io,right\n"
+                .into();
+            draft.recompute();
+            assert!(draft.preview.can_accept());
+        }
+        h.run();
+        assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: pasted CSV containing duplicate pin number, unknown electrical type and unknown side.
+    #[test]
+    fn shot_rows_with_errors() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type,Unit,Side\n\
+                              1,VCC,power_in,main,top\n\
+                              1,GND,power_in,main,bottom\n\
+                              3,SDA/GPIO2,analog_magic,main,left\n\
+                              4,SCL/GPIO3,I/O,main,diagonal\n"
+                .into();
+            draft.recompute();
+            assert_eq!(draft.preview.rows_with_findings_count(), 3);
+        }
+        h.run();
+        h.get_by_label("Show findings only (3)");
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: column mapping dropdown open on a reordered TSV table.
+    #[test]
+    fn shot_column_mapping() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Signal\tPin\tDir\tBank\tEdge\nTXD\t1\toutput\tio\tright\nRXD\t2\tinput\tio\tleft\n".into();
+            draft.recompute();
+            assert_eq!(draft.mapping.number, Some(1));
+        }
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").click();
+        h.run();
+        h.get_by_label("Unmapped (required)");
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: confirm/stage error rendered inline beside the footer with Refresh revision action.
+    #[test]
+    fn shot_confirm_error() {
+        let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n2,GND,power_in,main,bottom\n".into();
+            draft.recompute();
+        }
+        h.run();
+        h.state_mut().library_editors.edit(doc_id, 0, Action::AddUnit { unit: "aux".into() }).unwrap();
+        h.get_by_label("Stage pin table").scroll_to_me();
+        h.run();
+        click(&mut h, "Stage pin table");
+        h.get_by_label("Refresh revision").scroll_to_me();
+        h.run();
+        assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Refresh revision").accesskit_node().is_disabled());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: native file picker in flight, showing Loading file… and disabling Cancel/Stage.
+    #[test]
+    fn shot_loading() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        let (_hold_sender, receiver) = mpsc::sync_channel(1);
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.file_job = Some(receiver);
+        }
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Loading file…").accesskit_node().is_disabled());
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").accesskit_node().is_disabled());
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: keyboard focus inside the first text field (pin-table source editor).
+    #[test]
+    fn shot_keyboard_focus_first_field() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
+        h.run();
+        assert!(!h.get_by_role(egui::accesskit::Role::MultilineTextInput).accesskit_node().is_disabled());
+        assert!(h.ctx.egui_wants_keyboard_input());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
 }
