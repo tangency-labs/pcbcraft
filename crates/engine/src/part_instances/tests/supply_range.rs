@@ -485,26 +485,23 @@ fn supply_range_limit_matches_draft_writer_reader_and_schema() {
         pad.center = crate::schematic::Point { x_nm: (index as i64 % 16) * 1_270_000, y_nm: (index as i64 / 16 + 1) * 1_270_000 };
         footprint_editor.execute(footprint_editor.revision(), Action::Insert { primitive: Primitive::Pad { pad } }).unwrap();
     }
-    for item in [symbol_editor.snapshot(), footprint_editor.snapshot()] {
-        let prepared = session.execute(sources::PREPARE_PUBLICATION, &json!({"item":item.as_ref(),"documents":&documents})).unwrap();
-        documents.extend(serde_json::from_value::<sources::Documents>(prepared["documents"].clone()).unwrap());
-    }
+    let symbol_prepared =
+        session.execute(sources::PREPARE_PUBLICATION, &json!({"item":symbol_editor.snapshot().as_ref(),"documents":&documents})).unwrap();
+    let symbol_ref: Reference = serde_json::from_value(symbol_prepared["address"].clone()).unwrap();
+    documents.extend(serde_json::from_value::<sources::Documents>(symbol_prepared["documents"].clone()).unwrap());
+    let footprint_prepared =
+        session.execute(sources::PREPARE_PUBLICATION, &json!({"item":footprint_editor.snapshot().as_ref(),"documents":&documents})).unwrap();
+    let footprint_ref: Reference = serde_json::from_value(footprint_prepared["address"].clone()).unwrap();
+    documents.extend(serde_json::from_value::<sources::Documents>(footprint_prepared["documents"].clone()).unwrap());
     load(&mut session, &documents);
 
-    let mut unrated = Draft::new_part(Reference { library: LIBRARY.into(), id: "max-supply".into(), revision: 1 }).unwrap();
+    let mut unrated = Draft::new_part(symbol_ref).unwrap();
     let part = part_mut(&mut unrated);
     part.id = "max-supply-device".into();
     part.name = "Max supply device".into();
     let mapping = (1..=MAX_TERMINAL_RATINGS).map(|index| (index.to_string(), vec![index.to_string()])).collect();
-    part.packages.insert(
-        "test".into(),
-        Package {
-            name: "Max supply package".into(),
-            footprint: Reference { library: LIBRARY.into(), id: "max-supply-package".into(), revision: 1 },
-            mapping,
-            unconnected_pads: Vec::new(),
-        },
-    );
+    part.packages
+        .insert("test".into(), Package { name: "Max supply package".into(), footprint: footprint_ref, mapping, unconnected_pads: Vec::new() });
     let mut editor = DraftSession::new(unrated.clone(), false).unwrap();
     let mut rated = unrated.clone();
     for index in 1..=MAX_TERMINAL_RATINGS {
