@@ -92,6 +92,7 @@ fn pair_commands_reject_invalid_inputs_without_history_changes() {
     let base = json!({"pair":other,"name":"Pair","positive":p,"negative":n,"expected_revision":revision});
     let pair_id_error = "an unused, non-nil pair UUID";
     let member_error = "distinct persistent nets";
+    let active_member_error = "active nets in the owning registry";
     let name_error = "Pair names must be trimmed";
     let stale = "project changed";
     let missing = "Unknown differential pair";
@@ -101,15 +102,15 @@ fn pair_commands_reject_invalid_inputs_without_history_changes() {
         (CREATE_PAIR, "pair", json!(p), pair_id_error),
         (CREATE_PAIR, "negative", json!(p), member_error),
         (CREATE_PAIR, "positive", json!(spare), "at most one differential pair"),
-        (CREATE_PAIR, "positive", json!(foreign), member_error),
-        (CREATE_PAIR, "negative", json!(nil), member_error),
+        (CREATE_PAIR, "positive", json!(foreign), active_member_error),
+        (CREATE_PAIR, "negative", json!(nil), active_member_error),
         (UPDATE_PAIR, "name", json!(""), name_error),
         (UPDATE_PAIR, "name", json!(" leading"), name_error),
         (UPDATE_PAIR, "name", json!("internal\ncontrol"), name_error),
         (UPDATE_PAIR, "name", json!("x".repeat(MAX_PAIR_NAME_CHARS + 1)), name_error),
         (CREATE_PAIR, "expected_revision", json!(revision - 1), stale),
         (UPDATE_PAIR, "pair", json!(other), missing),
-        (UPDATE_PAIR, "negative", json!(foreign), member_error),
+        (UPDATE_PAIR, "negative", json!(foreign), active_member_error),
     ];
     for (command, key, value, expected) in cases {
         let mut params = base.clone();
@@ -442,7 +443,8 @@ fn pair_capacity_reuses_only_exact_net_record_proof() {
     assert!(opened.net_registry.require_records_proof(&opened).is_ok());
 }
 
-/// An explicitly recorded review reason survives member swaps and naming edits.
+/// An explicitly recorded review reason survives naming edits with unchanged endpoints,
+/// while updating endpoints with both members live clears `NeedsReview` back to `Active`.
 #[test]
 fn pair_update_preserves_retained_review_state() {
     let (mut session, [p, n, _]) = pair_fixture(false);
@@ -454,8 +456,11 @@ fn pair_update_preserves_retained_review_state() {
     Arc::make_mut(&mut Arc::make_mut(pairs)[0]).state = reason.clone();
     let project = decode_documents(&encode_documents(Arc::new(project)).unwrap()).unwrap();
     session.open_snapshot(project);
-    apply(&mut session, UPDATE_PAIR, json!({"pair":id,"name":"Changed","positive":n,"negative":p}));
+    apply(&mut session, UPDATE_PAIR, json!({"pair":id,"name":"Renamed","positive":p,"negative":n}));
     assert_eq!(session.project().unwrap().differential_pairs()[0].state, reason);
+    round_trip(&session);
+    apply(&mut session, UPDATE_PAIR, json!({"pair":id,"name":"Changed","positive":n,"negative":p}));
+    assert_eq!(session.project().unwrap().differential_pairs()[0].state, PairState::Active {});
     round_trip(&session);
 }
 

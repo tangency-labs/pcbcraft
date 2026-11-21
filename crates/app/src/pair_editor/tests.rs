@@ -417,7 +417,7 @@ fn pair_editor_needs_review_mark_reviewed_and_chooser_filtering() {
     let retained_label = choice_label("Retained net", negative);
     h.get_by_role_and_label(egui::Role::ComboBox, "Negative net").click();
     h.run();
-    h.get_by_role_and_label(egui::Role::RadioButton, &retained_label).click();
+    h.get_by_role_and_label(egui::Role::Button, &retained_label).click();
     h.run();
 
     // Switching to New pair filters out both the already-paired positive net and the retired negative net.
