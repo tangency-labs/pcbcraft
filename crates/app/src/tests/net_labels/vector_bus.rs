@@ -48,8 +48,25 @@ fn bus_scope_is_offered_in_the_label_form() {
     form_with_scope(&mut h, "D[0..7]", "Bus");
 }
 
-/// Placing a bus label from the form adds one bus label on the clicked point, draws it without
-/// the open-contact ring, and one Undo removes it. The harness ends on the placed bus label.
+/// The open Scope menu lists Local, Global and Bus in that order, and
+/// opening it edits nothing. The harness ends with the menu open.
+#[test]
+fn scope_menu_lists_local_global_and_bus() {
+    let mut h = editor(1400.);
+    let revision = h.state().session.revision();
+    h.key_press(Key::L);
+    h.run();
+    name(&mut h, "D[0..7]");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Scope").click();
+    h.run();
+    let tops = ["Local", "Global", "Bus"].map(|text| option(&h, text).rect().top());
+    assert!(tops[0] < tops[1] && tops[1] < tops[2], "{tops:?}");
+    assert!(matches!(h.state().dialog, Dialog::NetLabel(_)), "the label form stays open under the menu");
+    assert_eq!(h.state().session.revision(), revision, "opening the menu edits nothing");
+}
+
+/// Placing a bus label from the form adds one bus label on the clicked point, and one Undo
+/// removes it. The harness ends on the placed bus label.
 #[test]
 fn bus_label_placed_from_the_form_is_one_undo_step() {
     let mut h = editor(1400.);

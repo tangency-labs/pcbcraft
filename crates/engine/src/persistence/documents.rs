@@ -2683,8 +2683,9 @@ fn saved_document(bytes: &mut Vec<u8>, definition: &crate::schematic::SymbolDefi
 /// before those lists in version 3. Explicit field appearance uses version 4, net-name
 /// appearance version 5, mirrored placements version 6, and live generated contact-leg
 /// provenance version 7; wire-end intent uses version 8. Paper uses version 9, a superset of 8
-/// whose generated-leg and wire-end arrays are optional. Every sheet with paper is version 9;
-/// only a sheet decoded from an older version and not yet adopted keeps its earlier version.
+/// whose generated-leg and wire-end arrays are optional. Every sheet with paper and no bus
+/// label is version 9; only a sheet decoded from an older version and not yet adopted keeps its
+/// earlier version.
 /// A sheet holding a vector bus label uses version 16, a superset of 9 whose paper is optional.
 /// Versions 4 through 9 and 16 retain all three hierarchy/named arrays, including when empty.
 /// Write a nonempty parameter list as a top-level field, one parameter per line so a changed
