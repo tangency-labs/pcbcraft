@@ -517,3 +517,76 @@ fn pair_commands_require_live_members_for_new_or_changed_endpoints() {
     assert!(Arc::ptr_eq(&live_snap, &session.snapshot().unwrap()));
     assert_eq!(bytes(&session), live_bytes);
 }
+
+/// Explicit review (`reviewed: true`) clears `NeedsReview` while keeping unchanged live endpoints,
+/// participates in Undo/Redo, and is refused atomically when either member is no longer active.
+#[test]
+fn pair_mark_reviewed_clears_needs_review_only_when_both_members_are_live() {
+    let (mut session, pins) = circuit(7, false);
+    connect(&mut session, &pins[0], &pins[1]);
+    let wire_n = connect(&mut session, &pins[2], &pins[3]);
+    let positive = promote(&mut session, &pins[0]);
+    let negative = promote(&mut session, &pins[2]);
+    let pair = new_pair_id().unwrap();
+    apply(&mut session, CREATE_PAIR, json!({"pair":pair,"name":"DIFF","positive":positive,"negative":negative}));
+
+    // Add a third pin to `positive`: both members remain Active, but endpoints changed -> NeedsReview.
+    connect(&mut session, &pins[1], &pins[6]);
+    assert!(matches!(session.project().unwrap().net_registry.record(positive).unwrap().state, State::Active {}));
+    assert!(matches!(session.project().unwrap().net_registry.record(negative).unwrap().state, State::Active {}));
+    assert!(matches!(session.project().unwrap().differential_pairs()[0].state, PairState::NeedsReview { .. }));
+
+    // Explicit review with unchanged endpoints clears NeedsReview -> Active and round-trips Undo/Redo.
+    apply(&mut session, UPDATE_PAIR, json!({"pair":pair,"name":"DIFF","positive":positive,"negative":negative,"reviewed":true}));
+    assert_eq!(session.project().unwrap().differential_pairs()[0].state, PairState::Active {});
+    apply(&mut session, "edit.undo", json!({}));
+    assert!(matches!(session.project().unwrap().differential_pairs()[0].state, PairState::NeedsReview { .. }));
+    apply(&mut session, "edit.redo", json!({}));
+    assert_eq!(session.project().unwrap().differential_pairs()[0].state, PairState::Active {});
+
+    // Retire `negative`: explicit review must be refused atomically while a member is not active.
+    apply(&mut session, crate::DELETE_WIRE, json!({"wire":wire_n}));
+    assert!(matches!(session.project().unwrap().differential_pairs()[0].state, PairState::NeedsReview { .. }));
+    let rev = session.revision();
+    let undo = session.undo.len();
+    let redo = session.redo.len();
+    let snap = session.snapshot().unwrap();
+    let before_bytes = bytes(&session);
+    let err = session
+        .apply(UPDATE_PAIR, &json!({"pair":pair,"name":"DIFF","positive":positive,"negative":negative,"reviewed":true,"expected_revision":rev}))
+        .unwrap_err();
+    assert_eq!(err.code(), crate::error_codes::ErrorCode::InvalidParams);
+    assert_eq!((session.revision(), session.undo.len(), session.redo.len()), (rev, undo, redo));
+    assert!(Arc::ptr_eq(&snap, &session.snapshot().unwrap()));
+    assert_eq!(bytes(&session), before_bytes);
+}
+
+/// Net-class catalog edits without topology changes re-verify class bindings without losing
+/// the net-records proof, and refuse a catalog that leaves a bound record dangling.
+#[test]
+fn class_only_edit_revalidates_bindings_and_refuses_dangling_class() {
+    let (mut session, [p, _, _]) = pair_fixture(false);
+    apply(&mut session, crate::net_classes::CREATE, json!({"name":"HS","rules":{}}));
+    let class_id = session.project().unwrap().net_classes().definitions.iter().find(|class| class.name == "HS").unwrap().id;
+    let target = {
+        let project = session.project().unwrap();
+        crate::nets::ClassTarget::Persistent { project: project.id, scope: project.net_scope(), net: p }
+    };
+    apply(&mut session, crate::nets::SET_CLASSES, json!({"target":target,"classes":[class_id]}));
+    let bound = session.snapshot().unwrap();
+    assert!(bound.net_registry.has_records_proof(&bound));
+
+    // Catalog-only update keeps sheets/units/components/net_registry Arcs identical and preserves proof.
+    apply(&mut session, crate::net_classes::UPDATE, json!({"class":class_id,"name":"HS_UPDATED","rules":{"clearance_nm":250000}}));
+    let updated = session.snapshot().unwrap();
+    assert!(Arc::ptr_eq(&bound.sheets, &updated.sheets));
+    assert!(Arc::ptr_eq(&bound.net_registry, &updated.net_registry));
+    assert!(!Arc::ptr_eq(&bound.net_classes, &updated.net_classes));
+    assert!(updated.net_registry.has_records_proof(&updated));
+
+    // Dropping the bound class from the catalog must be refused on the class-only revalidation path.
+    let mut dangling = Project::clone(&updated);
+    dangling.net_classes = Arc::default();
+    let err = dangling.reconcile_nets(Some(&updated)).unwrap_err();
+    assert_eq!(err.code(), crate::error_codes::ErrorCode::InvalidParams);
+}

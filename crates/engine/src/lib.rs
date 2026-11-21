@@ -965,6 +965,8 @@ const PAIR_DRY_RUN: Param = Param {
     required: false,
     summary: "Validate and describe the change without publishing or adding an Undo step",
 };
+const PAIR_REVIEWED: Param =
+    Param { name: "reviewed", kind: ParamKind::Flag, required: false, summary: "Clear NeedsReview when both resulting member nets are active" };
 const UPDATE_PLAN_TOKEN: Param = Param {
     required: true,
     name: "plan_token",
@@ -2600,8 +2602,8 @@ const CATALOG: &[Command] = &[
     Command {
         id: nets::UPDATE_PAIR,
         title: "Edit Differential Pair",
-        summary: "Replace a pair's display name and members, preserving its UUID and review state.",
-        params: &[EXPECTED_REVISION, PAIR_ID, PAIR_NAME, PAIR_POSITIVE, PAIR_NEGATIVE, PAIR_DRY_RUN],
+        summary: "Replace a pair's display name and members, preserving its UUID and clearing review state on live endpoint repair or explicit review.",
+        params: &[EXPECTED_REVISION, PAIR_ID, PAIR_NAME, PAIR_POSITIVE, PAIR_NEGATIVE, PAIR_DRY_RUN, PAIR_REVIEWED],
     },
     Command {
         id: nets::REMOVE_PAIR,

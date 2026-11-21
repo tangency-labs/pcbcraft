@@ -1,10 +1,14 @@
 //! Revision-bound form for authored differential relationships, hosted by the owning editor.
 
 use crate::{Dialog, PcbApp, board_drc::jobs, editor_view::ViewInput};
-use pcbcraft_chrome::{catalog, controls, properties, shell};
+use pcbcraft_chrome::{catalog, controls, properties, rule_form as form, shell};
 use pcbcraft_engine::{Project, nets};
 use serde_json::json;
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 use uuid::Uuid;
 
 /// Immutable chooser data and disposable form fields; member names are never command inputs.
@@ -13,6 +17,7 @@ pub(super) struct Edit {
     source: ViewInput,
     project: Arc<Project>,
     members: BTreeMap<Uuid, String>,
+    active_members: BTreeSet<Uuid>,
     member_order: Vec<Uuid>,
     pairs: Vec<(Uuid, String)>,
     selected: Option<Uuid>,
@@ -36,6 +41,7 @@ impl Edit {
         let registry = project.inspect_net_registry()?;
         let mut members: BTreeMap<_, _> =
             crate::board_net_choice::net_choices(&registry).into_iter().filter_map(|choice| choice.id.map(|id| (id, choice.label))).collect();
+        let active_members: BTreeSet<_> = members.keys().copied().collect();
         for pair in project.differential_pairs() {
             for id in [pair.positive, pair.negative] {
                 members.entry(id).or_insert_with(|| "Retained net".into());
@@ -52,6 +58,7 @@ impl Edit {
             source,
             project,
             members,
+            active_members,
             member_order,
             pairs,
             selected: None,
@@ -143,7 +150,16 @@ impl PcbApp {
         let dirty = edit.changed();
         let mut selected = edit.selected;
         let mut remove = false;
+        let mut mark_reviewed = false;
         let mut discard = false;
+        let other_paired: BTreeSet<Uuid> = edit
+            .project
+            .differential_pairs()
+            .iter()
+            .filter(|pair| Some(pair.id) != edit.selected)
+            .flat_map(|pair| [pair.positive, pair.negative])
+            .collect();
+        let current_pair = edit.current().cloned();
         let action = catalog::settings_form(ctx, "Differential pairs", "Save pair", current && !preparing && dirty && edit.complete(), |ui| {
             egui::ScrollArea::vertical().id_salt("differential_pair_form").auto_shrink([false, false]).show(ui, |ui| {
                 pcbcraft_chrome::workspace::describe_scroll_viewport(ui);
@@ -174,14 +190,31 @@ impl PcbApp {
                     if edit.members.len() < 2 {
                         ui.label("At least two persistent nets are needed to create a pair.");
                     }
-                    if let Some(nets::Pair { state: nets::PairState::NeedsReview { reason }, .. }) = edit.current() {
-                        ui.label(format!("Needs review: {reason}"));
+                    if let Some(pair) = current_pair.as_ref()
+                        && let nets::PairState::NeedsReview { reason } = &pair.state
+                    {
+                        form::conflict(ui, |ui| {
+                            ui.label(format!("Needs review: {reason}"));
+                            let both_active = edit.active_members.contains(&pair.positive) && edit.active_members.contains(&pair.negative);
+                            mark_reviewed = ui
+                                .add_enabled_ui(!dirty && both_active, |ui| controls::button(ui, "Mark reviewed"))
+                                .inner
+                                .on_hover_text("Confirm the current live endpoints and clear review status.")
+                                .clicked();
+                        });
                     }
                     properties::text(ui, "Pair name", &mut edit.name);
-                    for (title, field) in [("Positive net", &mut edit.positive), ("Negative net", &mut edit.negative)] {
+                    for (title, field, retained) in [
+                        ("Positive net", &mut edit.positive, current_pair.as_ref().map(|pair| pair.positive)),
+                        ("Negative net", &mut edit.negative, current_pair.as_ref().map(|pair| pair.negative)),
+                    ] {
                         ui.label(title);
                         let label = field.and_then(|id| edit.members.get(&id)).map_or("Choose net", String::as_str);
-                        let rows = edit.member_order.iter().map(|id| (*id, edit.members[id].as_str()));
+                        let rows = edit
+                            .member_order
+                            .iter()
+                            .filter(|id| (edit.active_members.contains(id) && !other_paired.contains(id)) || retained == Some(**id))
+                            .map(|id| (*id, edit.members[id].as_str()));
                         chooser(ui, title, label, &edit.search, rows, field);
                     }
                     discard = ui.add_enabled_ui(dirty, |ui| controls::button(ui, "Discard pair changes")).inner.clicked();
@@ -216,8 +249,8 @@ impl PcbApp {
             }
         } else if current && (discard || selected != edit.selected) {
             edit.select(selected);
-        } else if current && (remove || action.primary && dirty && edit.complete()) {
-            match self.prepare_pair(&edit, remove) {
+        } else if current && (remove || mark_reviewed || action.primary && dirty && edit.complete()) {
+            match self.prepare_pair(&edit, remove, mark_reviewed) {
                 Ok(job) => {
                     edit.error = None;
                     edit.preparation.submit(jobs::Request { id: 0, job });
@@ -232,7 +265,7 @@ impl PcbApp {
     }
 
     /// Capture one shared revision-checked command, with a fresh ID only on creation.
-    fn prepare_pair(&self, edit: &Edit, remove: bool) -> Result<nets::PairEditJob, String> {
+    fn prepare_pair(&self, edit: &Edit, remove: bool, reviewed: bool) -> Result<nets::PairEditJob, String> {
         let pair = edit.selected.map_or_else(nets::new_pair_id, Ok).map_err(|error| error.to_string())?;
         let mut params = json!({"pair":pair, "expected_revision":edit.source.revision});
         let command = if remove {
@@ -241,6 +274,9 @@ impl PcbApp {
             params["name"] = json!(edit.name);
             params["positive"] = json!(edit.positive);
             params["negative"] = json!(edit.negative);
+            if reviewed {
+                params["reviewed"] = json!(true);
+            }
             if edit.selected.is_some() { nets::UPDATE_PAIR } else { nets::CREATE_PAIR }
         };
         self.session.prepare_pair_edit(command, &params).map_err(|error| error.to_string())

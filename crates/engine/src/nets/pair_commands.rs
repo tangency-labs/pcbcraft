@@ -118,15 +118,16 @@ fn pair_edit(project: &Project, command: &str, params: &Value) -> Result<(Edit, 
         let name = params["name"].as_str().ok_or_else(|| CommandError::InvalidParams("Expected a pair name.".into()))?;
         let positive = id(params, "positive")?;
         let negative = id(params, "negative")?;
-        let check_positive = before.as_ref().is_none_or(|pair| pair.positive != positive);
-        let check_negative = before.as_ref().is_none_or(|pair| pair.negative != negative);
+        let reviewed = command == UPDATE_PAIR && params["reviewed"].as_bool() == Some(true);
+        let check_positive = reviewed || before.as_ref().is_none_or(|pair| pair.positive != positive);
+        let check_negative = reviewed || before.as_ref().is_none_or(|pair| pair.negative != negative);
         if (check_positive && !is_active_net(registry, positive)) || (check_negative && !is_active_net(registry, negative)) {
             return Err(CommandError::InvalidParams("Differential pair members must be active nets in the owning registry.".into()));
         }
         let state = match before.as_ref() {
             None => PairState::default(),
             Some(pair)
-                if (pair.positive != positive || pair.negative != negative)
+                if (reviewed || pair.positive != positive || pair.negative != negative)
                     && is_active_net(registry, positive)
                     && is_active_net(registry, negative) =>
             {

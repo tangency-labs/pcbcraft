@@ -848,8 +848,12 @@ for updates and removal. Create and update also take `name`, `positive` and
 project's registry and cannot belong to another pair; new pairs and changed
 endpoints require active (live) net members. Display names do not
 identify pairs or nets. Remove takes only the pair UUID and revision and leaves
-both member nets in place. Update preserves the pair UUID and any stored review
-state, and identical edits do not advance the revision. All three commands
+both member nets in place. Update preserves the pair UUID; renaming without
+changing endpoints keeps stored review state, while changing an endpoint or
+passing `reviewed: true` clears `NeedsReview` back to `Active` once both
+resulting member nets are active (passing `reviewed: true` when either member
+is inactive returns `invalid_params`). Identical edits do not advance the
+revision. All three commands
 require an edit-scoped session; read-only sessions return `out_of_scope` on both
 direct and prepared edit entry points.
 
