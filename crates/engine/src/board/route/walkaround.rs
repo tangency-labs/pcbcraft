@@ -11,7 +11,12 @@ use super::{
 };
 use crate::{
     CommandError,
-    board::{clearance::ClearanceQuery, drc, geometry::Contour, track::MAX_PATH_POINTS},
+    board::{
+        clearance::ClearanceQuery,
+        drc,
+        geometry::{Contour, continues_straight},
+        track::MAX_PATH_POINTS,
+    },
     schematic::Point,
 };
 use std::collections::BTreeSet;
@@ -596,13 +601,8 @@ pub(super) fn simplify(points: &[Point]) -> Vec<Point> {
         if out.last() == Some(&p) {
             continue;
         }
-        if out.len() >= 2 {
-            let (a, b) = (out[out.len() - 2], out[out.len() - 1]);
-            let cross = i128::from(b.x_nm - a.x_nm) * i128::from(p.y_nm - b.y_nm) - i128::from(b.y_nm - a.y_nm) * i128::from(p.x_nm - b.x_nm);
-            let forward = i128::from(b.x_nm - a.x_nm) * i128::from(p.x_nm - b.x_nm) + i128::from(b.y_nm - a.y_nm) * i128::from(p.y_nm - b.y_nm);
-            if cross == 0 && forward > 0 {
-                out.pop();
-            }
+        if out.len() >= 2 && continues_straight(out[out.len() - 2], out[out.len() - 1], p) {
+            out.pop();
         }
         out.push(p);
     }

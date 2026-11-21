@@ -963,6 +963,13 @@ including changes carried by a footprint move or alignment. Unlock it first.
 Copy/duplicate/paste retain locks on the new objects; Cut refuses protected
 objects. Undo/redo and native saves preserve lock state.
 
+Repeated edits can leave a straight run split into several segments, or one
+segment stacked on another. The `pcb.merge_tracks` command, through live commands
+or MCP, joins the selected segments that lie on one line with the same layer and
+width into one segment per run, in one undo step. Two segments join only at an
+end that no other track, via or pad touches, so junctions and connections stay
+where they are; locked segments are left alone. There is no menu item for it yet.
+
 The **Tracks** and **Vias**
 selection filters turn picking of each off, by click, drag, U or box, and drop that kind
 from the current selection. Tracks stay on their layer, so a back-side track does

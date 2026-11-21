@@ -156,6 +156,15 @@ impl Contour {
     }
 }
 
+/// Whether a path from `a` through `b` to `c` runs straight on at `b`: both legs lie exactly on
+/// one line in integer nanometres (zero cross product, no tolerance) and point the same way.
+/// A repeated point or a reversal is not a straight continuation.
+pub(crate) fn continues_straight(a: Point, b: Point, c: Point) -> bool {
+    let cross = i128::from(b.x_nm - a.x_nm) * i128::from(c.y_nm - b.y_nm) - i128::from(b.y_nm - a.y_nm) * i128::from(c.x_nm - b.x_nm);
+    let forward = i128::from(b.x_nm - a.x_nm) * i128::from(c.x_nm - b.x_nm) + i128::from(b.y_nm - a.y_nm) * i128::from(c.y_nm - b.y_nm);
+    cross == 0 && forward > 0
+}
+
 /// Point-in-convex-polygon by consistent cross-product sign; boundary points count as inside.
 pub(super) fn inside(point: Point, corners: &[Point; 4]) -> bool {
     let mut sign = 0i8;

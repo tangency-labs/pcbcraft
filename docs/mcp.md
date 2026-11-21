@@ -580,6 +580,16 @@ commands refuse the whole edit when they would modify existing locked copper,
 including indirect footprint/segment transforms. No-op operations remain no-ops.
 Copy/paste preserve locks on new identities; Cut of protected copper is refused.
 
+`pcb.merge_tracks` takes an explicit `board`, `expected_revision` and `tracks` (unique
+UUIDs) and merges the listed unlocked segments that share a layer and width and lie on
+one line: stacked duplicates are absorbed, and two segments join where they meet at an
+end that no third track end, via or pad touches. The lowest UUID survives with the
+merged ends and keeps its direction; the copper outline and connectivity are unchanged.
+The result is `revision` plus `merge_tracks`: `before` and `after` track records,
+`removed` and `reshaped` UUIDs, the `locked` segments left alone, `changed` and
+`dry_run`. With `dry_run` true, or when nothing merges, revision and history stay
+unchanged; otherwise the merge is one undo step.
+
 `pcb.add_via` places one standalone through via from `at`, with optional `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad
 that would join two nets. `pcb.move_tracks` moves `tracks` and/or `vias` by `dx_nm` and
