@@ -2972,6 +2972,7 @@ dependencies = [
  "pcbcraft-engine",
  "pcbcraft-mcp",
  "pcbcraft-storage",
+ "serde_json",
 ]
 
 [[package]]
@@ -2980,6 +2981,7 @@ version = "0.1.0"
 dependencies = [
  "geo-index",
  "getrandom 0.3.4",
+ "pcbcraft-kicad",
  "pcbcraft-units",
  "rstar",
  "serde",
@@ -3001,6 +3003,10 @@ dependencies = [
  "solidcore-step",
  "solidcore-tess",
 ]
+
+[[package]]
+name = "pcbcraft-kicad"
+version = "0.1.0"
 
 [[package]]
 name = "pcbcraft-mcp"

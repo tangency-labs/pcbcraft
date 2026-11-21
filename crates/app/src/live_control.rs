@@ -519,8 +519,8 @@ impl Editor for LiveEditor<'_> {
         if app.parts.is_modal() && !matches!(command, "window.set_catalog_mode" | "window.set_panel") {
             return Some(format!("Close the Parts Catalog or switch it to compact mode before running `{command}`"));
         }
-        if command == "project.new" && app.files.dirty(&app.session) {
-            return Some("The open project has unsaved changes. Save or discard them in the editor before starting a new project.".to_owned());
+        if pcbcraft_engine::replaces_project(command) && app.files.dirty(&app.session) {
+            return Some("The open project has unsaved changes. Save or discard them in the editor before replacing the project.".to_owned());
         }
         None
     }

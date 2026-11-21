@@ -205,3 +205,26 @@ fn conversion_preflight_failure_leaves_no_destination() {
     assert!(publish(&destination, Documents::new(), Encoding::Json).is_err());
     assert!(fs::read_dir(parent.path()).unwrap().next().is_none());
 }
+
+/// An imported project written as a new folder or package opens through the ordinary path and
+/// encodes back to exactly the bytes written, so a later unchanged save rewrites nothing. The
+/// destination is never replaced.
+#[test]
+fn a_created_import_reopens_and_saves_back_unchanged() {
+    let text = include_str!("../../../kicad/tests/fixtures/divider.kicad_sch");
+    let imported = pcbcraft_engine::kicad_import::import(text, "Divider").unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["divider", "divider.pc"] {
+        let destination = dir.path().join(name);
+        create(imported.project.clone(), &destination, encoding_for(&destination)).unwrap();
+        let opened = crate::open(&destination).unwrap();
+        let written = if encoding_for(&destination) == Encoding::Zip {
+            decode_packed(&fs::read(&destination).unwrap()).unwrap().documents
+        } else {
+            crate::folder::load(&destination).unwrap()
+        };
+        assert_eq!(encode_documents(opened.clone()).unwrap(), written, "{name}");
+        assert_eq!(opened.symbols().len(), 6);
+        assert!(create(imported.project.clone(), &destination, encoding_for(&destination)).unwrap_err().contains("unused destination"));
+    }
+}

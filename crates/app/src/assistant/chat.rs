@@ -147,7 +147,10 @@ pub(crate) fn gate(mode: Mode, method: &str, command: Option<&str>, always: impl
 
 /// Commands that touch files, replace the project or close a window: they ask even under Edits.
 fn asks_under_edits(command: &str) -> bool {
-    command.starts_with("file.") || command.starts_with("ui.") || matches!(command, "project.new" | "window.close" | "arrangement.delete")
+    command.starts_with("file.")
+        || command.starts_with("ui.")
+        || pcbcraft_engine::replaces_project(command)
+        || matches!(command, "window.close" | "arrangement.delete")
 }
 
 /// The chat: its backend, conversation, the agent's own options and pending approvals.

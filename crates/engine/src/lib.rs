@@ -19,6 +19,7 @@ pub mod hierarchy;
 #[cfg(test)]
 mod identity_tests;
 pub mod instances;
+pub mod kicad_import;
 pub mod library;
 pub mod library_graphics;
 mod named_catalog;
@@ -93,6 +94,8 @@ enum ParamKind {
     ExternalText,
     /// A netlist document's text, bounded before it is parsed.
     NetlistText,
+    /// A KiCad schematic file's text, bounded so every transport can carry it.
+    KicadSchematicText,
     ClipboardUnits,
     BoardSelection,
     SchematicPasteTargets,
@@ -225,6 +228,8 @@ impl ParamKind {
             Self::NetlistText => {
                 json!({"type":"string","maxLength":netlist::compare::MAX_TEXT_BYTES,"description":"Netlist JSON text, at most 8 MiB when encoded as UTF-8."})
             }
+            Self::KicadSchematicText => json!({"type":"string","maxLength":kicad_import::MAX_TEXT_BYTES,
+                "description":"A .kicad_sch file's text, at most 8 MiB when encoded as UTF-8."}),
             Self::ClipboardUnits => json!({"type":"string","enum":["mm","mil"]}),
             Self::BoardSelection => json!({"type":"object","properties":{
                 "footprints":{"type":"array","maxItems":4096,"uniqueItems":true,"items":ParamKind::FootprintId.schema()},
@@ -448,6 +453,8 @@ impl ParamKind {
             Self::ExternalText => Err("must be UTF-8 text of at most 64 KiB"),
             Self::NetlistText if value.as_str().is_some_and(|s| s.len() <= netlist::compare::MAX_TEXT_BYTES) => Ok(()),
             Self::NetlistText => Err("must be UTF-8 text of at most 8 MiB"),
+            Self::KicadSchematicText if value.as_str().is_some_and(|s| s.len() <= kicad_import::MAX_TEXT_BYTES) => Ok(()),
+            Self::KicadSchematicText => Err("must be UTF-8 text of at most 8 MiB"),
             Self::ClipboardUnits => Err("must be mm or mil"),
             Self::BoardSelection if board::clipboard::BoardSelection::parse(value).is_some() => Ok(()),
             Self::SchematicPasteTargets
@@ -1296,6 +1303,15 @@ const CATALOG: &[Command] = &[
                 required: false,
                 summary: "Explicitly create the first PCB along with this project; defaults to schematic-only.",
             },
+        ],
+    },
+    Command {
+        id: kicad_import::IMPORT,
+        title: "Import KiCad Schematic",
+        summary: "Replace the open project with one converted from a self-contained KiCad 6-9 schematic (.kicad_sch text). Refuses, with reasons, anything that would change its connections; reports what it left out. Undoable.",
+        params: &[
+            NEW_NAME,
+            Param { name: "text", kind: ParamKind::KicadSchematicText, required: true, summary: "The schematic file's UTF-8 text, at most 8 MiB" },
         ],
     },
     Command {
@@ -2664,6 +2680,12 @@ const CATALOG: &[Command] = &[
     Command { id: "edit.redo", title: "Redo", summary: "Redo the last undone change.", params: &[] },
 ];
 
+/// Whether `id` replaces the open project with another one, as New Project and imports do.
+/// Hosts protect unsaved work and ask for approval before such commands.
+pub fn replaces_project(id: &str) -> bool {
+    matches!(id, "project.new" | kicad_import::IMPORT)
+}
+
 /// Every command there is.
 pub fn catalog() -> &'static [Command] {
     CATALOG
@@ -3237,6 +3259,7 @@ impl Session {
             | library::sources::PREPARE_PUBLICATION
             | library::sources::PREVIEW_PIN_REMAP => true,
             "project.new" => true,
+            kicad_import::IMPORT => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
             net_labels::ADD
@@ -3494,6 +3517,11 @@ impl Session {
         if id.starts_with("library.") {
             return self.library_command(id, params);
         }
+        if id == kicad_import::IMPORT {
+            let report = self.import_kicad(params)?;
+            self.report_committed(id, params);
+            return Ok(json!({"revision": self.revision, "report": report.to_json()}));
+        }
         if id == PREVIEW_ASSEMBLY_PROFILE {
             self.validate_project_command(id, params)?;
             return self.preview_assembly_profile(params);
@@ -3587,15 +3615,29 @@ impl Session {
         Ok(revision)
     }
 
-    /// Tell the edit observer that `command` with `params` produced the current project.
+    /// Replace the open project with one imported from the KiCad schematic text in `params`, as
+    /// one undoable change. A refused or unreadable file leaves the session unchanged.
+    fn import_kicad(&mut self, params: &Value) -> Result<kicad_import::Report, CommandError> {
+        self.validate_project_command(kicad_import::IMPORT, params)?;
+        let name = if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() };
+        let text = params["text"].as_str().ok_or_else(|| CommandError::InvalidParams("`text` must be a string".into()))?;
+        let imported = kicad_import::import(text, &name)?;
+        self.change(Project::clone(&imported.project))?;
+        Ok(imported.report)
+    }
+
+    /// Tell the edit observer that `command` with `params` produced the current project. An
+    /// import's source text is reported as its SHA-256 and length: the resulting project already
+    /// carries everything a journal needs, and the file itself stays out of recovery records.
     pub(crate) fn report_committed(&self, command: &str, params: &Value) {
         if let (Some(observer), Some(project)) = (&self.observer, &self.project) {
-            observer.committed(edits::CommittedEdit {
-                command: command.to_owned(),
-                params: params.clone(),
-                revision: self.revision,
-                project: project.clone(),
-            });
+            let mut params = params.clone();
+            if command == kicad_import::IMPORT
+                && let Some(text) = params.get("text").and_then(Value::as_str).map(str::to_owned)
+            {
+                params["text"] = json!({"sha256": format!("{:x}", <sha2::Sha256 as sha2::Digest>::digest(text.as_bytes())), "bytes": text.len()});
+            }
+            observer.committed(edits::CommittedEdit { command: command.to_owned(), params, revision: self.revision, project: project.clone() });
         }
     }
 
@@ -3801,6 +3843,7 @@ impl Session {
     fn apply_inner(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         self.validate_project_command(id, params)?;
         match id {
+            kicad_import::IMPORT => self.import_kicad(params).map(|_| ())?,
             "project.new" => self.change(Project {
                 name: if params.get("name").is_some() { name_param(params)? } else { UNTITLED.to_owned() },
                 id: fresh_id()?,
