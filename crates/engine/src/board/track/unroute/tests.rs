@@ -375,14 +375,32 @@ fn large_board_candidate_and_delta_work_is_bounded_per_step() {
     let drawing_count = drawing_items.len();
     let drawing_points: usize = drawing_items.iter().map(|drawing| drawing.points.len()).sum();
     board.drawings = Some(Drawings {
-        layers: vec![Layer { id: drawing_layer, name: "Notes".into(), purpose: LayerPurpose::User, side: None }],
+        layers: vec![Layer { id: drawing_layer, name: "Board Outline 2".into(), purpose: LayerPurpose::Outline, side: None }],
         items: drawing_items,
     });
     let baseline = Arc::make_mut(board.baseline.as_mut().unwrap());
     let terminals = baseline.nets[net].terminals.len();
-    let unrelated = (0..4096).map(|i| TerminalKey { component: u64::MAX - i, terminal: "1".into() }).collect();
-    baseline.nets.insert(0, NetState { display_name: None, terminals: unrelated, names: vec!["UNRELATED".into()], origin: None });
+    let template = baseline.components.values().next().unwrap().clone();
+    let mut pins: Vec<String> = (1..=1024).map(|n| n.to_string()).collect();
+    pins.sort();
+    let mut unrelated = Vec::with_capacity(4096);
+    for offset in 0..4_u64 {
+        let component = 10_000 + offset;
+        let mut state = template.clone();
+        state.reference = format!("U{}", 1000 + offset);
+        state.terminals = pins.clone();
+        state.package = None;
+        baseline.components.insert(component, state);
+        for terminal in &pins {
+            unrelated.push(TerminalKey { component, terminal: terminal.clone() });
+        }
+    }
+    let display_name = baseline.nets[net].display_name.is_some().then(|| "UNRELATED".into());
+    baseline.nets.push(NetState { display_name, terminals: unrelated, names: vec!["UNRELATED".into()], origin: None });
+    baseline.nets.sort_by(|a, b| a.terminals.cmp(&b.terminals));
+    baseline.validate().unwrap();
     let items = board.tracks.len() + board.vias.len() + board.footprints().len() + 1 + drawing_count + drawing_points;
+    project.board.drawings.clone().unwrap().validate(&project).unwrap();
     session.open_snapshot(Arc::new(project));
     args["expected_revision"] = json!(session.revision());
     args["dry_run"] = json!(true);
