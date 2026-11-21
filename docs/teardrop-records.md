@@ -57,7 +57,9 @@ closed outline and cannot join separate copper islands. It reports rejected
 intents with the rule, obstacle and distances or a geometry reason. For edge
 clearance it reports the nearest outline drawing UUID; for crossing it reports
 the nearest crossing drawing. For copper outside the outline it references the
-nearest closed drawing, not an open path. Distance ties pick the lowest drawing
+nearest closed drawing, not an open path; for copper inside a cut-out (a closed
+outline nested in another) it references the nearest closed drawing around the
+copper, which is the cut-out itself. Distance ties pick the lowest drawing
 UUID. Reports for approved additions include derived vertices. A `dry_run: true`
 validates the candidate, including the native board size limit, without changing
 revision or undo history. Applying the batch rechecks it and records the

@@ -141,3 +141,122 @@ fn check_design_command_reports_without_editing() {
     assert!(s.execute(CHECK_DESIGN, &json!({"clearance_nm":-1})).is_err());
     assert!(s.execute(CHECK_DESIGN, &json!({"board":uuid::Uuid::from_u128(9)})).is_err());
 }
+
+/// Add a closed square Board Outline drawing with its lower corner at (`x`, `y`) mm and return
+/// its UUID.
+pub(crate) fn outline_square(s: &mut Session, x_mm: i64, y_mm: i64, side_mm: i64) -> Uuid {
+    let layer = view(s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let (x, y, side) = (x_mm * 1_000_000, y_mm * 1_000_000, side_mm * 1_000_000);
+    let points = [(x, y), (x + side, y), (x + side, y + side), (x, y + side)].map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points,"closed":true,"expected_revision":s.revision()})).unwrap();
+    view(s).drawings().iter().find(|drawing| drawing.points == points).unwrap().id
+}
+
+/// The routed fixture inside a 40 mm square board with a closed 10 mm square cut-out from
+/// (5, 15) mm to (15, 25) mm, clear of every footprint. Returns the cut-out drawing.
+fn cut_out_board() -> (Session, Uuid) {
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    let cut_out = outline_square(&mut s, 5, 15, 10);
+    (s, cut_out)
+}
+
+/// Add one front-copper track between two points in millimetres and return its UUID.
+fn track_mm(s: &mut Session, from: (f64, f64), to: (f64, f64)) -> String {
+    let front = copper_layers(s)[0];
+    let at = |(x, y): (f64, f64)| Point { x_nm: (x * 1e6) as i64, y_nm: (y * 1e6) as i64 };
+    route(s, front, &[at(from), at(to)]).unwrap();
+    view(s).tracks().iter().find(|track| track.start == at(from)).unwrap().id.to_string()
+}
+
+/// The outline findings about one copper item.
+fn outline_findings<'a>(report: &'a Report, item: &str) -> Vec<&'a Violation> {
+    report.violations.iter().filter(|v| matches!(v.kind, Kind::OutsideBoard | Kind::EdgeClearance) && v.items[0] == item).collect()
+}
+
+/// A closed contour inside the board outline is a cut-out: copper fully inside it is off the
+/// board and the finding names the cut-out drawing, while the same track on solid board is clean.
+#[test]
+fn copper_inside_a_cut_out_is_outside_the_board() {
+    let (mut s, cut_out) = cut_out_board();
+    let inside = track_mm(&mut s, (8., 20.), (12., 20.));
+    let report = check(&s);
+    let found = outline_findings(&report, &inside);
+    assert_eq!(found.len(), 1, "{report:#?}");
+    assert_eq!(found[0].kind, Kind::OutsideBoard);
+    assert_eq!(found[0].message, "Copper lies inside a board cut-out");
+    assert_eq!(found[0].items, vec![inside.clone(), cut_out.to_string()]);
+    assert_eq!(count(&report, Kind::OutsideBoard), 1, "{report:#?}");
+
+    let (mut s, _) = cut_out_board();
+    let solid = track_mm(&mut s, (8., 30.), (12., 30.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &solid).is_empty(), "{report:#?}");
+    assert_eq!(count(&report, Kind::OutsideBoard) + count(&report, Kind::EdgeClearance), 0, "{report:#?}");
+}
+
+/// Copper that starts on the board and ends in the cut-out is off the board, as copper leaving
+/// the outer edge is; copper with both ends on the board that crosses the cut-out still crosses
+/// the outline; copper beside the cut-out keeps the ordinary edge clearance to it.
+#[test]
+fn copper_at_a_cut_out_edge_keeps_the_edge_findings() {
+    let (mut s, cut_out) = cut_out_board();
+    let entering = track_mm(&mut s, (3., 20.), (8., 20.));
+    let across = track_mm(&mut s, (3., 24.), (17., 24.));
+    let near = track_mm(&mut s, (16., 17.), (16., 23.));
+    let report = check(&s);
+    let entering = outline_findings(&report, &entering);
+    assert_eq!(entering.len(), 1, "{report:#?}");
+    assert_eq!((entering[0].kind, entering[0].items[1].as_str()), (Kind::OutsideBoard, cut_out.to_string().as_str()));
+    let across = outline_findings(&report, &across);
+    assert_eq!(across.len(), 1, "{report:#?}");
+    assert_eq!((across[0].kind, across[0].message.as_str()), (Kind::EdgeClearance, "Copper crosses the Board Outline"));
+    assert!(outline_findings(&report, &near).is_empty(), "1 mm from the cut-out clears the 0.3 mm rule: {report:#?}");
+    let strict = view(&s).check_design(Rules { edge_clearance_nm: 1_000_000, ..Rules::default() });
+    let near = outline_findings(&strict, &near);
+    assert_eq!(near.len(), 1, "{strict:#?}");
+    assert_eq!(near[0].kind, Kind::EdgeClearance);
+}
+
+/// A contour nested inside the cut-out is board again. Copper on that island is legal; copper
+/// in the cut-out next to the island is still off the board and names the cut-out, not the
+/// nearer island.
+#[test]
+fn an_island_inside_a_cut_out_is_board_again() {
+    let (mut s, cut_out) = cut_out_board();
+    let island = outline_square(&mut s, 8, 18, 4);
+    let on_island = track_mm(&mut s, (9.5, 20.), (10.5, 20.));
+    let beside = track_mm(&mut s, (12.6, 19.), (12.6, 21.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &on_island).is_empty(), "{report:#?}");
+    let beside = outline_findings(&report, &beside);
+    assert_eq!(beside.len(), 1, "{report:#?}");
+    assert_eq!(beside[0].kind, Kind::OutsideBoard);
+    assert_eq!(beside[0].items[1], cut_out.to_string());
+    assert_ne!(beside[0].items[1], island.to_string());
+}
+
+/// A single closed outline keeps its existing wording, and the resumable check reports exactly
+/// what the direct check reports for cut-outs and islands at every batch size.
+#[test]
+fn cut_out_findings_agree_between_direct_and_resumable_checks() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let outside = track_mm(&mut s, (30., 0.), (32., 0.));
+    let report = check(&s);
+    assert_eq!(outline_findings(&report, &outside)[0].message, "Copper lies outside the Board Outline");
+    assert_eq!(outline_findings(&report, &outside)[0].items, vec![outside.clone()]);
+
+    let (mut s, _) = cut_out_board();
+    outline_square(&mut s, 8, 18, 4);
+    for (from, to) in [((6., 20.), (6.5, 20.)), ((9.5, 20.), (10.5, 20.)), ((3., 23.), (17., 23.)), ((30., 30.), (40., 30.))] {
+        track_mm(&mut s, from, to);
+    }
+    let expected = s.check_design(&json!({})).unwrap();
+    assert_eq!(expected["counts"]["outside_board"], 2, "{expected:#}");
+    for budget in [1, 3, 256] {
+        let mut job = s.design_check_job(&json!({})).unwrap();
+        while !job.step(budget) {}
+        assert_eq!(json!(job.take_report().unwrap()), expected, "budget={budget}");
+    }
+}
