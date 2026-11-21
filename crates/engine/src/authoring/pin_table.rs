@@ -994,9 +994,7 @@ fn detect_delimiter(text: &str) -> Delimiter {
         }
     }
 
-    if lines_checked > 0 && lines_with_tab == lines_checked {
-        Delimiter::Tab
-    } else if tab_count >= comma_count && tab_count >= semi_count && tab_count > 0 {
+    if (lines_checked > 0 && lines_with_tab == lines_checked) || (tab_count >= comma_count && tab_count >= semi_count && tab_count > 0) {
         Delimiter::Tab
     } else if semi_count > comma_count {
         Delimiter::Semicolon
