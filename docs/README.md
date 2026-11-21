@@ -73,7 +73,7 @@ supported versions and deferred work before extending a format or consumer.
 | Typed quantities | [Quantities and units](formats/quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](formats/hierarchical-clipboard-contract.md) |
 | Shared geometry | [Snapshot copper queries](pcb/copper-clearance-query.md) · [Exact circular copper records](pcb/circular-copper-records.md) · [Straight via teardrop records](pcb/teardrop-records.md) · [Walkaround route planning](pcb/route-planning.md) |
-| Planar regions, solid bodies and STEP | [Geometry kernel and STEP library](design/geometry-kernel.md) |
+| Planar regions, solid bodies and STEP | [Geometry kernel and STEP library](design/geometry-kernel.md) · [3D model records, bindings and frames](3d-model-records.md) (proposed) · [Model record schema](schemas/model-v1.schema.json) |
 | Shared interface toolkit | [Craft UI migration and current pin](design/shared-ui-migration.md) |
 | Automation contracts | [MCP command API and errors](automation/command-api.md) · [Part commands](automation/part-commands.md) · [Board and connectivity commands](automation/board-commands.md) · [Craft control protocol](../crates/craft-control/README.md) |
 
