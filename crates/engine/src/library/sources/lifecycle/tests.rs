@@ -429,7 +429,13 @@ fn designator_lock_and_assessment_share_project_52_and_read_historical_51() {
             let undeclared = edit_project_header(&saved, |header| {
                 header.as_object_mut().unwrap().remove("board_instances");
             });
-            assert!(decode_documents(&undeclared).unwrap_err().contains("unexpected or unused project document"));
+            assert!(decode_documents(&undeclared).unwrap_err().contains("require instance records"));
+            let undeclared_unlocked = edit_project_header(&undeclared, |header| {
+                for component in header["components"].as_array_mut().unwrap() {
+                    component.as_object_mut().unwrap().remove("designator_locked");
+                }
+            });
+            assert!(decode_documents(&undeclared_unlocked).unwrap_err().contains("unexpected or unused project document"));
         }
 
         // Project/51 cannot carry the lifecycle document.
@@ -697,6 +703,7 @@ fn pre_folder_projects_adopt_lifecycle_and_reopen_project_52() {
     let project_6 = edit_project_header(&base, |header| header["format"] = json!("pcbcraft-project/6"));
     let mut project_9 = edit_project_header(&base, |header| {
         header["format"] = json!("pcbcraft-project/9");
+        header["numeric_id_high_water"] = json!(4);
         header["boards"] = json!([]);
     });
     project_9.remove("board.json");
