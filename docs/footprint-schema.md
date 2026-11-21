@@ -317,11 +317,12 @@ differently numbered one. For each such turn the silkscreen or fabrication drawi
 must differ from itself turned the same way. The check uses fixed silkscreen paths
 and rectangles and artwork on both layers, not courtyards or generated reference
 text. A circular land and an equal-dimension oval compare as the same contour, and
-zero-length silkscreen segments do not count. The check compares authored
-primitives, position, size, stroke and fill at integer
-nanometre precision; it does not compare rendered ink or verify that a mark names
-the correct pad. For example, the same line drawn as one segment on one side and
-two segments on the other can count as a mark. A cathode bar or pin 1 dot is a
+zero-length silkscreen segments do not count. Before comparison, duplicate marks
+and touching or overlapping collinear strokes on the same layer with the same
+stroke width and fill are merged, so splitting or repeating a line does not create
+a mark. Otherwise the check compares normalized geometry, position, size, layer,
+stroke width and fill at integer nanometre precision; it does not compare rendered
+ink or verify that a mark names the correct pad. A cathode bar or pin 1 dot is a
 common way to break the symmetry.
 
 `pcb.check_assembly` reports a warning for each polarized package placed on a board
