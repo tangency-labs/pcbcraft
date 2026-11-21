@@ -252,6 +252,42 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
     assert_ne!(serde_json::from_slice::<Value>(&docs[&test_board_path(&docs)]).unwrap()["format"], "pcbcraft-board/39");
 }
 
+/// Adding and deleting a reference-only horizontal dimension on a legacy `pcbcraft-project/6`
+/// project must not adopt explicit `board.json` registration or `numeric_id_high_water`,
+/// leaving `project.json` unchanged throughout and restoring the saved documents on delete.
+#[test]
+fn a_legacy_project_six_keeps_project_json_across_relation_add_and_delete() {
+    let mut s = fixture(false);
+    let mut historical = Project::clone(&crate::persistence::diagnostic_snapshot(s.snapshot().unwrap()));
+    historical.layout = None;
+    historical.numeric_id_high_water = None;
+    Arc::make_mut(&mut historical.board).ownership = board::identity::Ownership::Legacy;
+    let before = encode_documents(Arc::new(historical)).unwrap();
+    let entry: Value = serde_json::from_slice(&before[crate::persistence::ENTRY_POINT]).unwrap();
+    assert_eq!(entry["format"], "pcbcraft-project/6");
+    for field in ["boards", "layout_root", "numeric_id_high_water", "schematic_instances"] {
+        assert!(entry.get(field).is_none(), "{field}");
+    }
+    s.open_snapshot(decode_documents(&before).unwrap());
+    assert_eq!(bytes(&s), before);
+
+    let a = pick(&mut s, 0, "fp.origin", None);
+    let id = add(&mut s, "horizontal", origin(), a);
+    assert!(matches!(s.project().unwrap().board.ownership, board::identity::Ownership::Legacy));
+    assert!(s.project().unwrap().numeric_id_high_water.is_none());
+    let with_relation = bytes(&s);
+    assert_eq!(with_relation[crate::persistence::ENTRY_POINT], before[crate::persistence::ENTRY_POINT]);
+    assert_eq!(serde_json::from_slice::<Value>(&with_relation[&test_board_path(&with_relation)]).unwrap()["format"], "pcbcraft-board/39");
+    assert_eq!(encode_documents(decode_documents(&with_relation).unwrap()).unwrap(), with_relation);
+
+    run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
+    assert!(matches!(s.project().unwrap().board.ownership, board::identity::Ownership::Legacy));
+    assert!(s.project().unwrap().numeric_id_high_water.is_none());
+    let after = bytes(&s);
+    assert_eq!(after[crate::persistence::ENTRY_POINT], before[crate::persistence::ENTRY_POINT]);
+    assert_eq!(after, before);
+}
+
 /// DEC-1415: an exact reviewed loss survives native save/reopen, Undo/Redo and reappearance
 /// of a datum, never resolves from its witness, and never moves the surviving placement.
 #[test]

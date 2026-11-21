@@ -4555,10 +4555,10 @@ impl Session {
         }
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
-        let physical_changed = self
-            .project
-            .as_ref()
-            .is_some_and(|previous| previous.id == project.id && !Arc::ptr_eq(&previous.board, &project.board) && previous.board != project.board);
+        // Reference-only relations do not change physical board state.
+        let physical_changed = self.project.as_ref().is_some_and(|previous| {
+            previous.id == project.id && !Arc::ptr_eq(&previous.board, &project.board) && !previous.board.same_physical(&project.board)
+        });
         if physical_changed
             && matches!(project.board.ownership, board::identity::Ownership::Legacy)
             && let Some(target) = project.board_target()
