@@ -146,7 +146,7 @@ struct ProjectDocument {
     parameters: Option<crate::parameters::Parameters>,
     #[serde(default, deserialize_with = "present")]
     assembly_profiles: Option<crate::board::assembly_profile::Catalog>,
-    #[serde(default, deserialize_with = "present")]
+    #[serde(default, deserialize_with = "crate::board::output_recipe::stored_recipes")]
     output_recipes: Option<Vec<crate::board::output_recipe::Recipe>>,
     sheets: Vec<SheetReference>,
     components: Vec<ComponentRecord<'static>>,

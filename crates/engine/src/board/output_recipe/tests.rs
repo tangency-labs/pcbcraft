@@ -112,6 +112,21 @@ fn recipe_reader_refuses_wrong_header_and_invalid_records() {
         let invalid = replace_entry(&saved, |entry| entry["output_recipes"][0]["content"][field] = value);
         assert!(decode_documents(&invalid).err().unwrap().contains(expected));
     }
+    let positional = positional(&content);
+    for recipes in [json!([[ID, positional]]), json!([{"id":ID,"content":positional}])] {
+        let invalid = replace_entry(&saved, |entry| entry["output_recipes"] = recipes);
+        assert!(decode_documents(&invalid).err().unwrap().contains("invalid type: sequence, expected an object"));
+    }
+    let mut nested = content;
+    nested["assembly_profile"] = json!([Uuid::from_u128(12), 2]);
+    let invalid = replace_entry(&saved, |entry| entry["output_recipes"][0]["content"] = nested);
+    assert!(decode_documents(&invalid).err().unwrap().contains("invalid type: sequence, expected an object"));
+}
+
+/// The same content in the field order of the struct, as a derived positional sequence.
+fn positional(content: &Value) -> Value {
+    let fields = ["name", "board", "units", "file_stem", "gerber_layers", "drill", "origin", "assembly_profile"];
+    Value::Array(fields.iter().map(|field| content[field].clone()).collect())
 }
 
 /// Intrinsic and ownership refusals leave both the snapshot and the revision untouched.
@@ -120,6 +135,7 @@ fn invalid_or_stale_command_does_not_change_history() {
     let (mut session, content) = fixture();
     let revision = session.revision();
     let initial = session.snapshot().unwrap();
+    let history = (session.undo.len(), session.redo.len());
     let layer = content["gerber_layers"][0].clone();
     assert!(matches!(set(&mut session, Uuid::nil(), &content), Err(CommandError::InvalidParams(msg)) if msg.contains("non-nil UUID")));
     let stale = session.apply(SET_OUTPUT_RECIPE, &json!({"recipe":ID,"expected_revision":revision - 1,"content":content}));
@@ -134,18 +150,24 @@ fn invalid_or_stale_command_does_not_change_history() {
         ("gerber_layers", json!([Uuid::nil()])),
         ("origin", json!({"kind":"board_zero", "x_nm":1})),
         ("assembly_profile", json!({"profile":Uuid::from_u128(12),"revision":0})),
+        ("assembly_profile", json!([Uuid::from_u128(12), 2])),
+        ("origin", json!(["board_zero"])),
     ] {
         let mut invalid = content.clone();
         invalid[field] = value;
         let expected = if field == "board" { "target the registered board" } else { "must be valid output recipe content" };
         assert!(matches!(set(&mut session, ID, &invalid), Err(CommandError::InvalidParams(msg)) if msg.contains(expected)), "{field}: {invalid}");
     }
+    assert!(
+        matches!(set(&mut session, ID, &positional(&content)), Err(CommandError::InvalidParams(msg)) if msg.contains("must be valid output recipe content"))
+    );
     let mut boundary = content;
     boundary["drill"] = json!(false);
     boundary["gerber_layers"] = json!([]);
     assert!(matches!(set(&mut session, ID, &boundary), Err(CommandError::InvalidParams(msg)) if msg.contains("must be valid output recipe content")));
     assert_eq!(session.revision(), revision);
     assert!(Arc::ptr_eq(&initial, &session.snapshot().unwrap()));
+    assert_eq!((session.undo.len(), session.redo.len()), history);
 
     boundary["name"] = json!("a".repeat(MAX_RECIPE_NAME));
     boundary["file_stem"] = json!("a".repeat(MAX_FILE_STEM));
@@ -213,8 +235,8 @@ fn recipe_and_designator_lock_save_as_project_57_and_fall_back() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), recipes_only);
 }
 
-/// Published command discovery enforces the same reserved file stems and trimmed name rules
-/// as runtime validation, while accepting an ordinary valid recipe.
+/// The published schema shape and runtime agree on reserved file stems and trimmed name rules,
+/// while both accept an ordinary valid recipe.
 #[test]
 fn recipe_command_schema_matches_runtime_validation() {
     let described = crate::catalog().iter().find(|command| command.id == SET_OUTPUT_RECIPE).unwrap().to_json();

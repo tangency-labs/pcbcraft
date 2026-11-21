@@ -5,9 +5,9 @@ use crate::{
     CommandError, ParamKind, Project, Session,
     persistence::layout::{RESERVED_PORTABLE_SEGMENTS, portable_segment},
 };
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use serde_json::{Value, json};
-use std::{collections::BTreeSet, sync::Arc};
+use std::{collections::BTreeSet, fmt, marker::PhantomData, sync::Arc};
 use uuid::Uuid;
 
 /// Replace one authored recipe or remove it with null.
@@ -48,6 +48,7 @@ impl TryFrom<String> for Units {
 #[serde(deny_unknown_fields)]
 pub struct Recipe {
     pub id: Uuid,
+    #[serde(deserialize_with = "keyed")]
     pub content: Content,
 }
 
@@ -61,10 +62,50 @@ pub struct Content {
     pub file_stem: String,
     pub gerber_layers: Vec<Uuid>,
     pub drill: bool,
-    #[serde(default, deserialize_with = "crate::persistence::present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_keyed", skip_serializing_if = "Option::is_none")]
     pub origin: Option<Anchor>,
-    #[serde(default, deserialize_with = "crate::persistence::present", skip_serializing_if = "Option::is_none")]
+    #[serde(default, deserialize_with = "present_keyed", skip_serializing_if = "Option::is_none")]
     pub assembly_profile: Option<Adoption>,
+}
+
+/// A record that must be a keyed object, never the positional sequence a derived struct also reads.
+/// The key stream still reaches Serde's missing, duplicate and unknown field checks.
+struct Keyed<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Keyed<T> {
+    /// Refuse arrays and other non-map shapes before decoding the typed record.
+    fn deserialize<D: de::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Object<T>(PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> de::Visitor<'de> for Object<T> {
+            type Value = Keyed<T>;
+
+            /// Describe the only allowed shape.
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an object")
+            }
+
+            /// Decode the closed typed value directly from its map.
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                T::deserialize(de::value::MapAccessDeserializer::new(map)).map(Keyed)
+            }
+        }
+        deserializer.deserialize_map(Object(PhantomData))
+    }
+}
+
+/// Decode one required record from its keyed object form.
+fn keyed<'de, D: de::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<T, D::Error> {
+    Keyed::deserialize(deserializer).map(|Keyed(value)| value)
+}
+
+/// Decode an optional field that, when present, must be a keyed object; explicit null is refused.
+fn present_keyed<'de, D: de::Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<Option<T>, D::Error> {
+    keyed(deserializer).map(Some)
+}
+
+/// The native recipe list, when present: an array of keyed recipe objects. Explicit null is refused.
+pub(crate) fn stored_recipes<'de, D: de::Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<Recipe>>, D::Error> {
+    Vec::<Keyed<Recipe>>::deserialize(deserializer).map(|recipes| Some(recipes.into_iter().map(|Keyed(recipe)| recipe).collect()))
 }
 
 /// Leading or trailing characters rejected by both runtime validation and ECMA-262 `\s`.
@@ -138,7 +179,7 @@ pub(crate) fn schema() -> Value {
 
 /// Decode the same content type used in native documents and apply its intrinsic bounds.
 fn parse(value: &Value) -> Result<Option<Content>, String> {
-    let content: Option<Content> = serde_json::from_value(value.clone()).map_err(|error| error.to_string())?;
+    let content = serde_json::from_value::<Option<Keyed<Content>>>(value.clone()).map_err(|error| error.to_string())?.map(|Keyed(content)| content);
     if let Some(content) = &content {
         content.validate()?;
     }
