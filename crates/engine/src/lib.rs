@@ -113,6 +113,8 @@ enum ParamKind {
     NetLabelId,
     LibrarySource,
     LibraryDocuments,
+    /// Project interpretation of an exact lifecycle scheme revision.
+    LifecyclePolicy,
     AuthoringItem,
     PinRemaps,
     RemapBaseRevision,
@@ -259,6 +261,9 @@ impl ParamKind {
             Self::DefinitionRevision => json!({"type":"integer","minimum":1,"maximum":u32::MAX}),
             Self::LibraryDigest => json!({"type":"string","pattern":"^[0-9a-f]{64}$"}),
             Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
+            Self::LifecyclePolicy => json!({"type":"object","additionalProperties":false,"required":["scheme","states"],"properties":{
+                "scheme":{"type":"object","additionalProperties":false,"required":["library","id","revision"],"properties":{"library":Self::LibrarySource.schema(),"id":Self::LibrarySource.schema(),"revision":Self::DefinitionRevision.schema()}},
+                "states":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","label","disposition"],"properties":{"id":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$"},"label":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[^\\s\u{feff}\\x00-\\x1f\\x7f-\\x9f](?:[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\u{feff}\\x00-\\x1f\\x7f-\\x9f])?$"},"disposition":{"enum":["draft","released","deprecated","obsolete"]}}}}}}),
             Self::LibraryDocuments => {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
@@ -539,6 +544,8 @@ impl ParamKind {
             }
             Self::LibraryDigest => Err("must contain a lowercase SHA-256 content digest"),
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
+            Self::LifecyclePolicy if library::sources::lifecycle::Policy::from_value(value.clone()).is_ok() => Ok(()),
+            Self::LifecyclePolicy => Err("must contain a valid exact lifecycle scheme and state mapping"),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
             Self::PartDraft
                 if serde_json::to_vec(value).is_ok_and(|bytes| bytes.len() <= library::sources::MAX_FILE_BYTES)
@@ -1989,6 +1996,9 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[8],
     library::sources::COMMANDS[9],
     library::sources::COMMANDS[10],
+    library::sources::lifecycle::COMMANDS[0],
+    library::sources::lifecycle::COMMANDS[1],
+    library::sources::lifecycle::COMMANDS[2],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {
@@ -2798,6 +2808,8 @@ pub struct Project {
     parameters: Arc<parameters::Parameters>,
     /// Immutable profile payloads are shared across project snapshots and history.
     assembly_profiles: Arc<board::assembly_profile::Catalog>,
+    /// Offline lifecycle assessments are authored independently of immutable definitions.
+    lifecycle: Arc<library::sources::lifecycle::Assessments>,
     /// Authored part groups, independent of membership.
     part_groups: Arc<part_groups::Catalog>,
     /// Explicit part-group memberships, sorted by part instance and group; stored with the instances.
@@ -2811,6 +2823,11 @@ impl Project {
     pub fn id(&self) -> uuid::Uuid {
         self.id
     }
+    /// The exact lifecycle assertions and project policy adopted into this snapshot.
+    pub fn lifecycle(&self) -> &library::sources::lifecycle::Assessments {
+        &self.lifecycle
+    }
+
     /// The board's validated layer catalog and uniform rigid stackup, if explicitly initialized.
     /// Legacy projects retain an unspecified setup until a supported initialization is requested.
     pub fn board_setup(&self) -> Option<&board::setup::BoardSetup> {
@@ -3235,7 +3252,8 @@ impl Session {
             | library::sources::PARSE_QUANTITY
             | library::sources::PREPARE_PART_PUBLICATION
             | library::sources::PREPARE_PUBLICATION
-            | library::sources::PREVIEW_PIN_REMAP => true,
+            | library::sources::PREVIEW_PIN_REMAP
+            | library::sources::lifecycle::LOOKUP => true,
             "project.new" => true,
             sheets::CREATE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() < sheets::MAX_SHEETS),
             sheets::DELETE_SHEET => self.project.as_ref().is_some_and(|p| p.sheets.len() > 1),
@@ -3261,6 +3279,8 @@ impl Session {
             | netlist::COMPARE_NETLIST
             | library::sources::AVAILABLE_REVISIONS
             | library::sources::PREVIEW_FOOTPRINT_REVISION
+            | library::sources::lifecycle::ADOPT
+            | library::sources::lifecycle::INSPECT
             | no_connect::SET
             | no_connect::CHECK
             | net_classes::CREATE
@@ -3494,6 +3514,17 @@ impl Session {
         if id.starts_with("library.") {
             return self.library_command(id, params);
         }
+        if id == library::sources::lifecycle::ADOPT {
+            let before = self.revision();
+            let result = self.adopt_lifecycle(params)?;
+            if self.revision() != before {
+                self.report_committed(id, params);
+            }
+            return Ok(result);
+        }
+        if id == library::sources::lifecycle::INSPECT {
+            return self.inspect_lifecycle(params);
+        }
         if id == PREVIEW_ASSEMBLY_PROFILE {
             self.validate_project_command(id, params)?;
             return self.preview_assembly_profile(params);
@@ -3623,6 +3654,14 @@ impl Session {
         }
         if id.starts_with("library.") {
             self.library_command(id, params)?;
+            return Ok(self.revision);
+        }
+        if id == library::sources::lifecycle::ADOPT {
+            self.adopt_lifecycle(params)?;
+            return Ok(self.revision);
+        }
+        if id == library::sources::lifecycle::INSPECT {
+            self.inspect_lifecycle(params)?;
             return Ok(self.revision);
         }
         if sheets::scoped_command(id) {
@@ -3824,6 +3863,7 @@ impl Session {
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
                 assembly_profiles: Arc::default(),
+                lifecycle: Arc::default(),
                 part_groups: Arc::default(),
                 part_group_memberships: Arc::default(),
                 prefer_compact_part_groups: false,
@@ -4572,6 +4612,12 @@ impl Session {
     fn change(&mut self, project: Project) -> Result<(), CommandError> {
         let (project, highest) = self.prepare_change(project)?;
         let project = self.retain_allocation_watermark(Arc::new(project));
+        self.publish_change(project, highest);
+        Ok(())
+    }
+
+    /// Publish an already validated canonical candidate as exactly one history entry.
+    fn publish_change(&mut self, project: Arc<Project>, highest: u64) {
         self.update_plan = None;
         self.setup_preview = None;
         self.undo.push(self.project.replace(project));
@@ -4580,7 +4626,6 @@ impl Session {
         }
         self.redo.clear();
         self.revision = (self.revision + 1).max(highest);
-        Ok(())
     }
 
     /// Restore authored content and advance the revision, retaining allocation and profile-revision

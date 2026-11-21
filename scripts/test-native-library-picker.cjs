@@ -20,6 +20,13 @@ test('folder accepts thousands of documents with engine-provided limits',async()
  assert.equal(Object.keys(result.documents).length,3201);
  assert.equal(result.problems.length,0);
 });
+test('folder keeps flat lifecycle assertions and diagnoses nested ones',async()=>{
+ const files=[file('library.json'),file('symbols/r.json'),file('lifecycle-assertions/review.r1.json','{"state":"released"}'),file('lifecycle-assertions/old/review.json'),file('notes/readme.json')];
+ const result=await picker(files).pickLibraryFolder(8192,1048576,33554432);
+ assert.deepEqual(Object.keys(result.documents).sort(),['library.json','lifecycle-assertions/review.r1.json','symbols/r.json']);
+ assert.equal(result.documents['lifecycle-assertions/review.r1.json'],'{"state":"released"}');
+ assert.deepEqual(Array.from(result.problems),['lifecycle-assertions/old/review.json: unsupported native item path']);
+});
 test('folder and bundle preflight retain caller bounds',async()=>{
  await assert.rejects(picker([file('library.json'),file('parts/a.json')]).pickLibraryFolder(1,1048576,33554432),/1 files/);
  await assert.rejects(picker([file('library.json','{}',6),file('parts/a.json','{}',6)]).pickLibraryFolder(8192,1048576,10),/source exceeds/);

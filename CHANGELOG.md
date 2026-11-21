@@ -2,6 +2,15 @@
 
 ## 0.1.0 (unreleased)
 
+Native libraries can ship revision-specific lifecycle assertions under
+`lifecycle-assertions/`, and projects can pin exact assertion revisions and
+scheme policies through `library.lifecycle_assertion`, `project.adopt_lifecycle`
+and `project.inspect_lifecycle`. `project.json` selects `pcbcraft-project/52`
+and writes `library/lifecycle.json` only when at least one adopted assessment is
+stored; projects without adopted assessments keep their existing format
+selection and byte reuse, and removing the last adopted assessment returns
+`project.json` to the format required by its remaining content.
+
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
 its old slot. Splitting a pane itself opens another view. Separate Split window

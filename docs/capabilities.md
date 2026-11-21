@@ -245,6 +245,12 @@ sources explicitly, and makes no compatibility or adoption decision; see
 reports altered pads and lost contact for straight track ends and through vias
 on one placed instance. It does not check standalone circular track ends, move
 copper, resolve pad maps or adopt revisions.
+
+[Lifecycle assertions](native-library-sources.md#lifecycle-assertions) are separate
+publisher records. With the publishing source loaded, projects can preview, adopt
+and undo an exact assessment through shared commands; inspecting an adopted
+assessment works offline. There is no lifecycle-specific
+editor, finding or placement gate.
 Schematic, PCB layout, symbol and footprint editors share manual zoom up to
 102400%, with pointer-anchored wheel/pinch navigation and content-specific Fit.
 

@@ -34,7 +34,8 @@ are runtime workspaces excluded from saved project arrangements.
 
 **Add library** offers a library folder or a `pcbcraft-library-bundle/1` bundle.
 A folder contains `library.json` and optional flat `symbols/`, `footprints/`,
-`categories/`, `parts/` and `manufacturer-parts/` directories. On desktop its
+`categories/`, `parts/`, `manufacturer-parts/` and `lifecycle-assertions/`
+directories. On desktop its
 registration is saved in personal settings and reloaded in the background at
 startup. **Refresh** rereads the selected folder; **Relocate** chooses its new
 location. Missing sources remain listed with their names and errors.
@@ -218,6 +219,44 @@ try an exact string pad number in `pad`. If that pad also exceeds the limit,
 inspect its copper in the board editor; the query cannot split one pad's list.
 The query does not move copper or alter pins, saved bytes, project revision or
 Undo/Redo.
+
+## Lifecycle assertions
+
+A publisher may supply separate `lifecycle-assertions/*.json` documents in a
+native source folder or bundle. [Schema](schemas/lifecycle-v1.schema.json) format
+`pcbcraft-lifecycle-assertion/1` records have
+required fields `format`, `address`, `target`, `scheme`, `state`, `reason` and
+`provenance`. `address` and `scheme` each contain `library`, `id` and a positive
+`revision`; `target` adds the native item `kind`. The assertion and target must
+belong to the publishing library. `state` is a stable lowercase ID, `reason` is a
+nonempty single-line trimmed note of up to 4,096 characters (no control
+characters), and `provenance` contains `publisher` (up to 256 characters)
+without a personal registration or path. No fields accept null or unknown keys.
+The payload, not the filename, defines the exact address. Publish a new assertion
+revision to change a state; reusing an address for different content is a conflict.
+The transfer packager and bundled-library embedding include this directory, and
+`scripts/check-library-schemas.py` validates its records.
+
+- `library.lifecycle_assertion` reads an exact `library`, `assertion` and
+  `assertion_revision` from loaded sources and returns its content `digest`.
+- `project.adopt_lifecycle` takes those fields, `digest` and `expected_revision`.
+  Optionally pass `dry_run: true` for the before/after report without editing, or
+  `policy` to supply a project mapping for that exact scheme revision. The policy
+  has a `scheme` reference and one to 64 `states` with their stable `id`, display
+  `label` and explicit `disposition`. Adoption or a policy change is one Undo step;
+  reselecting the same pin and policy leaves history unchanged.
+- `project.inspect_lifecycle` reads adopted assertions and project policy,
+  including offline. Only `pcbcraft/lifecycle` revision 1 has a default policy:
+  draft, released, deprecated and obsolete. Other schemes and unmapped state IDs
+  remain unknown until explicitly mapped; labels do not determine release status.
+
+These are shared engine commands accessible through MCP. A
+[read-only session](mcp.md) runs the lookup and inspection; adoption returns
+`out_of_scope` there. There is no dedicated
+lifecycle editor or publisher action in this slice. Source changes are never
+automatically adopted. The [project storage contract](native-project-storage.md#adopted-lifecycle-assessments)
+describes offline pins. Lifecycle metadata does not change placement eligibility
+or emit a design finding.
 
 ## Edit and publish native items
 

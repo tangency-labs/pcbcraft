@@ -52,7 +52,8 @@ impl Session {
 /// These commands return data or manage only ephemeral review state. In particular, Copy
 /// returns data without setting a system clipboard. Export/publication preparation does
 /// not write files, netlist comparison only reads the text it is given, and annotation
-/// preview caches no proposal. Loading/removing library sources and Cut are not reads.
+/// preview caches no proposal. Lifecycle lookup and inspection only read exact pinned or
+/// loaded content. Loading/removing library sources, lifecycle adoption and Cut are not reads.
 fn is_read_command(id: &str) -> bool {
     matches!(
         id,
@@ -91,6 +92,8 @@ fn is_read_command(id: &str) -> bool {
             | sources::PREVIEW_FOOTPRINT_REVISION
             | sources::PREPARE_PART_PUBLICATION
             | sources::PREPARE_PUBLICATION
+            | sources::lifecycle::LOOKUP
+            | sources::lifecycle::INSPECT
     )
 }
 
