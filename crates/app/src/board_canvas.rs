@@ -598,7 +598,7 @@ pub(super) fn show(
         }
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
-    let mut openings = Vec::new();
+    let (mut openings, mut slots) = (Vec::new(), Vec::new());
     for mut footprint in footprints {
         if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
             preview(&mut footprint, draft);
@@ -668,8 +668,9 @@ pub(super) fn show(
             focus.is_some(),
             shift,
             bounds,
+            Some(&mut slots),
         );
-        collect_openings(&mut openings, &footprint, camera, rect, state.selection.contains(&footprint.id));
+        collect_openings(&mut openings, &mut slots, &footprint, camera, rect, state.selection.contains(&footprint.id));
         if selected || reference_enabled && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
             board::reference_outline(&p, reference_bounds, selected, reference_color);
         }
@@ -803,7 +804,7 @@ fn place_group(
             }
         }
         let colors = FootprintColors::new(appearance, board, state.active_layer.as_deref(), &state.hidden_layers);
-        let mut openings = Vec::new();
+        let (mut openings, mut slots) = (Vec::new(), Vec::new());
         for mut footprint in board.footprints().filter(|f| ids.contains(&f.id)) {
             for pad in &mut footprint.pads {
                 pad.center = transform(pad.center);
@@ -840,8 +841,9 @@ fn place_group(
                 false,
                 reference_shift(&footprint, camera, response.rect),
                 bounds,
+                Some(&mut slots),
             );
-            collect_openings(&mut openings, &footprint, camera, response.rect, true);
+            collect_openings(&mut openings, &mut slots, &footprint, camera, response.rect, true);
         }
         paint_openings(ui.painter(), openings);
     }
@@ -1056,18 +1058,38 @@ fn footprint_interactive(copper_visible: bool, footprint: &FootprintView<'_>) ->
     copper_visible || !footprint.non_plated_holes.is_empty()
 }
 
-/// Capture projected openings from the same pose and selection used to paint this footprint.
-fn collect_openings(openings: &mut Vec<(Pos2, f32, bool)>, footprint: &FootprintView<'_>, camera: &Camera, rect: Rect, selected: bool) {
+/// A through opening held back until every footprint in the pass has painted its copper.
+enum Opening {
+    /// Projected centre, radius and selection of a non-plated hole.
+    Hole(Pos2, f32, bool),
+    /// A plated slot with its pad label, styled by its own footprint's pass.
+    Slot(board::SlotOpening),
+}
+
+/// Capture projected openings from the same pose and selection used to paint this footprint:
+/// first the plated slots its land pass held back, in pad order, then its non-plated holes.
+fn collect_openings(
+    openings: &mut Vec<Opening>,
+    slots: &mut Vec<board::SlotOpening>,
+    footprint: &FootprintView<'_>,
+    camera: &Camera,
+    rect: Rect,
+    selected: bool,
+) {
+    openings.extend(slots.drain(..).map(Opening::Slot));
     openings.extend(footprint.non_plated_holes.iter().map(|hole| {
         let (center, radius) = hole_circle(hole, camera, rect);
-        (center, radius, selected)
+        Opening::Hole(center, radius, selected)
     }));
 }
 
 /// Paint openings after every footprint in this pass, including copper from other footprints.
-fn paint_openings(painter: &egui::Painter, openings: Vec<(Pos2, f32, bool)>) {
-    for (center, radius, selected) in openings {
-        board::non_plated_hole(painter, center, radius, selected);
+fn paint_openings(painter: &egui::Painter, openings: Vec<Opening>) {
+    for opening in openings {
+        match opening {
+            Opening::Hole(center, radius, selected) => board::non_plated_hole(painter, center, radius, selected),
+            Opening::Slot(slot) => board::slot_opening(painter, &slot),
+        }
     }
 }
 
@@ -1333,12 +1355,45 @@ mod tests {
     /// Publish and place a footprint with a hole; optionally center a later footprint's pad over it.
     fn offset_hole_fixture(overlap: bool) -> pcbcraft_engine::Session {
         use pcbcraft_engine::authoring::{Action, Item, Kind, Primitive};
-        use serde_json::json;
 
         let hole = OFFSET_HOLE;
         let mut editor = pcbcraft_engine::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
         editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
         let item = editor.snapshot();
+        let pad = item.footprint().unwrap().pads[0].center;
+        placed_fixture(&item, overlap, (hole.center.x_nm - pad.x_nm, hole.center.y_nm - pad.y_nm))
+    }
+
+    /// Make the default footprint's pad 1 a vertical plated slot and centre a later footprint's
+    /// surface pad 2 over the earlier footprint's slot.
+    fn slot_overlap_fixture() -> pcbcraft_engine::Session {
+        use pcbcraft_engine::authoring::{Action, Item, Kind, Primitive};
+        use pcbcraft_engine::board::{
+            definition::{CopperBinding, PadShape},
+            slot::PlatedSlot,
+        };
+
+        let mut editor = pcbcraft_engine::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let Primitive::Pad { pad: mut slotted } = editor.snapshot().objects[&1].clone() else { panic!("expected pad 1") };
+        slotted.shape = PadShape::Oval;
+        slotted.width_nm = 800_000;
+        slotted.height_nm = 1_700_000;
+        slotted.corner_radius_nm = 0;
+        slotted.copper = CopperBinding::AllCopper;
+        slotted.drill_nm = None;
+        slotted.plated_slot = Some(PlatedSlot::new(400_000, 1_200_000, 90_000).unwrap());
+        editor.execute(editor.revision(), Action::Replace { object: 1, primitive: Primitive::Pad { pad: slotted } }).unwrap();
+        let item = editor.snapshot();
+        let pads = item.footprint().unwrap().pads;
+        let center = |number: &str| pads.iter().find(|pad| pad.number == number).unwrap().center;
+        let (slot, land) = (center("1"), center("2"));
+        placed_fixture(&item, true, (slot.x_nm - land.x_nm, slot.y_nm - land.y_nm))
+    }
+
+    /// Publish `item` and place it at the origin; with `overlap`, place a second copy at `second`.
+    fn placed_fixture(item: &pcbcraft_engine::authoring::Item, overlap: bool, second: (i64, i64)) -> pcbcraft_engine::Session {
+        use serde_json::json;
+
         let definition = item.footprint().unwrap();
         let manifest = json!({"format":pcbcraft_engine::library::LIBRARY_FORMAT,"id":definition.library,"name":"Synthetic fixture","license":definition.license}).to_string();
         let document = item.export_native().unwrap().to_string();
@@ -1356,8 +1411,7 @@ mod tests {
             s.apply(pcbcraft_engine::ASSIGN_FOOTPRINT, &json!({"component":component,"library":definition.library,"definition":definition.id,"definition_revision":definition.revision,"mapping":{"1":"1","2":"2"},"expected_revision":s.revision()})).unwrap();
         }
         s.apply(pcbcraft_engine::INITIALIZE_UPDATE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
-        let pad = definition.pads[0].center;
-        for (component, (x, y)) in components.iter().zip([(0, 0), (hole.center.x_nm - pad.x_nm, hole.center.y_nm - pad.y_nm)]) {
+        for (component, (x, y)) in components.iter().zip([(0, 0), second]) {
             s.apply(pcbcraft_engine::PLACE_ASSIGNED_FOOTPRINT, &json!({"component":component,"x_nm":x,"y_nm":y,"expected_revision":s.revision()}))
                 .unwrap();
         }
@@ -1473,6 +1527,96 @@ mod tests {
                 })
                 .expect("earlier opening is painted with the correct selection outline");
             assert!(opening > copper, "the later pad would hide the earlier opening (preview={preview})");
+        }
+    }
+
+    /// The real board and rotated group-preview painters put the first footprint's plated slot
+    /// opening, outline and pad label over the second footprint's copper.
+    #[test]
+    fn earlier_footprint_slot_opening_paints_over_later_copper() {
+        use crate::editor_view::{EditorView, ViewId};
+        use egui::{Color32, Shape};
+        use pcbcraft_chrome::Tokens;
+
+        let s = slot_overlap_fixture();
+        let view = s.project().unwrap().boards().next().unwrap();
+        let footprints: Vec<_> = view.footprints().collect();
+        assert_eq!(footprints.len(), 2);
+        let slot = footprints[0].pads.iter().find(|pad| pad.plated_slot.is_some()).expect("earlier footprint has a plated slot").center;
+        assert!(footprints[1].pads.iter().any(|pad| pad.center == slot && pad.copper.is_some() && pad.plated_slot.is_none()));
+        let mut editor = EditorView::new(ViewId(1));
+        editor.sync(&s);
+        let source = editor.input(&s).unwrap();
+        let appearance = crate::board_appearance::Appearance::default();
+        let shift = Point { x_nm: 3_000_000, y_nm: -2_000_000 };
+        for preview in [false, true] {
+            let ctx = egui::Context::default();
+            pcbcraft_chrome::install(&ctx);
+            let mut camera = Camera::board();
+            let mut state = BoardState::default();
+            let mut opening = slot;
+            if preview {
+                state.placement = Some(Placement {
+                    source,
+                    components: footprints.iter().map(|f| f.component.clone()).collect(),
+                    candidate: s.snapshot().unwrap(),
+                    handoff: false,
+                    position: shift,
+                    rotation: 90,
+                });
+                let (x, y) = rotate(slot.x_nm, slot.y_nm, 1);
+                opening = Point { x_nm: x + shift.x_nm, y_nm: y + shift.y_nm };
+            }
+            let mut center = Pos2::ZERO;
+            let screen = Rect::from_min_size(Pos2::ZERO, egui::vec2(1000., 700.));
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                let rect = ui.available_rect_before_wrap();
+                show(
+                    ui,
+                    view,
+                    &mut camera,
+                    &mut state,
+                    Some(source),
+                    &BTreeSet::new(),
+                    Default::default(),
+                    &appearance,
+                    preview,
+                    Navigation::default(),
+                    0,
+                    pcbcraft_chrome::grid::Style::Off,
+                    "PCB canvas",
+                    &[],
+                    &[],
+                    pcbcraft_chrome::units::Unit::Mm,
+                );
+                center = camera.screen(opening, rect);
+            });
+            // This headless pass inspects shapes without a renderer to consume the font atlas updates.
+            output.textures_delta.clear();
+            let t = Tokens::get();
+            let centred = |path: &egui::epaint::PathShape| path.closed && Rect::from_points(&path.points).center().distance(center) < 0.1;
+            let copper = output
+                .shapes
+                .iter()
+                .rposition(|shape| {
+                    shape.clip_rect.contains(center)
+                        && matches!(&shape.shape,
+                            Shape::Path(path) if centred(path) && path.fill != Color32::TRANSPARENT && path.fill != t.board_canvas
+                        )
+                })
+                .expect("later pad is painted centered on the slot");
+            let fill = output
+                .shapes
+                .iter()
+                .position(|shape| matches!(&shape.shape, Shape::Path(path) if centred(path) && path.fill == t.board_canvas))
+                .expect("earlier slot opening is painted");
+            let outline = output
+                .shapes
+                .iter()
+                .rposition(|shape| matches!(&shape.shape, Shape::Path(path) if centred(path) && path.fill == Color32::TRANSPARENT))
+                .expect("earlier slot outline is painted");
+            assert!(fill > copper, "the later pad would hide the earlier slot opening (preview={preview})");
+            assert!(outline > fill, "the slot outline must stay above its opening (preview={preview})");
         }
     }
 
