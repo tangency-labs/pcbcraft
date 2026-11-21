@@ -246,11 +246,29 @@ fn failed_candidate_validation_is_atomic_and_uninitialized_legacy_is_explicit() 
     let report = plan(&mut session);
     let snapshot = session.snapshot().unwrap();
     let revision = session.revision();
-    let proposed = &mut session.update_plan.as_mut().unwrap().proposed;
-    proposed.components.values_mut().next().unwrap().package.as_mut().unwrap().mapping.insert("1".into(), "INVALID".into());
-    assert!(session.apply(APPLY_UPDATE, &json!({"plan_token":report["plan_token"],"expected_revision":revision})).is_err());
+    let Some(ReviewSlot::Eco(plan)) = session.update_plan.as_mut() else { panic!("missing native ECO preview") };
+    assert!(matches!(plan.payload, Payload::LegacyLazy));
+    plan.proposed.components.values_mut().next().unwrap().package.as_mut().unwrap().mapping.insert("1".into(), "INVALID".into());
+    assert!(session.checked_eco_candidate().is_none());
+    let Some(ReviewSlot::Eco(plan)) = &session.update_plan else { panic!("missing captured inputs") };
+    let native = apply_candidate(&snapshot, &plan.accepted, &plan.proposed).unwrap_err();
+    let before = encode_documents(snapshot.clone()).unwrap();
+    let history = (session.undo.len(), session.redo.len());
+    use crate::board::relations::{
+        probes::{Op, trace},
+        tests::Observe,
+    };
+    let observer: Arc<Observe> = Arc::default();
+    session.observe_edits(Some(observer.clone()));
+    let (result, ops) = trace(|| session.apply(APPLY_UPDATE, &json!({"plan_token":report["plan_token"],"expected_revision":revision})));
+    assert_eq!(ops, [Op::BuildEco]);
+    assert_eq!(result.unwrap_err().to_string(), native);
     assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
     assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+    assert!(observer.0.lock().unwrap().is_empty());
+    assert!(session.checked_eco_candidate().is_none());
 }
 
 /// Counting serialization stops before oversized complete reports can be cached.

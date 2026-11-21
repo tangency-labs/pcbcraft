@@ -245,9 +245,7 @@ impl CheckJob {
                 }
             }
             9 => {
-                let mut report = std::mem::take(&mut self.found).finish(rules, self.source.effective.sources.clone());
-                report.class_rules = self.class_rules.take();
-                self.report = Some(report);
+                self.report = Some(std::mem::take(&mut self.found).finish(view, self.source.effective.clone(), self.class_rules.take()));
             }
             _ => {}
         }
@@ -280,8 +278,20 @@ mod tests {
         let before = session.snapshot().unwrap();
         let bytes = encode_documents(before.clone()).unwrap();
         let revision = session.revision();
+        // Field names, order and option omission of the exact pre-advisory typed envelope.
+        #[derive(Serialize)]
+        struct NativeEnvelope<'a> {
+            rules: Rules,
+            sources: &'a BTreeMap<String, crate::board::rules::Source>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            class_rules: Option<&'a crate::board::class_rules::Context>,
+            violations: &'a [Violation],
+            counts: &'a BTreeMap<Kind, usize>,
+            total: usize,
+        }
         for params in [json!({"board":board.board}), json!({"board":board.board,"clearance_nm":300_000})] {
             let expected = session.check_design(&params).unwrap();
+            let envelope = session.execute(CHECK_DESIGN, &params).unwrap();
             for budget in [1, 7, 256, 4096] {
                 let mut job = session.design_check_job(&params).unwrap();
                 assert!(!job.step(0));
@@ -292,7 +302,19 @@ mod tests {
                     assert!(steps < 100_000);
                     assert!(job.take_report().is_none());
                 }
-                assert_eq!(json!(job.take_report().unwrap()), expected, "budget={budget}");
+                let report = job.take_report().unwrap();
+                let native = NativeEnvelope {
+                    rules: report.rules,
+                    sources: &report.sources,
+                    class_rules: report.class_rules.as_ref(),
+                    violations: &report.violations,
+                    counts: &report.counts,
+                    total: report.total,
+                };
+                assert!(report.relations.is_none());
+                assert_eq!(serde_json::to_vec(&report).unwrap(), serde_json::to_vec(&native).unwrap());
+                assert_eq!(serde_json::to_vec(&json!(&native)).unwrap(), serde_json::to_vec(&expected).unwrap(), "budget={budget}");
+                assert_eq!(serde_json::to_vec(&json!({"revision":revision,"design_check":&native})).unwrap(), serde_json::to_vec(&envelope).unwrap());
                 assert!(job.take_report().is_none());
                 assert!(job.step(1));
                 assert!(job.source().is_current(&session));
@@ -351,7 +373,9 @@ mod tests {
             });
             assert!(findings.listed.len() <= MAX_LISTED);
         }
-        let report = findings.finish(Rules::default(), BTreeMap::new());
+        let s = routed_fixture();
+        let view = view(&s);
+        let report = findings.finish(view, view.effective_rules(), None);
         assert_eq!(report.total, 10_000);
         assert_eq!(report.counts[&Kind::Clearance], 10_000);
         assert_eq!(report.violations.len(), MAX_LISTED);

@@ -503,6 +503,9 @@ impl Encoder {
     /// drawings, rotation, active footprint and designator locks, occurrence IDs, sheet paper,
     /// net classes, and part groups require split documents or an archive; refuse loss.
     pub fn new(project: Arc<Project>) -> Result<Self, String> {
+        if project.board.relations.is_some() {
+            return Err("Board relations require native split documents or an archive.".into());
+        }
         if project.components.values().any(|part| part.designator_locked) {
             return Err("Designator locks require split project format 51 or a packed archive.".into());
         }

@@ -259,7 +259,7 @@ impl Session {
             }
         }
         super::track::carry_copper(project, &mut next, &moved_ids)?;
-        self.change(next)?;
+        self.change_with_native_poses(next, ids)?;
         Ok(())
     }
 
@@ -297,7 +297,7 @@ impl Session {
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).footprints[index] = footprint;
         super::track::carry_copper(project, &mut next, &std::collections::BTreeSet::from([format!("footprint-{}", current.id)]))?;
-        self.change(next)?;
+        self.change_with_native_poses(next, [current.id])?;
         Ok(())
     }
 }

@@ -214,6 +214,125 @@ fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), lock_docs);
 }
 
+/// F1 is a lazy addition to the retained native arc/lock ladder, not an edit permission.
+#[test]
+fn a_format_f1_composes_with_native_arc_lock_corpus() {
+    use crate::board::relations::{
+        commands::{DELETE, EDIT, LIST},
+        tests::{add, bytes, origin, pick, run, unchanged},
+    };
+    for (arcs, lock) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mut s = track::tests::routed_fixture();
+        // Read the never-opted-in controls through the same native packed and document codecs.
+        let untouched = s.snapshot().unwrap();
+        if arcs {
+            add_arc(&mut s);
+        }
+        if lock {
+            s.open_snapshot(with_lock(&s.snapshot().unwrap(), true));
+        }
+        let native = bytes(&s);
+        let native_packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_packed(decode_packed(&native_packed).unwrap().project).unwrap(), native_packed);
+        assert_eq!(encode_documents(decode_documents(&native).unwrap()).unwrap(), native);
+        s.open_snapshot(untouched);
+        let reference = pick(&mut s, 0, "fp.origin", None);
+        let id = add(&mut s, "horizontal", origin(), reference);
+        run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
+        if arcs {
+            add_arc(&mut s);
+        }
+        if lock {
+            s.open_snapshot(with_lock(&s.snapshot().unwrap(), true));
+        }
+        let saved = bytes(&s);
+        let path = test_board_path(&saved);
+        let f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
+        assert_eq!(f1["format"], "pcbcraft-board/39");
+        assert_eq!(f1.get("arcs").is_some(), arcs);
+        assert_eq!(f1["footprints"][0].get("locked").is_some(), lock);
+        let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
+        let mut legacy = f1.clone();
+        legacy["format"] = native_board["format"].clone();
+        let mut doctored = saved.clone();
+        doctored.insert(path, serde_json::to_vec(&legacy).unwrap());
+        let before = doctored.clone();
+        assert!(decode_documents(&doctored).is_err());
+        assert_eq!(doctored, before);
+        let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        s.open_snapshot(decode_packed(&packed).unwrap().project);
+        assert_eq!(bytes(&s), saved);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "suppressed");
+        if arcs {
+            let e = unchanged(&mut s, |s| run(s, DELETE, json!({"ids":[id]})));
+            assert_eq!(e.details()["reason"], "arc_board");
+            assert_eq!(bytes(&s), saved);
+            let target = s.project().unwrap().board_target().unwrap().board;
+            run(&mut s, arc::SET_ARCS, json!({"board":target,"arcs":[]})).unwrap();
+        }
+        run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
+        let final_docs = bytes(&s);
+        let final_board: Value = serde_json::from_slice(&final_docs[&test_board_path(&final_docs)]).unwrap();
+        assert_ne!(final_board["format"], "pcbcraft-board/39");
+        assert_eq!(final_board["footprints"][0].get("locked").is_some(), lock);
+    }
+}
+
+/// Check dedicated native /24 and /25 independently of the arc/lock corpus.
+#[test]
+fn a_format_f1_composes_with_assigned_via_and_material_report() {
+    use crate::board::relations::{
+        commands::{DELETE, EDIT, LIST},
+        tests::{add, bytes, origin, pick, run},
+    };
+    for report in [false, true] {
+        let mut s = track::tests::routed_fixture();
+        if report {
+            add_material_report(&mut s);
+        } else {
+            let anchor = s.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+            run(&mut s, track::ADD_VIA, json!({"at":{"x_nm":-30_000_000,"y_nm":-30_000_000},"target":{"kind":"derived","anchor":anchor}})).unwrap();
+        }
+        let native = bytes(&s);
+        let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        assert_eq!(encode_documents(decode_documents(&native).unwrap()).unwrap(), native);
+        assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
+        let path = test_board_path(&native);
+        let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
+        assert_eq!(native_board["format"], if report { "pcbcraft-board/25" } else { "pcbcraft-board/24" });
+        if report {
+            assert!(native_board["setup"]["materials"][0]["thermal_conductivity"].is_array());
+        } else {
+            assert!(native_board["vias"][0]["net_assignment"].is_object());
+        }
+        let reference = pick(&mut s, 0, "fp.origin", None);
+        let id = add(&mut s, "horizontal", origin(), reference);
+        let composed = bytes(&s);
+        let mut b: Value = serde_json::from_slice(&composed[&path]).unwrap();
+        assert_eq!(b["format"], "pcbcraft-board/39");
+        assert_eq!(b.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
+        b["format"] = native_board["format"].clone();
+        assert_eq!(b, native_board);
+        for (file, data) in &native {
+            if *file != path {
+                assert_eq!(data, &composed[file]);
+            }
+        }
+        let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+        s.open_snapshot(decode_packed(&packed).unwrap().project);
+        assert_eq!(bytes(&s), composed);
+        assert_eq!(encode_packed(s.snapshot().unwrap()).unwrap(), packed);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+        run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
+        let edited = bytes(&s);
+        s.open_snapshot(decode_documents(&edited).unwrap());
+        assert_eq!(bytes(&s), edited);
+        assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "suppressed");
+        run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
+        assert_eq!(bytes(&s), native);
+    }
+}
+
 /// Both features are required in format 35 and cannot be relabeled as either single-feature format.
 #[test]
 fn combined_format_requires_both_features() {

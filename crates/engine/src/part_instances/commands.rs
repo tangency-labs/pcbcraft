@@ -175,6 +175,7 @@ impl Session {
             libraries: self.libraries.clone(),
             revision: self.revision,
             history_root_revision: self.history_root_revision,
+            relation_stage: crate::board::relations::RelationStage::Raw,
             ..Self::default()
         };
         let mut symbol_params = params.clone();
@@ -266,6 +267,7 @@ impl Session {
             libraries: self.libraries.clone(),
             revision: self.revision,
             history_root_revision: self.history_root_revision,
+            relation_stage: crate::board::relations::RelationStage::Raw,
             ..Self::default()
         };
         transaction.assign_selected_package(id)?;

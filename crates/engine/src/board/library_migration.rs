@@ -9,6 +9,10 @@ impl Board {
                 assignment.library = library.into();
             }
         }
+        if let Some(mut rows) = self.relations.take() {
+            Arc::make_mut(&mut rows).migrate_library_addresses(self, replacements);
+            self.relations = Some(rows);
+        }
         for placement in &mut self.footprints {
             if let Some(key) = placement.key()
                 && let Some(library) = replacements.footprint_library(&key)

@@ -1,0 +1,335 @@
+//! Pure reference resolution and measurement over one immutable native board.
+
+use super::{Corner, Definition, Kind, Point, Reference, Relation, Side, State, Witness};
+use crate::board::{
+    Board, Footprint,
+    definition::{CopperBinding, GraphicPurpose, GraphicRect, PadShape, RectPad},
+    view::{CopperLayers, rectangle_points},
+};
+use crate::{Project, schematic::PinNumber};
+use serde::Serialize;
+use std::cell::OnceCell;
+
+/// Operation-local resolver tied to one exact immutable snapshot. Cache even an unavailable
+/// native datum, and do not project it at all unless a pick needs it.
+pub(super) struct Resolver<'a> {
+    project: &'a Project,
+    datum: OnceCell<Option<Point>>,
+}
+
+impl<'a> Resolver<'a> {
+    pub(super) fn new(project: &'a Project) -> Self {
+        Self { project, datum: OnceCell::new() }
+    }
+
+    /// Resolve the native placement origin once, never from a saved relation witness.
+    fn datum(&self) -> Option<Point> {
+        *self.datum.get_or_init(|| {
+            #[cfg(test)]
+            super::probes::hit(super::probes::Op::NativeDatum);
+            let view = self.project.board_view(self.project.board_target()?)?;
+            view.placement_origin().ok().map(|origin| origin.at)
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum Axis {
+    X,
+    Y,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(super) enum Measure<Distance = f64> {
+    Projection { axis: Axis, signed_nm: i64, witnesses: [Witness; 2] },
+    Aligned { distance_nm: Distance, witnesses: [Witness; 2] },
+}
+
+impl Definition {
+    /// Read a placement's exact physical definition key, retaining the native legacy marker case.
+    fn of(fp: &Footprint) -> Self {
+        Self { library: fp.library.clone(), id: fp.definition.clone(), revision: fp.definition_revision }
+    }
+
+    /// Match a pinned placement without loading a different revision by name or index.
+    fn matches(&self, fp: &Footprint) -> bool {
+        self.library == fp.library && self.id == fp.definition && self.revision == fp.definition_revision
+    }
+}
+
+/// Look up the native counter ID; neither a component ID nor a pad name can replace it.
+pub(super) fn footprint(board: &Board, id: u64) -> Option<&Footprint> {
+    let footprints = board.footprints();
+    footprints.binary_search_by_key(&id, |fp| fp.id).ok().map(|i| &footprints[i])
+}
+
+/// Resolve the exact pad record from the currently pinned immutable native definition.
+fn pad<'a>(board: &'a Board, fp: &Footprint, number: &str) -> Option<&'a RectPad> {
+    board.definition_for(fp)?.pads.iter().find(|p| p.number == number)
+}
+
+/// A courtyard edge needs a sole graphic rectangle, no courtyard artwork, and exact quarter turns.
+fn courtyard<'a>(board: &'a Board, fp: &Footprint) -> Option<(usize, &'a GraphicRect)> {
+    let def = board.definition_for(fp)?;
+    if !fp.rotation.is_multiple_of(90) || def.artwork.iter().any(|a| a.purpose == GraphicPurpose::Courtyard) {
+        return None;
+    }
+    let mut rects = def.graphics.iter().enumerate().filter(|(_, rect)| rect.purpose == GraphicPurpose::Courtyard);
+    let (index, rect) = rects.next()?;
+    (rects.next().is_none() && rect.rotation.is_multiple_of(90)).then_some((index, rect))
+}
+
+/// Select the pad-local side and trim its endpoints to the finite straight flat.
+fn segment(corners: [Point; 4], side: Side, radius: i64) -> Option<Witness> {
+    let (a, b) = match side {
+        Side::Left => (corners[0], corners[3]),
+        Side::Right => (corners[1], corners[2]),
+        Side::Top => (corners[0], corners[1]),
+        Side::Bottom => (corners[3], corners[2]),
+    };
+    let dx = b.x_nm - a.x_nm;
+    let dy = b.y_nm - a.y_nm;
+    if dx.abs() + dy.abs() <= 2 * radius || (dx != 0 && dy != 0) {
+        return None;
+    }
+    let (x, y) = (dx.signum() * radius, dy.signum() * radius);
+    Some(Witness::Segment { a: Point { x_nm: a.x_nm + x, y_nm: a.y_nm + y }, b: Point { x_nm: b.x_nm - x, y_nm: b.y_nm - y } })
+}
+
+/// Resolve strictly on the live snapshot, without any saved witness or fallback search.
+pub(super) fn resolve(resolver: &Resolver<'_>, reference: &Reference) -> Option<Witness> {
+    let Some((id, key)) = reference.footprint() else {
+        return resolver.datum().map(|at| Witness::Point { at });
+    };
+    let board = &resolver.project.board;
+    let fp = footprint(board, id)?;
+    if !key.matches(fp) {
+        return None;
+    }
+    let corners = |p: &RectPad| rectangle_points(fp, p.center, p.width_nm, p.height_nm, p.rotation);
+    match reference {
+        Reference::Origin { .. } => Some(Witness::Point { at: Point { x_nm: fp.x_nm, y_nm: fp.y_nm } }),
+        Reference::PadCenter { pad, .. } => Some(Witness::Point { at: fp.pad_position(PinNumber::new(pad)?, board)? }),
+        Reference::PadCorner { pad: number, corner, .. } => {
+            let p = pad(board, fp, number)?;
+            let index = match corner {
+                Corner::Ll => 3,
+                Corner::Lr => 2,
+                Corner::Ur => 1,
+                Corner::Ul => 0,
+            };
+            (p.shape == PadShape::Rectangle).then(|| Witness::Point { at: corners(p)[index] })
+        }
+        Reference::PadEdge { pad: number, side, .. } => {
+            let p = pad(board, fp, number)?;
+            if !fp.rotation.is_multiple_of(90)
+                || !p.rotation.is_multiple_of(90)
+                || !matches!(p.shape, PadShape::Rectangle | PadShape::RoundedRectangle)
+            {
+                return None;
+            }
+            segment(corners(p), *side, p.corner_radius_nm)
+        }
+        Reference::CourtyardEdge { rect, side, .. } => {
+            let (index, graphic) = courtyard(board, fp)?;
+            if *rect != index {
+                return None;
+            }
+            segment(rectangle_points(fp, graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation), *side, 0)
+        }
+        Reference::BoardOrigin {} => None,
+    }
+}
+
+/// List exactly the closed offered feature tags; calling the resolver keeps eligibility in one place.
+pub(super) fn features(project: &Project, fp: &Footprint) -> Vec<(Reference, Witness)> {
+    let id = fp.id;
+    let def = Definition::of(fp);
+    let mut refs = vec![Reference::Origin { fp: id, def: def.clone() }];
+    let sides = [Side::Left, Side::Right, Side::Top, Side::Bottom];
+    for number in project.board.pad_numbers(fp) {
+        let pad = number.as_str().to_owned();
+        refs.push(Reference::PadCenter { fp: id, pad: pad.clone(), def: def.clone() });
+        refs.extend([Corner::Ll, Corner::Lr, Corner::Ur, Corner::Ul].map(|corner| Reference::PadCorner {
+            fp: id,
+            pad: pad.clone(),
+            def: def.clone(),
+            corner,
+        }));
+        refs.extend(sides.map(|side| Reference::PadEdge { fp: id, pad: pad.clone(), def: def.clone(), side }));
+    }
+    if let Some((rect, _)) = courtyard(&project.board, fp) {
+        refs.extend(sides.map(|side| Reference::CourtyardEdge { fp: id, def: def.clone(), rect, side }));
+    }
+    let resolver = Resolver::new(project);
+    refs.into_iter().filter_map(|reference| Some((reference.clone(), resolve(&resolver, &reference)?))).collect()
+}
+
+fn edge_axis(w: Witness) -> Option<Axis> {
+    match w {
+        Witness::Segment { a, b } if a.x_nm == b.x_nm && a.y_nm != b.y_nm => Some(Axis::X),
+        Witness::Segment { a, b } if a.y_nm == b.y_nm && a.x_nm != b.x_nm => Some(Axis::Y),
+        _ => None,
+    }
+}
+
+impl Witness {
+    /// Points project directly; for a parallel edge either endpoint gives its constant coordinate.
+    fn on_axis(self, axis: Axis) -> i64 {
+        let (Self::Point { at } | Self::Segment { a: at, .. }) = self;
+        match axis {
+            Axis::X => at.x_nm,
+            Axis::Y => at.y_nm,
+        }
+    }
+}
+
+/// Measure on native board axes, always second pick minus first; winding plays no role.
+/// Callers must go through this live-resolution entry; saved witnesses are not accepted.
+pub(super) fn measure(resolver: &Resolver<'_>, kind: Kind, refs: &[Reference; 2]) -> Option<Measure> {
+    if !kind.accepts(refs) {
+        return None;
+    }
+    let witnesses = [resolve(resolver, &refs[0])?, resolve(resolver, &refs[1])?];
+    let axis = match kind {
+        Kind::Horizontal | Kind::AlignV => Axis::X,
+        Kind::Vertical | Kind::AlignH => Axis::Y,
+        Kind::PointEdge => edge_axis(witnesses[0]).or_else(|| edge_axis(witnesses[1]))?,
+        Kind::Gap => {
+            let axis = edge_axis(witnesses[0])?;
+            if edge_axis(witnesses[1])? != axis {
+                return None;
+            }
+            axis
+        }
+        Kind::Aligned => {
+            let [Witness::Point { at: a }, Witness::Point { at: b }] = witnesses else { return None };
+            return Some(Measure::Aligned { distance_nm: ((b.x_nm - a.x_nm) as f64).hypot((b.y_nm - a.y_nm) as f64), witnesses });
+        }
+    };
+    Some(Measure::Projection { axis, signed_nm: witnesses[1].on_axis(axis) - witnesses[0].on_axis(axis), witnesses })
+}
+
+/// Read a live row without falling back to stored display geometry, including if suppressed.
+pub(super) fn live_measure(resolver: &Resolver<'_>, row: &Relation) -> Option<Measure> {
+    (row.state == State::Ok).then(|| measure(resolver, row.kind, &row.refs)).flatten()
+}
+
+impl Measure {
+    /// Adapt the bounded aligned distance to a JSON number so typed reports retain `Eq`.
+    /// The native projection stays integral; `None` preserves JSON's null for nonfinite floats
+    /// (not attainable from valid coordinates).
+    pub(super) fn for_report(self) -> Measure<Option<serde_json::Number>> {
+        match self {
+            Self::Projection { axis, signed_nm, witnesses } => Measure::Projection { axis, signed_nm, witnesses },
+            Self::Aligned { distance_nm, witnesses } => Measure::Aligned { distance_nm: serde_json::Number::from_f64(distance_nm), witnesses },
+        }
+    }
+
+    /// The native resolver's geometry, in pick order, for a live label or future lost display.
+    pub(super) fn witnesses(self) -> [Witness; 2] {
+        match self {
+            Self::Projection { witnesses, .. } | Self::Aligned { witnesses, .. } => witnesses,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct PadBinding<T> {
+    terminal: Option<T>,
+    explicitly_unconnected: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PadBindingChange {
+    old: PadBinding<String>,
+    new: PadBinding<String>,
+}
+
+/// Use the native pad-to-terminal mapping, retaining the distinction between an
+/// explicitly unconnected land and one without a resolved terminal.
+fn pad_binding(fp: &Footprint, pin: PinNumber) -> PadBinding<&str> {
+    PadBinding {
+        terminal: fp.component_pin(pin).map(|(_, terminal)| terminal),
+        explicitly_unconnected: fp.unconnected_pads.iter().any(|p| p == pin.as_str()),
+    }
+}
+
+/// A repeated address can mean something different on the same placement and
+/// exact definition. Disclose only that binding delta; the caller still checks
+/// that the feature and its ordered pair are available on the final candidate.
+pub(super) fn same_address_pad_binding_change(previous: &Project, final_resolver: &Resolver<'_>, reference: &Reference) -> Option<PadBindingChange> {
+    let (id, key) = reference.footprint()?;
+    let pin = PinNumber::new(reference.pad()?)?;
+    let before = footprint(&previous.board, id)?;
+    let after = footprint(&final_resolver.project.board, id)?;
+    if before.component != after.component || !key.matches(before) || !key.matches(after) {
+        return None;
+    }
+    let old = pad_binding(before, pin);
+    let new = pad_binding(after, pin);
+    let own = |binding: PadBinding<&str>| PadBinding {
+        terminal: binding.terminal.map(str::to_owned),
+        explicitly_unconnected: binding.explicitly_unconnected,
+    };
+    (old != new).then(|| PadBindingChange { old: own(old), new: own(new) })
+}
+
+/// Compare physical land semantics across definition revisions, independently of
+/// position and rotation. The caller separately checks terminal binding.
+fn same_land(previous: &Project, candidate: &Project, a: &Footprint, b: &Footprint, number: &str) -> bool {
+    let old = pad(&previous.board, a, number);
+    let new = pad(&candidate.board, b, number);
+    match (old, new) {
+        (Some(p), Some(q)) => {
+            let layers = |project: &Project, copper: CopperBinding, bottom| CopperLayers::resolve(project.board.setup.as_ref(), copper, bottom);
+            (p.shape, p.width_nm, p.height_nm, p.corner_radius_nm, p.copper, p.drill_nm)
+                == (q.shape, q.width_nm, q.height_nm, q.corner_radius_nm, q.copper, q.drill_nm)
+                && layers(previous, p.copper, a.bottom) == layers(candidate, q.copper, b.bottom)
+        }
+        (None, None) => a.library.is_none() && b.library.is_none(),
+        _ => false,
+    }
+}
+
+/// On a pin revision transition only, propose the same offered feature on the same placement.
+/// An unchanged exact revision still permits native transforms, including bottom-side changes.
+pub(super) fn correspondence(previous: &Project, final_resolver: &Resolver<'_>, old: &Reference) -> Option<Reference> {
+    let Some((id, key)) = old.footprint() else { return resolve(final_resolver, old).map(|_| old.clone()) };
+    let candidate = final_resolver.project;
+    let after = footprint(&candidate.board, id)?;
+    let before = footprint(&previous.board, id)?;
+    if !key.matches(before) || before.component != after.component {
+        return None;
+    }
+    // Even with an unchanged definition, a package-map change can repurpose a land.
+    if let Some(number) = old.pad() {
+        let pin = PinNumber::new(number)?;
+        if pad_binding(before, pin) != pad_binding(after, pin) {
+            return None;
+        }
+    }
+    if key.matches(after) {
+        return resolve(final_resolver, old).map(|_| old.clone());
+    }
+    if old.pad().is_some_and(|number| !same_land(previous, candidate, before, after, number)) {
+        return None;
+    }
+    let mut next = old.clone();
+    match &mut next {
+        Reference::Origin { def, .. } | Reference::PadCenter { def, .. } | Reference::PadCorner { def, .. } | Reference::PadEdge { def, .. } => {
+            *def = Definition::of(after);
+        }
+        Reference::CourtyardEdge { rect, def, .. } => {
+            let (index, _) = courtyard(&candidate.board, after)?;
+            if *rect != index || courtyard(&previous.board, before)?.0 != index {
+                return None;
+            }
+            *def = Definition::of(after);
+        }
+        Reference::BoardOrigin {} => return None,
+    }
+    resolve(final_resolver, &next).map(|_| next)
+}

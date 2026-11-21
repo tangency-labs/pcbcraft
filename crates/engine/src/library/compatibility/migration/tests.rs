@@ -121,6 +121,67 @@ fn custom_footprints_and_conflicting_physical_destinations_keep_their_bytes() {
     }
 }
 
+/// Compose the exact bundled rewrite with F1. A conflicting physical target refuses the
+/// substitution, not the open, and the historical lost witness never gets a new address.
+#[test]
+fn f1_open_only_rewrites_proven_placed_binding_and_keeps_lost_history() {
+    use crate::board::relations::{
+        commands::{EDIT, LIST},
+        tests::{add, pick, run},
+    };
+    for conflict in [false, true] {
+        let mut s = fixture(true);
+        if conflict {
+            let mut p = s.snapshot().unwrap();
+            let p_mut = Arc::make_mut(&mut p);
+            let (key, d) = p_mut.board.definitions.iter().find(|(key, _)| key.0 == "basic-components").unwrap();
+            let key = key.clone();
+            let mut custom = d.as_ref().clone();
+            custom.pads[0].width_nm += 100_000;
+            let custom = Arc::new(custom);
+            Arc::make_mut(&mut p_mut.schematic_packages).definitions.insert(key.clone(), custom.clone());
+            Arc::make_mut(&mut p_mut.board).definitions.insert(key, custom);
+            s.open_snapshot(p);
+        }
+        // The migrated footprint sits on the board origin, so measure from the other
+        // placement: a horizontal distance must be nonzero.
+        let partner = pick(&mut s, 1, "fp.origin", None);
+        let a = pick(&mut s, 0, "fp.origin", None);
+        let b = pick(&mut s, 0, "pad.center", Some("1"));
+        assert_eq!(a["def"]["library"], "starter");
+        let id = add(&mut s, "horizontal", partner.clone(), a);
+        run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":true}})).unwrap();
+        let lost = add(&mut s, "horizontal", partner, b);
+        // Fixture-only historical state under an intact placed pin; ingestion must not resolve it.
+        let mut docs = encode_documents(s.snapshot().unwrap()).unwrap();
+        let path = crate::persistence::test_board_path(&docs);
+        let mut board: serde_json::Value = serde_json::from_slice(&docs[&path]).unwrap();
+        let row = board["relations"]["relations"].as_array_mut().unwrap().iter_mut().find(|row| row["id"] == lost).unwrap();
+        row["state"] = json!({"kind":"lost","since_revision":s.revision()});
+        let historical = row.clone();
+        docs.insert(path.clone(), serde_json::to_vec(&board).unwrap());
+        let raw = decode_documents(&docs).unwrap();
+        let after = crate::persistence::prepare_opened(raw.clone()).unwrap();
+        let library = if conflict { "starter" } else { "basic-components" };
+        assert_eq!(after.board.footprints()[0].library.as_deref(), Some(library));
+        let converted = encode_documents(after.clone()).unwrap();
+        let board: serde_json::Value = serde_json::from_slice(&converted[&path]).unwrap();
+        assert!(board["relations"]["relations"].as_array().unwrap().contains(&historical));
+        s.open_snapshot(after);
+        let list = run(&mut s, LIST, json!({})).unwrap();
+        let rows = list["relations"].as_array().unwrap();
+        let current = rows.iter().find(|r| r["id"] == id).unwrap();
+        assert_eq!(current["status"], "suppressed");
+        assert_eq!(current["refs"][1]["def"]["library"], library);
+        run(&mut s, EDIT, json!({"id":id,"edit":{"suppressed":false}})).unwrap();
+        let list = run(&mut s, LIST, json!({})).unwrap();
+        assert!(list["relations"].as_array().unwrap().iter().any(|r| r["id"] == id && r["status"] == "reference"));
+        let a = &raw.board.footprints()[0];
+        let b = &s.project().unwrap().board.footprints()[0];
+        assert_eq!((a.id, a.x_nm, a.y_nm, a.rotation, a.bottom), (b.id, b.x_nm, b.y_nm, b.rotation, b.bottom));
+    }
+}
+
 /// Accepted orphan packages remain offline-resolvable; unavailable historical symbol bodies are
 /// not invented merely to change their old logical metadata address.
 #[test]

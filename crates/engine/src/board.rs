@@ -31,6 +31,7 @@ pub mod outline;
 mod pair_index;
 pub mod ratsnest;
 pub mod reference;
+pub(crate) mod relations;
 pub mod route;
 pub mod rules;
 pub mod setup;
@@ -349,6 +350,7 @@ pub fn rotate(x: i64, y: i64, degrees: u16) -> (i64, i64) {
 /// Board-local placements and immutable definitions, indexed independently from view state.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Board {
+    pub(crate) relations: Option<Arc<relations::Relations>>,
     pub(crate) zones: Vec<zones::Zone>,
     pub(crate) ownership: identity::Ownership,
     pub(crate) baseline: Option<Arc<update::Baseline>>,

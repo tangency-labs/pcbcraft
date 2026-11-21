@@ -84,6 +84,7 @@ pub const UNTITLED: &str = "Untitled";
 
 #[derive(Clone, Copy, Debug)]
 enum ParamKind {
+    Relation(board::relations::commands::Parameter),
     PartTerminal,
     Flag,
     /// A terminal, named label or hierarchical port, excluding junction/geometry anchors.
@@ -217,6 +218,7 @@ impl ParamKind {
     /// Publish the parameter's JSON type and bounds to command clients.
     fn schema(self) -> Value {
         match self {
+            Self::Relation(kind) => kind.schema(),
             Self::Flag => json!({"type":"boolean"}),
             Self::PartTerminal => {
                 json!({"oneOf":[{"type":"object","properties":{"part":{"type":"string","pattern":"^component-[1-9][0-9]*$"},"terminal":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}},"required":["part","terminal"],"additionalProperties":false},{"type":"object","properties":{"junction":{"type":"string","pattern":"^junction-[1-9][0-9]*$"}},"required":["junction"],"additionalProperties":false}]})
@@ -429,6 +431,7 @@ impl ParamKind {
     /// Check the raw JSON value before a command reads it, without coercing strings or fractions.
     fn validate(self, value: &Value) -> Result<(), &'static str> {
         match self {
+            Self::Relation(kind) => kind.validate(value),
             Self::Flag => {
                 if value.is_boolean() {
                     Ok(())
@@ -858,9 +861,14 @@ pub struct Command {
 impl Command {
     /// Describe the command and its required inputs for discovery by MCP clients.
     pub fn to_json(&self) -> Value {
-        let mut params: Map<String, Value> = self
-            .params
-            .iter()
+        json!({"id": self.id, "title": self.title, "summary": self.summary, "params": self.parameter_schema(None)})
+    }
+
+    /// Build a closed parameter schema directly from typed entries. Nested review
+    /// intents omit the outer revision, but use the same native parameter declarations.
+    fn parameter_schema(&self, omit: Option<&str>) -> Value {
+        let included = || self.params.iter().filter(|p| Some(p.name) != omit);
+        let mut params: Map<String, Value> = included()
             .map(|p| {
                 let mut schema = p.kind.schema();
                 schema["description"] = json!(p.summary);
@@ -870,13 +878,8 @@ impl Command {
         if sheets::scoped_command(self.id) {
             params.insert("sheet".to_owned(), json!({"type":"string", "format":"uuid", "description":"Sheet UUID from inspection. Required when the project has multiple sheets; omission is compatible with one-sheet projects."}));
         }
-        let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
-        json!({
-            "id": self.id,
-            "title": self.title,
-            "summary": self.summary,
-            "params": {"type": "object", "properties": params, "required": required, "additionalProperties": false},
-        })
+        let required: Vec<&str> = included().filter(|p| p.required).map(|p| p.name).collect();
+        json!({"type": "object", "properties": params, "required": required, "additionalProperties": false})
     }
 }
 
@@ -1770,17 +1773,25 @@ const CATALOG: &[Command] = &[
         summary: "Adopt current assigned packages and connectivity as an accepted board baseline. Later schematic removals and exclusions retain their physical footprints until a reviewed update is applied.",
         params: &[BOARD, EXPECTED_REVISION],
     },
+    board::relations::commands::ADD_COMMAND,
+    board::relations::commands::EDIT_COMMAND,
+    board::relations::commands::DELETE_COMMAND,
+    board::relations::commands::PREVIEW_COMMAND,
+    board::relations::commands::APPLY_COMMAND,
+    board::relations::commands::CANCEL_COMMAND,
+    board::relations::commands::LIST_COMMAND,
+    board::relations::commands::FEATURES_COMMAND,
     Command {
         id: PREVIEW_UPDATE,
         title: "Preview Board Update",
         summary: "Freeze a complete schematic-to-board change list and issue a session-local Apply token without changing the design or history.",
-        params: &[BOARD, EXPECTED_REVISION],
+        params: &[BOARD, EXPECTED_REVISION, board::relations::commands::REMAP_CHOICES],
     },
     Command {
         id: APPLY_UPDATE,
         title: "Apply Board Update",
         summary: "Accept one current preview atomically, preserving unchanged footprint placement. Stale, replaced or foreign-session tokens are refused.",
-        params: &[BOARD, EXPECTED_REVISION, UPDATE_PLAN_TOKEN],
+        params: &[BOARD, EXPECTED_REVISION, UPDATE_PLAN_TOKEN, board::relations::commands::ACCEPT_LOSS, board::relations::commands::CONFIRM_REMAPS],
     },
     Command {
         id: CANCEL_UPDATE,
@@ -2690,6 +2701,12 @@ pub enum CommandError {
     NotFound(String),
     /// The edit would exceed a fixed limit.
     CapExceeded(String),
+    /// A checked relation edit could not be approved or requires explicit review.
+    RelationRefused {
+        reason: &'static str,
+        message: String,
+        rows: Value,
+    },
     /// The call states a command API version other than this build's.
     VersionMismatch {
         command: String,
@@ -2709,7 +2726,7 @@ impl CommandError {
         match self {
             Self::Unknown(_) => ErrorCode::UnknownCommand,
             Self::InvalidParams(_) => ErrorCode::InvalidParams,
-            Self::Unavailable(_) => ErrorCode::Unavailable,
+            Self::Unavailable(_) | Self::RelationRefused { .. } => ErrorCode::Unavailable,
             Self::StaleRevision { .. } => ErrorCode::StaleRevision,
             Self::NotFound(_) => ErrorCode::NotFound,
             Self::CapExceeded(_) => ErrorCode::CapExceeded,
@@ -2723,6 +2740,7 @@ impl CommandError {
     pub fn details(&self) -> Value {
         match self {
             Self::StaleRevision { current } => json!({"current_revision": current}),
+            Self::RelationRefused { reason, rows, .. } => json!({"reason":reason,"rows":rows}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
             Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
             _ => json!({}),
@@ -2737,6 +2755,7 @@ impl std::fmt::Display for CommandError {
             Self::Unknown(id) => write!(f, "unknown command `{id}`"),
             Self::InvalidParams(m) | Self::Unavailable(m) | Self::NotFound(m) | Self::CapExceeded(m) => f.write_str(m),
             Self::StaleRevision { current } => write!(f, "project changed, inspect the current revision ({current}) and retry"),
+            Self::RelationRefused { message, .. } => f.write_str(message),
             Self::VersionMismatch { command, stated, current } => write!(
                 f,
                 "`{command}` was requested with command API version {stated}, but this session runs version {current}; refresh the command catalog"
@@ -3053,7 +3072,10 @@ pub struct Session {
     /// same persistent project from an edit or undo within the current history.
     history_root_revision: u64,
     /// One runtime-only review capability; never serialized or counted as an authored edit.
-    update_plan: Option<board::update::CachedPlan>,
+    update_plan: Option<board::relations::ReviewSlot>,
+    relation_stage: board::relations::RelationStage,
+    /// Only the closed generic preview dispatcher constructs this one-use private capture.
+    relation_capture: Option<(board::relations::RelationInput, Option<board::relations::Prepared>)>,
     /// One runtime-only setup review, never retained by authored history snapshots.
     setup_preview: Option<board::setup::preview::CachedPreview>,
     /// Isolated sheet transactions reconcile only after returning to the canonical project.
@@ -3076,6 +3098,8 @@ impl Default for Session {
             revision: 0,
             history_root_revision: 0,
             update_plan: None,
+            relation_stage: board::relations::RelationStage::Outer,
+            relation_capture: None,
             setup_preview: None,
             defer_net_reconciliation: false,
             observer: None,
@@ -3217,6 +3241,12 @@ impl Session {
     pub fn available(&self, id: &str) -> bool {
         if matches!(id, clipboard_text::LABELS | clipboard_text::OUTLINE | sheets::page::LIST_TEMPLATES) {
             return true;
+        }
+        if board::relations::commands::handles(id) {
+            return self.project.as_ref().is_some_and(|p| {
+                p.board_target().is_some()
+                    && (p.board.arcs.is_empty() || matches!(id, board::relations::commands::LIST | board::relations::commands::FEATURES))
+            });
         }
         if id == board::identity::CREATE_BOARD {
             return self.project.as_ref().is_some_and(|project| project.board_target().is_none());
@@ -3456,6 +3486,9 @@ impl Session {
     /// returns a stale query outcome, as `pcb.plan_route` does.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         self.authorize_command(id)?;
+        if board::relations::commands::handles(id) {
+            return self.relation_command(id, params, usize::MAX);
+        }
         self.refuse_stale(id, params)?;
         if matches!(id, board::arc::SET_ARCS | board::teardrop::EDIT_TEARDROPS) {
             let before = self.revision;
@@ -3481,8 +3514,12 @@ impl Session {
             return Ok(json!({"clipboard":text,"revision":self.revision}));
         }
         if matches!(id, board::clipboard::COPY | board::clipboard::CUT) {
-            let text = if id == board::clipboard::CUT { self.cut_board(params)? } else { self.copy_board(params)? };
-            return Ok(json!({"clipboard":text,"revision":self.revision}));
+            let clipboard = if id == board::clipboard::CUT { self.cut_board(params)? } else { self.copy_board(params)? };
+            let mut result = json!({"clipboard":clipboard.text,"revision":self.revision});
+            if let Some(notice) = clipboard.notice {
+                result["clipboard_notice"] = json!(notice);
+            }
+            return Ok(result);
         }
         if matches!(id, clipboard::COPY | clipboard::CUT) {
             let text = self.copy_schematic(params, id == clipboard::CUT)?;
@@ -3571,6 +3608,13 @@ impl Session {
     pub fn apply(&mut self, id: &str, params: &Value) -> Result<u64, CommandError> {
         self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
+        if board::relations::commands::handles(id) {
+            if id == board::relations::commands::APPLY && self.checked_relation_apply_has_clipboard(params) {
+                return Err(CommandError::Unavailable("Use the result-bearing execute entry point to apply a checked Cut.".into()));
+            }
+            self.relation_command(id, params, usize::MAX)?;
+            return Ok(self.revision);
+        }
         if id == board::clipboard::CUT {
             self.cut_board(params)?;
             return Ok(self.revision);
@@ -3641,7 +3685,11 @@ impl Session {
             && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())
         {
             project.resolve_board(params.get("board").and_then(Value::as_str))?;
-            return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
+            return Err(if project.board.relations.is_some() {
+                board::relations::reason("arc_board", board::arc::UNSUPPORTED, Value::Null)
+            } else {
+                CommandError::Unavailable(board::arc::UNSUPPORTED.into())
+            });
         }
         if id.starts_with("pcb.")
             && id != board::teardrop::EDIT_TEARDROPS
@@ -4474,7 +4522,18 @@ impl Session {
     /// metadata, nets and zone ownership are checked here so previews share Apply's preparation.
     /// Adopt required no-connect metadata; lock-introducing edits prepare their own metadata.
     /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
-    fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
+    fn prepare_change(&self, project: Project) -> Result<board::relations::Prepared, CommandError> {
+        let prepared = self.prepare_with(project, &board::relations::RelationInput::default())?;
+        prepared.disclosure.require_no_decisions()?;
+        Ok(prepared)
+    }
+
+    /// Stage 1 has no placement outputs. Reconcile native state, finalize reference rows, and
+    /// check the exact candidate before any edit or approval can publish it.
+    fn prepare_with(&self, mut project: Project, input: &board::relations::RelationInput) -> Result<board::relations::Prepared, CommandError> {
+        use board::relations::{self, RelationStage};
+        #[cfg(test)]
+        relations::probes::hit(relations::probes::Op::Prepare(self.relation_stage));
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
         if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
@@ -4482,7 +4541,13 @@ impl Session {
         if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
             if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
-                return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
+                return Err(
+                    if self.relation_stage == RelationStage::Outer && (previous.board.relations.is_some() || project.board.relations.is_some()) {
+                        relations::reason("arc_board", board::arc::UNSUPPORTED, Value::Null)
+                    } else {
+                        CommandError::Unavailable(board::arc::UNSUPPORTED.into())
+                    },
+                );
             }
             if !previous.board.teardrops.is_empty() && previous.board.teardrops == project.board.teardrops && previous.board != project.board {
                 return Err(CommandError::Unavailable(board::teardrop::UNSUPPORTED.into()));
@@ -4551,27 +4616,89 @@ impl Session {
         if !self.defer_net_reconciliation {
             project.reconcile_nets(self.project.as_deref())?;
         }
-        // Copper and package maps can exhaust the native board document even before the
-        // record-count limits. Check the changed board before publishing snapshot or history.
-        if self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
-            && (!project.board.tracks.is_empty()
-                || !project.board.vias.is_empty()
-                || !project.board.assignments.is_empty()
-                || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some()))
-        {
-            persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
+        let previous = self.project.as_deref().filter(|p| p.same_document(&project));
+        let outer = self.relation_stage == RelationStage::Outer;
+        let had_relations = previous.is_some_and(|p| p.board.relations.is_some());
+        let disclosure = if outer && (had_relations || project.board.relations.is_some() || !input.choices.is_empty() || input.review) {
+            relations::verify_final(previous, &mut project, (self.revision + 1).max(highest), input)?
         } else {
-            board::zones::validate(&project).map_err(CommandError::InvalidParams)?;
-            board::teardrop::validate(&project).map_err(CommandError::InvalidParams)?;
+            relations::Disclosure::default()
+        };
+        if outer
+            && (had_relations || project.board.relations.is_some())
+            && let Some(previous) = previous
+        {
+            board::track::protect_locked(previous, &project)?;
+            if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
+                return Err(relations::reason("arc_board", board::arc::UNSUPPORTED, Value::Null));
+            }
+            if !previous.board.teardrops.is_empty() && previous.board.teardrops == project.board.teardrops && previous.board != project.board {
+                return Err(CommandError::Unavailable(board::teardrop::UNSUPPORTED.into()));
+            }
         }
-        Ok((project, highest))
+        let certify = input.review || disclosure.affected;
+        // Copper, package maps and relations can exhaust the native board document even before
+        // the record-count limits. Check the changed board before publishing snapshot or history.
+        let size_check = |project: &Project| {
+            let board_changed = self.project.as_ref().is_none_or(|p| !Arc::ptr_eq(&p.board, &project.board));
+            if board_changed
+                && (!project.board.tracks.is_empty()
+                    || !project.board.vias.is_empty()
+                    || !project.board.assignments.is_empty()
+                    || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some())
+                    || outer && project.board.relations.is_some())
+            {
+                persistence::check_board_document_size(project).map_err(CommandError::InvalidParams)
+            } else {
+                board::zones::validate(project).map_err(CommandError::InvalidParams)?;
+                board::teardrop::validate(project).map_err(CommandError::InvalidParams)
+            }
+        };
+        let native = !outer || (!had_relations && project.board.relations.is_none());
+        if native && !certify {
+            // Preserve the native pre-watermark guard order for ordinary never-opted-in edits.
+            size_check(&project)?;
+        }
+        let project = self.retain_allocation_watermark(Arc::new(project));
+        let digest = if certify {
+            Some(relations::certify(project.clone())?)
+        } else {
+            if !native {
+                size_check(&project)?;
+            }
+            None
+        };
+        Ok(relations::Prepared { snapshot: project, highest, digest, disclosure })
     }
 
-    /// Prepare and publish an edit, retaining the allocation watermark and bounded undo history.
-    /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
+    /// A preview's private session captures one prepared candidate; ordinary callers publish
+    /// without acquiring or accepting approval.
     fn change(&mut self, project: Project) -> Result<(), CommandError> {
-        let (project, highest) = self.prepare_change(project)?;
-        let project = self.retain_allocation_watermark(Arc::new(project));
+        self.change_with_native_poses(project, [])
+    }
+
+    /// Carry validated native pose selections (including unchanged align anchors) to
+    /// review only. Direct and Raw commands retain the ordinary preparation path.
+    fn change_with_native_poses(&mut self, project: Project, poses: impl IntoIterator<Item = u64>) -> Result<(), CommandError> {
+        if let Some((mut input, prior)) = self.relation_capture.take() {
+            if prior.is_some() {
+                return Err(CommandError::InvalidParams("preview intent attempted more than one publication".into()));
+            }
+            input.explicit_poses.extend(poses);
+            let prepared = self.prepare_with(project, &input)?;
+            self.relation_capture = Some((input, Some(prepared)));
+        } else {
+            let prepared = self.prepare_change(project)?;
+            self.publish(prepared);
+        }
+        Ok(())
+    }
+
+    /// Adopt the exact checked candidate once, without deriving or mutating authored fields again.
+    fn publish(&mut self, prepared: board::relations::Prepared) {
+        #[cfg(test)]
+        board::relations::probes::hit(board::relations::probes::Op::Publish(self.relation_stage));
+        let board::relations::Prepared { snapshot: project, highest, .. } = prepared;
         self.update_plan = None;
         self.setup_preview = None;
         self.undo.push(self.project.replace(project));
@@ -4580,7 +4707,6 @@ impl Session {
         }
         self.redo.clear();
         self.revision = (self.revision + 1).max(highest);
-        Ok(())
     }
 
     /// Restore authored content and advance the revision, retaining allocation and profile-revision

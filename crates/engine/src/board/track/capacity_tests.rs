@@ -135,7 +135,8 @@ fn crossing(items: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>) {
 }
 
 /// Both island paths give the exhaustive eligible-pair result below, at and above the switch
-/// size, preserving separate legacy pad roots until the pad-contact phase, at sampled budgets.
+/// size. Reusing synchronous roots preserves the legacy separation and matches the resumable
+/// pad-contact merge at sampled budgets.
 #[test]
 fn pairwise_and_indexed_islands_agree_around_the_switch_size() {
     for items in [PAIRWISE_BELOW - 1, PAIRWISE_BELOW, PAIRWISE_BELOW + 1] {
@@ -144,6 +145,8 @@ fn pairwise_and_indexed_islands_agree_around_the_switch_size() {
         assert_eq!(compares_every_pair(items), items < PAIRWISE_BELOW, "{items} items");
         let expected = exhaustive(IslandBuilder::new(&lands, &tracks, &vias), items).finish(&lands, &tracks, &vias);
         let pads = exhaustive(IslandBuilder::pad_contacts(&lands, &tracks, &vias, &expected.1), lands.len()).finish(&lands, &tracks, &vias);
+        assert_eq!(build_islands(&lands, &tracks, &vias, false), expected);
+        assert_eq!(build_islands(&lands, &tracks, &vias, true), pads);
         for pairwise in [true, false] {
             for budget in [1, 7, usize::MAX] {
                 let mut builder = IslandBuilder::new(&lands, &tracks, &vias).on_path(pairwise);
