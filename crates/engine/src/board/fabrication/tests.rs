@@ -1269,13 +1269,14 @@ fn rounded_pad_macros_omit_the_outline_of_a_core_narrower_than_the_diameter() {
     }
 }
 
-/// When opposite strips overlap by at most the Gerber §4.14.2 perturbation bound (1 µm),
-/// coordinate shifts could open a gap through the middle, so the macro keeps its outline.
-/// Once the overlap exceeds 1 µm, strips alone stay closed and the outline is omitted.
+/// When opposite strips overlap by at most the Gerber §4.14.2 coordinate and size tolerance
+/// bound (1 µm edge shift plus 0.5 µm diameter shrinkage = 1.5 µm on axis-aligned edges),
+/// perturbations could open a gap through the middle, so the macro keeps its outline.
+/// Once the overlap exceeds 1.5 µm, strips alone stay closed and the outline is omitted.
 #[test]
 fn rounded_pad_macros_keep_the_outline_when_strip_overlap_is_too_small() {
     for local in [0, 90] {
-        for (height, keep_outline) in [(199_996, true), (199_000, true), (198_998, false)] {
+        for (height, keep_outline) in [(199_996, true), (198_998, true), (198_500, true), (198_498, false)] {
             let pads = [(PadShape::RoundedRectangle, 600_000, height, local, 50_000); 2];
             let s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
             let read = read_gerber(&view(&s).fabrication_outputs().unwrap(), TOP_COPPER);
@@ -1289,13 +1290,14 @@ fn rounded_pad_macros_keep_the_outline_when_strip_overlap_is_too_small() {
     }
 }
 
-/// A 900 nm core is wider than the 600 nm strips, but too narrow for an outline under
-/// the Gerber §4.14.2 perturbation rule. Two overlapping center-line rectangles replace
-/// the core and all four edge strips with no core-to-strip seams (§4.5.1.5).
+/// Narrow axis-aligned cores that are wider than the edge strips but too narrow for an outline
+/// under Gerber §4.14.2 use two overlapping center-line rectangles sharing the exact center,
+/// replacing the core and all four edge strips with no core-to-strip seams (§4.5.1.5).
 #[test]
 fn rounded_pad_macro_fills_a_900_nm_core_without_an_outline() {
-    for height in [1_500, 1_501] {
-        let pads = [(PadShape::RoundedRectangle, 600_000, height, 0, 300); 2];
+    for (height, radius) in [(1_500, 300), (1_501, 300), (1_000, 200)] {
+        let diameter = 2 * radius;
+        let pads = [(PadShape::RoundedRectangle, 600_000, height, 0, radius); 2];
         let s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
         let outputs = view(&s).fabrication_outputs().unwrap();
         for output in surface_files(false) {
@@ -1308,13 +1310,13 @@ fn rounded_pad_macro_fills_a_900_nm_core_without_an_outline() {
                 assert_eq!(aperture.rectangles.len(), 2);
                 let (w0, h0, x0, y0) = aperture.rectangles[0];
                 let (w1, h1, x1, y1) = aperture.rectangles[1];
-                assert_eq!((w0, h0, x0), (599_400, height, 0));
-                assert_eq!((w1, h1, x1, y1), (600_000, height - 600, 0, y0));
+                assert_eq!((w0, h0, x0), (600_000 - diameter, height, 0));
+                assert_eq!((w1, h1, x1, y1), (600_000, height - diameter, 0, y0));
                 assert_eq!(aperture.circles.len(), 4);
-                for &(diameter, corner) in &aperture.circles {
-                    assert_eq!(diameter, 600);
-                    assert_eq!((2 * corner.x_nm - x0).abs(), 599_400);
-                    assert_eq!((2 * corner.y_nm - y0).abs(), height - 600);
+                for &(circle_diameter, corner) in &aperture.circles {
+                    assert_eq!(circle_diameter, diameter);
+                    assert_eq!((2 * corner.x_nm - x0).abs(), 600_000 - diameter);
+                    assert_eq!((2 * corner.y_nm - y0).abs(), height - diameter);
                 }
             }
         }

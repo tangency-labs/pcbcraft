@@ -47,6 +47,8 @@ const CORNER_SEGMENTS: usize = 6;
 const ROUNDED_DIAMETER_TOLERANCE_NM: u64 = 2;
 /// Two coordinates can move toward each other by 1 µm under Gerber §4.14.2.
 const OUTLINE_CLEARANCE_NM: i64 = 1_000;
+/// A single dimension can vary by ±0.5 µm under Gerber §4.14.2.
+const SIZE_TOLERANCE_NM: i64 = OUTLINE_CLEARANCE_NM / 2;
 
 /// One generated file: a portable name and its text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -495,17 +497,20 @@ fn half_nm_mm(twice_nm: i64) -> String {
 }
 
 /// Whether the diameter-wide strips along a strictly convex core's edges still cover all of it
-/// under Gerber §4.14.2 coordinate perturbations (±0.5 µm per coordinate).
-/// They do when every vertex stays strictly within one diameter of some edge's line even after
-/// opposite edges move apart by the full perturbation box projection: each interior point is then
-/// still within half a diameter of its nearest edge, with no gap between opposite strips.
+/// under Gerber §4.14.2 coordinate (±0.5 µm per coordinate) and size (±0.5 µm diameter) tolerances.
+/// They do when every vertex stays strictly within the reduced diameter of some edge's line even
+/// after opposite edges move apart by the full perturbation box projection: each interior point is
+/// then still within half a reduced diameter of its nearest edge, with no gap between opposite strips.
 fn strips_cover_core(points: &[MacroPoint; 4], diameter: i64) -> bool {
-    diameter > OUTLINE_CLEARANCE_NM
+    let Some(effective_diameter) = diameter.checked_sub(SIZE_TOLERANCE_NM) else {
+        return false;
+    };
+    effective_diameter > OUTLINE_CLEARANCE_NM
         && (0..4).any(|i| {
             let (a, b) = (points[i], points[(i + 1) % 4]);
             let (dx, dy) = (i128::from(b.0 - a.0), i128::from(b.1 - a.1));
             let margin = i128::from(OUTLINE_CLEARANCE_NM) * (dx.abs() + dy.abs());
-            let limit = i128::from(diameter).pow(2) * (dx * dx + dy * dy);
+            let limit = i128::from(effective_diameter).pow(2) * (dx * dx + dy * dy);
             points.iter().all(|&p| {
                 let cross = (dx * i128::from(p.1 - a.1) - dy * i128::from(p.0 - a.0)).abs();
                 (cross + margin).pow(2) < limit
