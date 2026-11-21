@@ -7,7 +7,7 @@ const path=require('node:path');
 const source=readFileSync(path.join(__dirname,'../crates/app/src/native_sources.rs'),'utf8').split('inline_js = r#"')[1].split('"#)]')[0].replaceAll('export function','function');
 function picker(files){
  const input={files,click(){queueMicrotask(()=>this.onchange());}};
- const context={document:{createElement:()=>input},TextDecoder,Promise,Object};
+ const context={document:{createElement:()=>input},TextEncoder,TextDecoder,Promise,Object};
  vm.runInNewContext(source,context);
  return context;
 }
