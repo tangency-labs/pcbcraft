@@ -660,13 +660,13 @@ fn adoption_of_one_instance_keeps_the_other_on_its_original_revision() {
     params["preview"] = preview["preview"].clone();
     session.execute(APPLY_ADOPTION, &params).unwrap();
     let revisions = |project: &Project| project.components().map(|component| component.definition.revision()).collect::<Vec<_>>();
-    assert_eq!(revisions(&*session.snapshot().unwrap()), [2, 1]);
+    assert_eq!(revisions(&session.snapshot().unwrap()), [2, 1]);
     let report = session.execute(AVAILABLE_REVISIONS, &json!({})).unwrap();
     assert_eq!(report["outdated_instances"], json!([ids[1]]));
     let saved = encode_documents(session.snapshot().unwrap()).unwrap();
     let mut reopened = Session::default();
     reopened.open_snapshot(decode_documents(&saved).unwrap());
-    assert_eq!(revisions(&*reopened.snapshot().unwrap()), [2, 1]);
+    assert_eq!(revisions(&reopened.snapshot().unwrap()), [2, 1]);
     assert_eq!(encode_documents(reopened.snapshot().unwrap()).unwrap(), saved);
     session.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), original);
