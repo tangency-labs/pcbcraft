@@ -232,9 +232,10 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window stays in the editor, which asks about unsaved changes.
 Headless sessions refuse window commands with a reason.
 
-The native live connection also exposes `ui.handles`, `ui.at`, `ui.project` and queued pointer,
-keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
-for named targets, window-local coordinates, completion tickets and cancellation.
+The native live connection also exposes `ui.handles`, `ui.at`, `ui.project`,
+`ui.window`, `ui.resize` and queued pointer, keyboard, text and wheel input
+through `execute`. See [UI automation](ui-automation.md) for named targets,
+window-local coordinates, window sizes, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
 
