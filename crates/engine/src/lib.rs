@@ -33,6 +33,7 @@ pub mod part_groups;
 pub mod part_instances;
 pub mod persistence;
 pub mod schematic;
+pub mod schematic_pdf;
 pub mod selection;
 mod session_scope;
 pub mod sheets;
