@@ -331,11 +331,13 @@ fn quarter_turn_symmetry() {
     let opposite_dot = graphic(Geometry::Circle { center: point(-MM, -MM), radius_nm: MM / 4 });
     let label = graphic(Geometry::Text { at: point(0, 0), text: "+".into(), height_nm: MM, rotation: 0, align: TextAlign::Middle });
     let frame = graphic(Geometry::Rectangle { min: point(-3 * MM, -3 * MM), max: point(3 * MM, 3 * MM) });
-    let bar = graphic(Geometry::Line { from: point(-3 * MM, -3 * MM), to: point(-3 * MM, -2 * MM) });
+    let overlapped_edge = graphic(Geometry::Line { from: point(-3 * MM, -3 * MM), to: point(-3 * MM, -2 * MM) });
+    let bar = graphic(Geometry::Line { from: point(-3 * MM, -2 * MM), to: point(-2 * MM, -3 * MM) });
     for (artwork, marked) in [
         (vec![ring.clone()], false),
         (vec![ring.clone(), full], false),
         (vec![frame.clone()], false),
+        (vec![frame.clone(), overlapped_edge], false),
         (vec![ring.clone(), half], true),
         (vec![ring.clone(), dot.clone(), opposite_dot], false),
         (vec![ring.clone(), dot], true),
