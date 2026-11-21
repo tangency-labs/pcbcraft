@@ -82,10 +82,10 @@ The net pickers list active nets that are not already in another pair; an existi
 pair's own endpoints stay selectable even when retired. If a derived net has no
 persistent ID yet, promote it before pairing. To edit or remove an existing pair,
 select it from the pair picker. A retained member without a current name is shown
-by UUID. A pair that needs review shows its reason. Renaming keeps it; saving with
-a changed member, or **Mark reviewed** (enabled only when both members are live),
-clears it. **New pair** explains when fewer than two active unpaired nets are
-available.
+by UUID. A pair that needs review shows its reason. Renaming keeps it. Saving
+with a changed member clears it when both members are then live, and so does
+**Mark reviewed** (enabled only when both members are live). **New pair**
+explains when fewer than two active unpaired nets are available.
 
 **Save pair** and **Remove pair** each apply one edit and close the form. Removal
 leaves both nets intact. Cancel discards the draft, and Undo restores the exact
