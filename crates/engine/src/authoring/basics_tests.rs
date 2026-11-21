@@ -346,7 +346,7 @@ fn ball_grid_array_refuses_bad_grids_atomically() {
                 row_step: p(0, 800_000),
                 numbering: Some(ArrayNumbering::BallGrid { skip_jedec: true }),
             },
-            "at least two cells",
+            "Ball-grid dimensions must both be at least 1.",
         ),
         (
             Action::Array {
@@ -357,7 +357,7 @@ fn ball_grid_array_refuses_bad_grids_atomically() {
                 row_step: p(0, 800_000),
                 numbering: Some(ArrayNumbering::BallGrid { skip_jedec: true }),
             },
-            "at least two cells",
+            "Ball-grid dimensions must both be at least 1.",
         ),
         // Exceeds 1,024 pad limit (33 * 32 = 1056)
         (
@@ -381,7 +381,7 @@ fn ball_grid_array_refuses_bad_grids_atomically() {
                 row_step: p(0, 800_000),
                 numbering: Some(ArrayNumbering::BallGrid { skip_jedec: true }),
             },
-            "nonzero step",
+            "must be nonzero along any axis",
         ),
         // Multi-object selection
         (
@@ -393,7 +393,7 @@ fn ball_grid_array_refuses_bad_grids_atomically() {
                 row_step: p(0, 800_000),
                 numbering: Some(ArrayNumbering::BallGrid { skip_jedec: true }),
             },
-            "exactly one selected pad",
+            "requires selecting a single pad",
         ),
         // Non-pad selection (object 3 is an outline)
         (
@@ -405,7 +405,7 @@ fn ball_grid_array_refuses_bad_grids_atomically() {
                 row_step: p(0, 800_000),
                 numbering: Some(ArrayNumbering::BallGrid { skip_jedec: true }),
             },
-            "selected object to be a pad",
+            "requires selecting a single pad",
         ),
     ];
     for (action, expected) in bad_actions {
@@ -433,7 +433,7 @@ fn ball_grid_array_refuses_bad_grids_atomically() {
             },
         )
         .unwrap_err();
-    assert!(sym_err.contains("footprint documents"), "unexpected symbol error: {sym_err}");
+    assert!(sym_err.contains("only supported for footprint definitions"), "unexpected symbol error: {sym_err}");
     assert_eq!(sym.snapshot(), sym_before);
     assert_eq!(sym.revision(), 0);
 
@@ -456,7 +456,7 @@ fn ball_grid_array_refuses_bad_grids_atomically() {
             },
         )
         .unwrap_err();
-    assert!(collision_err.contains("already exists"), "unexpected collision error: {collision_err}");
+    assert!(collision_err.contains("is already used by another pad"), "unexpected collision error: {collision_err}");
     assert_eq!(s.snapshot(), before_collision);
     assert_eq!(s.revision(), rev_before);
 }

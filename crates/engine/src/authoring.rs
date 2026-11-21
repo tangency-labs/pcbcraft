@@ -1040,7 +1040,12 @@ impl Session {
                     Action::Paste { primitives, offset } => operations::paste(&mut next, &primitives, offset, &mut cursor)?,
                     Action::Array { objects, columns, rows, column_step, row_step, numbering } => {
                         if let Some(ArrayNumbering::BallGrid { skip_jedec }) = numbering {
-                            operations::ball_grid_array(&mut next, &objects, columns, rows, column_step, row_step, skip_jedec, &mut cursor)?;
+                            operations::ball_grid_array(
+                                &mut next,
+                                &objects,
+                                operations::BallGridSpec { columns, rows, column_step, row_step, skip_jedec },
+                                &mut cursor,
+                            )?;
                             ball_grid_spec = Some((rows, columns));
                         } else {
                             let originals = operations::selected(&next, &objects)?;

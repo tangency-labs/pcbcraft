@@ -194,9 +194,9 @@ mod tests {
     /// Invalid or oversized ball grids are refused without panicking.
     #[test]
     fn bad_grid_dimensions_are_refused() {
-        assert_eq!(generate_identifiers(0, 4, true).unwrap_err(), "Ball-grid dimensions must be at least 1x1.");
-        assert_eq!(generate_identifiers(4, 0, true).unwrap_err(), "Ball-grid dimensions must be at least 1x1.");
-        assert_eq!(generate_identifiers(0, 0, false).unwrap_err(), "Ball-grid dimensions must be at least 1x1.");
+        assert_eq!(generate_identifiers(0, 4, true).unwrap_err(), "Ball-grid dimensions must both be at least 1.");
+        assert_eq!(generate_identifiers(4, 0, true).unwrap_err(), "Ball-grid dimensions must both be at least 1.");
+        assert_eq!(generate_identifiers(0, 0, false).unwrap_err(), "Ball-grid dimensions must both be at least 1.");
         assert!(generate_identifiers(33, 32, true).unwrap_err().contains("pad limit"));
         assert!(generate_identifiers(1, 1025, true).unwrap_err().contains("pad limit"));
         assert_eq!(generate_identifiers(32, 32, true).map(|v| v.len()), Ok(1024));

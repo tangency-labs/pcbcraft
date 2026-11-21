@@ -155,9 +155,10 @@ and footprints without non-plated holes, `pcbcraft-library-item/2` for multi-uni
 symbols, and `pcbcraft-library-item/3` for footprints with non-plated holes. It records definition identity,
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
-Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
-and 64 undo snapshots per document, so footprints with more pads than that cannot
-yet be edited here. The footprint schema itself allows 1,024 pads, 256
+Its object order is deterministic, with a 1 MiB encoded size limit, up to 512
+primitives per symbol or 1,536 primitives per footprint (covering up to 1,024
+pads plus artwork, mechanical holes and legacy graphics), and 64 undo snapshots
+per document. The footprint schema itself allows 1,024 pads, 256
 parameterized artwork objects, 64 legacy technical rectangles and 64 legacy
 silkscreen paths.
 Object/content allocation counters survive

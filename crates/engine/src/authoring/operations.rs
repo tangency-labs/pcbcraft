@@ -108,20 +108,22 @@ pub(super) fn paste(item: &mut Item, primitives: &[Primitive], offset: Point, cu
     Ok(())
 }
 
+/// Parameters for generating a ball-grid pad array from one seed pad.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct BallGridSpec {
+    pub(super) columns: u16,
+    pub(super) rows: u16,
+    pub(super) column_step: Point,
+    pub(super) row_step: Point,
+    pub(super) skip_jedec: bool,
+}
+
 /// Generate a ball-grid pad array from one seed pad, naming rows with letters and columns with 1-based numbers.
 ///
 /// The seed pad becomes cell `(0, 0)` (`A1`) and the remaining `rows * columns - 1` pads are allocated
 /// into `item`. Rejections leave the caller's committed session untouched because `item` is a candidate clone.
-pub(super) fn ball_grid_array(
-    item: &mut Item,
-    objects: &[u64],
-    columns: u16,
-    rows: u16,
-    column_step: Point,
-    row_step: Point,
-    skip_jedec: bool,
-    cursor: &mut u64,
-) -> Result<(), String> {
+pub(super) fn ball_grid_array(item: &mut Item, objects: &[u64], spec: BallGridSpec, cursor: &mut u64) -> Result<(), String> {
+    let BallGridSpec { columns, rows, column_step, row_step, skip_jedec } = spec;
     if item.kind != Kind::Footprint {
         return Err("Ball-grid numbering is only supported for footprint definitions.".into());
     }

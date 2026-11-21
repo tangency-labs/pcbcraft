@@ -394,8 +394,6 @@ impl Document {
         }
         Ok(())
     }
-    /// Validate a shared transaction and invalidate cached forms/tools after an effective edit.
-    /// Only an unchanged RemapPins transaction preserves UI state; legacy no-op actions still
     /// Validate one transaction without mutating the document, storing its readable change record.
     fn preview(&mut self, revision: u64, action: Action) -> Result<(), String> {
         if self.pending() {
@@ -406,6 +404,8 @@ impl Document {
         self.error = None;
         Ok(())
     }
+    /// Validate a shared transaction and invalidate cached forms/tools after an effective edit.
+    /// Only an unchanged RemapPins transaction preserves UI state; legacy no-op actions still
     /// invalidate their cached forms/tools. Selecting a unit clears primitive selection rather
     /// than treating its existing objects as inserts.
     fn execute(&mut self, revision: u64, action: Action) -> Result<(), String> {
