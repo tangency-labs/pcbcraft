@@ -919,7 +919,7 @@ impl Session {
                 self.revision = revision;
             }
             Planned::Edit { next, next_id, next_content_revision, revision } => {
-                self.undo.push(std::mem::replace(&mut self.item, Arc::new(next)));
+                self.undo.push(std::mem::replace(&mut self.item, next));
                 self.redo.clear();
                 if self.undo.len() > HISTORY {
                     self.undo.remove(0);
@@ -1143,7 +1143,7 @@ impl Session {
                 next.validate()?;
                 let next_content_revision = self.next_content_revision.checked_add(1).ok_or("Content revision limit reached.")?;
                 let record = summarize_change(&self.item, &next, operation, dry_run, self.revision, revision, ball_grid_spec);
-                Ok((Planned::Edit { next, next_id: cursor, next_content_revision, revision }, record))
+                Ok((Planned::Edit { next: Arc::new(next), next_id: cursor, next_content_revision, revision }, record))
             }
         }
     }
@@ -1158,7 +1158,7 @@ enum Planned {
     NoChange,
     Undo(Arc<Item>, u64),
     Redo(Arc<Item>, u64),
-    Edit { next: Item, next_id: u64, next_content_revision: u32, revision: u64 },
+    Edit { next: Arc<Item>, next_id: u64, next_content_revision: u32, revision: u64 },
 }
 
 /// Stable snake-case operation name matching the serialized [`Action`] tag.
