@@ -200,11 +200,33 @@ mod tests {
         let mut cursor = RecordEncoding::default();
         let mut out = Vec::new();
         let mut steps = 0;
-        while !cursor.step(&mut out, &many_bindings).unwrap() {
+        let mut binding_steps = 0;
+        loop {
+            let before_phase = cursor.phase;
+            let before_item = cursor.item;
+            let before_len = out.len();
+            let done = cursor.step(&mut out, &many_bindings).unwrap();
+            if before_phase == 4 && !done {
+                assert_eq!(cursor.phase, 4);
+                assert_eq!(cursor.item, before_item + 1);
+                let mut expected = Vec::new();
+                if before_item != 0 {
+                    expected.push(b',');
+                }
+                serde_json::to_writer(&mut expected, &many_bindings.class_bindings[before_item]).unwrap();
+                assert_eq!(&out[before_len..], expected.as_slice());
+                binding_steps += 1;
+            } else if before_phase == 4 {
+                assert_eq!(&out[before_len..], b"]}");
+            }
+            if done {
+                break;
+            }
             steps += 1;
             assert!(steps < 64);
         }
         assert!(cursor.at_start());
+        assert_eq!(binding_steps, many_bindings.class_bindings.len());
         assert!(steps > many_bindings.class_bindings.len());
         assert_eq!(out, serde_json::to_vec(&many_bindings).unwrap());
 
