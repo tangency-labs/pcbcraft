@@ -116,9 +116,7 @@ impl Draft {
         if let Some(object) = self.object {
             let primitive: pcbcraft_engine::authoring::Primitive = serde_json::from_value(value).map_err(|e| e.to_string())?;
             if let Some((points, stroke_nm)) = pcbcraft_engine::authoring::courtyard::courtyard_polygon(&primitive) {
-                if !(1..=2_000_000).contains(&stroke_nm) {
-                    return Err("Stroke (mm) must be between 0.001 and 2 mm.".into());
-                }
+                pcbcraft_engine::authoring::courtyard::validate_stroke(stroke_nm)?;
                 pcbcraft_engine::authoring::courtyard::validate_polygon(points)?;
             }
             Ok(Action::Replace { object, primitive })

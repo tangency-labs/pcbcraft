@@ -18,6 +18,10 @@ pub const DEFAULT_CLEARANCE_NM: i64 = 250_000;
 pub const DEFAULT_STROKE_NM: i64 = 50_000;
 /// Maximum allowed courtyard clearance when generating an outline (10.0 mm).
 pub const MAX_CLEARANCE_NM: i64 = 10_000_000;
+/// Thinnest courtyard outline stroke (0.001 mm), the library graphic limit.
+pub const MIN_STROKE_NM: i64 = crate::library_graphics::MIN_STROKE_NM;
+/// Widest courtyard outline stroke (2 mm), the library graphic limit.
+pub const MAX_STROKE_NM: i64 = crate::library_graphics::MAX_STROKE_NM;
 /// Minimum number of vertices in a closed courtyard outline.
 pub const MIN_VERTICES: usize = 3;
 /// Maximum number of vertices in a closed courtyard outline (matches `Graphic::validate`).
@@ -88,6 +92,7 @@ pub fn courtyard_polygon(primitive: &Primitive) -> Option<(&[Point], i64)> {
 /// vertices, zero area, self-intersecting edges, out-of-bounds coordinates, or invalid
 /// stroke widths.
 pub fn make_courtyard_polygon(points: Vec<Point>, stroke_nm: i64) -> Result<Primitive, String> {
+    validate_stroke(stroke_nm)?;
     validate_polygon(&points)?;
     let graphic = Graphic { geometry: Geometry::Polyline { points, closed: true }, stroke_nm, fill: Fill::None };
     graphic.validate(footprint::MAX_OFFSET_NM)?;
@@ -103,6 +108,7 @@ pub fn generate(item: &Item, clearance_nm: i64, source: CourtyardSource, stroke_
     if !(0..=MAX_CLEARANCE_NM).contains(&clearance_nm) {
         return Err("Courtyard clearance must be between 0 and 10 mm.".into());
     }
+    validate_stroke(stroke_nm)?;
     let mut bounds: Option<(i64, i64, i64, i64)> = None;
     for primitive in item.objects.values() {
         let include = match (source, primitive) {
@@ -186,11 +192,21 @@ pub fn with_removed_vertex(primitive: &Primitive, index: usize) -> Result<Primit
     make_courtyard_polygon(updated, stroke_nm)
 }
 
-/// Compute the integer midpoint of edge `edge_index` (wrapping from the last vertex to the first).
+/// Compute the midpoint of edge `edge_index` (wrapping from the last vertex to the first),
+/// rounded to the nanometre grid. An odd coordinate sum rounds toward negative infinity on
+/// both axes, so the rounding is the same on either side of the origin and the point is at
+/// most half a nanometre from the true midpoint.
 pub fn edge_midpoint(points: &[Point], edge_index: usize) -> Option<Point> {
     let a = points.get(edge_index)?;
     let b = points.get((edge_index + 1) % points.len())?;
-    Some(Point { x_nm: ((i128::from(a.x_nm) + i128::from(b.x_nm)) / 2) as i64, y_nm: ((i128::from(a.y_nm) + i128::from(b.y_nm)) / 2) as i64 })
+    let half = |p: i64, q: i64| i64::try_from((i128::from(p) + i128::from(q)).div_euclid(2)).ok();
+    Some(Point { x_nm: half(a.x_nm, b.x_nm)?, y_nm: half(a.y_nm, b.y_nm)? })
+}
+
+/// Validate a courtyard outline stroke width against [`MIN_STROKE_NM`]..=[`MAX_STROKE_NM`], with
+/// the same message the dialog, the inspector and the live command report.
+pub fn validate_stroke(stroke_nm: i64) -> Result<(), String> {
+    if (MIN_STROKE_NM..=MAX_STROKE_NM).contains(&stroke_nm) { Ok(()) } else { Err("Stroke (mm) must be between 0.001 and 2 mm.".into()) }
 }
 
 /// Validate that `points` forms a bounded, non-degenerate, non-self-intersecting closed polygon.
@@ -410,7 +426,7 @@ mod tests {
                             text: "${REFERENCE}_LONG_FAB_LABEL".into(),
                             height_nm: 2_000_000,
                             rotation: 0,
-                            align: crate::library_graphics::TextAlign::Middle,
+                            align: crate::schematic::TextAlign::Middle,
                         },
                         stroke_nm: 120_000,
                         fill: Fill::None,
@@ -443,6 +459,49 @@ mod tests {
         assert_eq!(after.area_nm2, before.area_nm2);
         assert_eq!(after.width_nm, before.width_nm);
         assert_eq!(after.height_nm, before.height_nm);
+    }
+
+    /// One stroke check with one message guards generation and every polygon edit, at the same
+    /// limits as the library graphic validator.
+    #[test]
+    fn courtyard_stroke_range_is_shared_and_reported_with_the_ui_message() {
+        let message = "Stroke (mm) must be between 0.001 and 2 mm.";
+        assert_eq!((MIN_STROKE_NM, MAX_STROKE_NM), (1, 2_000_000));
+        assert!(validate_stroke(MIN_STROKE_NM).is_ok() && validate_stroke(MAX_STROKE_NM).is_ok());
+        assert_eq!(validate_stroke(0).unwrap_err(), message);
+        assert_eq!(validate_stroke(MAX_STROKE_NM + 1).unwrap_err(), message);
+        let item = Item::new(Kind::Footprint).unwrap();
+        assert_eq!(generate(&item, DEFAULT_CLEARANCE_NM, CourtyardSource::PadsAndBody, 5_000_000).unwrap_err(), message);
+        let square = vec![pt(0, 0), pt(1_000_000, 0), pt(1_000_000, 1_000_000), pt(0, 1_000_000)];
+        assert_eq!(make_courtyard_polygon(square.clone(), 0).unwrap_err(), message);
+        assert!(make_courtyard_polygon(square, MAX_STROKE_NM).is_ok());
+    }
+
+    /// Odd coordinate sums round toward negative infinity on both sides of the origin, so a
+    /// diagonal-edge midpoint is the nanometre grid point at most half a nanometre from the true
+    /// midpoint and the inserted vertex keeps the outline simple.
+    #[test]
+    fn edge_midpoint_rounds_odd_sums_to_the_nanometre_grid_consistently() {
+        // Even sums are exact; odd sums floor on both signs (truncation would give -1 and 0).
+        assert_eq!(edge_midpoint(&[pt(-4, 6), pt(2, -2)], 0), Some(pt(-1, 2)));
+        assert_eq!(edge_midpoint(&[pt(-3, 1), pt(0, 0)], 0), Some(pt(-2, 0)));
+        assert_eq!(edge_midpoint(&[pt(1, 2), pt(2, 5)], 0), Some(pt(1, 3)));
+        // The wrapping edge from the last vertex back to the first, and an extreme sum.
+        assert_eq!(edge_midpoint(&[pt(0, 0), pt(10, 0), pt(-7, -9)], 2), Some(pt(-4, -5)));
+        assert_eq!(edge_midpoint(&[pt(i64::MAX, i64::MIN), pt(i64::MAX, i64::MIN)], 0), Some(pt(i64::MAX, i64::MIN)));
+        assert_eq!(edge_midpoint(&[], 0), None);
+        assert_eq!(edge_midpoint(&[pt(0, 0), pt(1, 1)], 2), None);
+
+        // A diagonal edge with odd sums on both axes, in negative coordinates.
+        let primitive =
+            make_courtyard_polygon(vec![pt(-1_000_001, -1_000_000), pt(0, -1_000_000), pt(0, 0), pt(-1_000_000, -3)], DEFAULT_STROKE_NM).unwrap();
+        let (points, _) = courtyard_polygon(&primitive).unwrap();
+        let mid = edge_midpoint(points, 3).unwrap();
+        assert_eq!(mid, pt(-1_000_001, -500_002));
+        let inserted = with_inserted_vertex(&primitive, 3, mid).unwrap();
+        let (after, _) = courtyard_polygon(&inserted).unwrap();
+        assert_eq!(after.len(), 5);
+        assert!(is_simple_polygon(after));
     }
 
     /// Pads-only generation ignores a wider fabrication outline.

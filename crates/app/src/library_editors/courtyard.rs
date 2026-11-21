@@ -68,9 +68,7 @@ impl CourtyardDraft {
             return Err("Clearance (mm) must be between 0 and 10 mm.".into());
         }
         let stroke_nm = units::parse_length(&self.stroke, units::Unit::Mm).map_err(|e| format!("Stroke (mm): {e}"))?;
-        if !(1..=2_000_000).contains(&stroke_nm) {
-            return Err("Stroke (mm) must be between 0.001 and 2 mm.".into());
-        }
+        courtyard::validate_stroke(stroke_nm)?;
         Ok(Action::GenerateCourtyard { clearance_nm, source, stroke_nm, replace_existing: self.replace_existing })
     }
 
@@ -246,14 +244,17 @@ impl Document {
         let item = self.session.snapshot();
         let courtyard_ids: Vec<u64> = item.objects.iter().filter(|(_, p)| courtyard::is_courtyard_primitive(p)).map(|(id, _)| *id).collect();
         properties::section(ui, "Courtyard");
-        if let Some(first_id) = courtyard_ids.first().copied() {
+        if let Some(first_id) = self.first_courtyard_id() {
             let count = courtyard_ids.len();
             let outline_word = if count == 1 { "outline" } else { "outlines" };
             let shape_word = if count == 1 { "shape" } else { "shapes" };
             let summary = match item.objects.get(&first_id).and_then(courtyard::courtyard_polygon) {
                 Some((points, _)) => match courtyard::metrics(points) {
+                    // With several outlines the size and vertices are those of the first one,
+                    // the outline "Select courtyard" selects, and the label says so.
                     Some(m) => {
-                        format!("{count} {outline_word} · {} × {} mm · {} vertices", format_mm(m.width_nm), format_mm(m.height_nm), m.vertex_count)
+                        let size = format!("{} × {} mm · {} vertices", format_mm(m.width_nm), format_mm(m.height_nm), m.vertex_count);
+                        if count == 1 { format!("1 outline · {size}") } else { format!("{count} outlines · first of {count}: {size}") }
                     }
                     None => format!("{count} courtyard {outline_word}"),
                 },
@@ -361,7 +362,7 @@ impl Document {
             let mut apply_clicked = false;
             ui.horizontal(|ui| {
                 add_vertex = controls::enabled_button(ui, !dirty && selected_vertex.is_some() && count < courtyard::MAX_VERTICES, "Add vertex")
-                    .on_hover_text("Insert a vertex at the exact midpoint of the next edge")
+                    .on_hover_text("Insert a vertex at the midpoint of the next edge, on the nanometre grid")
                     .clicked();
                 remove_vertex = controls::enabled_button(ui, !dirty && selected_vertex.is_some() && count > courtyard::MIN_VERTICES, "Remove vertex")
                     .on_hover_text("Remove the selected vertex (Backspace)")
@@ -587,6 +588,21 @@ mod tests {
         mid + (mid - centre).normalized() * 40.0
     }
 
+    /// Revision, Undo/Redo availability and the whole item of one library document, captured
+    /// before a refused action and compared after it to prove the refusal changed nothing.
+    #[derive(Debug, PartialEq)]
+    struct DocState {
+        revision: u64,
+        can_undo: bool,
+        can_redo: bool,
+        item: std::sync::Arc<Item>,
+    }
+
+    fn doc_state(app: &PcbApp, id: u64) -> DocState {
+        let session = &app.library_editors.documents[&id].session;
+        DocState { revision: session.revision(), can_undo: session.can_undo(), can_redo: session.can_redo(), item: session.snapshot() }
+    }
+
     /// Whether the button labelled `label` is disabled in the accessibility tree.
     fn button_disabled(h: &Harness<'_, PcbApp>, label: &str) -> bool {
         h.get_by_role_and_label(egui::Role::Button, label).accesskit_node().is_disabled()
@@ -795,9 +811,11 @@ mod tests {
             let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&selected]).unwrap();
             doc.camera.screen(pts[1], area)
         };
+        let before = doc_state(h.state(), id);
         click_at(&mut h, v1_screen);
         assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(0));
         assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some("Apply or reset the property fields before switching vertices."));
+        assert_eq!(doc_state(h.state(), id), before);
 
         // Pressing C while edits are pending refuses with an explicit error and keeps show_courtyard false.
         h.state_mut().library_editors.documents.get_mut(&id).unwrap().show_courtyard = false;
@@ -808,6 +826,7 @@ mod tests {
         assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some("Apply or reset the property fields before changing tools."));
         assert!(!h.state().library_editors.documents[&id].show_courtyard);
         assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Select));
+        assert_eq!(doc_state(h.state(), id), before);
         h.state_mut().library_editors.documents.get_mut(&id).unwrap().show_courtyard = true;
 
         // Positive controls after Reset: the same click selects vertex 1 and the same C arms Courtyard.
@@ -1010,9 +1029,10 @@ mod tests {
             )
             .unwrap();
         let rev_after_bg = h.state().library_editors.documents[&id].session.revision();
+        let before = doc_state(h.state(), id);
 
         crate::tests::click(&mut h, "Generate");
-        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_after_bg);
+        assert_eq!(doc_state(h.state(), id), before);
         if let Dialog::LibraryCourtyard(draft) = &h.state().dialog {
             assert_eq!(draft.revision, rev_after_bg);
             assert!(draft.has_existing);
@@ -1134,9 +1154,15 @@ mod tests {
             }
             json!({"document":id,"expected_revision":revision,"action":action})
         };
+        let before = doc_state(&app, id);
         assert!(app.run_window_command(&ctx, "app.library_edit", &generate(1, None)).is_err());
+        assert_eq!(doc_state(&app, id), before);
         assert!(app.run_window_command(&ctx, "app.library_edit", &generate(0, Some(("margin_nm", json!(1))))).is_err());
-        assert_eq!(app.library_editors.documents[&id].session.revision(), 0);
+        assert_eq!(doc_state(&app, id), before);
+        // An out-of-range stroke is refused with the same message as the dialog and inspector.
+        let wide = app.run_window_command(&ctx, "app.library_edit", &generate(0, Some(("stroke_nm", json!(5_000_000)))));
+        assert!(wide.unwrap_err().contains("Stroke (mm) must be between 0.001 and 2 mm."));
+        assert_eq!(doc_state(&app, id), before);
         app.run_window_command(&ctx, "app.library_edit", &generate(0, None)).unwrap();
         let item = app.library_editors.documents[&id].session.snapshot();
         let outlines: Vec<_> = item.objects.values().filter_map(courtyard::courtyard_polygon).collect();
@@ -1153,13 +1179,43 @@ mod tests {
 
         app.run_window_command(&ctx, "app.library_new", &json!({"kind":"symbol"})).unwrap();
         let symbol = app.library_editors.active.unwrap();
+        let symbol_before = doc_state(&app, symbol);
         let refused = app.run_window_command(
             &ctx,
             "app.library_edit",
             &json!({"document":symbol,"expected_revision":0,"action":{"operation":"generate_courtyard","clearance_nm":250_000}}),
         );
         assert!(refused.is_err());
-        assert_eq!(app.library_editors.documents[&symbol].session.revision(), 0);
+        assert_eq!(doc_state(&app, symbol), symbol_before);
+    }
+
+    /// Hiding the courtyard layer while the selected outline has pending property edits is
+    /// refused: the layer stays visible, the selection, vertex and edits are kept and the
+    /// document is untouched. After Reset the same button hides the layer and deselects it.
+    #[test]
+    fn courtyard_layer_hide_refused_while_pending_keeps_selection_and_document() {
+        let (mut h, id, cy_id) = harness_with_generated_courtyard();
+        select_vertex_on_canvas(&mut h, id, cy_id, 1);
+        type_into(&mut h, "Vertex X (mm)", "2");
+        assert!(h.state().library_editors.documents[&id].pending());
+        let before = doc_state(h.state(), id);
+
+        crate::tests::click(&mut h, "Courtyard layer");
+        let doc = &h.state().library_editors.documents[&id];
+        assert_eq!(doc.error.as_deref(), Some("Apply or reset the property fields before changing selection."));
+        assert!(doc.show_courtyard);
+        assert!(doc.selection.contains(&cy_id));
+        assert_eq!(doc.selected_vertex, Some(1));
+        assert!(doc.pending());
+        assert_eq!(doc_state(h.state(), id), before);
+
+        // Positive control: after Reset the same button hides the layer and clears the selection.
+        crate::tests::click(&mut h, "Reset");
+        crate::tests::click(&mut h, "Courtyard layer");
+        let doc = &h.state().library_editors.documents[&id];
+        assert!(!doc.show_courtyard);
+        assert!(!doc.selection.contains(&cy_id));
+        assert_eq!(doc_state(h.state(), id), before);
     }
 
     /// With a vertex selected and property edits pending, Backspace refuses with an explicit
@@ -1172,6 +1228,7 @@ mod tests {
         type_into(&mut h, "Vertex X (mm)", "2");
         assert!(h.state().library_editors.documents[&id].pending());
         let rev = h.state().library_editors.documents[&id].session.revision();
+        let before = doc_state(h.state(), id);
 
         // Clicking empty canvas takes focus from the field; the selection change is refused.
         let empty = empty_point_outside_edge(&h, id, cy_id, 2);
@@ -1180,9 +1237,11 @@ mod tests {
         assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some("Apply or reset the property fields before changing selection."));
         assert!(h.state().library_editors.documents[&id].selection.contains(&cy_id));
         assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(2));
+        assert_eq!(doc_state(h.state(), id), before);
 
         h.key_press(egui::Key::Backspace);
         h.run();
+        assert_eq!(doc_state(h.state(), id), before);
         let doc = &h.state().library_editors.documents[&id];
         assert_eq!(doc.error.as_deref(), Some("Apply or reset the property fields before removing a vertex."));
         assert_eq!(doc.session.revision(), rev);
@@ -1204,8 +1263,10 @@ mod tests {
         assert_eq!(doc.selected_vertex, Some(2));
 
         // At three vertices Backspace refuses and keeps the triangle.
+        let triangle = doc_state(h.state(), id);
         h.key_press(egui::Key::Backspace);
         h.run();
+        assert_eq!(doc_state(h.state(), id), triangle);
         let doc = &h.state().library_editors.documents[&id];
         assert_eq!(doc.error.as_deref(), Some("A courtyard outline needs at least three vertices."));
         assert_eq!(doc.session.revision(), rev + 1);
@@ -1304,8 +1365,10 @@ mod tests {
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
         h.get_by_label("Stroke (mm)").type_text("5");
         h.run();
+        let before = doc_state(h.state(), id);
         crate::tests::click(&mut h, "Apply");
         assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some("Stroke (mm) must be between 0.001 and 2 mm."));
+        assert_eq!(doc_state(h.state(), id), before);
 
         // Valid inspector Stroke commits on Enter.
         h.get_by_label("Stroke (mm)").click();
@@ -1561,6 +1624,38 @@ mod tests {
         h.run();
         assert!(h.state().library_editors.documents[&id].selected.is_none());
         assert!(h.query_by_label("Select courtyard").is_some());
+        assert!(h.query_by_label("1 outline · 2.10 × 1.30 mm · 4 vertices").is_some());
+    }
+
+    /// With two outlines (generated without replacing), the summary labels its size as the
+    /// first outline's, and Select courtyard selects that first outline.
+    #[test]
+    fn courtyard_summary_with_two_outlines_names_the_first() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        for (revision, clearance_nm) in [(0, courtyard::DEFAULT_CLEARANCE_NM), (1, 500_000)] {
+            app.library_editors
+                .edit(
+                    id,
+                    revision,
+                    Action::GenerateCourtyard {
+                        clearance_nm,
+                        source: CourtyardSource::PadsAndBody,
+                        stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                        replace_existing: false,
+                    },
+                )
+                .unwrap();
+        }
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select_many(Default::default()).unwrap();
+        h.run();
+        assert!(h.query_by_label("2 outlines · first of 2: 2.10 × 1.30 mm · 4 vertices").is_some());
+        let first = h.state().library_editors.documents[&id].first_courtyard_id().unwrap();
+        crate::tests::click(&mut h, "Select courtyard");
+        assert_eq!(h.state().library_editors.documents[&id].selected, Some(first));
     }
 
     /// Snapshot state: Courtyard outline inspector displaying a self-intersection validation error
