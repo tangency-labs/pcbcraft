@@ -234,7 +234,7 @@ fn native_selection(update: &FootprintUpdate<'_>, assignment: &Assignment) -> Re
     let before = &old.resolved.definition;
     let after = &part.definition;
     let symbol = &update.instance.definition;
-    let package = &after.packages[package_id];
+    let package = after.packages.get(package_id).ok_or_else(|| invalid("The candidate native part has no matching package."))?;
     let unchanged = before.symbol == after.symbol
         && matches_pinned(symbol, part.schematic_symbol().map_err(CommandError::InvalidParams)?)
         && before.category == after.category

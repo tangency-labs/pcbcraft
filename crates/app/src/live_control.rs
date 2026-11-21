@@ -747,7 +747,7 @@ mod tests {
     fn guarded_execution_is_normalized_before_editor_dispatch() -> io::Result<()> {
         let endpoint = LiveControl::start(&egui::Context::default())?;
         let timeout = IO_TIMEOUT / 2;
-        let body = json!({"method":"engine.execute_versioned", "params":{"command":"project.new", "version":pcbcraft_engine::command_api::COMMAND_API_VERSION}});
+        let body = json!({"method":"engine.execute_versioned", "params":{"command":"project.new", "version":1}});
         let _client = Connection::connect(endpoint.port, &endpoint.token, body.clone(), timeout)?;
         let request = endpoint.requests.recv_timeout(timeout).unwrap();
         assert_eq!(request.body()["method"], "engine.execute");
