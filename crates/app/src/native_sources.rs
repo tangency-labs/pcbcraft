@@ -410,6 +410,24 @@ impl PcbApp {
     }
 }
 
+/// Diagnose unsupported folder item paths before loading the transported document map so a bad
+/// filename (such as a dotfile under `lifecycle-assertions/`) becomes an adapter problem rather
+/// than aborting the whole browser folder import.
+#[cfg(any(target_arch = "wasm32", test))]
+fn load_folder_documents(documents: sources::Documents, mut problems: Vec<String>) -> Result<NativeSource, String> {
+    let mut supported = sources::Documents::new();
+    for (path, text) in documents {
+        if sources::is_document_path(&path) {
+            supported.insert(path, text);
+        } else {
+            problems.push(format!("{path}: unsupported native item path"));
+        }
+    }
+    let mut source = NativeSource::load(&supported)?;
+    source.add_adapter_problems(problems);
+    Ok(source)
+}
+
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::*;
@@ -424,12 +442,22 @@ mod web {
           const files=input.files||[];if(!files.length)return resolve(null);
           if(!folder){if(files[0].size>maxSourceBytes*2)throw Error(`Library bundle exceeds ${maxSourceBytes*2/1048576} MiB`);return resolve(await files[0].arrayBuffer());}
           const documents={};const problems=[];let total=0,count=0;
+          const utf8=new TextEncoder();
+          const isDocumentPath=(path)=>{
+            if(path==='library.json')return true;
+            const slash=path.indexOf('/');
+            if(slash<0)return false;
+            const dir=path.slice(0,slash),name=path.slice(slash+1);
+            return /^(symbols|footprints|categories|parts|manufacturer-parts|lifecycle-assertions)$/.test(dir)
+              &&name.endsWith('.json')&&!name.startsWith('.')
+              &&!/[/\\]|\p{Cc}/u.test(name)&&utf8.encode(name).length<=128;
+          };
           for(const file of files){
             const pieces=file.webkitRelativePath.split('/');pieces.shift();const path=pieces.join('/');
             // Root notices are not native documents; preserve the native folder adapter's scope.
             if(path!=='library.json'&&!/^(symbols|footprints|categories|parts|manufacturer-parts|lifecycle-assertions)\//.test(path))continue;
             if(++count>maxFiles)throw Error(`Library source exceeds ${maxFiles} files`);
-            if(path!=='library.json'&&!/^(symbols|footprints|categories|parts|manufacturer-parts|lifecycle-assertions)\/[^/]+\.json$/.test(path)){problems.push(path+': unsupported native item path');continue;}
+            if(!isDocumentPath(path)){problems.push(path+': unsupported native item path');continue;}
             if(file.size>maxFileBytes){if(path==='library.json')throw Error('Manifest exceeds 1 MiB');problems.push(path+': file exceeds 1 MiB');continue;}
             if((total+=file.size)>maxSourceBytes)throw Error(`Library source exceeds ${maxSourceBytes/1048576} MiB`);
             if(Object.hasOwn(documents,path))throw Error('Duplicate library path');
@@ -473,8 +501,7 @@ mod web {
             problems: Vec<String>,
         }
         let folder: Folder = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-        let mut source = NativeSource::load(&folder.documents)?;
-        source.add_adapter_problems(folder.problems);
+        let source = load_folder_documents(folder.documents, folder.problems)?;
         Ok(Some((Arc::new(source), None, false)))
     }
     /// Bound picked bytes before copying into Wasm memory and use the native snapshot validator.
