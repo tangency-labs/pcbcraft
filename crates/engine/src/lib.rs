@@ -35,6 +35,7 @@ pub mod persistence;
 pub mod schematic;
 pub mod selection;
 mod session_scope;
+pub mod sheet_split;
 pub mod sheets;
 pub mod wire;
 pub use board::assembly_profile::{ADOPT_ASSEMBLY_PROFILE, PREVIEW_ASSEMBLY_PROFILE, SET_ASSEMBLY_PROFILE};
@@ -1630,6 +1631,12 @@ const CATALOG: &[Command] = &[
         title: "Delete Symbol",
         summary: "Remove a symbol, its incident wires and unused component. With an accepted baseline, retain its footprint pending review; otherwise remove it. Undoable.",
         params: &[SYMBOL, EXPECTED_REVISION],
+    },
+    Command {
+        id: sheet_split::PREVIEW,
+        title: "Preview Split to New Sheet",
+        summary: "Review moving selected objects to a new child sheet without editing: the symbols, part instances, wires and labels that move with their IDs, the boundary nets that become ports, and global or power nets that need none.",
+        params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..EXPECTED_REVISION }],
     },
     Command {
         id: annotation::PREVIEW,
@@ -3290,6 +3297,7 @@ impl Session {
             | DELETE_SYMBOL
             | SET_SYMBOL_FIELDS
             | annotation::PREVIEW
+            | sheet_split::PREVIEW
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
@@ -3450,7 +3458,7 @@ impl Session {
     /// review report. Queries never change authored project state or history.
     /// Fabrication queries generate their file data once, after shared command validation.
     /// Board copy and cut return clipboard text bounded by the shared clipboard limit.
-    /// Authorized symbol-field dry runs and annotation previews return proposals without
+    /// Authorized symbol-field dry runs, annotation previews and split previews return proposals without
     /// publishing edits. Failed commands leave the project intact. Scope refusals precede
     /// validation; otherwise a stale `expected_revision` is reported first unless the command
     /// returns a stale query outcome, as `pcb.plan_route` does.
@@ -3471,6 +3479,10 @@ impl Session {
         if id == annotation::PREVIEW {
             self.validate_project_command(id, params)?;
             return self.preview_annotation(params);
+        }
+        if id == sheet_split::PREVIEW {
+            self.validate_project_command(id, params)?;
+            return self.preview_split(params);
         }
         if id == sheets::page::LIST_TEMPLATES {
             check_params(command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?, params)?;
@@ -3755,6 +3767,7 @@ impl Session {
                 | DELETE_SYMBOL
                 | SET_SYMBOL_FIELDS
                 | annotation::PREVIEW
+                | sheet_split::PREVIEW
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
@@ -3954,6 +3967,9 @@ impl Session {
             SET_SYMBOL_FIELDS => self.set_symbol_fields(params)?,
             annotation::PREVIEW => {
                 self.preview_annotation(params)?;
+            }
+            sheet_split::PREVIEW => {
+                self.preview_split(params)?;
             }
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,

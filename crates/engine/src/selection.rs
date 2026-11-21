@@ -166,7 +166,7 @@ impl Selection {
     }
 
     /// Reject an empty group or any missing identity before constructing an edit.
-    fn validate(&self, project: &Project) -> Result<(), CommandError> {
+    pub(crate) fn validate(&self, project: &Project) -> Result<(), CommandError> {
         let mut found = self.clone();
         found.retain(project);
         if self.is_empty() || &found != self {

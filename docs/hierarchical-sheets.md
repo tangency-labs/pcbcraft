@@ -53,3 +53,31 @@ and preserves unselected incident routes on both sides of an interface. See the
 [clipboard guide](clipboard.md#hierarchical-clipboard) for reuse, naming,
 versioned exchange and cancellation. These operations keep the existing
 single-parent model and do not introduce repeated sheet instances.
+
+## Preview a split to a new sheet
+
+`schematic.preview_split_sheet` reviews moving selected objects from one sheet
+onto a new child sheet without editing anything. Give it the sheet, the `items`
+selection used by Copy and Move (symbols, wires, named-net anchors and
+no-connect markers) and the new sheet's `name`, which must be free without case.
+The reply lists:
+
+- the selected symbols with their part instances and designators, which a split
+  would keep, and parts whose other units stay behind (units of one part may sit
+  on different sheets, so this is reported, not refused);
+- the wires and junctions that would travel, and the `cut_wires` with one end on
+  each side;
+- the `ports`: each net with members on both sides becomes one hierarchical
+  label and sheet pin, named after the net. An unnamed net uses its generated
+  `Net-NNNN` name and is marked `generated`. The proposed direction follows the
+  pin types: driven only from inside is output (tri-state when every inside
+  driver is tri-state), driven only from outside is input, driven from both
+  sides or carrying a bidirectional pin is bidirectional, otherwise passive;
+- the `global_nets` that need no port because the same global label or power
+  symbol name sits on both sides. A power symbol left outside the selection does
+  not carry its name inside, so that net is listed as a port.
+
+More than 64 ports, an empty or unknown selection, a taken or blank name, a
+full project and a stale `expected_revision` are refused. The revision, undo
+history and project files do not change, and read-only sessions may run it.
+Applying a split is not available yet.

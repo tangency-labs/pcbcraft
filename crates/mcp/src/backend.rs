@@ -202,6 +202,7 @@ fn serve_session(session: &mut Session, method: &str, params: &Value, api_versio
                         | pcbcraft_engine::part_groups::INSPECT_GROUPS
                         | pcbcraft_engine::PREVIEW_UPDATE
                         | pcbcraft_engine::annotation::PREVIEW
+                        | pcbcraft_engine::sheet_split::PREVIEW
                         | pcbcraft_engine::PREVIEW_ASSEMBLY_PROFILE
                         | pcbcraft_engine::PREVIEW_BOARD_SETUP
                         | pcbcraft_engine::no_connect::CHECK
