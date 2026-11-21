@@ -2355,6 +2355,7 @@ pub(crate) fn take_board_record_writes() -> usize {
 /// Resumable native board document size check matching [`check_board_document_size`] byte-for-byte.
 pub(crate) struct BoardSizeCheck {
     bytes: BoardByteCounter,
+    header: BoardHeaderSteps,
     phase: u8,
     cursor: usize,
     last_assignment: Option<u64>,
@@ -2367,12 +2368,27 @@ impl BoardSizeCheck {
     /// Start counting native board bytes; callers that already validated teardrops may skip
     /// repeating [`crate::board::teardrop::validate`].
     pub(crate) fn new(validate_teardrops: bool) -> Self {
-        Self { bytes: BoardByteCounter::default(), phase: 0, cursor: 0, last_assignment: None, first: true, validate_teardrops, completed: 0 }
+        Self {
+            bytes: BoardByteCounter::default(),
+            header: BoardHeaderSteps::new(),
+            phase: 0,
+            cursor: 0,
+            last_assignment: None,
+            first: true,
+            validate_teardrops,
+            completed: 0,
+        }
     }
 
-    /// Monotonic work count across header prefix and serialized board records.
+    /// Native board bytes counted so far; equals the saved board document once `step` returns true.
+    #[cfg(test)]
+    pub(crate) fn byte_count(&self) -> usize {
+        self.bytes.0
+    }
+
+    /// Monotonic work count across header units and serialized board records.
     pub(crate) fn progress(&self, project: &Project) -> (usize, usize) {
-        let total = 1usize
+        let total = BoardHeaderSteps::total(project)
             .saturating_add(project.board.teardrops.len())
             .saturating_add(project.board.tracks.len())
             .saturating_add(project.board.vias.len())
@@ -2390,9 +2406,12 @@ impl BoardSizeCheck {
             return Ok(false);
         }
         if self.phase == 0 {
-            board_header_prefix(&mut self.bytes, project, self.validate_teardrops)?;
-            budget -= 1;
-            self.completed = self.completed.saturating_add(1);
+            let before = budget;
+            let done = self.header.step(&mut self.bytes, project, self.validate_teardrops, &mut budget)?;
+            self.completed = self.completed.saturating_add(before - budget);
+            if !done {
+                return Ok(false);
+            }
             self.phase = 1;
             self.cursor = 0;
             self.first = true;
@@ -2547,7 +2566,177 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
 /// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
+///
+/// The header is written in [`BoardHeaderSteps`] units; one unbounded step is the full writer.
 fn board_header_prefix(bytes: &mut impl Write, project: &Project, validate_teardrops: bool) -> Result<(), String> {
+    let mut budget = usize::MAX;
+    if BoardHeaderSteps::new().step(bytes, project, validate_teardrops, &mut budget)? { Ok(()) } else { Err("board header did not complete".into()) }
+}
+
+const HEADER_OPEN: u8 = 0;
+const HEADER_MATERIALS: u8 = 1;
+const HEADER_LAYERS: u8 = 2;
+const HEADER_STRATA: u8 = 3;
+const HEADER_FIELDS: u8 = 4;
+const HEADER_GRAPHIC_LAYERS: u8 = 5;
+const HEADER_GRAPHIC_ITEMS: u8 = 6;
+const HEADER_ZONES: u8 = 7;
+const HEADER_ARCS: u8 = 8;
+const HEADER_DONE: u8 = 9;
+
+/// Resumable board header writer. The validated opening and the single-value fields (baseline,
+/// rules, placement origin, assembly profiles, silkscreen and outline) are one unit each; every
+/// setup material, layer and stratum, graphics layer and item, zone and arc is one unit. Lists
+/// keep the full writer's openers, separators, closers and empty forms.
+struct BoardHeaderSteps {
+    phase: u8,
+    cursor: usize,
+    first: bool,
+}
+
+impl BoardHeaderSteps {
+    /// Start before the validated opening.
+    fn new() -> Self {
+        Self { phase: HEADER_OPEN, cursor: 0, first: true }
+    }
+
+    /// Header units: the opening and field units plus one per variable-sized header record.
+    fn total(project: &Project) -> usize {
+        let board = &project.board;
+        let setup = board
+            .setup
+            .as_ref()
+            .map_or(0, |setup| setup.materials().len().saturating_add(setup.layers().len()).saturating_add(setup.stackup().strata.len()));
+        let graphics = board.drawings.as_ref().map_or(0, |graphics| graphics.layers.len().saturating_add(graphics.items.len()));
+        2usize.saturating_add(setup).saturating_add(graphics).saturating_add(board.zones.len()).saturating_add(board.arcs.len())
+    }
+
+    /// Enter the next header list with a fresh cursor and separator state.
+    fn advance(&mut self, phase: u8) {
+        self.phase = phase;
+        self.cursor = 0;
+        self.first = true;
+    }
+
+    /// Continue one header list: write its opener before its first record (or alone when the
+    /// list is empty), then records while budget lasts. Returns true once every record is
+    /// written; the caller then writes the list's closer.
+    fn records<T: Serialize>(&mut self, bytes: &mut impl Write, items: &[T], opener: &[u8], budget: &mut usize) -> Result<bool, String> {
+        if self.cursor < items.len() && *budget == 0 {
+            return Ok(false);
+        }
+        if self.first {
+            bytes.write_all(opener).map_err(|error| error.to_string())?;
+        }
+        let end = self.cursor.saturating_add(*budget).min(items.len());
+        for item in &items[self.cursor..end] {
+            record(bytes, &mut self.first, item)?;
+        }
+        *budget -= end - self.cursor;
+        self.cursor = end;
+        Ok(self.cursor == items.len())
+    }
+
+    /// Advance at most `budget` header units, decrementing it by the units done. Returns
+    /// `Ok(true)` once the header through the arcs list is written.
+    fn step(&mut self, bytes: &mut impl Write, project: &Project, validate_teardrops: bool, budget: &mut usize) -> Result<bool, String> {
+        let board = &project.board;
+        loop {
+            match self.phase {
+                HEADER_OPEN => {
+                    if *budget == 0 {
+                        return Ok(false);
+                    }
+                    board_header_open(bytes, project, validate_teardrops)?;
+                    *budget -= 1;
+                    self.advance(if board.setup.is_some() { HEADER_MATERIALS } else { HEADER_FIELDS });
+                }
+                HEADER_MATERIALS | HEADER_LAYERS | HEADER_STRATA => {
+                    let setup = board.setup.as_ref().ok_or("board setup changed during the header count")?;
+                    if self.phase == HEADER_MATERIALS {
+                        if !setup.materials().is_empty() {
+                            if !self.records(bytes, setup.materials(), b"    \"materials\": [\n", budget)? {
+                                return Ok(false);
+                            }
+                            bytes.write_all(b"    ],\n").map_err(|error| error.to_string())?;
+                        }
+                        self.advance(HEADER_LAYERS);
+                    } else if self.phase == HEADER_LAYERS {
+                        if !self.records(bytes, setup.layers(), b"    \"layers\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        write!(bytes, "    ],\n    \"stackup\": {{\n      \"id\": \"{}\",\n      \"strata\": [\n", setup.stackup().id)
+                            .map_err(|e| e.to_string())?;
+                        self.advance(HEADER_STRATA);
+                    } else {
+                        let stackup = setup.stackup();
+                        if !self.records(bytes, &stackup.strata, b"", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
+                        for (field, value) in [
+                            ("finished_thickness_nm", stackup.finished_thickness_nm),
+                            ("finished_thickness_tolerance_nm", stackup.finished_thickness_tolerance_nm),
+                            ("declared_minimum_thickness_nm", stackup.declared_minimum_thickness_nm),
+                        ] {
+                            if let Some(value) = value {
+                                write!(bytes, ",\n      \"{field}\": {value}").map_err(|e| e.to_string())?;
+                            }
+                        }
+                        bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
+                        self.advance(HEADER_FIELDS);
+                    }
+                }
+                HEADER_FIELDS => {
+                    if *budget == 0 {
+                        return Ok(false);
+                    }
+                    board_header_fields(bytes, project)?;
+                    *budget -= 1;
+                    self.advance(if board.drawings.is_some() { HEADER_GRAPHIC_LAYERS } else { HEADER_ZONES });
+                }
+                HEADER_GRAPHIC_LAYERS | HEADER_GRAPHIC_ITEMS => {
+                    let graphics = board.drawings.as_ref().ok_or("board graphics changed during the header count")?;
+                    if self.phase == HEADER_GRAPHIC_LAYERS {
+                        if !self.records(bytes, &graphics.layers, b"  \"graphics\": {\n    \"layers\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"    ],\n").map_err(|error| error.to_string())?;
+                        self.advance(HEADER_GRAPHIC_ITEMS);
+                    } else {
+                        if !self.records(bytes, &graphics.items, b"    \"items\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
+                        self.advance(HEADER_ZONES);
+                    }
+                }
+                HEADER_ZONES => {
+                    if !board.zones.is_empty() {
+                        if !self.records(bytes, &board.zones, b"  \"zones\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+                    }
+                    self.advance(HEADER_ARCS);
+                }
+                HEADER_ARCS => {
+                    if !board.arcs.is_empty() {
+                        if !self.records(bytes, &board.arcs, b"  \"arcs\": [\n", budget)? {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+                    }
+                    self.advance(HEADER_DONE);
+                }
+                _ => return Ok(true),
+            }
+        }
+    }
+}
+
+/// Validate the board, then write its format line and, for configured boards, the setup opener.
+fn board_header_open(bytes: &mut impl Write, project: &Project, validate_teardrops: bool) -> Result<(), String> {
     crate::board::zones::validate(project)?;
     crate::board::arc::validate(project, &project.board.arcs)?;
     if validate_teardrops {
@@ -2631,36 +2820,6 @@ fn board_header_prefix(bytes: &mut impl Write, project: &Project, validate_teard
             CONFIGURED_BOARD_FORMAT
         };
         bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes()).map_err(|error| error.to_string())?;
-        if !setup.materials().is_empty() {
-            bytes.write_all(b"    \"materials\": [\n").map_err(|error| error.to_string())?;
-            let mut first = true;
-            for material in setup.materials() {
-                record(bytes, &mut first, material)?;
-            }
-            bytes.write_all(b"    ],\n").map_err(|error| error.to_string())?;
-        }
-        bytes.write_all(b"    \"layers\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for layer in setup.layers() {
-            record(bytes, &mut first, layer)?;
-        }
-        write!(bytes, "    ],\n    \"stackup\": {{\n      \"id\": \"{}\",\n      \"strata\": [\n", setup.stackup().id).map_err(|e| e.to_string())?;
-        first = true;
-        for stratum in &setup.stackup().strata {
-            record(bytes, &mut first, stratum)?;
-        }
-        bytes.write_all(b"      ]").map_err(|error| error.to_string())?;
-        let stackup = setup.stackup();
-        for (field, value) in [
-            ("finished_thickness_nm", stackup.finished_thickness_nm),
-            ("finished_thickness_tolerance_nm", stackup.finished_thickness_tolerance_nm),
-            ("declared_minimum_thickness_nm", stackup.declared_minimum_thickness_nm),
-        ] {
-            if let Some(value) = value {
-                write!(bytes, ",\n      \"{field}\": {value}").map_err(|e| e.to_string())?;
-            }
-        }
-        bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
     } else {
         let format = if let Some(format) = arc_or_lock_format {
             format
@@ -2709,6 +2868,12 @@ fn board_header_prefix(bytes: &mut impl Write, project: &Project, validate_teard
         };
         bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
+    Ok(())
+}
+
+/// Write the single-value header fields between the setup and the graphics, in saved order.
+fn board_header_fields(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
+    let board = &project.board;
     if let Some(baseline) = &board.baseline {
         let encoded = baseline.encode()?;
         bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
@@ -2732,40 +2897,11 @@ fn board_header_prefix(bytes: &mut impl Write, project: &Project, validate_teard
         project.assembly_profiles.validate(&board.assembly_profiles)?;
         writeln!(bytes, "  \"assembly_profiles\": {},", json(&board.assembly_profiles)?).map_err(|e| e.to_string())?;
     }
-    if let Some(settings) = silkscreen {
+    if let Some(settings) = &board.silkscreen {
         writeln!(bytes, "  \"silkscreen\": {},", serde_json::to_string(settings).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     }
-    if let Some(outline) = outline {
+    if let Some(outline) = &board.outline {
         writeln!(bytes, "  \"outline\": {},", serde_json::to_string(outline).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    }
-    if let Some(graphics) = &board.drawings {
-        bytes.write_all(b"  \"graphics\": {\n    \"layers\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for layer in &graphics.layers {
-            record(bytes, &mut first, layer)?;
-        }
-        bytes.write_all(b"    ],\n    \"items\": [\n").map_err(|error| error.to_string())?;
-        first = true;
-        for item in &graphics.items {
-            record(bytes, &mut first, item)?;
-        }
-        bytes.write_all(b"    ]\n  },\n").map_err(|error| error.to_string())?;
-    }
-    if !board.zones.is_empty() {
-        bytes.write_all(b"  \"zones\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for zone in &board.zones {
-            record(bytes, &mut first, zone)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
-    }
-    if !board.arcs.is_empty() {
-        bytes.write_all(b"  \"arcs\": [\n").map_err(|error| error.to_string())?;
-        let mut first = true;
-        for arc in &board.arcs {
-            record(bytes, &mut first, arc)?;
-        }
-        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
     Ok(())
 }

@@ -658,4 +658,214 @@ mod regeneration {
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
         assert_eq!(session.undo.len(), history.0);
     }
+
+    /// A board header with hundreds of graphics and zones is size-checked in bounded units: every
+    /// step serializes at most its budget of header records, dropping a job mid-header leaves
+    /// project, revision and Undo unchanged, and budget-1 stepping, one large step and a check
+    /// resumed after stopping mid-header all count exactly the saved board document's bytes.
+    #[test]
+    fn board_size_check_header_is_bounded_resumable_and_byte_exact() {
+        use crate::board::track::{
+            Track, Via,
+            tests::{copper_layers, routed_fixture},
+        };
+        use crate::persistence::{BoardSizeCheck, ENTRY_POINT, decode_documents, project_board_path, take_board_record_writes};
+        use std::sync::Arc;
+
+        const COUNT: usize = 64;
+        const DRAWINGS: usize = 400;
+        const ZONES: usize = 200;
+        let mut session = routed_fixture();
+        let board = view(&session).target.board;
+        let copper_layer = copper_layers(&session)[0];
+        let outline_layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+        let silkscreen_layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Silkscreen).unwrap().id;
+        let corners =
+            [point(-5_000_000, -5_000_000), point(265_000_000, -5_000_000), point(265_000_000, 155_000_000), point(-5_000_000, 155_000_000)];
+        session
+            .apply(ADD_DRAWING, &json!({"board":board,"layer":outline_layer,"points":corners,"closed":true,"expected_revision":session.revision()}))
+            .unwrap();
+        let rules = Values { clearance_nm: 35_000, ..Values::default() };
+        session.apply(SET_RULES, &json!({"board":board,"rules":rules,"expected_revision":session.revision()})).unwrap();
+        // One authored zone and one stroked graphic, far from the copper, as templates.
+        let square =
+            [point(200_000_000, 100_000_000), point(210_000_000, 100_000_000), point(210_000_000, 110_000_000), point(200_000_000, 110_000_000)];
+        let nets = session.project().unwrap().inspect_net_registry().unwrap();
+        session
+            .apply(
+                crate::board::zones::ADD_ZONE,
+                &json!({"board":board,"layer":copper_layer,"target":{"kind":"derived","anchor":nets["nets"][0]["anchor"]},
+                    "points":square,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+        session
+            .apply(
+                ADD_DRAWING,
+                &json!({"board":board,"layer":silkscreen_layer,"points":square,"closed":true,"stroke_nm":150_000,"expected_revision":session.revision()}),
+            )
+            .unwrap();
+
+        let mut project = session.project().unwrap().clone();
+        let mut first_record = None;
+        {
+            let board_data = Arc::make_mut(&mut project.board);
+            for index in 0..COUNT {
+                let at = point(index as i64 * 2_000_000, 20_000_000);
+                let via = Uuid::from_u128(0x10_0000 + index as u128);
+                let track = Uuid::from_u128(0x20_0000 + index as u128);
+                let id = Uuid::from_u128(0x30_0000 + index as u128);
+                board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+                board_data.tracks.push(Track {
+                    id: track,
+                    locked: false,
+                    layer: copper_layer,
+                    width_nm: 100_000,
+                    start: at,
+                    end: point(at.x_nm + 600_000, at.y_nm),
+                });
+                let record = Record { id, via, track, parameters: PARAMS };
+                if first_record.is_none() {
+                    first_record = Some(record);
+                }
+                board_data.teardrops.push(record);
+            }
+            board_data.vias.sort_by_key(|via| via.id);
+            board_data.tracks.sort_by_key(|track| track.id);
+            board_data.teardrops.sort_by_key(|record| record.id);
+            let zone = board_data.zones[0].clone();
+            board_data.zones = (0..ZONES)
+                .map(|index| {
+                    let mut copy = zone.clone();
+                    copy.id = Uuid::from_u128(0x40_0000 + index as u128);
+                    copy
+                })
+                .collect();
+            let graphics = board_data.drawings.as_mut().unwrap();
+            let stroked = graphics.items.iter().find(|item| item.stroke_nm.is_some()).unwrap().clone();
+            graphics.items.extend((0..DRAWINGS).map(|index| {
+                let mut copy = stroked.clone();
+                copy.id = Uuid::from_u128(0x50_0000 + index as u128);
+                copy
+            }));
+            graphics.items.sort_by_key(|item| item.id);
+        }
+        let saved = encode_documents(Arc::new(project)).unwrap();
+        session.open_snapshot(decode_documents(&saved).unwrap());
+        session.apply("project.rename", &json!({"name":"Header-heavy board"})).unwrap();
+        assert_eq!(view(&session).zones().len(), ZONES);
+        assert!(view(&session).drawings().len() >= DRAWINGS + 2);
+        assert_eq!(view(&session).teardrops().len(), COUNT);
+
+        let before = session.snapshot().unwrap();
+        let header_units = {
+            let setup = before.board.setup.as_ref().unwrap();
+            let graphics = before.board.drawings.as_ref().unwrap();
+            2 + setup.materials().len()
+                + setup.layers().len()
+                + setup.stackup().strata.len()
+                + graphics.layers.len()
+                + graphics.items.len()
+                + before.board.zones.len()
+                + before.board.arcs.len()
+        };
+        assert!(header_units > DRAWINGS + ZONES);
+        let before_bytes = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        assert!(history.0 > 0);
+        let first = first_record.unwrap().on(view(&session).target);
+        let params = json!({"tracks":[first.track],"vias":[first.via],"dx_nm":200_000,"dy_nm":200_000,"expected_revision":revision});
+
+        // Stop a job partway through the header (inside graphics and zones) and drop it.
+        let mut canceled = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        for _ in 0..50_000 {
+            if canceled.progress().stage == "Checking board size" {
+                break;
+            }
+            assert!(!canceled.step(256));
+        }
+        assert_eq!(canceled.progress().stage, "Checking board size");
+        assert_eq!(canceled.progress().completed, 0);
+        for expected in 1..=DRAWINGS {
+            let _ = (take_derive_calls(), take_board_record_writes());
+            assert!(!canceled.step(1));
+            assert_eq!(take_derive_calls(), 0);
+            assert!(take_board_record_writes() <= 1);
+            assert_eq!(canceled.progress().completed, expected);
+        }
+        assert!(canceled.progress().completed < header_units);
+        assert!(canceled.take_result().unwrap().is_none());
+        drop(canceled);
+
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
+        assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+
+        // A fresh job drains the size check with mixed budgets: every unfinished step does exactly
+        // its budget of units and serializes at most that many records, and progress reaches total.
+        let mut job = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        for _ in 0..50_000 {
+            if job.progress().stage == "Checking board size" {
+                break;
+            }
+            assert!(!job.step(256));
+        }
+        assert_eq!(job.progress().stage, "Checking board size");
+        let mut last = 0usize;
+        let mut finished = false;
+        for budget in [1usize, 7, 64].into_iter().cycle().take(50_000) {
+            let _ = (take_derive_calls(), take_board_record_writes());
+            let done = job.step(budget);
+            assert_eq!(take_derive_calls(), 0);
+            assert!(take_board_record_writes() <= budget);
+            if done {
+                finished = true;
+                break;
+            }
+            let progress = job.progress();
+            assert_eq!(progress.stage, "Checking board size");
+            assert_eq!(progress.completed, last + budget);
+            assert!(progress.completed <= progress.total);
+            last = progress.completed;
+        }
+        assert!(finished);
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        let prepared = job.take_result().unwrap().unwrap();
+        session.commit_copper_edit(prepared).unwrap();
+        assert_eq!(session.revision(), revision + 1);
+
+        // The real serializer, one large step, budget-1 stepping and a check stopped mid-header
+        // then resumed all count the same board document bytes.
+        let committed = session.snapshot().unwrap();
+        let documents = encode_documents(committed.clone()).unwrap();
+        let saved_board = documents[&project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()].len();
+        let mut whole = BoardSizeCheck::new(true);
+        assert!(whole.step(&committed, usize::MAX).unwrap());
+        assert_eq!(whole.byte_count(), saved_board);
+        let (whole_completed, total) = whole.progress(&committed);
+        assert_eq!(whole_completed, total);
+
+        let mut single = BoardSizeCheck::new(true);
+        let mut steps = 0usize;
+        let _ = take_board_record_writes();
+        while !single.step(&committed, 1).unwrap() {
+            assert!(take_board_record_writes() <= 1);
+            steps += 1;
+            assert_eq!(single.progress(&committed), (steps, total));
+        }
+        assert!(take_board_record_writes() <= 1);
+        assert!(steps >= header_units);
+        assert_eq!(single.progress(&committed), (total, total));
+        assert_eq!(single.byte_count(), saved_board);
+
+        let mut resumed = BoardSizeCheck::new(true);
+        for _ in 0..header_units / 2 {
+            assert!(!resumed.step(&committed, 1).unwrap());
+        }
+        assert_eq!(resumed.progress(&committed), (header_units / 2, total));
+        assert!(resumed.step(&committed, usize::MAX).unwrap());
+        assert_eq!(resumed.progress(&committed), (total, total));
+        assert_eq!(resumed.byte_count(), saved_board);
+    }
 }
