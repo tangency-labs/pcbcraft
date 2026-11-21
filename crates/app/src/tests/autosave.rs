@@ -620,3 +620,54 @@ fn the_status_bar_says_when_unsaved_work_is_not_kept() {
     assert!(h.query_by_label_contains(SHOWN).is_none());
     eframe::App::on_exit(h.state_mut());
 }
+
+/// Screenshot state: Preferences open on the Saving page with both intervals at their Off default.
+#[test]
+fn saving_page_open() {
+    let mut h = harness();
+    open_saving_page(&mut h);
+    assert!(h.query_by_label("Save to project").is_some());
+    assert!(!apply_enabled(&h));
+    assert_eq!(intervals(&h), (0, 0));
+}
+
+/// Screenshot state: unapplied choices on the Saving page, with Apply enabled.
+#[test]
+fn saving_page_changed() {
+    let mut h = harness();
+    open_saving_page(&mut h);
+    interval_segment(&h, 0, "5 min").click();
+    h.run();
+    interval_segment(&h, 1, "1 min").click();
+    h.run();
+    assert!(apply_enabled(&h));
+    assert_eq!(intervals(&h), (0, 0));
+}
+
+/// Screenshot state: keyboard focus on a Recovery snapshots interval.
+#[test]
+fn saving_page_keyboard_focus() {
+    let mut h = harness();
+    open_saving_page(&mut h);
+    interval_segment(&h, 0, "1 min").focus();
+    h.run();
+    assert!(interval_segment(&h, 0, "1 min").is_focused());
+    assert!(!interval_segment(&h, 1, "1 min").is_focused());
+}
+
+/// Screenshot state: the status bar saying why unsaved work isn't being kept.
+#[test]
+fn status_bar_recovery_notice() {
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("blocked");
+    std::fs::write(&dir, b"not a directory").unwrap();
+    let mut h = harness();
+    h.state_mut().autosave.dir = Some(dir);
+    h.state_mut().preferences.autosave_minutes = 5;
+    h.state_mut().start_new_project();
+    run_at(&mut h, 1.0);
+    assert!(h.state().sync_recovery().is_err());
+    run_at(&mut h, 2.0);
+    run_at(&mut h, 2.5);
+    assert!(h.query_by_label_contains("Unsaved work isn’t being kept for recovery").is_some());
+}
