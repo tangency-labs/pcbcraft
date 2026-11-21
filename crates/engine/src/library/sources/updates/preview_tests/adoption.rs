@@ -19,6 +19,15 @@ impl EditObserver for EditLog {
     }
 }
 
+fn history(session: &Session) -> (u64, usize, usize) {
+    (session.revision(), session.undo.len(), session.redo.len())
+}
+
+fn assert_history_unchanged(session: &Session, before: &Arc<Project>, before_history: (u64, usize, usize)) {
+    assert!(Arc::ptr_eq(before, &session.snapshot().unwrap()));
+    assert_eq!(history(session), before_history);
+}
+
 fn reviewed(session: &mut Session, target: &Value) -> Value {
     let report = session.execute(PREVIEW_FOOTPRINT_REVISION, target).unwrap();
     assert_eq!(report["delta"]["pad_numbers_changed"], true);
@@ -42,6 +51,7 @@ fn footprint_revision_adding_pad_nine_requires_mapping_and_preserves_copper() {
     session.observe_edits(Some(log.clone()));
     let mut params = reviewed(&mut session, &target);
     let before = session.snapshot().unwrap();
+    let before_history = history(&session);
     let bytes = encode_documents(before.clone()).unwrap();
     let revision = session.revision();
     let catalog = session.libraries().generation();
@@ -50,14 +60,13 @@ fn footprint_revision_adding_pad_nine_requires_mapping_and_preserves_copper() {
             params["mapping"] = bad;
         }
         assert_eq!(session.execute(APPLY_FOOTPRINT_REVISION, &params).unwrap_err().code(), ErrorCode::InvalidParams);
-        assert_eq!(session.revision(), revision);
-        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_history_unchanged(&session, &before, before_history);
     }
     params["mapping"] = json!({"1":"1","2":["2","9"]});
     let mut bad = params.clone();
     bad["acceptance"] = json!("0".repeat(64));
     assert_eq!(session.apply(APPLY_FOOTPRINT_REVISION, &bad).unwrap_err().code(), ErrorCode::InvalidParams);
-    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_history_unchanged(&session, &before, before_history);
     assert!(log.0.lock().unwrap().is_empty());
     session.execute(APPLY_FOOTPRINT_REVISION, &params).unwrap();
     {
@@ -194,12 +203,15 @@ fn reopen_with_baseline(session: &mut Session, update: impl FnOnce(&mut Baseline
 /// Check the specific refusal, not just an unrelated validation error or a rejected preview.
 fn assert_apply_refused_without_edit(session: &mut Session, params: &Value, message: &str) {
     let before = session.snapshot().unwrap();
-    let revision = session.revision();
+    let before_history = history(session);
+    let before_inspect = session.inspect();
     let error = session.apply(APPLY_FOOTPRINT_REVISION, params).unwrap_err();
     assert_eq!(error.code(), ErrorCode::InvalidParams);
     assert_eq!(error.to_string(), message);
-    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
-    assert_eq!(session.revision(), revision);
+    assert_history_unchanged(session, &before, before_history);
+    let after_inspect = session.inspect();
+    assert_eq!(after_inspect["can_undo"], before_inspect["can_undo"]);
+    assert_eq!(after_inspect["can_redo"], before_inspect["can_redo"]);
 }
 
 /// Adding a pad-only net must not synthesize display metadata for an existing accepted net.
@@ -268,12 +280,13 @@ fn large_board_footprint_revision_job_batches_encoding_and_rechecks_authority() 
     let mut params = reviewed(&mut session, &target);
     params["mapping"] = json!({"1":"1","2":["2","9"]});
     let snapshot = session.snapshot().unwrap();
+    let before_history = history(&session);
     let mut abandoned = session.prepare_footprint_revision(&params).unwrap();
     assert!(!abandoned.step(0));
     assert!(!abandoned.step(32), "candidate preparation must yield before encoding");
     assert!(abandoned.take_result().unwrap().is_none());
     drop(abandoned);
-    assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    assert_history_unchanged(&session, &snapshot, before_history);
     let prepare = |session: &Session, params: &Value| {
         let mut job = session.prepare_footprint_revision(params).unwrap();
         let steps = (1..=512).find(|_| job.step(32)).expect("8192 tracks and one package must fit 512 worker batches of 32 records");
@@ -286,14 +299,15 @@ fn large_board_footprint_revision_job_batches_encoding_and_rechecks_authority() 
     session.execute(REMOVE, &json!({"source":"test"})).unwrap();
     load(&mut session, &documents);
     assert!(session.commit_footprint_revision(edit).unwrap_err().to_string().contains("catalog"));
-    assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    assert_history_unchanged(&session, &snapshot, before_history);
     params = reviewed(&mut session, &target);
     params["mapping"] = json!({"1":"1","2":["2","9"]});
     let obsolete = prepare(&session, &params);
     session.apply("project.rename", &json!({"name":"Large board after review"})).unwrap();
     let current = session.snapshot().unwrap();
+    let current_history = history(&session);
     assert_eq!(session.commit_footprint_revision(obsolete).unwrap_err().code(), ErrorCode::StaleRevision);
-    assert!(Arc::ptr_eq(&current, &session.snapshot().unwrap()));
+    assert_history_unchanged(&session, &current, current_history);
     params = reviewed(&mut session, &target);
     params["mapping"] = json!({"1":"1","2":["2","9"]});
     let edit = prepare(&session, &params);
@@ -314,14 +328,20 @@ fn footprint_revision_refuses_stale_revision_and_catalog_review() {
     params["unconnected_pads"] = json!(["9"]);
     session.apply("project.rename", &json!({"name":"Updated after review"})).unwrap();
     let before = session.snapshot().unwrap();
+    let before_history = history(&session);
+    let before_inspect = session.inspect();
     assert_eq!(session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap_err().code(), ErrorCode::StaleRevision);
-    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_history_unchanged(&session, &before, before_history);
+    assert_eq!(session.inspect()["can_undo"], before_inspect["can_undo"]);
+    assert_eq!(session.inspect()["can_redo"], before_inspect["can_redo"]);
     params["acceptance"] = reviewed(&mut session, &target)["acceptance"].clone();
     params["expected_revision"] = json!(session.revision());
     session.execute(REMOVE, &json!({"source":"test"})).unwrap();
     load(&mut session, &documents);
     assert_eq!(session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap_err().code(), ErrorCode::InvalidParams);
-    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_history_unchanged(&session, &before, before_history);
+    assert_eq!(session.inspect()["can_undo"], before_inspect["can_undo"]);
+    assert_eq!(session.inspect()["can_redo"], before_inspect["can_redo"]);
     params["acceptance"] = reviewed(&mut session, &target)["acceptance"].clone();
     session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
     assert_eq!(session.project().unwrap().board.footprints()[0].unconnected_pads, ["9".to_owned()]);
@@ -336,7 +356,10 @@ fn footprint_revision_removes_the_old_pad_mapping_only_with_explicit_resolution(
     params["acceptance"] = report["acceptance"].clone();
     params["expected_revision"] = report["revision"].clone();
     params["mapping"] = report["current_mapping"].clone();
+    let before = session.snapshot().unwrap();
+    let before_history = history(&session);
     assert_eq!(session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap_err().code(), ErrorCode::InvalidParams);
+    assert_history_unchanged(&session, &before, before_history);
     params["mapping"] = json!({"1":"1","2":"02"});
     session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
     let placement = &session.project().unwrap().board.footprints()[0];
@@ -350,8 +373,9 @@ fn footprint_revision_of_native_part_requires_its_declared_map() {
     let mut params = reviewed(&mut session, &target);
     params["mapping"] = json!({"1":["1","9"],"2":"2"});
     let before = session.snapshot().unwrap();
+    let before_history = history(&session);
     assert!(session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap_err().to_string().contains("declared map"));
-    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_history_unchanged(&session, &before, before_history);
     params["mapping"] = json!({"1":"1","2":["2","9"]});
     session.apply(APPLY_FOOTPRINT_REVISION, &params).unwrap();
     let after = session.snapshot().unwrap();
@@ -360,4 +384,82 @@ fn footprint_revision_of_native_part_requires_its_declared_map() {
     assert_eq!(selection.package.as_deref(), Some("same-package"));
     let bytes = encode_documents(after).unwrap();
     assert_eq!(encode_documents(decode_documents(&bytes).unwrap()).unwrap(), bytes);
+}
+
+/// A locked placement refuses revision apply without touching project state or history.
+#[test]
+fn footprint_revision_refuses_locked_placement() {
+    let (mut session, _, target) = package_fixture(|_| {}, false, true);
+    Arc::make_mut(&mut Arc::make_mut(session.project.as_mut().unwrap()).board).footprints_mut()[0].locked = true;
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    assert_apply_refused_without_edit(&mut session, &params, "Unlock the footprint before applying a revision.");
+}
+
+/// Divergent placement and assignment terminal maps refuse revision apply without editing.
+#[test]
+fn footprint_revision_refuses_mismatched_placement_and_assignment_maps() {
+    let (mut session, _, target) = package_fixture(|_| {}, false, true);
+    let component = session.snapshot().unwrap().board.footprints()[0].component;
+    Arc::make_mut(&mut Arc::make_mut(session.project.as_mut().unwrap()).board).assignments.get_mut(&component).unwrap().mapping =
+        crate::board::parse_mapping(&json!({"1":"2","2":"1"})).unwrap();
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    assert_apply_refused_without_edit(&mut session, &params, "Placed footprint and package assignment have different terminal maps.");
+}
+
+/// A native part revision that also changes unrelated packages requires a broader review.
+#[test]
+fn footprint_revision_of_native_part_refuses_unrelated_package_changes() {
+    let (mut session, mut documents, target) = package_fixture(|_| {}, true, true);
+    let mut part: Value = serde_json::from_str(&documents["parts/part-r2.json"]).unwrap();
+    let other = part["packages"]["same-package"].clone();
+    part["packages"]["other-package"] = other;
+    documents.insert("parts/part-r2.json".into(), part.to_string());
+    session.execute(REMOVE, &json!({"source":"test"})).unwrap();
+    load(&mut session, &documents);
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    assert_apply_refused_without_edit(
+        &mut session,
+        &params,
+        "This native part revision needs a broader review of its dependencies or manufacturer selection.",
+    );
+}
+
+/// Board replacement guards reject mismatched keys, conflicting pinned content and invalid footprints.
+#[test]
+fn replace_reviewed_footprint_refuses_key_content_and_bounds_errors() {
+    let (session, _, _) = package_fixture(|_| {}, false, true);
+    let board = session.snapshot().unwrap().board.as_ref().clone();
+    let placement = &board.footprints()[0];
+    let assignment = board.assignments[&placement.component].clone();
+    let pinned = board.definitions[&assignment.key()].clone();
+
+    let mut wrong_key = assignment.clone();
+    wrong_key.definition_revision += 1;
+    let mut attempt = board.clone();
+    assert_eq!(
+        attempt.replace_reviewed_footprint(wrong_key, pinned.clone()).unwrap_err(),
+        "Footprint definition differs from its reviewed assignment."
+    );
+    assert_eq!(attempt, board);
+
+    let mut conflicting = pinned.as_ref().clone();
+    conflicting.name.push_str(" conflict");
+    let mut attempt = board.clone();
+    assert_eq!(
+        attempt.replace_reviewed_footprint(assignment.clone(), Arc::new(conflicting)).unwrap_err(),
+        "Footprint content conflicts with the project's pinned revision."
+    );
+    assert_eq!(attempt, board);
+
+    let mut rev2 = pinned.as_ref().clone();
+    rev2.revision += 1;
+    let mut empty_map = assignment;
+    empty_map.definition_revision = rev2.revision;
+    empty_map.mapping.clear();
+    let mut attempt = board.clone();
+    assert_eq!(attempt.replace_reviewed_footprint(empty_map, Arc::new(rev2)).unwrap_err(), "Replacement footprint is outside supported bounds.");
+    assert_eq!(attempt, board);
 }

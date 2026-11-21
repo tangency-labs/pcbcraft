@@ -379,6 +379,10 @@ impl Board {
     pub(crate) fn footprints(&self) -> &[Footprint] {
         &self.footprints
     }
+    #[cfg(test)]
+    pub(crate) fn footprints_mut(&mut self) -> &mut [Footprint] {
+        &mut self.footprints
+    }
     /// Resolve only the exact pinned definition; missing revisions never use the current catalog.
     pub(crate) fn definition_for(&self, footprint: &Footprint) -> Option<&definition::FootprintDefinition> {
         self.definitions.get(&footprint.key()?).map(Arc::as_ref)
