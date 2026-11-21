@@ -269,3 +269,29 @@ fn query_is_read_only_and_follows_history_and_reopen() {
     assert_eq!(promoted["nets"][0]["id"], json!(id));
     assert_eq!(promoted["nets"][0]["sheets"], report["nets"][0]["sheets"]);
 }
+
+/// Moving a part without changing what it connects keeps an equal basis, so a viewer can keep
+/// its overview; joining that part to a cross-sheet net changes the basis.
+#[test]
+fn moves_keep_the_basis_and_connection_changes_replace_it() {
+    let mut s = session();
+    let targets = add_sheets(&mut s, 2);
+    for sheet in &targets {
+        let pin = resistor(&mut s, *sheet, 0);
+        label(&mut s, *sheet, pin, "CAN_H", "global");
+    }
+    let spare = resistor(&mut s, targets[0], 40 * G);
+    let before = s.snapshot().unwrap();
+    let basis = before.sheet_overview_basis().unwrap();
+    apply(&mut s, crate::MOVE_SYMBOL, json!({"sheet":targets[0].id(),"symbol":spare.inspect()["symbol"],"x_nm":40 * G,"y_nm":20 * G}));
+    let moved = s.snapshot().unwrap();
+    assert!(!moved.same_sheet_overview(&before));
+    assert_eq!(moved.sheet_overview_basis().unwrap(), basis);
+    assert_eq!(basis.overview(&moved, None).unwrap(), before.sheet_overview(None).unwrap());
+
+    label(&mut s, targets[0], spare, "CAN_H", "global");
+    assert_ne!(s.snapshot().unwrap().sheet_overview_basis().unwrap(), basis);
+    let report = overview(&mut s, json!({}));
+    assert_eq!(pages(&report, "CAN_H"), [1, 2]);
+    assert_eq!(report["nets"][0]["sheets"][0]["terminals"], json!(2));
+}

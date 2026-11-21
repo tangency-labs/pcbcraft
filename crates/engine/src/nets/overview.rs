@@ -3,7 +3,7 @@
 //! The overview is derived from the same whole-project connectivity as the netlist and the Net
 //! Inspector. It never stores a second graph, allocates a net identity or changes history.
 
-use super::{Anchor, State, graph::Graph};
+use super::{Anchor, Registry, Scope, State, graph::Graph};
 use crate::{CommandError, Project, Session, SheetTarget, WireEndpoint, schematic::Connectivity};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -88,10 +88,55 @@ pub struct SheetOverview {
 }
 
 /// What one sheet contributes to one net while the overview is collected.
-#[derive(Default)]
+#[derive(Debug, Default, PartialEq, Eq)]
 struct Reach {
     via: BTreeSet<Via>,
     terminals: BTreeSet<(u64, String)>,
+}
+
+/// A shared value compared by identity: equal only when both hold the same allocation.
+#[derive(Debug)]
+struct Same<T>(Arc<T>);
+
+impl<T> PartialEq for Same<T> {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl<T> Eq for Same<T> {}
+
+/// One sheet as the overview reports it.
+#[derive(Debug, PartialEq, Eq)]
+struct SheetInfo {
+    target: SheetTarget,
+    occurrence: Uuid,
+    name: String,
+    page: usize,
+}
+
+/// Everything the overview reports about one cross-sheet net except its anchor and identity.
+#[derive(Debug, PartialEq, Eq)]
+struct NetBasis {
+    name: String,
+    names: Vec<String>,
+    reached: BTreeMap<Uuid, Reach>,
+    /// Every endpoint of the net with its sheet and, for part terminals, the owning part, which
+    /// together fix the net's anchors.
+    endpoints: BTreeSet<(Uuid, WireEndpoint, u64)>,
+}
+
+/// What a project's [`SheetOverview`] is derived from, read from the cached whole-project
+/// connectivity without resolving net anchors. Two snapshots with equal bases have equal
+/// overviews, so a viewer reads the overview again only when the basis changes: moving parts,
+/// wires, labels or sheet symbols without changing what they connect keeps it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SheetOverviewBasis {
+    project: Uuid,
+    scope: Scope,
+    registry: Same<Registry>,
+    sheets: Vec<SheetInfo>,
+    nets: Vec<NetBasis>,
 }
 
 impl Project {
@@ -101,23 +146,36 @@ impl Project {
     /// sheets, so equal local names on two sheets are two nets. Fails only when the net
     /// anchors cannot be resolved.
     pub fn sheet_overview(&self, only: Option<SheetTarget>) -> Result<SheetOverview, String> {
+        self.sheet_overview_basis()?.overview(self, only)
+    }
+
+    /// Collect the [`SheetOverviewBasis`] of this snapshot. It costs one pass over the
+    /// project's endpoints, like reading its connectivity, and skips the anchor resolution
+    /// that [`SheetOverviewBasis::overview`] performs.
+    pub fn sheet_overview_basis(&self) -> Result<SheetOverviewBasis, String> {
         let electrical = self.borrowed_electrical_connectivity();
-        let graph = Graph::build(self)?;
         let pages: BTreeMap<Uuid, usize> = self.page_order().into_iter().enumerate().map(|(index, target)| (target.id(), index + 1)).collect();
+        let mut sheets = Vec::new();
         let mut rows = Rows::default();
         let mut units = BTreeMap::<(u64, String), (usize, BTreeSet<Uuid>)>::new();
         for sheet in self.sheets() {
+            sheets.push(SheetInfo {
+                target: sheet.target,
+                occurrence: self.sheet_occurrence(sheet.target).ok_or("Missing sheet occurrence while building the sheet overview.")?.id,
+                name: sheet.name.to_owned(),
+                page: pages.get(&sheet.target.id()).copied().ok_or("Missing page while building the sheet overview.")?,
+            });
             let own = self.for_sheet(sheet.target).ok_or("Unknown sheet while building the sheet overview.")?;
             let power: BTreeSet<_> = own.power_terminals().map(|(end, _, _)| end).collect();
             for symbol in own.symbols() {
                 for terminal in symbol.terminals() {
                     let end = WireEndpoint::Terminal(terminal);
                     if power.contains(&end) {
-                        rows.mark(electrical, sheet.target, end, Some(Via::PowerSymbol));
+                        rows.mark(electrical, sheet.target, end, symbol.component, Some(Via::PowerSymbol));
                         continue;
                     }
                     let key = (symbol.component, terminal.number().to_owned());
-                    if let Some(reach) = rows.mark(electrical, sheet.target, end, None) {
+                    if let Some(reach) = rows.mark(electrical, sheet.target, end, symbol.component, None) {
                         reach.terminals.insert(key.clone());
                     }
                     if let Some(row) = electrical.net_index_for(terminal) {
@@ -126,71 +184,40 @@ impl Project {
                 }
             }
             for label in own.net_labels() {
-                rows.mark(electrical, sheet.target, WireEndpoint::NetLabel(label.id), label.style.global().then_some(Via::GlobalLabel));
+                rows.mark(electrical, sheet.target, WireEndpoint::NetLabel(label.id), 0, label.style.global().then_some(Via::GlobalLabel));
             }
             for label in own.hierarchical_labels() {
-                rows.mark(electrical, sheet.target, WireEndpoint::Label(label.id), Some(Via::HierarchicalLabel));
+                rows.mark(electrical, sheet.target, WireEndpoint::Label(label.id), 0, Some(Via::HierarchicalLabel));
             }
             for block in own.sheet_symbols() {
                 for pin in own.sheet_pins(block) {
-                    rows.mark(electrical, sheet.target, WireEndpoint::SheetPin(pin.label.id), Some(Via::SheetPin));
+                    rows.mark(electrical, sheet.target, WireEndpoint::SheetPin(pin.label.id), 0, Some(Via::SheetPin));
                 }
             }
         }
         // A part terminal drawn on units placed on several sheets carries its net to each of them.
-        for (row, sheets) in units.into_values().filter(|(_, sheets)| sheets.len() > 1) {
-            for sheet in sheets {
+        for (row, reached) in units.into_values().filter(|(_, reached)| reached.len() > 1) {
+            for sheet in reached {
                 if let Some(reach) = rows.reached.get_mut(&row).and_then(|reached| reached.get_mut(&sheet)) {
                     reach.via.insert(Via::SharedTerminal);
                 }
             }
         }
-        let mut active = BTreeMap::new();
-        for record in self.net_registry.records.iter().filter(|record| matches!(record.state, State::Active {})) {
-            if let Some(network) = graph.network(&record.primary) {
-                active.entry(network).or_insert(record.id);
-            }
-        }
         let mut nets = Vec::new();
         for (row, reached) in rows.reached {
-            if reached.len() < 2 || only.is_some_and(|sheet| !reached.contains_key(&sheet.id())) {
+            if reached.len() < 2 {
                 continue;
             }
-            let (sheet, end) = rows.first.get(&row).copied().ok_or("Missing endpoint while building the sheet overview.")?;
-            let network = graph.endpoint_anchor(sheet, end).and_then(|anchor| graph.network(anchor));
-            let anchor = network
-                .and_then(|index| graph.networks.get(index))
-                .and_then(|network| network.anchors.first())
-                .cloned()
-                .ok_or("Missing net anchor while building the sheet overview.")?;
-            let mut sheets = Vec::with_capacity(reached.len());
-            for (id, reach) in reached {
-                let info = self.sheets().find(|sheet| sheet.target.id() == id).ok_or("Unknown sheet while building the sheet overview.")?;
-                sheets.push(SheetReach {
-                    sheet: id,
-                    occurrence: self.sheet_occurrence(info.target).ok_or("Missing sheet occurrence while building the sheet overview.")?.id,
-                    name: info.name.to_owned(),
-                    page: pages.get(&id).copied().ok_or("Missing page while building the sheet overview.")?,
-                    via: reach.via.into_iter().collect(),
-                    terminals: reach.terminals.len(),
-                });
-            }
-            sheets.sort_by_key(|reach| reach.page);
-            nets.push(CrossSheetNet {
-                id: network.and_then(|index| active.get(&index).copied()),
-                anchor,
-                name: electrical.net_name(row),
-                names: electrical.net_names(row).to_vec(),
-                sheets,
-            });
+            let endpoints = rows.endpoints.remove(&row).unwrap_or_default();
+            nets.push(NetBasis { name: electrical.net_name(row), names: electrical.net_names(row).to_vec(), reached, endpoints });
         }
-        nets.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.anchor.cmp(&b.anchor)));
-        Ok(SheetOverview { nets })
+        nets.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.endpoints.first().cmp(&b.endpoints.first())));
+        Ok(SheetOverviewBasis { project: self.id, scope: self.net_scope(), registry: Same(self.net_registry.clone()), sheets, nets })
     }
 
-    /// Whether two snapshots, or two sheet projections of one snapshot, give the same
-    /// [`Self::sheet_overview`]. Shared collections mean no sheet, part value, connection or net
-    /// identity changed; a false answer only means the overview must be read again.
+    /// Whether two snapshots, or two sheet projections of one snapshot, share every collection
+    /// the overview reads, so [`Self::sheet_overview`] is the same without comparing bases. A
+    /// false answer only means the basis must be read again.
     pub fn same_sheet_overview(&self, other: &Self) -> bool {
         self.id == other.id
             && Arc::ptr_eq(&self.sheets, &other.sheets)
@@ -200,18 +227,67 @@ impl Project {
     }
 }
 
-/// Per-net, per-sheet contributions, plus the first endpoint seen on each net for its anchor.
+impl SheetOverviewBasis {
+    /// Resolve each net's anchor and persistent identity in `project`, the snapshot this basis
+    /// was collected from or one with an equal basis. With `only`, keep the nets that reach
+    /// that sheet.
+    pub fn overview(&self, project: &Project, only: Option<SheetTarget>) -> Result<SheetOverview, String> {
+        let graph = Graph::build(project)?;
+        let mut active = BTreeMap::new();
+        for record in self.registry.0.records.iter().filter(|record| matches!(record.state, State::Active {})) {
+            if let Some(network) = graph.network(&record.primary) {
+                active.entry(network).or_insert(record.id);
+            }
+        }
+        let mut nets = Vec::new();
+        for net in self.nets.iter().filter(|net| only.is_none_or(|sheet| net.reached.contains_key(&sheet.id()))) {
+            let network = net
+                .endpoints
+                .iter()
+                .find_map(|(sheet, end, _)| {
+                    let target = self.sheets.iter().find(|info| info.target.id() == *sheet)?.target;
+                    graph.endpoint_anchor(target, *end).and_then(|anchor| graph.network(anchor))
+                })
+                .ok_or("Missing endpoint while building the sheet overview.")?;
+            let anchor = graph
+                .networks
+                .get(network)
+                .and_then(|network| network.anchors.first())
+                .cloned()
+                .ok_or("Missing net anchor while building the sheet overview.")?;
+            let mut sheets = Vec::with_capacity(net.reached.len());
+            for (id, reach) in &net.reached {
+                let info = self.sheets.iter().find(|info| info.target.id() == *id).ok_or("Unknown sheet while building the sheet overview.")?;
+                sheets.push(SheetReach {
+                    sheet: *id,
+                    occurrence: info.occurrence,
+                    name: info.name.clone(),
+                    page: info.page,
+                    via: reach.via.iter().copied().collect(),
+                    terminals: reach.terminals.len(),
+                });
+            }
+            sheets.sort_by_key(|reach| reach.page);
+            nets.push(CrossSheetNet { id: active.get(&network).copied(), anchor, name: net.name.clone(), names: net.names.clone(), sheets });
+        }
+        nets.sort_by(|a, b| a.name.cmp(&b.name).then_with(|| a.anchor.cmp(&b.anchor)));
+        Ok(SheetOverview { nets })
+    }
+}
+
+/// Per-net, per-sheet contributions, plus every endpoint seen on each net.
 #[derive(Default)]
 struct Rows {
     reached: BTreeMap<usize, BTreeMap<Uuid, Reach>>,
-    first: BTreeMap<usize, (SheetTarget, WireEndpoint)>,
+    endpoints: BTreeMap<usize, BTreeSet<(Uuid, WireEndpoint, u64)>>,
 }
 
 impl Rows {
-    /// Record that the net holding `end`, when it has one, reaches `sheet`.
-    fn mark(&mut self, electrical: &Connectivity, sheet: SheetTarget, end: WireEndpoint, via: Option<Via>) -> Option<&mut Reach> {
+    /// Record that the net holding `end`, when it has one, reaches `sheet`. `part` is the part
+    /// owning a terminal endpoint and zero otherwise.
+    fn mark(&mut self, electrical: &Connectivity, sheet: SheetTarget, end: WireEndpoint, part: u64, via: Option<Via>) -> Option<&mut Reach> {
         let row = electrical.net_index_for_endpoint(end)?;
-        self.first.entry(row).or_insert((sheet, end));
+        self.endpoints.entry(row).or_default().insert((sheet.id(), end, part));
         let reach = self.reached.entry(row).or_default().entry(sheet.id()).or_default();
         reach.via.extend(via);
         Some(reach)

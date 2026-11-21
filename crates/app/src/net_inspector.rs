@@ -3,7 +3,7 @@ use egui::{Rect, Ui};
 use pcbcraft_chrome::{properties, shell, workspace};
 use pcbcraft_engine::{
     Project,
-    nets::{SheetOverview, Via},
+    nets::{SheetOverview, SheetOverviewBasis, Via},
     schematic::Terminal,
 };
 use std::{collections::BTreeSet, sync::Arc};
@@ -19,8 +19,10 @@ pub(super) struct NetInspector {
     snapshot: Option<Snapshot>,
     /// Cross-sheet nets folded by the user, by net name, kept while the project changes.
     folded_sheets: BTreeSet<String>,
-    /// Snapshot the inter-sheet overview was read from; any sheet's edits refresh it.
+    /// Snapshot the inter-sheet overview was last checked against.
     overview_project: Option<Arc<Project>>,
+    /// What the shown overview was derived from; anchors are resolved again only when it changes.
+    overview_basis: Option<SheetOverviewBasis>,
     overview: Option<Result<SheetOverview, String>>,
 }
 impl Default for NetInspector {
@@ -36,6 +38,7 @@ impl Default for NetInspector {
             snapshot: None,
             folded_sheets: BTreeSet::new(),
             overview_project: None,
+            overview_basis: None,
             overview: None,
         }
     }
@@ -103,6 +106,15 @@ fn tree_row(
     response.fold || response.clicked
 }
 
+/// Sheet row tooltip: how many part pins of the net are drawn on that sheet.
+fn sheet_tip(terminals: usize) -> String {
+    match terminals {
+        0 => "No part pins on this sheet".into(),
+        1 => "1 part pin on this sheet".into(),
+        count => format!("{count} part pins on this sheet"),
+    }
+}
+
 /// Sheet row text: page number, sheet name and how the net arrives there.
 fn sheet_line(page: usize, name: &str, via: &[Via]) -> String {
     if via.is_empty() {
@@ -112,6 +124,23 @@ fn sheet_line(page: usize, name: &str, via: &[Via]) -> String {
     }
 }
 impl NetInspector {
+    /// Read the inter-sheet overview of a changed snapshot. Edits that keep every connection,
+    /// such as moves, leave the basis equal and skip resolving net anchors again.
+    fn refresh_overview(&mut self, project: &Project) {
+        match project.sheet_overview_basis() {
+            Ok(basis) => {
+                if self.overview_basis.as_ref() != Some(&basis) || self.overview.is_none() {
+                    self.overview = Some(basis.overview(project, None));
+                    self.overview_basis = Some(basis);
+                }
+            }
+            Err(error) => {
+                self.overview = Some(Err(error));
+                self.overview_basis = None;
+            }
+        }
+    }
+
     /// Float a stable Craft card inside its pane, sharing the Properties inspector
     /// footprint without resizing the canvas or changing document history.
     pub(super) fn show(&mut self, ui: &Ui, project: Option<Arc<Project>>, area: Rect) {
@@ -122,7 +151,7 @@ impl NetInspector {
         let active = project.as_ref().map(|project| project.sheet_target().id());
         if let Some(project) = project {
             if !self.overview_project.as_ref().is_some_and(|p| p.same_sheet_overview(&project)) {
-                self.overview = Some(project.sheet_overview(None));
+                self.refresh_overview(&project);
                 self.overview_project = Some(project.clone());
             }
             if !self.project.as_ref().is_some_and(|p| p.same_connectivity(&project)) {
@@ -134,6 +163,7 @@ impl NetInspector {
             self.project = None;
             self.snapshot = None;
             self.overview_project = None;
+            self.overview_basis = None;
             self.overview = None;
         }
         let width = if area.width() < 600. { area.width() } else { 260. };
@@ -204,7 +234,7 @@ impl NetInspector {
                             if expanded {
                                 for sheet in &net.sheets {
                                     let line = sheet_line(sheet.page, &sheet.name, &sheet.via);
-                                    let tip = format!("{} part pins on this sheet", sheet.terminals);
+                                    let tip = sheet_tip(sheet.terminals);
                                     tree_row(ui, ("sheet_net_page", index, sheet.sheet), &line, None, 1, None, &tip, active == Some(sheet.sheet));
                                 }
                             }
@@ -309,6 +339,14 @@ mod tests {
         assert!(harness.query_by_label("Cross-sheet net CAN_H").is_none());
         click(&mut harness, "Redo");
         harness.get_by_label("Cross-sheet net CAN_H");
+    }
+
+    /// Sheet row tooltips count part pins in the right number, including none.
+    #[test]
+    fn sheet_row_tooltips_count_part_pins() {
+        assert_eq!(super::sheet_tip(0), "No part pins on this sheet");
+        assert_eq!(super::sheet_tip(1), "1 part pin on this sheet");
+        assert_eq!(super::sheet_tip(2), "2 part pins on this sheet");
     }
 
     /// The three-sheet project with the Net Inspector open on page 1.
