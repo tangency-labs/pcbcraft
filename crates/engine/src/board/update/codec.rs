@@ -558,4 +558,149 @@ mod tests {
             assert_eq!(Baseline::decode(&encoded).unwrap(), baseline);
         }
     }
+
+    /// A baseline net with many names and terminals bounds validation, set release, and encoding to one item per step.
+    #[test]
+    fn large_baseline_net_names_and_seen_release_step_one_item_at_a_time() {
+        const TERMINALS: u64 = 1024;
+        const NAMES: usize = 1024;
+        let part = PartInstanceState {
+            library: "basic".into(),
+            definition: "resistor".into(),
+            revision: 1,
+            reference: "R1".into(),
+            value: "10k".into(),
+            primary_quantity: None,
+            terminals: vec!["1".into()],
+            package: None,
+        };
+        let baseline = Baseline {
+            format: DISPLAY_FORMAT.into(),
+            project: Uuid::from_u128(1),
+            board: Uuid::from_u128(2),
+            source: SourceCapture { capture_id: Uuid::from_u128(3), content_digest: "c".repeat(64) },
+            components: (1..=TERMINALS).map(|id| (id, part.clone())).collect(),
+            nets: vec![NetState {
+                display_name: Some("WideNamesNet".into()),
+                terminals: (1..=TERMINALS).map(|component| TerminalKey { component, terminal: "1".into() }).collect(),
+                // Reverse-ordered to verify Encode Phase 5 preserves JSON array order rather than BTreeSet order.
+                names: (0..NAMES).map(|index| format!("SIG_{:04}", NAMES - index)).collect(),
+                origin: None,
+            }],
+        };
+
+        let mut writer = BaselineEncoding::default();
+        let mut stepped_standalone = Vec::new();
+        let mut name_validate_steps = 0usize;
+        let mut name_release_steps = 0usize;
+        let mut seen_insert_steps = 0usize;
+        let mut seen_release_steps = 0usize;
+        let mut terminal_encode_steps = 0usize;
+        let mut name_encode_steps = 0usize;
+
+        loop {
+            let before_phase = writer.phase;
+            let before_item = writer.item;
+            let before_val_phase = writer.validation.phase;
+            let before_val_item = writer.validation.item;
+            let before_names_len = writer.validation.names.len();
+            let before_seen_len = writer.validation.seen.len();
+            let before_bytes = stepped_standalone.len();
+
+            if writer.step(&baseline, &mut stepped_standalone, false).unwrap() {
+                break;
+            }
+
+            if before_phase == 0 {
+                assert_eq!(stepped_standalone.len(), 0);
+                match (before_val_phase, writer.validation.phase) {
+                    (6, 6) => {
+                        assert_eq!(writer.validation.item, before_val_item + 1);
+                        assert_eq!(writer.validation.names.len(), before_names_len + 1);
+                        name_validate_steps += 1;
+                    }
+                    (7, 7) => {
+                        assert_eq!(writer.validation.names.len(), before_names_len - 1);
+                        name_release_steps += 1;
+                    }
+                    (7, 8) => {
+                        assert_eq!(before_names_len, 0);
+                        assert!(writer.validation.names.is_empty());
+                    }
+                    (8, 8) => {
+                        assert_eq!(writer.validation.item, before_val_item + 1);
+                        assert_eq!(writer.validation.seen.len(), before_seen_len + 1);
+                        seen_insert_steps += 1;
+                    }
+                    (9, 9) if writer.phase == 0 => {
+                        assert_eq!(writer.validation.seen.len(), before_seen_len - 1);
+                        seen_release_steps += 1;
+                    }
+                    (9, 9) => {
+                        assert_eq!(writer.phase, 1);
+                        assert_eq!(before_seen_len, 0);
+                        assert!(writer.validation.names.is_empty());
+                        assert!(writer.validation.seen.is_empty());
+                    }
+                    _ => {}
+                }
+            } else if before_phase == 4 && writer.phase == 4 {
+                assert_eq!(writer.item, before_item + 1);
+                terminal_encode_steps += 1;
+            } else if before_phase == 5 && writer.phase == 5 {
+                assert_eq!(writer.item, before_item + 1);
+                let expected_chunk = if before_item == 0 {
+                    format!("\"{}\"", baseline.nets[0].names[before_item])
+                } else {
+                    format!(",\"{}\"", baseline.nets[0].names[before_item])
+                };
+                assert_eq!(&stepped_standalone[before_bytes..], expected_chunk.as_bytes());
+                name_encode_steps += 1;
+            }
+        }
+
+        assert_eq!(name_validate_steps, NAMES);
+        assert_eq!(name_release_steps, NAMES);
+        assert_eq!(seen_insert_steps, TERMINALS as usize);
+        assert_eq!(seen_release_steps, TERMINALS as usize);
+        assert_eq!(terminal_encode_steps, TERMINALS as usize);
+        assert_eq!(name_encode_steps, NAMES);
+        assert!(writer.validation.names.is_empty());
+        assert!(writer.validation.seen.is_empty());
+
+        let expected_legacy = legacy_encode(&baseline);
+        let single_shot = baseline.encode().unwrap();
+        assert_eq!(stepped_standalone, expected_legacy);
+        assert_eq!(single_shot, expected_legacy);
+        assert_eq!(Baseline::decode(&stepped_standalone).unwrap(), baseline);
+
+        let mut embedded_writer = BaselineEncoding::default();
+        let mut stepped_embedded = Vec::new();
+        while !embedded_writer.step(&baseline, &mut stepped_embedded, true).unwrap() {}
+        assert_eq!(stepped_embedded, std::str::from_utf8(&stepped_standalone).unwrap().replace('\n', "\n  ").into_bytes());
+
+        // Mid-names cancellation during validation (Phase 6) emits no bytes and leaves subsequent encodes byte-exact.
+        let mut cancelled_validation = BaselineEncoding::default();
+        let mut cancelled_val_bytes = Vec::new();
+        while !(cancelled_validation.phase == 0 && cancelled_validation.validation.phase == 6 && cancelled_validation.validation.item == NAMES / 2) {
+            assert!(!cancelled_validation.step(&baseline, &mut cancelled_val_bytes, false).unwrap());
+        }
+        assert!(cancelled_val_bytes.is_empty());
+        assert_eq!(cancelled_validation.validation.names.len(), NAMES / 2);
+        drop(cancelled_validation);
+
+        // Mid-names cancellation during encoding (Phase 5) stops cleanly at a strict byte prefix without corrupting later encodes.
+        let mut cancelled_encode = BaselineEncoding::default();
+        let mut cancelled_encode_bytes = Vec::new();
+        while !(cancelled_encode.phase == 5 && cancelled_encode.item == NAMES / 2) {
+            assert!(!cancelled_encode.step(&baseline, &mut cancelled_encode_bytes, false).unwrap());
+        }
+        assert!(stepped_standalone.starts_with(&cancelled_encode_bytes));
+        assert!(cancelled_encode_bytes.len() < stepped_standalone.len());
+        let partial_text = std::str::from_utf8(&cancelled_encode_bytes).unwrap();
+        assert!(partial_text.contains(&baseline.nets[0].names[NAMES / 2 - 1]));
+        assert!(!partial_text.contains(&baseline.nets[0].names[NAMES / 2]));
+        drop(cancelled_encode);
+        assert_eq!(baseline.encode().unwrap(), expected_legacy);
+    }
 }

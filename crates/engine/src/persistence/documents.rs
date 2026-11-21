@@ -1407,6 +1407,11 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     project_data.numeric_id_high_water = numeric_id_high_water;
     project_data.layout = storage_layout;
     project_data.prefer_compact_part_groups = compact_part_groups;
+    let wires_by_id: BTreeMap<u64, &Wire> = if layouts.iter().any(|(_, _, _, _, generated, _)| !generated.is_empty()) {
+        project_data.wires.iter().map(|wire| (wire.ordinal(), wire)).collect()
+    } else {
+        BTreeMap::new()
+    };
     let sheets = layouts
         .into_iter()
         .map(|(reference, symbols, junctions, wires, generated, ends)| {
@@ -1415,7 +1420,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 .filter_map(|record| {
                     let GeneratedLegRecord { wire: wire_id, end, other, bends } = record;
                     let bends = bends?;
-                    let wire = project_data.wires.iter().find(|wire| wire.ordinal() == wire_id)?;
+                    let wire = wires_by_id.get(&wire_id).copied()?;
                     if !wires.contains(&wire_id) || wire.bends() != Some(bends.as_slice()) {
                         return None;
                     }
@@ -1731,11 +1736,32 @@ impl DocumentsEncoder {
         (self.phase == 21).then_some(self.cursor as usize)
     }
 
+    /// Progress of bounded generated-leg matching while phases 23..=25 run on a sheet:
+    /// `(phase, cursor, wires_indexed, live_legs_matched)`.
+    #[cfg(test)]
+    pub(crate) fn generated_leg_scan_progress(&self) -> Option<(u8, usize, usize, usize)> {
+        matches!(self.phase, 23..=25).then_some((self.phase, self.cursor as usize, self.sheet_wire_index.len(), self.live_generated_legs.len()))
+    }
+
     /// Designator-lock fact accumulated by the component scan (phase 26), exposed only while
     /// the remaining header scans (27, 28, 29, 36) run and before phase 0 consumes it.
     #[cfg(test)]
     pub(crate) fn scanned_designator_locks(&mut self) -> Option<&mut bool> {
         matches!(self.phase, 27 | 28 | 29 | 36).then_some(&mut self.header.has_locks)
+    }
+
+    /// Copper-row emission progress while phase 30 streams tracks or vias:
+    /// `Some(("tracks", written))` or `Some(("vias", written))`.
+    #[cfg(test)]
+    pub(crate) fn board_copper_progress(&self) -> Option<(&'static str, usize)> {
+        if self.phase != 30 {
+            return None;
+        }
+        match self.board_rows.phase {
+            6 => Some(("tracks", self.board_rows.index.saturating_sub(1))),
+            7 => Some(("vias", self.board_rows.index.saturating_sub(1))),
+            _ => None,
+        }
     }
 
     /// Advance the current representation within the caller's incremental record budget.
@@ -2179,7 +2205,7 @@ impl DocumentsEncoder {
                 24 => {
                     let sheet = &self.project.sheets[self.sheet_cursor];
                     if let Some(leg) = sheet.generated_legs.get(self.cursor as usize) {
-                        if self.sheet_wire_index.get(&leg.wire).is_some_and(|&index| leg.matches(&sheet.wires[index])) {
+                        if self.sheet_wire_index.get(&leg.wire).is_some_and(|&index| sheet.wires.get(index).is_some_and(|wire| leg.matches(wire))) {
                             self.live_generated_legs.push(self.cursor as usize);
                         }
                         self.cursor += 1;
@@ -2277,8 +2303,10 @@ impl DocumentsEncoder {
                     }
                 }
                 17 => {
-                    if let Some(&index) = self.live_generated_legs.get(self.cursor as usize) {
-                        let leg = GeneratedLegRecord::from(&self.project.sheets[self.sheet_cursor].generated_legs[index]);
+                    if let Some(&index) = self.live_generated_legs.get(self.cursor as usize)
+                        && let Some(leg) = self.project.sheets[self.sheet_cursor].generated_legs.get(index)
+                    {
+                        let leg = GeneratedLegRecord::from(leg);
                         record(&mut self.bytes, &mut self.first, &leg)?;
                         self.cursor += 1;
                     } else {

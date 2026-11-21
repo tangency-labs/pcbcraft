@@ -447,3 +447,297 @@ fn explicit_conversion_preserves_old_split_packages_and_validates_integrity() {
     assert!(decode_legacy_packed(&zip_files(&old, "", false)).is_err());
     assert!(decode_legacy_packed(&encode_packed_documents(expected).unwrap()).is_err());
 }
+
+/// Generated-leg matching indexes sheet wires and scans legs within the step batch budget,
+/// cancels cleanly mid-leg, and matches full encode and decode round-trip byte for byte.
+#[test]
+fn generated_leg_matching_is_bounded_cancellable_and_byte_exact() {
+    let mut s = session();
+    for index in 0..64_i64 {
+        let y_nm = (index + 100) * 2_540_000;
+        apply(&mut s, DRAW_WIRE, json!({"from":{"x_nm":0,"y_nm":y_nm},"to":{"x_nm":2_540_000,"y_nm":y_nm},"bends":[]}));
+    }
+    let mut snapshot = s.snapshot().unwrap();
+    let project = Arc::make_mut(&mut snapshot);
+    let sheet_data = &mut Arc::make_mut(&mut project.sheets)[0];
+    let mut legs: Vec<crate::wire::GeneratedLeg> = sheet_data
+        .wires
+        .iter()
+        .filter(|wire| wire.bends().is_some())
+        .map(|wire| {
+            let [other, end] = wire.endpoints();
+            crate::wire::GeneratedLeg { wire: wire.ordinal(), end, other, bends: wire.bends().map(|bends| bends.to_vec()) }
+        })
+        .collect();
+    let live_count = legs.len();
+    assert!(live_count >= 64);
+    let sample = legs[0].clone();
+    legs.push(crate::wire::GeneratedLeg { wire: 999_999, end: sample.end, other: sample.other, bends: sample.bends.clone() });
+    legs.push(crate::wire::GeneratedLeg { wire: sample.wire, end: sample.other, other: sample.end, bends: sample.bends });
+    sheet_data.generated_legs = Arc::new(legs);
+
+    let expected = encode_documents(snapshot.clone()).unwrap();
+    let sheet_path = sheet(&expected);
+    let parsed_sheet: Value = serde_json::from_slice(&expected[&sheet_path]).unwrap();
+    assert_eq!(parsed_sheet["generated_legs"].as_array().unwrap().len(), live_count);
+
+    let batch = 8;
+    let mut encoder = DocumentsEncoder::new(snapshot.clone());
+    let mut wire_index_steps = 0_usize;
+    let mut leg_match_steps = 0_usize;
+    let mut prev_wire_cursor = 0_usize;
+    let mut prev_leg_cursor = 0_usize;
+    let incremental = loop {
+        if let Some(encoded) = encoder.step(batch).unwrap() {
+            break encoded;
+        }
+        if let Some((phase, cursor, _indexed, matched)) = encoder.generated_leg_scan_progress() {
+            match phase {
+                23 => {
+                    wire_index_steps += 1;
+                    assert!(cursor >= prev_wire_cursor);
+                    assert!(cursor - prev_wire_cursor <= batch);
+                    prev_wire_cursor = cursor;
+                }
+                24 => {
+                    leg_match_steps += 1;
+                    assert!(cursor >= prev_leg_cursor);
+                    assert!(cursor - prev_leg_cursor <= batch);
+                    assert!(matched <= cursor);
+                    prev_leg_cursor = cursor;
+                }
+                _ => {}
+            }
+        }
+    };
+    assert!(wire_index_steps >= 6, "wire indexing should span multiple bounded steps");
+    assert!(leg_match_steps >= 6, "generated-leg matching should span multiple bounded steps");
+    assert_eq!(incremental, expected);
+
+    // Cancel strictly mid-leg during phase 24 and verify a subsequent save is unaffected.
+    let mut cancelled = DocumentsEncoder::new(snapshot.clone());
+    let mut paused_mid_leg = false;
+    for _ in 0..512 {
+        assert!(cancelled.step(4).unwrap().is_none());
+        if let Some((24, cursor, _indexed, matched)) = cancelled.generated_leg_scan_progress()
+            && cursor > 0
+            && cursor < live_count
+            && matched < live_count
+        {
+            paused_mid_leg = true;
+            break;
+        }
+    }
+    assert!(paused_mid_leg, "encoder should yield mid-leg before finishing phase 24");
+    drop(cancelled);
+    assert_eq!(encode_documents(snapshot).unwrap(), expected);
+
+    // Decode uses the indexed wire lookup and round-trips byte-for-byte.
+    let reopened = decode_documents(&expected).unwrap();
+    assert_eq!(reopened.sheets[0].generated_legs.len(), live_count);
+    assert_eq!(encode_documents(reopened).unwrap(), expected);
+}
+
+/// Native board copper serialization (tracks and vias) streams incrementally within the caller's
+/// step budget, can be cancelled mid-tracks or mid-vias without affecting the snapshot, and
+/// produces byte-exact `board.json` output matching the canonical array framing.
+#[test]
+fn board_copper_encoding_is_step_bounded_cancellable_and_byte_exact() {
+    use crate::{ADD_TRACKS, ADD_VIA, INITIALIZE_BOARD_SETUP, board::setup::LayerPurpose};
+
+    const TRACK_COUNT: usize = 64;
+    const VIA_COUNT: usize = 48;
+    const BUDGET: usize = 5;
+
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"name":"Copper streaming","create_board":true})).unwrap();
+    apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    let front = s.project().unwrap().board_setup().unwrap().layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper).unwrap().id;
+    for i in 0..TRACK_COUNT {
+        let y = (i as i64) * 2_000_000;
+        apply(&mut s, ADD_TRACKS, json!({"layer":front,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":y},{"x_nm":5_000_000,"y_nm":y}]}));
+    }
+    for i in 0..VIA_COUNT {
+        let x = 10_000_000 + (i as i64) * 2_000_000;
+        apply(&mut s, ADD_VIA, json!({"at":{"x_nm":x,"y_nm":0},"via_diameter_nm":600_000,"via_drill_nm":300_000}));
+    }
+    let snapshot = s.snapshot().unwrap();
+    assert_eq!(snapshot.board.tracks.len(), TRACK_COUNT);
+    assert_eq!(snapshot.board.vias.len(), VIA_COUNT);
+
+    let mut encoder = DocumentsEncoder::new(snapshot.clone());
+    let mut track_steps = 0usize;
+    let mut via_steps = 0usize;
+    let mut mid_tracks_seen = false;
+    let mut mid_vias_seen = false;
+    let mut prev_tracks: Option<usize> = None;
+    let mut prev_vias: Option<usize> = None;
+    let incremental = loop {
+        if let Some(docs) = encoder.step(BUDGET).unwrap() {
+            break docs;
+        }
+        match encoder.board_copper_progress() {
+            Some(("tracks", written)) => {
+                track_steps += 1;
+                if let Some(prev) = prev_tracks {
+                    assert!(written >= prev && written - prev <= BUDGET, "track step exceeded budget: {prev} -> {written}");
+                } else {
+                    assert!(written <= BUDGET, "initial track step exceeded budget: {written}");
+                }
+                if written > 0 && written < TRACK_COUNT {
+                    mid_tracks_seen = true;
+                }
+                prev_tracks = Some(written);
+            }
+            Some(("vias", written)) => {
+                via_steps += 1;
+                if let Some(prev) = prev_vias {
+                    assert!(written >= prev && written - prev <= BUDGET, "via step exceeded budget: {prev} -> {written}");
+                } else {
+                    assert!(written <= BUDGET, "initial via step exceeded budget: {written}");
+                }
+                if written > 0 && written < VIA_COUNT {
+                    mid_vias_seen = true;
+                }
+                prev_vias = Some(written);
+            }
+            _ => {}
+        }
+    };
+    assert!(mid_tracks_seen, "encoder must yield mid-tracks");
+    assert!(mid_vias_seen, "encoder must yield mid-vias");
+    assert!(track_steps >= TRACK_COUNT / BUDGET, "too few track steps: {track_steps}");
+    assert!(via_steps >= VIA_COUNT / BUDGET, "too few via steps: {via_steps}");
+
+    for (target_kind, target_total) in [("tracks", TRACK_COUNT), ("vias", VIA_COUNT)] {
+        let mut cancelled = DocumentsEncoder::new(snapshot.clone());
+        let mut cancelled_mid = false;
+        for _ in 0..512 {
+            assert!(cancelled.step(BUDGET).unwrap().is_none(), "finished before mid-{target_kind} pause");
+            if let Some((kind, written)) = cancelled.board_copper_progress()
+                && kind == target_kind
+                && written > 0
+                && written < target_total
+            {
+                cancelled_mid = true;
+                break;
+            }
+        }
+        assert!(cancelled_mid, "did not reach mid-{target_kind} state to cancel");
+        drop(cancelled);
+    }
+
+    let reference = encode_documents(snapshot.clone()).unwrap();
+    assert_eq!(incremental, reference);
+    let mut one_by_one = DocumentsEncoder::new(snapshot.clone());
+    let single_step = loop {
+        if let Some(docs) = one_by_one.step(1).unwrap() {
+            break docs;
+        }
+    };
+    assert_eq!(single_step, reference);
+    check_board_document_size(&snapshot).unwrap();
+
+    let board_path = snapshot.board_document_path().unwrap();
+    let board_text = std::str::from_utf8(&incremental[&board_path]).unwrap();
+    let mut expected_copper = String::from("  \"tracks\": [\n");
+    for (index, track) in snapshot.board.tracks.iter().enumerate() {
+        if index > 0 {
+            expected_copper.push_str("\n    ,\n");
+        }
+        expected_copper.push_str("    ");
+        expected_copper.push_str(&serde_json::to_string(track).unwrap());
+        expected_copper.push('\n');
+    }
+    expected_copper.push_str("  ],\n  \"vias\": [\n");
+    for (index, via) in snapshot.board.vias.iter().enumerate() {
+        if index > 0 {
+            expected_copper.push_str("\n    ,\n");
+        }
+        expected_copper.push_str("    ");
+        expected_copper.push_str(&serde_json::to_string(via).unwrap());
+        expected_copper.push('\n');
+    }
+    expected_copper.push_str("  ],\n  \"footprints\": [\n");
+    assert!(board_text.contains(&expected_copper), "board.json copper formatting drifted");
+    assert_eq!(encode_documents(decode_documents(&incremental).unwrap()).unwrap(), incremental);
+}
+
+/// Native document encoding steps large net lineage rows incrementally via `RecordEncoding`,
+/// tolerates mid-record cancellation without mutating the snapshot, and matches Serde byte-for-byte.
+#[test]
+fn documents_encoder_steps_large_net_lineage_incrementally_and_matches_serde() {
+    const LINEAGE_LEN: usize = 64;
+    for board in [false, true] {
+        let mut s = Session::default();
+        s.apply("project.new", json!({"create_board": board})).unwrap();
+        let mut pins = Vec::new();
+        for index in 0..4 {
+            apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm": index as i64 * 25_400_000, "y_nm": 0}));
+            pins.push(json!({"symbol": s.project().unwrap().symbols().last().unwrap().id(), "terminal": "1"}));
+        }
+        apply(&mut s, crate::CONNECT_PINS, json!({"from": pins[0], "to": pins[1]}));
+        apply(&mut s, crate::CONNECT_PINS, json!({"from": pins[2], "to": pins[3]}));
+        apply(&mut s, crate::nets::PROMOTE, json!({"anchor": pins[0]}));
+        apply(&mut s, crate::nets::PROMOTE, json!({"anchor": pins[2]}));
+
+        let small = s.snapshot().unwrap();
+        let mut large_project = (*small).clone();
+        let registry = Arc::make_mut(&mut large_project.net_registry);
+        assert_eq!(registry.records.len(), 2);
+        let second_id = registry.records[1].id;
+        let anchor = registry.records[0].primary.clone();
+        registry.records[0].lineage = (0..LINEAGE_LEN)
+            .map(|index| crate::nets::Lineage {
+                snapshot: crate::board::update::SourceCapture { capture_id: Uuid::from_u128(100 + index as u128), content_digest: "a".repeat(64) },
+                net: (index % 2 == 0).then_some(second_id),
+                anchor: anchor.clone(),
+            })
+            .collect();
+        let large = Arc::new(large_project);
+
+        let mut small_encoder = DocumentsEncoder::new(small);
+        let mut small_steps = 0usize;
+        while small_encoder.step(1).unwrap().is_none() {
+            small_steps += 1;
+        }
+
+        let mut large_encoder = DocumentsEncoder::new(large.clone());
+        let mut large_steps = 0usize;
+        let incremental_1 = loop {
+            if let Some(docs) = large_encoder.step(1).unwrap() {
+                break docs;
+            }
+            large_steps += 1;
+        };
+        assert_eq!(large_steps, small_steps + LINEAGE_LEN + 2);
+
+        let mut cancelled = DocumentsEncoder::new(large.clone());
+        for _ in 0..large_steps / 2 {
+            assert!(cancelled.step(1).unwrap().is_none());
+        }
+        drop(cancelled);
+
+        let mut resumed = DocumentsEncoder::new(large.clone());
+        let incremental_7 = loop {
+            if let Some(docs) = resumed.step(7).unwrap() {
+                break docs;
+            }
+        };
+
+        let one_shot = encode_documents(large.clone()).unwrap();
+        assert_eq!(incremental_1, one_shot);
+        assert_eq!(incremental_7, one_shot);
+
+        let path = large.instances_document_path().unwrap_or_else(|| ENTRY_POINT.to_owned());
+        let text = std::str::from_utf8(&one_shot[&path]).unwrap();
+        let first_row = serde_json::to_string(&large.net_registry.records[0]).unwrap();
+        let second_row = serde_json::to_string(&large.net_registry.records[1]).unwrap();
+        let expected_pair = format!("    {first_row}\n\n    ,\n    {second_row}\n");
+        assert!(text.contains(&expected_pair));
+
+        let reopened = decode_documents(&incremental_1).unwrap();
+        assert_eq!(reopened.net_registry, large.net_registry);
+        assert_eq!(encode_documents(reopened).unwrap(), one_shot);
+    }
+}
