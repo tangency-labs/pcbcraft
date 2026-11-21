@@ -366,6 +366,10 @@ fn board_follow_reuses_cached_sheet_views_and_settles() {
     assert_ne!(power, schematic);
     h.run();
     let app = h.state_mut();
+    // Power was forked from Main's camera; give it its own zoom so a follow that copied Main's
+    // camera would be caught.
+    let power_camera = &mut app.views.view_mut(power).unwrap().camera;
+    power_camera.set_zoom(power_camera.zoom() * 2.0);
     assert_eq!(app.views.open_document(power, DocumentTarget::Sheet(main), &app.session), Some(schematic));
     app.views.view_mut(schematic).unwrap().camera.center_on(Point { x_nm: -25_400_000, y_nm: 12_700_000 });
     app.preferences.selection_follow = SelectionFollow::Both;
@@ -378,6 +382,7 @@ fn board_follow_reuses_cached_sheet_views_and_settles() {
         (camera.screen(origin, rect), camera.zoom())
     };
     let power_zoom = views.view(power).unwrap().camera.zoom();
+    assert_ne!(power_zoom, main_zoom);
     assert!(!rect.contains(views.view(power).unwrap().camera.screen(POWER_U3, rect)));
     let before = h.state().session.inspect();
 
