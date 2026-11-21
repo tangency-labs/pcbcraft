@@ -10,9 +10,7 @@ use pcbcraft_chrome::{
     library_workspace::{self, TableEntry},
     shell,
 };
-#[cfg(not(target_arch = "wasm32"))]
-use pcbcraft_engine::authoring::pin_table::MAX_BYTES;
-use pcbcraft_engine::authoring::pin_table::{self, ColumnMapping, ColumnRole, Delimiter, ImportPlan, PinSide, Preview, PreviewRow};
+use pcbcraft_engine::authoring::pin_table::{self, ColumnMapping, ColumnRole, Delimiter, ImportPlan, MAX_BYTES, PinSide, Preview, PreviewRow};
 #[cfg(not(target_arch = "wasm32"))]
 use std::sync::mpsc;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -21,6 +19,8 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 const ROWS_PER_PAGE: usize = 25;
 /// Dialog width in logical points, giving all seven preview columns room without horizontal cramping.
 const DIALOG_WIDTH: f32 = 880.0;
+/// Stable widget ID for the pin-table source text editor so keyboard focus and Escape handling stay exact.
+const SOURCE_TEXT_ID: &str = "pin_table_source_text";
 
 /// Validated pin-table plan and source state retained on an open symbol document after staging.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -330,7 +330,12 @@ impl PcbApp {
     pub(crate) fn library_pin_table_dialog(&mut self, ctx: &Context, mut draft: Box<Draft>) {
         draft.poll_file_job();
         let tokens = Tokens::get();
-        let has_staged = self.library_editors.documents.get(&draft.document).is_some_and(|doc| doc.staged_pin_table.is_some());
+        let staged_raw_text =
+            self.library_editors.documents.get(&draft.document).and_then(|doc| doc.staged_pin_table.as_ref().map(|staged| staged.raw_text.as_str()));
+        let has_staged = staged_raw_text.is_some();
+        let has_unsaved_edits = !draft.raw_text.trim().is_empty() && staged_raw_text != Some(draft.raw_text.as_str());
+        let source_id = egui::Id::new(SOURCE_TEXT_ID);
+        let source_was_focused = ctx.memory(|mem| mem.focused() == Some(source_id));
         let mut load_file = false;
         let mut clear_text = false;
         let mut auto_map = false;
@@ -386,11 +391,11 @@ impl PcbApp {
                 ui.label(shell::error(io_error));
             }
             ui.add_space(tokens.space_4);
-            let source_label = ui.label(shell::dim("Pin table text (CSV or TSV, up to 256 KiB):"));
+            let source_label = ui.label(shell::dim(format!("Pin table text (CSV or TSV, up to {} KiB):", MAX_BYTES / 1024)));
             egui::ScrollArea::vertical().id_salt("pin_table_source_scroll").max_height(132.0).show(ui, |ui| {
                 let editor = egui::TextEdit::multiline(&mut draft.raw_text)
-                    .id_salt("pin_table_source_text")
-                    .code_editor()
+                    .id(source_id)
+                    .font(egui::TextStyle::Monospace)
                     .desired_rows(5)
                     .desired_width(f32::INFINITY)
                     .hint_text("Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n2,SDA/GPIO2,I/O,main,left")
@@ -574,7 +579,7 @@ impl PcbApp {
                     plural(unit_count, "unit", "units"),
                 )
             } else if is_empty {
-                "Paste or load a pin table to preview.".to_owned()
+                "Nothing to stage yet.".to_owned()
             } else {
                 format!("Resolve {finding_count} {} before staging.", plural(finding_count, "finding", "findings"))
             };
@@ -593,8 +598,17 @@ impl PcbApp {
             });
         });
 
-        if (cancel || dismissed) && !loading {
+        if cancel && !loading {
             return;
+        }
+        if dismissed && !loading && !source_was_focused {
+            if has_unsaved_edits {
+                draft.confirm_error = Some("Use Cancel to discard unsaved pin-table edits, or Stage pin table to keep them.".into());
+                draft.revision_stale = false;
+                ctx.request_repaint();
+            } else {
+                return;
+            }
         }
         if load_file {
             draft.start_file_load(ctx);
@@ -632,6 +646,7 @@ impl PcbApp {
                     draft.revision_stale =
                         self.library_editors.documents.get(&draft.document).is_some_and(|doc| doc.session.revision() != draft.revision);
                     draft.confirm_error = Some(error);
+                    ctx.request_repaint();
                 }
             }
         }
@@ -685,20 +700,97 @@ mod tests {
         (h, doc_id)
     }
 
-    /// Empty dialog opens without any red validation error; pasting a 256-pin CSV with 2
-    /// duplicates disables staging, lets the user toggle the findings-only filter, and after
-    /// fixing duplicates clicking "Stage pin table" stages an `ImportPlan` without mutating
-    /// symbol revision, exposes it in `inspect()`, and restores it on reopen.
+    fn click_at(h: &mut Harness<'_, PcbApp>, pos: egui::Pos2) {
+        h.hover_at(pos);
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run();
+        }
+    }
+
+    fn type_multiline(h: &mut Harness<'_, PcbApp>, lines: &[&str]) {
+        h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
+        h.run();
+        for (idx, line) in lines.iter().enumerate() {
+            if idx > 0 {
+                h.key_press(egui::Key::Enter);
+                h.run();
+            }
+            h.get_by_role(egui::accesskit::Role::MultilineTextInput).type_text(line);
+            h.run();
+        }
+    }
+
+    fn tab_to_source_field(h: &mut Harness<'_, PcbApp>) -> egui::Id {
+        let source_id = egui::Id::new(SOURCE_TEXT_ID);
+        for _ in 0..12 {
+            if h.ctx.memory(|mem| mem.focused() == Some(source_id)) {
+                return source_id;
+            }
+            h.key_press(egui::Key::Tab);
+            h.run();
+        }
+        panic!("Tab did not reach pin-table source text field; focused = {:?}", h.ctx.memory(|mem| mem.focused()));
+    }
+
+    fn assert_no_findings_filter(h: &Harness<'_, PcbApp>) {
+        let has_filter = h
+            .query_all_by_role(egui::accesskit::Role::CheckBox)
+            .any(|node| node.accesskit_node().label().unwrap_or_default().contains("Show findings only"));
+        assert!(!has_filter);
+    }
+
+    fn synthetic_40_rows_with_30_errors_csv() -> String {
+        let mut csv = String::from("Number,Name,Type,Unit,Side\n");
+        for i in 1..=40 {
+            let etype = if i <= 30 { "unknown_type" } else { "input" };
+            let side = if i % 2 == 1 { "left" } else { "right" };
+            csv.push_str(&format!("{i},PIN_{i},{etype},main,{side}\n"));
+        }
+        csv
+    }
+
+    /// Empty dialog opens without any red validation error; typing through the real text field
+    /// clears stale file metadata and recomputes live; pasting a 256-pin CSV with 2 duplicates
+    /// disables staging, lets the user toggle the findings-only filter, and after fixing duplicates
+    /// clicking "Stage pin table" stages an `ImportPlan` without mutating symbol revision, exposes
+    /// it in `inspect()`, and restores the exact staged text, delimiter and mapping on reopen.
     #[test]
     fn dialog_256_pin_csv_with_two_duplicates_filter_fix_and_stage() {
         let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
         let revision_before = h.state().library_editors.documents.get(&doc_id).unwrap().session.revision();
 
-        // Empty state suppresses validation findings and pager.
-        assert!(h.query_by_label("Show findings only (1)").is_none());
+        // Empty state renders the prompt once, shows the calm footer line, and omits findings/pager controls.
+        assert_no_findings_filter(&h);
         assert!(h.query_by_label("Previous").is_none());
+        h.get_by_label("Paste or load a pin table to preview.");
+        h.get_by_label("Nothing to stage yet.");
 
-        // Paste 256-pin CSV with 2 duplicates.
+        // Drive real TextEdit typing to exercise response.changed() clearing source_name and io_error.
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.source_name = Some("stale.csv".into());
+            draft.io_error = Some("Previous I/O error".into());
+        }
+        h.run();
+        type_multiline(&mut h, &["Number,Name,Type,Unit,Side", "1,VCC,power_in,main,top", "1,GND,power_in,main,bottom"]);
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert!(draft.source_name.is_none());
+            assert!(draft.io_error.is_none());
+            assert_eq!(draft.preview.rows.len(), 2);
+            assert_eq!(draft.preview.rows_with_findings_count(), 1);
+        }
+        h.get_by_label("Show findings only (1)");
+
+        // Clear via the real Clear button, then load the 256-pin CSV with 2 duplicates.
+        click(&mut h, "Clear");
+        assert_no_findings_filter(&h);
         {
             let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
                 panic!("expected pin table dialog");
@@ -728,11 +820,12 @@ mod tests {
         }
 
         // Fix the duplicates and click "Stage pin table".
+        let expected_csv = synthetic_256_csv(false);
         {
             let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
                 panic!("expected pin table dialog");
             };
-            draft.raw_text = synthetic_256_csv(false);
+            draft.raw_text = expected_csv.clone();
             draft.recompute();
         }
         h.run();
@@ -741,21 +834,32 @@ mod tests {
         click(&mut h, "Stage pin table");
 
         assert!(matches!(h.state().dialog, Dialog::None));
-        let doc = h.state().library_editors.documents.get(&doc_id).unwrap();
-        assert_eq!(doc.session.revision(), revision_before);
-        let staged = doc.staged_pin_table.as_ref().expect("staged pin table");
-        assert_eq!(staged.plan.base_revision, revision_before);
-        assert_eq!(staged.plan.pins.len(), 256);
-        assert_eq!(staged.plan.units.len(), 4);
-        assert_eq!(staged.plan.pins[0].name.as_deref(), Some("SIG_1/ALT_1"));
+        let (expected_mapping, expected_delimiter) = {
+            let doc = h.state().library_editors.documents.get(&doc_id).unwrap();
+            assert_eq!(doc.session.revision(), revision_before);
+            let staged = doc.staged_pin_table.as_ref().expect("staged pin table");
+            assert_eq!(staged.plan.base_revision, revision_before);
+            assert_eq!(staged.plan.pins.len(), 256);
+            assert_eq!(staged.plan.units.len(), 4);
+            assert_eq!(staged.plan.pins[0].name.as_deref(), Some("SIG_1/ALT_1"));
+            (staged.mapping, staged.delimiter)
+        };
         assert!(h.state().library_editors.notice.as_deref().unwrap_or_default().contains("256 pins across 4 units"));
         let inspected = h.state().library_editors.inspect();
         assert_eq!(inspected["documents"][0]["staged_pin_table"]["pin_count"], 256);
         assert_eq!(inspected["documents"][0]["staged_pin_table"]["unit_count"], 4);
 
-        // Reopening restores the staged source text and exposes Clear staged plan.
+        // Reopening restores the exact staged source text, delimiter and mapping, and exposes Clear staged plan.
         h.state_mut().begin_library_pin_table(doc_id).unwrap();
         h.run();
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert_eq!(draft.raw_text, expected_csv);
+            assert_eq!(draft.mapping, expected_mapping);
+            assert_eq!(draft.delimiter, expected_delimiter);
+        }
         h.get_by_label("Clear staged plan").scroll_to_me();
         h.run();
         click(&mut h, "Clear staged plan");
@@ -763,7 +867,8 @@ mod tests {
     }
 
     /// Column remapping via the labelled ComboBox updates the preview live; Escape closes an open
-    /// ComboBox popup before dismissing the modal, and Cancel/Escape discards cleanly.
+    /// ComboBox popup before dismissing the modal, unsaved text is protected from stray Escape,
+    /// Cancel discards cleanly, and Escape closes an empty dialog immediately.
     #[test]
     fn dialog_column_remapping_choice_escape_and_cancel() {
         let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 760.0));
@@ -788,6 +893,7 @@ mod tests {
             assert_eq!(draft.mapping.number, None);
             assert!(!draft.preview.can_accept());
         }
+        h.get_by_label("Table finding (1) — fix before staging:");
 
         // Click Auto-map columns to restore valid header mapping.
         click(&mut h, "Auto-map columns");
@@ -799,7 +905,7 @@ mod tests {
             assert!(draft.preview.can_accept());
         }
 
-        // Open Pin number ComboBox again: first Escape closes popup only, second Escape closes dialog.
+        // Open Pin number ComboBox again: first Escape closes popup only, second Escape protects unsaved text.
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").click();
         h.run();
         h.get_by_label("Unmapped (required)");
@@ -810,13 +916,78 @@ mod tests {
 
         h.key_press(egui::Key::Escape);
         h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+        h.get_by_label("Use Cancel to discard unsaved pin-table edits, or Stage pin table to keep them.");
+
+        // Explicit Cancel discards cleanly.
+        h.get_by_label("Cancel").scroll_to_me();
+        h.run();
+        click(&mut h, "Cancel");
         assert!(matches!(h.state().dialog, Dialog::None));
         assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
+
+        // Reopening an empty dialog allows Escape to close immediately.
+        h.state_mut().begin_library_pin_table(doc_id).unwrap();
+        h.run();
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
+    }
+
+    /// Keyboard navigation and unsaved-edit protection: Tab enters and leaves the source text field
+    /// without inserting a tab character, Escape inside the focused text field drops focus without
+    /// losing pasted text, and a stray backdrop click keeps unsaved text intact until Cancel.
+    #[test]
+    fn dialog_keyboard_tab_escape_and_backdrop_protection() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+
+        // Tab reaches the source field and Tab leaves it without inserting '\t'.
+        let source_id = tab_to_source_field(&mut h);
+        h.key_press(egui::Key::Tab);
+        h.run();
+        assert_ne!(h.ctx.memory(|mem| mem.focused()), Some(source_id));
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert!(!draft.raw_text.contains('\t'));
+        }
+
+        // Type CSV into the source field via real keyboard input, then press Escape while focused.
+        type_multiline(&mut h, &["Number,Name,Type,Unit,Side", "1,VCC,power_in,main,top"]);
+        assert_eq!(h.ctx.memory(|mem| mem.focused()), Some(source_id));
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+        assert_ne!(h.ctx.memory(|mem| mem.focused()), Some(source_id));
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert!(draft.raw_text.contains("1,VCC,power_in,main,top"));
+        }
+
+        // Clicking outside the dialog on the backdrop keeps the dialog and unsaved text intact.
+        click_at(&mut h, egui::pos2(5.0, 5.0));
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+        h.get_by_label("Use Cancel to discard unsaved pin-table edits, or Stage pin table to keep them.");
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert!(draft.raw_text.contains("1,VCC,power_in,main,top"));
+        }
+
+        // Explicit Cancel still discards immediately.
+        h.get_by_label("Cancel").scroll_to_me();
+        h.run();
+        click(&mut h, "Cancel");
+        assert!(matches!(h.state().dialog, Dialog::None));
     }
 
     /// Short-host viewport (L7): scrolling the modal brings footer buttons cleanly inside the
-    /// viewport; revision mismatch reports inline beside the footer with a Refresh revision button,
-    /// and non-symbol documents refuse pin-table import.
+    /// viewport; revision mismatch reports inline beside the footer with a Refresh revision button
+    /// that preserves text and mapping; non-symbol documents refuse pin-table import.
     #[test]
     fn dialog_short_host_footer_reachable_revision_refresh_and_non_symbol_refusal() {
         let mut app = PcbApp::default();
@@ -826,13 +997,15 @@ mod tests {
 
         let viewport_size = egui::vec2(960.0, 420.0);
         let (mut h, doc_id) = symbol_harness(viewport_size);
-        {
+        let original_text = "Number,Name,Type\n1,VCC,power_in\n".to_owned();
+        let original_mapping = {
             let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
                 panic!("expected pin table dialog");
             };
-            draft.raw_text = "Number,Name,Type\n1,VCC,power_in\n".into();
+            draft.raw_text = original_text.clone();
             draft.recompute();
-        }
+            draft.mapping
+        };
         h.run();
 
         // Scroll footer controls into view and assert both lie inside the 960x420 viewport.
@@ -846,11 +1019,20 @@ mod tests {
         h.state_mut().library_editors.edit(doc_id, 0, Action::AddUnit { unit: "aux".into() }).unwrap();
         click(&mut h, "Stage pin table");
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+        h.get_by_label("Symbol changed while the pin-table dialog was open; click Refresh revision to stage on the current revision.");
 
-        // Refresh revision clears the error and lets Stage pin table succeed without losing the paste.
+        // Refresh revision clears the error and preserves text and mapping so Stage pin table succeeds.
         h.get_by_label("Refresh revision").scroll_to_me();
         h.run();
         click(&mut h, "Refresh revision");
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert_eq!(draft.raw_text, original_text);
+            assert_eq!(draft.mapping, original_mapping);
+            assert!(draft.confirm_error.is_none());
+        }
         h.get_by_label("Stage pin table").scroll_to_me();
         h.run();
         click(&mut h, "Stage pin table");
@@ -862,8 +1044,10 @@ mod tests {
     #[test]
     fn shot_empty_dialog() {
         let (h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
-        assert!(h.query_by_label("Show findings only (1)").is_none());
+        assert_no_findings_filter(&h);
         assert!(h.query_by_label("Previous").is_none());
+        h.get_by_label("Paste or load a pin table to preview.");
+        h.get_by_label("Nothing to stage yet.");
         assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
         assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").accesskit_node().is_disabled());
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
@@ -916,6 +1100,44 @@ mod tests {
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
     }
 
+    /// Snapshot state: table-level findings banner when Pin number is unmapped.
+    #[test]
+    fn shot_table_findings() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Signal,Dir,Bank\nTXD,output,io\nRXD,input,io\n".into();
+            draft.recompute();
+            assert_eq!(draft.mapping.number, None);
+            assert_eq!(draft.preview.table_finding_count(), 1);
+        }
+        h.run();
+        h.get_by_label("Table finding (1) — fix before staging:");
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: Show findings only toggled on with a multi-page filtered table.
+    #[test]
+    fn shot_findings_only_paged() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = synthetic_40_rows_with_30_errors_csv();
+            draft.recompute();
+            assert_eq!(draft.preview.rows_with_findings_count(), 30);
+        }
+        h.run();
+        click(&mut h, "Show findings only (30)");
+        h.get_by_label("Page 1 of 2 · 30 shown");
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
     /// Snapshot state: column mapping dropdown open on a reordered TSV table.
     #[test]
     fn shot_column_mapping() {
@@ -932,6 +1154,50 @@ mod tests {
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").click();
         h.run();
         h.get_by_label("Unmapped (required)");
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: reopened dialog with a previously staged plan showing Clear staged plan in the footer.
+    #[test]
+    fn shot_reopen_staged() {
+        let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,power,top\n2,GND,power_in,power,bottom\n".into();
+            draft.recompute();
+        }
+        h.run();
+        h.get_by_label("Stage pin table").scroll_to_me();
+        h.run();
+        click(&mut h, "Stage pin table");
+        assert!(matches!(h.state().dialog, Dialog::None));
+
+        h.state_mut().begin_library_pin_table(doc_id).unwrap();
+        h.run();
+        h.get_by_label("Clear staged plan").scroll_to_me();
+        h.run();
+        assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Clear staged plan").accesskit_node().is_disabled());
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: Loaded file caption and inline file I/O error line under Source table.
+    #[test]
+    fn shot_loaded_file_and_io_error() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n".into();
+            draft.source_name = Some("mcu-pins.csv".into());
+            draft.io_error = Some(format!("Selected file exceeds the {} KiB pin-table limit.", MAX_BYTES / 1024));
+            draft.recompute();
+        }
+        h.run();
+        h.get_by_label("Loaded file: mcu-pins.csv");
+        h.get_by_label(&format!("Selected file exceeds the {} KiB pin-table limit.", MAX_BYTES / 1024));
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
     }
 
@@ -953,6 +1219,7 @@ mod tests {
         click(&mut h, "Stage pin table");
         h.get_by_label("Refresh revision").scroll_to_me();
         h.run();
+        h.get_by_label("Symbol changed while the pin-table dialog was open; click Refresh revision to stage on the current revision.");
         assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Refresh revision").accesskit_node().is_disabled());
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
     }
@@ -975,13 +1242,33 @@ mod tests {
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
     }
 
-    /// Snapshot state: keyboard focus inside the first text field (pin-table source editor).
+    /// Snapshot state: short host viewport (960x420) scrolled to the dialog footer.
+    #[test]
+    fn shot_short_host_footer() {
+        let viewport_size = egui::vec2(960.0, 420.0);
+        let (mut h, _doc_id) = symbol_harness(viewport_size);
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n2,GND,power_in,main,bottom\n".into();
+            draft.recompute();
+        }
+        h.run();
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, viewport_size);
+        h.get_by_label("Cancel").scroll_to_me();
+        h.run();
+        assert!(viewport.contains_rect(h.get_by_label("Cancel").rect()));
+        assert!(viewport.contains_rect(h.get_by_label("Stage pin table").rect()));
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: keyboard focus on the pin-table source text field reached by Tab from the first control.
     #[test]
     fn shot_keyboard_focus_first_field() {
         let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
-        h.get_by_role(egui::accesskit::Role::MultilineTextInput).click();
-        h.run();
-        assert!(!h.get_by_role(egui::accesskit::Role::MultilineTextInput).accesskit_node().is_disabled());
+        let source_id = tab_to_source_field(&mut h);
+        assert_eq!(h.ctx.memory(|mem| mem.focused()), Some(source_id));
         assert!(h.ctx.egui_wants_keyboard_input());
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
     }

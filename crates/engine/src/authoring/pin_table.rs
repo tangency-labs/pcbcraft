@@ -6,7 +6,7 @@
 //! later symbol-generation and re-import-diff stages consume.
 
 use crate::{
-    library::MAX_TERMINALS,
+    library::{MAX_DRAWING_NM, MAX_TERMINALS},
     schematic::{ElectricalType, GRID_NM, PinNumber, PinOrientation},
 };
 use serde::{Deserialize, Serialize};
@@ -27,8 +27,6 @@ pub const MAX_PIN_NAME_CHARS: usize = 32;
 pub const PIN_PITCH_NM: i64 = GRID_NM * 2;
 /// Minimum symbol body span along either axis (10.16 mm = 4 pin pitches).
 pub const MIN_BODY_SPAN_NM: i64 = PIN_PITCH_NM * 4;
-/// Native symbol drawing half-extent bound (±100 mm), matching `library::MAX_DRAWING_NM`.
-pub const MAX_DRAWING_NM: i64 = 100_000_000;
 /// Maximum symbol body span along either axis so leads still fit inside ±100 mm.
 pub const MAX_BODY_SPAN_NM: i64 = (MAX_DRAWING_NM - PIN_PITCH_NM) * 2;
 /// Maximum terminals one unit can hold on the native symbol grid (`library::MAX_TERMINALS` docs).
@@ -281,7 +279,7 @@ impl FindingKind {
             Self::EmptyTable => "Empty",
             Self::InputTooLarge => "Too large",
             Self::UnclosedQuote => "Quote error",
-            Self::MissingNumberColumn => "No number col",
+            Self::MissingNumberColumn => "Unmapped number",
             Self::TooManyPins => "Too many pins",
             Self::TooManyUnits => "Too many units",
             Self::UnitTooLarge => "Unit too large",
