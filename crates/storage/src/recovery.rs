@@ -673,6 +673,8 @@ struct Pending {
 struct Mailbox {
     state: Mutex<Pending>,
     ready: Condvar,
+    /// Hand the worker only the newest of consecutive queued edits (see [`RecorderOptions`]).
+    coalesce: bool,
 }
 
 /// The current recovery failure, retained until a successful snapshot repairs it.
@@ -731,7 +733,12 @@ impl Mailbox {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut state =
             self.ready.wait_while(state, |state| state.queue.is_empty() && state.stop.is_none()).unwrap_or_else(std::sync::PoisonError::into_inner);
-        let message = state.queue.pop_front();
+        let mut message = state.queue.pop_front();
+        // Each record holds the documents it produces, so the newest of a run of edits replays
+        // to the same state as the whole run, and only that state is encoded.
+        while self.coalesce && matches!(message, Some(Message::Committed(_))) && matches!(state.queue.front(), Some(Message::Committed(_))) {
+            message = state.queue.pop_front();
+        }
         message.ok_or(state.stop.flatten())
     }
 
@@ -802,17 +809,25 @@ impl JournalRecorder {
     /// Start recording, waking the host when recovery health changes or the worker stops.
     /// The callback runs off the editor thread and must not wait for it.
     pub fn start_notifying(dir: PathBuf, id: String, wake: impl Fn() + Send + 'static) -> Result<Self, String> {
+        Self::start_with(dir, id, RecorderOptions::default(), wake)
+    }
+
+    /// Start recording with `options`. With a retention, the worker prunes entries left by
+    /// earlier runs before it records anything; a prune failure is reported by the next
+    /// [`sync`](Self::sync) and does not stop recording.
+    pub fn start_with(dir: PathBuf, id: String, options: RecorderOptions, wake: impl Fn() + Send + 'static) -> Result<Self, String> {
         if !valid_id(&id) {
             return Err(format!("`{id}` is not a recovery entry id."));
         }
-        let mailbox = Arc::new(Mailbox::default());
+        let mailbox = Arc::new(Mailbox { coalesce: options.coalesce_edits, ..Mailbox::default() });
         let (worker_dir, worker_id, worker_mailbox) = (dir.clone(), id.clone(), Arc::clone(&mailbox));
         let (done, exit) = mpsc::sync_channel(1);
         std::thread::Builder::new()
             .name("pcbcraft-recovery".to_owned())
             .spawn(move || {
                 let exited = MarkExited(Arc::clone(&worker_mailbox));
-                let result = record(&worker_dir, &worker_id, &worker_mailbox, &wake);
+                let pruned = options.retention.map_or(Ok(0), |retention| prune(&worker_dir, retention));
+                let result = record(&worker_dir, &worker_id, &worker_mailbox, &wake, pruned.err());
                 drop(exited);
                 let _ = done.send(result);
                 wake();
@@ -875,6 +890,98 @@ impl JournalRecorder {
     pub fn retire(mut self, discard_before: Option<Instant>) -> RecorderExit {
         self.mailbox.close(discard_before);
         self.exit.take().unwrap_or_else(|| RecorderExit(Mutex::new(mpsc::channel().1)))
+    }
+}
+
+/// Options for [`JournalRecorder::start_with`]. The default records every edit and prunes
+/// nothing, as [`JournalRecorder::start`] does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RecorderOptions {
+    /// When edits arrive faster than the worker writes them, encode and record only the newest
+    /// of each queued run. Recovery reaches the same documents; [`Recovered::commands`] then
+    /// names only the last command of each coalesced run.
+    pub coalesce_edits: bool,
+    /// Prune entries left by earlier runs when the recorder starts.
+    pub retention: Option<Retention>,
+}
+
+/// How long, and how many, recovery entries no running session holds are kept.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Retention {
+    /// An unheld entry whose newest file is older than this is removed.
+    pub max_age: Duration,
+    /// At most this many unheld entries are kept, the most recently written first.
+    pub max_entries: usize,
+}
+
+/// Most folder entries a prune looks at, so a crowded folder cannot stall the worker.
+const SCAN_LIMIT: usize = 16_384;
+
+/// Remove entries in `dir` that no running session holds and that are older than
+/// `retention.max_age` or beyond the newest `retention.max_entries`. Entries held by a running
+/// session are never touched. Returns how many entries were removed; while another entry is
+/// being opened or removed it removes nothing and does not wait.
+pub fn prune(dir: &Path, retention: Retention) -> Result<usize, String> {
+    let gate = match open_lock_file(&dir.join(".entries.lock")) {
+        Ok(gate) => gate,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(error.to_string()),
+    };
+    if gate.try_lock().is_err() {
+        return Ok(0);
+    }
+    let mut written: std::collections::BTreeMap<String, SystemTime> = std::collections::BTreeMap::new();
+    for entry in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.take(SCAN_LIMIT) {
+        let Ok(entry) = entry else { continue };
+        let name = entry.file_name();
+        let Some((id, ext)) = name.to_str().and_then(|name| name.rsplit_once('.')) else { continue };
+        if !matches!(ext, "pc" | "journal" | "lock") || !valid_id(id) {
+            continue;
+        }
+        let modified = entry.metadata().and_then(|metadata| metadata.modified()).unwrap_or(UNIX_EPOCH);
+        let newest = written.entry(id.to_owned()).or_insert(modified);
+        *newest = (*newest).max(modified);
+    }
+    let mut entries: Vec<(SystemTime, String)> = written.into_iter().map(|(id, modified)| (modified, id)).collect();
+    entries.sort_by(|a, b| b.cmp(a));
+    let now = SystemTime::now();
+    let (mut kept, mut removed) = (0, 0);
+    for (modified, id) in entries {
+        let lock_path = entry_file(dir, &id, "lock");
+        // Locks are created under the gate, so one missing now stays missing until we finish.
+        let lock = if lock_path.exists() {
+            match open_entry_lock(&lock_path, false) {
+                Ok(lock) if lock.try_lock().is_ok() => Some(lock),
+                Ok(_) => continue,
+                Err(error) => return Err(format!("{}: {error}", lock_path.display())),
+            }
+        } else {
+            None
+        };
+        let old = now.duration_since(modified).unwrap_or_default() > retention.max_age;
+        if old || kept >= retention.max_entries {
+            remove_unlocked(dir, &id, lock)?;
+            removed += 1;
+        } else {
+            kept += 1;
+        }
+    }
+    drop(gate);
+    Ok(removed)
+}
+
+/// Delete entry `id`, whose lock (if it has one) the caller holds under the folder gate. The lock
+/// is closed before its path is removed, as Windows requires.
+fn remove_unlocked(dir: &Path, id: &str, lock: Option<File>) -> Result<(), String> {
+    for ext in ["pc", "journal"] {
+        remove_if_present(&entry_file(dir, id, ext))?;
+    }
+    match lock {
+        Some(lock) => {
+            drop(lock);
+            remove_if_present(&entry_file(dir, id, "lock"))
+        }
+        None => Ok(()),
     }
 }
 
@@ -949,14 +1056,11 @@ pub fn remove_entry(dir: &Path, id: &str) -> Result<(), String> {
     match open_entry_lock(&lock_path, false) {
         Ok(lock) => {
             lock.try_lock().map_err(|_| format!("Recovery entry `{id}` is in use by another session."))?;
-            for ext in ["pc", "journal"] {
-                remove_if_present(&entry_file(dir, id, ext))?;
-            }
+            remove_unlocked(dir, id, Some(lock))
         }
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error.to_string()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
     }
-    remove_if_present(&lock_path)
 }
 
 /// Remove a file, treating one that is already gone as removed.
@@ -982,9 +1086,8 @@ impl EditObserver for JournalRecorder {
 /// The worker: encode each reported state and write it to the entry, until the recorder is gone.
 /// Errors are kept for the next `sync`. A state that cannot be encoded is skipped; the next
 /// recorded edit carries its changes, or a new snapshot follows a root that failed.
-fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn()) -> Result<(), String> {
+fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: Option<String>) -> Result<(), String> {
     let mut journal: Option<EditJournal> = None;
-    let mut error: Option<String> = None;
     let discard_before = loop {
         let message = match mailbox.next() {
             Ok(message) => message,

@@ -702,6 +702,138 @@ fn the_mailbox_coalesces_a_burst_behind_a_barrier() {
     assert!(matches!(pending.queue.back(), Some(Message::Snapshot(project) | Message::Opened(project)) if project.name == "Latest"));
 }
 
+/// With coalescing, a run of queued edits reaches the worker as its newest edit only; a barrier
+/// still splits runs. Without it, every edit is handed over in order.
+#[test]
+fn coalescing_hands_the_worker_only_the_newest_queued_edit() {
+    for coalesce in [false, true] {
+        let mailbox = Mailbox { coalesce, ..Mailbox::default() };
+        let mut session = Session::default();
+        session.apply("project.new", &json!({})).unwrap();
+        let mut revisions = Vec::new();
+        let mut edits = Vec::new();
+        for index in 0..4 {
+            let revision = session
+                .apply(PLACE_SYMBOL, &json!({"definition":"resistor","x_nm":index * 10 * GRID_NM,"y_nm":0,"expected_revision":session.revision()}))
+                .unwrap();
+            revisions.push(revision);
+            edits.push(CommittedEdit { command: PLACE_SYMBOL.to_owned(), params: json!({}), revision, project: session.snapshot().unwrap() });
+        }
+        let last = edits.pop().unwrap();
+        for edit in edits {
+            mailbox.push(Message::Committed(edit));
+        }
+        let (barrier, _done) = mpsc::sync_channel(1);
+        mailbox.push(Message::Sync(barrier));
+        mailbox.push(Message::Committed(last));
+        mailbox.close(None);
+        let mut handed = Vec::new();
+        while let Ok(message) = mailbox.next() {
+            handed.push(match message {
+                Message::Committed(edit) => Some(edit.revision),
+                Message::Sync(_) => None,
+                Message::Opened(_) | Message::Snapshot(_) => panic!("only edits and a barrier were queued"),
+            });
+        }
+        let expected = if coalesce {
+            vec![Some(revisions[2]), None, Some(revisions[3])]
+        } else {
+            vec![Some(revisions[0]), Some(revisions[1]), Some(revisions[2]), None, Some(revisions[3])]
+        };
+        assert_eq!(handed, expected, "coalesce {coalesce}");
+    }
+}
+
+/// A coalescing recorder recovers exactly the session's documents.
+#[test]
+fn a_coalescing_recorder_recovers_the_current_state() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = RecorderOptions { coalesce_edits: true, ..RecorderOptions::default() };
+    let recorder = Arc::new(JournalRecorder::start_with(dir.path().to_path_buf(), "entry".into(), options, || {}).unwrap());
+    let mut session = Session::default();
+    session.observe_edits(Some(recorder.clone()));
+    session.apply("project.new", &json!({"name":"Coalesced"})).unwrap();
+    ten_edits(&mut session);
+    recorder.sync().unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert!((1..=10).contains(&recovered.commands.len()));
+    assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
+    session.observe_edits(None);
+    Arc::into_inner(recorder).unwrap().discard().unwrap();
+}
+
+/// Mark every file of entry `id` as last written `age` ago.
+fn age_entry(dir: &Path, id: &str, age: Duration) {
+    let when = std::time::SystemTime::now() - age;
+    for ext in ["pc", "journal", "lock"] {
+        if let Ok(file) = File::options().write(true).open(entry_file(dir, id, ext)) {
+            file.set_modified(when).unwrap();
+        }
+    }
+}
+
+/// The entry ids with any file in `dir`.
+fn entry_ids(dir: &Path) -> std::collections::BTreeSet<String> {
+    fs::read_dir(dir)
+        .unwrap()
+        .filter_map(|entry| entry.unwrap().file_name().into_string().unwrap().split_once('.').map(|(id, _)| id.to_owned()))
+        .filter(|id| !id.is_empty())
+        .collect()
+}
+
+const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Pruning removes unheld entries past the age limit, then all but the newest few; an entry a
+/// running session holds stays however old it is, and folder-gate contention removes nothing.
+#[test]
+fn pruning_keeps_held_entries_and_bounds_the_rest() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let documents = encode_documents(session.snapshot().unwrap()).unwrap();
+    let held = EditJournal::create(dir.path(), "held", documents.clone()).unwrap();
+    age_entry(dir.path(), "held", DAY * 30);
+    for (id, days) in [("old", 30), ("newest", 0), ("newer", 1), ("new", 2)] {
+        drop(EditJournal::create(dir.path(), id, documents.clone()).unwrap());
+        age_entry(dir.path(), id, DAY * days + Duration::from_secs(60));
+    }
+    fs::write(entry_file(dir.path(), "orphan", "pc"), b"left without a lock").unwrap();
+    age_entry(dir.path(), "orphan", DAY * 30);
+    let retention = Retention { max_age: DAY * 14, max_entries: 2 };
+
+    let before = tree(dir.path());
+    let gate = entry_gate(dir.path()).unwrap();
+    assert_eq!(prune(dir.path(), retention), Ok(0));
+    drop(gate);
+    assert_eq!(tree(dir.path()), before, "a busy folder is left alone");
+
+    assert_eq!(prune(dir.path(), retention), Ok(3));
+    assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["held", "newer", "newest"].map(str::to_owned)));
+    assert_eq!(recover(dir.path(), "newest").unwrap().documents, documents);
+    drop(held);
+    assert_eq!(prune(dir.path(), retention), Ok(1), "released, the old entry goes");
+    assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["newer", "newest"].map(str::to_owned)));
+    assert_eq!(prune(&dir.path().join("missing"), retention), Ok(0));
+}
+
+/// A recorder started with a retention prunes earlier runs' entries before its first barrier
+/// returns; the default recorder prunes nothing.
+#[test]
+fn a_recorder_with_retention_prunes_before_recording() {
+    for retention in [None, Some(Retention { max_age: DAY * 14, max_entries: 16 })] {
+        let dir = tempfile::tempdir().unwrap();
+        let (journal, _) = journal_with(dir.path(), 1);
+        drop(journal);
+        age_entry(dir.path(), "entry", DAY * 30);
+        let options = RecorderOptions { retention, ..RecorderOptions::default() };
+        let recorder = JournalRecorder::start_with(dir.path().to_path_buf(), "fresh".into(), options, || {}).unwrap();
+        recorder.sync().unwrap();
+        assert_eq!(entry_file(dir.path(), "entry", "pc").exists(), retention.is_none(), "{retention:?}");
+        recorder.finish().unwrap();
+    }
+}
+
 /// A timed snapshot's post-rename flush error retains the published state and is not mistaken
 /// for a successful no-op on retry, whether the snapshot or journal flush failed.
 #[test]
