@@ -294,14 +294,20 @@ impl PcbApp {
         }
     }
 
-    /// Shared modal chrome shows the session's ERC report. A report from an older revision, or
-    /// a source view that no longer accepts input, shows no rows: it says the schematic changed
-    /// and offers Rerun. Navigation focuses the target host; nothing here edits the document
-    /// except the explicit Remove marker action, which uses the ordinary revision-checked edit.
+    /// Shared modal chrome shows the session's ERC report. Rows and wording follow only the
+    /// report's status, as MCP's `schematic.erc_report` does: a report from an older revision
+    /// shows no rows and asks for a rerun. Show, Remove marker and Run again use the source view's
+    /// input as it is now (or the active view's), so a released focus or layout change never
+    /// hides a current report. Navigation focuses the target host; nothing here edits the
+    /// document except the explicit Remove marker action, an ordinary revision-checked edit.
     pub(super) fn no_connect_dialog(&mut self, ctx: &egui::Context, mut inspection: Box<Inspection>) {
-        let accepted = self.views.view(inspection.source.view()).is_some_and(|view| view.accepts(inspection.source, &self.session));
+        let input =
+            self.views.view(inspection.source.view()).and_then(|view| view.input(&self.session)).or_else(|| self.views.active.input(&self.session));
+        if let Some(source) = input {
+            inspection.source = source;
+        }
         let ran = self.session.erc_report();
-        let current = accepted && ran.as_ref().is_some_and(|(_, status)| *status == erc::Status::Current);
+        let current = ran.as_ref().is_some_and(|(_, status)| *status == erc::Status::Current);
         let report = ran.as_ref().filter(|_| current).and_then(|(report, _)| report.no_connect());
         let rows = report.map(|report| self.no_connect_rows(report)).unwrap_or_default();
         let (mut navigate, mut remove, mut close, mut rerun) = (None::<Navigation>, None::<Attachment>, false, false);
@@ -315,12 +321,15 @@ impl PcbApp {
                     }
                 }
                 (Some((ran, _)), None) => {
-                    ui.label(shell::error("The schematic changed since this check ran. Rerun the check to see current results."));
+                    ui.label(shell::dim("The schematic changed since this check. Run again to refresh."));
                     ui.label(shell::dim(format!("Checked revision {} · current revision {}", ran.revision, self.session.revision())));
                 }
                 (None, _) => {
                     ui.label(shell::dim("Not run"));
                 }
+            }
+            if input.is_none() {
+                ui.label(shell::dim("Open a schematic view to navigate."));
             }
             if let Some(report) = report
                 && report.truncated
@@ -335,37 +344,37 @@ impl PcbApp {
             let row_height = Tokens::get().control_height * 2. + Tokens::get().space_8;
             egui::ScrollArea::vertical().id_salt("no_connect_findings").max_height(420.).show_rows(ui, row_height, count, |ui, range| {
                 for index in range {
-                    let Row { target, label, positions, issue } = &rows[index];
+                    let Some(Row { target, label, positions, issue }) = rows.get(index) else { continue };
                     ui.add(egui::Label::new(format!("{label} · {}", issue.map_or("Intentionally unconnected", rule_label))).truncate());
                     ui.horizontal(|ui| {
-                        if ui.add_enabled_ui(!positions.is_empty(), |ui| controls::button(ui, format!("Show {label}"))).inner.clicked() {
+                        let show = input.is_some() && !positions.is_empty();
+                        if ui.add_enabled_ui(show, |ui| controls::button(ui, format!("Show {label}"))).inner.clicked() {
                             navigate = positions.first().cloned();
                         }
-                        if !matches!(issue, Some("unconnected_pin" | "dangling_wire")) && controls::button(ui, "Remove marker").clicked() {
+                        if !matches!(issue, Some("unconnected_pin" | "dangling_wire"))
+                            && ui.add_enabled_ui(input.is_some(), |ui| controls::button(ui, "Remove marker")).inner.clicked()
+                        {
                             remove = Some(target.clone());
                         }
                     });
                 }
             });
             ui.horizontal(|ui| {
-                rerun = controls::button(ui, if current { "Run again" } else { "Rerun" }).clicked();
+                rerun = ui.add_enabled_ui(input.is_some(), |ui| controls::button(ui, "Run again")).inner.clicked();
                 close = controls::button(ui, "Close").clicked();
             });
         });
-        if rerun {
-            // A rerun reads the current revision, so the same view's current input replaces the old one.
-            let view = self.views.view(inspection.source.view());
-            let Some(source) = view.and_then(|view| view.input(&self.session)).or_else(|| self.views.active.input(&self.session)) else { return };
-            inspection.source = source;
+        let actionable = current && input.is_some();
+        if rerun && input.is_some() {
             self.run(erc::RUN, &json!({}));
             self.dialog = Dialog::NoConnects(inspection);
             return;
         }
-        if current && let Some(target) = remove {
+        if actionable && let Some(target) = remove {
             self.set_no_connect(inspection.source, target, false);
             return;
         }
-        if current && let Some(at) = navigate {
+        if actionable && let Some(at) = navigate {
             if let Some(id) = self.views.open_document(inspection.source.view(), DocumentTarget::Sheet(at.sheet), &self.session)
                 && let Some(view) = self.views.view_mut(id)
             {

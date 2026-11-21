@@ -149,18 +149,26 @@ fn a_run_is_read_only_and_goes_stale_after_an_edit() {
     assert_eq!(s.execute(REPORT, &json!({})).unwrap()["status"], "not_run");
 }
 
-/// Both commands need an open project and refuse parameters, like the focused check.
+/// Both commands need an open project and refuse parameters, like the focused check, and a
+/// refused run leaves the kept report exactly as it was.
 #[test]
 fn erc_commands_need_a_project_and_take_no_parameters() {
     let mut s = Session::default();
     for id in [RUN, REPORT] {
-        assert!(s.execute(id, &json!({})).is_err(), "{id}");
+        let err = s.execute(id, &json!({})).unwrap_err();
+        assert!(matches!(err, CommandError::Unavailable(ref m) if m.contains("no project is open")), "{id}: {err:?}");
     }
     let mut s = stub();
     for id in [RUN, REPORT] {
-        assert!(s.execute(id, &json!({"extra":true})).is_err(), "{id}");
+        let err = s.execute(id, &json!({"extra":true})).unwrap_err();
+        assert!(matches!(err, CommandError::InvalidParams(ref m) if m.contains("has no parameter `extra`")), "{id}: {err:?}");
     }
-    assert!(s.erc_report().is_none());
+    assert!(s.erc_report().is_none(), "a refused run keeps no report");
+    s.execute(RUN, &json!({})).unwrap();
+    let (kept, _) = s.erc_report().unwrap();
+    let err = s.execute(RUN, &json!({"extra":true})).unwrap_err();
+    assert!(matches!(err, CommandError::InvalidParams(_)), "{err:?}");
+    assert!(Arc::ptr_eq(&kept, &s.erc_report().unwrap().0), "a refused run never replaces the kept report");
 }
 
 /// A run covers every sheet of the project and still leaves the revision, the document bytes

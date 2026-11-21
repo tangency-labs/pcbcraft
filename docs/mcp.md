@@ -839,8 +839,8 @@ revision return identical bytes.
 any run it returns `status: "not_run"`. After any edit, Undo or Redo the report
 is `status: "stale"`: the reply gives `report_revision` and no findings, and
 `rerun` names the command to run again. Opening another project discards it.
-The schematic ERC dialog shows this same report and offers Rerun when it is
-stale. `schematic.check_no_connects` keeps its original response.
+The schematic ERC dialog shows this same report and asks you to run it again
+when it is stale. `schematic.check_no_connects` keeps its original response.
 
 Schematic selections may include an optional `no_connects` array of the same
 pin/wire target objects. `view.select` exposes marker selection and

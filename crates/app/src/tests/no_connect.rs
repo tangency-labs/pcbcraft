@@ -948,7 +948,6 @@ fn erc_dialog_current_state_lists_the_session_report() {
     }
     assert_eq!(h.query_all_by_label("Remove marker").count(), 1, "only the intentional marker can be removed");
     h.get_by_label("Run again");
-    assert!(h.query_by_label("Rerun").is_none());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
     assert_eq!(h.state().session.revision(), revision);
     click(&mut h, "Close");
@@ -960,7 +959,8 @@ fn erc_dialog_current_state_lists_the_session_report() {
 }
 
 /// An edit while the dialog is open makes the report stale: no finding rows, navigation or
-/// removal remain, the dialog says the schematic changed, and it offers Rerun.
+/// removal remain, the dialog says in dim ink that the schematic changed, and Run again stays
+/// the one action, as on the board DRC card.
 #[test]
 fn erc_dialog_stale_state_hides_findings_and_offers_rerun() {
     let mut h = marked_editor();
@@ -969,15 +969,15 @@ fn erc_dialog_stale_state_hides_findings_and_offers_rerun() {
     h.state_mut().run("project.rename", &json!({"name":"Changed"}));
     h.run();
     assert_eq!(h.state().session.erc_report().unwrap().1, pcbcraft_engine::erc::Status::Stale);
-    h.get_by_label("The schematic changed since this check ran. Rerun the check to see current results.");
+    h.get_by_label("The schematic changed since this check. Run again to refresh.");
     h.get_by_label(&format!("Checked revision {ran} · current revision {}", h.state().session.revision()));
-    for gone in ["Show J1 pin 1", "Show J1 pin 2", "Remove marker", "Run again", "No-connect markers: 1 · Findings: 3"] {
+    for gone in ["Show J1 pin 1", "Show J1 pin 2", "Remove marker", "No-connect markers: 1 · Findings: 3"] {
         assert!(h.query_by_label(gone).is_none(), "{gone}");
     }
-    h.get_by_label("Rerun");
+    assert!(!h.get_by_label("Run again").accesskit_node().is_disabled());
 }
 
-/// Rerun from the stale state runs the check on the current revision through the same shared
+/// Run again from the stale state runs the check on the current revision through the same shared
 /// command, restores the rows and navigation, and still changes no project data.
 #[test]
 fn erc_dialog_rerun_refreshes_the_report_on_the_current_revision() {
@@ -987,7 +987,7 @@ fn erc_dialog_rerun_refreshes_the_report_on_the_current_revision() {
     h.run();
     let changed = h.state().session.snapshot().unwrap();
     let revision = h.state().session.revision();
-    click(&mut h, "Rerun");
+    click(&mut h, "Run again");
     h.run();
     let (report, status) = h.state().session.erc_report().unwrap();
     assert_eq!((report.revision, status), (revision, pcbcraft_engine::erc::Status::Current));
@@ -1069,6 +1069,86 @@ fn erc_dialog_and_live_mcp_read_the_same_report() {
     let source = h.state().views.active.input(&h.state().session).unwrap();
     h.state_mut().dialog = Dialog::NoConnects(Box::new(crate::no_connect::Inspection { source }));
     h.run();
-    h.get_by_label("Rerun");
+    h.get_by_label("The schematic changed since this check. Run again to refresh.");
+    h.get_by_label("Run again");
     assert!(h.query_by_label("Show J1 pin 2").is_none());
+}
+
+/// Releasing the source view's input (focus, layout or host changes do this) at an unchanged
+/// revision leaves the report current: the dialog keeps its rows and wording, as MCP does, and
+/// Show still navigates with the view's new input.
+#[test]
+fn erc_dialog_keeps_a_current_report_when_the_view_releases_input() {
+    let mut h = marked_editor();
+    open_erc(&mut h);
+    let Dialog::NoConnects(inspection) = &h.state().dialog else { panic!("the ERC dialog is open") };
+    let view = inspection.source.view();
+    let (shown, _) = h.state().session.erc_report().unwrap();
+    h.state_mut().views.view_mut(view).unwrap().release_input();
+    h.run();
+    assert_eq!(h.state().session.erc_report().unwrap().1, pcbcraft_engine::erc::Status::Current);
+    assert!(Arc::ptr_eq(&shown, &h.state().session.erc_report().unwrap().0));
+    assert!(h.query_by_label_contains("The schematic changed").is_none());
+    h.get_by_label("No-connect markers: 1 · Findings: 3");
+    assert!(!h.get_by_label("Show J1 pin 2").accesskit_node().is_disabled());
+    click(&mut h, "Show J1 pin 2");
+    assert!(matches!(h.state().dialog, Dialog::None), "navigation uses the view's new input");
+}
+
+/// With no view able to take input, the dialog stays open with its report, says why actions
+/// are unavailable, and disables Show, Remove marker and Run again instead of vanishing.
+#[test]
+fn erc_dialog_without_a_schematic_view_disables_actions_and_stays_open() {
+    let mut h = marked_editor();
+    open_erc(&mut h);
+    let (shown, _) = h.state().session.erc_report().unwrap();
+    h.state_mut().views.active.library = Some(Default::default());
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::NoConnects(_)));
+    h.get_by_label("No-connect markers: 1 · Findings: 3");
+    h.get_by_label("Open a schematic view to navigate.");
+    for disabled in ["Show J1 pin 2", "Remove marker", "Run again"] {
+        assert!(h.get_by_label(disabled).accesskit_node().is_disabled(), "{disabled}");
+    }
+    h.get_by_label("Run again").click();
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::NoConnects(_)), "a disabled Run again leaves the dialog open");
+    assert!(Arc::ptr_eq(&shown, &h.state().session.erc_report().unwrap().0));
+}
+
+/// Tab moves through the finding rows in order, then Run again and Close; Escape closes the
+/// dialog and keeps the session's report.
+#[test]
+fn erc_dialog_keyboard_focus_moves_through_rows_then_actions() {
+    let mut h = marked_editor();
+    open_erc(&mut h);
+    let (shown, _) = h.state().session.erc_report().unwrap();
+    h.get_by_label("Show J1 pin 2").focus();
+    h.run();
+    assert!(h.get_by_label("Show J1 pin 2").is_focused());
+    for next in ["Show J1 pin 3", "Show J1 pin 4", "Show J1 pin 1", "Remove marker", "Run again", "Close"] {
+        h.key_press(Key::Tab);
+        h.run();
+        assert!(h.get_by_label(next).is_focused(), "Tab reaches {next}");
+    }
+    h.key_press(Key::Escape);
+    h.run();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert!(Arc::ptr_eq(&shown, &h.state().session.erc_report().unwrap().0), "Escape keeps the report");
+}
+
+/// Showing the dialog before any run says "Not run" and offers Run again.
+#[test]
+fn erc_dialog_not_run_state_offers_run_again() {
+    let mut h = marked_editor();
+    assert!(h.state().session.erc_report().is_none());
+    let source = h.state().views.active.input(&h.state().session).unwrap();
+    h.state_mut().dialog = Dialog::NoConnects(Box::new(crate::no_connect::Inspection { source }));
+    h.run();
+    h.get_by_label("Not run");
+    assert!(h.query_by_label_contains("No-connect markers").is_none());
+    click(&mut h, "Run again");
+    h.run();
+    assert_eq!(h.state().session.erc_report().unwrap().1, pcbcraft_engine::erc::Status::Current);
+    h.get_by_label("No-connect markers: 1 · Findings: 3");
 }

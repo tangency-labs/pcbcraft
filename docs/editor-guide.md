@@ -251,7 +251,7 @@ physical DRC violations. New wires and endpoint attachments at an X are blocked,
 including with **W**; remove the mark first. Hovering or quickly clicking near
 an X does not start a wire. Older saved conflicts remain visible in the check.
 The check is a snapshot of one revision: after any edit, including Undo, the
-dialog hides its rows and says the schematic changed until you choose **Rerun**.
+dialog hides its rows and says the schematic changed until you choose **Run again**.
 MCP reads the same report. The no-connect rule is the only ERC rule so far; it
 does not implement type-conflict or power-driver checks.
 See the [identity and storage contract](no-connect-markers.md).
