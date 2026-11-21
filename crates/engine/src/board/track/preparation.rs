@@ -81,11 +81,19 @@ struct PendingRegeneration {
     class_rules: Option<Context>,
 }
 
+/// Bounded final validation before adopting a regenerated copper edit.
+enum FinalCheck {
+    /// Full native board byte-limit check (includes budgeted zone validation).
+    Size(crate::persistence::BoardSizeCheck),
+    /// Budgeted zone validation when the final board skips the native document-size check.
+    Zones { steps: crate::board::zones::ZoneValidationSteps, completed: usize, total: usize },
+}
+
 struct PendingFinalize {
     project: Project,
     highest: u64,
     class_rules: Option<Context>,
-    size_check: Option<crate::persistence::BoardSizeCheck>,
+    final_check: FinalCheck,
 }
 
 /// Candidate construction, reusable pad projection and bounded contact validation for a copper
@@ -236,8 +244,16 @@ impl CopperEditJob {
         if self.phase == 5
             && let Some(finalize) = &self.finalize
         {
-            let (completed, total) = finalize.size_check.as_ref().map_or((1, 1), |check| check.progress(&finalize.project));
-            return Progress { stage: "Checking board size", completed, total };
+            return match &finalize.final_check {
+                FinalCheck::Size(check) => {
+                    let (completed, total) = check.progress(&finalize.project);
+                    Progress { stage: "Checking board size", completed, total }
+                }
+                FinalCheck::Zones { completed, total, .. } => {
+                    let (completed, total) = if *total == 0 { (1, 1) } else { ((*completed).min(*total), *total) };
+                    Progress { stage: "Validating board zones", completed, total }
+                }
+            };
         }
         let total = self.lands.as_ref().map_or(1, |lands| {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
@@ -469,15 +485,15 @@ impl CopperEditJob {
                 };
                 let next = regeneration.state.finish();
                 let source = &self.context.source;
-                let size_check = if Session::needs_board_size_check(Some(&source.snapshot), &next) {
+                let final_check = if Session::needs_board_size_check(Some(&source.snapshot), &next) {
                     // Regeneration already checked every surviving teardrop invariant and derivation.
-                    Some(crate::persistence::BoardSizeCheck::new(false))
+                    FinalCheck::Size(crate::persistence::BoardSizeCheck::new(false))
                 } else {
-                    crate::board::zones::validate(&next).map_err(CommandError::InvalidParams)?;
-                    None
+                    let total = crate::board::zones::ZoneValidationSteps::total(&next);
+                    FinalCheck::Zones { steps: crate::board::zones::ZoneValidationSteps::new(), completed: 0, total }
                 };
                 self.finalize =
-                    Some(PendingFinalize { project: next, highest: regeneration.highest, class_rules: regeneration.class_rules, size_check });
+                    Some(PendingFinalize { project: next, highest: regeneration.highest, class_rules: regeneration.class_rules, final_check });
                 self.phase = 5;
                 self.work = 0;
                 return Ok(false);
@@ -486,9 +502,16 @@ impl CopperEditJob {
                 let Some(finalize) = self.finalize.as_mut() else {
                     return Err(CommandError::Unavailable("board finalization state is unavailable".into()));
                 };
-                if let Some(size_check) = finalize.size_check.as_mut()
-                    && !size_check.step(&finalize.project, budget).map_err(CommandError::InvalidParams)?
-                {
+                let done = match &mut finalize.final_check {
+                    FinalCheck::Size(size_check) => size_check.step(&finalize.project, budget).map_err(CommandError::InvalidParams)?,
+                    FinalCheck::Zones { steps, completed, .. } => {
+                        let mut remaining = budget;
+                        let done = steps.step(&finalize.project, &mut remaining).map_err(CommandError::InvalidParams)?;
+                        *completed = completed.saturating_add(budget - remaining);
+                        done
+                    }
+                };
+                if !done {
                     return Ok(false);
                 }
                 let Some(finalize) = self.finalize.take() else {
@@ -723,5 +746,183 @@ mod tests {
         s.commit_copper_edit(prepared).unwrap();
         assert_eq!(view(&s).tracks().len(), 1);
         assert_eq!(view(&s).tracks()[0].start.x_nm, -17_000_000);
+    }
+
+    /// Build a strictly convex `count`-vertex polygon in nanometres for zone validation tests.
+    fn regular_zone_polygon(count: usize, offset_x_nm: i64) -> Vec<Point> {
+        const RADIUS_NM: f64 = 5_000_000.0;
+        (0..count)
+            .map(|index| {
+                let angle = 2.0 * std::f64::consts::PI * (index as f64) / (count as f64);
+                Point { x_nm: offset_x_nm + (RADIUS_NM * angle.cos()).round() as i64, y_nm: (RADIUS_NM * angle.sin()).round() as i64 }
+            })
+            .collect()
+    }
+
+    /// Deleting the final track and via on a zone-heavy board without assignments or mapped
+    /// footprints skips `BoardSizeCheck` yet still validates all zones in bounded, cancellable
+    /// batches before publishing the edit.
+    #[test]
+    fn deleting_final_copper_on_zone_heavy_board_validates_zones_in_bounded_cancellable_batches() {
+        use crate::board::teardrop::{Length, Parameters, Record};
+        use crate::board::zones::{ADD_ZONE, MAX_POINTS, ZONE_VALIDATION_EDGES_PER_UNIT, ZoneValidationSteps, take_zone_edges_stepped};
+        use crate::persistence::decode_documents;
+
+        const ZONES: usize = 32;
+        let mut session = routed_fixture();
+        let board = view(&session).target.board;
+        let copper_layer = copper_layers(&session)[0];
+        let nets = session.project().unwrap().inspect_net_registry().unwrap();
+        let square = [
+            Point { x_nm: 0, y_nm: 0 },
+            Point { x_nm: 10_000_000, y_nm: 0 },
+            Point { x_nm: 10_000_000, y_nm: 10_000_000 },
+            Point { x_nm: 0, y_nm: 10_000_000 },
+        ];
+        session
+            .apply(
+                ADD_ZONE,
+                &json!({
+                    "board": board,
+                    "layer": copper_layer,
+                    "target": { "kind": "derived", "anchor": nets["nets"][0]["anchor"] },
+                    "points": square,
+                    "expected_revision": session.revision(),
+                }),
+            )
+            .unwrap();
+
+        let at = Point { x_nm: 10_000_000, y_nm: 20_000_000 };
+        let via = Uuid::from_u128(0x10_0000);
+        let track = Uuid::from_u128(0x20_0000);
+        let teardrop_id = Uuid::from_u128(0x30_0000);
+        let mut project = session.project().unwrap().clone();
+        {
+            let board_data = Arc::make_mut(&mut project.board);
+            board_data.footprints.clear();
+            board_data.assignments.clear();
+            board_data.definitions.clear();
+            board_data.baseline = None;
+            board_data.vias = vec![Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 }];
+            board_data.tracks = vec![Track {
+                id: track,
+                locked: false,
+                layer: copper_layer,
+                width_nm: 100_000,
+                start: at,
+                end: Point { x_nm: at.x_nm + 600_000, y_nm: at.y_nm },
+            }];
+            board_data.teardrops = vec![Record {
+                id: teardrop_id,
+                via,
+                track,
+                parameters: Parameters { length: Length::Percent(20), max_length_nm: None, width_pct: 80, max_width_nm: None },
+            }];
+            let template = board_data.zones[0].clone();
+            board_data.zones = (0..ZONES)
+                .map(|index| {
+                    let mut zone = template.clone();
+                    zone.id = Uuid::from_u128(0x80_0000 + index as u128);
+                    zone.points = regular_zone_polygon(MAX_POINTS, (index as i64) * 12_000_000);
+                    zone
+                })
+                .collect();
+        }
+        let saved = encode_documents(Arc::new(project)).unwrap();
+        session.open_snapshot(decode_documents(&saved).unwrap());
+        session.apply("project.rename", &json!({ "name": "Zone-heavy empty-copper board" })).unwrap();
+
+        let before = session.snapshot().unwrap();
+        assert!(before.board.assignments.is_empty());
+        assert!(before.board.footprints().is_empty());
+        assert_eq!(before.board.tracks.len(), 1);
+        assert_eq!(before.board.vias.len(), 1);
+        assert_eq!(before.board.teardrops.len(), 1);
+        assert_eq!(before.board.zones.len(), ZONES);
+        let expected_zone_units = ZoneValidationSteps::total(&before);
+        assert_eq!(expected_zone_units, ZONES * MAX_POINTS.div_ceil(ZONE_VALIDATION_EDGES_PER_UNIT));
+
+        let before_bytes = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        assert!(history.0 > 0);
+        let delete_params = json!({ "tracks": [track], "vias": [via], "expected_revision": revision });
+
+        // Cancel halfway through budgeted zone validation and drop the job.
+        let mut canceled = session.prepare_copper_edit(DELETE_TRACKS, &delete_params).unwrap();
+        let _ = take_zone_edges_stepped();
+        for _ in 0..10_000 {
+            if canceled.progress().stage == "Validating board zones" {
+                break;
+            }
+            assert!(!canceled.step(1));
+            assert_eq!(take_zone_edges_stepped(), 0);
+        }
+        let entered = canceled.progress();
+        assert_eq!(entered.stage, "Validating board zones");
+        assert_eq!(entered.completed, 0);
+        assert_eq!(entered.total, expected_zone_units);
+
+        assert!(!canceled.step(0));
+        assert_eq!(take_zone_edges_stepped(), 0);
+        assert_eq!(canceled.progress().completed, 0);
+
+        for expected in 1..=(expected_zone_units / 2) {
+            assert!(!canceled.step(1));
+            let edges = take_zone_edges_stepped();
+            assert!(edges > 0 && edges <= ZONE_VALIDATION_EDGES_PER_UNIT);
+            let progress = canceled.progress();
+            assert_eq!(progress.stage, "Validating board zones");
+            assert_eq!(progress.completed, expected);
+            assert_eq!(progress.total, expected_zone_units);
+        }
+        assert!(canceled.take_result().unwrap().is_none());
+        drop(canceled);
+
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
+        assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+
+        // Drain a fresh job at budget 1: every zone-validation step stays within the per-unit
+        // edge budget, all 8,192 edges are checked, and committing removes the final copper.
+        let mut job = session.prepare_copper_edit(DELETE_TRACKS, &delete_params).unwrap();
+        let _ = take_zone_edges_stepped();
+        for _ in 0..10_000 {
+            if job.progress().stage == "Validating board zones" {
+                break;
+            }
+            assert!(!job.step(1));
+            assert_eq!(take_zone_edges_stepped(), 0);
+        }
+        assert_eq!(job.progress().stage, "Validating board zones");
+        let mut zone_steps = 0usize;
+        let mut total_zone_edges = 0usize;
+        loop {
+            let done = job.step(1);
+            let edges = take_zone_edges_stepped();
+            assert!(edges > 0 && edges <= ZONE_VALIDATION_EDGES_PER_UNIT);
+            zone_steps += 1;
+            total_zone_edges += edges;
+            if done {
+                break;
+            }
+            let progress = job.progress();
+            assert_eq!(progress.stage, "Validating board zones");
+            assert_eq!(progress.completed, zone_steps);
+            assert_eq!(progress.total, expected_zone_units);
+        }
+        assert_eq!(zone_steps, expected_zone_units);
+        assert_eq!(total_zone_edges, ZONES * MAX_POINTS);
+
+        let prepared = job.take_result().unwrap().unwrap();
+        session.commit_copper_edit(prepared).unwrap();
+        assert_eq!(session.revision(), revision + 1);
+        let committed = session.snapshot().unwrap();
+        assert!(!Session::needs_board_size_check(Some(&before), &committed));
+        assert!(view(&session).tracks().is_empty());
+        assert!(view(&session).vias().is_empty());
+        assert!(view(&session).teardrops().is_empty());
+        assert_eq!(view(&session).zones().len(), ZONES);
     }
 }
