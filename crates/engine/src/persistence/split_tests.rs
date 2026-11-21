@@ -670,7 +670,7 @@ fn documents_encoder_steps_large_net_lineage_incrementally_and_matches_serde() {
     const LINEAGE_LEN: usize = 64;
     for board in [false, true] {
         let mut s = Session::default();
-        s.apply("project.new", json!({"create_board": board})).unwrap();
+        s.apply("project.new", &json!({"create_board": board})).unwrap();
         let mut pins = Vec::new();
         for index in 0..4 {
             apply(&mut s, crate::PLACE_RESISTOR, json!({"x_nm": index as i64 * 25_400_000, "y_nm": 0}));
