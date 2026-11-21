@@ -1827,9 +1827,12 @@ fn mechanical_holes_use_their_own_drill_file() {
     let mixed = with.export_fabrication(&params).unwrap();
     assert_eq!(&mixed[..mixed.len() - 1], legacy.as_slice(), "no NPTH hits in plated, copper, mask or paste files");
     // The legacy serializer emits via tools first here, then the two pads in board coordinate order.
+    let software = format!("; #@! TF.GenerationSoftware,PCBcraft,PCBcraft,{}\n; #@! TF.SameCoordinates,Original\n", env!("CARGO_PKG_VERSION"));
     assert_eq!(
         file(&legacy, "-PTH.drl"),
-        "M48\n; PCBcraft plated drill file\n; TYPE=PLATED\nFMAT,2\nMETRIC\nT1C0.300\nT2C1.000\n%\nG90\nG05\nT1\nX11.000Y-22.000\nT2\nX29.000Y23.000\nX29.000Y21.000\nM30\n"
+        format!(
+            "M48\n; PCBcraft plated drill file\n; TYPE=PLATED\n{software}; #@! TF.FileFunction,Plated,1,4,PTH\nFMAT,2\nMETRIC\nT1C0.300\nT2C1.000\n%\nG90\nG05\nT1\nX11.000Y-22.000\nT2\nX29.000Y23.000\nX29.000Y21.000\nM30\n"
+        )
     );
     assert!(!legacy.iter().any(|out| out.name.ends_with("-NPTH.drl")));
     // Mirror local X, rotate 90°, add board placement, subtract origin, then negate Y.
@@ -1837,7 +1840,9 @@ fn mechanical_holes_use_their_own_drill_file() {
     assert!(npth.name.ends_with("-NPTH.drl"));
     assert_eq!(
         npth.contents,
-        "M48\n; PCBcraft non-plated drill file\n; TYPE=NON_PLATED\nFMAT,2\nMETRIC\nT1C3.200\n%\nG90\nG05\nT1\nX34.000Y20.000\nX35.000Y27.000\nM30\n"
+        format!(
+            "M48\n; PCBcraft non-plated drill file\n; TYPE=NON_PLATED\n{software}; #@! TF.FileFunction,NonPlated,1,4,NPTH\nFMAT,2\nMETRIC\nT1C3.200\n%\nG90\nG05\nT1\nX34.000Y20.000\nX35.000Y27.000\nM30\n"
+        )
     );
     let capture = with.export_fabrication_archive(&params).unwrap();
     assert_eq!(capture, with.export_fabrication_archive(&params).unwrap());
@@ -1851,6 +1856,118 @@ fn mechanical_holes_use_their_own_drill_file() {
         manifest["files"].as_array().unwrap().last().unwrap(),
         &json!({"name":npth.name,"size_bytes":npth.contents.len(),"sha256":format!("{:x}", Sha256::digest(npth.contents.as_bytes()))})
     );
+}
+
+/// The drill files as an XNC reader sees them: X2 file attributes from standard comments
+/// (XNC 2021.11 §4.1), the tool table and the drill hits per tool.
+#[derive(Debug, Default)]
+struct ReadXnc {
+    attributes: Vec<(String, Vec<String>)>,
+    tools: BTreeMap<u32, String>,
+    hits: BTreeMap<u32, usize>,
+}
+
+/// Read one drill file with the XNC 2021.11 grammar (§2.10, §3): M48 first, one METRIC unit
+/// in the header before the tool table, `%` ends the header, G05 drill mode, tool selections
+/// and hits, and M30 last. `FMAT,2` and `G90` are the IPC-NC-349 commands legacy readers
+/// expect; they are accepted where they appear and change nothing. Anything else fails.
+fn read_xnc(text: &str) -> Result<ReadXnc, String> {
+    let mut read = ReadXnc::default();
+    let mut lines = text.lines();
+    if lines.next() != Some("M48") {
+        return Err("the first line must be M48".into());
+    }
+    let (mut unit, mut header, mut drilling, mut tool, mut ended) = (false, true, false, None, false);
+    for line in lines {
+        if ended {
+            return Err(format!("data after M30: {line}"));
+        }
+        if let Some(comment) = line.strip_prefix(';') {
+            if comment.len() > 255 || comment.contains(';') {
+                return Err(format!("invalid comment: {line}"));
+            }
+            if let Some(attribute) = comment.strip_prefix(" #@! TF.") {
+                let mut fields = attribute.split(',').map(str::to_owned);
+                let name = fields.next().unwrap_or_default();
+                read.attributes.push((name, fields.collect()));
+            }
+            continue;
+        }
+        if line.contains(' ') || line != line.to_ascii_uppercase() {
+            return Err(format!("commands are upper case without spaces: {line}"));
+        }
+        if header {
+            match line {
+                "FMAT,2" if !unit => {}
+                "METRIC" if !unit => unit = true,
+                "%" if unit => header = false,
+                _ => {
+                    let (number, diameter) =
+                        line.strip_prefix('T').and_then(|rest| rest.split_once('C')).ok_or_else(|| format!("not a header command: {line}"))?;
+                    let number: u32 = number.parse().map_err(|_| format!("tool number: {line}"))?;
+                    let size: f64 = diameter.parse().map_err(|_| format!("tool diameter: {line}"))?;
+                    if !unit || !(1..=99).contains(&number) || size <= 0. || read.tools.insert(number, diameter.to_owned()).is_some() {
+                        return Err(format!("invalid tool declaration: {line}"));
+                    }
+                }
+            }
+            continue;
+        }
+        match line {
+            "G90" if !drilling => {}
+            "G05" => drilling = true,
+            "M30" => ended = true,
+            _ if line.starts_with('T') => {
+                let number: u32 = line.get(1..).unwrap_or_default().parse().map_err(|_| format!("tool selection: {line}"))?;
+                if !read.tools.contains_key(&number) {
+                    return Err(format!("selected an undefined tool: {line}"));
+                }
+                tool = Some(number);
+            }
+            _ => {
+                let (x, y) = line.strip_prefix('X').and_then(|rest| rest.split_once('Y')).ok_or_else(|| format!("not a body command: {line}"))?;
+                x.parse::<f64>().and(y.parse::<f64>()).map_err(|_| format!("coordinate: {line}"))?;
+                let selected = tool.filter(|_| drilling).ok_or_else(|| format!("hit without drill mode and tool: {line}"))?;
+                *read.hits.entry(selected).or_default() += 1;
+            }
+        }
+    }
+    if !ended {
+        return Err("the last command must be M30".into());
+    }
+    Ok(read)
+}
+
+/// The existing plated file parses as XNC and its attributes name it plated PTH over every copper
+/// layer; the non-plated file names itself NonPlated NPTH. Both share the Gerber layers' frame.
+/// XNC 2021.11 §4.1; Ucamco Gerber rev. 2026.05 §5.6.3 (file function), §5.6.5 (same coordinates).
+#[test]
+fn plated_drill_file_parses_as_xnc_with_plated_pth_attributes() {
+    use crate::board::definition::CircularNpth;
+    let holes = [CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 }];
+    let s = drill_fixture(&holes);
+    let copper = view(&s).setup().unwrap().copper_stack().count();
+    assert_eq!(copper, 4, "the plated fixture spans inner copper");
+    let outputs = s.export_fabrication(&json!({})).unwrap();
+    let attribute = |read: &ReadXnc, name: &str| -> Vec<Vec<String>> {
+        read.attributes.iter().filter(|(key, _)| key == name).map(|(_, fields)| fields.clone()).collect()
+    };
+    let software = vec![vec!["PCBcraft".to_owned(), "PCBcraft".to_owned(), env!("CARGO_PKG_VERSION").to_owned()]];
+    for (suffix, function, tools, hits) in
+        [("-PTH.drl", ["Plated", "1", "4", "PTH"], vec!["0.300", "1.000"], 3), ("-NPTH.drl", ["NonPlated", "1", "4", "NPTH"], vec!["3.200"], 1)]
+    {
+        let read = read_xnc(file(&outputs, suffix)).unwrap_or_else(|error| panic!("{suffix}: {error}"));
+        assert_eq!(attribute(&read, "FileFunction"), vec![function.map(str::to_owned).to_vec()], "{suffix}");
+        assert_eq!(attribute(&read, "GenerationSoftware"), software, "{suffix}");
+        assert_eq!(attribute(&read, "SameCoordinates"), vec![vec!["Original".to_owned()]], "{suffix}");
+        assert_eq!(read.tools.values().map(String::as_str).collect::<Vec<_>>(), tools, "{suffix}: tools sorted by diameter");
+        assert_eq!(read.hits.values().sum::<usize>(), hits, "{suffix}");
+    }
+    // The drill files share the identity every Gerber layer of this export declares.
+    assert!(outputs.iter().filter(|output| output.name.ends_with(".gbr")).all(|output| output.contents.contains("%TF.SameCoordinates,Original*%")));
+    // A file the reader must refuse: hits before drill mode, and data after M30.
+    assert_eq!(read_xnc("M48\nMETRIC\nT1C0.300\n%\nT1\nX0Y0\nM30\n").unwrap_err(), "hit without drill mode and tool: X0Y0");
+    assert_eq!(read_xnc("M48\nMETRIC\nT1C0.300\n%\nG05\nT1\nX0Y0\nM30\nX1Y1\n").unwrap_err(), "data after M30: X1Y1");
 }
 
 /// A half-unit diameter rounds up to a nonzero tool; a smaller diameter cannot produce any archive.

@@ -4,7 +4,9 @@
 //! Each copper layer, the top and bottom solder mask, paste and silkscreen, and the
 //! Board Outline get one Gerber file in millimeters with nanometer resolution (format 4.6).
 //! Plated holes (vias and through-hole pads) go in one Excellon file. Circular non-plated
-//! footprint holes, when present, go in a separate non-plated Excellon file. Every coordinate
+//! footprint holes, when present, go in a separate non-plated Excellon file. Each drill file
+//! names its content in XNC standard-comment file attributes (`Plated,1,N,PTH` or
+//! `NonPlated,1,N,NPTH` over all N copper layers). Every coordinate
 //! is written in the board's output frame: measured from its placement origin with Y up, seen
 //! from the top.
 //! Openings use the pad exporter without process expansion: mask includes pads on the outer
@@ -573,9 +575,10 @@ impl BoardView<'_> {
         }
         files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive") });
 
-        files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, DrillPlating::Plated, self.plated_drill_hits()) });
+        let span = order.len();
+        files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, DrillPlating::Plated, span, self.plated_drill_hits()) });
         if !non_plated.is_empty() {
-            files.push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, DrillPlating::NonPlated, non_plated) });
+            files.push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, DrillPlating::NonPlated, span, non_plated) });
         }
         unique_file_names(&mut files, copper_count);
         Ok(Fabrication { origin, files })
@@ -626,12 +629,19 @@ enum DrillPlating {
 
 /// Write one Excellon file from resolved through hits using absolute metric coordinates.
 /// Tools are sorted by diameter and hits in board coordinates, independent of the output origin.
-fn drill_file(frame: Frame, plating: DrillPlating, mut holes: BTreeMap<i64, Vec<Point>>) -> String {
-    let (description, kind) = match plating {
-        DrillPlating::Plated => ("plated", "PLATED"),
-        DrillPlating::NonPlated => ("non-plated", "NON_PLATED"),
+/// The header carries X2 file attributes as XNC standard comments (`; #@! `, XNC 2021.11 §4.1):
+/// the generating software, the shared coordinate frame of this export's Gerber layers (Gerber
+/// §5.6.5) and the file function spanning copper layers 1 to `copper_layers` (§5.6.3).
+fn drill_file(frame: Frame, plating: DrillPlating, copper_layers: usize, mut holes: BTreeMap<i64, Vec<Point>>) -> String {
+    let (description, kind, function) = match plating {
+        DrillPlating::Plated => ("plated", "PLATED", format!("Plated,1,{copper_layers},PTH")),
+        DrillPlating::NonPlated => ("non-plated", "NON_PLATED", format!("NonPlated,1,{copper_layers},NPTH")),
     };
-    let mut text = format!("M48\n; PCBcraft {description} drill file\n; TYPE={kind}\nFMAT,2\nMETRIC\n");
+    let mut text = format!("M48\n; PCBcraft {description} drill file\n; TYPE={kind}\n");
+    let _ = writeln!(text, "; #@! TF.GenerationSoftware,PCBcraft,PCBcraft,{}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(text, "; #@! TF.SameCoordinates,Original");
+    let _ = writeln!(text, "; #@! TF.FileFunction,{function}");
+    text.push_str("FMAT,2\nMETRIC\n");
     for (index, diameter) in holes.keys().enumerate() {
         let _ = writeln!(text, "T{}C{}", index + 1, mm(*diameter, DRILL_DECIMALS));
     }
