@@ -6,6 +6,7 @@ mod bga;
 #[cfg(target_arch = "wasm32")]
 mod browser_capture;
 pub mod checker;
+mod envelope;
 mod fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pointer;
@@ -589,6 +590,63 @@ mod tests {
         ] {
             assert!(ids.contains(id), "{id} missing from {ids:?}");
         }
+    }
+
+    /// The envelope recipe builds a board at the documented track, via and 1,024-pad footprint
+    /// limits through shared commands, stays within every native storage bound, reopens with all
+    /// counts and deterministic copper geometry intact, and keeps stable SHA-256 bytes on round-trip.
+    #[test]
+    fn envelope_recipe_generates_saves_reopens_and_keeps_stable_bytes() {
+        use pcbcraft_engine::{
+            board::{
+                setup::{LayerPurpose, Side},
+                track::{MAX_TRACKS, MAX_VIAS},
+            },
+            persistence::{MAX_ARCHIVE_BYTES, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS_BYTES, decode_documents, encode_documents, encode_packed},
+        };
+
+        let artifact_json = generate("envelope-v1", "test").unwrap();
+        let artifact = load_artifact(&artifact_json).unwrap();
+        assert_eq!(artifact.recipe, "envelope-v1");
+        assert_eq!(artifact.seed, 237_240);
+        assert_eq!(artifact.project_sha256, digest(&artifact.project));
+        assert!(artifact.project.len() <= MAX_ARCHIVE_BYTES, "{} bytes", artifact.project.len());
+
+        let reopened = decode_packed(&artifact.project).unwrap().project;
+        let board = reopened.board_view(artifact.board).unwrap();
+        assert_eq!(reopened.sheets().len(), 1);
+        assert_eq!(reopened.components().count(), envelope::FOOTPRINTS);
+        assert_eq!(reopened.all_symbols().count(), envelope::DISCRETE_PARTS as usize + envelope::BGA_UNITS);
+        assert_eq!(board.footprints().count(), envelope::FOOTPRINTS);
+        assert_eq!(board.tracks().len(), MAX_TRACKS);
+        assert_eq!(board.vias().len(), MAX_VIAS);
+        assert_eq!(board.footprints().map(|footprint| footprint.pads.len()).max(), Some(envelope::BGA_PADS));
+        assert_eq!(
+            board.footprints().map(|footprint| footprint.pads.len()).sum::<usize>(),
+            envelope::DISCRETE_PARTS as usize * 2 + envelope::BGA_PADS
+        );
+
+        let setup = board.setup().unwrap();
+        let front = setup.layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(Side::Front)).unwrap().id;
+        let back = setup.layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(Side::Back)).unwrap().id;
+        assert_eq!(board.tracks().iter().filter(|track| track.layer == front).count(), MAX_TRACKS / 2);
+        assert_eq!(board.tracks().iter().filter(|track| track.layer == back).count(), MAX_TRACKS / 2);
+
+        let reencoded_packed = encode_packed(reopened.clone()).unwrap();
+        assert_eq!(digest(&reencoded_packed), artifact.project_sha256);
+        assert_eq!(reencoded_packed, artifact.project);
+
+        let documents = encode_documents(reopened).unwrap();
+        let total_bytes: usize = documents.values().map(Vec::len).sum();
+        assert!(total_bytes <= MAX_DOCUMENTS_BYTES, "{total_bytes} bytes");
+        for (path, bytes) in &documents {
+            assert!(bytes.len() <= MAX_DOCUMENT_BYTES, "{path}: {} bytes", bytes.len());
+        }
+        let expected_digests: BTreeMap<_, _> = documents.iter().map(|(path, bytes)| (path.clone(), digest(bytes))).collect();
+        let reopened_documents = decode_documents(&documents).unwrap();
+        let reencoded_documents = encode_documents(reopened_documents).unwrap();
+        let actual_digests: BTreeMap<_, _> = reencoded_documents.iter().map(|(path, bytes)| (path.clone(), digest(bytes))).collect();
+        assert_eq!(actual_digests, expected_digests);
     }
 
     /// Corrupt archives, unsupported recipes and invalid sample/environment metadata must

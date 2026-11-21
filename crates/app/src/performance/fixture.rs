@@ -25,9 +25,10 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
         "channels-v1" => (64, 24, 16, 4),
         "hierarchy-v1" => (64, 4, 16, 0),
         "schematic-limits-v1" => (4096, 4, 16, 0),
+        "envelope-v1" => (super::envelope::DISCRETE_PARTS, 0, 0, 0),
         _ => {
             return Err(
-                "recipe must be reference-v1, dense-v1, capacity-v1, board-limits-v1, channels-v1, hierarchy-v1, schematic-limits-v1 or bga-v1"
+                "recipe must be reference-v1, dense-v1, capacity-v1, board-limits-v1, channels-v1, hierarchy-v1, schematic-limits-v1, bga-v1 or envelope-v1"
                     .into(),
             );
         }
@@ -96,8 +97,9 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
             )?;
         }
     }
-    if recipe == "bga-v1" {
-        // The reference board plus one 1,024-ball array away from its parts, tracks and probes.
+    if matches!(recipe, "bga-v1" | "envelope-v1") {
+        // One 1,024-ball array at the footprint, symbol and terminal-map limits,
+        // placed clear of the discrete parts, tracks and replay probes.
         super::bga::place(&mut session, None)?;
     }
     apply(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true}))?;
@@ -134,6 +136,9 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
             ADD_TRACKS,
             json!({"board":board.board,"layer":layers[0],"width_nm":if (path+seed)%3==0 {400_000} else {150_000},"points":points,"layer_changes":changes,"via_diameter_nm":600_000,"via_drill_nm":300_000}),
         )?;
+    }
+    if recipe == "envelope-v1" {
+        super::envelope::populate_board(&mut session, board, [layers[0], layers[1]])?;
     }
     if recipe == "channels-v1" {
         // Two parallel horizontal rails with attached branches bound alternating open/narrow
