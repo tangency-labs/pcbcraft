@@ -69,24 +69,28 @@ impl BoardView<'_> {
         self.project().board.baseline.as_ref().is_some_and(|baseline| baseline.project == self.target.project && baseline.board == self.target.board)
     }
 
-    /// Resolve accepted connectivity only. Missing baselines and unsupported circular copper
+    /// Resolve accepted connectivity only. Missing baselines and unsupported teardrop copper
     /// return errors instead of an apparently complete empty overlay;
     /// pending schematic edits never alter these connections before reviewed acceptance.
     /// Every resolvable net forms a spatial chain with one display edge per copper island
     /// beyond the first: N-1 edges with no tracks, none once copper joins every terminal.
     /// Unplaced or unmapped terminals are reported separately, without phantom endpoints.
     pub fn ratsnest(self) -> Result<Ratsnest, String> {
-        self.require_linear_copper()?;
+        self.require_no_teardrops()?;
         if !self.has_accepted_connectivity() {
             return Err("board has no accepted connectivity".into());
         }
-        let copper = if self.tracks().is_empty() && self.vias().is_empty() { super::track::Copper::default() } else { self.copper()? };
+        let copper = if self.tracks().is_empty() && self.vias().is_empty() && self.arc_tracks().is_empty() {
+            super::track::Copper::default()
+        } else {
+            self.copper()?
+        };
         self.ratsnest_with_copper(&copper)
     }
 
     /// Reuse completed copper connectivity when checking the same immutable snapshot.
     pub(super) fn ratsnest_with_copper(self, copper: &super::track::Copper) -> Result<Ratsnest, String> {
-        self.require_linear_copper()?;
+        self.require_no_teardrops()?;
         let board = &self.project().board;
         let baseline = board
             .baseline

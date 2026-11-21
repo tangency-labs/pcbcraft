@@ -9,9 +9,10 @@
 #[cfg(test)]
 use super::geometry::{inside, segment_distance};
 use super::{
+    arc::{ArcTrack, geometry::ArcGeometry},
     definition::PadShape,
     geometry::Contour as PadContour,
-    pair_index::{Hit, PairIndex, Search},
+    pair_index::{Bounds as PairBounds, Hit, PairIndex, Search},
     setup::LayerPurpose,
     view::{BoardView, CopperLayers},
 };
@@ -192,7 +193,7 @@ pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]
     Ok(())
 }
 
-/// Copper islands for one board snapshot: which pads, tracks and vias are joined by copper.
+/// Copper islands for one board snapshot: which pads, tracks, vias and arcs are joined by copper.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Copper {
     /// Island index for each physical pad, keyed by footprint ID and pad number.
@@ -201,6 +202,8 @@ pub struct Copper {
     pub tracks: BTreeMap<Uuid, usize>,
     /// Island index for each via.
     pub vias: BTreeMap<Uuid, usize>,
+    /// Island index for each circular arc track.
+    pub arcs: BTreeMap<Uuid, usize>,
 }
 
 /// Resolved pad geometry and net membership used by connectivity, DRC and footprint edits.
@@ -210,7 +213,7 @@ pub(super) struct Land {
     pub(super) corners: [Point; 4],
     pub(super) layers: Vec<Uuid>,
     pub(super) net: Option<String>,
-    center: Point,
+    pub(super) center: Point,
     shape: PadShape,
     corner_radius_nm: i64,
     size_nm: (i64, i64),
@@ -234,12 +237,12 @@ impl<'a> BoardView<'a> {
         &self.project().board.vias
     }
 
-    /// Group physical pads, tracks and vias into islands joined by overlapping copper: tracks on
-    /// a shared layer, vias on any layer. Legacy center-only markers and unconfigured pads have
-    /// no copper and stay isolated. Circular copper returns an unsupported-geometry error.
+    /// Group physical pads, tracks, vias and circular arcs into islands joined by overlapping
+    /// copper: tracks and arcs on a shared layer, vias on any layer. Legacy center-only markers
+    /// and unconfigured pads have no copper and stay isolated. Teardrops return an error.
     pub fn copper(self) -> Result<Copper, String> {
-        self.require_linear_copper()?;
-        Ok(islands(&lands(self), self.tracks(), self.vias()).0)
+        self.require_no_teardrops()?;
+        Ok(islands_with_arcs(&lands(self), self.tracks(), self.vias(), self.arc_tracks()).0)
     }
 
     /// Where routed copper would go if footprint `id` took the given pose: the tracks whose ends
@@ -260,23 +263,23 @@ impl<'a> BoardView<'a> {
         Ok(carry(self, after, &BTreeSet::from([id.to_owned()])))
     }
 
-    /// Resolve one unambiguous intended net per copper island, including explicit isolated vias.
-    /// Conflicting contacts expose no arbitrary display net; physical islands remain separate.
-    /// Circular copper returns an error rather than incomplete membership.
+    /// Resolve one unambiguous intended net per copper island, including explicit isolated vias
+    /// and circular arcs. Conflicting contacts expose no arbitrary display net; physical islands
+    /// remain separate. Teardrops return an error rather than incomplete membership.
     pub fn copper_nets(self) -> Result<BTreeMap<Uuid, String>, String> {
         self.copper_with_nets().map(|(_, nets)| nets)
     }
 
-    /// Resolve physical islands and complete authored/contact-derived intent in one contact pass.
-    /// Circular copper returns an error before any partial geometry is resolved.
+    /// Resolve physical islands and complete authored/contact-derived intent in one contact pass,
+    /// including circular arcs. Teardrops return an error before any partial geometry is resolved.
     pub fn copper_with_nets(self) -> Result<(Copper, BTreeMap<Uuid, String>), String> {
-        self.require_linear_copper()?;
+        self.require_no_teardrops()?;
         let lands = lands(self);
-        let (tracks, vias) = (self.tracks(), self.vias());
-        let (copper, members) = islands(&lands, tracks, vias);
+        let (tracks, vias, arcs) = (self.tracks(), self.vias(), self.arc_tracks());
+        let (copper, members) = islands_with_arcs(&lands, tracks, vias, arcs);
         let members = if vias.iter().any(|v| v.net_assignment.is_some()) { with_pad_contacts(&lands, &copper, members) } else { members };
         let intent = self.project().board_intent_memberships();
-        let intrinsic = super::via_nets::node_membership(self.project(), &lands, tracks.len(), vias, &intent);
+        let intrinsic = super::via_nets::node_membership_with_arcs(self.project(), &lands, tracks.len(), vias, arcs.len(), &intent);
         let island_net: Vec<_> = members
             .iter()
             .map(|nodes| {
@@ -296,7 +299,11 @@ impl<'a> BoardView<'a> {
             let Some(name) = name else { continue };
             for node in nodes {
                 if let Some(index) = node.checked_sub(lands.len()) {
-                    let id = tracks.get(index).map(|t| t.id).or_else(|| index.checked_sub(tracks.len()).and_then(|i| vias.get(i)).map(|v| v.id));
+                    let id = tracks
+                        .get(index)
+                        .map(|t| t.id)
+                        .or_else(|| index.checked_sub(tracks.len()).and_then(|i| vias.get(i)).map(|v| v.id))
+                        .or_else(|| index.checked_sub(tracks.len() + vias.len()).and_then(|i| arcs.get(i)).map(|a| a.id));
                     if let Some(id) = id {
                         nets.insert(id, name.clone());
                     }
@@ -339,7 +346,12 @@ pub(super) fn lands_from_footprints<'a>(footprints: impl Iterator<Item = super::
 /// Union-find over lands, then tracks, then vias. Returns islands plus each island's member
 /// node indices, numbered in that order.
 pub(super) fn islands(lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
-    build_islands(lands, tracks, vias, false)
+    islands_with_arcs(lands, tracks, vias, &[])
+}
+
+/// Union-find over lands, tracks, vias and circular arcs, numbered in that order.
+pub(super) fn islands_with_arcs(lands: &[Land], tracks: &[Track], vias: &[Via], arcs: &[ArcTrack]) -> (Copper, Vec<Vec<usize>>) {
+    build_islands(lands, tracks, vias, arcs, false)
 }
 
 /// Join direct pad contacts onto existing islands without repeating track/via contact searches.
@@ -380,17 +392,55 @@ fn join(parent: &mut [usize], a: usize, b: usize) {
     }
 }
 
-/// Build islands from copper contours. Footprint edit validation also joins direct pad pairs.
-fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
-    let mut builder = IslandBuilder::new(lands, tracks, vias);
+/// Build islands from copper contours and arcs. Footprint edit validation also joins direct pad pairs.
+fn build_islands(lands: &[Land], tracks: &[Track], vias: &[Via], arcs: &[ArcTrack], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
+    let mut builder = IslandBuilder::with_arcs(lands, tracks, vias, arcs);
     while !builder.step(usize::MAX) {}
     if join_pad_pairs {
-        for_each_pad_contact(lands, &builder.contours[..lands.len()], &builder.bounds[..lands.len()], |i, j| join(&mut builder.parent, i, j));
+        let pad_contours: Vec<_> = lands.iter().map(Land::contour).collect();
+        for_each_pad_contact(lands, &pad_contours, &builder.bounds[..lands.len()], |i, j| join(&mut builder.parent, i, j));
     }
-    builder.finish(lands, tracks, vias)
+    builder.finish_with_arcs(lands, tracks, vias, arcs)
 }
 
-/// Copper items (pads, tracks and vias together) below which island contact phases enumerate
+/// Copper contact primitive for island building: a linear pad/track/via contour or an arc.
+enum CopperShape {
+    Linear(PadContour),
+    Arc(ArcGeometry),
+    Invalid,
+}
+
+impl CopperShape {
+    /// Exact contact test shared across pads, straight tracks, vias and circular arcs.
+    fn touches(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Linear(a), Self::Linear(b)) => a.touches(b),
+            (Self::Arc(a), Self::Linear(b)) | (Self::Linear(b), Self::Arc(a)) => a.touches_contour(b),
+            (Self::Arc(a), Self::Arc(b)) => a.touches_arc(b),
+            _ => false,
+        }
+    }
+
+    /// Axis-aligned bounding box for quick rejection before narrow-phase contact checks.
+    fn bounds(&self) -> [f64; 4] {
+        match self {
+            Self::Linear(c) => c.bounds(),
+            Self::Arc(a) => a.bounds(),
+            Self::Invalid => [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY],
+        }
+    }
+
+    /// Four-axis bounds for the broad-phase spatial index.
+    fn pair_bounds(&self) -> PairBounds {
+        match self {
+            Self::Linear(c) => PairBounds::from_contour(c),
+            Self::Arc(a) => PairBounds::from_arc(a),
+            Self::Invalid => PairBounds::from_contour(&PadContour::capsule(Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 0, y_nm: 0 }, -1.0)),
+        }
+    }
+}
+
+/// Copper items (pads, tracks, vias and arcs together) below which island contact phases enumerate
 /// neighbors directly instead of building a bounds index. Retains the original small-board
 /// threshold for contact preparation.
 pub(super) const PAIRWISE_BELOW: usize = 128;
@@ -408,9 +458,10 @@ fn compares_every_pair(items: usize) -> bool {
 /// Pad-to-pad contacts stay separate from legacy clearance islands.
 pub(super) struct IslandBuilder {
     parent: Vec<usize>,
-    contours: Vec<PadContour>,
+    shapes: Vec<CopperShape>,
     bounds: Vec<[f64; 4]>,
-    layers: Vec<Vec<Uuid>>,
+    /// `Some(layers)` for single/multi-layer items (pads, tracks, arcs); `None` for through vias.
+    layers: Vec<Option<Vec<Uuid>>>,
     /// None when lower-numbered neighbors are enumerated directly.
     index: Option<PairIndex>,
     search: Search,
@@ -430,40 +481,43 @@ enum Nearby {
 }
 
 impl IslandBuilder {
-    /// Capture bounded primitive contours once, without evaluating any contact pairs.
+    /// Capture bounded linear primitive contours once, without evaluating any contact pairs.
     pub(super) fn new(lands: &[Land], tracks: &[Track], vias: &[Via]) -> Self {
-        let contours: Vec<_> = lands
+        Self::with_arcs(lands, tracks, vias, &[])
+    }
+
+    /// Capture bounded pad, track, via and circular-arc primitives once, without evaluating pairs.
+    pub(super) fn with_arcs(lands: &[Land], tracks: &[Track], vias: &[Via], arcs: &[ArcTrack]) -> Self {
+        let shapes: Vec<_> = lands
             .iter()
-            .map(Land::contour)
-            .chain(tracks.iter().map(|t| PadContour::capsule(t.start, t.end, t.width_nm as f64 / 2.)))
-            .chain(vias.iter().map(|v| PadContour::capsule(v.at, v.at, v.diameter_nm as f64 / 2.)))
+            .map(|l| CopperShape::Linear(l.contour()))
+            .chain(tracks.iter().map(|t| CopperShape::Linear(PadContour::capsule(t.start, t.end, t.width_nm as f64 / 2.))))
+            .chain(vias.iter().map(|v| CopperShape::Linear(PadContour::capsule(v.at, v.at, v.diameter_nm as f64 / 2.))))
+            .chain(arcs.iter().map(|a| ArcGeometry::from_track(a).map_or(CopperShape::Invalid, CopperShape::Arc)))
             .collect();
-        let bounds: Vec<_> = contours.iter().map(PadContour::bounds).collect();
-        let layers: Vec<_> = lands.iter().map(|l| l.layers.clone()).chain(tracks.iter().map(|t| vec![t.layer])).collect();
-        let pairwise = compares_every_pair(contours.len());
-        Self::with_path(lands.len(), contours, bounds, layers, pairwise)
+        let bounds: Vec<_> = shapes.iter().map(CopperShape::bounds).collect();
+        let layers: Vec<_> = lands
+            .iter()
+            .map(|l| Some(l.layers.clone()))
+            .chain(tracks.iter().map(|t| Some(vec![t.layer])))
+            .chain(std::iter::repeat_n(None, vias.len()))
+            .chain(arcs.iter().map(|a| Some(vec![a.layer])))
+            .collect();
+        let pairwise = compares_every_pair(shapes.len());
+        Self::with_path(lands.len(), shapes, bounds, layers, pairwise)
     }
 
     /// Build on the chosen path; tests compare both paths on the same board.
-    fn with_path(lands: usize, contours: Vec<PadContour>, bounds: Vec<[f64; 4]>, layers: Vec<Vec<Uuid>>, pairwise: bool) -> Self {
-        let index = (!pairwise).then(|| PairIndex::new(contours.iter()));
-        Self {
-            parent: (0..contours.len()).collect(),
-            contours,
-            bounds,
-            layers,
-            index,
-            search: Search::default(),
-            node: lands,
-            nearby: Nearby::Lookup,
-        }
+    fn with_path(lands: usize, shapes: Vec<CopperShape>, bounds: Vec<[f64; 4]>, layers: Vec<Option<Vec<Uuid>>>, pairwise: bool) -> Self {
+        let index = (!pairwise).then(|| PairIndex::from_bounds(shapes.iter().map(CopperShape::pair_bounds).collect()));
+        Self { parent: (0..shapes.len()).collect(), shapes, bounds, layers, index, search: Search::default(), node: lands, nearby: Nearby::Lookup }
     }
 
     /// The same builder forced onto one path, to check that both give the same islands.
     #[cfg(test)]
     pub(super) fn on_path(self, pairwise: bool) -> Self {
         let node = self.node;
-        let mut builder = Self::with_path(0, self.contours, self.bounds, self.layers, pairwise);
+        let mut builder = Self::with_path(0, self.shapes, self.bounds, self.layers, pairwise);
         (builder.parent, builder.node) = (self.parent, node);
         builder
     }
@@ -524,13 +578,13 @@ impl IslandBuilder {
                 self.nearby = Nearby::Lookup;
                 continue;
             };
-            let layers = match (self.layers.get(i), self.layers.get(j)) {
+            let layers = match (&self.layers[i], &self.layers[j]) {
                 (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
-                (None, Some(b)) => !b.is_empty(),
-                _ => true,
+                (None, Some(b)) | (Some(b), None) => !b.is_empty(),
+                (None, None) => true,
             };
             let (a, b) = (self.bounds[i], self.bounds[j]);
-            if layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j]) {
+            if layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.shapes[i].touches(&self.shapes[j]) {
                 join(&mut self.parent, i, j);
             }
         }
@@ -546,7 +600,12 @@ impl IslandBuilder {
     }
 
     /// Canonicalize completed roots to the existing pad/track/via identity maps.
-    pub(super) fn finish(mut self, lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
+    pub(super) fn finish(self, lands: &[Land], tracks: &[Track], vias: &[Via]) -> (Copper, Vec<Vec<usize>>) {
+        self.finish_with_arcs(lands, tracks, vias, &[])
+    }
+
+    /// Canonicalize completed roots to pad/track/via/arc identity maps.
+    pub(super) fn finish_with_arcs(mut self, lands: &[Land], tracks: &[Track], vias: &[Via], arcs: &[ArcTrack]) -> (Copper, Vec<Vec<usize>>) {
         let parent = &mut self.parent;
         let mut roots = BTreeMap::new();
         let mut members: Vec<Vec<usize>> = Vec::new();
@@ -563,8 +622,10 @@ impl IslandBuilder {
                 copper.pads.insert(land.key.clone(), island);
             } else if let Some(track) = tracks.get(node - lands.len()) {
                 copper.tracks.insert(track.id, island);
-            } else {
-                copper.vias.insert(vias[node - lands.len() - tracks.len()].id, island);
+            } else if let Some(via) = vias.get(node - lands.len() - tracks.len()) {
+                copper.vias.insert(via.id, island);
+            } else if let Some(arc) = arcs.get(node - lands.len() - tracks.len() - vias.len()) {
+                copper.arcs.insert(arc.id, island);
             }
         }
         (copper, members)
@@ -601,15 +662,15 @@ fn short(project: &Project, added: &BTreeSet<Uuid>) -> Option<(String, String)> 
     short_for_copper_edit(project, added, &BTreeSet::new())
 }
 
-/// Check the islands touching edited tracks, vias or footprint lands for shorts.
+/// Check the islands touching edited tracks, vias, circular arcs or footprint lands for shorts.
 /// Footprint edits use pad contours and include direct pad contacts on a shared layer.
 /// Unrelated pre-existing islands remain outside the check.
 pub(crate) fn short_for_copper_edit(project: &Project, added: &BTreeSet<Uuid>, footprints: &BTreeSet<String>) -> Option<(String, String)> {
     let view = project.board_view(project.board_target()?)?;
     let lands = lands(view);
-    let (tracks, vias) = (view.tracks(), view.vias());
-    let (_, members) = build_islands(&lands, tracks, vias, !footprints.is_empty() || vias.iter().any(|v| v.net_assignment.is_some()));
-    short_from_members(project, &lands, tracks, vias, &members, added, footprints)
+    let (tracks, vias, arcs) = (view.tracks(), view.vias(), view.arc_tracks());
+    let (_, members) = build_islands(&lands, tracks, vias, arcs, !footprints.is_empty() || vias.iter().any(|v| v.net_assignment.is_some()));
+    short_from_members_with_arcs(project, &lands, tracks, vias, arcs, &members, added, footprints)
 }
 
 /// Apply the existing short policy to completed contact groups, without recomputing islands.
@@ -622,6 +683,20 @@ fn short_from_members(
     added: &BTreeSet<Uuid>,
     footprints: &BTreeSet<String>,
 ) -> Option<(String, String)> {
+    short_from_members_with_arcs(project, lands, tracks, vias, &[], members, added, footprints)
+}
+
+/// Apply the short policy across pads, tracks, vias and circular arcs.
+fn short_from_members_with_arcs(
+    project: &Project,
+    lands: &[Land],
+    tracks: &[Track],
+    vias: &[Via],
+    arcs: &[ArcTrack],
+    members: &[Vec<usize>],
+    added: &BTreeSet<Uuid>,
+    footprints: &BTreeSet<String>,
+) -> Option<(String, String)> {
     let is_added = |node: usize| {
         if let Some(land) = lands.get(node) {
             return footprints.contains(&land.key.0);
@@ -629,10 +704,11 @@ fn short_from_members(
         let index = node.checked_sub(lands.len());
         let track = index.and_then(|index| tracks.get(index)).map(|track| track.id);
         let via = index.and_then(|index| index.checked_sub(tracks.len())).and_then(|index| vias.get(index)).map(|via| via.id);
-        track.or(via).is_some_and(|id| added.contains(&id))
+        let arc = index.and_then(|index| index.checked_sub(tracks.len() + vias.len())).and_then(|index| arcs.get(index)).map(|arc| arc.id);
+        track.or(via).or(arc).is_some_and(|id| added.contains(&id))
     };
     let intent = project.board_intent_memberships();
-    let intrinsic = super::via_nets::node_membership(project, lands, tracks.len(), vias, &intent);
+    let intrinsic = super::via_nets::node_membership_with_arcs(project, lands, tracks.len(), vias, arcs.len(), &intent);
     members.iter().filter(|island| island.iter().any(|node| is_added(*node))).find_map(|island| {
         let mut nets = island.iter().filter_map(|node| intrinsic[*node]);
         let first = nets.next()?;

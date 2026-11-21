@@ -106,6 +106,18 @@ impl BoardView<'_> {
 
 /// One node's intrinsic intent: pad membership or an active authored via target, never a name.
 pub(super) fn node_membership(project: &Project, lands: &[Land], tracks: usize, vias: &[Via], memberships: &Memberships) -> Vec<Option<usize>> {
+    node_membership_with_arcs(project, lands, tracks, vias, 0, memberships)
+}
+
+/// One node's intrinsic intent across pads, tracks, vias and circular arcs.
+pub(super) fn node_membership_with_arcs(
+    project: &Project,
+    lands: &[Land],
+    tracks: usize,
+    vias: &[Via],
+    arcs: usize,
+    memberships: &Memberships,
+) -> Vec<Option<usize>> {
     let accepted = project.board.baseline.as_ref().map(|b| b.terminal_net_index());
     let graph = accepted.is_none().then(|| project.electrical_connectivity());
     lands
@@ -124,6 +136,7 @@ pub(super) fn node_membership(project: &Project, lands: &[Land], tracks: usize, 
             let address = via.net_assignment?;
             (project.via_net_state(address) == "active").then(|| memberships.ids.get(&address.net).copied()).flatten()
         }))
+        .chain(std::iter::repeat_n(None, arcs))
         .collect()
 }
 

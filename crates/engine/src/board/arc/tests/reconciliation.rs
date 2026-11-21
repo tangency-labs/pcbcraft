@@ -241,9 +241,9 @@ fn arc_report_superset_retains_header_and_material_validation() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }
 
-/// Unsupported membership is unknown, not falsely disconnected or stripped of authored intent.
+/// Via inspection retains authored state and resolves membership accurately with circular arcs.
 #[test]
-fn arc_via_inspection_retains_authored_state_and_reports_unknown_geometry() {
+fn arc_via_inspection_retains_authored_state_and_resolves_membership() {
     let (mut s, arc) = fixture();
     assigned_via(&mut s);
     let previous = view(&s).inspect_vias()[0].clone();
@@ -252,9 +252,9 @@ fn arc_via_inspection_retains_authored_state_and_reports_unknown_geometry() {
     assert_eq!(current["net_assignment"], previous["net_assignment"]);
     assert_eq!(current["assignment_mode"], "explicit");
     assert_eq!(current["net_state"], "active");
-    assert_eq!(current["net"], Value::Null);
-    assert_eq!(current["connected_to_pad"], Value::Null);
-    assert_eq!(current["geometry_error"], UNSUPPORTED);
+    assert_eq!(current["net"], previous["net"]);
+    assert_eq!(current["connected_to_pad"], false);
+    assert!(current.get("geometry_error").is_none());
     assert_eq!(s.inspect()["project"]["boards"][0]["vias"][0], current);
     s.apply(SET_ARCS, &params(&s, &[])).unwrap();
     assert_eq!(view(&s).inspect_vias()[0], previous);

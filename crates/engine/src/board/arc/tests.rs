@@ -1,3 +1,4 @@
+mod contact;
 mod limits;
 mod reconciliation;
 
@@ -207,7 +208,8 @@ fn invalid_arcs_fail_atomically_on_the_shared_command_path() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Each supported entry point diagnoses missing circular geometry instead of a chord result.
+/// Connectivity and short detection handle circular arcs; every remaining unsupported consumer
+/// still refuses curves instead of substituting a chord.
 #[test]
 fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     let (mut s, arc) = fixture();
@@ -216,10 +218,12 @@ fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     s.apply(SET_ARCS, &params(&s, &[arc])).unwrap();
     let v = view(&s);
     let target = v.target;
-    assert_eq!(v.copper().unwrap_err(), UNSUPPORTED);
-    assert_eq!(v.copper_nets().unwrap_err(), UNSUPPORTED);
-    assert_eq!(v.copper_with_nets().unwrap_err(), UNSUPPORTED);
-    assert_eq!(v.ratsnest().unwrap_err(), UNSUPPORTED);
+    assert!(v.copper().is_ok());
+    assert!(v.copper_nets().is_ok());
+    assert!(v.copper_with_nets().is_ok());
+    assert!(v.ratsnest().is_ok());
+    assert!(v.copper_shorts().is_ok());
+    assert_eq!(v.require_linear_copper().unwrap_err(), UNSUPPORTED);
     assert_eq!(v.carried_tracks("footprint-1", Point { x_nm: 0, y_nm: 0 }, 0, false).unwrap_err(), UNSUPPORTED);
     assert_eq!(v.fabrication().err().unwrap(), UNSUPPORTED);
     assert_eq!(v.fabrication_outputs().err().unwrap(), UNSUPPORTED);
