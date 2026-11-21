@@ -922,6 +922,10 @@ const SCAN_LIMIT: usize = 16_384;
 /// session are never touched. Returns how many entries were removed; while another entry is
 /// being opened or removed it removes nothing and does not wait.
 pub fn prune(dir: &Path, retention: Retention) -> Result<usize, String> {
+    // A folder not created yet holds nothing; failing to create one is the recorder's to report.
+    if !dir.is_dir() {
+        return Ok(0);
+    }
     let gate = match open_lock_file(&dir.join(".entries.lock")) {
         Ok(gate) => gate,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(0),
