@@ -1,7 +1,13 @@
 use super::*;
 use crate::{
-    CONNECT_PINS, PLACE_RESISTOR, PLACE_SYMBOL, PLACE_UNIT, error_codes::ErrorCode, library::sources::symbol_digest, net_labels,
-    persistence::encode_documents, schematic::GRID_NM,
+    CONNECT_PINS, DRAW_WIRE, PLACE_RESISTOR, PLACE_SYMBOL, PLACE_UNIT, SheetTarget,
+    error_codes::ErrorCode,
+    hierarchy::{ADD_LABEL, CREATE_CHILD},
+    library::sources::symbol_digest,
+    net_labels,
+    persistence::encode_documents,
+    schematic::{GRID_NM, Point},
+    sheets::CREATE_SHEET,
 };
 use std::sync::Arc;
 
@@ -37,6 +43,33 @@ fn pin(symbol: &str, terminal: &str) -> Value {
 /// Join two terminals with a wire.
 fn connect(s: &mut Session, from: Value, to: Value) {
     apply(s, CONNECT_PINS, json!({"from":from,"to":to}));
+}
+
+/// A symbol terminal as a wire endpoint.
+fn terminal(symbol: &str, number: &str) -> WireEndpoint {
+    WireEndpoint::Terminal(Terminal::parse(&pin(symbol, number)).unwrap())
+}
+
+/// The symbol most recently placed on a sheet.
+fn last_symbol(s: &Session, sheet: SheetTarget) -> String {
+    s.project().unwrap().for_sheet(sheet).unwrap().symbols().last().unwrap().id()
+}
+
+/// Draw one wire between two existing anchors on a sheet, horizontal first when they are
+/// not aligned, without healing so each wire keeps its own identity.
+fn route(s: &mut Session, sheet: SheetTarget, from: WireEndpoint, to: WireEndpoint) {
+    let (a, b) = {
+        let project = s.project().unwrap().for_sheet(sheet).unwrap();
+        (project.endpoint_position(from).unwrap(), project.endpoint_position(to).unwrap())
+    };
+    let bends = if a.x_nm != b.x_nm && a.y_nm != b.y_nm { vec![Point { x_nm: b.x_nm, y_nm: a.y_nm }] } else { vec![] };
+    apply(s, DRAW_WIRE, json!({"sheet":sheet.id(),"from":from.inspect(),"to":to.inspect(),"bends":bends,"auto_heal":false}));
+}
+
+/// Name a terminal's net with a local label at the terminal.
+fn local_label(s: &mut Session, sheet: SheetTarget, at: WireEndpoint, name: &str) {
+    let point = s.project().unwrap().for_sheet(sheet).unwrap().endpoint_position(at).unwrap();
+    apply(s, net_labels::ADD, json!({"sheet":sheet.id(),"name":name,"style":"local","x_nm":point.x_nm,"y_nm":point.y_nm}));
 }
 
 /// Six resistors on one sheet: R1 to R3 are selected, R4 to R6 stay. Three nets cross the
@@ -241,4 +274,115 @@ fn port_direction_follows_the_drivers_on_each_side() {
     assert_eq!(direction(&[Input], &[PowerOut]), Direction::Input);
     assert_eq!(direction(&[Output], &[OpenCollector]), Direction::Bidirectional);
     assert_eq!(direction(&[Passive], &[Bidirectional]), Direction::Bidirectional);
+}
+
+/// A junction travels only when every branch stays inside. Three selected resistors meeting
+/// at a T move whole with their junction and need no port. A branch to an outside resistor
+/// keeps the junction outside: every inside wire is cut, a selected one included, and the
+/// net becomes a port.
+#[test]
+fn junctions_travel_only_when_every_branch_stays_inside() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    let sheet = s.project().unwrap().sheet_target();
+    let row = 10 * GRID_NM;
+    let parts = [resistor(&mut s, 0, 0), resistor(&mut s, 0, row), resistor(&mut s, 0, 2 * row)];
+    let start = terminal(&parts[1], "2");
+    let at = s.project().unwrap().endpoint_position(start).unwrap();
+    let node = Point { x_nm: at.x_nm + 30 * GRID_NM, y_nm: at.y_nm };
+    apply(&mut s, DRAW_WIRE, json!({"from":start.inspect(),"to":node,"bends":[],"auto_heal":false}));
+    let first = s.project().unwrap().wires().last().unwrap().id();
+    let id = s.project().unwrap().junctions().find(|(_, point)| *point == node).unwrap().0;
+    let junction = WireEndpoint::Junction(id);
+    route(&mut s, sheet, terminal(&parts[0], "2"), junction);
+    route(&mut s, sheet, terminal(&parts[2], "2"), junction);
+
+    let report = s.execute(PREVIEW, &json!({"items":{"symbols":parts,"wires":[]},"name":"Tee"})).unwrap();
+    let preview = &report["split_preview"];
+    assert_eq!(preview["junctions"], json!([format!("junction-{id}")]));
+    assert_eq!(preview["wires"].as_array().unwrap().len(), 3);
+    assert_eq!(preview["cut_wires"], json!([]));
+    assert_eq!(preview["ports"], json!([]));
+
+    let outside = resistor(&mut s, at.x_nm + 60 * GRID_NM, row);
+    route(&mut s, sheet, terminal(&outside, "1"), junction);
+    let report = s.execute(PREVIEW, &json!({"items":{"symbols":parts,"wires":[first]},"name":"Tee"})).unwrap();
+    let preview = &report["split_preview"];
+    assert_eq!(preview["junctions"], json!([]));
+    assert_eq!(preview["wires"], json!([]));
+    let cut = preview["cut_wires"].as_array().unwrap();
+    assert_eq!(cut.len(), 3);
+    assert!(cut.iter().all(|wire| wire["outside"] == junction.inspect()), "{preview}");
+    assert!(cut.iter().any(|wire| wire["wire"] == json!(first)));
+    let ports = preview["ports"].as_array().unwrap();
+    assert_eq!(ports.len(), 1, "{preview}");
+    assert_eq!(ports[0]["inside"].as_array().unwrap().len(), 3);
+    assert_eq!(ports[0]["outside"], json!([pin(&outside, "1")]));
+}
+
+/// A port takes the net's authored name even when the same name on another sheet makes the
+/// net's displayed name longer. Two boundary nets with the same authored name would give
+/// the new sheet two equal labels, so that is refused.
+#[test]
+fn ports_take_the_authored_name_and_a_repeated_name_is_refused() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    let main = s.project().unwrap().sheet_target();
+    let first = resistor(&mut s, 0, 0);
+    let across = resistor(&mut s, 40 * GRID_NM, 0);
+    connect(&mut s, pin(&first, "2"), pin(&across, "1"));
+    local_label(&mut s, main, terminal(&across, "1"), "EN");
+    apply(&mut s, CREATE_SHEET, json!({"name":"Other"}));
+    let other = s.project().unwrap().sheets().find(|sheet| sheet.name == "Other").unwrap().target;
+    apply(&mut s, PLACE_RESISTOR, json!({"sheet":other.id(),"x_nm":0,"y_nm":0}));
+    let remote = last_symbol(&s, other);
+    local_label(&mut s, other, terminal(&remote, "1"), "EN");
+    {
+        let project = s.project().unwrap().for_sheet(main).unwrap();
+        let graph = project.borrowed_electrical_connectivity();
+        let index = graph.net_index_for_endpoint(terminal(&across, "1")).unwrap();
+        assert_ne!(graph.borrowed_net_name(index), Some("EN"), "the displayed name is qualified");
+    }
+    let report = s.execute(PREVIEW, &json!({"sheet":main.id(),"items":{"symbols":[first],"wires":[]},"name":"Split"})).unwrap();
+    let ports = report["split_preview"]["ports"].as_array().unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0]["name"], "EN");
+    assert_eq!(ports[0]["generated"], false);
+
+    // A second boundary net reaches a child sheet, where a local label also names it EN.
+    apply(&mut s, PLACE_RESISTOR, json!({"sheet":main.id(),"x_nm":0,"y_nm":10 * GRID_NM}));
+    let second = last_symbol(&s, main);
+    apply(&mut s, CREATE_CHILD, json!({"sheet":main.id(),"name":"Child","x_nm":40 * GRID_NM,"y_nm":20 * GRID_NM}));
+    let child = s.project().unwrap().sheets().find(|sheet| sheet.name == "Child").unwrap().target;
+    apply(&mut s, ADD_LABEL, json!({"sheet":child.id(),"name":"LINK","direction":"input","x_nm":0,"y_nm":0}));
+    let link = s.project().unwrap().for_sheet(child).unwrap().labels[0].id;
+    route(&mut s, main, terminal(&second, "2"), WireEndpoint::SheetPin(link));
+    apply(&mut s, PLACE_RESISTOR, json!({"sheet":child.id(),"x_nm":10 * GRID_NM,"y_nm":0}));
+    let inner = last_symbol(&s, child);
+    route(&mut s, child, terminal(&inner, "1"), WireEndpoint::Label(link));
+    local_label(&mut s, child, terminal(&inner, "1"), "EN");
+
+    let project = s.snapshot().unwrap();
+    let params = json!({"sheet":main.id(),"items":{"symbols":[first, second],"wires":[]},"name":"Split"});
+    let error = s.execute(PREVIEW, &params).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidParams);
+    assert!(error.to_string().contains("share the port name EN"), "{error}");
+    assert!(Arc::ptr_eq(&project, &s.snapshot().unwrap()));
+}
+
+/// A project that already has the most sheets cannot take a new child sheet.
+#[test]
+fn a_full_project_is_refused() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    let main = s.project().unwrap().sheet_target();
+    let part = resistor(&mut s, 0, 0);
+    for index in 1..MAX_SHEETS {
+        apply(&mut s, CREATE_SHEET, json!({"name":format!("Extra {index}")}));
+    }
+    let project = s.snapshot().unwrap();
+    let error = s.execute(PREVIEW, &json!({"sheet":main.id(),"items":{"symbols":[part],"wires":[]},"name":"Split"})).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::CapExceeded);
+    assert!(error.to_string().contains(&format!("already has {MAX_SHEETS} sheets")), "{error}");
+    assert!(Arc::ptr_eq(&project, &s.snapshot().unwrap()));
 }

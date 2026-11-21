@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::{
     CommandError, Project, Session,
     hierarchy::{Direction, MAX_LABELS},
+    no_connect::Attachment,
     schematic::{ElectricalType, WireEndpoint, wiring::Terminal},
     selection::Selection,
     sheets::MAX_SHEETS,
@@ -48,7 +49,7 @@ struct Port {
     name: String,
     /// True when the name is the net's generated number rather than an authored name.
     generated: bool,
-    direction: &'static str,
+    direction: Direction,
     inside: Vec<Value>,
     outside: Vec<Value>,
 }
@@ -80,7 +81,7 @@ struct Preview {
     wires: Vec<String>,
     junctions: Vec<String>,
     net_labels: Vec<String>,
-    no_connects: Value,
+    no_connects: Vec<Attachment>,
     ports: Vec<Port>,
     global_nets: Vec<GlobalNet>,
     cut_wires: Vec<CutWire>,
@@ -156,8 +157,7 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
     let mut parts = BTreeSet::new();
     let mut inside: BTreeSet<WireEndpoint> = BTreeSet::new();
     for symbol in project.symbols().iter().filter(|symbol| items.symbols.contains(&symbol.id())) {
-        let reference = project.component(symbol).map(|part| part.reference().to_owned()).unwrap_or_default();
-        symbols.push(MovedSymbol { symbol: symbol.id(), part_instance: symbol.component_id(), reference });
+        symbols.push(MovedSymbol { symbol: symbol.id(), part_instance: symbol.component_id(), reference: project.reference(symbol) });
         parts.insert(symbol.component);
         inside.extend(symbol.terminals().into_iter().map(WireEndpoint::Terminal));
     }
@@ -165,47 +165,70 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
         project.net_labels().iter().filter(|label| items.net_labels.contains(&label.object_id())).map(|label| WireEndpoint::NetLabel(label.id)),
     );
 
+    let mut units_of: BTreeMap<u64, Vec<_>> = BTreeMap::new();
+    for symbol in project.all_symbols().filter(|symbol| parts.contains(&symbol.component)) {
+        units_of.entry(symbol.component).or_default().push(symbol);
+    }
     let mut split = Vec::new();
-    for &ordinal in &parts {
-        let units: Vec<_> = project.all_symbols().filter(|symbol| symbol.component == ordinal).collect();
+    for units in units_of.values() {
         let staying: Vec<_> = units.iter().filter(|symbol| !items.symbols.contains(&symbol.id())).map(|symbol| symbol.id()).collect();
         if let (false, Some(unit)) = (staying.is_empty(), units.first()) {
             split.push(SplitPart {
                 part_instance: unit.component_id(),
-                reference: project.component(unit).map(|part| part.reference().to_owned()).unwrap_or_default(),
+                reference: project.reference(unit),
                 moved: units.iter().filter(|symbol| items.symbols.contains(&symbol.id())).map(|symbol| symbol.id()).collect(),
                 staying,
             });
         }
     }
 
-    // A wire travels when it is selected or both its ends are selected anchors. A junction
-    // travels only when every wire meeting it travels, so it never strands an outside route.
-    let candidates: BTreeSet<_> = project
-        .wires()
-        .iter()
-        .filter(|wire| items.wires.contains(&wire.id()) || wire.endpoints().iter().all(|end| inside.contains(end)))
-        .map(|wire| wire.ordinal())
-        .collect();
-    let mut incident: BTreeMap<u64, bool> = BTreeMap::new();
+    // A junction travels when every wire meeting it leads to a selected anchor or another
+    // travelling junction, and its routes reach the selection. A wire travels when both of
+    // its ends travel and is cut when only one does, so no route is stranded on either side.
+    let mut branches: BTreeMap<u64, Vec<WireEndpoint>> = BTreeMap::new();
     for wire in project.wires() {
-        for end in wire.endpoints() {
+        let [from, to] = wire.endpoints();
+        for (end, other) in [(from, to), (to, from)] {
             if let WireEndpoint::Junction(id) = end {
-                *incident.entry(id).or_insert(true) &= candidates.contains(&wire.ordinal());
+                branches.entry(id).or_default().push(other);
             }
         }
     }
-    let junctions: BTreeSet<_> = incident.into_iter().filter(|(_, all)| *all).map(|(id, _)| id).collect();
+    let neighbours = |id: u64| branches.get(&id).map_or(&[][..], Vec::as_slice);
+    let mut travelling: BTreeSet<u64> = branches.keys().copied().collect();
+    let mut pending: Vec<u64> = travelling.iter().copied().collect();
+    while let Some(id) = pending.pop() {
+        let leaves = neighbours(id).iter().any(|end| match end {
+            WireEndpoint::Junction(other) => !travelling.contains(other),
+            _ => !inside.contains(end),
+        });
+        if leaves && travelling.remove(&id) {
+            pending.extend(neighbours(id).iter().filter_map(|end| match end {
+                WireEndpoint::Junction(other) if travelling.contains(other) => Some(*other),
+                _ => None,
+            }));
+        }
+    }
+    let mut junctions = BTreeSet::new();
+    let mut pending: Vec<u64> = travelling.iter().copied().filter(|id| neighbours(*id).iter().any(|end| inside.contains(end))).collect();
+    while let Some(id) = pending.pop() {
+        if junctions.insert(id) {
+            pending.extend(neighbours(id).iter().filter_map(|end| match end {
+                WireEndpoint::Junction(other) if travelling.contains(other) => Some(*other),
+                _ => None,
+            }));
+        }
+    }
     let within = |end: &WireEndpoint| inside.contains(end) || matches!(end, WireEndpoint::Junction(id) if junctions.contains(id));
     let mut wires = Vec::new();
     let mut cut_wires = Vec::new();
     for wire in project.wires() {
         let [from, to] = wire.endpoints();
         match (within(&from), within(&to)) {
-            (true, true) if candidates.contains(&wire.ordinal()) => wires.push(wire.id()),
+            (true, true) => wires.push(wire.id()),
             (true, false) => cut_wires.push(CutWire { wire: wire.id(), inside: from.inspect(), outside: to.inspect() }),
             (false, true) => cut_wires.push(CutWire { wire: wire.id(), inside: to.inspect(), outside: from.inspect() }),
-            _ => {}
+            (false, false) => {}
         }
     }
 
@@ -216,11 +239,16 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
     let mut ports = Vec::new();
     let mut global_nets = Vec::new();
     for index in nets {
-        let (members_in, members_out): (Vec<_>, Vec<_>) =
-            graph.endpoints(index).filter(|end| !matches!(end, WireEndpoint::Junction(_))).partition(|end| inside.contains(end));
+        // Junctions decide whether a net crosses, as a junction that stays is reached by a cut
+        // wire, but only anchors are listed.
+        let (members_in, members_out): (Vec<_>, Vec<_>) = graph.endpoints(index).partition(|end| within(end));
         if members_in.is_empty() || members_out.is_empty() {
             continue;
         }
+        let anchors = |members: Vec<WireEndpoint>| -> Vec<WireEndpoint> {
+            members.into_iter().filter(|end| !matches!(end, WireEndpoint::Junction(_))).collect()
+        };
+        let (members_in, members_out) = (anchors(members_in), anchors(members_out));
         let names = |members: &[WireEndpoint]| -> BTreeSet<String> { members.iter().filter_map(|end| globals.get(end).cloned()).collect() };
         let shared = names(members_in.as_slice()).intersection(&names(members_out.as_slice())).next().cloned();
         let listed = |members: &[WireEndpoint]| -> Vec<Value> { members.iter().map(|end| end.inspect()).collect() };
@@ -228,10 +256,15 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
             global_nets.push(GlobalNet { name, inside: listed(members_in.as_slice()), outside: listed(members_out.as_slice()) });
             continue;
         }
-        let name = graph
-            .borrowed_net_name(index)
-            .ok_or_else(|| CommandError::Unavailable("A boundary net has neither a name nor a generated number.".into()))?
-            .to_owned();
+        // The authored name, not its project-qualified display form, names the port; the
+        // generated number is used only for a net nobody named.
+        let name = match graph.net_names(index).iter().min() {
+            Some(name) => name.clone(),
+            None => graph
+                .borrowed_net_name(index)
+                .ok_or_else(|| CommandError::Unavailable("A boundary net has neither a name nor a generated number.".into()))?
+                .to_owned(),
+        };
         let kinds = |members: &[WireEndpoint]| -> Vec<ElectricalType> {
             members
                 .iter()
@@ -244,7 +277,7 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
         ports.push(Port {
             name,
             generated: graph.net_names(index).is_empty(),
-            direction: direction(&kinds(members_in.as_slice()), &kinds(members_out.as_slice())).as_str(),
+            direction: direction(&kinds(members_in.as_slice()), &kinds(members_out.as_slice())),
             inside: listed(members_in.as_slice()),
             outside: listed(members_out.as_slice()),
         });
@@ -271,7 +304,7 @@ fn plan(project: &Project, items: &Selection, name: String) -> Result<Preview, C
         wires,
         junctions: junctions.iter().map(|id| format!("junction-{id}")).collect(),
         net_labels: items.net_labels.iter().cloned().collect(),
-        no_connects: serde_json::to_value(&items.no_connects).map_err(|error| CommandError::InvalidParams(error.to_string()))?,
+        no_connects: items.no_connects.iter().cloned().collect(),
         ports,
         global_nets,
         cut_wires,

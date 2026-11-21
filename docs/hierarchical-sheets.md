@@ -66,9 +66,13 @@ The reply lists:
   would keep, and parts whose other units stay behind (units of one part may sit
   on different sheets, so this is reported, not refused);
 - the wires and junctions that would travel, and the `cut_wires` with one end on
-  each side;
+  each side. Wires follow their ends: a wire travels when both ends do, and a
+  junction travels only when every wire meeting it leads inside, so a selected
+  wire with an end outside is cut;
 - the `ports`: each net with members on both sides becomes one hierarchical
-  label and sheet pin, named after the net. An unnamed net uses its generated
+  label and sheet pin, named with the net's authored name (the first in
+  alphabetical order when it has several), without the sheet path that may be
+  shown when another sheet uses the same name. An unnamed net uses its generated
   `Net-NNNN` name and is marked `generated`. The proposed direction follows the
   pin types: driven only from inside is output (tri-state when every inside
   driver is tri-state), driven only from outside is input, driven from both
@@ -77,7 +81,7 @@ The reply lists:
   symbol name sits on both sides. A power symbol left outside the selection does
   not carry its name inside, so that net is listed as a port.
 
-More than 64 ports, an empty or unknown selection, a taken or blank name, a
-full project and a stale `expected_revision` are refused. The revision, undo
-history and project files do not change, and read-only sessions may run it.
-Applying a split is not available yet.
+More than 64 ports, two boundary nets with the same name, an empty or unknown
+selection, a taken or blank name, a full project and a stale `expected_revision`
+are refused. The revision, undo history and project files do not change, and
+read-only sessions may run it. Applying a split is not available yet.
