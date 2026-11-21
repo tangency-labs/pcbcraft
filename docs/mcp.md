@@ -416,7 +416,7 @@ a malformed reply from another editor may omit the facts it describes.
 | `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
 | `stale_revision` | `expected_revision` is not the current revision. `details.current_revision` gives the current one; inspect it and retry. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
-| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs. |
+| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs, or a live `schematic.complete_packages` report would exceed the 16 MiB reply limit (nothing is edited). |
 | `needs_live_editor` | A window or `ui.` command, or `inspect_editor`, in a session without an open editor. |
 | `denied` | The person declined the request in the editor's assistant. |
 | `cancelled` | The request was stopped, timed out or lost its connection before it finished; nothing changed. |
@@ -737,9 +737,14 @@ skipped}`, even with `inspect: false`. Each change names `sheet`, `symbol`,
 pin numbers as an old-to-new map). A source part in `changes` is retired; its
 symbol is retained. Skipped entries name `part` and `reason`. A read-only
 session refuses the command with `out_of_scope`, even for a dry run, because the
-same command applies the transfer. For a live Apply, the editor checks its
-request deadline after preparing the transfer and does not publish if the deadline
-or an observed disconnect wins. Once publication is authorized, that server
+same command applies the transfer. In the live editor, Preview and Apply prepare
+the plan off the editor thread, so the canvas stays responsive; just before
+publishing, the editor re-checks the revision, open dialogs, the request deadline
+and the connection. If the report would exceed the 16 MiB live reply limit,
+Preview and Apply both return `cap_exceeded` and nothing is edited; use `"sheet"`
+scope or headless MCP for very large projects. For a live Apply, the editor
+checks its request deadline after preparing the transfer and does not publish if
+the deadline or an observed disconnect wins. Once publication is authorized, that server
 deadline no longer ends the reply wait. A client timeout or transport failure can
 still lose the reply to a committed edit; inspect before retrying. See [package
 completion](symbol-schema.md#complete-loose-packages) for the matching and

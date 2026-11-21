@@ -30,6 +30,8 @@ struct Move<'a> {
 
 /// Prefer packages that already had multiple units, then stable instance order.
 type Slots = BTreeMap<usize, BTreeSet<(bool, u64)>>;
+/// Planned unit transfers and skipped-part reports, or `None` when preparation was cancelled.
+type MovePlan<'a> = Option<(Vec<Move<'a>>, Vec<Value>)>;
 
 /// Runtime authority for a deferred package completion, independent of display names or boards.
 #[derive(Clone, Debug)]
@@ -352,7 +354,7 @@ fn plan_moves<'a>(
     owners: &BTreeMap<u64, Owner<'a>>,
     sheet: Option<Uuid>,
     cancelled: Option<&AtomicBool>,
-) -> Result<Option<(Vec<Move<'a>>, Vec<Value>)>, CommandError> {
+) -> Result<MovePlan<'a>, CommandError> {
     let is_cancelled = || cancelled.is_some_and(|flag| flag.load(Ordering::Relaxed));
     let mut pools = BTreeMap::<Vec<u8>, Slots>::new();
     let mut loose = Vec::new();

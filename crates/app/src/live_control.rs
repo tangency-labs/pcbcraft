@@ -273,10 +273,13 @@ impl Drop for CancelOnDrop {
     }
 }
 
+/// Background preparation result: `None` when the worker observed cancellation.
+type PackageCompletionOutcome = Result<Option<pcbcraft_engine::package_completion::PreparedPackageCompletion>, pcbcraft_engine::CommandError>;
+
 struct PendingPackageCompletion {
     source: pcbcraft_engine::package_completion::PackageCompletionSource,
     _cancel: CancelOnDrop,
-    result: Receiver<Result<Option<pcbcraft_engine::package_completion::PreparedPackageCompletion>, pcbcraft_engine::CommandError>>,
+    result: Receiver<PackageCompletionOutcome>,
     request: Request,
     chat: bool,
     port: u16,
