@@ -3,7 +3,7 @@ use super::*;
 
 /// The open Scope menu's option with this text. The ribbon's disabled Bus wire tool shares the
 /// word, so the option is the lowest match: the menu opens below the form's Scope field.
-fn option<'h>(h: &'h Harness<'_, PcbApp>, text: &str) -> egui_kittest::Node<'h> {
+fn option<'h>(h: &'h Harness<'_, PcbApp>, text: &'h str) -> egui_kittest::Node<'h> {
     h.get_all_by_label(text).max_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap()
 }
 
@@ -138,7 +138,10 @@ fn bus_label_is_selectable_but_never_a_wire_end() {
     h.run();
     let project = h.state().session.project().unwrap();
     let [wire] = project.wires() else { panic!("one wire is drawn from the label's point") };
-    assert!(!wire.endpoints().iter().any(|end| matches!(end, pcbcraft_engine::WireEndpoint::NetLabel(_))), "no wire ends on the bus label");
+    assert!(
+        !wire.endpoints().iter().any(|end| matches!(end, pcbcraft_engine::schematic::WireEndpoint::NetLabel(_))),
+        "no wire ends on the bus label"
+    );
     assert_eq!(project.net_labels()[0].style, Style::Bus);
 
     click_canvas_at(&mut h, point + egui::vec2(25., -10.));
