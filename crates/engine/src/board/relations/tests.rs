@@ -1423,3 +1423,94 @@ fn a_nest_raw_sites_are_explicit_and_unadvertised() {
     let mut s = fixture(false);
     unchanged(&mut s, |s| run(s, PREVIEW, json!({"intent":{"command":"pcb.cut","params":{"items":{},"relation_stage":"Raw"}}})));
 }
+
+/// F1 validation rejects `Kind::Gap` rows whose saved witness segments are perpendicular,
+/// covering both `(vertical, horizontal)` and `(horizontal, vertical)` pairs.
+#[test]
+fn gap_rejects_perpendicular_saved_witness_segments() {
+    let mut s = fixture(false);
+    let edge = |s: &mut Session, fp, side| {
+        let features = run(s, FEATURES, json!({"fp": format!("footprint-{fp}")})).unwrap();
+        features["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|item| {
+                let r = &item["reference"];
+                (r["tag"] == "pad.edge" && r["pad"] == "1" && r["side"] == side).then(|| r.clone())
+            })
+            .unwrap()
+    };
+    let fp0 = s.project().unwrap().board.footprints()[0].id;
+    let fp1 = s.project().unwrap().board.footprints()[1].id;
+    let a = edge(&mut s, fp0, "left");
+    let b = edge(&mut s, fp1, "left");
+    add(&mut s, "gap", a, b);
+
+    let docs = bytes(&s);
+    let path = test_board_path(&docs);
+    let board: Value = serde_json::from_slice(&docs[&path]).unwrap();
+    assert!(decode_documents(&docs).is_ok());
+
+    let vertical = json!({"kind": "segment", "a": {"x_nm": 0, "y_nm": 0}, "b": {"x_nm": 0, "y_nm": 1_000_000}});
+    let horizontal = json!({"kind": "segment", "a": {"x_nm": 0, "y_nm": 0}, "b": {"x_nm": 1_000_000, "y_nm": 0}});
+    for witnesses in [json!([&vertical, &horizontal]), json!([&horizontal, &vertical])] {
+        let mut changed = board.clone();
+        changed["relations"]["relations"][0]["last_resolved"] = witnesses;
+        let parsed: Relations = serde_json::from_value(changed["relations"].clone()).unwrap();
+        assert_eq!(parsed.validate().unwrap_err(), "invalid board relation identity, picks, datum, label, state or display witness");
+
+        let mut doc = docs.clone();
+        doc.insert(path.clone(), serde_json::to_vec(&changed).unwrap());
+        assert!(decode_documents(&doc).unwrap_err().contains("invalid board relation identity, picks, datum, label, state or display witness"));
+    }
+}
+
+/// Parallel `Kind::Gap` saved witnesses remain structurally readable through F1 decoding even
+/// after the referenced original footprints/features no longer exist on the board.
+#[test]
+fn gap_parallel_saved_witness_remains_readable_when_original_features_are_missing() {
+    let mut s = fixture(false);
+    let edge = |s: &mut Session, fp, side| {
+        let features = run(s, FEATURES, json!({"fp": format!("footprint-{fp}")})).unwrap();
+        features["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find_map(|item| {
+                let r = &item["reference"];
+                (r["tag"] == "pad.edge" && r["pad"] == "1" && r["side"] == side).then(|| r.clone())
+            })
+            .unwrap()
+    };
+    let fp0 = s.project().unwrap().board.footprints()[0].id;
+    let fp1 = s.project().unwrap().board.footprints()[1].id;
+    let a = edge(&mut s, fp0, "left");
+    let b = edge(&mut s, fp1, "left");
+    add(&mut s, "gap", a, b);
+
+    let preview =
+        reviewed(&mut s, board::clipboard::DELETE, json!({"items": {"footprints": [format!("footprint-{fp0}"), format!("footprint-{fp1}")]}}));
+    run(&mut s, APPLY, decision(&preview)).unwrap();
+    assert!(s.project().unwrap().board.footprints().iter().all(|f| f.id != fp0 && f.id != fp1));
+
+    let docs = bytes(&s);
+    let reopened = decode_documents(&docs).unwrap();
+    let relations = reopened.board.relations.as_ref().expect("lost gap relation preserved");
+    assert_eq!(relations.relations.len(), 1);
+    assert_eq!(relations.relations[0].kind, Kind::Gap);
+    assert!(matches!(relations.relations[0].state, State::Lost { since_revision } if since_revision > 0));
+    assert!(relations.relations[0].last_resolved[0].parallel_segments(relations.relations[0].last_resolved[1]));
+
+    // Horizontal parallel saved witnesses remain equally readable when original features are absent.
+    let path = test_board_path(&docs);
+    let mut board: Value = serde_json::from_slice(&docs[&path]).unwrap();
+    board["relations"]["relations"][0]["last_resolved"] = json!([
+        {"kind": "segment", "a": {"x_nm": 0, "y_nm": 0}, "b": {"x_nm": 1_000_000, "y_nm": 0}},
+        {"kind": "segment", "a": {"x_nm": 0, "y_nm": 2_000_000}, "b": {"x_nm": 1_000_000, "y_nm": 2_000_000}}
+    ]);
+    let mut horizontal_doc = docs.clone();
+    horizontal_doc.insert(path, serde_json::to_vec(&board).unwrap());
+    let reopened_horizontal = decode_documents(&horizontal_doc).unwrap();
+    assert_eq!(reopened_horizontal.board.relations.as_ref().unwrap().relations.len(), 1);
+}

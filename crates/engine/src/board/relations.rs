@@ -133,6 +133,14 @@ impl Witness {
             }
         }
     }
+
+    /// True when two valid segment witnesses share the same projection axis (both vertical or both horizontal).
+    fn parallel_segments(self, other: Self) -> bool {
+        match (self, other) {
+            (Self::Segment { a: a0, b: b0 }, Self::Segment { a: a1, b: b1 }) => (a0.x_nm == b0.x_nm) == (a1.x_nm == b1.x_nm),
+            _ => false,
+        }
+    }
 }
 
 impl Reference {
@@ -249,6 +257,7 @@ impl Relations {
                 || row.refs.iter().any(|r| !r.valid())
                 || row.label.is_some_and(|p| !bounded(p, MAX_CENTER_NM))
                 || !row.last_resolved.into_iter().zip(&row.refs).all(|(w, r)| w.valid_for(r))
+                || (row.kind == Kind::Gap && !row.last_resolved[0].parallel_segments(row.last_resolved[1]))
                 || matches!(row.state, State::Lost { since_revision: 0 })
             {
                 return Err("invalid board relation identity, picks, datum, label, state or display witness".into());
