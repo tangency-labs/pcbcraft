@@ -648,6 +648,10 @@ before moving, reshaping or deleting them. Copy/duplicate retain locks, and Cut
 refuses protected copper. See the [lock policy](pcb-layout-workflow.md#fixed-tracks-and-vias)
 for mixed selections and indirect footprint/segment changes.
 
+To remove one arm from a routed connection without deleting the rest of the net,
+use [`pcb.unroute_connection`](mcp.md) through MCP. Start with `dry_run: true`
+to see which tracks and vias would be removed.
+
 ## Try the same project through MCP
 
 For repeatable UI demonstrations in the native app, the live connection can

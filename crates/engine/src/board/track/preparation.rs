@@ -10,7 +10,15 @@ use std::sync::{Arc, Mutex, TryLockError};
 pub fn is_copper_edit(command: &str) -> bool {
     matches!(
         command,
-        super::super::via_nets::SET_VIA_NET | ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS
+        super::super::via_nets::SET_VIA_NET
+            | ADD_TRACKS
+            | ADD_VIA
+            | MOVE_TRACKS
+            | RESHAPE_TRACKS
+            | SET_TRACK_WIDTH
+            | SET_VIA_SIZE
+            | DELETE_TRACKS
+            | unroute::UNROUTE_CONNECTION
     )
 }
 
@@ -50,6 +58,7 @@ pub struct PreparedCopperEdit {
     /// The parameters the edit was prepared with, reported with it once committed.
     params: Value,
     class_rules: Option<crate::board::class_rules::Context>,
+    report: Option<Value>,
 }
 impl PreparedCopperEdit {
     /// Captured policies explain changed-copper validation, with source identities and conflicts.
@@ -78,6 +87,7 @@ pub struct CopperEditJob {
     added: BTreeSet<Uuid>,
     lands: Option<Arc<Vec<Land>>>,
     builder: Option<IslandBuilder>,
+    unroute: Option<unroute::Planner>,
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
@@ -149,6 +159,7 @@ impl Session {
             added: BTreeSet::new(),
             lands: None,
             builder: None,
+            unroute: None,
             work: 0,
             result: None,
             class_islands: None,
@@ -166,6 +177,11 @@ impl Session {
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
     /// A committed candidate is reported to the edit observer as its prepared command.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
+        self.commit_copper_edit_with_report(prepared).map(|(revision, _)| revision)
+    }
+
+    /// Recheck command scope, then publish an edit or finish a preview and return its report, if any.
+    pub fn commit_copper_edit_with_report(&mut self, mut prepared: PreparedCopperEdit) -> Result<(u64, Option<Value>), CommandError> {
         self.authorize_command(prepared.command)?;
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
@@ -174,16 +190,49 @@ impl Session {
             self.change((*candidate).clone())?;
             self.report_committed(prepared.command, &prepared.params);
         }
-        Ok(self.revision())
+        let revision = self.revision();
+        if let Some(report) = &mut prepared.report {
+            report["revision"] = json!(revision);
+        }
+        Ok((revision, prepared.report))
     }
 }
 impl CopperEditJob {
+    /// Keep the unroute continuation private until the shared deletion checks finish.
+    fn advance_unroute(&mut self, budget: usize) -> Result<bool, CommandError> {
+        let source = &self.context.source;
+        let planner = self.unroute.get_or_insert_with(|| unroute::Planner::new(source.snapshot.clone(), source.target(), self.params.clone()));
+        let prepared = planner.step(budget);
+        self.work = planner.completed();
+        let Some(prepared) = prepared else { return Ok(false) };
+        self.unroute = None;
+        let (candidate, report) = prepared?;
+        self.phase = 4;
+        self.result = Some(Ok(PreparedCopperEdit {
+            source: source.clone(),
+            candidate: candidate.map(Arc::new),
+            command: self.command,
+            params: self.params.clone(),
+            class_rules: None,
+            report: Some(report),
+        }));
+        Ok(true)
+    }
+
     /// Captured source authority; the host also owns and validates its input generation.
     pub fn source(&self) -> &Source {
         &self.context.source
     }
     /// Report work progress without treating partial validation as a valid candidate.
     pub fn progress(&self) -> Progress {
+        if self.command == unroute::UNROUTE_CONNECTION {
+            let done = self.phase == 4;
+            return Progress {
+                stage: if done { "Prepared" } else { "Planning connection unroute" },
+                completed: self.work,
+                total: self.work.saturating_add(usize::from(!done)),
+            };
+        }
         let total = self.lands.as_ref().map_or(1, |lands| {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
             n.saturating_mul(n.saturating_sub(1)) / 2
@@ -225,6 +274,9 @@ impl CopperEditJob {
     }
     /// Shared native/browser phases use exactly the synchronous command's geometry and short policy.
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
+        if self.command == unroute::UNROUTE_CONNECTION {
+            return self.advance_unroute(budget);
+        }
         match self.phase {
             0 => {
                 let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
@@ -238,6 +290,7 @@ impl CopperEditJob {
                         command: self.command,
                         params: self.params.clone(),
                         class_rules: None,
+                        report: None,
                     }));
                     return Ok(true);
                 }
@@ -351,6 +404,7 @@ impl CopperEditJob {
                     command: self.command,
                     params: self.params.clone(),
                     class_rules,
+                    report: None,
                 }));
             }
             _ => {}

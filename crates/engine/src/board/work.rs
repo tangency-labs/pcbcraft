@@ -1,7 +1,13 @@
 //! Snapshot authority and progress shared by checker and copper preparation jobs.
 use super::view::BoardTarget;
 use crate::{Project, Session};
-use std::sync::Arc;
+use std::{future::poll_fn, sync::Arc, task::Poll};
+
+/// Suspend before the next logical work unit; only the owning host advances the continuation.
+pub(super) async fn yield_unit() {
+    let mut yielded = false;
+    poll_fn(move |_| if std::mem::replace(&mut yielded, true) { Poll::Ready(()) } else { Poll::Pending }).await
+}
 
 /// Runtime authority for a report, independent of display names or persisted net indices.
 #[derive(Clone, Debug)]
