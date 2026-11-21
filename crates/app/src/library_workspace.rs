@@ -88,6 +88,25 @@ impl PcbApp {
         self.dialog = Dialog::None;
         self.message = self.enter_workspace(ctx, "library", Placement::Here).err();
     }
+    /// The ribbon's Updates opens the same pane review as its Review library updates button.
+    pub(super) fn open_library_updates(&mut self, ctx: &egui::Context) {
+        self.open_library_workspace(ctx);
+        if self.message.is_some() {
+            return;
+        }
+        if self.library_sources.command_refusal(pcbcraft_engine::library::sources::AVAILABLE_REVISIONS).is_some() {
+            // The pane already states this refusal in place of its review button.
+            return;
+        }
+        match adoption::discover(self) {
+            Ok(review) => {
+                if let Some(state) = self.views.active.library.as_mut() {
+                    state.adoption = Some(review);
+                }
+            }
+            Err(error) => self.message = Some(error),
+        }
+    }
     /// Open Library through the normal pane/window ownership path without requiring a project.
     pub(super) fn place_library_workspace(&mut self, ctx: &egui::Context, placement: Placement) -> Result<(), String> {
         if placement == Placement::Window && crate::IN_BROWSER {

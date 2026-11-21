@@ -85,6 +85,7 @@ fn is_read_command(id: &str) -> bool {
             | sources::LIST
             | sources::SEARCH
             | sources::AVAILABLE_REVISIONS
+            | sources::PREVIEW_ADOPTION
             | sources::RESOLVE_PART
             | sources::PARSE_QUANTITY
             | sources::PREVIEW_PIN_REMAP

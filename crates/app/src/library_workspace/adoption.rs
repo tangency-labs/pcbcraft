@@ -24,7 +24,7 @@ pub(super) struct Review {
 }
 
 /// Open a fresh list from the live project. This is a query, not an authored edit.
-fn discover(app: &mut PcbApp) -> Result<Review, String> {
+pub(super) fn discover(app: &mut PcbApp) -> Result<Review, String> {
     let project = app.session.snapshot().ok_or("No project is open.")?;
     let list = app.session.execute(AVAILABLE_REVISIONS, &Value::Null).map_err(|error| error.to_string())?;
     Ok(Review {

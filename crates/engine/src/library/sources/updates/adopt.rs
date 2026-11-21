@@ -3,7 +3,10 @@ use super::{Catalog, Inventory, Key, Kind, inspect_revision, latest_key};
 use crate::{CommandError, Project, Session, board::assignment::component_ids, part_instances::Selection, schematic::SymbolDefinition};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, btree_map::Entry},
+    sync::Arc,
+};
 
 /// A generic part keeps its exact dependency closure; a plain symbol replaces its drawing pin.
 enum Replacement {
@@ -38,6 +41,8 @@ fn prepare(project: &Project, catalog: &Catalog, mut ids: Vec<u64>) -> Result<(P
     let inventory = Inventory::from_project(project)?;
     let mut replacements = BTreeMap::new();
     let mut changes = Vec::new();
+    // Many instances usually share a few pinned roots; discover each root once, as `inspect` does.
+    let mut discoveries: BTreeMap<Key, Value> = BTreeMap::new();
     ids.sort_unstable();
     for id in ids {
         let instance = project.components.get(&id).ok_or_else(|| format!("No part instance component-{id}."))?;
@@ -48,8 +53,13 @@ fn prepare(project: &Project, catalog: &Catalog, mut ids: Vec<u64>) -> Result<(P
             let symbol = &instance.definition;
             Key { library: symbol.library.clone(), kind: Kind::Symbol, id: symbol.id.clone(), revision: symbol.revision() }
         };
-        let pinned = inventory.item(&key).ok_or("Missing pinned update root.")?;
-        let discovery = inspect_revision(&inventory, pinned, catalog);
+        let discovery: &Value = match discoveries.entry(key.clone()) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let pinned = inventory.item(entry.key()).ok_or("Missing pinned update root.")?;
+                entry.insert(inspect_revision(&inventory, pinned, catalog))
+            }
+        };
         let invalid = |reason: &str| format!("{} ({}): {reason}", instance.reference(), instance.id());
         if discovery["status"] != "Update available" {
             return Err(invalid(discovery["diagnostic"].as_str().or_else(|| discovery["status"].as_str()).unwrap_or("No update available.")));

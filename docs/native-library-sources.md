@@ -139,8 +139,11 @@ Opening a project never searches or refreshes a library to replace its geometry.
 `library.available_revisions` takes no parameters and requires an open project.
 It compares existing part instances with native revisions already loaded in the
 session, without refreshing sources or accessing the network. It works through
-the shared engine command, including live and headless MCP with `inspect: false`;
-there is no dedicated update-list GUI in this command.
+the shared engine command, including live and headless MCP with `inspect: false`.
+In the desktop app, Parts Library's **Review library updates** (also
+**Libraries → Updates** on the ribbon) lists the instances this query reports
+with a supported update; see
+[adopt non-geometric revisions](#adopt-non-geometric-revisions).
 
 The result contains `project` (UUID), runtime `revision`, `catalog_generation`,
 `board` (UUID or null), `instances` and `outdated_instances`. Each instance row
@@ -221,14 +224,16 @@ Undo/Redo.
 
 ## Adopt non-geometric revisions
 
-With a project open, choose **Review library updates** in Parts Library. Select
+With a project open, choose **Review library updates** in Parts Library, or
+**Updates** on the ribbon's Libraries tab, which opens the same review. Select
 instances, choose **Preview selected updates**, and read the exact before and
 after fields. **Apply reviewed updates** uses the same command and Undo history
 as the schematic editor. **Undo adoption** reverses the change directly from
 its result. A project or source change clears the current review or result;
 open the review again to see the current state. A pending library folder
 operation temporarily prevents review and adoption in the desktop and live
-MCP editor.
+MCP editor; the pane then shows that refusal in place of the review button.
+Previews are read-only and also run in read-only headless sessions.
 
 `library.preview_adoption` reviews the latest loaded symbol or generic-part root
 for the chosen `instances` (a nonempty list of distinct `component-N` IDs).
