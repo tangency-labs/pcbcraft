@@ -257,7 +257,7 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
 /// leaving `project.json` unchanged throughout and restoring the saved documents on delete.
 #[test]
 fn a_legacy_project_six_keeps_project_json_across_relation_add_and_delete() {
-    let mut s = fixture(false);
+    let s = fixture(false);
     let mut historical = Project::clone(&crate::persistence::diagnostic_snapshot(s.snapshot().unwrap()));
     historical.layout = None;
     historical.numeric_id_high_water = None;
@@ -268,6 +268,7 @@ fn a_legacy_project_six_keeps_project_json_across_relation_add_and_delete() {
     for field in ["boards", "layout_root", "numeric_id_high_water", "schematic_instances"] {
         assert!(entry.get(field).is_none(), "{field}");
     }
+    let mut s = Session::default();
     s.open_snapshot(decode_documents(&before).unwrap());
     assert_eq!(bytes(&s), before);
 
