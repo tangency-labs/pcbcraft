@@ -872,4 +872,168 @@ mod tests {
         assert!(matches!(h.state().dialog, Dialog::LibraryCourtyard(..)));
         assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_after_bg);
     }
+
+    /// Snapshot state: courtyard draw tool active on a footprint with no courtyard yet.
+    #[test]
+    fn courtyard_shot_tool_active_and_empty() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, canvas::Tool::Draw { kind: canvas::Place::Courtyard, start: None, .. }));
+        assert!(h.state().library_editors.documents[&id].first_courtyard_id().is_none());
+    }
+
+    /// Snapshot state: courtyard outline actively being drawn with two placed vertices and a live preview segment.
+    #[test]
+    fn courtyard_shot_outline_being_drawn() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+        let area = h.get_by_label("Library canvas").rect();
+        let (p0, p1, p2) = {
+            let doc = &h.state().library_editors.documents[&id];
+            (
+                doc.camera.screen(Point { x_nm: -1_500_000, y_nm: -900_000 }, area),
+                doc.camera.screen(Point { x_nm: 1_500_000, y_nm: -900_000 }, area),
+                doc.camera.screen(Point { x_nm: 1_500_000, y_nm: 900_000 }, area),
+            )
+        };
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        click_at(&mut h, p0);
+        click_at(&mut h, p1);
+        h.hover_at(p2);
+        h.run();
+        assert!(matches!(&h.state().library_editors.documents[&id].tool, canvas::Tool::Courtyard { points, .. } if points.len() == 2));
+    }
+
+    /// Snapshot state: generated courtyard outline selected with vertex handles and vertex properties panel.
+    #[test]
+    fn courtyard_shot_vertex_selected_with_panel() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(0));
+        assert!(h.query_by_label("Vertex X (mm)").is_some());
+        assert!(h.query_by_label("Vertex Y (mm)").is_some());
+    }
+
+    /// Snapshot state: Generate Courtyard dialog open with an invalid clearance validation error.
+    #[test]
+    fn courtyard_shot_validation_error() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        crate::tests::click(&mut h, "Generate courtyard…");
+        h.get_by_label("Clearance (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Clearance (mm)").type_text("-1");
+        h.run();
+        crate::tests::click(&mut h, "Generate");
+        assert!(matches!(&h.state().dialog, Dialog::LibraryCourtyard(draft) if draft.error.is_some()));
+    }
+
+    /// Snapshot state: footprint with a generated courtyard whose courtyard layer is hidden.
+    #[test]
+    fn courtyard_shot_layer_hidden() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        crate::tests::click(&mut h, "Courtyard layer");
+        assert!(!h.state().library_editors.documents[&id].show_courtyard);
+        assert!(h.state().library_editors.documents[&id].selected.is_none());
+    }
+
+    /// Snapshot state: Generate Courtyard dialog open with a stale-revision refusal error.
+    #[test]
+    fn courtyard_shot_stale_revision_dialog() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+        crate::tests::click(&mut h, "Generate courtyard…");
+        h.state_mut()
+            .library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: 100_000,
+                    source: CourtyardSource::PadsOnly,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        crate::tests::click(&mut h, "Generate");
+        assert!(matches!(&h.state().dialog, Dialog::LibraryCourtyard(draft) if draft.error.is_some()));
+    }
+
+    /// Snapshot state: keyboard focus inside the Vertex X (mm) input of the Courtyard outline panel.
+    #[test]
+    fn courtyard_shot_keyboard_focus_in_vertex_panel() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        h.get_by_label("Vertex X (mm)").click();
+        h.run();
+        assert!(h.ctx.memory(|m| m.focused().is_some()));
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(0));
+    }
 }
