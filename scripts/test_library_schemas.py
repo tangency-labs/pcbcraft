@@ -219,27 +219,50 @@ class LibrarySchemaTests(unittest.TestCase):
         }
         assessments = {"assertions": [assertion], "policies": [policy]}
         validator.validate(assessments)
-        for bad_reason in ["", " ", " Drawing review", "Drawing review ", "\ufeffA", "A\ufeff", "Drawing\nreview", "Drawing\treview", "A\x00B", "é" * 4097]:
+        for bad_reason in ["", " ", " Drawing review", "Drawing review ", "Drawing review\n", "Drawing review\r\n", "\ufeffA", "A\ufeff", "Drawing\nreview", "Drawing\treview", "A\x00B", "é" * 4097]:
             changed = copy.deepcopy(assertion)
             changed["reason"] = bad_reason
             self.assertFalse(validator.is_valid(changed), repr(bad_reason))
-        for bad_short in ["", " ", " Released", "Released ", "\ufeffA", "A\ufeff", "Re\nleased", "A\x7fB", "é" * 257]:
+        for bad_short in ["", " ", " Released", "Released ", "Released\n", "Released\r\n", "\ufeffA", "A\ufeff", "Re\nleased", "A\x7fB", "é" * 257]:
             changed = copy.deepcopy(assertion)
             changed["provenance"]["publisher"] = bad_short
             self.assertFalse(validator.is_valid(changed), repr(bad_short))
             changed_assessments = copy.deepcopy(assessments)
             changed_assessments["policies"][0]["states"][0]["label"] = bad_short
             self.assertFalse(validator.is_valid(changed_assessments), repr(bad_short))
+        for bad_id in ["lifecycle-demo\n", "lifecycle-demo\r\n", "a\n"]:
+            for section in ("address", "target", "scheme"):
+                for field in ("library", "id"):
+                    changed = copy.deepcopy(assertion)
+                    changed[section][field] = bad_id
+                    self.assertFalse(validator.is_valid(changed), f"{section}.{field}={bad_id!r}")
+        for bad_state in ["draft\n", "draft\r\n", "released\n"]:
+            changed = copy.deepcopy(assertion)
+            changed["state"] = bad_state
+            self.assertFalse(validator.is_valid(changed), f"state={bad_state!r}")
+            changed_assessments = copy.deepcopy(assessments)
+            changed_assessments["policies"][0]["states"][0]["id"] = bad_state
+            self.assertFalse(validator.is_valid(changed_assessments), f"policy.state.id={bad_state!r}")
         if shutil.which("node"):
             lifecycle = json.loads((ROOT / "docs/schemas/lifecycle-v1.schema.json").read_text())
             pattern = lifecycle["$defs"]["singleLineText"]["pattern"]
+            native_id = lifecycle["$defs"]["nativeId"]["pattern"]
+            state_id = lifecycle["$defs"]["stateId"]["pattern"]
             cases = [
                 {"pattern": pattern, "text": value, "expected": ok}
                 for value, ok in [
                     ("A", True), ("Drawing review", True), ("é" * 4096, True),
                     ("", False), (" ", False), (" A", False), ("A ", False),
+                    ("A\n", False), ("Drawing review\n", False), ("Drawing review\r\n", False),
                     ("\ufeffA", False), ("A\ufeff", False),
                     ("A\nB", False), ("A\tB", False), ("A\x00B", False), ("A\x7fB", False),
+                ]
+            ] + [
+                {"pattern": pat, "text": value, "expected": ok}
+                for pat in (native_id, state_id)
+                for value, ok in [
+                    ("a", True), ("lifecycle-demo", True),
+                    ("a\n", False), ("lifecycle-demo\n", False), ("lifecycle-demo\r\n", False),
                 ]
             ]
             program = "const cases=JSON.parse(require('fs').readFileSync(0,'utf8'));for(const c of cases){if(new RegExp(c.pattern).test(c.text)!==c.expected)throw new Error(JSON.stringify(c));}"
