@@ -95,8 +95,11 @@ the registry's existing 8 MiB serialized limit. Incremental writing charges one
 record per pair, and history snapshots share the pair list and individual values.
 Read-only registry inspection includes `pairs` only when present. The
 [editor](net-class-editor.md#differential-pairs) and [shared commands](mcp.md#differential-pairs)
-author this same relationship without changing the format, the member records
-or stored review context. There is no pair class, inference or router.
+author this same relationship without changing the format or the member records:
+name-only edits preserve stored review context (`NeedsReview`), while passing
+`reviewed: true` (which requires both resulting members to be active) or
+changing a member net when both resulting members are active clears
+`NeedsReview` back to `Active`. There is no pair class, inference or router.
 
 ## Transactions and reconciliation
 
