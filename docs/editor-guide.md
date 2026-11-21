@@ -967,8 +967,9 @@ Repeated edits can leave a straight run split into several segments, or one
 segment stacked on another. The `pcb.merge_tracks` command, through live commands
 or MCP, joins the selected segments that lie on one line with the same layer and
 width into one segment per run, in one undo step. Two segments join only at an
-end that no other track, via or pad touches, so junctions and connections stay
-where they are; locked segments are left alone. There is no menu item for it yet.
+end where no other track ends and no via or pad touches, so junctions and
+connections stay where they are; locked segments are left alone. There is no
+menu item for it yet.
 
 The **Tracks** and **Vias**
 selection filters turn picking of each off, by click, drag, U or box, and drop that kind
