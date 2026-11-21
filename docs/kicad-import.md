@@ -66,13 +66,14 @@ There is no desktop menu entry yet.
   different name or type in different units, more than 32 units, hidden power
   pins on ordinary symbols, which KiCad joins to a net by name, and an alternate
   (De Morgan) body style that places, names, types or hides pins differently from
-  the normal one.
+  the normal one, or whose pin names are too long (over 512 bytes) to compare.
 - More than 1,000 placed symbols (this slice's own limit; a sheet holds 4,096),
   4,000 straight wire pieces, 256 labels or 4,096 native wires, for now: the import runs every placement and wire through the ordinary commands
   and can't be cancelled, so this slice keeps it within seconds, and a sheet holds
   at most 256 named labels and 4,096 wires. Symbols may also take at most
   2,000,000 points of conversion work in all, counting a common part once for each
-  unit it is drawn in: each drawing costs its points, and each text and pin one.
+  unit it is drawn in: each drawing costs its points, each text and pin one, and
+  reading a symbol one per unit and pin it has.
   Drawing beyond a unit's 256 entries is left out unconverted and costs nothing,
   except a long polyline that crosses the limit, which costs all its points.
   The converted symbols may come to at most 32 MiB less 64 KiB as native documents,

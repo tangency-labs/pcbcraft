@@ -28,13 +28,16 @@ const DEFAULT_STROKE_NM: i64 = 152_400;
 const MAX_STROKE_NM: i64 = 2_000_000;
 /// How many straight pieces a Bézier curve is drawn with.
 const CURVE_STEPS: usize = 16;
+/// The longest pin name, in bytes, an alternate body style's pins are compared with.
+const MAX_COMPARED_NAME: usize = 512;
 /// The most bytes one native library file holds.
 const MAX_FILE_BYTES: usize = crate::library::sources::MAX_FILE_BYTES;
 /// How many drawing points one import may convert, over every symbol and unit. A common part is
 /// drawn again in each unit and symbols can share one drawing through `extends`, so the work
 /// isn't bounded by the file's size alone.
 ///
-/// Each pin of each unit costs one point too.
+/// Reading a symbol costs one point per unit and pin it has, and converting each pin of each
+/// unit one more.
 pub(super) const MAX_DRAWING_WORK: usize = 2_000_000;
 
 /// A converted symbol: its native document and how to place it.
@@ -46,11 +49,14 @@ pub(super) struct Converted {
     pub(super) units: BTreeMap<u32, String>,
     /// For a power symbol, the terminal whose net the placed Value names.
     pub(super) power_terminal: Option<String>,
+    /// For a power symbol, where that terminal's pin is in the library symbol: the index of its
+    /// unit in `units` and of the pin in that unit, so its name is read from the file, not copied.
+    pub(super) power_pin: Option<(usize, usize)>,
 }
 
-/// What an alternate body style must keep of a pin: unit, number, name as imported, position,
+/// What an alternate body style must keep of a pin: unit, number, name, position,
 /// electrical type and whether it is hidden.
-type StylePin<'a> = (u32, &'a str, Option<String>, i64, i64, String, bool);
+type StylePin<'a> = (u32, &'a str, &'a str, i64, i64, String, bool);
 
 /// A native unit being built: its pins in order and its drawing.
 struct NativeUnit {
@@ -62,15 +68,33 @@ struct NativeUnit {
 /// Convert `symbol` under the native ID `id`. Fails with the reason when its electrical content
 /// can't be represented exactly, or when its document would exceed a library file's size. Each
 /// unit's drawing stops at [`MAX_DRAWING`] entries, with a note, before anything past the limit
-/// is converted. Every pin, drawing and text visited is paid for from `budget`, in points; when
-/// it runs short, it is set to zero and the drawing stops there, and the caller refuses the
-/// import.
+/// is converted. Reading its units and pins, and every pin, drawing and text converted, is paid
+/// for from `budget`, in points; when it runs short, it is set to zero, conversion stops there,
+/// and the caller refuses the import. Messages show at most 16 characters of a pin number.
 pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report: &mut Report) -> Result<Converted, String> {
+    // Reading the symbol below visits each of its units and pins, and symbols can share one
+    // drawing through `extends`, so that is paid for first: units before they are counted
+    // through, then pins.
+    if !pay(budget, symbol.units.len().max(1)) || !pay(budget, symbol.units.iter().map(|unit| unit.pins.len()).sum::<usize>().max(1)) {
+        return Err("it has more units and pins than an import converts".into());
+    }
+    // Every pin number of the styles read is checked before any is compared or kept.
+    for pin in symbol.units.iter().filter(|unit| unit.style <= 2).flat_map(|unit| &unit.pins) {
+        if !valid_number(&pin.number) {
+            return Err(format!("pin number `{}` isn't 1 to 8 letters, digits, +, - or _", shown(&pin.number)));
+        }
+    }
     // Style 0 is drawn in every body style, 1 is the normal style and 2 the alternate one.
     // Which style a placed symbol shows isn't read, so an alternate style is accepted only when
     // it puts exactly the same pins in the same places.
     if symbol.units.iter().any(|unit| unit.style == 2) {
-        // Names compare as imported (at most 32 characters), so a huge name costs no more.
+        // Names compare in full, as the file writes them, so names that differ only in spaces
+        // or control characters (which the import trims) differ too; a name too long to
+        // compare cheaply refuses instead.
+        let compared = symbol.units.iter().filter(|unit| unit.style <= 2).flat_map(|unit| &unit.pins);
+        if compared.clone().any(|pin| pin.name.len() > MAX_COMPARED_NAME) {
+            return Err(format!("its alternate (De Morgan) body style can't be compared: a pin name is longer than {MAX_COMPARED_NAME} bytes"));
+        }
         let pins = |style: u32| -> BTreeSet<StylePin<'_>> {
             symbol
                 .units
@@ -78,7 +102,7 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
                 .filter(|unit| unit.style == 0 || unit.style == style)
                 .flat_map(|unit| {
                     unit.pins.iter().map(move |pin| {
-                        (unit.unit, pin.number.as_str(), clip(&pin.name, 32), pin.at.x_nm, pin.at.y_nm, format!("{:?}", pin.electrical), pin.hidden)
+                        (unit.unit, pin.number.as_str(), pin.name.as_str(), pin.at.x_nm, pin.at.y_nm, format!("{:?}", pin.electrical), pin.hidden)
                     })
                 })
                 .collect()
@@ -102,10 +126,20 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
         return Err(format!("it has {} units; a native symbol holds at most {MAX_UNITS}", numbers.len()));
     }
     let single = numbers.len() == 1;
-    let power_terminal = symbol
+    let power_pin = symbol
         .power
-        .then(|| normal.iter().flat_map(|unit| &unit.pins).find(|pin| pin.electrical == Electrical::PowerIn).map(|pin| pin.number.clone()))
+        .then(|| {
+            symbol
+                .units
+                .iter()
+                .enumerate()
+                .filter(|(_, unit)| unit.style <= 1)
+                .flat_map(|(u, unit)| unit.pins.iter().enumerate().map(move |(p, pin)| (u, p, pin)))
+                .find(|(_, _, pin)| pin.electrical == Electrical::PowerIn)
+        })
         .flatten();
+    let power_terminal = power_pin.map(|(_, _, pin)| pin.number.clone());
+    let power_pin = power_pin.map(|(u, p, _)| (u, p));
 
     let mut terminals: BTreeMap<String, (Option<String>, &'static str)> = BTreeMap::new();
     let mut terminal_order: Vec<String> = Vec::new();
@@ -215,16 +249,15 @@ pub(super) fn convert(symbol: &LibSymbol, id: String, budget: &mut usize, report
     if text.len() > MAX_FILE_BYTES {
         return Err(format!("its native document would take {} KiB; a library file holds at most {} KiB", text.len() >> 10, MAX_FILE_BYTES >> 10));
     }
-    Ok(Converted { id, text, units, power_terminal })
+    Ok(Converted { id, text, units, power_terminal, power_pin })
 }
 
 /// A pin's logical terminal: its name and native electrical type. Fails for a number the native
 /// format can't hold, and for a hidden power input on an ordinary symbol, which KiCad joins to a
 /// net named after the pin without any wire.
 fn terminal(pin: &Pin, symbol: &LibSymbol, power_terminal: Option<&str>, report: &mut Report) -> Result<(Option<String>, &'static str), String> {
-    let valid = (1..=8).contains(&pin.number.len()) && pin.number.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'_'));
-    if !valid {
-        return Err(format!("pin number `{}` isn't 1 to 8 letters, digits, +, - or _", pin.number));
+    if !valid_number(&pin.number) {
+        return Err(format!("pin number `{}` isn't 1 to 8 letters, digits, +, - or _", shown(&pin.number)));
     }
     if pin.hidden && pin.electrical == Electrical::PowerIn && power_terminal != Some(pin.number.as_str()) && !symbol.power {
         return Err(format!("hidden power pin {} joins a net by its name, which PCBCraft doesn't do", pin.number));
@@ -525,6 +558,23 @@ fn unit_letters(index: usize) -> String {
 fn reference_prefix(kicad: &str) -> String {
     let letters: String = kicad.chars().take(64).filter(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase()).take(4).collect();
     if letters.is_empty() { "U".to_owned() } else { letters }
+}
+
+/// Whether `number` is a pin number the native format holds: 1 to 8 ASCII letters, digits, `+`,
+/// `-` or `_`. The length is checked first, so a long number isn't read through.
+pub(super) fn valid_number(number: &str) -> bool {
+    (1..=8).contains(&number.len()) && number.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'-' | b'_'))
+}
+
+/// `text` as it can be shown in a message: at most 16 characters, control characters as `?`,
+/// with `…` when it was longer.
+pub(super) fn shown(text: &str) -> String {
+    let mut chars = text.chars();
+    let mut out: String = chars.by_ref().take(16).map(|c| if c.is_control() { '?' } else { c }).collect();
+    if chars.next().is_some() {
+        out.push('…');
+    }
+    out
 }
 
 /// `text` without control characters, at most `limit` characters taken from its first

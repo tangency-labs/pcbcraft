@@ -332,6 +332,7 @@ fn the_net_check_refuses_a_project_whose_connections_differ_from_the_file() {
     // The import places symbols in file order, so the n-th native placement is the n-th KiCad one.
     let mut natives: Vec<_> = imported.project.symbols().iter().collect();
     natives.sort_by_key(|s| s.ordinal);
+    let library_pins = LibraryPins::new(&schematic, schematic.symbols.iter().map(|s| s.lib_symbol.as_str()));
     let placed: Vec<Placed> = natives
         .iter()
         .zip(&schematic.symbols)
@@ -340,7 +341,7 @@ fn the_net_check_refuses_a_project_whose_connections_differ_from_the_file() {
             source,
             symbol: native.ordinal,
             component: native.component,
-            pins: pins_of(symbol, &schematic, &converted).unwrap(),
+            pins: pins_of(symbol, &library_pins).unwrap(),
         })
         .collect();
     let segments = |s: &Schematic| wiring::segments(&s.wires.iter().map(|w| w.points.clone()).collect::<Vec<_>>()).unwrap();
@@ -690,8 +691,9 @@ fn a_unit_drawing_stops_at_the_native_limit_and_the_whole_import_has_a_budget() 
     let converted = symbols::convert(&schematic.lib_symbols["L:Box"], "box".into(), &mut budget, &mut Report::default()).unwrap();
     let document: serde_json::Value = serde_json::from_str(&converted.text).unwrap();
     assert_eq!(document["units"][0]["drawing"].as_array().unwrap().len(), 256);
-    // Only what was converted is paid for: 256 rectangles of two points and one pin.
-    assert_eq!(budget, symbols::MAX_DRAWING_WORK - 256 * 2 - 1);
+    // Only what was read and converted is paid for: its one unit and one pin read, then 256
+    // rectangles of two points and the pin converted.
+    assert_eq!(budget, symbols::MAX_DRAWING_WORK - 1 - 1 - 256 * 2 - 1);
 
     // A common part drawn again in each of 32 units: 70,000 points each come to more than the
     // import's drawing budget, which refuses the file before anything is built.
@@ -703,7 +705,7 @@ fn a_unit_drawing_stops_at_the_native_limit_and_the_whole_import_has_a_budget() 
         (symbol (lib_id "L:Big") (at 0 0 0) (unit 1) (property "Reference" "U1")))"#
     );
     let refused = import(&text, "Big");
-    assert!(matches!(&refused, Err(CommandError::CapExceeded(m)) if m.contains("points in all")), "{refused:?}");
+    assert!(matches!(&refused, Err(CommandError::CapExceeded(m)) if m.contains("points of drawing, pins and units")), "{refused:?}");
 }
 
 /// A file whose symbol `L:Big` has `rectangles` rectangles in its common part and 32 units of
@@ -733,4 +735,75 @@ fn symbols_beyond_the_library_loaders_sizes_are_refused() {
     // size, well within the drawing budget.
     let refused = import(&big_symbols(150, 45), "Many");
     assert!(matches!(&refused, Err(CommandError::CapExceeded(m)) if m.contains("MiB as native documents")), "{refused:?}");
+}
+
+#[test]
+fn long_pin_numbers_shared_by_derived_symbols_refuse_with_a_short_message() {
+    // One huge pin number in a symbol's alternate style only, shared by 50 derived symbols: it
+    // refuses as a pin number before the styles are compared.
+    let number = "9".repeat(100_000);
+    let derived: String = (1..=50).map(|n| format!(r#"(symbol "L:D{n}" (extends "L:G"))"#)).collect();
+    let placed: String =
+        (1..=50).map(|n| format!(r#"(symbol (lib_id "L:D{n}") (at {} 0 0) (unit 1) (property "Reference" "U{n}"))"#, n * 10)).collect();
+    let text = format!(
+        r#"(kicad_sch (version 20231120) (lib_symbols (symbol "L:G" (property "Reference" "U")
+        (symbol "G_1_1" (pin input line (at -2.54 0 0) (length 1.27) (number "1")))
+        (symbol "G_1_2" (pin input line (at -2.54 0 0) (length 1.27) (number "{number}")))) {derived})
+        {placed})"#
+    );
+    let refused = import(&text, "Long");
+    assert!(
+        matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("pin number `9999999999999999…` isn't") && m.len() < 8_000),
+        "{:?}",
+        refused.as_ref().err().map(|e| e.to_string().chars().take(300).collect::<String>())
+    );
+}
+
+#[test]
+fn alternate_style_pin_names_compare_in_full() {
+    let symbol = |normal: &str, alternate: &str| {
+        format!(
+            r#"(kicad_sch (version 20231120) (lib_symbols (symbol "L:G" (property "Reference" "U")
+            (symbol "G_1_1" (pin input line (at -2.54 0 0) (length 1.27) (name "{normal}") (number "1")))
+            (symbol "G_1_2" (pin input line (at -2.54 0 0) (length 1.27) (name "{alternate}") (number "1")))))
+            (symbol (lib_id "L:G") (at 0 0 0) (unit 1) (property "Reference" "U1")))"#
+        )
+    };
+    // Names that differ only after the 32 characters kept still differ.
+    let prefix = "A".repeat(40);
+    let refused = import(&symbol(&format!("{prefix}X"), &format!("{prefix}Y")), "Names");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("names, types or hides pins differently")), "{refused:?}");
+    // A name too long to compare refuses rather than being cut short.
+    let long = "B".repeat(600);
+    let refused = import(&symbol(&long, &long), "Long");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("can't be compared")), "{refused:?}");
+    // Equal names of ordinary length import.
+    assert!(import(&symbol(&prefix, &prefix), "Same").is_ok());
+}
+
+#[test]
+fn symbols_sharing_a_drawing_share_one_pin_table() {
+    // A base with a common pin and two units, and 50 symbols extending it: one table, read once;
+    // and a single-unit symbol with a table of its own.
+    let derived: String = (1..=50).map(|n| format!(r#"(symbol "L:D{n}" (extends "L:Base"))"#)).collect();
+    let text = format!(
+        r#"(kicad_sch (version 20231120) (lib_symbols (symbol "L:Base" (property "Reference" "U")
+        (symbol "Base_0_1" (pin passive line (at 0 5.08 270) (length 1.27) (number "9")))
+        (symbol "Base_1_1" (pin passive line (at -5.08 0 0) (length 1.27) (number "1")))
+        (symbol "Base_2_1" (pin passive line (at -5.08 0 0) (length 1.27) (number "2")))) {derived}
+        (symbol "L:One" (property "Reference" "R") (symbol "One_1_1" (pin passive line (at 0 3.81 270) (length 1.27) (number "1")))))
+        (symbol (lib_id "L:D7") (at 0 0 0) (unit 1) (property "Reference" "U1")))"#
+    );
+    let schematic = pcbcraft_kicad::read_schematic(&text).unwrap();
+    let pins = LibraryPins::new(&schematic, schematic.lib_symbols.keys().map(String::as_str));
+    assert_eq!(pins.tables.len(), 2);
+    assert_eq!(pins.by_name.len(), 52);
+    let placed = |lib: &str, unit: u32| PlacedSymbol { lib_symbol: lib.to_owned(), unit, ..schematic.symbols[0].clone() };
+    let numbers = |symbol: &PlacedSymbol| pins.of(symbol).map(|(n, _)| n.to_string()).collect::<Vec<_>>();
+    assert_eq!(numbers(&placed("L:D7", 2)), ["9", "2"]);
+    assert_eq!(numbers(&placed("L:Base", 1)), ["9", "1"]);
+    // A unit the symbol doesn't have shows only the common pins.
+    assert_eq!(numbers(&placed("L:D7", 5)), ["9"]);
+    // A single-unit symbol shows its unit whichever unit is placed.
+    assert_eq!(numbers(&placed("L:One", 3)), ["1"]);
 }
