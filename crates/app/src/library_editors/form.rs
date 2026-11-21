@@ -358,8 +358,9 @@ fn format_mdeg(mdeg: i64) -> String {
     }
 }
 
-/// Parse a non-negative degree value with up to three decimal places into whole millidegrees.
+/// Parse a non-negative degree value in `[0, 360)` with up to three decimal places into whole millidegrees.
 fn parse_mdeg(text: &str) -> Result<i64, &'static str> {
+    const RANGE_ERR: &str = "must be at least 0° and less than 360°.";
     let text = text.trim();
     let text = text.strip_suffix('°').unwrap_or(text).trim();
     if text.is_empty() {
@@ -375,12 +376,16 @@ fn parse_mdeg(text: &str) -> Result<i64, &'static str> {
     if frac.len() > 3 || !whole.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
         return Err("must be a non-negative number in degrees (up to 3 decimal places).");
     }
-    let whole: i64 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| "angle is out of range.")? };
-    let mut frac_mdeg: i64 = if frac.is_empty() { 0 } else { frac.parse().map_err(|_| "angle is out of range.")? };
+    let whole: i64 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| RANGE_ERR)? };
+    let mut frac_mdeg: i64 = if frac.is_empty() { 0 } else { frac.parse().map_err(|_| RANGE_ERR)? };
     for _ in frac.len()..3 {
         frac_mdeg *= 10;
     }
-    whole.checked_mul(1_000).and_then(|v| v.checked_add(frac_mdeg)).ok_or("angle is out of range.")
+    let mdeg = whole.checked_mul(1_000).and_then(|v| v.checked_add(frac_mdeg)).ok_or(RANGE_ERR)?;
+    if mdeg >= 360_000 {
+        return Err(RANGE_ERR);
+    }
+    Ok(mdeg)
 }
 
 /// Enum storage names remain unchanged while controls use ordinary readable labels.
@@ -444,9 +449,11 @@ mod slot_form_tests {
         assert_eq!(parse_mdeg("30.005"), Ok(30_005));
         assert_eq!(parse_mdeg("30.5°"), Ok(30_500));
         assert_eq!(parse_mdeg("359.999"), Ok(359_999));
-        for invalid in ["", ".", "-5", "30.1234", "abc"] {
+        for invalid in ["", "  ", ".", "-5", "30,5", "30.1234", "360", "400", "abc"] {
             assert!(parse_mdeg(invalid).is_err(), "{invalid:?} should be rejected");
         }
+        assert_eq!(parse_mdeg("360").unwrap_err(), "must be at least 0° and less than 360°.");
+        assert_eq!(parse_mdeg("99999999999999999999").unwrap_err(), "must be at least 0° and less than 360°.");
 
         let item = Item::new(Kind::Footprint).unwrap();
         let mut session = Session::new(item, false).unwrap();
@@ -470,5 +477,9 @@ mod slot_form_tests {
         draft.numbers.insert(".pad.plated_slot.rotation_mdeg".into(), ("0".into(), "30.1234".into()));
         let error = draft.action().unwrap_err();
         assert!(error.contains("Slot Rotation (°)"), "{error}");
+
+        draft.numbers.insert(".pad.plated_slot.rotation_mdeg".into(), ("0".into(), "360".into()));
+        let error = draft.action().unwrap_err();
+        assert_eq!(error, "Slot Rotation (°) must be at least 0° and less than 360°.");
     }
 }
