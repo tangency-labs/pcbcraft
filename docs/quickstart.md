@@ -800,7 +800,7 @@ last window still asks about unsaved work.
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
 For a round plated hole, choose **Through hole** and enter a positive drill
 smaller than the land. For an obround cut-out, choose **Plated slot**, then set
-its finished width, overall length and independent rotation (in millidegrees).
+its finished width, overall length and independent rotation (in degrees, up to 3 decimal places).
 The entire opening must fit inside the copper. Corner radius is zero for
 rectangular and circular lands. Fabrication export does not yet machine slots.
 
