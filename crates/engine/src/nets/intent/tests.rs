@@ -716,6 +716,119 @@ fn working_voltage_requirement_reports_source_verification_and_review() {
     let orphaned = report(&mut session, &target);
     assert_eq!(orphaned["intent"], declared);
     assert_eq!(orphaned["requirement"]["reasons"], json!(["net_retired", "reference_retired"]));
-    let args = request(&session, &target, &json!({}));
+    let args = request(&session, &target, &volts("5"));
+    let before = session.snapshot().unwrap();
     assert!(matches!(session.apply(SET, &args), Err(CommandError::Unavailable(_))));
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    let revision = session.revision();
+    let args = request(&session, &target, &json!({}));
+    session.apply(SET, &args).unwrap();
+    assert_eq!(session.revision(), revision + 1);
+    let cleared = report(&mut session, &target);
+    assert_eq!((&cleared["intent"], &cleared["requirement"]), (&json!({"working_voltage":null}), &Value::Null));
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(report(&mut session, &target)["intent"], declared);
+}
+
+/// Place unnamed resistor terminals through the shared command path, as the registry tests do.
+fn pin_circuit(count: usize) -> (Session, Vec<Value>) {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":false})).unwrap();
+    let mut pins = Vec::new();
+    for index in 0..count {
+        apply(&mut session, crate::PLACE_RESISTOR, json!({"x_nm":index as i64*25_400_000,"y_nm":0}));
+        pins.push(json!({"symbol":session.project().unwrap().symbols().last().unwrap().id(),"terminal":"1"}));
+    }
+    (session, pins)
+}
+
+/// Connect two terminals and return the new wire ID.
+fn wire(session: &mut Session, a: &Value, b: &Value) -> String {
+    apply(session, crate::CONNECT_PINS, json!({"from":a,"to":b}));
+    session.project().unwrap().wires().last().unwrap().id()
+}
+
+/// Promote the network of one terminal and return its persistent net target.
+fn promoted(session: &mut Session, pin: &Value) -> Value {
+    let before: Vec<_> = session.project().unwrap().net_registry.records.iter().map(|record| record.id).collect();
+    apply(session, crate::nets::PROMOTE, json!({"anchor":pin}));
+    let project = session.project().unwrap();
+    let net = project.net_registry.records.iter().map(|record| record.id).find(|id| !before.contains(id)).unwrap();
+    json!({"kind":"net","address":NetAddress { project: project.id(), scope: project.net_scope(), net }})
+}
+
+/// A split that keeps the owning net's UUID on one branch, an ambiguous split and a merge all
+/// flag the declaration for review with the original value. Saving it again after review
+/// records the current split history; the flag survives Undo, save and reopen.
+#[test]
+fn working_voltage_review_flags_split_ambiguous_split_and_merge() {
+    let report = |session: &mut Session, target: &Value| session.execute(INSPECT, &json!({"version":1,"target":target})).unwrap();
+    let review = |reasons: Value| json!({"source":"authored_on_net","verification":"unverified","review":"needs_review","reasons":reasons});
+    let current = json!({"source":"authored_on_net","verification":"unverified","review":"current","reasons":[]});
+
+    let (mut session, pins) = pin_circuit(4);
+    wire(&mut session, &pins[0], &pins[1]);
+    let middle = wire(&mut session, &pins[1], &pins[2]);
+    wire(&mut session, &pins[2], &pins[3]);
+    let target = promoted(&mut session, &pins[0]);
+    let net: Uuid = serde_json::from_value(target["address"]["net"].clone()).unwrap();
+    let args = request(&session, &target, &volts("48"));
+    session.apply(SET, &args).unwrap();
+    assert_eq!(report(&mut session, &target)["requirement"], current);
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
+    assert!(!entry.to_string().contains("splits_seen"), "an unsplit declaration keeps its saved shape");
+
+    apply(&mut session, crate::DELETE_WIRE, json!({"wire":middle}));
+    let project = session.project().unwrap();
+    assert!(matches!(project.net_registry.record(net).unwrap().state, State::Active {}), "one branch keeps the UUID");
+    assert_eq!(project.net_registry.records.iter().filter(|record| record.lineage.iter().any(|source| source.net == Some(net))).count(), 1);
+    let split = report(&mut session, &target);
+    assert_eq!(split["intent"], volts("48"));
+    assert_eq!(split["requirement"], review(json!(["net_split"])));
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut reader = Session::default();
+    reader.open_snapshot(decode_documents(&saved).unwrap());
+    assert_eq!(report(&mut reader, &target)["requirement"], review(json!(["net_split"])));
+
+    let revision = session.revision();
+    let args = request(&session, &target, &volts("48"));
+    session.apply(SET, &args).unwrap();
+    assert_eq!(session.revision(), revision + 1, "saving after review is one step");
+    assert_eq!(report(&mut session, &target)["requirement"], current);
+    let args = request(&session, &target, &volts("48"));
+    session.apply(SET, &args).unwrap();
+    assert_eq!(session.revision(), revision + 1, "an unchanged reviewed declaration is a no-op");
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut reader = Session::default();
+    reader.open_snapshot(decode_documents(&saved).unwrap());
+    assert_eq!(report(&mut reader, &target)["requirement"], current);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(report(&mut session, &target)["requirement"], review(json!(["net_split"])));
+    session.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(report(&mut session, &target)["requirement"], current);
+
+    wire(&mut session, &pins[1], &pins[2]);
+    assert!(matches!(session.project().unwrap().net_registry.record(net).unwrap().state, State::Retired { .. }));
+    let merged = report(&mut session, &target);
+    assert_eq!(merged["intent"], volts("48"));
+    assert_eq!(merged["requirement"], review(json!(["net_merged"])));
+
+    let (mut session, pins) = pin_circuit(6);
+    wire(&mut session, &pins[0], &pins[1]);
+    let target = promoted(&mut session, &pins[0]);
+    wire(&mut session, &pins[0], &pins[2]);
+    wire(&mut session, &pins[2], &pins[3]);
+    wire(&mut session, &pins[0], &pins[4]);
+    wire(&mut session, &pins[4], &pins[5]);
+    let args = request(&session, &target, &volts("12"));
+    session.apply(SET, &args).unwrap();
+    let selected = crate::selection::Selection {
+        symbols: [pins[0]["symbol"].as_str().unwrap().into(), pins[1]["symbol"].as_str().unwrap().into()].into(),
+        ..Default::default()
+    };
+    apply(&mut session, crate::DELETE_ITEMS, json!({"items":selected}));
+    let ambiguous = report(&mut session, &target);
+    assert_eq!(ambiguous["intent"], volts("12"));
+    assert_eq!(ambiguous["requirement"], review(json!(["net_ambiguous"])));
 }

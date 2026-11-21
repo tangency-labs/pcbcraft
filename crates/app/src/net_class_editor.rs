@@ -47,13 +47,16 @@ struct NetChoice {
 }
 
 /// A saved net identity or class that can hold one working-voltage requirement. The target is
-/// the exact `electrical_intent` selector; the label is display only.
+/// the exact `electrical_intent` selector; the label is display only. A historical owner is a
+/// net that was deleted, merged or left ambiguous but still carries a declaration: it is listed
+/// so the declaration can be reviewed and cleared, never redeclared.
 #[derive(Debug)]
 struct Owner {
     label: String,
     target: Value,
     net: Option<Uuid>,
     anchor: Option<Value>,
+    historical: bool,
 }
 
 /// A voltage reference names Earth or a saved net identity, never a display name.
@@ -220,21 +223,42 @@ impl Edit {
                     target: json!({"kind":"net","address":address}),
                     net: Some(id),
                     anchor: Some(row["anchor"].clone()),
+                    historical: false,
                 });
-                references.push((id, label.clone()));
+                // Only a named net can be chosen as a new reference, matching the engine rule.
+                if row["names"].as_array().is_some_and(|names| !names.is_empty()) {
+                    references.push((id, label.clone()));
+                }
             }
             nets.push(NetChoice { label, target: ClassTarget::Derived { anchor } });
         }
+        for record in registry["records"].as_array().into_iter().flatten() {
+            if record["state"]["kind"] == "active" || record["authored_intent"]["voltage"].is_null() {
+                continue;
+            }
+            let Some(id) = record["id"].as_str().and_then(|id| Uuid::parse_str(id).ok()) else { continue };
+            let address = json!({"project":project.id(),"scope":scope,"net":id});
+            owners.push(Owner {
+                label: format!("Former net · {}", &id.to_string()[..8]),
+                target: json!({"kind":"net","address":address}),
+                net: Some(id),
+                anchor: None,
+                historical: true,
+            });
+        }
         for class in &project.net_classes().definitions {
             let target = json!({"kind":"net_class","project":project.id(),"class":class.id});
-            owners.push(Owner { label: format!("Class · {}", class_label(&project, class)), target, net: None, anchor: None });
+            owners.push(Owner { label: format!("Class · {}", class_label(&project, class)), target, net: None, anchor: None, historical: false });
         }
         let selected_target = selected.as_ref().ok().and_then(|selected| selected.as_ref());
         let net_index = selected_target.and_then(|selected| nets.iter().position(|net| &net.target == selected));
         let owner_index = selected_target.and_then(|selected| {
-            owners.iter().position(|owner| match selected {
-                ClassTarget::Persistent { net, .. } => owner.net == Some(*net),
-                ClassTarget::Derived { anchor } => owner.anchor.is_some() && owner.anchor == serde_json::to_value(anchor).ok(),
+            owners.iter().position(|owner| {
+                !owner.historical
+                    && match selected {
+                        ClassTarget::Persistent { net, .. } => owner.net == Some(*net),
+                        ClassTarget::Derived { anchor } => owner.anchor.is_some() && owner.anchor == serde_json::to_value(anchor).ok(),
+                    }
             })
         });
         let mut edit = Self {
@@ -525,11 +549,22 @@ fn resolution(ui: &mut egui::Ui, project: &Project, result: &Resolution, unit: u
 fn review_reason(reason: &str) -> &str {
     match reason {
         "reference_retired" => "The reference net no longer exists in the design.",
-        "reference_ambiguous" => "The reference net was split or merged and needs a new choice.",
+        "reference_ambiguous" => "The reference net was split and no branch kept its identity.",
+        "reference_merged" => "The reference net was merged into another net.",
+        "reference_split" => "The reference net was split; another branch now has its own identity.",
         "net_retired" => "This net no longer exists in the design.",
-        "net_ambiguous" => "This net was split or merged.",
+        "net_ambiguous" => "This net was split and no branch kept its identity.",
+        "net_merged" => "This net was merged into another net.",
+        "net_split" => "This net was split; another branch now has its own identity.",
         other => other,
     }
+}
+
+/// Whether every review reason is a split that kept the identities: saving the unchanged
+/// declaration again then records the review and clears the flag.
+fn split_review(report: &Value) -> bool {
+    let reasons = report["requirement"]["reasons"].as_array();
+    reasons.is_some_and(|reasons| !reasons.is_empty() && reasons.iter().all(|reason| reason.as_str().is_some_and(|r| r.ends_with("_split"))))
 }
 
 /// Author and inspect one working-voltage requirement through `electrical_intent`. The
@@ -558,9 +593,13 @@ fn voltage_page(ui: &mut egui::Ui, edit: &mut Edit, dirty: bool, pick_owner: &mu
         return discard;
     };
     let own_net = edit.owners.get(draft.owner).and_then(|owner| owner.net);
+    let historical = edit.owners.get(draft.owner).is_some_and(|owner| owner.historical);
     form::section(ui, "Requirement", |ui| {
+        if historical {
+            ui.label(shell::dim("This net is no longer in the design. Its declaration can be reviewed or cleared, not changed."));
+        }
         controls::checkbox(ui, &mut draft.fields.declared, "Declare working voltage");
-        ui.add_enabled_ui(draft.fields.declared, |ui| {
+        ui.add_enabled_ui(draft.fields.declared && !historical, |ui| {
             properties::field(ui, "Value", |ui| {
                 controls::text(ui, &mut draft.fields.value).accessible_name("Working voltage value");
                 ui.label("V");
@@ -627,6 +666,9 @@ fn voltage_page(ui: &mut egui::Ui, edit: &mut Edit, dirty: bool, pick_owner: &mu
                         ui.label(review_reason(reason));
                     }
                     ui.label("The original declaration and reference are kept until you change them.");
+                    if split_review(&draft.report) {
+                        ui.label("After checking it, choose Save working voltage to record the review.");
+                    }
                 });
             }
         }
@@ -676,9 +718,10 @@ impl Edit {
         match self.page {
             Page::Classes => self.draft.as_ref().is_some_and(|d| d.rules(self.unit).is_ok()) && self.changed(),
             Page::Net => self.target.is_some() && self.changed(),
-            Page::Voltage => {
-                self.changed() && self.voltage.as_ref().is_some_and(|draft| !draft.fields.declared || !draft.fields.value.trim().is_empty())
-            }
+            Page::Voltage => self.voltage.as_ref().is_some_and(|draft| {
+                let confirm = draft.fields.declared && split_review(&draft.report);
+                (self.changed() || confirm) && (!draft.fields.declared || !draft.fields.value.trim().is_empty())
+            }),
         }
     }
     /// A containing host may retain unsaved content while refreshing after its own validated

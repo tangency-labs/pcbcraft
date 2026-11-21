@@ -182,7 +182,10 @@ intent stays under `schematic_instances.net_registry`; there is no extra file.
 The physical board, sheets and archive container keep their own versions.
 
 The payload contains one field, `voltage`, with `magnitude_volts`, `basis` and
-`reference`. The magnitude is an exact canonical decimal string, including `"0"`. A `reference` is
+`reference`. The magnitude is an exact canonical decimal string, including `"0"`.
+`net_splits_seen` and `reference_splits_seen` are present only when nonzero: the
+number of registry records whose lineage named the owning or reference net when
+the declaration was last saved, so a later split is reported for review. A `reference` is
 `{"kind":"earth"}` or `{"kind":"net","net":UUID}` in the same persistent net
 registry. An existing historical reference is retained, not resolved to a new
 net. The payload, its `voltage` and its `reference` are objects with named

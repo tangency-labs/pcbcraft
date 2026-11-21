@@ -45,9 +45,14 @@ with a saved identity is chosen already. Check **Declare working voltage**, then
 enter the value in volts, a **DC** or **Peak AC** basis and an **Earth** or net
 reference, and choose **Save working voltage**. Clearing the check removes the
 requirement. **Status** reports where the value was entered and that nothing has
-verified it. When the net or its reference no longer exists, or was split or merged,
-a **Needs review** notice names the reason; the original value and reference stay
-selected until you change them. Each save is one Undo step and uses
+verified it. When the net or its reference was deleted, split or merged, a
+**Needs review** notice names the reason; the original value and reference stay
+selected until you change them. After a split that kept the identities, check the
+declaration and choose **Save working voltage** to record the review. A net that
+was deleted, merged or left ambiguous but still carries a declaration is listed
+under **Declared on** as **Former net**; its declaration can be reviewed and
+cleared, but not changed. Only named nets are offered as references. Each save is
+one Undo step and uses
 `electrical_intent.set`, and the page reads the same report as
 `electrical_intent.inspect`.
 

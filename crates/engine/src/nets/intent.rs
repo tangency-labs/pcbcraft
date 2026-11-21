@@ -2,7 +2,7 @@
 //! policy stay separate from future rule resolution; neither class membership nor connectivity
 //! derives values here, and no checker verifies them yet.
 
-use super::{NetAddress, State, graph::Graph};
+use super::{NetAddress, Retirement, State, graph::Graph};
 use crate::{CommandError, Project, Session};
 use pcbcraft_units::quantity::{Quantity, decimal};
 use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
@@ -35,6 +35,11 @@ struct ExactDecimal(String);
 
 /// A voltage and its reference are one value: neither can be authored without the other.
 /// Saved values are read through [`present_named`], which accepts named fields only.
+///
+/// A split can keep the owning or reference net's UUID on one branch, so a surviving active
+/// identity does not prove the declaration still describes the same conductors. Each save
+/// records how many split branches already named each net in the registry's lineage; a later
+/// split adds a branch and flags the declaration for review until it is saved again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkingVoltage {
@@ -42,6 +47,24 @@ struct WorkingVoltage {
     basis: VoltageBasis,
     #[serde(deserialize_with = "named")]
     reference: Reference,
+    /// Split branches of the owning net known when the declaration was last saved.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    net_splits_seen: u32,
+    /// Split branches of the reference net known when the declaration was last saved.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    reference_splits_seen: u32,
+}
+
+/// Omit an empty split baseline so declarations on unsplit nets keep their saved shape.
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+/// Count registry records whose split or merge lineage names this net. Records are never
+/// removed and lineage is immutable, so the count only grows as the net is split again.
+fn splits_of(project: &Project, net: Uuid) -> u32 {
+    let count = project.net_registry.records.iter().filter(|record| record.lineage.iter().any(|source| source.net == Some(net))).count();
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -255,8 +278,9 @@ impl IntentV1 {
         Ok(())
     }
 
-    /// Validate local values and foreign scopes before creating a candidate snapshot.
-    fn checked(input: IntentInput, project: &Project) -> Result<Self, CommandError> {
+    /// Validate local values and foreign scopes before creating a candidate snapshot. The split
+    /// baselines come from the current registry, so saving marks the declaration as reviewed.
+    fn checked(input: IntentInput, project: &Project, target: Target) -> Result<Self, CommandError> {
         let voltage = input
             .working_voltage
             .map(|input| {
@@ -265,7 +289,15 @@ impl IntentV1 {
                     ReferenceInput::Earth {} => Reference::Earth {},
                     ReferenceInput::Net { address } => Reference::Net { net: local_net(project, address)? },
                 };
-                Ok::<_, CommandError>(WorkingVoltage { magnitude_volts, basis: input.basis, reference })
+                let net_splits_seen = match target {
+                    Target::Net { address } => splits_of(project, address.net),
+                    Target::NetClass { .. } => 0,
+                };
+                let reference_splits_seen = match reference {
+                    Reference::Net { net } => splits_of(project, net),
+                    Reference::Earth {} => 0,
+                };
+                Ok::<_, CommandError>(WorkingVoltage { magnitude_volts, basis: input.basis, reference, net_splits_seen, reference_splits_seen })
             })
             .transpose()?;
         Ok(Self { voltage })
@@ -285,25 +317,28 @@ impl IntentV1 {
     }
 
     /// Report where an authored requirement came from and whether it still describes current
-    /// nets. Nothing verifies the value yet. A retired or ambiguous owner or reference keeps
-    /// the original declaration and reference but flags it for review; nothing is redirected.
+    /// nets. Nothing verifies the value yet. An owner or reference that was split (even when
+    /// one branch kept its UUID), merged, left ambiguous or removed keeps the original
+    /// declaration and reference but flags it for review; nothing is redirected.
     fn requirement(&self, project: &Project, target: Target) -> Value {
         let Some(voltage) = &self.voltage else { return Value::Null };
         let mut reasons = Vec::new();
-        let mut check = |net: Uuid, role: &str| match project.net_registry.record(net).map(|record| &record.state) {
+        let mut check = |net: Uuid, seen: u32, role: &str| match project.net_registry.record(net).map(|record| &record.state) {
+            Some(State::Active {}) if splits_of(project, net) > seen => reasons.push(format!("{role}_split")),
             Some(State::Active {}) => {}
             Some(State::Ambiguous { .. }) => reasons.push(format!("{role}_ambiguous")),
+            Some(State::Retired { reason: Retirement::Merged, .. }) => reasons.push(format!("{role}_merged")),
             _ => reasons.push(format!("{role}_retired")),
         };
         let source = match target {
             Target::Net { address } => {
-                check(address.net, "net");
+                check(address.net, voltage.net_splits_seen, "net");
                 "authored_on_net"
             }
             Target::NetClass { .. } => "authored_on_net_class",
         };
         if let Reference::Net { net } = voltage.reference {
-            check(net, "reference");
+            check(net, voltage.reference_splits_seen, "reference");
         }
         json!({
             "source": source,
@@ -336,16 +371,17 @@ fn check_version(version: u8) -> Result<(), CommandError> {
 }
 
 impl Target {
-    /// Load the exact authored record. Historical values are available for inspection only.
-    fn existing(self, project: &Project, editing: bool) -> Result<&IntentV1, CommandError> {
+    /// Load the exact authored record. A historical net's declaration can be inspected and
+    /// cleared, but not replaced: `declaring` refuses a nonempty edit of an inactive identity.
+    fn existing(self, project: &Project, declaring: bool) -> Result<&IntentV1, CommandError> {
         match self {
             Self::Net { address } => {
                 let record = project
                     .net_registry
                     .record(local_net(project, address)?)
                     .ok_or_else(|| CommandError::InvalidParams("Unknown net identity.".into()))?;
-                if editing && !matches!(record.state, State::Active {}) {
-                    return Err(CommandError::Unavailable("Only an active net identity can be edited.".into()));
+                if declaring && !matches!(record.state, State::Active {}) {
+                    return Err(CommandError::Unavailable("A net that no longer exists can only have its declaration cleared.".into()));
                 }
                 Ok(&record.authored_intent)
             }
@@ -416,8 +452,8 @@ impl Session {
         check_version(request.version)?;
         self.check_revision(&json!({"expected_revision": request.expected_revision}))?;
         let project = self.open_project()?;
-        let before = request.target.existing(project, true)?;
-        let intent = IntentV1::checked(request.intent, project)?;
+        let intent = IntentV1::checked(request.intent, project, request.target)?;
+        let before = request.target.existing(project, !intent.is_empty())?;
         if before == &intent {
             return Ok(());
         }
