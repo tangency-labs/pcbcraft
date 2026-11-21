@@ -291,7 +291,8 @@ fn pair_first_board_transfer_preserves_relationship_and_undo() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Deleting a member's last anchor retires the net without retargeting the pair or setting review state.
+/// Deleting a member's last anchor retires the net, keeps the original pair and member UUIDs,
+/// and surfaces `NeedsReview` through save/reopen and Undo/Redo.
 #[test]
 fn pair_keeps_retired_member_and_reuses_the_relationship_through_history() {
     for board in [false, true] {
@@ -300,13 +301,56 @@ fn pair_keeps_retired_member_and_reuses_the_relationship_through_history() {
         let before = encode_documents(original.clone()).unwrap();
         apply(&mut session, crate::net_labels::DELETE, json!({"id":label}));
         let current = session.snapshot().unwrap();
-        assert_eq!(*current.net_registry.pairs[0], pair);
-        assert!(Arc::ptr_eq(&original.net_registry.pairs, &current.net_registry.pairs));
+        let updated = &current.net_registry.pairs[0];
+        assert_eq!(updated.id, pair.id);
+        assert_eq!(updated.positive, pair.positive);
+        assert_eq!(updated.negative, pair.negative);
+        assert_eq!(updated.name, pair.name);
+        assert!(matches!(&updated.state, PairState::NeedsReview { reason } if reason.contains("retired")));
         assert!(matches!(current.net_registry.record(pair.positive).unwrap().state, State::Retired { reason: Retirement::Removed, .. }));
         assert!(matches!(current.net_registry.record(pair.negative).unwrap().state, State::Active {}));
         round_trip(&session);
         let after = encode_documents(current).unwrap();
         apply(&mut session, "edit.undo", json!({}));
+        assert_eq!(*session.project().unwrap().net_registry.pairs[0], pair);
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+        apply(&mut session, "edit.redo", json!({}));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);
+    }
+}
+
+/// A split where the member net UUID survives on one branch still changes its endpoint
+/// membership and must flag the pair `NeedsReview` while keeping original pair and member IDs.
+#[test]
+fn pair_flags_needs_review_on_split_where_member_uuid_survives() {
+    for board in [false, true] {
+        let (mut session, pins) = circuit(6, board);
+        connect(&mut session, &pins[0], &pins[1]);
+        let middle = connect(&mut session, &pins[1], &pins[2]);
+        connect(&mut session, &pins[2], &pins[3]);
+        let positive = promote(&mut session, &pins[0]);
+        connect(&mut session, &pins[4], &pins[5]);
+        let negative = promote(&mut session, &pins[4]);
+        let pair_id = crate::nets::new_pair_id().unwrap();
+        apply(&mut session, crate::nets::CREATE_PAIR, json!({"pair":pair_id,"name":"USB_D","positive":positive,"negative":negative}));
+        let before = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(session.project().unwrap().net_registry.pairs[0].state, PairState::Active {});
+
+        apply(&mut session, crate::DELETE_WIRE, json!({"wire":middle}));
+        // The member UUID survives as Active on the primary-anchor branch, while the other
+        // branch receives a fresh UUID; endpoint membership changed, so review is required.
+        assert_eq!(id_for(&session, &pins[0]), positive);
+        assert_ne!(id_for(&session, &pins[2]), positive);
+        let current = session.snapshot().unwrap();
+        assert!(matches!(current.net_registry.record(positive).unwrap().state, State::Active {}));
+        assert!(matches!(current.net_registry.record(negative).unwrap().state, State::Active {}));
+        let pair = &current.net_registry.pairs[0];
+        assert_eq!((pair.id, pair.positive, pair.negative), (pair_id, positive, negative));
+        assert!(matches!(&pair.state, PairState::NeedsReview { reason } if reason.contains("split")));
+        round_trip(&session);
+        let after = encode_documents(current).unwrap();
+        apply(&mut session, "edit.undo", json!({}));
+        assert_eq!(session.project().unwrap().net_registry.pairs[0].state, PairState::Active {});
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
         apply(&mut session, "edit.redo", json!({}));
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);
@@ -322,14 +366,16 @@ fn pair_resource_edges_are_bounded_and_history_shares_records() {
     let template = project.net_registry.records[0].clone();
     let snapshot = crate::board::update::capture_source(&project).unwrap();
     let registry = Arc::make_mut(&mut project.net_registry);
-    registry.records = (1..=MAX_RECORDS as u128)
-        .map(|id| Record {
-            id: Uuid::from_u128(id),
-            generated_number: Some(id as u32),
-            state: State::Retired { snapshot: snapshot.clone(), reason: Retirement::Removed, successors: vec![] },
-            ..template.clone()
-        })
-        .collect();
+    registry.records = Arc::new(
+        (1..=MAX_RECORDS as u128)
+            .map(|id| Record {
+                id: Uuid::from_u128(id),
+                generated_number: Some(id as u32),
+                state: State::Retired { snapshot: snapshot.clone(), reason: Retirement::Removed, successors: vec![] },
+                ..template.clone()
+            })
+            .collect(),
+    );
     registry.pairs = Arc::new(
         (0..MAX_PAIRS)
             .map(|index| {
@@ -361,13 +407,14 @@ fn fill_with_retired_nets(project: &mut crate::Project, count: usize) -> crate::
     let occupied = registry.reserved_ids();
     let last_number = registry.records.iter().filter_map(|record| record.generated_number).max().unwrap();
     let missing = count - registry.records.len();
-    registry.records.extend((1..).map(Uuid::from_u128).filter(|id| !occupied.contains(id)).take(missing).enumerate().map(|(index, id)| Record {
+    let records = Arc::make_mut(&mut registry.records);
+    records.extend((1..).map(Uuid::from_u128).filter(|id| !occupied.contains(id)).take(missing).enumerate().map(|(index, id)| Record {
         id,
         generated_number: Some(last_number + index as u32 + 1),
         state: State::Retired { snapshot: snapshot.clone(), reason: Retirement::Removed, successors: vec![] },
         ..template.clone()
     }));
-    registry.records.sort_by_key(|record| record.id);
+    records.sort_by_key(|record| record.id);
     snapshot
 }
 
@@ -454,7 +501,7 @@ fn pair_bytes_cross_the_registry_budget_without_publishing_edits() {
     let retired_ids: Vec<_> = registry.records.iter().filter(|record| matches!(record.state, State::Retired { .. })).map(|r| r.id).collect();
     let mut bytes = serde_json::to_vec(registry).unwrap().len();
     let cap_before_pairs = MAX_REGISTRY_BYTES - 4096;
-    for record in registry.records.iter_mut().filter(|record| matches!(record.state, State::Retired { .. })) {
+    for record in Arc::make_mut(&mut registry.records).iter_mut().filter(|record| matches!(record.state, State::Retired { .. })) {
         for object in 1..=8 {
             let source = Lineage { snapshot: snapshot.clone(), net: None, anchor: Anchor { object, ..record.primary.clone() } };
             let extra = serde_json::to_vec(&source).unwrap().len() + usize::from(!record.lineage.is_empty());
@@ -507,12 +554,12 @@ fn pair_bytes_cross_the_registry_budget_without_publishing_edits() {
 fn pair_envelope_preserves_unnumbered_registry_and_rejects_partial_numbers() {
     let (session, _, _) = paired(false);
     let mut project = session.project().unwrap().clone();
-    for record in &mut Arc::make_mut(&mut project.net_registry).records {
+    for record in Arc::make_mut(&mut Arc::make_mut(&mut project.net_registry).records) {
         record.generated_number = None;
     }
     let documents = encode_documents(Arc::new(project.clone())).unwrap();
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
-    Arc::make_mut(&mut project.net_registry).records[0].generated_number = Some(1);
+    Arc::make_mut(&mut Arc::make_mut(&mut project.net_registry).records)[0].generated_number = Some(1);
     assert_eq!(encode_documents(Arc::new(project)).unwrap_err(), "Numbered net registries require a number on every record.");
     let mut value: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
     stored_registry(&mut value)["records"][0]["generated_number"] = json!(1);

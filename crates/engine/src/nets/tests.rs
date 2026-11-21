@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    Session,
+    Project, Session,
     persistence::{ENTRY_POINT, decode_documents, decode_packed, encode_documents, encode_packed},
     selection::Selection,
 };
@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 mod codec;
 mod numbering;
+mod pair_commands;
 mod pairs;
 mod selection;
 
@@ -269,9 +270,9 @@ fn exhausted_registry_preserves_the_project_revision_history_and_update_preview(
     template.state =
         State::Retired { snapshot: crate::board::update::capture_source(&project).unwrap(), reason: Retirement::Removed, successors: Vec::new() };
     project.net_registry = Arc::new(Registry {
-        records: (1..=MAX_RECORDS as u128)
-            .map(|id| Record { id: Uuid::from_u128(id), generated_number: Some(id as u32), ..template.clone() })
-            .collect(),
+        records: Arc::new(
+            (1..=MAX_RECORDS as u128).map(|id| Record { id: Uuid::from_u128(id), generated_number: Some(id as u32), ..template.clone() }).collect(),
+        ),
         ..Registry::default()
     });
     project.net_registry.validate(&project).unwrap();
@@ -351,7 +352,7 @@ fn first_board_creation_moves_registry_and_preserves_historical_scope() {
     let scope = project.net_scope();
     assert_eq!(scope.kind, ScopeKind::Board);
     assert_eq!(id_for(&session, &pins[0]), merged);
-    for record in &project.net_registry.records {
+    for record in project.net_registry.records.iter() {
         if matches!(record.state, State::Active {}) {
             assert!(record.anchors().all(|a| a.scope == scope));
         } else {

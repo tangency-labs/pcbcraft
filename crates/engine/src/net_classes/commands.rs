@@ -56,7 +56,7 @@ impl Session {
                 if replacement == id || catalog.get(replacement).is_none() {
                     return Err(CommandError::InvalidParams("Choose a different existing replacement class.".into()));
                 }
-                for record in &mut registry.records {
+                for record in Arc::make_mut(&mut registry.records) {
                     for binding in &mut record.class_bindings {
                         if binding.class == id {
                             binding.class = replacement;

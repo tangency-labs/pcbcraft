@@ -18,7 +18,7 @@ use crate::{
 mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
-pub(crate) use documents::check_board_document_size;
+pub(crate) use documents::{PairDocumentBudget, PairDocumentProbe, check_board_document_size, document_row_framing_bytes};
 pub mod layout;
 mod part_group_storage;
 pub use documents::{
@@ -1078,6 +1078,7 @@ fn validate_with_hierarchy(
         layout: None,
         circuit_use: None,
         net_registry: Arc::default(),
+        net_records_proof: Default::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),

@@ -182,6 +182,7 @@ enum ParamKind {
     ClassRules,
     ClassSet,
     ClassId,
+    PairId,
     ClassTarget,
     ViaDiameter,
     ViaDrill,
@@ -308,7 +309,7 @@ impl ParamKind {
             Self::ClassRules => net_classes::rules_schema(),
             Self::ClassSet => net_classes::set_schema(),
             Self::ClassTarget => nets::class_target_schema(),
-            Self::ClassId => json!({"type":"string","format":"uuid"}),
+            Self::ClassId | Self::PairId => json!({"type":"string","format":"uuid"}),
             Self::RuleLength => json!({"type":"integer","minimum":0,"maximum":MAX_CENTER_NM}),
             Self::ViaDiameter => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM + 1,"maximum":board::track::MAX_VIA_DIAMETER_NM}),
             Self::ViaDrill => json!({"type":"integer","minimum":board::track::MIN_VIA_DRILL_NM,"maximum":board::track::MAX_VIA_DIAMETER_NM - 1}),
@@ -645,6 +646,9 @@ impl ParamKind {
             Self::ClassTarget => nets::ClassTarget::parse(value)
                 .map(|_| ())
                 .map_err(|_| "must contain a scoped persistent net address or current typed derived anchor"),
+            Self::PairId => {
+                value.as_str().and_then(|id| uuid::Uuid::parse_str(id).ok()).map(|_| ()).ok_or("must identify a differential pair by UUID")
+            }
             Self::ClassId => serde_json::from_value::<uuid::Uuid>(value.clone())
                 .ok()
                 .filter(|id| !id.is_nil())
@@ -948,6 +952,21 @@ const BOARD: Param = Param {
 };
 const EXPECTED_REVISION: Param =
     Param { required: true, name: "expected_revision", summary: "Revision returned by inspect_project", kind: ParamKind::Revision };
+const PAIR_ID: Param = Param { name: "pair", kind: ParamKind::PairId, required: true, summary: "Pair UUID; use a fresh UUID for creation" };
+const PAIR_NAME: Param =
+    Param { name: "name", kind: ParamKind::Text, required: true, summary: "Trimmed nonempty display name, up to 200 characters" };
+const PAIR_POSITIVE: Param =
+    Param { name: "positive", kind: ParamKind::NetId, required: true, summary: "Persistent positive net UUID in this registry" };
+const PAIR_NEGATIVE: Param =
+    Param { name: "negative", kind: ParamKind::NetId, required: true, summary: "Persistent negative net UUID in this registry" };
+const PAIR_DRY_RUN: Param = Param {
+    name: "dry_run",
+    kind: ParamKind::Flag,
+    required: false,
+    summary: "Validate and describe the change without publishing or adding an Undo step",
+};
+const PAIR_REVIEWED: Param =
+    Param { name: "reviewed", kind: ParamKind::Flag, required: false, summary: "Clear NeedsReview when both resulting member nets are active" };
 const UPDATE_PLAN_TOKEN: Param = Param {
     required: true,
     name: "plan_token",
@@ -2575,6 +2594,24 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: nets::CREATE_PAIR,
+        title: "Create Differential Pair",
+        summary: "Record two distinct persistent nets as an explicitly ordered pair in one undo step.",
+        params: &[EXPECTED_REVISION, PAIR_ID, PAIR_NAME, PAIR_POSITIVE, PAIR_NEGATIVE, PAIR_DRY_RUN],
+    },
+    Command {
+        id: nets::UPDATE_PAIR,
+        title: "Edit Differential Pair",
+        summary: "Replace a pair's display name and members, preserving its UUID and clearing review state on live endpoint repair or explicit review.",
+        params: &[EXPECTED_REVISION, PAIR_ID, PAIR_NAME, PAIR_POSITIVE, PAIR_NEGATIVE, PAIR_DRY_RUN, PAIR_REVIEWED],
+    },
+    Command {
+        id: nets::REMOVE_PAIR,
+        title: "Remove Differential Pair",
+        summary: "Remove one relationship without changing either of its member nets.",
+        params: &[EXPECTED_REVISION, PAIR_ID, PAIR_DRY_RUN],
+    },
+    Command {
         id: nets::SET_CLASSES,
         title: "Set Net Classes",
         summary: "Replace a net's complete class set, promoting an eligible derived target in the same undoable transaction. An empty set removes assignments.",
@@ -2792,6 +2829,8 @@ pub struct Project {
     circuit_use: Option<uuid::Uuid>,
     /// Sparse identity authority; current connectivity remains derived from the schematic.
     net_registry: Arc<nets::Registry>,
+    /// Validation evidence for the exact immutable non-pair registry and graph inputs.
+    net_records_proof: nets::RecordsProofCache,
     /// Authored dimensional class definitions, independent of net assignments and boards.
     net_classes: Arc<net_classes::Catalog>,
     /// The project's own parameter values, `@project.Name`; stored only from project/22.
@@ -3043,6 +3082,8 @@ pub struct Session {
     clearance_identity: Arc<()>,
     /// One disposable captured-board query cache; history snapshots never retain this cache.
     clearance_cache: std::sync::Mutex<Option<board::clearance::Cached>>,
+    /// Reuse one exact native headroom measurement across pair-only edits, not across other edits.
+    pair_document_budget: std::sync::Mutex<Option<(std::sync::Weak<Project>, persistence::PairDocumentBudget)>>,
     libraries: Arc<library::sources::Catalog>,
     project: Option<Arc<Project>>,
     undo: Vec<Option<Arc<Project>>>,
@@ -3069,6 +3110,7 @@ impl Default for Session {
             scope: SessionScope::Edit,
             clearance_identity: Arc::new(()),
             clearance_cache: std::sync::Mutex::new(None),
+            pair_document_budget: std::sync::Mutex::new(None),
             libraries: Arc::new(library::sources::Catalog::bundled()),
             project: None,
             undo: Vec::new(),
@@ -3268,6 +3310,9 @@ impl Session {
             | net_classes::REMOVE
             | net_classes::INSPECT
             | net_classes::RESOLVE
+            | nets::CREATE_PAIR
+            | nets::UPDATE_PAIR
+            | nets::REMOVE_PAIR
             | nets::SET_CLASSES
             | nets::INSPECT_CLASSES
             | part_groups::CREATE
@@ -3518,6 +3563,10 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.inspect_net_class_target(params);
         }
+        if matches!(id, nets::CREATE_PAIR | nets::UPDATE_PAIR | nets::REMOVE_PAIR) && params["dry_run"].as_bool() == Some(true) {
+            self.validate_project_command(id, params)?;
+            return self.preview_pair_edit(id, params);
+        }
         if id == board::class_rules::ROUTE_RULES {
             self.validate_project_command(id, params)?;
             return self.route_rule_query(params);
@@ -3733,6 +3782,9 @@ impl Session {
                 | net_classes::REMOVE
                 | net_classes::INSPECT
                 | net_classes::RESOLVE
+                | nets::CREATE_PAIR
+                | nets::UPDATE_PAIR
+                | nets::REMOVE_PAIR
                 | nets::SET_CLASSES
                 | nets::INSPECT_CLASSES
                 | part_groups::CREATE
@@ -3821,6 +3873,7 @@ impl Session {
                 layout: Some(persistence::layout::Layout::default()),
                 circuit_use: Some(fresh_id()?),
                 net_registry: Arc::default(),
+                net_records_proof: Default::default(),
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
                 assembly_profiles: Arc::default(),
@@ -3845,6 +3898,7 @@ impl Session {
             net_classes::INSPECT | net_classes::RESOLVE => {
                 self.net_class_query(id, params)?;
             }
+            nets::CREATE_PAIR | nets::UPDATE_PAIR | nets::REMOVE_PAIR => self.edit_pair(id, params)?,
             nets::SET_CLASSES => self.set_net_classes(params)?,
             nets::INSPECT_CLASSES => {
                 self.inspect_net_class_target(params)?;
@@ -4571,7 +4625,19 @@ impl Session {
     /// New edits clear redo and advance the revision past the highest ID allocated in the edit.
     fn change(&mut self, project: Project) -> Result<(), CommandError> {
         let (project, highest) = self.prepare_change(project)?;
+        self.publish_change(project, highest);
+        Ok(())
+    }
+
+    /// Adopt a validated authored snapshot: preserve the allocation watermark, expire preview
+    /// authority, and record exactly one undo entry. Callers validate their own changed fields.
+    fn publish_change(&mut self, project: Project, highest: u64) {
         let project = self.retain_allocation_watermark(Arc::new(project));
+        self.publish_validated_snapshot(project, highest);
+    }
+
+    /// Adopt a validated snapshot whose allocation watermark has already been retained.
+    fn publish_validated_snapshot(&mut self, project: Arc<Project>, highest: u64) {
         self.update_plan = None;
         self.setup_preview = None;
         self.undo.push(self.project.replace(project));
@@ -4580,7 +4646,6 @@ impl Session {
         }
         self.redo.clear();
         self.revision = (self.revision + 1).max(highest);
-        Ok(())
     }
 
     /// Restore authored content and advance the revision, retaining allocation and profile-revision

@@ -1,6 +1,9 @@
 //! Transactional continuation evidence comes from frozen before/after graphs, never saved members.
 
-use super::{Anchor, Lineage, MAX_RECORDS, Record, Registry, Retirement, Scope, State, graph::Graph};
+use super::{
+    Anchor, AnchorKind, Lineage, MAX_RECORDS, Pair, PairState, Record, Registry, Retirement, Scope, State,
+    graph::{Graph, Network},
+};
 use crate::{CommandError, Project, board::update::SourceCapture};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -35,7 +38,7 @@ fn source_capture(capture: &mut Option<SourceCapture>, before: &Project) -> Resu
 
 /// Current instance storage follows a first-board scope transfer; lineage keeps its captured owner.
 pub(super) fn requalify(records: &mut Registry, scope: Scope) {
-    for record in &mut records.records {
+    for record in Arc::make_mut(&mut records.records) {
         if !matches!(record.state, State::Active {}) {
             continue;
         }
@@ -73,7 +76,8 @@ fn source_anchor(anchor: &Anchor, scope: Scope) -> Anchor {
 fn adopt_numbers(registry: &mut Registry, graph: &Graph, plan: &super::numbering::Plan) -> Result<(), CommandError> {
     let mut ids = registry.reserved_ids();
     let mut last = plan.records.values().copied().chain(plan.networks.iter().flatten().copied()).max().unwrap_or(0);
-    for record in &mut registry.records {
+    let records = Arc::make_mut(&mut registry.records);
+    for record in records.iter_mut() {
         if record.generated_number.is_none() {
             record.generated_number =
                 Some(match plan.records.get(&record.id).copied().or_else(|| graph.network(&record.primary).and_then(|index| plan.networks[index])) {
@@ -82,21 +86,88 @@ fn adopt_numbers(registry: &mut Registry, graph: &Graph, plan: &super::numbering
                 });
         }
     }
-    let existing: BTreeSet<_> = registry
-        .records
-        .iter()
-        .filter(|record| matches!(record.state, State::Active {}))
-        .filter_map(|record| graph.network(&record.primary))
-        .collect();
+    let existing: BTreeSet<_> =
+        records.iter().filter(|record| matches!(record.state, State::Active {})).filter_map(|record| graph.network(&record.primary)).collect();
     for (index, network) in graph.networks.iter().enumerate().filter(|(_, network)| network.meaningful()) {
         if !existing.contains(&index) {
-            let mut record = network.record(allocate(registry.records.len(), &mut ids)?, None).map_err(CommandError::InvalidParams)?;
+            let mut record = network.record(allocate(records.len(), &mut ids)?, None).map_err(CommandError::InvalidParams)?;
             record.generated_number = plan.networks[index];
-            registry.records.push(record);
+            records.push(record);
         }
     }
-    registry.records.sort_by_key(|record| record.id);
+    records.sort_by_key(|record| record.id);
     Ok(())
+}
+
+/// Compare logical endpoint membership (terminals and ports) without allocating.
+fn endpoints_changed(before: &Network, after: &Network) -> bool {
+    before.anchors.iter().filter(|a| a.kind != AnchorKind::Label).ne(after.anchors.iter().filter(|a| a.kind != AnchorKind::Label))
+}
+
+/// Explain why a topology change invalidated one pair member, or return `None` when its
+/// active identity and endpoint membership survived intact.
+fn member_invalidation_reason(
+    member: Uuid,
+    result: &BTreeMap<Uuid, Record>,
+    old: &Graph,
+    after: &Graph,
+    old_index_by_id: &BTreeMap<Uuid, usize>,
+    after_index_by_id: &BTreeMap<Uuid, usize>,
+    targets: &[Vec<usize>],
+) -> Option<&'static str> {
+    match result.get(&member).map(|record| &record.state) {
+        Some(State::Active {}) => {
+            if let (Some(&old_index), Some(&after_index)) = (old_index_by_id.get(&member), after_index_by_id.get(&member)) {
+                if targets[old_index].len() > 1 {
+                    return Some("Member net split; review endpoints.");
+                }
+                if endpoints_changed(&old.networks[old_index], &after.networks[after_index]) {
+                    return Some("Member net endpoints changed; review endpoints.");
+                }
+            }
+            None
+        }
+        Some(State::Retired { reason: Retirement::Removed, .. }) => Some("Member net retired; review endpoints."),
+        Some(State::Retired { reason: Retirement::Merged, .. }) => Some("Member net merged; review endpoints."),
+        Some(State::Retired { reason: Retirement::Resolution, .. }) => Some("Member net resolved to another net; review endpoints."),
+        Some(State::Ambiguous { .. }) => Some("Member net split ambiguously; review endpoints."),
+        None => Some("Member net is no longer active; review endpoints."),
+    }
+}
+
+/// Keep original pair and member UUIDs across topology changes, surfacing `NeedsReview`
+/// whenever a member ceases to be active or its endpoint membership changes.
+fn reconcile_pairs(
+    pairs: Arc<Vec<Arc<Pair>>>,
+    result: &BTreeMap<Uuid, Record>,
+    by_source: &BTreeMap<usize, Record>,
+    assigned: &[Option<Uuid>],
+    old: &Graph,
+    after: &Graph,
+    targets: &[Vec<usize>],
+) -> Arc<Vec<Arc<Pair>>> {
+    if pairs.is_empty() {
+        return pairs;
+    }
+    let old_index_by_id: BTreeMap<_, _> = by_source.iter().map(|(&index, record)| (record.id, index)).collect();
+    let after_index_by_id: BTreeMap<_, _> = assigned.iter().enumerate().filter_map(|(index, id)| id.map(|id| (id, index))).collect();
+    let mut changed = false;
+    let updated: Vec<Arc<Pair>> = pairs
+        .iter()
+        .map(|pair| {
+            let reason = member_invalidation_reason(pair.positive, result, old, after, &old_index_by_id, &after_index_by_id, targets)
+                .or_else(|| member_invalidation_reason(pair.negative, result, old, after, &old_index_by_id, &after_index_by_id, targets));
+            if let Some(reason) = reason {
+                let next_state = PairState::NeedsReview { reason: reason.into() };
+                if pair.state != next_state {
+                    changed = true;
+                    return Arc::new(Pair { state: next_state, ..(**pair).clone() });
+                }
+            }
+            pair.clone()
+        })
+        .collect();
+    if changed { Arc::new(updated) } else { pairs }
 }
 
 impl Project {
@@ -106,7 +177,8 @@ impl Project {
     /// by class and origin. Inherited classes must exist in the catalog, and meaningful splits
     /// require every inherited property to be shareable. Missing classes, unsupported split
     /// inheritance or a union above `MAX_BINDINGS` refuse the edit before session publication.
-    /// Stored pair members and review intent are preserved, not retargeted or evaluated here.
+    /// Stored pair and member identities are preserved; active pairs whose member retires,
+    /// merges, splits or changes endpoint membership are flagged `NeedsReview`.
     /// An explicit pair edit combined with a topology change is refused rather than discarded.
     /// Newly adopted registries and changed registries on unchanged topology also validate,
     /// even when they contain pairs but no net records.
@@ -122,7 +194,13 @@ impl Project {
             && Arc::ptr_eq(&before.components, &self.components)
             && Arc::ptr_eq(&before.net_registry, &self.net_registry)
         {
-            return Ok(());
+            if self.net_registry.records.is_empty() || self.net_registry.has_records_proof(self) {
+                return Ok(());
+            }
+            if before.net_registry.has_records_proof(before) && !Arc::ptr_eq(&before.net_classes, &self.net_classes) {
+                return self.net_registry.revalidate_class_bindings(self).map_err(CommandError::InvalidParams);
+            }
+            return self.net_registry.validate(self).map_err(CommandError::InvalidParams);
         }
         let mut old = Graph::build(before).map_err(CommandError::InvalidParams)?;
         let after = Graph::build(self).map_err(CommandError::InvalidParams)?;
@@ -157,7 +235,7 @@ impl Project {
         let plan = super::numbering::plan(&registry, &old.networks).map_err(CommandError::InvalidParams)?;
         adopt_numbers(&mut registry, &old, &plan)?;
         let mut by_source = BTreeMap::<usize, Record>::new();
-        for record in &registry.records {
+        for record in registry.records.as_slice() {
             if matches!(record.state, State::Active {}) {
                 let index = old.network(&record.primary).ok_or_else(|| CommandError::InvalidParams("Missing source net primary.".into()))?;
                 by_source.insert(index, record.clone());
@@ -266,7 +344,7 @@ impl Project {
         }
         // Existing unresolved decisions survive later graph edits with current result references.
         // No surviving candidate means retirement; choosing among survivors remains explicit.
-        for record in &registry.records {
+        for record in registry.records.as_slice() {
             if let State::Ambiguous { snapshot, branches } = &record.state {
                 let branches = unique(branches.iter().flat_map(|id| continuations.get(id).into_iter().flatten().copied()));
                 let mut next = record.clone();
@@ -278,8 +356,14 @@ impl Project {
                 result.insert(record.id, next);
             }
         }
-        let next = Registry { records: result.into_values().collect(), pairs: registry.pairs };
+        let pairs = reconcile_pairs(registry.pairs, &result, &by_source, &assigned, &old, &after, &targets);
+        let next = Registry { records: Arc::new(result.into_values().collect()), pairs };
         if next == *self.net_registry {
+            if !next.records.is_empty() {
+                // Geometry can change while every authored identity survives. Reuse the
+                // already constructed graph to prove the new immutable inputs at publication.
+                self.net_registry.validate_records_against(self, Some(&after)).map_err(CommandError::InvalidParams)?;
+            }
             return Ok(());
         }
         self.net_registry = Arc::new(next);
