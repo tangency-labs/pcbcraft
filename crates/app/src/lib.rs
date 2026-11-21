@@ -71,6 +71,7 @@ mod schematic_canvas;
 mod selection_filters;
 mod sheet_editing;
 mod sheet_parameters;
+mod sheet_split;
 #[cfg(not(target_arch = "wasm32"))]
 mod ui_automation;
 mod unsaved;
@@ -241,6 +242,7 @@ enum Dialog {
     /// Revision-bound create/rename/delete forms for an explicitly addressed flat sheet.
     Sheet(sheet_editing::Edit),
     Hierarchy(hierarchy::Edit),
+    SplitSheet(Box<sheet_split::Edit>),
     NetLabel(Box<net_labels::Edit>),
     /// Chooses and pins a package independently of board placement.
     Footprint(Box<footprint_assignment::Edit>),
@@ -1957,6 +1959,7 @@ impl PcbApp {
             ToolAction::Copy | ToolAction::Cut => self.copy_schematic_clipboard(ctx, matches!(action, ToolAction::Cut)),
             ToolAction::Paste | ToolAction::PasteOptions => self.request_clipboard(ctx, matches!(action, ToolAction::PasteOptions)),
             ToolAction::Duplicate => self.duplicate_schematic_clipboard(),
+            ToolAction::MoveToNewSheet => self.begin_split_sheet(),
             ToolAction::Symbols => self.parts.focus_search(),
             ToolAction::Wire => self.begin_wire(),
             ToolAction::Ground => self.begin_ground(ctx),
@@ -2381,6 +2384,7 @@ impl PcbApp {
             Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
+            Dialog::SplitSheet(edit) => self.split_sheet_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
             Dialog::SaveChanges(then) => self.save_changes_dialog(ctx, then),
             Dialog::OpenLocation => {

@@ -893,6 +893,10 @@ pub(crate) fn show(
                 return Some(Click::ToolAction(action, ui.ctx().clone()));
             }
             menu::separator(ui);
+            if let Some(action) = tool_menu::split(ui, !selected.symbols.is_empty() || !selected.wires.is_empty()) {
+                return Some(Click::ToolAction(action, ui.ctx().clone()));
+            }
+            menu::separator(ui);
             if group {
                 return MenuItem::new("Delete selected items").shortcut("Del").show(ui).then_some(Click::DeleteItems);
             }

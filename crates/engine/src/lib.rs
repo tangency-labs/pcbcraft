@@ -1639,6 +1639,12 @@ const CATALOG: &[Command] = &[
         params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..EXPECTED_REVISION }],
     },
     Command {
+        id: sheet_split::SPLIT,
+        title: "Move to New Sheet",
+        summary: "Move selected objects to a new child sheet as one undo step. Symbols, part instances, wires and labels keep their IDs; each boundary net from the preview becomes a hierarchical label and sheet pin, so the netlist is unchanged. The sheet symbol goes at x_nm, y_nm, or where the moved objects were.",
+        params: &[ITEMS, sheets::SHEET_NAME, Param { required: false, ..ANCHOR_X }, Param { required: false, ..ANCHOR_Y }, EXPECTED_REVISION],
+    },
+    Command {
         id: annotation::PREVIEW,
         title: "Preview schematic annotation",
         summary: "Review reference designators without editing. Propose the lowest free references for unlocked placeholders and report duplicates.",
@@ -3298,6 +3304,7 @@ impl Session {
             | SET_SYMBOL_FIELDS
             | annotation::PREVIEW
             | sheet_split::PREVIEW
+            | sheet_split::SPLIT
             | PLACE_FOOTPRINT
             | ASSIGN_FOOTPRINT
             | INITIALIZE_UPDATE_BASELINE
@@ -3768,6 +3775,7 @@ impl Session {
                 | SET_SYMBOL_FIELDS
                 | annotation::PREVIEW
                 | sheet_split::PREVIEW
+                | sheet_split::SPLIT
                 | PLACE_FOOTPRINT
                 | ASSIGN_FOOTPRINT
                 | INITIALIZE_UPDATE_BASELINE
@@ -3971,6 +3979,7 @@ impl Session {
             sheet_split::PREVIEW => {
                 self.preview_split(params)?;
             }
+            sheet_split::SPLIT => self.split_sheet(params)?,
             ASSIGN_FOOTPRINT => self.assign_footprint(params)?,
             INITIALIZE_UPDATE_BASELINE => self.initialize_update_baseline(params)?,
             PREVIEW_UPDATE => self.preview_board_update(params)?,

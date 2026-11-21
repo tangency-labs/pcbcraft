@@ -84,4 +84,28 @@ The reply lists:
 More than 64 ports, two boundary nets with the same name, an empty or unknown
 selection, a taken or blank name, a full project and a stale `expected_revision`
 are refused. The revision, undo history and project files do not change, and
-read-only sessions may run it. Applying a split is not available yet.
+read-only sessions may run it.
+
+## Move a selection to a new sheet
+
+In the schematic, select the symbols and wires to move, then choose
+**Move to New Sheet…** from the canvas context menu or the **Sheets** ribbon
+group's menu. The form suggests a free sheet name and shows the preview for the
+name in the field: how many symbols, wires, junctions and net labels move, the
+ports with their names and directions (generated names are marked), the nets
+that stay connected by a global or power name, and any part whose units end up
+on two sheets. A taken or empty name shows the reason and offers no move. Nothing
+changes until **Move to Sheet**; Cancel leaves the project as it was.
+
+`schematic.split_sheet` applies the same plan with the same parameters plus
+`expected_revision`, and optionally `x_nm` and `y_nm` (given together) for the
+new sheet symbol; by default it sits where the moved objects were. Symbols, part
+instances, wires, junctions and net labels keep their IDs, references and
+positions on the new child sheet. Each port becomes a hierarchical label in the
+child, wired to the inside members, and a pin on the sheet symbol, wired to the
+outside members; a cut wire's outside end becomes the label's place. Global and
+power nets keep connecting by name. The split is one undo step, and it is
+refused, leaving the project and revision unchanged, if the resulting netlist
+would group any terminals differently or drop a net name. A net that had only
+a generated number gains the port name, so a later board update reports it as
+the same connections under a new name.

@@ -386,3 +386,234 @@ fn a_full_project_is_refused() {
     assert!(error.to_string().contains(&format!("already has {MAX_SHEETS} sheets")), "{error}");
     assert!(Arc::ptr_eq(&project, &s.snapshot().unwrap()));
 }
+
+/// The net row of an endpoint in the whole-project graph.
+fn net_of(s: &Session, end: WireEndpoint) -> Option<usize> {
+    s.project().unwrap().borrowed_electrical_connectivity().net_index_for_endpoint(end)
+}
+
+/// The sheet with this name, as an address.
+fn sheet_named(s: &Session, name: &str) -> SheetTarget {
+    s.project().unwrap().sheets().find(|sheet| sheet.name == name).unwrap().target
+}
+
+/// Splitting the fixture moves exactly the previewed symbols onto a new child sheet with their
+/// IDs, references and positions, adds one hierarchical label and sheet pin per previewed port,
+/// keeps every terminal on its net, and is one undo step that undo and redo replay exactly.
+#[test]
+fn split_moves_the_previewed_objects_and_keeps_every_net() {
+    let mut f = fixture();
+    let items = selection(&f);
+    let s = &mut f.session;
+    let before = s.snapshot().unwrap();
+    let main = before.sheet_target();
+    let preview = s.execute(PREVIEW, &json!({"items":items,"name":"Filter"})).unwrap()["split_preview"].clone();
+    let moved: Vec<_> =
+        before.symbols().iter().filter(|symbol| items["symbols"].as_array().unwrap().contains(&json!(symbol.id()))).cloned().collect();
+    let pairs = [
+        (terminal(&f.inside[0], "2"), terminal(&f.outside[0], "1")),
+        (terminal(&f.inside[1], "2"), terminal(&f.outside[1], "1")),
+        (terminal(&f.inside[2], "2"), terminal(&f.outside[2], "1")),
+        (terminal(&f.inside[0], "1"), terminal(&f.inside[1], "1")),
+        (terminal(&f.outside[0], "2"), terminal(&f.outside[1], "2")),
+        (terminal(&f.grounds[0], "1"), terminal(&f.grounds[1], "1")),
+        (terminal(&f.inside[2], "1"), terminal(&f.grounds[0], "1")),
+    ];
+    for (a, b) in pairs {
+        assert_eq!(net_of(s, a), net_of(s, b));
+    }
+    let crossings = [terminal(&f.inside[0], "2"), terminal(&f.inside[1], "2"), terminal(&f.inside[2], "2")];
+    assert_ne!(net_of(s, crossings[0]), net_of(s, crossings[1]));
+    let revision = s.revision();
+
+    let next = s.apply(SPLIT, &json!({"items":items,"name":"Filter","expected_revision":revision})).unwrap();
+    assert_ne!(next, revision);
+    let project = s.project().unwrap();
+    let child = sheet_named(s, "Filter");
+    let parent_view = project.for_sheet(main).unwrap();
+    let child_view = project.for_sheet(child).unwrap();
+    assert_eq!(project.parent_sheet(child), Some(main));
+    assert_eq!(parent_view.sheet_symbols().len(), 1);
+    for symbol in &moved {
+        let placed = child_view.symbols().iter().find(|other| other.id() == symbol.id()).unwrap();
+        assert_eq!(placed.position, symbol.position);
+        assert_eq!(placed.component_id(), symbol.component_id());
+        assert_eq!(project.reference(placed), before.reference(symbol));
+        assert!(!parent_view.symbols().iter().any(|other| other.id() == symbol.id()));
+    }
+    assert_eq!(child_view.symbols().len(), moved.len());
+    assert_eq!(parent_view.symbols().len(), before.symbols().len() - moved.len());
+    for wire in preview["wires"].as_array().unwrap() {
+        assert!(child_view.wires().iter().any(|other| json!(other.id()) == *wire), "{wire}");
+    }
+
+    let ports = preview["ports"].as_array().unwrap();
+    let labels = child_view.hierarchical_labels();
+    assert_eq!(labels.len(), ports.len());
+    for port in ports {
+        let label = labels.iter().find(|label| json!(label.name) == port["name"]).unwrap();
+        assert_eq!(json!(label.direction), port["direction"]);
+        let pin = WireEndpoint::SheetPin(label.id);
+        for member in port["inside"].as_array().unwrap() {
+            assert_eq!(net_of(s, WireEndpoint::parse(member).unwrap()), net_of(s, WireEndpoint::Label(label.id)), "{port}");
+        }
+        for member in port["outside"].as_array().unwrap() {
+            assert_eq!(net_of(s, WireEndpoint::parse(member).unwrap()), net_of(s, pin), "{port}");
+        }
+    }
+    for (a, b) in pairs {
+        assert_eq!(net_of(s, a), net_of(s, b));
+    }
+    assert_ne!(net_of(s, crossings[0]), net_of(s, crossings[1]));
+    assert_ne!(net_of(s, crossings[1]), net_of(s, crossings[2]));
+    let sda = net_of(s, terminal(&f.outside[0], "1")).unwrap();
+    assert!(s.project().unwrap().borrowed_electrical_connectivity().net_names(sda).contains(&"SDA".to_owned()));
+
+    let after = s.snapshot().unwrap();
+    s.execute("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&before, &s.snapshot().unwrap());
+    s.execute("edit.redo", &Value::Null).unwrap();
+    crate::assert_same_content(&after, &s.snapshot().unwrap());
+}
+
+/// A selection meeting an outside branch at a junction: the inside wires move with their
+/// ends on the new label, the junction stays and reaches the sheet pin, and all four
+/// resistors stay on one net.
+#[test]
+fn a_junction_that_stays_is_wired_to_the_sheet_pin() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    let sheet = s.project().unwrap().sheet_target();
+    let row = 10 * GRID_NM;
+    let parts = [resistor(&mut s, 0, 0), resistor(&mut s, 0, row), resistor(&mut s, 0, 2 * row)];
+    let start = terminal(&parts[1], "2");
+    let at = s.project().unwrap().endpoint_position(start).unwrap();
+    let node = Point { x_nm: at.x_nm + 30 * GRID_NM, y_nm: at.y_nm };
+    apply(&mut s, DRAW_WIRE, json!({"from":start.inspect(),"to":node,"bends":[],"auto_heal":false}));
+    let id = s.project().unwrap().junctions().find(|(_, point)| *point == node).unwrap().0;
+    let junction = WireEndpoint::Junction(id);
+    route(&mut s, sheet, terminal(&parts[0], "2"), junction);
+    route(&mut s, sheet, terminal(&parts[2], "2"), junction);
+    let outside = resistor(&mut s, at.x_nm + 60 * GRID_NM, row);
+    route(&mut s, sheet, terminal(&outside, "1"), junction);
+
+    apply(&mut s, SPLIT, json!({"items":{"symbols":parts,"wires":[]},"name":"Tee"}));
+    let project = s.project().unwrap();
+    let child = project.for_sheet(sheet_named(&s, "Tee")).unwrap();
+    let parent = project.for_sheet(sheet).unwrap();
+    let [label] = child.hierarchical_labels() else { panic!("one port label") };
+    assert_eq!(label.at, node);
+    assert_eq!(child.wires().iter().filter(|wire| wire.endpoints().contains(&WireEndpoint::Label(label.id))).count(), 3);
+    assert!(parent.junctions().any(|(other, _)| other == id));
+    assert!(parent.wires().iter().any(|wire| wire.endpoints().contains(&WireEndpoint::SheetPin(label.id))));
+    let net = net_of(&s, terminal(&outside, "1"));
+    assert!(net.is_some());
+    for part in &parts {
+        assert_eq!(net_of(&s, terminal(part, "2")), net);
+    }
+}
+
+/// Over sheet geometry, the sheet symbol goes where the caller asks; a lone coordinate,
+/// a stale revision and a taken name are refused and leave the exact snapshot.
+#[test]
+fn split_places_the_sheet_symbol_and_refuses_bad_requests() {
+    let mut f = fixture();
+    let items = selection(&f);
+    let s = &mut f.session;
+    let project = s.snapshot().unwrap();
+    let revision = s.revision();
+    let taken = project.sheets().next().unwrap().name.to_owned();
+    let cases = [
+        (json!({"items":items,"name":"Filter","x_nm":0,"expected_revision":revision}), ErrorCode::InvalidParams, "must be given together"),
+        (json!({"items":items,"name":"Filter","expected_revision":revision + 1}), ErrorCode::StaleRevision, "revision"),
+        (json!({"items":items,"name":taken,"expected_revision":revision}), ErrorCode::InvalidParams, "already exists"),
+        (json!({"items":{"symbols":[],"wires":[]},"name":"Filter","expected_revision":revision}), ErrorCode::InvalidParams, "selection must contain"),
+    ];
+    for (params, code, reason) in cases {
+        let error = s.apply(SPLIT, &params).unwrap_err();
+        assert_eq!(error.code(), code, "{params}: {error}");
+        assert!(error.to_string().contains(reason), "{params}: {error}");
+        assert!(Arc::ptr_eq(&project, &s.snapshot().unwrap()));
+        assert_eq!(s.revision(), revision);
+    }
+    let at = Point { x_nm: -60 * GRID_NM, y_nm: 20 * GRID_NM };
+    apply(s, SPLIT, json!({"items":items,"name":"Filter","x_nm":at.x_nm,"y_nm":at.y_nm}));
+    let main = s.project().unwrap().for_sheet(project.sheet_target()).unwrap();
+    assert_eq!(main.sheet_symbols().iter().map(|block| block.at).collect::<Vec<_>>(), [at]);
+    let again =
+        s.execute(PREVIEW, &json!({"sheet":project.sheet_target().id(),"items":{"symbols":[f.outside[0]],"wires":[]},"name":"filter"})).unwrap_err();
+    assert!(again.to_string().contains("already exists"), "{again}");
+}
+
+/// The netlist guard tells equal groupings from changed ones: a new connection between
+/// two nets, or a net that loses a name, is a different netlist.
+#[test]
+fn the_netlist_guard_detects_joined_nets_and_lost_names() {
+    let mut f = fixture();
+    let s = &mut f.session;
+    let before = s.project().unwrap().electrical_connectivity();
+    assert!(same_netlist(&before, &before));
+    connect(s, pin(&f.inside[1], "2"), pin(&f.inside[2], "2"));
+    let joined = s.project().unwrap().electrical_connectivity();
+    assert!(!same_netlist(&before, &joined));
+    let mut f = fixture();
+    let s = &mut f.session;
+    let label = s.project().unwrap().net_labels().first().unwrap().object_id();
+    apply(s, net_labels::DELETE, json!({"id":label}));
+    let unnamed = s.project().unwrap().electrical_connectivity();
+    assert!(!same_netlist(&before, &unnamed));
+    assert!(same_netlist(&unnamed, &before), "adding a name keeps the netlist");
+}
+
+/// A schematic-to-board update after the split proposes nothing when every boundary net
+/// already had a name. A net known only by its generated number gains the port name, which
+/// the update reports as the same terminals under a new name.
+#[test]
+fn board_update_after_a_split_changes_only_unnamed_boundary_nets() {
+    use crate::board::{
+        assignment::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT},
+        definition::basic_components,
+        update::{Baseline, SourceCapture, preview},
+    };
+    for named in [true, false] {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({"create_board":true})).unwrap();
+        let first = resistor(&mut s, 0, 0);
+        let second = resistor(&mut s, 40 * GRID_NM, 0);
+        connect(&mut s, pin(&first, "2"), pin(&second, "1"));
+        let main = s.project().unwrap().sheet_target();
+        if named {
+            local_label(&mut s, main, terminal(&second, "1"), "SIG");
+        }
+        let parts: Vec<_> = s.project().unwrap().symbols().iter().map(|symbol| symbol.component_id()).collect();
+        let definition = basic_components("resistor-0402").unwrap();
+        for (index, part) in parts.iter().enumerate() {
+            apply(
+                &mut s,
+                ASSIGN_FOOTPRINT,
+                json!({"component":part,"library":definition.library,"definition":definition.id,
+                    "definition_revision":definition.revision,"mapping":{"1":"1","2":"2"}}),
+            );
+            apply(&mut s, PLACE_ASSIGNED_FOOTPRINT, json!({"component":part,"x_nm":index as i64 * 8_000_000,"y_nm":2_000_000}));
+        }
+        let capture = |project: &Project, id: u128| {
+            let source = SourceCapture { capture_id: uuid::Uuid::from_u128(id), content_digest: "a".repeat(64) };
+            Baseline::proposed(project, &Baseline::current_choices(project), source).unwrap()
+        };
+        let accepted = capture(s.project().unwrap(), 1);
+        apply(&mut s, SPLIT, json!({"items":{"symbols":[first],"wires":[]},"name":"Split"}));
+        let update = preview(&accepted, &capture(s.project().unwrap(), 2)).unwrap();
+        if named {
+            assert!(update.is_noop(), "{:?} {:?}", update.removed_nets, update.added_nets);
+        } else {
+            assert!(update.components.is_empty() && update.blockers.is_empty());
+            let ([removed], [added]) = (update.removed_nets.as_slice(), update.added_nets.as_slice()) else {
+                panic!("one renamed net: {:?} {:?}", update.removed_nets, update.added_nets)
+            };
+            assert_eq!(removed.terminals, added.terminals);
+            assert!(removed.names.is_empty());
+            assert_eq!(added.names.len(), 1);
+            assert!(added.names[0].starts_with("Net-"), "{added:?}");
+        }
+    }
+}

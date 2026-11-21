@@ -48,6 +48,7 @@ mod save_changes;
 mod selection_filters;
 mod selection_move;
 mod sheet_parameters;
+mod sheet_split;
 mod split_editors;
 mod symbol_overlap;
 mod tool_modes;
