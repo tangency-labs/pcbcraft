@@ -263,7 +263,7 @@ impl ParamKind {
             Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
             Self::LifecyclePolicy => json!({"type":"object","additionalProperties":false,"required":["scheme","states"],"properties":{
                 "scheme":{"type":"object","additionalProperties":false,"required":["library","id","revision"],"properties":{"library":Self::LibrarySource.schema(),"id":Self::LibrarySource.schema(),"revision":Self::DefinitionRevision.schema()}},
-                "states":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","label","disposition"],"properties":{"id":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$"},"label":{"type":"string","minLength":1,"maxLength":256,"pattern":r"^[^\s\x00-\x1f\x7f-\x9f](?:[^\x00-\x1f\x7f-\x9f]*[^\s\x00-\x1f\x7f-\x9f])?$"},"disposition":{"enum":["draft","released","deprecated","obsolete"]}}}}}}),
+                "states":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","label","disposition"],"properties":{"id":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$"},"label":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[^\\s\u{feff}\\x00-\\x1f\\x7f-\\x9f](?:[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\u{feff}\\x00-\\x1f\\x7f-\\x9f])?$"},"disposition":{"enum":["draft","released","deprecated","obsolete"]}}}}}}),
             Self::LibraryDocuments => {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }

@@ -219,11 +219,11 @@ class LibrarySchemaTests(unittest.TestCase):
         }
         assessments = {"assertions": [assertion], "policies": [policy]}
         validator.validate(assessments)
-        for bad_reason in ["", " ", " Drawing review", "Drawing review ", "Drawing\nreview", "Drawing\treview", "A\x00B", "é" * 4097]:
+        for bad_reason in ["", " ", " Drawing review", "Drawing review ", "\ufeffA", "A\ufeff", "Drawing\nreview", "Drawing\treview", "A\x00B", "é" * 4097]:
             changed = copy.deepcopy(assertion)
             changed["reason"] = bad_reason
             self.assertFalse(validator.is_valid(changed), repr(bad_reason))
-        for bad_short in ["", " ", " Released", "Released ", "Re\nleased", "A\x7fB", "é" * 257]:
+        for bad_short in ["", " ", " Released", "Released ", "\ufeffA", "A\ufeff", "Re\nleased", "A\x7fB", "é" * 257]:
             changed = copy.deepcopy(assertion)
             changed["provenance"]["publisher"] = bad_short
             self.assertFalse(validator.is_valid(changed), repr(bad_short))
@@ -238,6 +238,7 @@ class LibrarySchemaTests(unittest.TestCase):
                 for value, ok in [
                     ("A", True), ("Drawing review", True), ("é" * 4096, True),
                     ("", False), (" ", False), (" A", False), ("A ", False),
+                    ("\ufeffA", False), ("A\ufeff", False),
                     ("A\nB", False), ("A\tB", False), ("A\x00B", False), ("A\x7fB", False),
                 ]
             ]

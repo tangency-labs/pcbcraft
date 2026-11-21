@@ -206,8 +206,11 @@ fn check_state_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Apply the native single-line trimmed text rules and character limit.
+/// Apply the native single-line trimmed text rules, character limit and edge BOM refusal.
 fn check_line(field: &str, text: &str, limit: usize) -> Result<(), String> {
+    if text.starts_with('\u{feff}') || text.ends_with('\u{feff}') {
+        return Err(format!("`{field}` must not start or end with a byte-order mark"));
+    }
     check_text(field, text, limit)
 }
 

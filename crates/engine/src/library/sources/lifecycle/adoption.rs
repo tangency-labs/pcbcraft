@@ -160,8 +160,8 @@ impl Assessments {
         if candidate.policies.len() > MAX_POLICIES {
             return Err(format!("A project supports up to {MAX_POLICIES} lifecycle policies"));
         }
-        // The validated per-field and record-count bounds fit the encoded 4 MiB limit,
-        // including JSON escaping and indentation. The writer also checks that limit.
+        // Character limits do not bound the encoded size; the writer's 4 MiB check
+        // (`encode`) refuses an adoption that would exceed it.
         Ok(candidate)
     }
 }
