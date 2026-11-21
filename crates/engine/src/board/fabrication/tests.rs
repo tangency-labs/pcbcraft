@@ -1304,7 +1304,7 @@ fn fabrication_refuses_axis_aligned_narrow_cores_where_corner_circles_can_separa
 #[test]
 fn rounded_pad_macro_emits_when_corner_circles_stay_connected_at_narrow_core_boundary() {
     for local in [0, 90] {
-        for (height, radius, expect_outline) in [(3_302, 1_201, false), (1_601, 300, true)] {
+        for (height, radius, expect_outline) in [(3_299, 1_200, false), (3_302, 1_201, false), (1_601, 300, true)] {
             let diameter = 2 * radius;
             let pads = [(PadShape::RoundedRectangle, 600_000, height, local, radius); 2];
             let s = aperture_fixture_with_radii(&pads, 0, false, Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 30_000_001, y_nm: -25_000_003 }, None);
