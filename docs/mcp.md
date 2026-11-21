@@ -232,7 +232,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window stays in the editor, which asks about unsaved changes.
 Headless sessions refuse window commands with a reason.
 
-The native live connection also exposes `ui.handles`, `ui.at` and queued pointer,
+The native live connection also exposes `ui.handles`, `ui.at`, `ui.project` and queued pointer,
 keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
 for named targets, window-local coordinates, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
@@ -563,6 +563,15 @@ returns the filename and findings without rendering the file text. If the full
 reply exceeds the live editor's 16 MiB frame limit, save the project and use the
 headless command for the full export.
 
+`project.compare_netlist` takes a netlist file's text as `netlist` and compares
+it with what the open project exports now, the project netlist or, for a board
+file, that board's accepted netlist, without editing anything. `execute` returns
+`comparison`: `matches`, `identical`, the counts on both sides, `differences`
+such as a terminal on another net (named with its net in the design and the
+file's net it is on), and `notes` for renamed nets and other changes that leave connectivity
+alone. Terminals are matched by part and terminal, never by net name or
+position; see [comparing a file with the design](netlist-format.md#comparing-a-file-with-the-design).
+
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks
 or unlocks the whole selection in one undo step, with no geometry or connectivity
@@ -642,9 +651,10 @@ at `pcbcraft-cli mcp`. Pass
 `--project path/to/project.json` (or a folder or `.pc`) after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to omit inspection and return the revision for ordinary edits.
-Commands that return their own data, such as exports and clipboard queries,
-retain that data. In particular, `schematic.set_symbol_fields` with `dry_run: true`
-still returns the full preview, including the changed native documents. Use `inspect_project` to read
+Commands that return their own data, such as exports, clipboard queries and
+[schematic annotation preview](annotation.md), retain that data. In particular,
+`schematic.set_symbol_fields` with `dry_run: true` still returns the full preview,
+including the changed native documents. Use `inspect_project` to read
 the project, or `cross_probe` to look up a linked terminal or pad. The additive
 read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
 unavailable states at a captured revision; see [pin/pad correspondence](pin-pad-correspondence.md)

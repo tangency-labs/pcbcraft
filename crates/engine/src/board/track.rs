@@ -213,12 +213,13 @@ pub(super) struct Land {
     center: Point,
     shape: PadShape,
     corner_radius_nm: i64,
+    size_nm: (i64, i64),
 }
 
 impl Land {
     /// Derive the copper contour from resolved corners and pad shape in board nanometers.
     pub(super) fn contour(&self) -> PadContour {
-        PadContour::pad(self.center, self.corners, self.shape, self.corner_radius_nm)
+        PadContour::pad(self.center, self.corners, self.shape, self.corner_radius_nm, self.size_nm)
     }
 }
 
@@ -328,6 +329,7 @@ pub(super) fn lands_from_footprints<'a>(footprints: impl Iterator<Item = super::
                     center: pad.center,
                     shape: pad.shape,
                     corner_radius_nm: pad.corner_radius_nm,
+                    size_nm: pad.size_nm,
                 })
             })
         })
@@ -533,6 +535,14 @@ impl IslandBuilder {
             }
         }
         self.node >= end
+    }
+
+    /// Resolve export-only contact groups. Start a fresh builder's traversal at the first pad
+    /// so direct pad contacts count, using the same index and contact rules as ordinary copper.
+    pub(super) fn fabrication_roots(mut self) -> Vec<usize> {
+        self.node = 0;
+        while !self.step(usize::MAX) {}
+        (0..self.parent.len()).map(|i| find(&mut self.parent, i)).collect()
     }
 
     /// Canonicalize completed roots to the existing pad/track/via identity maps.

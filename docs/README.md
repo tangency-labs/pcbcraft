@@ -30,6 +30,7 @@ before treating an older plan as implemented behavior.
 | Tools, shortcuts, views and project files | [Editor guide](editor-guide.md) · [Schematic keyboard shortcuts](keyboard-shortcuts.md) · [Board keyboard shortcuts](board-keyboard-shortcuts.md) · [Library editor keyboard shortcuts](library-editor-keyboard-shortcuts.md) |
 | Net names, labels and power symbols | [Named nets and power symbols](net-labels.md) |
 | Sheet hierarchy and interfaces | [Hierarchical sheets](hierarchical-sheets.md) |
+| Review reference designators | [Schematic annotation preview](annotation.md) |
 | Selection exchange and reuse | [Copy and paste](clipboard.md) |
 | Intentional unused connections | [No-connect markers](no-connect-markers.md) |
 | Schematic-to-board review and airwires | [Single-board updates](single-board-update.md) · [Accepted board connections](board-ratsnest.md) |
@@ -79,6 +80,7 @@ availability by themselves.
 | Net identity policy | [Persistent net identity](net-identity.md), including broader multiboard requirements |
 | Earlier net-registry rollout | [Path to the registry](net-registry-path.md), retained as a planning record; implemented slices are linked under Reference and formats |
 | Sheet paper, title blocks and parameters | [Sheet frames, parameters and templates](sheet-frames-and-parameters.md), a proposal for [#46](https://github.com/tangency-labs/pcbcraft/issues/46) |
+| Parametric board (RFC, proposal) | [Parametric board RFC](RFC/parametric-board.md): first the board published to SolidCraft and refreshed in place in an assembly, then outlines linked over the Craft bridge, board parameters, parts held to edges and the update that carries their copper, for [#70](https://github.com/tangency-labs/pcbcraft/issues/70), [#86](https://github.com/tangency-labs/pcbcraft/issues/86) and [#153](https://github.com/tangency-labs/pcbcraft/issues/153) |
 | Future multiboard and reusable circuits | [Overview](multiboard-and-sheet-instances.md) · [Circuit definitions and instances](circuit-instances.md) · [Storage and migration](multiboard-storage.md) · [Assembly and outputs](multiboard-assembly-and-outputs.md) |
 
 ## Verification and history
