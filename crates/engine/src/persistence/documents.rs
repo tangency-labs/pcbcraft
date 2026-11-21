@@ -2394,7 +2394,9 @@ impl BoardSizeCheck {
 
     /// Monotonic work count across header units and serialized board records.
     pub(crate) fn progress(&self, project: &Project) -> (usize, usize) {
-        let total = BoardHeaderSteps::total(project)
+        let total = self
+            .header
+            .total(project)
             .saturating_add(project.board.teardrops.len())
             .saturating_add(project.board.tracks.len())
             .saturating_add(project.board.vias.len())
@@ -2579,47 +2581,61 @@ fn board_header_prefix(bytes: &mut impl Write, project: &Project, validate_teard
     if BoardHeaderSteps::new().step(bytes, project, validate_teardrops, &mut budget)? { Ok(()) } else { Err("board header did not complete".into()) }
 }
 
-const HEADER_OPEN: u8 = 0;
-const HEADER_MATERIALS: u8 = 1;
-const HEADER_LAYERS: u8 = 2;
-const HEADER_STRATA: u8 = 3;
-const HEADER_BASELINE: u8 = 4;
-const HEADER_FIELDS: u8 = 5;
-const HEADER_GRAPHIC_LAYERS: u8 = 6;
-const HEADER_GRAPHIC_ITEMS: u8 = 7;
-const HEADER_ZONES: u8 = 8;
-const HEADER_ARCS: u8 = 9;
-const HEADER_DONE: u8 = 10;
+const HEADER_VALIDATE_ZONES: u8 = 0;
+const HEADER_OPEN: u8 = 1;
+const HEADER_MATERIALS: u8 = 2;
+const HEADER_LAYERS: u8 = 3;
+const HEADER_STRATA: u8 = 4;
+const HEADER_BASELINE: u8 = 5;
+const HEADER_FIELDS: u8 = 6;
+const HEADER_GRAPHIC_LAYERS: u8 = 7;
+const HEADER_GRAPHIC_ITEMS: u8 = 8;
+const HEADER_ZONES: u8 = 9;
+const HEADER_ARCS: u8 = 10;
+const HEADER_DONE: u8 = 11;
 
-/// Resumable board header writer. The validated opening and the remaining single-value fields
-/// (rules, placement origin, assembly profiles, silkscreen and outline) are one unit each; a
-/// baseline adds one opening unit plus one per baseline component and net; every setup material,
-/// layer and stratum, graphics layer and item, zone and arc is one unit. Lists keep the full
-/// writer's openers, separators, closers and empty forms.
+/// Resumable board header writer. Any authored zones are validated first in budgeted outline-edge
+/// batches ([`crate::board::zones::ZoneValidationSteps`]); the validated opening and the remaining
+/// single-value fields (rules, placement origin, assembly profiles, silkscreen and outline) are
+/// one unit each; a baseline adds one opening unit plus one per baseline component and net batch;
+/// every setup material, layer and stratum, graphics layer and item, zone and arc is one unit.
+/// Lists keep the full writer's openers, separators, closers and empty forms.
 struct BoardHeaderSteps {
     phase: u8,
     cursor: usize,
     first: bool,
+    zone_validation: Option<crate::board::zones::ZoneValidationSteps>,
     baseline: Option<crate::board::update::BaselineSteps>,
+    baseline_total: std::sync::OnceLock<usize>,
 }
 
 impl BoardHeaderSteps {
-    /// Start before the validated opening.
+    /// Start before budgeted zone validation and the validated opening.
     fn new() -> Self {
-        Self { phase: HEADER_OPEN, cursor: 0, first: true, baseline: None }
+        Self {
+            phase: HEADER_VALIDATE_ZONES,
+            cursor: 0,
+            first: true,
+            zone_validation: None,
+            baseline: None,
+            baseline_total: std::sync::OnceLock::new(),
+        }
     }
 
-    /// Header units: the opening and field units plus baseline units and one per variable-sized
-    /// header record.
-    fn total(project: &Project) -> usize {
+    /// Header units: zone-validation batches, the opening and field units, cached baseline units,
+    /// and one per variable-sized header record. Baseline units are computed once and reused across
+    /// progress polls so each poll remains O(1).
+    fn total(&self, project: &Project) -> usize {
         let board = &project.board;
+        let zone_validation = crate::board::zones::ZoneValidationSteps::total(project);
         let setup = board
             .setup
             .as_ref()
             .map_or(0, |setup| setup.materials().len().saturating_add(setup.layers().len()).saturating_add(setup.stackup().strata.len()));
-        let baseline = board.baseline.as_deref().map_or(0, crate::board::update::BaselineSteps::total);
+        let baseline = *self.baseline_total.get_or_init(|| board.baseline.as_deref().map_or(0, crate::board::update::BaselineSteps::total));
         let graphics = board.drawings.as_ref().map_or(0, |graphics| graphics.layers.len().saturating_add(graphics.items.len()));
         2usize
+            .saturating_add(zone_validation)
             .saturating_add(setup)
             .saturating_add(baseline)
             .saturating_add(graphics)
@@ -2659,6 +2675,16 @@ impl BoardHeaderSteps {
         let board = &project.board;
         loop {
             match self.phase {
+                HEADER_VALIDATE_ZONES => {
+                    if !board.zones.is_empty() {
+                        let steps = self.zone_validation.get_or_insert_with(crate::board::zones::ZoneValidationSteps::new);
+                        if !steps.step(project, budget)? {
+                            return Ok(false);
+                        }
+                        self.zone_validation = None;
+                    }
+                    self.advance(HEADER_OPEN);
+                }
                 HEADER_OPEN => {
                     if *budget == 0 {
                         return Ok(false);
@@ -2774,9 +2800,9 @@ impl BoardHeaderSteps {
     }
 }
 
-/// Validate the board, then write its format line and, for configured boards, the setup opener.
+/// Validate arcs and teardrops (zones are already validated in [`HEADER_VALIDATE_ZONES`]), then
+/// write the board format line and, for configured boards, the setup opener.
 fn board_header_open(bytes: &mut impl Write, project: &Project, validate_teardrops: bool) -> Result<(), String> {
-    crate::board::zones::validate(project)?;
     crate::board::arc::validate(project, &project.board.arcs)?;
     if validate_teardrops {
         crate::board::teardrop::validate(project)?;
@@ -3071,5 +3097,303 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> R
     } else {
         bytes.extend_from_slice(b"  \"symbols\": [\n");
         Ok(4)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        Session,
+        board::update::{
+            BASELINE_NET_TERMINALS_PER_UNIT, Baseline, BaselineSteps, FORMAT as BASELINE_FORMAT, NetState, PartInstanceState, SourceCapture,
+            TerminalKey, take_baseline_total_net_scans,
+        },
+    };
+
+    /// Polling [`BoardSizeCheck::progress`] across every step of a large baseline computes the
+    /// baseline work total once and reuses it in O(1) without rescanning baseline nets on each
+    /// poll, while keeping `(completed, total)` monotonic and exact.
+    #[test]
+    fn board_size_check_progress_caches_baseline_total_across_polls() {
+        const COMPONENT_COUNT: usize = 512;
+        let mut session = Session::default();
+        session.apply("project.new", &serde_json::json!({"create_board": true})).unwrap();
+        let mut project = (*session.snapshot().unwrap()).clone();
+        let target = project.boards().next().unwrap().target;
+
+        let mut components = BTreeMap::new();
+        for id in 1..=(COMPONENT_COUNT as u64) {
+            components.insert(
+                id,
+                PartInstanceState {
+                    library: "starter".into(),
+                    definition: "resistor".into(),
+                    revision: 1,
+                    reference: format!("R{id}"),
+                    value: "10k".into(),
+                    primary_quantity: None,
+                    terminals: vec!["1".into(), "2".into()],
+                    package: None,
+                },
+            );
+        }
+        let mut nets = Vec::with_capacity(COMPONENT_COUNT + 1);
+        nets.push(NetState {
+            display_name: None,
+            terminals: (1..=(COMPONENT_COUNT as u64)).map(|component| TerminalKey { component, terminal: "1".into() }).collect(),
+            names: vec!["WIDE_BUS".into()],
+            origin: None,
+        });
+        for id in 1..=(COMPONENT_COUNT as u64) {
+            nets.push(NetState {
+                display_name: None,
+                terminals: vec![TerminalKey { component: id, terminal: "2".into() }],
+                names: vec![format!("NET_{id}")],
+                origin: None,
+            });
+        }
+        let net_count = nets.len();
+        let expected_wide_units = COMPONENT_COUNT.div_ceil(BASELINE_NET_TERMINALS_PER_UNIT);
+        let expected_baseline_units = 1 + COMPONENT_COUNT + expected_wide_units + COMPONENT_COUNT;
+        let baseline = Baseline {
+            format: BASELINE_FORMAT.into(),
+            project: target.project,
+            board: target.board,
+            source: SourceCapture { capture_id: Uuid::from_u128(1), content_digest: "0".repeat(64) },
+            components,
+            nets,
+        };
+        let _ = take_baseline_total_net_scans();
+        assert_eq!(BaselineSteps::total(&baseline), expected_baseline_units);
+        assert_eq!(take_baseline_total_net_scans(), net_count);
+
+        Arc::make_mut(&mut project.board).baseline = Some(Arc::new(baseline));
+        let expected_total = 2 + expected_baseline_units + project.board.footprints().len();
+        let saved_documents = encode_documents(Arc::new(project.clone())).unwrap();
+        let saved_board_len = saved_documents[&project_board_path(&saved_documents[ENTRY_POINT]).unwrap().unwrap()].len();
+
+        let _ = take_baseline_total_net_scans();
+        check_board_document_size(&project).unwrap();
+        assert_eq!(take_baseline_total_net_scans(), 0);
+
+        let mut check = BoardSizeCheck::new(true);
+        let _ = take_baseline_total_net_scans();
+        assert_eq!(check.progress(&project), (0, expected_total));
+        assert_eq!(take_baseline_total_net_scans(), net_count);
+
+        let mut previous_completed = 0usize;
+        let mut steps = 0usize;
+        while !check.step(&project, 1).unwrap() {
+            steps += 1;
+            let (completed, total) = check.progress(&project);
+            assert_eq!(total, expected_total);
+            assert_eq!(completed, steps);
+            assert!(completed >= previous_completed);
+            previous_completed = completed;
+            assert_eq!(take_baseline_total_net_scans(), 0);
+        }
+        assert_eq!(check.progress(&project), (expected_total, expected_total));
+        assert_eq!(take_baseline_total_net_scans(), 0);
+        assert_eq!(steps, expected_total);
+        assert_eq!(check.byte_count(), saved_board_len);
+    }
+
+    use crate::board::track::tests::{copper_layers, routed_fixture, view};
+    use crate::board::zones::{
+        ADD_ZONE, MAX_POINTS, MAX_ZONES, ZONE_VALIDATION_EDGES_PER_UNIT, ZoneValidationSteps, take_zone_edges_stepped, validate as validate_zones,
+    };
+    use serde_json::json;
+
+    /// Build a strictly convex `count`-vertex polygon in nanometres for zone validation tests.
+    fn regular_polygon(count: usize, offset_x_nm: i64) -> Vec<Point> {
+        const RADIUS_NM: f64 = 5_000_000.0;
+        (0..count)
+            .map(|index| {
+                let angle = 2.0 * std::f64::consts::PI * (index as f64) / (count as f64);
+                Point { x_nm: offset_x_nm + (RADIUS_NM * angle.cos()).round() as i64, y_nm: (RADIUS_NM * angle.sin()).round() as i64 }
+            })
+            .collect()
+    }
+
+    /// Step `BoardSizeCheck` one unit at a time until it returns an error, asserting every
+    /// intermediate step stays within the per-unit zone-edge budget.
+    fn drain_budget_one_error(project: &Project) -> String {
+        let mut check = BoardSizeCheck::new(true);
+        let limit = check.progress(project).1.saturating_add(4);
+        let _ = take_zone_edges_stepped();
+        for _ in 0..=limit {
+            match check.step(project, 1) {
+                Ok(true) => panic!("expected zone validation error, but BoardSizeCheck completed"),
+                Ok(false) => {
+                    assert!(take_zone_edges_stepped() <= ZONE_VALIDATION_EDGES_PER_UNIT);
+                }
+                Err(error) => return error,
+            }
+        }
+        panic!("BoardSizeCheck did not terminate");
+    }
+
+    /// A board at the maximum total-vertex budget (32 zones x 256 vertices = 8,192 points)
+    /// validates zones in bounded edge batches, cancels cleanly mid-validation, matches saved
+    /// board bytes, and preserves exact limit, duplicate-ID, option, and outline errors.
+    #[test]
+    fn board_size_check_validates_zones_in_bounded_cancellable_batches() {
+        const ZONES: usize = 32;
+        let mut session = routed_fixture();
+        let board = view(&session).target.board;
+        let copper_layer = copper_layers(&session)[0];
+        let nets = session.project().unwrap().inspect_net_registry().unwrap();
+        let square = [
+            Point { x_nm: 0, y_nm: 0 },
+            Point { x_nm: 10_000_000, y_nm: 0 },
+            Point { x_nm: 10_000_000, y_nm: 10_000_000 },
+            Point { x_nm: 0, y_nm: 10_000_000 },
+        ];
+        session
+            .apply(
+                ADD_ZONE,
+                &json!({
+                    "board": board,
+                    "layer": copper_layer,
+                    "target": { "kind": "derived", "anchor": nets["nets"][0]["anchor"] },
+                    "points": square,
+                    "expected_revision": session.revision(),
+                }),
+            )
+            .unwrap();
+
+        let mut base = session.project().unwrap().clone();
+        let template = base.board.zones[0].clone();
+        Arc::make_mut(&mut base.board).zones = (0..ZONES)
+            .map(|index| {
+                let mut zone = template.clone();
+                zone.id = Uuid::from_u128(0x70_0000 + index as u128);
+                zone.points = regular_polygon(MAX_POINTS, (index as i64) * 12_000_000);
+                zone
+            })
+            .collect();
+        let project = Arc::new(base);
+
+        let expected_zone_units = ZONES * MAX_POINTS.div_ceil(ZONE_VALIDATION_EDGES_PER_UNIT);
+        assert_eq!(ZoneValidationSteps::total(&project), expected_zone_units);
+
+        let documents = encode_documents(project.clone()).unwrap();
+        let saved_board = documents[&project_board_path(&documents[ENTRY_POINT]).unwrap().unwrap()].len();
+        let mut whole = BoardSizeCheck::new(true);
+        assert!(whole.step(&project, usize::MAX).unwrap());
+        assert_eq!(whole.byte_count(), saved_board);
+        let (whole_completed, total) = whole.progress(&project);
+        assert_eq!(whole_completed, total);
+
+        // Budget-0 does no work; budget-1 validates at most ZONE_VALIDATION_EDGES_PER_UNIT edges
+        // per step and counts the exact saved board bytes.
+        let mut single = BoardSizeCheck::new(true);
+        let _ = take_zone_edges_stepped();
+        assert!(!single.step(&project, 0).unwrap());
+        assert_eq!(take_zone_edges_stepped(), 0);
+        assert_eq!(single.progress(&project), (0, total));
+
+        let mut steps = 0usize;
+        let mut total_zone_edges = 0usize;
+        while !single.step(&project, 1).unwrap() {
+            let edges = take_zone_edges_stepped();
+            assert!(edges <= ZONE_VALIDATION_EDGES_PER_UNIT);
+            steps += 1;
+            if steps <= expected_zone_units {
+                assert!(edges > 0);
+            } else {
+                assert_eq!(edges, 0);
+            }
+            total_zone_edges += edges;
+            assert_eq!(single.progress(&project), (steps, total));
+        }
+        assert_eq!(take_zone_edges_stepped(), 0);
+        assert_eq!(total_zone_edges, ZONES * MAX_POINTS);
+        assert_eq!(single.progress(&project), (total, total));
+        assert_eq!(single.byte_count(), saved_board);
+
+        // Dropping mid-validation (mid-first-zone and mid-board) cancels cleanly before any header
+        // bytes are written, and resuming from those boundaries still matches the saved board.
+        for pause_at in [3usize, expected_zone_units / 2] {
+            let mut canceled = BoardSizeCheck::new(true);
+            let _ = take_zone_edges_stepped();
+            for expected in 1..=pause_at {
+                assert!(!canceled.step(&project, 1).unwrap());
+                assert!(take_zone_edges_stepped() <= ZONE_VALIDATION_EDGES_PER_UNIT);
+                assert_eq!(canceled.progress(&project), (expected, total));
+            }
+            assert_eq!(canceled.byte_count(), 0);
+            drop(canceled);
+
+            let mut resumed = BoardSizeCheck::new(true);
+            for _ in 0..pause_at {
+                assert!(!resumed.step(&project, 1).unwrap());
+            }
+            assert_eq!(resumed.byte_count(), 0);
+            assert_eq!(resumed.progress(&project), (pause_at, total));
+            assert!(resumed.step(&project, usize::MAX).unwrap());
+            assert_eq!(resumed.progress(&project), (total, total));
+            assert_eq!(resumed.byte_count(), saved_board);
+        }
+        assert_eq!(encode_documents(project.clone()).unwrap(), documents);
+
+        // Board-wide point limit (8,196 > 8,192).
+        let mut over_points = (*project).clone();
+        let mut extra = template.clone();
+        extra.id = Uuid::from_u128(0x70_ffff);
+        Arc::make_mut(&mut over_points.board).zones.push(extra);
+        let expected = validate_zones(&over_points).unwrap_err();
+        assert_eq!(expected, "Zone resource limit exceeded.");
+        assert_eq!(drain_budget_one_error(&over_points), expected);
+
+        // Board-wide zone count limit (257 > MAX_ZONES).
+        let mut over_zones = (*project).clone();
+        Arc::make_mut(&mut over_zones.board).zones = (0..=MAX_ZONES)
+            .map(|index| {
+                let mut zone = template.clone();
+                zone.id = Uuid::from_u128(0x71_0000 + index as u128);
+                zone
+            })
+            .collect();
+        let expected = validate_zones(&over_zones).unwrap_err();
+        assert_eq!(expected, "Zone resource limit exceeded.");
+        assert_eq!(drain_budget_one_error(&over_zones), expected);
+
+        // Duplicate zone ID across separate validation batches.
+        let mut dup_id = (*project).clone();
+        let first_id = dup_id.board.zones[0].id;
+        Arc::make_mut(&mut dup_id.board).zones[ZONES - 1].id = first_id;
+        let expected = validate_zones(&dup_id).unwrap_err();
+        assert_eq!(expected, "Zone has a duplicate/nil identity or unregistered net.");
+        assert_eq!(drain_budget_one_error(&dup_id), expected);
+
+        // Invalid zone options.
+        let mut bad_options = (*project).clone();
+        Arc::make_mut(&mut bad_options.board).zones[ZONES / 2].options.priority = 1001;
+        let expected = validate_zones(&bad_options).unwrap_err();
+        assert_eq!(drain_budget_one_error(&bad_options), expected);
+
+        // Self-intersecting outline detected in a later edge batch (edge_cursor >= 32).
+        let mut self_intersect = (*project).clone();
+        Arc::make_mut(&mut self_intersect.board).zones[20].points.swap(40, 41);
+        let expected = validate_zones(&self_intersect).unwrap_err();
+        assert_eq!(expected, "Zone outlines cannot intersect or touch themselves.");
+        assert_eq!(drain_budget_one_error(&self_intersect), expected);
+
+        // Zero-area collinear outline.
+        let mut zero_area = (*project).clone();
+        Arc::make_mut(&mut zero_area.board).zones[10].points =
+            vec![Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 1_000_000, y_nm: 0 }, Point { x_nm: 2_000_000, y_nm: 0 }];
+        let expected = validate_zones(&zero_area).unwrap_err();
+        assert_eq!(expected, "A zone must enclose a nonzero area.");
+        assert_eq!(drain_budget_one_error(&zero_area), expected);
+
+        // Too-few-vertices outline.
+        let mut too_few = (*project).clone();
+        Arc::make_mut(&mut too_few.board).zones[5].points.truncate(2);
+        let expected = validate_zones(&too_few).unwrap_err();
+        assert_eq!(expected, "A zone needs 3–256 distinct bounded vertices; closure is implicit.");
+        assert_eq!(drain_budget_one_error(&too_few), expected);
     }
 }

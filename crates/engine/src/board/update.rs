@@ -19,11 +19,19 @@ use uuid::Uuid;
 std::thread_local! {
     pub(super) static TERMINAL_NET_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BASELINE_TERMINALS_STEPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static BASELINE_TOTAL_NET_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
 pub(crate) fn take_baseline_terminals_stepped() -> usize {
     BASELINE_TERMINALS_STEPPED.with(|count| count.replace(0))
+}
+
+/// Return and reset the current test thread's count of baseline nets scanned by
+/// [`BaselineSteps::total`].
+#[cfg(test)]
+pub(crate) fn take_baseline_total_net_scans() -> usize {
+    BASELINE_TOTAL_NET_SCANS.with(|count| count.replace(0))
 }
 
 /// Explicitly adopt current supported logical inputs before retaining physical removals.
@@ -156,6 +164,8 @@ impl BaselineSteps {
     /// Work units for this baseline: one opening unit, one per component, and one per
     /// [`BASELINE_NET_TERMINALS_PER_UNIT`]-terminal batch (minimum one per net).
     pub(crate) fn total(baseline: &Baseline) -> usize {
+        #[cfg(test)]
+        BASELINE_TOTAL_NET_SCANS.with(|count| count.set(count.get().saturating_add(baseline.nets.len())));
         baseline.nets.iter().fold(1usize.saturating_add(baseline.components.len()), |acc, net| acc.saturating_add(baseline_net_units(net)))
     }
 
