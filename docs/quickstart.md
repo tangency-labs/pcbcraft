@@ -232,8 +232,8 @@ the same `VCC` net name, which can be changed before placement.
    only once the save succeeds. In the browser, leaving or reloading the page
    shows the browser's own warning while the project is unsaved.
    On the desktop, **Preferences → Saving** sets how often unsaved work is
-   copied to your recovery folder (every 5 minutes by default) and whether a
-   project that already has a folder or file is saved on a timer (off by default).
+   copied to your recovery folder and whether a project that already has a
+   folder or file is saved on a timer. Both are off by default.
 
 The status bar shows the grid point under the pointer; click its unit, or press
 **Ctrl+U**, to read coordinates and the grid in mm instead of mil. The wheel zooms

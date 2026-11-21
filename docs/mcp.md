@@ -240,33 +240,9 @@ edits or reach file controls. Headless sessions cannot run them.
 
 ### Preferences and external updates
 
-`app.set_preferences` changes personal editor settings, not project documents,
-board outlines or project Undo. Its optional `autosave_minutes` and
-`save_to_project_minutes` parameters use the same settings as Preferences →
-Saving; they do not introduce an exchange format or domain update command.
-
-The existing [native document identities](native-project-storage.md#document-ownership)
-remain authoritative: project, board and sheet UUIDs and the objects' own IDs,
-not display names, file paths or recovery entry names. Object allocation remains
-scoped to its [saved lineage](multiboard-storage.md#numeric-id-allocation).
-Pinned library content revisions describe authored content; the live session's
-`revision` and `expected_revision` instead guard edits to the currently inspected
-session and are not durable cross-application source identities. The
-[historical capture contract](multiboard-storage.md#unsaved-snapshots-and-historical-references)
-separately describes source captures; the recovery entry name is not such a
-capture identity.
-
-Future SolidCraft/FieldCraft or plugin adapters must submit domain changes
-through the same validated, revision-checked engine transactions as GUI and MCP,
-with explicit project/document/object targets, pinned source content, units and
-transforms. PCBcraft retains its electronics documents, native files, history and
-save lifecycle, including [board-owned outlines](pcb-representation.md#ownership).
-The [extension boundary](../AGENTS.md#extension-and-cross-application-boundaries)
-and [geometry integration boundary](geometry-kernel.md#later-integrations)
-remain the contracts for that future work. These preferences and recovery timers
-implement no live simulation exchange, external parametric evaluator or automatic
-outline synchronization. No such exchange or ABI compatibility has been tested
-here; shared Craft dependencies alone do not establish it.
+`app.set_preferences` changes personal editor settings, including the
+Preferences → Saving intervals `autosave_minutes` and `save_to_project_minutes`;
+it never changes project documents or project Undo.
 
 ## Command API version
 

@@ -1237,7 +1237,8 @@ provides an API for recording unsaved edits, with a per-user recovery store
 as its default. Callers can choose another directory; the API does not check
 whether it is outside a project. Hosts should keep recovery separate from
 project files, the `.pcbcraft-save` transaction and the save lock. The desktop
-attaches a recorder to its open project; the CLI and headless MCP do not yet
+attaches a recorder to its open project when Recovery snapshots is on (it is Off
+by default); the CLI and headless MCP do not yet
 attach one. Offering recovery entries on start is not implemented.
 The API's default store is `PCBCRAFT_RECOVERY_DIR` when set, else `recovery` under
 `%LOCALAPPDATA%\PCBcraft`, `~/Library/Application Support/PCBcraft` or
@@ -1328,29 +1329,41 @@ edits unrecorded until a snapshot succeeds; recovery returns the last recorded
 state. A recorder keeps the entry lock even if its first snapshot fails.
 
 Each recorded edit encodes the whole project and fingerprints the complete
-document set, on the writer thread. The desktop app attempts to delete its entry
-on a clean exit (below); cleanup failures are logged. An entry left by a crash
-stays in the store until the recovery offer on start, which is not built yet,
-deals with it.
+document set, on the writer thread; the editor thread only queues the shared
+project. A recorder started with `RecorderOptions::coalesce_edits` encodes only
+the newest of a run of edits still queued when the writer gets to them, so the
+writer encodes at most one state per completed write however fast edits come.
+Replay is unchanged, since each record holds the documents it produces, but
+`Recovered::commands` then names only the last command of each coalesced run.
+No timing has been measured.
+
+With `RecorderOptions::retention`, the writer first prunes entries no running
+session holds: those last written longer ago than `max_age`, then all but the
+newest `max_entries`. Held entries are never touched, at most 16,384 folder
+entries are examined, and folder-gate contention skips the prune without
+waiting. The desktop keeps 16 such entries for up to 14 days and attempts to
+delete its own entry on a clean exit (below); cleanup failures are logged.
+`JournalRecorder::start` records every edit and prunes nothing.
 
 ### Recovery snapshots and timed saves
 
-The desktop app attempts to record its open project when a recovery folder is
-available. Encoding and I/O failures have the limits described above; the timer
-does not guarantee persistence. A successful recovery snapshot replaces
-`<id>.pc` with the current state and starts an empty journal. **Preferences → Saving → Recovery snapshots**
-(`autosave_minutes`) takes one every 1, 5 (the default) or 10 minutes after
-the first change since the last one. A snapshot waits until editing has paused
-for 2 seconds, but never more than a second interval. Off (0) still requests one
-on the next frame after a synchronous GUI edit timed by `PcbApp::run` takes
-1.5 seconds or longer. That duration hook does not cover live/Assistant dispatch,
-direct session edits or asynchronous work; those routes do not trigger this
-exception to Off. The recorder attempts to journal committed edits whatever the
-setting. A snapshot is skipped only when its journal is open and the state
-matches both the last snapshot and the last recorded state.
+**Preferences → Saving → Recovery snapshots** (`autosave_minutes`) is Off (0)
+by default until the recovery offer on start exists. Off attaches no recorder
+and writes nothing; turning it Off retires the running recorder and attempts to
+delete its entry. Set to 1, 5 or 10 minutes, the desktop app records its open
+project when a recovery folder is available, journaling committed edits and
+taking a snapshot every interval after the first change since the last one.
+Encoding and I/O failures have the limits described above; the timer does not
+guarantee persistence. A successful recovery snapshot replaces `<id>.pc` with
+the current state and starts an empty journal. A snapshot waits until editing
+has paused for 2 seconds, but never more than a second interval. A synchronous
+GUI edit timed by `PcbApp::run` at 1.5 seconds or longer requests one on the
+next frame without waiting for the interval. A snapshot is skipped only when its
+journal is open and the state matches both the last snapshot and the last
+recorded state.
 Native timer logic does not require the window to paint. If recording fails,
-the editor shows a recovery warning and retries a snapshot after five seconds,
-even with no new edits. Detected removal disables that entry until the project
+the status bar says why unsaved work isn't being kept and the editor retries a
+snapshot after five seconds, even with no new edits. Detected removal disables that entry until the project
 is replaced or reopened.
 
 Only an approved project close attempts to delete the current entry. An
@@ -1381,11 +1394,8 @@ separate worker rather than making Save wait for them. A
 timed save is an ordinary save, so **Save** is unavailable while it runs, as
 during any save. The Saving page activates its changes only on **Apply** or **OK**.
 Both settings are personal preferences, also set by `app.set_preferences`, and
-are never stored in the project. The CLI and
-headless MCP do not record unsaved work yet. These preferences neither author
-board outlines nor create a cross-application update path; see the
-[live preference and extension boundary](mcp.md#preferences-and-external-updates)
-for identity, revision and native ownership.
+are never stored in the project ([live preferences](mcp.md#preferences-and-external-updates)).
+The CLI and headless MCP do not record unsaved work yet.
 
 ## Compatibility and fixtures
 
