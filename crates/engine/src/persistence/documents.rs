@@ -87,6 +87,7 @@ const ORIGIN_BOARD_FORMAT: &str = "pcbcraft-board/21";
 const ARC_BOARD_FORMAT: &str = "pcbcraft-board/26";
 const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/34";
 const ARC_LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/35";
+const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const RELATIONS_BOARD_FORMAT: &str = "pcbcraft-board/39";
@@ -344,6 +345,8 @@ struct BoardDocument {
     relations: Option<crate::board::relations::Relations>,
     #[serde(default, deserialize_with = "present")]
     arcs: Option<Vec<crate::board::arc::ArcTrack>>,
+    #[serde(default, deserialize_with = "present")]
+    teardrops: Option<Vec<crate::board::teardrop::Record>>,
     #[serde(default, deserialize_with = "present")]
     zones: Option<Vec<crate::board::zones::Zone>>,
     #[serde(default, deserialize_with = "present")]
@@ -951,6 +954,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             tracks: None,
             vias: None,
             arcs: None,
+            teardrops: None,
             baseline: None,
             footprints: vec![],
         }
@@ -968,16 +972,23 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if let Some(relations) = &board.relations {
         relations.validate().map_err(|error| format!("board.json: {error}"))?;
     }
+    // Format 37 requires teardrops; F1 (format 39) may carry them like every other native field.
+    let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
+    if (!related && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
+        return Err("board.json: teardrops require board format 37 (or 39) and a nonempty array".into());
+    }
+    // Formats 37 and 39 both accept the existing straight-board fields without requiring them.
+    let native_superset = related || with_teardrops;
     let arc_and_footprint_lock_format = board.format == ARC_LOCKED_FOOTPRINT_BOARD_FORMAT;
     let curved = board.format == ARC_BOARD_FORMAT || arc_and_footprint_lock_format;
     if (!related && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: arcs require format 26 or 35 and a nonempty array; format 26 requires arcs, as does format 35.".into());
     }
     let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if !related && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
+    if !native_superset && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
         return Err("board.json: footprint locks require board format 34 or 35; each requires an authored footprint lock.".into());
     }
-    let arc_or_footprint_locks = curved || footprint_locks || related;
+    let arc_or_footprint_locks = curved || footprint_locks || native_superset;
     let reported = board.format == REPORT_BOARD_FORMAT;
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
@@ -1059,7 +1070,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let sided = board.format == SIDE_BOARD_FORMAT;
     let references = board.format == REFERENCE_BOARD_FORMAT;
-    let tracked = related
+    let tracked = native_superset
         || matches!(
             board.format.as_str(),
             TRACK_BOARD_FORMAT
@@ -1085,7 +1096,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     if (board.format == VIA_BOARD_FORMAT && board.vias.is_none())
         || (board.vias.is_some()
-            && !related
+            && !native_superset
             && !matches!(
                 board.format.as_str(),
                 VIA_BOARD_FORMAT
@@ -1173,7 +1184,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     {
         return Err("board.json: pinned physical footprints require board format 5".into());
     }
-    if !related
+    if !native_superset
         && !matches!(
             board.format.as_str(),
             ASSIGNED_BOARD_FORMAT
@@ -1204,7 +1215,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
     }
     if (board.format == ASSIGNED_BOARD_FORMAT && board.assignments.is_none())
-        || (!related
+        || (!native_superset
             && !matches!(
                 board.format.as_str(),
                 ASSIGNED_BOARD_FORMAT
@@ -1254,6 +1265,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
             | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+            | TEARDROP_BOARD_FORMAT
             | REPORT_BOARD_FORMAT
             | ASSIGNED_VIA_BOARD_FORMAT
             | STACK_BOARD_FORMAT
@@ -1508,6 +1520,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     crate::board::arc::validate(project_data, &arcs).map_err(|error| format!("board.json: {error}"))?;
     arcs.sort_by_key(|arc| arc.id);
     Arc::make_mut(&mut project_data.board).arcs = arcs;
+    let mut teardrops = board.teardrops.unwrap_or_default();
+    teardrops.sort_by_key(|record| record.id);
+    Arc::make_mut(&mut project_data.board).teardrops = teardrops;
+    crate::board::teardrop::validate(project_data).map_err(|error| format!("board.json: {error}"))?;
     crate::part_instances::storage::validate_project(project_data)?;
     if let Some(catalog) = net_classes {
         project_data.net_classes = Arc::new(catalog);
@@ -2346,8 +2362,8 @@ impl Write for BoardByteCounter {
     }
 }
 
-/// Check the native board document before adopting an edited copper-bearing board. Use the
-/// native writer's header, record framing, serialized fields and closing bytes.
+/// Check the native board document before adopting an edited board with copper or package
+/// maps. Use the native writer's header, record framing, serialized fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
     let mut bytes = BoardByteCounter::default();
     board_header(&mut bytes, project)?;
@@ -2382,6 +2398,7 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
 fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     crate::board::zones::validate(project)?;
     crate::board::arc::validate(project, &project.board.arcs)?;
+    crate::board::teardrop::validate(project)?;
     let board = &project.board;
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
@@ -2406,6 +2423,7 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         (false, true) => Some(LOCKED_FOOTPRINT_BOARD_FORMAT),
         (false, false) => None,
     };
+    let arc_or_lock_format = if board.teardrops.is_empty() { arc_or_lock_format } else { Some(TEARDROP_BOARD_FORMAT) };
     if let Some(setup) = setup {
         let format = if board.relations.is_some() {
             RELATIONS_BOARD_FORMAT
@@ -2604,6 +2622,14 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         let mut first = true;
         for arc in &board.arcs {
             record(bytes, &mut first, arc)?;
+        }
+        bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+    }
+    if !board.teardrops.is_empty() {
+        bytes.write_all(b"  \"teardrops\": [\n").map_err(|error| error.to_string())?;
+        let mut first = true;
+        for intent in &board.teardrops {
+            record(bytes, &mut first, intent)?;
         }
         bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }

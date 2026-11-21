@@ -13,7 +13,7 @@ use std::{
 };
 use uuid::Uuid;
 
-mod index;
+pub(super) mod index;
 mod overlay;
 pub(crate) mod preparation;
 pub use overlay::{ObstacleId, Overlay, OverlayDecision, OverlayResults};
@@ -144,9 +144,28 @@ impl Session {
     /// Capture saved board defaults, or diagnostic overrides that cannot weaken authored limits.
     /// Rule changes invalidate the returned authority just like copper or connectivity changes.
     pub fn clearance_query_with_rules(&self, target: BoardTarget, overrides: &serde_json::Value) -> Result<ClearanceQuery, CommandError> {
+        self.clearance_query_impl(target, overrides, false)
+    }
+
+    /// Capture only underlying objects. The teardrop command must project its own retained intents.
+    pub(super) fn teardrop_base_query(&self, target: BoardTarget) -> Result<ClearanceQuery, CommandError> {
+        self.clearance_query_impl(target, &serde_json::json!({}), true)
+    }
+
+    /// Share immutable geometry and policy; only the teardrop command supplies its own polygons.
+    fn clearance_query_impl(
+        &self,
+        target: BoardTarget,
+        overrides: &serde_json::Value,
+        teardrop_projection: bool,
+    ) -> Result<ClearanceQuery, CommandError> {
         let snapshot = self.snapshot().ok_or_else(|| CommandError::Unavailable("no project is open".into()))?;
         let view = snapshot.board_view(target).ok_or_else(|| CommandError::NotFound("unknown board target".into()))?;
-        view.require_linear_copper().map_err(CommandError::Unavailable)?;
+        if teardrop_projection {
+            view.require_no_arcs().map_err(CommandError::Unavailable)?;
+        } else {
+            view.require_linear_copper().map_err(CommandError::Unavailable)?;
+        }
         let rules = view.resolve_rules(overrides)?;
         let geometry = self.clearance_cache.try_lock().ok().and_then(|cache| {
             cache.as_ref().filter(|c| c.target == target && Weak::ptr_eq(&c.snapshot, &Arc::downgrade(&snapshot))).map(|c| c.geometry.clone())

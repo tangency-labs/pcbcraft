@@ -15,7 +15,7 @@
     "source": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/source" },
     "pads": {
       "type": "array",
-      "maxItems": 128,
+      "maxItems": 1024,
       "items": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/pad" }
     },
     "non_plated_holes": {
