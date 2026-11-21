@@ -424,4 +424,137 @@ mod tests {
             .insert(0, NetState { display_name: Some("Other".into()), terminals: vec![reused_terminal], names: vec!["Other".into()], origin: None });
         assert!(baseline.encode().unwrap_err().contains("duplicate or unknown component terminal"));
     }
+
+    /// Reference formatter matching main's pre-streaming `Baseline::encode` byte layout.
+    fn legacy_encode(baseline: &Baseline) -> Vec<u8> {
+        let mut out = Vec::new();
+        write!(
+            &mut out,
+            "{{\n  \"format\": \"{}\",\n  \"project\": \"{}\",\n  \"board\": \"{}\",\n  \"source\": ",
+            baseline.format, baseline.project, baseline.board
+        )
+        .unwrap();
+        serde_json::to_writer(&mut out, &baseline.source).unwrap();
+        out.extend_from_slice(b",\n  \"components\": {\n");
+        for (index, (id, component)) in baseline.components.iter().enumerate() {
+            if index != 0 {
+                out.extend_from_slice(b"    ,\n");
+            }
+            write!(&mut out, "    \"{id}\":").unwrap();
+            serde_json::to_writer(&mut out, component).unwrap();
+            out.push(b'\n');
+        }
+        out.extend_from_slice(b"  },\n  \"nets\": [\n");
+        for (index, net) in baseline.nets.iter().enumerate() {
+            if index != 0 {
+                out.extend_from_slice(b"    ,\n");
+            }
+            out.extend_from_slice(b"    ");
+            serde_json::to_writer(&mut out, net).unwrap();
+            out.push(b'\n');
+        }
+        out.extend_from_slice(b"  ]\n}");
+        out
+    }
+
+    /// Standalone `Baseline::encode` must remain byte-identical to main across all five baseline formats.
+    #[test]
+    fn standalone_encode_matches_legacy_bytes_across_all_formats() {
+        use crate::board::update::NetOrigin;
+        use crate::library::parts::{PadIds, Value};
+        use std::collections::BTreeMap;
+
+        let source = SourceCapture { capture_id: Uuid::from_u128(3), content_digest: "b".repeat(64) };
+        let base_part = || PartInstanceState {
+            library: "basic".into(),
+            definition: "resistor".into(),
+            revision: 1,
+            reference: "R1".into(),
+            value: "10k".into(),
+            primary_quantity: None,
+            terminals: vec!["1".into(), "2".into()],
+            package: None,
+        };
+        let mut multipad_part = base_part();
+        let mut mapping = BTreeMap::new();
+        mapping.insert("1".into(), PadIds::One("1".into()));
+        mapping.insert("2".into(), PadIds::Many(vec!["2".into(), "3".into()]));
+        multipad_part.package =
+            Some(Package { library: Some("basic".into()), definition: "0603".into(), revision: 1, mapping, unconnected_pads: vec!["4".into()] });
+        let mut quantity_part = base_part();
+        quantity_part.primary_quantity = Some(Value::Quantity { value: "10000".into(), unit: "Ohm".into() });
+
+        let cases = [
+            Baseline {
+                format: FORMAT.into(),
+                project: Uuid::from_u128(1),
+                board: Uuid::from_u128(2),
+                source: source.clone(),
+                components: BTreeMap::from([(1, base_part())]),
+                nets: vec![NetState {
+                    display_name: None,
+                    terminals: vec![TerminalKey { component: 1, terminal: "1".into() }],
+                    names: vec!["SIG".into()],
+                    origin: None,
+                }],
+            },
+            Baseline {
+                format: MULTIPAD_FORMAT.into(),
+                project: Uuid::from_u128(1),
+                board: Uuid::from_u128(2),
+                source: source.clone(),
+                components: BTreeMap::from([(1, multipad_part)]),
+                nets: vec![NetState {
+                    display_name: None,
+                    terminals: vec![TerminalKey { component: 1, terminal: "1".into() }],
+                    names: vec!["SIG".into()],
+                    origin: None,
+                }],
+            },
+            Baseline {
+                format: QUANTITY_FORMAT.into(),
+                project: Uuid::from_u128(1),
+                board: Uuid::from_u128(2),
+                source: source.clone(),
+                components: BTreeMap::from([(1, quantity_part)]),
+                nets: vec![NetState {
+                    display_name: None,
+                    terminals: vec![TerminalKey { component: 1, terminal: "1".into() }],
+                    names: vec!["SIG".into()],
+                    origin: None,
+                }],
+            },
+            Baseline {
+                format: DISPLAY_FORMAT.into(),
+                project: Uuid::from_u128(1),
+                board: Uuid::from_u128(2),
+                source: source.clone(),
+                components: BTreeMap::from([(1, base_part())]),
+                nets: vec![NetState {
+                    display_name: Some("SIG_DISP".into()),
+                    terminals: vec![TerminalKey { component: 1, terminal: "1".into() }],
+                    names: vec!["SIG".into()],
+                    origin: None,
+                }],
+            },
+            Baseline {
+                format: NET_ORIGIN_FORMAT.into(),
+                project: Uuid::from_u128(1),
+                board: Uuid::from_u128(2),
+                source,
+                components: BTreeMap::from([(1, base_part())]),
+                nets: vec![NetState {
+                    display_name: Some("Net-R1-1".into()),
+                    terminals: vec![TerminalKey { component: 1, terminal: "1".into() }],
+                    names: Vec::new(),
+                    origin: Some(NetOrigin::Schematic),
+                }],
+            },
+        ];
+        for baseline in cases {
+            let encoded = baseline.encode().unwrap();
+            assert_eq!(encoded, legacy_encode(&baseline), "format {}", baseline.format);
+            assert_eq!(Baseline::decode(&encoded).unwrap(), baseline);
+        }
+    }
 }
