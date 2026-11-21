@@ -708,23 +708,28 @@ fn pre_folder_projects_adopt_lifecycle_and_reopen_project_52() {
     });
     project_9.remove("board.json");
 
+    // A boardless project/9 pins a package for component 2 (R1) as a schematic footprint choice,
+    // which selects project/13. The command addresses the component, not a sheet symbol, and
+    // resolves only exact catalog footprints such as basic-components/resistor-0402 r4.
     let mut prep_13 = Session::default();
     prep_13.open_snapshot(decode_documents(&project_9).unwrap());
     prep_13
         .apply(
             crate::board::assignment::ASSIGN_FOOTPRINT,
             &json!({
-                "symbol": "symbol-2",
+                "component": "component-2",
                 "library": "basic-components",
-                "definition": "generic-through-hole-2",
-                "definition_revision": 1,
+                "definition": "resistor-0402",
+                "definition_revision": 4,
                 "mapping": {"1": "1", "2": "2"},
                 "expected_revision": prep_13.revision(),
             }),
         )
         .unwrap();
     let project_13 = encode_documents(prep_13.snapshot().unwrap()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&project_13[crate::persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/13");
+    let entry_13: Value = serde_json::from_slice(&project_13[crate::persistence::ENTRY_POINT]).unwrap();
+    assert_eq!(entry_13["format"], "pcbcraft-project/13");
+    assert_eq!(entry_13["footprint_choices"][0]["component"], 2);
 
     let (documents, draft, _) = source();
     for (label, fixture) in [("project/6", project_6), ("project/9", project_9), ("project/13", project_13)] {
@@ -736,6 +741,7 @@ fn pre_folder_projects_adopt_lifecycle_and_reopen_project_52() {
         let saved = encode_documents(session.snapshot().unwrap()).unwrap();
         let entry: Value = serde_json::from_slice(&saved[crate::persistence::ENTRY_POINT]).unwrap();
         assert_eq!(entry["format"], "pcbcraft-project/52", "{label}");
+        assert_eq!(entry.get("footprint_choices").is_some(), label == "project/13", "{label}");
         assert!(saved.contains_key("library/lifecycle.json"), "{label}");
         let reopened = decode_documents(&saved).unwrap();
         assert_eq!(reopened.lifecycle().disposition(&draft.target), Some(Disposition::Draft), "{label}");
