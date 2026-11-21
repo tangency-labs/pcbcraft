@@ -1,5 +1,5 @@
 //! Benchmark suite for large boards: each named action's nearest-rank p50/p95 against a
-//! committed budget table. Budgets are estimated targets until measured on named machines;
+//! committed budget table. Budgeted boundaries are CPU proxies for the proposed #237 gates;
 //! a verdict describes one machine and build and never gates CI.
 use super::{Environment, Metric, Result, clock_ms, digest, load_artifact, run};
 use pcbcraft_engine::persistence::{decode_packed, encode_packed};
@@ -22,25 +22,41 @@ pub enum Boundary {
     Pooled { prefix: &'static str, suffix: &'static str },
 }
 
-/// One action and its p95 budget. `p95_ms` is `None` when no target has been set yet.
+/// One action and its strict p95 budget: a pass needs p95 below `p95_ms`. `p95_ms` is `None`
+/// when no target has been agreed; `basis` says where the target comes from and what the
+/// measured boundary can and cannot certify.
 #[derive(Clone, Copy, Debug)]
 pub struct Budget {
     pub action: &'static str,
     pub boundary: Boundary,
     pub p95_ms: Option<f64>,
+    pub basis: &'static str,
 }
 
-/// Estimated targets for a board at the envelope size (`envelope-v1`). They are not
-/// measured results; `docs/performance-testing.md` lists the same table. Routing input uses
-/// the proposed #237 routing-input target on the CPU replay of pointer moves during an
-/// active route; the 16.7 ms visible-preview target needs a rendered window and stays unmeasured.
+/// Basis for actions without an agreed target; they report quantiles only.
+const NO_TARGET: &str = "no target yet";
+
+/// The proposed #237 gates (`docs/performance-testing.md`, "Agent acceptance instructions"):
+/// routing input p95 < 4 ms and commit p95 < 100 ms. Both boundaries here are CPU proxies,
+/// so a pass is evidence about service cost, not about the window or a future shove commit.
+/// Open, save, DRC and connectivity have no agreed target and report quantiles only.
 pub const BUDGETS: &[Budget] = &[
-    Budget { action: "open", boundary: Boundary::Metric("decode.cold"), p95_ms: Some(3_000.0) },
-    Budget { action: "save", boundary: Boundary::Metric(SAVE_METRIC), p95_ms: Some(2_000.0) },
-    Budget { action: "drc", boundary: Boundary::Metric("drc.synchronous"), p95_ms: Some(10_000.0) },
-    Budget { action: "connectivity", boundary: Boundary::Metric("electrical_connectivity.first"), p95_ms: None },
-    Budget { action: "move_commit", boundary: Boundary::Metric("command.move_tracks"), p95_ms: Some(100.0) },
-    Budget { action: "routing_input", boundary: Boundary::Pooled { prefix: "replay.reverse.", suffix: ".ui" }, p95_ms: Some(4.0) },
+    Budget { action: "open", boundary: Boundary::Metric("decode.cold"), p95_ms: None, basis: NO_TARGET },
+    Budget { action: "save", boundary: Boundary::Metric(SAVE_METRIC), p95_ms: None, basis: NO_TARGET },
+    Budget { action: "drc", boundary: Boundary::Metric("drc.synchronous"), p95_ms: None, basis: NO_TARGET },
+    Budget { action: "connectivity", boundary: Boundary::Metric("electrical_connectivity.first"), p95_ms: None, basis: NO_TARGET },
+    Budget {
+        action: "move_commit",
+        boundary: Boundary::Metric("command.move_tracks"),
+        p95_ms: Some(100.0),
+        basis: "proposed #237 commit target; validated track-edit proxy, does not qualify walkaround or shove commits",
+    },
+    Budget {
+        action: "routing_input",
+        boundary: Boundary::Pooled { prefix: "replay.reverse.", suffix: ".ui" },
+        p95_ms: Some(4.0),
+        basis: "proposed #237 routing-input target; CPU service-cost proxy, does not certify the window input budget",
+    },
 ];
 
 /// Targets the suite cannot measure yet; they are listed so a report never implies them.
@@ -48,6 +64,7 @@ const UNMEASURED: &[&str] = &[
     "memory: process RSS on the envelope board (use the resource collector)",
     "agent bulk change of 10,000 objects",
     "multi-core speedup of DRC, pour fill and connectivity",
+    "window routing input p95 < 4 ms (CPU replay is a proxy)",
     "valid visible preview p95 < 16.7 ms / p99 < 33 ms (CPU replay is a proxy)",
 ];
 
@@ -86,8 +103,9 @@ fn samples_for(boundary: Boundary, metrics: &[Metric]) -> Vec<f64> {
         .collect()
 }
 
-/// Compare each budgeted action's nearest-rank p95 with its budget. An action whose boundary
-/// recorded no samples is `Unmeasured`, whatever its budget.
+/// Compare each budgeted action's nearest-rank p95 with its budget; only a p95 strictly below
+/// the budget passes. An action whose boundary recorded no samples is `Unmeasured`, whatever
+/// its budget.
 pub fn assess(budgets: &[Budget], metrics: &[Metric]) -> Vec<Assessment> {
     budgets
         .iter()
@@ -103,7 +121,7 @@ pub fn assess(budgets: &[Budget], metrics: &[Metric]) -> Vec<Assessment> {
             let verdict = match (p95, budget.p95_ms) {
                 (None, _) => Verdict::Unmeasured,
                 (Some(_), None) => Verdict::NoBudget,
-                (Some(actual), Some(limit)) if actual <= limit => Verdict::MeasuredPass,
+                (Some(actual), Some(limit)) if actual < limit => Verdict::MeasuredPass,
                 (Some(_), Some(_)) => Verdict::MeasuredMiss,
             };
             let boundary = match budget.boundary {
@@ -117,7 +135,7 @@ pub fn assess(budgets: &[Budget], metrics: &[Metric]) -> Vec<Assessment> {
                 p50_ms: p50,
                 p95_ms: p95,
                 budget_p95_ms: budget.p95_ms,
-                budget_basis: if budget.p95_ms.is_some() { "estimated target" } else { "no target set" },
+                budget_basis: budget.basis,
                 verdict,
             }
         })

@@ -237,7 +237,7 @@ to both revisions and document that patch; do not silently compare different cod
 
 `board_perf budgets` runs the same CPU workloads as `run` on one saved artifact,
 also times a packed save of that project, and reports each action's nearest-rank
-p50/p95 next to a committed p95 budget:
+p50/p95 next to its p95 budget when one has been proposed:
 
 ```sh
 target/release/examples/board_perf generate envelope-v1 "$(git rev-parse HEAD)" /tmp/envelope-v1.json
@@ -245,25 +245,31 @@ target/release/examples/board_perf budgets /tmp/envelope-v1.json /tmp/native-env
 ```
 
 | Action | Boundary | p95 budget |
-| --- | --- | ---: |
-| `open` | `decode.cold` | 3,000 ms |
-| `save` | `encode.packed` | 2,000 ms |
-| `drc` | `drc.synchronous` | 10,000 ms |
+| --- | --- | --- |
+| `open` | `decode.cold` | no target yet |
+| `save` | `encode.packed` | no target yet |
+| `drc` | `drc.synchronous` | no target yet |
 | `connectivity` | `electrical_connectivity.first` | no target yet |
-| `move_commit` | `command.move_tracks` | 100 ms |
-| `routing_input` | every `replay.reverse.*.ui` sample, pooled | 4 ms |
+| `move_commit` | `command.move_tracks` | below 100 ms (proposed #237 commit target; track-edit proxy) |
+| `routing_input` | every `replay.reverse.*.ui` sample, pooled | below 4 ms (proposed #237 routing-input target; CPU service-cost proxy) |
 
-These budgets are estimated targets for a board at the `envelope-v1` size, not
-measured results. Each action gets **measured pass** (p95 at or under budget),
-**measured miss**, **unmeasured** (its boundary recorded no samples) or **no
-budget**. A missing boundary never counts as a pass. The save must reproduce the
-saved archive bytes; that check runs outside the timed boundary. `open` covers
-unpacking, decoding and validating the archive, not process startup or the file
-dialog. `routing_input` is the CPU replay proxy described above, so it cannot
-certify the visible-preview budget (p95 < 16.7 ms / p99 < 33 ms). The report lists
-that budget, process memory, a 10,000-object agent change and multi-core speedup
-as unmeasured. A verdict describes one machine and build; like other timings here,
-it does not gate CI. The first iteration checks clearance pairs against the
+Open, save, DRC and connectivity have no agreed target, so the suite reports their
+quantiles with the verdict **no budget**. The two budgeted rows use the proposed
+#237 gates (see [Agent acceptance instructions](#agent-acceptance-instructions))
+and are strict: each action gets **measured pass** (p95 below
+budget), **measured miss** (p95 at or above budget), **unmeasured** (its boundary
+recorded no samples) or **no budget**. A missing boundary never counts as a pass.
+Each row carries a `budget_basis` saying where its target comes from and what its
+boundary can certify. `routing_input` is the CPU service-cost proxy described
+there, so a pass certifies neither the window's routing-input budget nor either
+visible-preview budget (p95 < 16.7 ms / p99 < 33 ms); `move_commit` times a
+validated track edit and does not qualify walkaround or shove commits. The report
+lists the window routing-input budget, the visible-preview budget, process memory,
+a 10,000-object agent change and multi-core speedup as unmeasured. The save must
+reproduce the saved archive bytes; that check runs outside the timed boundary.
+`open` covers unpacking, decoding and validating the archive, not process startup
+or the file dialog. A verdict describes one machine and build; like other timings
+here, it does not gate CI. The first iteration checks clearance pairs against the
 exhaustive reference, so envelope-size runs take much longer than the timed
 boundaries alone.
 

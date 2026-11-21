@@ -146,9 +146,11 @@ single observation. DRC and preparation have no standalone budget in #237.
 
 The [budget suite](performance-testing.md#budget-suite-for-large-boards)
 (`board_perf budgets`) reports open, save, DRC, connectivity, move-commit and
-routing-input p50/p95 against estimated budgets for an `envelope-v1` board. No
-envelope-size measurements are recorded here yet; those budgets stay **unmeasured**
-until a run on named hardware is added.
+routing-input p50/p95. Only move-commit and routing-input have a budget: the
+proposed #237 targets, assessed strictly on CPU proxies that certify neither the
+window input budget nor visible preview. Open, save, DRC and connectivity report
+quantiles with no target yet. No envelope-size measurements are recorded here yet;
+the suite's rows stay **unmeasured** until a run on named hardware is added.
 
 No budget is relaxed by this change. The reference process's observed peak sampled
 RSS is 28,499,968 bytes and sampled VmHWM is 28,794,880 bytes. The separate
