@@ -233,6 +233,40 @@ and browser reports are separate baselines and cannot be compared as one series.
 If a feature needs a new boundary, apply the same measurement-only instrumentation
 to both revisions and document that patch; do not silently compare different code.
 
+## Budget suite for large boards
+
+`board_perf budgets` runs the same CPU workloads as `run` on one saved artifact,
+also times a packed save of that project, and reports each action's nearest-rank
+p50/p95 next to a committed p95 budget:
+
+```sh
+target/release/examples/board_perf generate envelope-v1 "$(git rev-parse HEAD)" /tmp/envelope-v1.json
+target/release/examples/board_perf budgets /tmp/envelope-v1.json /tmp/native-env.json 20 /tmp/envelope-budgets.json
+```
+
+| Action | Boundary | p95 budget |
+| --- | --- | ---: |
+| `open` | `decode.cold` | 3,000 ms |
+| `save` | `encode.packed` | 2,000 ms |
+| `drc` | `drc.synchronous` | 10,000 ms |
+| `connectivity` | `electrical_connectivity.first` | no target yet |
+| `move_commit` | `command.move_tracks` | 100 ms |
+| `routing_input` | every `replay.reverse.*.ui` sample, pooled | 4 ms |
+
+These budgets are estimated targets for a board at the `envelope-v1` size, not
+measured results. Each action gets **measured pass** (p95 at or under budget),
+**measured miss**, **unmeasured** (its boundary recorded no samples) or **no
+budget**. A missing boundary never counts as a pass. The save must reproduce the
+saved archive bytes; that check runs outside the timed boundary. `open` covers
+unpacking, decoding and validating the archive, not process startup or the file
+dialog. `routing_input` is the CPU replay proxy described above, so it cannot
+certify the visible-preview budget (p95 < 16.7 ms / p99 < 33 ms). The report lists
+that budget, process memory, a 10,000-object agent change and multi-core speedup
+as unmeasured. A verdict describes one machine and build; like other timings here,
+it does not gate CI. The first iteration checks clearance pairs against the
+exhaustive reference, so envelope-size runs take much longer than the timed
+boundaries alone.
+
 ## Property-edit service-time diagnostic
 
 `property_edit_perf` in `pcbcraft-engine` measures synchronous shared property

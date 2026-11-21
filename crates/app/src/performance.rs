@@ -5,6 +5,7 @@
 mod bga;
 #[cfg(target_arch = "wasm32")]
 mod browser_capture;
+pub mod budget;
 pub mod checker;
 mod envelope;
 mod fixture;
@@ -649,6 +650,64 @@ mod tests {
         let reencoded_documents = encode_documents(reopened_documents).unwrap();
         let actual_digests: BTreeMap<_, _> = reencoded_documents.iter().map(|(path, bytes)| (path.clone(), digest(bytes))).collect();
         assert_eq!(actual_digests, expected_digests);
+    }
+
+    /// The suite reports p50/p95 for every budgeted action on a command-generated fixture,
+    /// times the save boundary, and gives each action the verdict its own budget implies.
+    #[test]
+    fn budget_suite_reports_each_action_against_its_budget() {
+        use budget::{BUDGETS, Verdict};
+        let artifact = generate("reference-v1", "test").unwrap();
+        let report = budget::suite(&artifact, environment(), 2).unwrap();
+        assert_eq!(report["schema"], budget::SCHEMA);
+        assert_eq!(report["artifact_sha256"], digest(artifact.as_bytes()));
+        let actions = report["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), BUDGETS.len());
+        for (row, budget) in actions.iter().zip(BUDGETS) {
+            assert_eq!(row["action"], budget.action);
+            let p50 = row["p50_ms"].as_f64().unwrap();
+            let p95 = row["p95_ms"].as_f64().unwrap();
+            assert!(p50 <= p95, "{}: p50 {p50} above p95 {p95}", budget.action);
+            assert!(row["samples"].as_u64().unwrap() >= 2, "{}", budget.action);
+            let expected = match budget.p95_ms {
+                None => Verdict::NoBudget,
+                Some(limit) if p95 <= limit => Verdict::MeasuredPass,
+                Some(_) => Verdict::MeasuredMiss,
+            };
+            assert_eq!(row["verdict"], serde_json::to_value(expected).unwrap(), "{}", budget.action);
+            assert_eq!(row["budget_p95_ms"].as_f64(), budget.p95_ms);
+        }
+        let routing = actions.iter().find(|row| row["action"] == "routing_input").unwrap();
+        assert_eq!(routing["samples"], 12, "six route pointer moves per iteration");
+        let unmeasured = report["unmeasured"].as_array().unwrap();
+        assert!(unmeasured.iter().any(|item| item.as_str().unwrap().starts_with("memory")));
+    }
+
+    /// A budget decides by nearest-rank p95; an absent boundary stays unmeasured even with a
+    /// budget, and an action without a target reports quantiles but no pass or miss.
+    #[test]
+    fn budget_assessment_uses_p95_and_never_passes_missing_boundaries() {
+        use budget::{Boundary, Budget, Verdict, assess};
+        let samples: Vec<f64> = (1..=20).map(f64::from).collect();
+        let metrics = vec![
+            Metric::new("one", samples.clone()),
+            Metric::new("replay.reverse.0.ui", vec![1.0, 2.0]),
+            Metric::new("replay.reverse.1.ui", vec![3.0, 40.0]),
+            Metric::new("replay.reverse.1.tessellate", vec![500.0, 500.0]),
+        ];
+        let budgets = [
+            Budget { action: "pass", boundary: Boundary::Metric("one"), p95_ms: Some(19.0) },
+            Budget { action: "miss", boundary: Boundary::Metric("one"), p95_ms: Some(18.9) },
+            Budget { action: "absent", boundary: Boundary::Metric("missing"), p95_ms: Some(1e9) },
+            Budget { action: "open", boundary: Boundary::Metric("one"), p95_ms: None },
+            Budget { action: "pooled", boundary: Boundary::Pooled { prefix: "replay.reverse.", suffix: ".ui" }, p95_ms: Some(16.7) },
+        ];
+        let rows = assess(&budgets, &metrics);
+        let verdicts: Vec<_> = rows.iter().map(|row| row.verdict).collect();
+        assert_eq!(verdicts, [Verdict::MeasuredPass, Verdict::MeasuredMiss, Verdict::Unmeasured, Verdict::NoBudget, Verdict::MeasuredMiss]);
+        assert_eq!((rows[0].p50_ms, rows[0].p95_ms), (Some(10.0), Some(19.0)));
+        assert_eq!((rows[2].samples, rows[2].p95_ms), (0, None));
+        assert_eq!((rows[4].samples, rows[4].p50_ms, rows[4].p95_ms), (4, Some(2.0), Some(40.0)));
     }
 
     /// Corrupt archives, unsupported recipes and invalid sample/environment metadata must
