@@ -285,10 +285,14 @@ impl Session {
                     sheet.connectivity = Arc::default();
                 }
                 let removed = Arc::make_mut(&mut project.sheets).remove(index);
+                let retired: std::collections::BTreeSet<_> = removed
+                    .symbols
+                    .iter()
+                    .map(|symbol| symbol.component)
+                    .filter(|&component| !project.all_symbols().any(|other| other.component == component))
+                    .collect();
+                project.retire_components(retired)?;
                 for symbol in removed.symbols.iter() {
-                    if !project.all_symbols().any(|other| other.component == symbol.component) {
-                        project.retire_component(symbol.component);
-                    }
                     Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
                 }
             }

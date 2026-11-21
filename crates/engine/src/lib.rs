@@ -2862,13 +2862,25 @@ impl Project {
         self.components.get(&symbol.component)
     }
 
-    /// Retire one live part through the board's accepted-state policy. Last
-    /// visible shared fields become retained display metadata; package/terminal
-    /// and connection acceptance remain unchanged until a reviewed update.
-    pub(crate) fn retire_component(&mut self, id: u64) {
-        let component = Arc::make_mut(&mut self.components).remove(&id);
-        Arc::make_mut(&mut self.schematic_packages).remove_component(id);
-        Arc::make_mut(&mut self.board).remove_component(id, component.as_ref());
+    /// Retire live parts through the board's accepted-state policy. Last visible
+    /// shared fields become retained display metadata; package/terminal and
+    /// connection acceptance remain unchanged until a reviewed update. Refuse
+    /// the batch before mutating when any part would immediately remove a
+    /// locked footprint.
+    pub(crate) fn retire_components(&mut self, ids: impl IntoIterator<Item = u64>) -> Result<(), CommandError> {
+        let ids: std::collections::BTreeSet<u64> = ids.into_iter().collect();
+        let immediate = ids
+            .iter()
+            .filter(|&&id| self.board.baseline.as_ref().is_none_or(|baseline| !baseline.components.contains_key(&id)))
+            .filter_map(|&id| self.board.footprint_for_part_instance(id))
+            .map(Some);
+        board::transform::require_unlocked_placements(self, immediate)?;
+        for id in ids {
+            let component = Arc::make_mut(&mut self.components).remove(&id);
+            Arc::make_mut(&mut self.schematic_packages).remove_component(id);
+            Arc::make_mut(&mut self.board).remove_component(id, component.as_ref());
+        }
+        Ok(())
     }
 
     /// Return the owning component's reference, or empty text for a foreign placement.
@@ -4194,12 +4206,7 @@ impl Session {
         project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
         if !project.all_symbols().any(|other| other.component == symbol.component) {
-            if project.board.baseline.is_none()
-                && let Some(footprint) = project.board.footprint_for_part_instance(symbol.component)
-            {
-                board::transform::require_unlocked_placements(&project, [Some(footprint)])?;
-            }
-            project.retire_component(symbol.component);
+            project.retire_components([symbol.component])?;
         }
         project.sheet_mut().connectivity = Arc::default();
         self.change(project)?;

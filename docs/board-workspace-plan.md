@@ -316,8 +316,9 @@ not validate closure across paths, edge clearance or manufacturing validity.
 Selection filters now occupy the lower-right card, with supported footprint and
 board-graphic categories and shared GUI/live-MCP handlers. Each PCB view can
 exclude locked footprints, tracks and vias without changing visibility or
-project inspection. New views include locked objects by default, and saved
-views without the setting include them.
+project inspection. New project views include locked objects by default; a view
+opened beside another copies its filters, and saved views without the setting
+include them.
 Flip view and the broader layout ribbon remain future work.
 
 A bounded transform slice now moves and rotates existing legacy and physical SMD

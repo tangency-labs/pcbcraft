@@ -54,17 +54,9 @@ fn marker_fixture() -> Session {
     session
 }
 
-/// Last-unit deletion on a board without a baseline leaves the locked placement and history intact.
-/// The same deletion on an unlocked placement still removes both the component and its footprint.
-#[test]
-fn last_unit_delete_refuses_locked_legacy_placement_atomically() {
-    let mut session = marker_fixture();
-    let original = session.snapshot().unwrap();
-    assert!(original.board.baseline.is_none());
-    let symbol = &original.symbols[0];
-    let footprint = &original.board.footprints[0];
-    let locked_name = format!("{} (footprint-{})", original.reference(symbol), footprint.id);
-    session.open_snapshot(with_lock(&original, true));
+fn assert_refused_legacy_retire(original: &Arc<Project>, component: u64, locked_name: &str, command: &str, params: Value) {
+    let mut session = Session::default();
+    session.open_snapshot(with_lock(original, true));
     session.apply("project.rename", &json!({"name":"Locked legacy board"})).unwrap();
     add_redo_control(&mut session);
     let before = session.snapshot().unwrap();
@@ -75,18 +67,100 @@ fn last_unit_delete_refuses_locked_legacy_placement_atomically() {
     };
     let before_history = history(&session);
     assert!(before_history.iter().all(|entries| entries.iter().any(Option::is_some)));
-    let error = session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol.id(),"expected_revision":revision})).unwrap_err();
-    assert!(matches!(&error, crate::CommandError::InvalidParams(message) if message.contains(&locked_name)), "{error}");
-    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
-    assert!(session.project().unwrap().board.footprint_for_part_instance(symbol.component).unwrap().locked);
-    assert_eq!((session.revision(), session.history_root_revision(), history(&session)), (revision, root, before_history));
+    let mut locked_params = params.clone();
+    locked_params["expected_revision"] = json!(revision);
+    let error = session.apply(command, &locked_params).unwrap_err();
+    assert!(matches!(&error, crate::CommandError::InvalidParams(message) if message.contains(locked_name)), "{command}: {error}");
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()), "{command}");
+    assert!(session.project().unwrap().board.footprint_for_part_instance(component).unwrap().locked, "{command}");
+    assert_eq!((session.revision(), session.history_root_revision(), history(&session)), (revision, root, before_history), "{command}");
 
-    session.open_snapshot(original.clone());
-    session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol.id(),"expected_revision":session.revision()})).unwrap();
-    assert!(session.project().unwrap().symbols.is_empty());
-    assert!(session.project().unwrap().board.footprint_for_part_instance(symbol.component).is_none());
-    session.apply("edit.undo", &Value::Null).unwrap();
-    crate::assert_same_content(&original, &session.snapshot().unwrap());
+    let mut unlocked = Session::default();
+    unlocked.open_snapshot(original.clone());
+    let mut unlocked_params = params;
+    unlocked_params["expected_revision"] = json!(unlocked.revision());
+    unlocked.apply(command, &unlocked_params).unwrap();
+    assert!(unlocked.project().unwrap().all_symbols().all(|s| s.component != component), "{command}");
+    assert!(unlocked.project().unwrap().board.footprint_for_part_instance(component).is_none(), "{command}");
+    unlocked.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(original, &unlocked.snapshot().unwrap());
+}
+
+/// Last-unit deletion on a board without a baseline leaves the locked placement and history intact.
+/// The same deletion on an unlocked placement still removes both the component and its footprint.
+#[test]
+fn last_unit_delete_refuses_locked_legacy_placement_atomically() {
+    let session = marker_fixture();
+    let original = session.snapshot().unwrap();
+    assert!(original.board.baseline.is_none());
+    let symbol = &original.symbols[0];
+    let footprint = &original.board.footprints[0];
+    let locked_name = format!("{} (footprint-{})", original.reference(symbol), footprint.id);
+    assert_refused_legacy_retire(&original, symbol.component, &locked_name, crate::DELETE_SYMBOL, json!({"symbol":symbol.id()}));
+}
+
+/// GUI Delete (`schematic.delete_items`) shares the legacy-board lock refusal and leaves state untouched.
+#[test]
+fn delete_items_refuses_locked_legacy_placement_atomically() {
+    let session = marker_fixture();
+    let original = session.snapshot().unwrap();
+    assert!(original.board.baseline.is_none());
+    let symbol = &original.symbols[0];
+    let footprint = &original.board.footprints[0];
+    let locked_name = format!("{} (footprint-{})", original.reference(symbol), footprint.id);
+    let items = crate::selection::Selection::one_symbol(symbol.id());
+    assert_refused_legacy_retire(&original, symbol.component, &locked_name, crate::DELETE_ITEMS, json!({"items":items}));
+}
+
+/// Schematic Cut refuses retiring a component whose legacy footprint is locked.
+#[test]
+fn schematic_cut_refuses_locked_legacy_placement_atomically() {
+    let session = marker_fixture();
+    let original = session.snapshot().unwrap();
+    assert!(original.board.baseline.is_none());
+    let symbol = &original.symbols[0];
+    let footprint = &original.board.footprints[0];
+    let locked_name = format!("{} (footprint-{})", original.reference(symbol), footprint.id);
+    let items = crate::selection::Selection::one_symbol(symbol.id());
+    assert_refused_legacy_retire(&original, symbol.component, &locked_name, crate::clipboard::CUT, json!({"items":items}));
+}
+
+/// Hierarchical Cut refuses retiring a root component whose legacy footprint is locked.
+#[test]
+fn hierarchy_cut_refuses_locked_legacy_placement_atomically() {
+    let mut session = marker_fixture();
+    session
+        .apply(crate::hierarchy::CREATE_CHILD, &json!({"name":"Child","x_nm":30_480_000,"y_nm":0,"expected_revision":session.revision()}))
+        .unwrap();
+    let original = session.snapshot().unwrap();
+    assert!(original.board.baseline.is_none());
+    let root = original.sheets().next().unwrap().target;
+    let block = format!("sheet-symbol-{}", original.subsheets[0].id);
+    let symbol = &original.symbols[0];
+    let footprint = &original.board.footprints[0];
+    let locked_name = format!("{} (footprint-{})", original.reference(symbol), footprint.id);
+    let items = crate::selection::Selection::one_symbol(symbol.id());
+    assert_refused_legacy_retire(
+        &original,
+        symbol.component,
+        &locked_name,
+        crate::clipboard::CUT,
+        json!({"sheet":root.id(),"items":items,"objects":[block]}),
+    );
+}
+
+/// Deleting a sheet refuses retiring a component whose legacy footprint is locked.
+#[test]
+fn sheet_delete_refuses_locked_legacy_placement_atomically() {
+    let mut session = marker_fixture();
+    session.apply(crate::sheets::CREATE_SHEET, &json!({"name":"Secondary","expected_revision":session.revision()})).unwrap();
+    let original = session.snapshot().unwrap();
+    assert!(original.board.baseline.is_none());
+    let first = original.sheets().next().unwrap().target;
+    let symbol = &original.symbols[0];
+    let footprint = &original.board.footprints[0];
+    let locked_name = format!("{} (footprint-{})", original.reference(symbol), footprint.id);
+    assert_refused_legacy_retire(&original, symbol.component, &locked_name, crate::sheets::DELETE_SHEET, json!({"sheet":first.id()}));
 }
 
 /// Split documents and packed bytes retain a legacy marker lock and a non-first physical lock,

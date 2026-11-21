@@ -145,7 +145,9 @@ impl Filters {
 /// Check selected IDs against one ID-sorted copper slice without walking the board.
 /// IDs absent from this slice may belong to the other copper kind, so leave them alone.
 fn retain_unlocked_ids<T>(selected: &mut BTreeSet<uuid::Uuid>, ordered: &[T], mut fields: impl FnMut(&T) -> (uuid::Uuid, bool)) {
-    selected.retain(|id| !ordered.binary_search_by_key(id, |item| fields(item).0).is_ok_and(|index| fields(&ordered[index]).1));
+    selected.retain(|id| {
+        !ordered.binary_search_by_key(id, |item| fields(item).0).is_ok_and(|index| ordered.get(index).is_some_and(|item| fields(item).1))
+    });
 }
 
 impl PcbApp {

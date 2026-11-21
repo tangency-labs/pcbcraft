@@ -465,7 +465,7 @@ fn selected_copper_is_selectable<T>(
     id_of: impl FnMut(&T) -> Uuid,
     allowed: impl FnOnce(&T) -> bool,
 ) -> bool {
-    enabled && ordered.binary_search_by_key(id, id_of).is_ok_and(|i| allowed(&ordered[i]))
+    enabled && ordered.binary_search_by_key(id, id_of).is_ok_and(|i| ordered.get(i).is_some_and(allowed))
 }
 
 /// The topmost visible via or track under a screen point, among the allowed kinds.

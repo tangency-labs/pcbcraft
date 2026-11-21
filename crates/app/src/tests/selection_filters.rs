@@ -518,3 +518,40 @@ fn definition_views_refuse_filter_panel_actions_and_report_the_card_hidden() {
         }
     }
 }
+
+/// PCB Selection filters card with the Locked objects row in its default checked state.
+#[test]
+fn pcb_selection_filters_card_shows_locked_objects_checked() {
+    let mut h = fixture();
+    let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    assert!(h.state().views.active.filters.include_locked);
+    assert_eq!(h.get_by_label("Select locked objects").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+}
+
+/// PCB Selection filters card with the Locked objects row cleared.
+#[test]
+fn pcb_selection_filters_card_shows_locked_objects_cleared() {
+    let mut h = fixture();
+    let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    click(&mut h, "Select locked objects");
+    assert!(!h.state().views.active.filters.include_locked);
+    assert_eq!(h.get_by_label("Select locked objects").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+}
