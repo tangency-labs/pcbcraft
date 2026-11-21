@@ -241,7 +241,11 @@ fn recipe_and_designator_lock_save_as_project_57_and_fall_back() {
 fn recipe_command_schema_matches_runtime_validation() {
     let described = crate::catalog().iter().find(|command| command.id == SET_OUTPUT_RECIPE).unwrap().to_json();
     let content_schema = &described["params"]["properties"]["content"];
-    assert_eq!(content_schema, &schema());
+    // Discovery adds each parameter's summary as its description; the rest is the runtime schema.
+    assert_eq!(content_schema["description"], "Complete recipe configuration, or null to remove it");
+    let mut published = content_schema.clone();
+    published.as_object_mut().unwrap().remove("description");
+    assert_eq!(published, schema());
     let properties = &content_schema["oneOf"][1]["properties"];
     let name_schema = &properties["name"];
     let stem_schema = &properties["file_stem"];
