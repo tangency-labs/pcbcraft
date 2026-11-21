@@ -107,24 +107,40 @@ fn assessment_round_trips_offline_and_adopts_in_one_undo_step() {
     assert_eq!(crate::persistence::decode_packed(&packed).unwrap().documents, released_files);
 }
 
+/// Snapshot the revision, history root and undo/redo flags to assert refused edits touch none of them.
+fn history_state(session: &Session) -> (u64, u64, bool, bool) {
+    let inspected = session.inspect();
+    (session.revision(), session.history_root_revision(), inspected["can_undo"].as_bool().unwrap(), inspected["can_redo"].as_bool().unwrap())
+}
+
 /// Publisher refresh can expose more information but may not change a pin or overwrite immutable assertion bytes.
 #[test]
 fn conflict_and_stale_selection_do_not_replace_a_pinned_assertion() {
     let (mut session, mut documents, draft, mut released) = placed();
+    let pre_adopt = encode_documents(session.snapshot().unwrap()).unwrap();
     let mut stale = params(&session, &released);
     session.apply(ADOPT, &params(&session, &draft)).unwrap();
     assert_eq!(session.execute(LOOKUP, &params_for_lookup(&released)).unwrap()["digest"], released.digest().unwrap());
     let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let before_history = history_state(&session);
     assert!(session.execute(ADOPT, &stale).unwrap_err().to_string().contains("project changed"));
+    assert_eq!(history_state(&session), before_history);
     stale["expected_revision"] = json!(session.revision());
     stale["digest"] = json!("0".repeat(64));
     assert!(session.execute(ADOPT, &stale).unwrap_err().to_string().contains("content changed"));
+    assert_eq!(history_state(&session), before_history);
     released.state = "obsolete".into();
     documents.insert("lifecycle-assertions/drawing-assessment.r2.json".into(), released.encode().unwrap());
     session.execute(LOAD, &json!({"source":"fixture","documents":documents})).unwrap();
     assert!(session.execute(LOOKUP, &params_for_lookup(&released)).unwrap_err().to_string().contains("Conflicting"));
+    assert_eq!(history_state(&session), before_history);
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
     assert_eq!(session.snapshot().unwrap().lifecycle().disposition(&draft.target), Some(Disposition::Draft));
+    // Undo steps back to pre-adoption in one step, proving no refused edit entered history.
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), pre_adopt);
+    session.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
 }
 
 /// Build the three exact address fields that the read-only source command accepts.
@@ -181,13 +197,18 @@ fn custom_and_unknown_schemes_are_not_evaluated_by_label() {
         scheme: draft.scheme.clone(),
         states: vec![State { id: "draft".into(), label: "Production".into(), disposition: Disposition::Deprecated }],
     };
+    let before_refusal = encode_documents(session.snapshot().unwrap()).unwrap();
+    let before_history = history_state(&session);
     policy.scheme.revision = 1;
     edit["policy"] = json!(policy);
     assert!(session.execute(ADOPT, &edit).unwrap_err().to_string().contains("exact scheme revision"));
+    assert_eq!(history_state(&session), before_history);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_refusal);
     policy.scheme.revision = 2;
     edit["policy"] = json!(policy);
     assert_eq!(session.execute(ADOPT, &edit).unwrap()["disposition_after"], "deprecated");
     session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_refusal);
     assert_eq!(session.snapshot().unwrap().lifecycle().disposition(&draft.target), None);
 }
 
@@ -195,11 +216,21 @@ fn custom_and_unknown_schemes_are_not_evaluated_by_label() {
 #[test]
 fn codecs_refuse_wrong_versions_unknown_fields_and_limits() {
     let (_, mut draft, _) = source();
-    draft.reason = "é".repeat(MAX_NOTE_BYTES / 2);
+    draft.reason = "é".repeat(MAX_NOTE_CHARS);
+    draft.provenance.publisher = "é".repeat(MAX_LABEL_CHARS);
     let encoded = draft.encode().unwrap();
     assert_eq!(Assertion::read(&encoded).unwrap(), draft);
-    draft.reason.push('x');
-    assert!(draft.encode().unwrap_err().contains("exceeds 4096 UTF-8 bytes"));
+    for bad_reason in ["", " ", " Drawing review", "Drawing review ", "Drawing\nreview", "Drawing\treview", "A\0B", &"é".repeat(MAX_NOTE_CHARS + 1)]
+    {
+        let mut invalid = draft.clone();
+        invalid.reason = bad_reason.into();
+        assert!(invalid.encode().is_err(), "reason {bad_reason:?}");
+    }
+    for bad_publisher in ["", " ", " Publisher", "Publisher ", "Pub\nlisher", "A\x7fB", &"é".repeat(MAX_LABEL_CHARS + 1)] {
+        let mut invalid = draft.clone();
+        invalid.provenance.publisher = bad_publisher.into();
+        assert!(invalid.encode().is_err(), "publisher {bad_publisher:?}");
+    }
     let mut value: Value = serde_json::from_str(&encoded).unwrap();
     value["target"]["unexpected"] = json!(true);
     assert!(Assertion::read(&value.to_string()).unwrap_err().contains("unknown field `unexpected`"));
@@ -207,10 +238,14 @@ fn codecs_refuse_wrong_versions_unknown_fields_and_limits() {
     value["format"] = json!("pcbcraft-lifecycle-assertion/2");
     assert!(Assertion::read(&value.to_string()).unwrap_err().contains("Unsupported lifecycle assertion format"));
     let mut policy = Policy::standard();
-    policy.states = (0..MAX_STATES)
-        .map(|i| State { id: format!("state-{i}"), label: "é".repeat(MAX_LABEL_BYTES / 2), disposition: Disposition::Draft })
-        .collect();
+    policy.states =
+        (0..MAX_STATES).map(|i| State { id: format!("state-{i}"), label: "é".repeat(MAX_LABEL_CHARS), disposition: Disposition::Draft }).collect();
     assert!(policy.validate().is_ok());
+    for bad_label in ["", " ", " Released", "Released ", "Re\nleased", "A\x7fB", &"é".repeat(MAX_LABEL_CHARS + 1)] {
+        let mut invalid = Policy::standard();
+        invalid.states[0].label = bad_label.into();
+        assert!(invalid.validate().is_err(), "label {bad_label:?}");
+    }
     policy.states.push(State { id: "extra".into(), label: "Extra".into(), disposition: Disposition::Draft });
     assert!(policy.validate().unwrap_err().contains("must contain 1 to 64 states"));
     policy.states.truncate(2);
@@ -317,8 +352,10 @@ fn reopened_pin_refuses_different_content_at_the_same_address() {
     let mut reopened = Session::default();
     reopened.open_snapshot(decode_documents(&saved).unwrap());
     reopened.execute(LOAD, &json!({"source":"fixture","documents":documents})).unwrap();
+    let before_history = history_state(&reopened);
     let error = reopened.execute(ADOPT, &params(&reopened, &changed)).unwrap_err().to_string();
     assert!(error.contains("already has different pinned content"), "{error}");
+    assert_eq!(history_state(&reopened), before_history);
     assert_eq!(encode_documents(reopened.snapshot().unwrap()).unwrap(), saved);
     assert_eq!(reopened.snapshot().unwrap().lifecycle().disposition(&draft.target), Some(Disposition::Draft));
 }
@@ -448,5 +485,245 @@ fn ordinary_edit_without_assessments_preserves_prior_format_and_removing_last_as
         assert_eq!(encode_documents(Arc::new(cleared)).unwrap(), edited);
         session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), edited);
+    }
+}
+
+/// Positional JSON arrays are refused at every level of assertion files, lifecycle.json and MCP policies.
+#[test]
+fn positional_json_arrays_are_refused_in_assertions_assessments_and_policy() {
+    let (mut session, _, draft, _) = placed();
+    let standard = Policy::standard();
+    let base: Value = serde_json::from_str(&draft.encode().unwrap()).unwrap();
+    let positional_assertion =
+        json!([FORMAT, &base["address"], &base["target"], &base["scheme"], &base["state"], &base["reason"], &base["provenance"]]);
+    assert!(Assertion::read(&positional_assertion.to_string()).unwrap_err().contains("expected an object"));
+    for (field, array) in [
+        ("address", json!([draft.address.library, draft.address.id, draft.address.revision])),
+        ("target", json!([draft.target.library, "symbol", draft.target.id, draft.target.revision])),
+        ("scheme", json!([draft.scheme.library, draft.scheme.id, draft.scheme.revision])),
+        ("provenance", json!([draft.provenance.publisher])),
+    ] {
+        let mut mutated = base.clone();
+        mutated[field] = array;
+        assert!(Assertion::read(&mutated.to_string()).unwrap_err().contains("expected an object"), "nested {field}");
+    }
+
+    let positional_stored = json!([[&base], [&standard]]);
+    let positional_assertion_item = json!({"assertions":[&positional_assertion],"policies":[]});
+    let positional_policy_item = json!({
+        "assertions":[&base],
+        "policies":[[&standard.scheme, [["draft", "Draft", "draft"]]]]
+    });
+    for (label, value) in [("stored", positional_stored), ("assertion item", positional_assertion_item), ("policy item", positional_policy_item)] {
+        let bytes = serde_json::to_vec(&value).unwrap();
+        assert!(Assessments::decode(&bytes).unwrap_err().contains("expected an object"), "{label}");
+    }
+
+    let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let before_history = history_state(&session);
+    for (label, policy) in [
+        ("policy", json!([&standard.scheme, [{"id":"draft","label":"Draft","disposition":"draft"}]])),
+        (
+            "policy.scheme",
+            json!({"scheme":[&standard.scheme.library, &standard.scheme.id, standard.scheme.revision],"states":[{"id":"draft","label":"Draft","disposition":"draft"}]}),
+        ),
+        ("policy.states[0]", json!({"scheme":&standard.scheme,"states":[["draft","Draft","draft"]]})),
+    ] {
+        let mut request = params(&session, &draft);
+        request["policy"] = policy;
+        assert!(session.execute(ADOPT, &request).is_err(), "{label}");
+        assert_eq!(history_state(&session), before_history, "{label}");
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before, "{label}");
+    }
+}
+
+/// Build a native source with `count` distinct symbols and assertions (each on its own scheme revision).
+fn bulk_source(count: usize, reason: &str) -> (Documents, Vec<Assertion>) {
+    let (base_docs, template, _) = source();
+    let symbol_path = base_docs.keys().find(|path| path.starts_with("symbols/")).unwrap().clone();
+    let symbol_value: Value = serde_json::from_str(&base_docs[&symbol_path]).unwrap();
+    let mut documents = Documents::new();
+    documents.insert("library.json".into(), base_docs["library.json"].clone());
+    let mut assertions = Vec::with_capacity(count);
+    for index in 0..count {
+        let id = format!("sym-{index}");
+        let mut sym = symbol_value.clone();
+        sym["id"] = json!(id);
+        documents.insert(format!("symbols/{id}.json"), sym.to_string());
+        let mut assertion = template.clone();
+        assertion.address.id = format!("assess-{index}");
+        assertion.address.revision = 1;
+        assertion.target.id = id;
+        assertion.scheme = Reference { library: "lifecycle-demo".into(), id: "scheme".into(), revision: (index + 1) as u32 };
+        assertion.reason = reason.into();
+        documents.insert(format!("lifecycle-assertions/assess-{index}.r1.json"), assertion.encode().unwrap());
+        assertions.push(assertion);
+    }
+    (documents, assertions)
+}
+
+/// Boundary tests for 128/129 assessments, 32/33 policies, and the 4 MiB document size limit,
+/// including dry-run parity and unchanged revision/history/bytes on every refusal.
+#[test]
+fn assessment_and_policy_count_and_size_limits_refuse_cleanly() {
+    // 1. 128 assessments accepted, 129th refused (apply and dry_run).
+    let (documents, assertions) = bulk_source(129, "Pending review");
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    session.execute(LOAD, &json!({"source":"fixture","documents":documents})).unwrap();
+    for assertion in &assertions[..128] {
+        session.execute(ADOPT, &params(&session, assertion)).unwrap();
+    }
+    let at_limit = encode_documents(session.snapshot().unwrap()).unwrap();
+    let at_limit_history = history_state(&session);
+    for dry_run in [true, false] {
+        let mut over = params(&session, &assertions[128]);
+        over["dry_run"] = json!(dry_run);
+        assert!(session.execute(ADOPT, &over).unwrap_err().to_string().contains("up to 128 lifecycle assessments"));
+        assert_eq!(history_state(&session), at_limit_history);
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), at_limit);
+    }
+
+    // 2. 32 policies accepted, 33rd refused (apply and dry_run).
+    let (policy_docs, policy_assertions) = bulk_source(33, "Policy check");
+    let mut policy_session = Session::default();
+    policy_session.apply("project.new", &json!({})).unwrap();
+    policy_session.execute(LOAD, &json!({"source":"fixture","documents":policy_docs})).unwrap();
+    for assertion in &policy_assertions[..32] {
+        let mut req = params(&policy_session, assertion);
+        req["policy"] = json!(Policy {
+            scheme: assertion.scheme.clone(),
+            states: vec![State { id: "draft".into(), label: "Draft".into(), disposition: Disposition::Draft }],
+        });
+        policy_session.execute(ADOPT, &req).unwrap();
+    }
+    let at_policy_limit = encode_documents(policy_session.snapshot().unwrap()).unwrap();
+    let at_policy_history = history_state(&policy_session);
+    for dry_run in [true, false] {
+        let mut over = params(&policy_session, &policy_assertions[32]);
+        over["dry_run"] = json!(dry_run);
+        over["policy"] = json!(Policy {
+            scheme: policy_assertions[32].scheme.clone(),
+            states: vec![State { id: "draft".into(), label: "Draft".into(), disposition: Disposition::Draft }],
+        });
+        assert!(policy_session.execute(ADOPT, &over).unwrap_err().to_string().contains("up to 32 lifecycle policies"));
+        assert_eq!(history_state(&policy_session), at_policy_history);
+        assert_eq!(encode_documents(policy_session.snapshot().unwrap()).unwrap(), at_policy_limit);
+    }
+
+    // 3. Exact 4 MiB accepted vs 4 MiB + 1 refused in decode, and ADOPT exceeding 4 MiB refused cleanly.
+    const FOUR_MIB: usize = 4 * 1024 * 1024;
+    let (_, draft, _) = source();
+    let standard = Policy::standard();
+    let mut padded = stored(&[&draft], &[&standard]);
+    padded.resize(FOUR_MIB, b' ');
+    assert!(Assessments::decode(&padded).is_ok());
+    padded.push(b' ');
+    assert!(Assessments::decode(&padded).unwrap_err().contains("exceeds 4 MiB"));
+
+    // 128 max-character 4-byte UTF-8 assertions (~2.1 MiB) + 32 max-state policies (~2.1 MiB) cross 4 MiB.
+    let big_reason = "😀".repeat(MAX_NOTE_CHARS);
+    let big_label = "😀".repeat(MAX_LABEL_CHARS);
+    let (big_docs, big_assertions) = bulk_source(128, &big_reason);
+    let mut size_session = Session::default();
+    size_session.apply("project.new", &json!({})).unwrap();
+    size_session.execute(LOAD, &json!({"source":"fixture","documents":big_docs})).unwrap();
+    let mut hit_size_limit = false;
+    for (index, assertion) in big_assertions.iter().enumerate() {
+        let mut req = params(&size_session, assertion);
+        if index < 32 {
+            let states = (0..MAX_STATES)
+                .map(|i| State {
+                    id: if i == 0 { "draft".into() } else { format!("s-{i}") },
+                    label: big_label.clone(),
+                    disposition: Disposition::Draft,
+                })
+                .collect();
+            req["policy"] = json!(Policy { scheme: assertion.scheme.clone(), states });
+        }
+        let before = encode_documents(size_session.snapshot().unwrap()).unwrap();
+        let before_history = history_state(&size_session);
+        let mut dry = req.clone();
+        dry["dry_run"] = json!(true);
+        match size_session.execute(ADOPT, &dry) {
+            Ok(_) => {
+                assert_eq!(history_state(&size_session), before_history);
+                size_session.execute(ADOPT, &req).unwrap();
+            }
+            Err(error) => {
+                assert!(error.to_string().contains("exceeds 4 MiB"), "{error}");
+                assert_eq!(history_state(&size_session), before_history);
+                assert_eq!(encode_documents(size_session.snapshot().unwrap()).unwrap(), before);
+                assert!(size_session.execute(ADOPT, &req).unwrap_err().to_string().contains("exceeds 4 MiB"));
+                assert_eq!(history_state(&size_session), before_history);
+                assert_eq!(encode_documents(size_session.snapshot().unwrap()).unwrap(), before);
+                hit_size_limit = true;
+                break;
+            }
+        }
+    }
+    assert!(hit_size_limit, "expected 4 MiB lifecycle document limit refusal");
+}
+
+/// Pre-folder projects (/6, /9 and /13) can adopt a lifecycle assessment, write /52 and reopen cleanly.
+#[test]
+fn pre_folder_projects_adopt_lifecycle_and_reopen_project_52() {
+    let base: crate::persistence::Documents = [
+        (crate::persistence::ENTRY_POINT, include_bytes!("../../../../../app/tests/fixtures/split/two-resistors/project.json").as_slice()),
+        ("board.json", include_bytes!("../../../../../app/tests/fixtures/split/two-resistors/board.json").as_slice()),
+        (
+            "sheets/0bbcf5e3-dd21-47b3-ae6b-bd66c8f97989.json",
+            include_bytes!("../../../../../app/tests/fixtures/split/two-resistors/sheets/0bbcf5e3-dd21-47b3-ae6b-bd66c8f97989.json").as_slice(),
+        ),
+        (
+            "library/symbols/starter/resistor.r1.json",
+            include_bytes!("../../../../../app/tests/fixtures/split/two-resistors/library/symbols/starter/resistor.r1.json").as_slice(),
+        ),
+    ]
+    .into_iter()
+    .map(|(path, bytes)| (path.to_owned(), bytes.to_vec()))
+    .collect();
+
+    let project_6 = edit_project_header(&base, |header| header["format"] = json!("pcbcraft-project/6"));
+    let mut project_9 = edit_project_header(&base, |header| {
+        header["format"] = json!("pcbcraft-project/9");
+        header["boards"] = json!([]);
+    });
+    project_9.remove("board.json");
+
+    let mut prep_13 = Session::default();
+    prep_13.open_snapshot(decode_documents(&project_9).unwrap());
+    prep_13
+        .apply(
+            crate::board::assignment::ASSIGN_FOOTPRINT,
+            &json!({
+                "symbol": "symbol-2",
+                "library": "basic-components",
+                "definition": "generic-through-hole-2",
+                "definition_revision": 1,
+                "mapping": {"1": "1", "2": "2"},
+                "expected_revision": prep_13.revision(),
+            }),
+        )
+        .unwrap();
+    let project_13 = encode_documents(prep_13.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<Value>(&project_13[crate::persistence::ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/13");
+
+    let (documents, draft, _) = source();
+    for (label, fixture) in [("project/6", project_6), ("project/9", project_9), ("project/13", project_13)] {
+        let mut session = Session::default();
+        session.open_snapshot(decode_documents(&fixture).unwrap());
+        let before = encode_documents(session.snapshot().unwrap()).unwrap();
+        session.execute(LOAD, &json!({"source":"fixture","documents":documents})).unwrap();
+        session.execute(ADOPT, &params(&session, &draft)).unwrap();
+        let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+        let entry: Value = serde_json::from_slice(&saved[crate::persistence::ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/52", "{label}");
+        assert!(saved.contains_key("library/lifecycle.json"), "{label}");
+        let reopened = decode_documents(&saved).unwrap();
+        assert_eq!(reopened.lifecycle().disposition(&draft.target), Some(Disposition::Draft), "{label}");
+        assert_eq!(encode_documents(reopened).unwrap(), saved, "{label}");
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before, "{label}");
     }
 }

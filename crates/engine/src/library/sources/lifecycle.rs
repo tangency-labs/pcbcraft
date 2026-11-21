@@ -17,8 +17,41 @@ pub const FORMAT: &str = "pcbcraft-lifecycle-assertion/1";
 /// Flat source directory for assertions, separate from item definitions.
 pub(super) const DIRECTORY: &str = "lifecycle-assertions";
 const MAX_STATES: usize = 64;
-const MAX_LABEL_BYTES: usize = 256;
-const MAX_NOTE_BYTES: usize = 4096;
+const MAX_LABEL_CHARS: usize = 256;
+const MAX_NOTE_CHARS: usize = 4096;
+
+/// Decode only from a JSON object, refusing the positional sequence form derived structs also accept.
+pub(super) struct Object<T>(pub(super) T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
+        struct Record<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Record<T> {
+            type Value = Object<T>;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("an object")
+            }
+
+            fn visit_map<A: serde::de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                T::deserialize(serde::de::value::MapAccessDeserializer::new(map)).map(Object)
+            }
+        }
+        de.deserialize_map(Record(std::marker::PhantomData))
+    }
+}
+
+fn object<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<T, D::Error> {
+    Object::deserialize(de).map(|Object(value)| value)
+}
+
+fn objects<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Vec<T>, D::Error> {
+    Vec::<Object<T>>::deserialize(de).map(|records| records.into_iter().map(|Object(value)| value).collect())
+}
+
+pub(super) fn arc_objects<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Vec<std::sync::Arc<T>>, D::Error> {
+    Vec::<Object<T>>::deserialize(de).map(|records| records.into_iter().map(|Object(value)| std::sync::Arc::new(value)).collect())
+}
 
 /// Project interpretation of a state; scheme IDs and display labels do not imply a disposition.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,11 +76,20 @@ pub struct State {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
+    #[serde(deserialize_with = "object")]
     pub scheme: Reference,
+    #[serde(deserialize_with = "objects")]
     pub states: Vec<State>,
 }
 
 impl Policy {
+    /// Decode a policy from a JSON object value, refusing positional arrays at every level.
+    pub(crate) fn from_value(value: serde_json::Value) -> Result<Self, String> {
+        let Object(policy): Object<Self> = serde_json::from_value(value).map_err(|error| error.to_string())?;
+        policy.validate()?;
+        Ok(policy)
+    }
+
     /// The default mapping is applied only to this reserved exact scheme revision.
     pub fn standard() -> Self {
         use Disposition::{Deprecated, Draft, Obsolete, Released};
@@ -74,7 +116,7 @@ impl Policy {
         let mut ids = BTreeSet::new();
         for state in &self.states {
             check_state_id(&state.id)?;
-            check_line("lifecycle state label", &state.label, MAX_LABEL_BYTES)?;
+            check_line("lifecycle state label", &state.label, MAX_LABEL_CHARS)?;
             if !ids.insert(state.id.as_str()) {
                 return Err(format!("Duplicate lifecycle state ID {:?}", state.id));
             }
@@ -100,11 +142,15 @@ pub struct Provenance {
 #[serde(deny_unknown_fields)]
 pub struct Assertion {
     pub format: String,
+    #[serde(deserialize_with = "object")]
     pub address: Reference,
+    #[serde(deserialize_with = "object")]
     pub target: Key,
+    #[serde(deserialize_with = "object")]
     pub scheme: Reference,
     pub state: String,
     pub reason: String,
+    #[serde(deserialize_with = "object")]
     pub provenance: Provenance,
 }
 
@@ -114,7 +160,7 @@ impl Assertion {
         if text.len() > super::MAX_FILE_BYTES {
             return Err("Lifecycle assertion exceeds the native document limit".into());
         }
-        let assertion: Self = serde_json::from_str(text).map_err(|error| error.to_string())?;
+        let Object(assertion): Object<Self> = serde_json::from_str(text).map_err(|error| error.to_string())?;
         assertion.validate()?;
         Ok(assertion)
     }
@@ -143,14 +189,14 @@ impl Assertion {
         }
         self.scheme.validate()?;
         check_state_id(&self.state)?;
-        check_line("lifecycle reason", &self.reason, MAX_NOTE_BYTES)?;
-        check_line("lifecycle publisher", &self.provenance.publisher, MAX_LABEL_BYTES)
+        check_line("lifecycle reason", &self.reason, MAX_NOTE_CHARS)?;
+        check_line("lifecycle publisher", &self.provenance.publisher, MAX_LABEL_CHARS)
     }
 }
 
 /// Stable IDs are lowercase ASCII slugs; labels may be localized without changing identity.
 fn check_state_id(id: &str) -> Result<(), String> {
-    if !(1..=MAX_LABEL_BYTES).contains(&id.len())
+    if !(1..=MAX_LABEL_CHARS).contains(&id.len())
         || !id.bytes().all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
         || id.starts_with('-')
         || id.ends_with('-')
@@ -160,11 +206,8 @@ fn check_state_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Apply both native one-line text rules and the UTF-8 byte limit.
+/// Apply the native single-line trimmed text rules and character limit.
 fn check_line(field: &str, text: &str, limit: usize) -> Result<(), String> {
-    if text.len() > limit {
-        return Err(format!("`{field}` exceeds {limit} UTF-8 bytes"));
-    }
     check_text(field, text, limit)
 }
 

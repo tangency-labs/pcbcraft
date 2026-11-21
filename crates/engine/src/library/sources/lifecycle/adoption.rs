@@ -64,7 +64,9 @@ pub struct Assessments {
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Stored {
+    #[serde(deserialize_with = "super::arc_objects")]
     assertions: Vec<Arc<Assertion>>,
+    #[serde(deserialize_with = "super::arc_objects")]
     policies: Vec<Arc<Policy>>,
 }
 
@@ -105,7 +107,7 @@ impl Assessments {
         if bytes.len() > MAX_BYTES {
             return Err("Project lifecycle data exceeds 4 MiB".into());
         }
-        let stored: Stored = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
+        let super::Object(stored): super::Object<Stored> = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
         if !(1..=MAX_ASSESSMENTS).contains(&stored.assertions.len()) || stored.policies.len() > MAX_POLICIES {
             return Err("Invalid project lifecycle assessment or policy count".into());
         }
@@ -188,7 +190,7 @@ impl Session {
             return Err(fail("Lifecycle assertion content changed; inspect the exact revision and retry".into()));
         }
         self.libraries().item(&assertion.target).map_err(fail)?;
-        let policy = params.get("policy").map(|value| serde_json::from_value(value.clone())).transpose().map_err(|e| fail(e.to_string()))?;
+        let policy = params.get("policy").map(|value| Policy::from_value(value.clone())).transpose().map_err(fail)?;
         let old = self.open_project()?;
         let candidate = old.lifecycle.adopting(assertion.clone(), policy).map_err(fail)?;
         let changed = candidate != *old.lifecycle;
@@ -203,8 +205,9 @@ impl Session {
             let (prepared, highest) = self.prepare_change(project)?;
             let prepared = self.retain_allocation_watermark(Arc::new(prepared));
             // Refuse this explicit adoption before publishing if it would make the project
-            // exceed native storage limits; ordinary Save does not run an adoption check.
-            crate::persistence::encode_documents(prepared.clone()).map_err(fail)?;
+            // exceed native storage limits or fail to reopen; ordinary Save does not run an adoption check.
+            let encoded = crate::persistence::encode_documents(prepared.clone()).map_err(fail)?;
+            crate::persistence::decode_documents(&encoded).map_err(fail)?;
             if !dry_run {
                 self.publish_change(prepared, highest);
             }

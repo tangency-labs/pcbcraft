@@ -229,7 +229,8 @@ required fields `format`, `address`, `target`, `scheme`, `state`, `reason` and
 `provenance`. `address` and `scheme` each contain `library`, `id` and a positive
 `revision`; `target` adds the native item `kind`. The assertion and target must
 belong to the publishing library. `state` is a stable lowercase ID, `reason` is a
-nonempty single-line note of up to 4 KiB, and `provenance` contains `publisher`
+nonempty single-line trimmed note of up to 4,096 characters (no control
+characters), and `provenance` contains `publisher` (up to 256 characters)
 without a personal registration or path. No fields accept null or unknown keys.
 The payload, not the filename, defines the exact address. Publish a new assertion
 revision to change a state; reusing an address for different content is a conflict.

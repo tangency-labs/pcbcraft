@@ -6,6 +6,11 @@
   "$defs": {
     "nativeId": {"type": "string", "minLength": 1, "maxLength": 64, "pattern": "^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$"},
     "stateId": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$"},
+    "singleLineText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[^\\s\\x00-\\x1f\\x7f-\\x9f](?:[^\\x00-\\x1f\\x7f-\\x9f]*[^\\s\\x00-\\x1f\\x7f-\\x9f])?$"
+    },
     "revision": {"type": "integer", "minimum": 1, "maximum": 4294967295},
     "reference": {
       "type": "object",
@@ -38,12 +43,12 @@
         "target": {"$ref": "#/$defs/target"},
         "scheme": {"$ref": "#/$defs/reference"},
         "state": {"$ref": "#/$defs/stateId"},
-        "reason": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "reason": {"$ref": "#/$defs/singleLineText", "maxLength": 4096},
         "provenance": {
           "type": "object",
           "additionalProperties": false,
           "required": ["publisher"],
-          "properties": {"publisher": {"type": "string", "minLength": 1, "maxLength": 256}}
+          "properties": {"publisher": {"$ref": "#/$defs/singleLineText", "maxLength": 256}}
         }
       }
     },
@@ -63,7 +68,7 @@
             "required": ["id", "label", "disposition"],
             "properties": {
               "id": {"$ref": "#/$defs/stateId"},
-              "label": {"type": "string", "minLength": 1, "maxLength": 256},
+              "label": {"$ref": "#/$defs/singleLineText", "maxLength": 256},
               "disposition": {"enum": ["draft", "released", "deprecated", "obsolete"]}
             }
           }

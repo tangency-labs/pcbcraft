@@ -201,6 +201,49 @@ class LibrarySchemaTests(unittest.TestCase):
         program = "const cases=JSON.parse(require('fs').readFileSync(0,'utf8'));for(const c of cases){if(new RegExp(c.pattern).test(c.text)!==c.expected)throw new Error(JSON.stringify(c));}"
         subprocess.run(["node", "-e", program], input=json.dumps(cases), text=True, check=True, capture_output=True)
 
+    def test_lifecycle_text_rules_match_runtime_and_cross_language_regex(self):
+        validator = self.checks["urn:pcbcraft:schema:lifecycle:1"]
+        assertion = {
+            "format": "pcbcraft-lifecycle-assertion/1",
+            "address": {"library": "lifecycle-demo", "id": "drawing-assessment", "revision": 1},
+            "target": {"library": "lifecycle-demo", "kind": "symbol", "id": "resistor", "revision": 1},
+            "scheme": {"library": "pcbcraft", "id": "lifecycle", "revision": 1},
+            "state": "draft",
+            "reason": "é" * 4096,
+            "provenance": {"publisher": "é" * 256},
+        }
+        validator.validate(assertion)
+        policy = {
+            "scheme": {"library": "pcbcraft", "id": "lifecycle", "revision": 1},
+            "states": [{"id": "draft", "label": "é" * 256, "disposition": "draft"}],
+        }
+        assessments = {"assertions": [assertion], "policies": [policy]}
+        validator.validate(assessments)
+        for bad_reason in ["", " ", " Drawing review", "Drawing review ", "Drawing\nreview", "Drawing\treview", "A\x00B", "é" * 4097]:
+            changed = copy.deepcopy(assertion)
+            changed["reason"] = bad_reason
+            self.assertFalse(validator.is_valid(changed), repr(bad_reason))
+        for bad_short in ["", " ", " Released", "Released ", "Re\nleased", "A\x7fB", "é" * 257]:
+            changed = copy.deepcopy(assertion)
+            changed["provenance"]["publisher"] = bad_short
+            self.assertFalse(validator.is_valid(changed), repr(bad_short))
+            changed_assessments = copy.deepcopy(assessments)
+            changed_assessments["policies"][0]["states"][0]["label"] = bad_short
+            self.assertFalse(validator.is_valid(changed_assessments), repr(bad_short))
+        if shutil.which("node"):
+            lifecycle = json.loads((ROOT / "docs/schemas/lifecycle-v1.schema.json").read_text())
+            pattern = lifecycle["$defs"]["singleLineText"]["pattern"]
+            cases = [
+                {"pattern": pattern, "text": value, "expected": ok}
+                for value, ok in [
+                    ("A", True), ("Drawing review", True), ("é" * 4096, True),
+                    ("", False), (" ", False), (" A", False), ("A ", False),
+                    ("A\nB", False), ("A\tB", False), ("A\x00B", False), ("A\x7fB", False),
+                ]
+            ]
+            program = "const cases=JSON.parse(require('fs').readFileSync(0,'utf8'));for(const c of cases){if(new RegExp(c.pattern).test(c.text)!==c.expected)throw new Error(JSON.stringify(c));}"
+            subprocess.run(["node", "-e", program], input=json.dumps(cases), text=True, check=True, capture_output=True)
+
     def test_missing_checker_dependency_has_an_installation_hint(self):
         result = subprocess.run([sys.executable, "-S", str(ROOT / "scripts/check-library-schemas.py")], capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)

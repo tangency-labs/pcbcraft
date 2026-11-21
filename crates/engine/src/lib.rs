@@ -263,7 +263,7 @@ impl ParamKind {
             Self::LibrarySource => json!({"type":"string","minLength":1,"maxLength":64}),
             Self::LifecyclePolicy => json!({"type":"object","additionalProperties":false,"required":["scheme","states"],"properties":{
                 "scheme":{"type":"object","additionalProperties":false,"required":["library","id","revision"],"properties":{"library":Self::LibrarySource.schema(),"id":Self::LibrarySource.schema(),"revision":Self::DefinitionRevision.schema()}},
-                "states":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","label","disposition"],"properties":{"id":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$"},"label":{"type":"string","minLength":1,"maxLength":256},"disposition":{"enum":["draft","released","deprecated","obsolete"]}}}}}}),
+                "states":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","additionalProperties":false,"required":["id","label","disposition"],"properties":{"id":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[a-z0-9]+(?:[a-z0-9-]*[a-z0-9])?$"},"label":{"type":"string","minLength":1,"maxLength":256,"pattern":r"^[^\s\x00-\x1f\x7f-\x9f](?:[^\x00-\x1f\x7f-\x9f]*[^\s\x00-\x1f\x7f-\x9f])?$"},"disposition":{"enum":["draft","released","deprecated","obsolete"]}}}}}}),
             Self::LibraryDocuments => {
                 json!({"type":"object","maxProperties":library::sources::MAX_FILES,"additionalProperties":{"type":"string","maxLength":library::sources::MAX_FILE_BYTES}})
             }
@@ -544,11 +544,7 @@ impl ParamKind {
             }
             Self::LibraryDigest => Err("must contain a lowercase SHA-256 content digest"),
             Self::LibrarySource if value.as_str().is_some_and(board::definition::valid_id) => Ok(()),
-            Self::LifecyclePolicy
-                if serde_json::from_value::<library::sources::lifecycle::Policy>(value.clone()).is_ok_and(|policy| policy.validate().is_ok()) =>
-            {
-                Ok(())
-            }
+            Self::LifecyclePolicy if library::sources::lifecycle::Policy::from_value(value.clone()).is_ok() => Ok(()),
             Self::LifecyclePolicy => Err("must contain a valid exact lifecycle scheme and state mapping"),
             Self::LibraryDocuments if library::sources::valid_documents_value(value) => Ok(()),
             Self::PartDraft
