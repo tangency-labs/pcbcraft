@@ -434,11 +434,17 @@ impl BoardView<'_> {
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     /// X2 attributes describe pad, track and via functions and intended copper membership.
     /// Ambiguous routed copper does not acquire an arbitrary net name.
+    /// A placed slot is refused until the plated machining output can preserve its geometry.
     pub fn fabrication(self) -> Result<Fabrication, String> {
         self.require_linear_copper()?;
         let board = &self.project().board;
-        if board.footprints().iter().any(|footprint| board.definition_for(footprint).is_some_and(|d| !d.non_plated_holes.is_empty())) {
-            return Err("Fabrication output does not yet support non-plated holes; no drill data was generated.".into());
+        for definition in board.footprints().iter().filter_map(|footprint| board.definition_for(footprint)) {
+            if !definition.non_plated_holes.is_empty() {
+                return Err("Fabrication output does not yet support non-plated holes; no drill data was generated.".into());
+            }
+            if definition.has_plated_slots() {
+                return Err("Fabrication output cannot yet machine plated slots; no files were generated.".into());
+            }
         }
         let setup = self.setup().ok_or("Initialize the board setup before generating fabrication outputs.")?;
         let copper: Vec<_> = setup.layers().iter().filter(|layer| layer.purpose == LayerPurpose::Copper).collect();

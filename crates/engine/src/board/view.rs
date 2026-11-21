@@ -89,6 +89,8 @@ pub struct PadView {
     pub shape: super::definition::PadShape,
     pub corner_radius_nm: i64,
     pub drill_nm: Option<i64>,
+    /// Finished plated slot resolved after placement mirroring and rotation.
+    pub plated_slot: Option<super::slot::ResolvedPlatedSlot>,
     pub through_hole: bool,
     /// Snapshot-local connectivity label, matching Net Inspector; not a persisted net identity.
     pub net: Option<String>,
@@ -347,6 +349,9 @@ impl<'a> BoardView<'a> {
                             shape: physical.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
                             corner_radius_nm: physical.map_or(0, |p| p.corner_radius_nm),
                             drill_nm: physical.and_then(|p| p.drill_nm),
+                            plated_slot: physical
+                                .and_then(|p| p.plated_slot)
+                                .and_then(|slot| slot.resolve(center, footprint.rotation, footprint.bottom)),
                             through_hole: physical.is_some_and(|p| p.copper == super::definition::CopperBinding::AllCopper),
                             net,
                         }
