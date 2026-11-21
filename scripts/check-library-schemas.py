@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate native symbol, footprint, category and part JSON against the published schemas.
+"""Validate native symbol, footprint, category, part and model JSON against the published schemas.
 
 Uses Python 3.10+ and jsonschema 4.18+. References resolve from this repository
 only. Cross-record semantic validation belongs to the engine's library resolver.
@@ -33,6 +33,7 @@ FORMATS = {
     "pcbcraft-part/1": "urn:pcbcraft:schema:part:1",
     "pcbcraft-part/2": "urn:pcbcraft:schema:part:2",
     "pcbcraft-manufacturer-part/1": "urn:pcbcraft:schema:manufacturer-part:1",
+    "pcbcraft-model/1": "urn:pcbcraft:schema:model:1",
 }
 
 
