@@ -39,6 +39,9 @@ pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
 /// Merge addressed collinear and stacked duplicate track segments in one undo step.
 pub const MERGE_TRACKS: &str = "pcb.merge_tracks";
+/// Largest encoded `merge_tracks` report, checked before anything is published. It leaves
+/// 1 MiB of the 16 MiB live editor reply limit for the reply wrapper and the revision.
+pub const MERGE_REPORT_MAX_BYTES: usize = 15 << 20;
 
 mod locks;
 mod merge;

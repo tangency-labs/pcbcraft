@@ -237,3 +237,39 @@ fn a_long_chain_with_duplicates_collapses_to_one_segment() {
     assert_eq!(merged.len(), 1);
     assert_eq!(ends(merged[0].start, merged[0].end), ends(at(0, y), at(100 * MM, y)));
 }
+
+/// A report one byte over its budget is refused with `cap_exceeded` before anything changes,
+/// for a dry run and an applied merge alike; at exactly its encoded size it is accepted.
+#[test]
+fn an_oversized_report_is_refused_before_publishing() {
+    let mut s = tests::routed_fixture();
+    let front = tests::copper_layers(&s)[0];
+    let y = 40 * MM;
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(0, y), at(MM, y), at(2 * MM, y), at(3 * MM, y)]);
+    let tracks = all_tracks(&s);
+    let target = board(&s);
+    let request = |s: &Session, dry_run: bool| json!({"board":target,"tracks":tracks,"dry_run":dry_run,"expected_revision":s.revision()});
+    let preview = s.merge_tracks_within(&request(&s, true), usize::MAX).unwrap()["merge_tracks"].clone();
+    let dry_size = serde_json::to_vec(&preview).unwrap().len();
+    let mut applied = preview.clone();
+    applied["dry_run"] = json!(false);
+    let apply_size = serde_json::to_vec(&applied).unwrap().len();
+    assert!(merge::report_fits(&preview, dry_size));
+    assert!(!merge::report_fits(&preview, dry_size - 1));
+
+    let snapshot = s.snapshot().unwrap();
+    let revision = s.revision();
+    let can_undo = s.inspect()["can_undo"].clone();
+    for (dry_run, size) in [(true, dry_size), (false, apply_size)] {
+        let error = s.merge_tracks_within(&request(&s, dry_run), size - 1).unwrap_err();
+        assert_eq!(error.code(), crate::error_codes::ErrorCode::CapExceeded, "{error}");
+        assert!(error.to_string().contains("merge fewer tracks"), "{error}");
+        assert!(std::sync::Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
+        assert_eq!(s.revision(), revision);
+        assert_eq!(s.inspect()["can_undo"], can_undo);
+    }
+    let result = s.merge_tracks_within(&request(&s, false), apply_size).unwrap();
+    assert_eq!(result["merge_tracks"], applied);
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(tests::view(&s).tracks().len(), 1);
+}

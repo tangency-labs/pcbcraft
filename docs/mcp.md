@@ -588,7 +588,9 @@ merged ends and keeps its direction; the copper outline and connectivity are unc
 The result is `revision` plus `merge_tracks`: `before` and `after` track records,
 `removed` and `reshaped` UUIDs, the `locked` segments left alone, `changed` and
 `dry_run`. With `dry_run` true, or when nothing merges, revision and history stay
-unchanged; otherwise the merge is one undo step.
+unchanged; otherwise the merge is one undo step. A report that would encode to more
+than 15 MiB is refused with `cap_exceeded` before anything changes, dry run or not, so
+the reply always fits the live editor's limit; merge fewer tracks at a time.
 
 `pcb.add_via` places one standalone through via from `at`, with optional `via_diameter_nm` and
 `via_drill_nm`, in one undo step, refusing a second via at the same position or a pad

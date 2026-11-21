@@ -2452,6 +2452,14 @@ fn merging_tracks_over_mcp_returns_the_diff() {
     assert_eq!(undone["project"]["boards"][0]["tracks"], before["project"]["boards"][0]["tracks"]);
 }
 
+/// The largest merge report the engine accepts still fits the live editor's reply frame with
+/// its wrapper, so a merge is never published and then refused by the transport.
+#[test]
+fn the_merge_report_budget_fits_the_live_reply_limit() {
+    let wrapper = serde_json::to_vec(&json!({"result":{"revision":u64::MAX,"merge_tracks":null}})).unwrap().len() - "null".len();
+    assert!(pcbcraft_engine::board::track::MERGE_REPORT_MAX_BYTES + wrapper <= crate::live::MAX_REPLY_BYTES);
+}
+
 /// MCP exposes explicit board lock intent and the same atomic protection as the editor.
 #[test]
 fn copper_lock_commands_and_protected_edits_share_mcp_inspection() {

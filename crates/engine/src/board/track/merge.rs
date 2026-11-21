@@ -126,6 +126,24 @@ impl Obstacles {
     }
 }
 
+/// Whether `report` encodes as compact JSON in at most `budget` bytes. Encoding stops at the
+/// limit without keeping a copy of the bytes.
+pub(crate) fn report_fits(report: &Value, budget: usize) -> bool {
+    struct Budget(usize);
+    impl std::io::Write for Budget {
+        /// Count each encoded chunk, refusing before it crosses the remaining byte budget.
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0 = self.0.checked_sub(bytes.len()).ok_or_else(|| std::io::Error::other("merge report byte limit exceeded"))?;
+            Ok(bytes.len())
+        }
+        /// Counting has no buffered output to flush.
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    serde_json::to_writer(Budget(budget), report).is_ok()
+}
+
 /// Greatest common divisor of two non-negative integers; zero only when both are zero.
 fn gcd(mut a: i64, mut b: i64) -> i64 {
     while b != 0 {
@@ -275,8 +293,14 @@ impl Session {
     /// the absorbed segments and reshapes the survivors through the shared track commands in
     /// one private transaction, so their validation, lock protection and net-short refusal
     /// apply, then publishes one undo step. With nothing to merge, revision and history stay
-    /// unchanged.
+    /// unchanged. A report larger than [`MERGE_REPORT_MAX_BYTES`] is refused with
+    /// `cap_exceeded` before anything changes, for a dry run as for an applied merge.
     pub(crate) fn merge_tracks(&mut self, params: &Value) -> Result<Value, CommandError> {
+        self.merge_tracks_within(params, MERGE_REPORT_MAX_BYTES)
+    }
+
+    /// [`Self::merge_tracks`] with an explicit report byte budget.
+    pub(crate) fn merge_tracks_within(&mut self, params: &Value, report_budget: usize) -> Result<Value, CommandError> {
         self.validate_project_command(MERGE_TRACKS, params)?;
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -288,10 +312,14 @@ impl Session {
         }
         let plan = plan(view, &selected);
         let dry_run = params["dry_run"].as_bool().unwrap_or(false);
+        let report = plan.report(target.board, dry_run);
+        if !report_fits(&report, report_budget) {
+            return Err(CommandError::CapExceeded(format!("the merge report would exceed {report_budget} bytes; merge fewer tracks at a time")));
+        }
         if plan.changed() && !dry_run {
             self.publish_merge(target, &plan)?;
         }
-        Ok(json!({"revision": self.revision(), "merge_tracks": plan.report(target.board, dry_run)}))
+        Ok(json!({"revision": self.revision(), "merge_tracks": report}))
     }
 
     /// Delete the absorbed segments, then reshape the survivors, in a private transaction, and
