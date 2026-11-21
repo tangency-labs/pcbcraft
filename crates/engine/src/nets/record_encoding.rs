@@ -28,7 +28,7 @@ impl RecordEncoding {
             State::Retired { successors, .. } => successors.len(),
         };
         match self.phase {
-            0 if lineage.len() + successors <= 8 => {
+            0 if lineage.len() + successors + class_bindings.len() <= 8 => {
                 json(out, row)?;
                 return Ok(true);
             }
@@ -86,17 +86,29 @@ impl RecordEncoding {
                     self.item += 1;
                 } else {
                     emit(out, b"]}")?;
+                    self.item = 0;
                     self.phase = 3;
                 }
             }
             3 => {
-                if !class_bindings.is_empty() {
-                    emit(out, b",\"class_bindings\":")?;
-                    json(out, class_bindings)?;
+                if class_bindings.is_empty() {
+                    emit(out, b"}")?;
+                    *self = Self::default();
+                    return Ok(true);
                 }
-                emit(out, b"}")?;
-                *self = Self::default();
-                return Ok(true);
+                emit(out, b",\"class_bindings\":[")?;
+                self.item = 0;
+                self.phase = 4;
+            }
+            4 => {
+                if let Some(binding) = class_bindings.get(self.item) {
+                    array_item(out, self.item, binding)?;
+                    self.item += 1;
+                } else {
+                    emit(out, b"]}")?;
+                    *self = Self::default();
+                    return Ok(true);
+                }
             }
             _ => return Err("invalid net record encoding phase".into()),
         }
@@ -163,5 +175,58 @@ mod tests {
             assert!(steps > ids.len());
             assert_eq!(out, serde_json::to_vec(&row).unwrap());
         }
+    }
+
+    /// A row that is only large because of `class_bindings` must stream one binding per step,
+    /// while a large row with no `class_bindings` must still omit the key.
+    #[test]
+    fn large_class_bindings_stream_one_per_step_and_empty_is_omitted() {
+        let project = Uuid::from_u128(1);
+        let scope = Scope { kind: ScopeKind::Schematic, id: project };
+        let primary = Anchor { kind: AnchorKind::Terminal, project, scope, occurrence: Uuid::nil(), object: 10, terminal: "1".into() };
+        let snapshot = SourceCapture { capture_id: Uuid::from_u128(3), content_digest: "a".repeat(64) };
+        let record_id = Uuid::from_u128(4);
+
+        let bindings: Vec<_> = (100..112).map(|n| ClassBinding { class: Uuid::from_u128(n), origin: record_id }).collect();
+        let many_bindings = Record {
+            id: record_id,
+            generated_number: None,
+            primary: primary.clone(),
+            fallbacks: Vec::new(),
+            lineage: Vec::new(),
+            state: State::Active {},
+            class_bindings: bindings,
+        };
+        let mut cursor = RecordEncoding::default();
+        let mut out = Vec::new();
+        let mut steps = 0;
+        while !cursor.step(&mut out, &many_bindings).unwrap() {
+            steps += 1;
+            assert!(steps < 64);
+        }
+        assert!(cursor.at_start());
+        assert!(steps > many_bindings.class_bindings.len());
+        assert_eq!(out, serde_json::to_vec(&many_bindings).unwrap());
+
+        let empty_bindings = Record {
+            id: record_id,
+            generated_number: None,
+            primary: primary.clone(),
+            fallbacks: Vec::new(),
+            lineage: (10..22).map(|n| Lineage { snapshot: snapshot.clone(), net: Some(Uuid::from_u128(n)), anchor: primary.clone() }).collect(),
+            state: State::Active {},
+            class_bindings: Vec::new(),
+        };
+        let mut cursor = RecordEncoding::default();
+        let mut out = Vec::new();
+        let mut steps = 0;
+        while !cursor.step(&mut out, &empty_bindings).unwrap() {
+            steps += 1;
+            assert!(steps < 64);
+        }
+        assert!(cursor.at_start());
+        assert!(steps > empty_bindings.lineage.len());
+        assert_eq!(out, serde_json::to_vec(&empty_bindings).unwrap());
+        assert!(!String::from_utf8(out).unwrap().contains("class_bindings"));
     }
 }
