@@ -593,8 +593,10 @@ mod tests {
     }
 
     /// The envelope recipe builds a board at the documented track, via and 1,024-pad footprint
-    /// limits through shared commands, stays within every native storage bound, reopens with all
-    /// counts and deterministic copper geometry intact, and keeps stable SHA-256 bytes on round-trip.
+    /// limits through shared commands, stays within every native storage bound, and reopens with
+    /// all counts and the front/back layer split intact. Seeded geometry and counts are
+    /// deterministic while document UUIDs are random, so the SHA-256 checks verify round-trip
+    /// byte stability across save, reopen and re-encode.
     #[test]
     fn envelope_recipe_generates_saves_reopens_and_keeps_stable_bytes() {
         use pcbcraft_engine::{

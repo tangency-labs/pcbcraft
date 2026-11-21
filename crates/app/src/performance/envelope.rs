@@ -1,13 +1,15 @@
-//! The `envelope-v1` workload: one deterministic board at the documented capacity envelope,
-//! built entirely through shared engine commands.
+//! The `envelope-v1` workload: one board at the documented capacity envelope with seeded
+//! geometry and counts, built entirely through shared engine commands. Production commands
+//! allocate random UUIDs, so bytes are stable across save/reopen/re-encode rather than across
+//! separate generations.
 //!
 //! Envelope counts come from the engine's documented limits on `main`:
 //! - `MAX_TRACKS = 65_536` (`crates/engine/src/board/track.rs:59`, `docs/native-project-storage.md:924`)
 //! - `MAX_VIAS = 16_384` (`crates/engine/src/board/track.rs:61`, `docs/native-project-storage.md:932`)
 //! - `MAX_PADS = 1,024`, `MAX_ARTWORK = 256` (`crates/engine/src/board/definition.rs:10,12`, `docs/native-project-storage.md:854`)
 //! - `MAX_TERMINALS = 1,024` (`crates/engine/src/library.rs:92`, `docs/native-project-storage.md:855`)
-//! - 512 footprints (511 discrete resistors plus one 32 x 32 BGA, matching `board-limits-v1`
-//!   footprint count within `MAX_SYMBOLS = 4,096` at `crates/engine/src/schematic.rs:24`)
+//! - 512 footprints (chosen to match `board-limits-v1`, not a limit: 511 discrete resistors plus
+//!   one 32 x 32 BGA, within `MAX_SYMBOLS = 4,096` at `crates/engine/src/schematic.rs:24`)
 //! - Storage bounds: `MAX_DOCUMENT_BYTES = 16 MiB` (`crates/engine/src/persistence/documents.rs:41`),
 //!   `MAX_DOCUMENTS_BYTES = 48 MiB` (`crates/engine/src/persistence/documents.rs:43`),
 //!   `MAX_ARCHIVE_BYTES = 64 MiB` (`crates/engine/src/persistence.rs:63`).
@@ -28,12 +30,13 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 /// Discrete two-terminal resistors placed alongside the 1,024-ball array (512 footprints total).
-pub(super) const DISCRETE_PARTS: u32 = 511;
+pub(super) const DISCRETE_PARTS: i64 = 511;
 /// Total physical footprints on the envelope board (511 resistors plus one 32 x 32 BGA).
 pub(super) const FOOTPRINTS: usize = DISCRETE_PARTS as usize + 1;
 /// Pad count on the envelope board's BGA footprint (`crates/engine/src/board/definition.rs:10`).
 pub(super) const BGA_PADS: usize = 1024;
-/// Multi-unit schematic symbols representing the 1,024-terminal BGA (`crates/app/src/performance/bga.rs:21`).
+/// Multi-unit schematic symbols representing the 1,024-terminal BGA (`BALLS / PINS_PER_UNIT`,
+/// `crates/app/src/performance/bga.rs:19,23`).
 pub(super) const BGA_UNITS: usize = 8;
 
 const MM: i64 = 1_000_000;
