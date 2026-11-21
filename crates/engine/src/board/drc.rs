@@ -82,7 +82,8 @@ pub struct ShortNet {
 /// One finding: what, where (a representative point in board nanometers) and which items.
 /// Items are footprint IDs (`footprint-N`), pads (`footprint-N:pad`), mechanical
 /// openings (`footprint-N:npth:index`, 1-based in the pinned definition), or track/via UUIDs.
-/// A copper item inside a board cut-out also lists the cut-out's Board Outline drawing UUID.
+/// A copper item or non-plated hole inside a board cut-out also lists the cut-out's Board
+/// Outline drawing UUID.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Violation {
     pub kind: Kind,
@@ -448,10 +449,11 @@ impl BoardView<'_> {
     }
 
     /// Require a closed Board Outline, every copper item on the board, and copper at least the
-    /// edge clearance from every outline segment. Closed contours nest by even-odd parity, so a
-    /// contour inside the outer one is a cut-out and copper inside it is off the board; the
-    /// finding then names the cut-out drawing. Penetration remains a finding at zero required
-    /// clearance. Open outline paths still count as edges.
+    /// edge clearance from every outline segment. Disjoint closed contours nest by even-odd
+    /// parity, so a contour inside the outer one is a cut-out and copper inside it is off the
+    /// board; the finding then names the cut-out drawing. Contours that meet form a union.
+    /// Penetration remains a finding at zero required clearance. Open outline paths still count
+    /// as edges.
     fn check_outline(self, items: &[Item], rules: Rules, context: Option<&super::class_rules::Context>, found: &mut Findings) {
         let outline = self.outline_edges();
         let Outline { drawn, polygons, edges, .. } = &outline;
@@ -514,15 +516,20 @@ impl BoardView<'_> {
 }
 
 /// The board's Board Outline drawings: closed polygons that bound the board, and every
-/// edge, closed or open, that copper must keep its edge clearance from. The board is where an
-/// odd number of closed polygons overlap: the outer contour is board, a contour nested in it is
-/// a cut-out, and one nested in a cut-out is board again, as for the 3D board substrate.
+/// edge, closed or open, that copper must keep its edge clearance from. When the closed
+/// polygons are disjoint, the board is where an odd number of them overlap: the outer contour
+/// is board, a contour nested in it is a cut-out, and one nested in a cut-out is board again,
+/// as for the 3D board substrate. When any two of them cross, touch or share an edge, such as
+/// an L-shaped board drawn as two overlapping rectangles or a duplicated outline, nesting is
+/// ambiguous and the board is their union, with no cut-outs.
 pub(super) struct Outline {
     /// Whether any outline drawing exists, even one that is not closed.
     pub(super) drawn: bool,
     pub(super) polygons: Vec<Vec<Point>>,
     /// The drawing of each closed polygon, in the order of `polygons`.
     drawings: Vec<Uuid>,
+    /// Whether the closed polygons are disjoint, so that nesting by parity makes cut-outs.
+    nested: bool,
     pub(super) edges: Vec<OutlineEdge>,
 }
 
@@ -542,15 +549,36 @@ impl OutlineEdge {
     }
 }
 
-/// Whether every core anchor of the copper lies on the board, that is inside an odd number of
-/// closed outline polygons. Copper inside a cut-out is inside an even number and is not contained.
-pub(super) fn contains(polygons: &[Vec<Point>], contour: &Contour) -> bool {
-    contour.core.iter().all(|point| on_board(polygons, *point))
+/// The edges of a closed polygon, including its closing edge.
+fn polygon_edges(polygon: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
+    (0..polygon.len()).map(move |i| (polygon[i], polygon[(i + 1) % polygon.len()]))
 }
 
-/// Even-odd parity of the closed outline polygons around a point.
-fn on_board(polygons: &[Vec<Point>], point: Point) -> bool {
-    polygons.iter().filter(|polygon| in_polygon(point, polygon)).count() % 2 == 1
+/// Closed bounds `[min x, min y, max x, max y]` of a point set.
+fn point_bounds(points: &[Point]) -> [i64; 4] {
+    points.iter().fold([i64::MAX, i64::MAX, i64::MIN, i64::MIN], |b, p| [b[0].min(p.x_nm), b[1].min(p.y_nm), b[2].max(p.x_nm), b[3].max(p.y_nm)])
+}
+
+/// Whether two closed bounds share at least one point.
+fn bounds_meet(a: [i64; 4], b: [i64; 4]) -> bool {
+    a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3]
+}
+
+/// Whether two closed polygons cross, touch or share any boundary point, exactly in integer
+/// nanometers. Only edges that reach the other polygon's bounds are compared, so contours far
+/// apart, or a small cut-out well inside the outer contour, cost little.
+fn polygons_meet(a: &[Point], b: &[Point]) -> bool {
+    let (a_bounds, b_bounds) = (point_bounds(a), point_bounds(b));
+    if !bounds_meet(a_bounds, b_bounds) {
+        return false;
+    }
+    let b_edges: Vec<_> = edges_near(b, a_bounds).collect();
+    edges_near(a, b_bounds).any(|(p, q)| b_edges.iter().any(|&(r, s)| courtyard::segments_meet(p, q, r, s)))
+}
+
+/// The edges of a closed polygon whose bounds meet the given bounds.
+fn edges_near(polygon: &[Point], bounds: [i64; 4]) -> impl Iterator<Item = (Point, Point)> + '_ {
+    polygon_edges(polygon).filter(move |&(p, q)| bounds_meet(point_bounds(&[p, q]), bounds))
 }
 
 /// The copper's smallest distance to any outline edge, and whether an edge enters its interior.
@@ -563,11 +591,24 @@ pub(super) fn edge_gap(edges: &[OutlineEdge], contour: &Contour) -> (f64, bool) 
 }
 
 impl Outline {
+    /// Whether every core anchor of the copper lies on the board. With disjoint contours that is
+    /// inside an odd number of closed polygons, so copper inside a cut-out is not contained;
+    /// otherwise it is inside any closed polygon.
+    pub(super) fn contains(&self, contour: &Contour) -> bool {
+        contour.core.iter().all(|point| self.on_board(*point))
+    }
+
+    /// Even-odd parity of the closed polygons around a point, or any of them when contours meet.
+    fn on_board(&self, point: Point) -> bool {
+        let around = self.polygons.iter().filter(|polygon| in_polygon(point, polygon)).count();
+        if self.nested { around % 2 == 1 } else { around > 0 }
+    }
+
     /// The closed drawings around the copper's first core anchor that is off the board, or
     /// `None` when every anchor is on the board. The list is empty when that anchor lies
     /// outside every closed contour; otherwise it lies inside a cut-out of the listed drawings.
     pub(super) fn off_board(&self, contour: &Contour) -> Option<Vec<Uuid>> {
-        let point = contour.core.iter().copied().find(|point| !on_board(&self.polygons, *point))?;
+        let point = contour.core.iter().copied().find(|point| !self.on_board(*point))?;
         Some(self.polygons.iter().zip(&self.drawings).filter(|(polygon, _)| in_polygon(point, polygon)).map(|(_, drawing)| *drawing).collect())
     }
 
@@ -603,7 +644,7 @@ impl BoardView<'_> {
             .into_iter()
             .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
             .collect();
-        let polygons = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.points.clone()).collect();
+        let polygons: Vec<Vec<Point>> = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.points.clone()).collect();
         let drawings = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.id).collect();
         let edges = outline
             .iter()
@@ -618,7 +659,8 @@ impl BoardView<'_> {
                 })
             })
             .collect();
-        Outline { drawn: !outline.is_empty(), polygons, drawings, edges }
+        let nested = !polygons.iter().enumerate().any(|(i, a)| polygons[i + 1..].iter().any(|b| polygons_meet(a, b)));
+        Outline { drawn: !outline.is_empty(), polygons, drawings, nested, edges }
     }
 }
 

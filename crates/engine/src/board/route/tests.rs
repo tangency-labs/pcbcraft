@@ -339,6 +339,18 @@ fn a_board_cut_out_stops_routes_and_cannot_start_one() {
     commit_and_agree(&mut s, &across, layer, WIDTH);
 }
 
+/// Overlapping closed outlines are one board without cut-outs: a route in the area two of them
+/// share is on the board and reaches its target, as it did before cut-outs existed.
+#[test]
+fn a_route_in_overlapping_outlines_is_on_the_board() {
+    let mut s = board();
+    outline_square(&mut s, 20, 10, 15);
+    let layer = copper_layers(&s)[0];
+    let shared = plan(&s, &request(&s, p(21_000_000, 15_000_000), p(24_000_000, 15_000_000)));
+    assert_eq!(shared.outcome, Outcome::Reached, "{shared:?}");
+    commit_and_agree(&mut s, &shared, layer, WIDTH);
+}
+
 /// Locked copper is an obstacle like any other: planning edits nothing, the route goes round,
 /// and the committed route leaves the locked track's geometry and lock untouched.
 #[test]

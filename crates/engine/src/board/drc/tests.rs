@@ -236,6 +236,47 @@ fn an_island_inside_a_cut_out_is_board_again() {
     assert_ne!(beside[0].items[1], island.to_string());
 }
 
+/// Closed outlines that overlap are one board, not a board with a cut-out: an L-shaped board
+/// drawn as two overlapping squares keeps copper in their shared area and in each arm legal.
+#[test]
+fn overlapping_outlines_form_one_board_without_cut_outs() {
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    outline_square(&mut s, 25, -5, 20);
+    let shared = track_mm(&mut s, (28., 10.), (32., 10.));
+    let arm = track_mm(&mut s, (38., 2.), (42., 2.));
+    let outside = track_mm(&mut s, (38., 25.), (42., 25.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &shared).is_empty(), "{report:#?}");
+    assert!(outline_findings(&report, &arm).is_empty(), "{report:#?}");
+    let outside = outline_findings(&report, &outside);
+    assert_eq!(outside.len(), 1, "{report:#?}");
+    assert_eq!(outside[0].message, "Copper lies outside the Board Outline");
+    assert_eq!(outside[0].items.len(), 1);
+    assert_eq!(count(&report, Kind::OutsideBoard), 1, "{report:#?}");
+}
+
+/// A Board Outline drawn twice in the same place is still one board: copper on it stays legal,
+/// and a contour touching another is not a cut-out either.
+#[test]
+fn duplicated_or_touching_outlines_make_no_cut_out() {
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    outline_square(&mut s, -5, -5, 40);
+    let solid = track_mm(&mut s, (8., 30.), (12., 30.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &solid).is_empty(), "{report:#?}");
+    assert_eq!(count(&report, Kind::OutsideBoard), 0, "{report:#?}");
+
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    outline_square(&mut s, -5, 15, 10);
+    let inside = track_mm(&mut s, (-1., 20.), (1., 20.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &inside).is_empty(), "{report:#?}");
+    assert_eq!(count(&report, Kind::OutsideBoard), 0, "{report:#?}");
+}
+
 /// A single closed outline keeps its existing wording, and the resumable check reports exactly
 /// what the direct check reports for cut-outs and islands at every batch size.
 #[test]

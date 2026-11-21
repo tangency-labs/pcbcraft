@@ -243,7 +243,7 @@ impl<'a> Walker<'a> {
         if !self.outline.polygons.is_empty() {
             let edge = rules.edge_clearance_nm;
             let (distance, crosses) = drc::edge_gap(&self.outline.edges, &contour);
-            if !drc::contains(&self.outline.polygons, &contour) || crosses || distance < edge as f64 {
+            if !self.outline.contains(&contour) || crosses || distance < edge as f64 {
                 legal = false;
             }
         }

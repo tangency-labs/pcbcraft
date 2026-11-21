@@ -767,7 +767,10 @@ Select **Board Outline** when drawing the physical boundary. Its centerline
 continues to define the board edge; a closed boundary is required for fabrication.
 A closed Board Outline drawn inside another is a cut-out, a hole through the board,
 and one drawn inside a cut-out is board again: a point is on the board when it lies
-inside an odd number of closed outlines.
+inside an odd number of closed outlines. This applies only when no two closed outlines
+cross, touch or share an edge. When any two do, such as an L-shaped board drawn as two
+overlapping rectangles or an outline drawn twice, there are no cut-outs: the board is
+everywhere inside any closed outline.
 Board Outline is also available without a copper setup. Fit and layer visibility
 include these graphics, while DRC reports a missing closed outline and copper
 outside it, inside a cut-out or too close to an edge. Routing and teardrops treat a
@@ -806,7 +809,8 @@ listing up to 1,000 findings. It reports a short when one copper island joins pa
 different intended nets, copper of different nets closer than the clearance
 (0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
 connection, a missing closed Board Outline, copper outside the outline or inside a
-cut-out (the finding also names the cut-out drawing), copper within 0.3 mm of any
+cut-out (the finding also names the cut-out drawing, and the same applies to non-plated
+holes), copper within 0.3 mm of any
 edge, and overlapping footprint courtyards. Courtyards on the same side are
 compared by their actual rectangle and closed-polyline shapes after rotation and flip,
 so empty space between separate courtyard elements or inside a concave outline is free.
