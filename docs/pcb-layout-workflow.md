@@ -331,6 +331,7 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 | 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
 | Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
+| Named layer groups | [board/41](native-project-storage.md#named-layer-groups) | Written only when named groups exist; derived groups are not stored |
 
 These are selected layout formats, not a consecutive version list. Canonical
 saves use the highest supported format required by the authored data; compatible

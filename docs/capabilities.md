@@ -4,6 +4,11 @@ For a first session, use the [quickstart](quickstart.md) or
 [editor guide](editor-guide.md). The [documentation map](README.md) links topic
 guides, format references, design plans and verification records.
 
+The physical stack also exposes [derived and named layer groups](board-materials.md#layer-groups).
+Physical stackup stages copper roles and named memberships; `pcb.inspect_layer_groups`
+reads the same IDs/names headlessly. Rule-scoping consumers and live simulation links
+remain future work.
+
 ## Capability inventory
 
 | Workflow | Implemented slices | Remaining scope |

@@ -433,7 +433,11 @@ Choose any even copper count from 2 through 64; 10- and 12-layer boards are incl
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
 construction, with a laminate total and a cross-section aligned to the table rows. **Fit unlocked dielectrics**
 fits a target thickness while retaining copper and locked gaps. Values accept mm
-or mil, and blanks remain unspecified.
+or mil, and blanks remain unspecified. Select a copper stratum to set its role.
+**Layer groups** adds named sets of copper layers in the same draft; removing a
+layer drops its membership, and one Undo restores the complete setup. Mixed role
+belongs to both plane and signal. `pcb.inspect_layer_groups` reads these groups
+and the derived outer/inner/plane/signal sets without changing the board.
 
 **Materials** offers generic family choices and custom materials. **Add material**
 starts with basic identity fields; **Technical properties** expands sourced Tg/Dk/Df
