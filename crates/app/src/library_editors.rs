@@ -1170,19 +1170,20 @@ impl PcbApp {
 /// `Y26` before `AA1`), followed by non-electrical primitives in stable ID order.
 pub(super) fn browser_objects(item: &Item) -> Vec<(u64, &pcbcraft_engine::authoring::Primitive)> {
     use pcbcraft_engine::authoring::{Primitive, natural_cmp};
-    let mut entries: Vec<(u64, &Primitive)> = item.objects.iter().map(|(id, p)| (*id, p)).collect();
-    entries.sort_by(|(id_a, a), (id_b, b)| {
-        let key = |primitive: &Primitive| match primitive {
+    /// Extract the natural-sort pin/pad number key for electrical primitives.
+    fn key(primitive: &Primitive) -> Option<&str> {
+        match primitive {
             Primitive::Pad { pad } => Some(pad.number.as_str()),
             Primitive::Pin { number, .. } => Some(number.as_str()),
             _ => None,
-        };
-        match (key(a), key(b)) {
-            (Some(na), Some(nb)) => natural_cmp(na, nb).then_with(|| id_a.cmp(id_b)),
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => id_a.cmp(id_b),
         }
+    }
+    let mut entries: Vec<(u64, &Primitive)> = item.objects.iter().map(|(id, p)| (*id, p)).collect();
+    entries.sort_by(|(id_a, a), (id_b, b)| match (key(a), key(b)) {
+        (Some(na), Some(nb)) => natural_cmp(na, nb).then_with(|| id_a.cmp(id_b)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => id_a.cmp(id_b),
     });
     entries
 }
