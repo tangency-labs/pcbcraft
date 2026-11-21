@@ -2341,23 +2341,196 @@ impl Write for BoardByteCounter {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    static BOARD_RECORD_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Return and reset the current test thread's serialized board-record count.
+#[cfg(test)]
+pub(crate) fn take_board_record_writes() -> usize {
+    BOARD_RECORD_WRITES.with(|count| count.replace(0))
+}
+
+/// Resumable native board document size check matching [`check_board_document_size`] byte-for-byte.
+pub(crate) struct BoardSizeCheck {
+    bytes: BoardByteCounter,
+    phase: u8,
+    cursor: usize,
+    last_assignment: Option<u64>,
+    first: bool,
+    validate_teardrops: bool,
+    completed: usize,
+}
+
+impl BoardSizeCheck {
+    /// Start counting native board bytes; callers that already validated teardrops may skip
+    /// repeating [`crate::board::teardrop::validate`].
+    pub(crate) fn new(validate_teardrops: bool) -> Self {
+        Self { bytes: BoardByteCounter::default(), phase: 0, cursor: 0, last_assignment: None, first: true, validate_teardrops, completed: 0 }
+    }
+
+    /// Monotonic work count across header prefix and serialized board records.
+    pub(crate) fn progress(&self, project: &Project) -> (usize, usize) {
+        let total = 1usize
+            .saturating_add(project.board.teardrops.len())
+            .saturating_add(project.board.tracks.len())
+            .saturating_add(project.board.vias.len())
+            .saturating_add(project.board.assignments.len())
+            .saturating_add(project.board.footprints().len());
+        (self.completed.min(total), total)
+    }
+
+    /// Advance bounded record-counting batches. Returns `Ok(true)` once the closing bytes fit.
+    pub(crate) fn step(&mut self, project: &Project, mut budget: usize) -> Result<bool, String> {
+        if self.phase == 6 {
+            return Ok(true);
+        }
+        if budget == 0 {
+            return Ok(false);
+        }
+        if self.phase == 0 {
+            board_header_prefix(&mut self.bytes, project, self.validate_teardrops)?;
+            budget -= 1;
+            self.completed = self.completed.saturating_add(1);
+            self.phase = 1;
+            self.cursor = 0;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        if self.phase == 1 {
+            if !project.board.teardrops.is_empty() {
+                if self.cursor == 0 {
+                    self.bytes.write_all(b"  \"teardrops\": [\n").map_err(|error| error.to_string())?;
+                }
+                let end = self.cursor.saturating_add(budget).min(project.board.teardrops.len());
+                for intent in &project.board.teardrops[self.cursor..end] {
+                    record(&mut self.bytes, &mut self.first, intent)?;
+                }
+                let done_here = end - self.cursor;
+                budget -= done_here;
+                self.cursor = end;
+                self.completed = self.completed.saturating_add(done_here);
+                if self.cursor < project.board.teardrops.len() {
+                    return Ok(false);
+                }
+                self.bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            }
+            self.phase = 2;
+            self.cursor = 0;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        if self.phase == 2 {
+            if !project.board.tracks.is_empty() {
+                if self.cursor == 0 {
+                    self.bytes.write_all(b"  \"tracks\": [\n").map_err(|error| error.to_string())?;
+                }
+                let end = self.cursor.saturating_add(budget).min(project.board.tracks.len());
+                for track in &project.board.tracks[self.cursor..end] {
+                    record(&mut self.bytes, &mut self.first, track)?;
+                }
+                let done_here = end - self.cursor;
+                budget -= done_here;
+                self.cursor = end;
+                self.completed = self.completed.saturating_add(done_here);
+                if self.cursor < project.board.tracks.len() {
+                    return Ok(false);
+                }
+                self.bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            }
+            self.phase = 3;
+            self.cursor = 0;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        if self.phase == 3 {
+            if !project.board.vias.is_empty() {
+                if self.cursor == 0 {
+                    self.bytes.write_all(b"  \"vias\": [\n").map_err(|error| error.to_string())?;
+                }
+                let end = self.cursor.saturating_add(budget).min(project.board.vias.len());
+                for via in &project.board.vias[self.cursor..end] {
+                    record(&mut self.bytes, &mut self.first, via)?;
+                }
+                let done_here = end - self.cursor;
+                budget -= done_here;
+                self.cursor = end;
+                self.completed = self.completed.saturating_add(done_here);
+                if self.cursor < project.board.vias.len() {
+                    return Ok(false);
+                }
+                self.bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
+            }
+            self.bytes
+                .write_all(if !project.board.assignments.is_empty() { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" })
+                .map_err(|error| error.to_string())?;
+            self.phase = 4;
+            self.cursor = 0;
+            self.last_assignment = None;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        if self.phase == 4 {
+            if !project.board.assignments.is_empty() {
+                let range = match self.last_assignment {
+                    Some(last) => project.board.assignments.range((std::ops::Bound::Excluded(last), std::ops::Bound::Unbounded)),
+                    None => project.board.assignments.range(..),
+                };
+                let mut count = 0;
+                for (&key, assignment) in range.take(budget) {
+                    record(&mut self.bytes, &mut self.first, assignment)?;
+                    self.last_assignment = Some(key);
+                    count += 1;
+                }
+                budget -= count;
+                self.cursor += count;
+                self.completed = self.completed.saturating_add(count);
+                if self.cursor < project.board.assignments.len() {
+                    return Ok(false);
+                }
+                self.bytes.write_all(BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS).map_err(|error| error.to_string())?;
+            }
+            self.phase = 5;
+            self.cursor = 0;
+            self.first = true;
+            if budget == 0 {
+                return Ok(false);
+            }
+        }
+        let footprints = project.board.footprints();
+        if self.cursor < footprints.len() {
+            let end = self.cursor.saturating_add(budget).min(footprints.len());
+            for footprint in &footprints[self.cursor..end] {
+                record(&mut self.bytes, &mut self.first, footprint)?;
+            }
+            let done_here = end - self.cursor;
+            self.cursor = end;
+            self.completed = self.completed.saturating_add(done_here);
+            if self.cursor < footprints.len() {
+                return Ok(false);
+            }
+        }
+        self.bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())?;
+        self.phase = 6;
+        Ok(true)
+    }
+}
+
 /// Check the native board document before adopting an edited board with copper or package
 /// maps. Use the native writer's header, record framing, serialized fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
-    let mut bytes = BoardByteCounter::default();
-    board_header(&mut bytes, project)?;
-    let mut first = true;
-    for assignment in project.board.assignments.values() {
-        record(&mut bytes, &mut first, assignment)?;
-    }
-    if !project.board.assignments.is_empty() {
-        bytes.write_all(BOARD_FOOTPRINTS_AFTER_ASSIGNMENTS).map_err(|error| error.to_string())?;
-        first = true;
-    }
-    for footprint in project.board.footprints() {
-        record(&mut bytes, &mut first, footprint)?;
-    }
-    bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
+    let mut check = BoardSizeCheck::new(true);
+    while !check.step(project, usize::MAX)? {}
+    Ok(())
 }
 
 /// Preserve canonical legacy encodings until authored content requires a newer format. Arcs
@@ -2374,10 +2547,12 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
 /// bottom-side footprints version 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each may carry any
 /// earlier field, so routing or flipping never drops baseline or intent data. Version 12 stays
 /// tracks-only and 13 has no bottom-side parts, so their released readers keep working.
-fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
+fn board_header_prefix(bytes: &mut impl Write, project: &Project, validate_teardrops: bool) -> Result<(), String> {
     crate::board::zones::validate(project)?;
     crate::board::arc::validate(project, &project.board.arcs)?;
-    crate::board::teardrop::validate(project)?;
+    if validate_teardrops {
+        crate::board::teardrop::validate(project)?;
+    }
     let board = &project.board;
     let setup = board.setup.as_ref();
     let silkscreen = board.silkscreen.as_ref();
@@ -2592,6 +2767,13 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         }
         bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
+    Ok(())
+}
+
+/// Write the complete board header through the assignments/footprints opener for [`DocumentEncoder`].
+fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
+    board_header_prefix(bytes, project, true)?;
+    let board = &project.board;
     if !board.teardrops.is_empty() {
         bytes.write_all(b"  \"teardrops\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
@@ -2616,12 +2798,16 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         }
         bytes.write_all(b"  ],\n").map_err(|error| error.to_string())?;
     }
-    bytes.write_all(if assignments { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" }).map_err(|error| error.to_string())?;
+    bytes
+        .write_all(if !board.assignments.is_empty() { b"  \"assignments\": [\n" } else { b"  \"footprints\": [\n" })
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
 /// Keep commas on their own lines so adding a record never rewrites the previous record.
 fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
+    #[cfg(test)]
+    BOARD_RECORD_WRITES.with(|count| count.set(count.get().saturating_add(1)));
     if !*first {
         bytes.write_all(b"\n    ,\n").map_err(|error| error.to_string())?;
     }

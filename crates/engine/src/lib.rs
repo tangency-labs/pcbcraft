@@ -4570,15 +4570,19 @@ impl Session {
         Ok((project, highest))
     }
 
-    /// Check the final candidate's document size and invariants after any teardrop
-    /// regeneration and pruning, before changing history or notifying observers.
-    pub(crate) fn finalize_prepared_change(source: Option<&Project>, project: Project, highest: u64) -> Result<(Project, u64), CommandError> {
-        if source.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+    /// Whether the final candidate board requires a native board document size check.
+    pub(crate) fn needs_board_size_check(source: Option<&Project>, project: &Project) -> bool {
+        source.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
             && (!project.board.tracks.is_empty()
                 || !project.board.vias.is_empty()
                 || !project.board.assignments.is_empty()
                 || project.board.footprints().iter().any(|footprint| footprint.mapping.is_some()))
-        {
+    }
+
+    /// Check the final candidate's document size and invariants after any teardrop
+    /// regeneration and pruning, before changing history or notifying observers.
+    pub(crate) fn finalize_prepared_change(source: Option<&Project>, project: Project, highest: u64) -> Result<(Project, u64), CommandError> {
+        if Self::needs_board_size_check(source, &project) {
             persistence::check_board_document_size(&project).map_err(CommandError::InvalidParams)?;
         } else {
             board::zones::validate(&project).map_err(CommandError::InvalidParams)?;

@@ -73,12 +73,19 @@ impl PreparedCopperEdit {
     }
 }
 
-const PHASE_DONE: u8 = 5;
+const PHASE_DONE: u8 = 6;
 
 struct PendingRegeneration {
     state: teardrop::Regeneration,
     highest: u64,
     class_rules: Option<Context>,
+}
+
+struct PendingFinalize {
+    project: Project,
+    highest: u64,
+    class_rules: Option<Context>,
+    size_check: Option<crate::persistence::BoardSizeCheck>,
 }
 
 /// Candidate construction, reusable pad projection and bounded contact validation for a copper
@@ -96,6 +103,7 @@ pub struct CopperEditJob {
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
     regeneration: Option<PendingRegeneration>,
+    finalize: Option<PendingFinalize>,
     check_route_vias: bool,
 }
 
@@ -182,6 +190,7 @@ impl Session {
             result: None,
             class_islands: None,
             regeneration: None,
+            finalize: None,
             check_route_vias: false,
         }
     }
@@ -224,6 +233,12 @@ impl CopperEditJob {
             let (completed, total) = regeneration.state.progress();
             return Progress { stage: "Regenerating teardrops", completed, total };
         }
+        if self.phase == 5
+            && let Some(finalize) = &self.finalize
+        {
+            let (completed, total) = finalize.size_check.as_ref().map_or((1, 1), |check| check.progress(&finalize.project));
+            return Progress { stage: "Checking board size", completed, total };
+        }
         let total = self.lands.as_ref().map_or(1, |lands| {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
             n.saturating_mul(n.saturating_sub(1)) / 2
@@ -235,6 +250,7 @@ impl CopperEditJob {
                 2 => "Checking copper contacts",
                 3 => "Validating route",
                 4 => "Regenerating teardrops",
+                5 => "Checking board size",
                 _ => "Prepared",
             },
             completed: self.work.min(total),
@@ -254,6 +270,7 @@ impl CopperEditJob {
             Ok(done) => done,
             Err(error) => {
                 self.regeneration = None;
+                self.finalize = None;
                 self.result = Some(Err(error));
                 self.phase = PHASE_DONE;
                 true
@@ -450,15 +467,41 @@ impl CopperEditJob {
                 let Some(regeneration) = self.regeneration.take() else {
                     return Err(CommandError::Unavailable("teardrop regeneration state is unavailable".into()));
                 };
+                let next = regeneration.state.finish();
                 let source = &self.context.source;
-                let (next, highest) = Session::finalize_prepared_change(Some(&source.snapshot), regeneration.state.finish(), regeneration.highest)?;
+                let size_check = if Session::needs_board_size_check(Some(&source.snapshot), &next) {
+                    // Regeneration already checked every surviving teardrop invariant and derivation.
+                    Some(crate::persistence::BoardSizeCheck::new(false))
+                } else {
+                    crate::board::zones::validate(&next).map_err(CommandError::InvalidParams)?;
+                    None
+                };
+                self.finalize =
+                    Some(PendingFinalize { project: next, highest: regeneration.highest, class_rules: regeneration.class_rules, size_check });
+                self.phase = 5;
+                self.work = 0;
+                return Ok(false);
+            }
+            5 => {
+                let Some(finalize) = self.finalize.as_mut() else {
+                    return Err(CommandError::Unavailable("board finalization state is unavailable".into()));
+                };
+                if let Some(size_check) = finalize.size_check.as_mut()
+                    && !size_check.step(&finalize.project, budget).map_err(CommandError::InvalidParams)?
+                {
+                    return Ok(false);
+                }
+                let Some(finalize) = self.finalize.take() else {
+                    return Err(CommandError::Unavailable("board finalization state is unavailable".into()));
+                };
+                let source = &self.context.source;
                 self.result = Some(Ok(PreparedCopperEdit {
                     source: source.clone(),
-                    candidate: Some(Arc::new(next)),
-                    prepared_highest: Some(highest),
+                    candidate: Some(Arc::new(finalize.project)),
+                    prepared_highest: Some(finalize.highest),
                     command: self.command,
                     params: self.params.clone(),
-                    class_rules: regeneration.class_rules,
+                    class_rules: finalize.class_rules,
                 }));
                 self.phase = PHASE_DONE;
                 self.work = 0;

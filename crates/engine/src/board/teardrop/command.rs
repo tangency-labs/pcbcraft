@@ -16,7 +16,10 @@ use crate::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 use uuid::Uuid;
 
 /// Add and remove checked straight-via teardrop intents.
@@ -181,6 +184,8 @@ pub(in crate::board) struct Regeneration {
     source: Source,
     geometry: Option<Arc<BoardGeometry>>,
     derive_next: usize,
+    last_id: Option<Uuid>,
+    sites: BTreeSet<(Uuid, Uuid)>,
     retained: Vec<Addition>,
     evaluator: Option<Evaluator<'static>>,
     check_next: usize,
@@ -198,7 +203,17 @@ impl Evaluator<'static> {
 impl Regeneration {
     /// Start resumable teardrop regeneration over an already-reconciled candidate project.
     pub(in crate::board) fn new(project: Project, source: Source, geometry: Arc<BoardGeometry>) -> Self {
-        Self { project, source, geometry: Some(geometry), derive_next: 0, retained: Vec::new(), evaluator: None, check_next: 0 }
+        Self {
+            project,
+            source,
+            geometry: Some(geometry),
+            derive_next: 0,
+            last_id: None,
+            sites: BTreeSet::new(),
+            retained: Vec::new(),
+            evaluator: None,
+            check_next: 0,
+        }
     }
 
     /// Monotonic work count across derivation and clearance checking.
@@ -223,12 +238,35 @@ impl Regeneration {
         let target = self.source.target;
         let board = self.project.board_view(target).ok_or_else(|| CommandError::NotFound("board is unavailable".into()))?;
         let records = board.teardrops();
+        if self.derive_next == 0 && !records.is_empty() {
+            if records.len() > edit::MAX_INTENTS {
+                return Err(CommandError::InvalidParams("too many or non-unique teardrop identities".into()));
+            }
+            if !self.project.board.arcs.is_empty() {
+                return Err(CommandError::InvalidParams("teardrop checking does not support boards with circular copper arcs".into()));
+            }
+            if board.setup().is_none() {
+                return Err(CommandError::InvalidParams("teardrops require a copper board setup".into()));
+            }
+        }
         if self.derive_next < records.len() {
             let end = self.derive_next.saturating_add(budget).min(records.len());
             for &record in &records[self.derive_next..end] {
                 let intent = record.on(target);
                 match intent.derive(board) {
-                    Ok(copper) => self.retained.push(Addition { intent, copper }),
+                    Ok(copper) => {
+                        if self.last_id.is_some_and(|previous| previous >= record.id) {
+                            return Err(CommandError::InvalidParams("too many or non-unique teardrop identities".into()));
+                        }
+                        if board.tracks().binary_search_by_key(&record.id, |track| track.id).is_ok()
+                            || board.vias().binary_search_by_key(&record.id, |via| via.id).is_ok()
+                            || !self.sites.insert((record.via, record.track))
+                        {
+                            return Err(CommandError::InvalidParams("duplicate teardrop attachment or copper identity".into()));
+                        }
+                        self.last_id = Some(record.id);
+                        self.retained.push(Addition { intent, copper });
+                    }
                     Err(
                         ShapeError::MissingTrack
                         | ShapeError::MissingVia

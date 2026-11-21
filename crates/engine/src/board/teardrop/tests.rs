@@ -484,4 +484,178 @@ mod regeneration {
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
         assert_eq!(session.undo.len(), history.0);
     }
+
+    /// At the 8,192-teardrop cap, neither the final regeneration transition nor the final
+    /// completion step re-derives teardrops or performs an unbudgeted whole-board encode count;
+    /// mid-pass cancellation leaves project, revision and Undo unchanged.
+    #[test]
+    fn regeneration_final_step_is_bounded_at_max_intents_and_cancel_leaves_session_unchanged() {
+        use crate::board::track::{
+            Track, Via,
+            tests::{copper_layers, routed_fixture},
+        };
+        use crate::persistence::{decode_documents, take_board_record_writes};
+        use std::sync::Arc;
+
+        const COUNT: usize = edit::MAX_INTENTS;
+        let mut session = routed_fixture();
+        let board = view(&session).target.board;
+        let copper_layer = copper_layers(&session)[0];
+        let outline_layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+        let corners =
+            [point(-5_000_000, -5_000_000), point(265_000_000, -5_000_000), point(265_000_000, 155_000_000), point(-5_000_000, 155_000_000)];
+        session
+            .apply(ADD_DRAWING, &json!({"board":board,"layer":outline_layer,"points":corners,"closed":true,"expected_revision":session.revision()}))
+            .unwrap();
+        let rules = Values { clearance_nm: 35_000, ..Values::default() };
+        session.apply(SET_RULES, &json!({"board":board,"rules":rules,"expected_revision":session.revision()})).unwrap();
+
+        let mut project = session.project().unwrap().clone();
+        let mut first_record = None;
+        {
+            let board_data = Arc::make_mut(&mut project.board);
+            for index in 0..COUNT {
+                let col = (index % 128) as i64;
+                let row = (index / 128) as i64;
+                let at = point(col * 2_000_000, 20_000_000 + row * 2_000_000);
+                let via = Uuid::from_u128(0x10_0000 + index as u128);
+                let track = Uuid::from_u128(0x20_0000 + index as u128);
+                let id = Uuid::from_u128(0x30_0000 + index as u128);
+                board_data.vias.push(Via { id: via, net_assignment: None, locked: false, at, diameter_nm: 500_000, drill_nm: 300_000 });
+                board_data.tracks.push(Track {
+                    id: track,
+                    locked: false,
+                    layer: copper_layer,
+                    width_nm: 100_000,
+                    start: at,
+                    end: point(at.x_nm + 600_000, at.y_nm),
+                });
+                let record = Record { id, via, track, parameters: PARAMS };
+                if first_record.is_none() {
+                    first_record = Some(record);
+                }
+                board_data.teardrops.push(record);
+            }
+            board_data.vias.sort_by_key(|via| via.id);
+            board_data.tracks.sort_by_key(|track| track.id);
+            board_data.teardrops.sort_by_key(|record| record.id);
+        }
+        let saved = encode_documents(Arc::new(project)).unwrap();
+        session.open_snapshot(decode_documents(&saved).unwrap());
+        session.apply("project.rename", &json!({"name":"Max teardrop board"})).unwrap();
+
+        let first = first_record.unwrap().on(view(&session).target);
+        let original = first.derive(view(&session)).unwrap();
+        let before = session.snapshot().unwrap();
+        let before_bytes = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        assert_eq!(view(&session).teardrops().len(), 8_192);
+        assert!(history.0 > 0);
+
+        let (dx, dy) = (200_000, 200_000);
+        let params = json!({"tracks":[first.track],"vias":[first.via],"dx_nm":dx,"dy_nm":dy,"expected_revision":revision});
+
+        // Cancel mid-pass during small-step regeneration and confirm nothing changed.
+        let mut canceled = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        for _ in 0..50_000 {
+            if canceled.progress().stage == "Regenerating teardrops" {
+                break;
+            }
+            assert!(!canceled.step(256));
+        }
+        assert_eq!(canceled.progress().stage, "Regenerating teardrops");
+        let _ = (take_derive_calls(), take_board_record_writes());
+        assert!(!canceled.step(1));
+        assert_eq!(take_derive_calls(), 1);
+        assert_eq!(take_board_record_writes(), 0);
+        assert!(canceled.take_result().unwrap().is_none());
+        drop(canceled);
+
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
+        assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+
+        // Drain a fresh job at 8,192 teardrops and count work on every regeneration and
+        // board-size-check step, using step(1) across the regeneration transition and final step.
+        let mut job = session.prepare_copper_edit(MOVE_TRACKS, &params).unwrap();
+        for _ in 0..50_000 {
+            if job.progress().stage == "Regenerating teardrops" {
+                break;
+            }
+            assert!(!job.step(256));
+        }
+        assert_eq!(job.progress().stage, "Regenerating teardrops");
+
+        let mut transitioned_on_step_one = false;
+        for _ in 0..50_000 {
+            let progress = job.progress();
+            if progress.stage != "Regenerating teardrops" {
+                break;
+            }
+            let budget = if progress.total.saturating_sub(progress.completed) <= 4 { 1 } else { 256 };
+            let _ = (take_derive_calls(), take_board_record_writes());
+            let done = job.step(budget);
+            let derives = take_derive_calls();
+            let records = take_board_record_writes();
+            assert!(!done);
+            assert!(derives <= budget);
+            assert_eq!(records, 0);
+            if job.progress().stage == "Checking board size" {
+                assert_eq!(budget, 1);
+                assert_eq!(derives, 0);
+                transitioned_on_step_one = true;
+                break;
+            }
+        }
+        assert!(transitioned_on_step_one);
+        assert_eq!(job.progress().stage, "Checking board size");
+
+        // Header prefix step (constant overhead, zero teardrop re-derivation).
+        let _ = (take_derive_calls(), take_board_record_writes());
+        assert!(!job.step(1));
+        assert_eq!(take_derive_calls(), 0);
+        assert!(take_board_record_writes() < 100);
+
+        let mut size_check_yields = 1usize;
+        let mut finished = false;
+        let mut final_step_budget = 0usize;
+        let mut final_step_derives = usize::MAX;
+        let mut final_step_records = usize::MAX;
+        for _ in 0..50_000 {
+            let progress = job.progress();
+            let budget = if progress.total.saturating_sub(progress.completed) <= 8 { 1 } else { 256 };
+            let _ = (take_derive_calls(), take_board_record_writes());
+            let done = job.step(budget);
+            let derives = take_derive_calls();
+            let records = take_board_record_writes();
+            assert_eq!(derives, 0);
+            assert!(records <= budget);
+            if done {
+                finished = true;
+                final_step_budget = budget;
+                final_step_derives = derives;
+                final_step_records = records;
+                break;
+            }
+            size_check_yields += 1;
+        }
+        assert!(finished);
+        assert_eq!(final_step_budget, 1);
+        assert_eq!(final_step_derives, 0);
+        assert!(final_step_records <= 1);
+        assert!(size_check_yields >= 2);
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+        assert_eq!(session.revision(), revision);
+
+        let prepared = job.take_result().unwrap().unwrap();
+        session.commit_copper_edit(prepared).unwrap();
+        assert_eq!(session.revision(), revision + 1);
+        assert_eq!(view(&session).teardrops().len(), COUNT);
+        assert_eq!(first.derive(view(&session)).unwrap().vertices, original.vertices.map(|p| point(p.x_nm + dx, p.y_nm + dy)));
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_bytes);
+        assert_eq!(session.undo.len(), history.0);
+    }
 }
