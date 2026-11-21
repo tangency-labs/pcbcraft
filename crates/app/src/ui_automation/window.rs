@@ -57,13 +57,16 @@ impl PcbApp {
     /// `applied` once the client matches it to a physical pixel, else `constrained` after
     /// the settle time. Repaints continue while it is pending.
     pub(super) fn automation_measure(&mut self, ctx: &egui::Context, host: HostId) -> Measured {
+        // The pinned egui-winit reads macOS maximized/minimized only when the window opens,
+        // so later values there are unknown rather than measured.
+        let current = !cfg!(target_os = "macos");
         let window = ctx.input(|input| {
             let info = input.viewport();
             Measured {
                 client: input.viewport_rect().size(),
-                maximized: info.maximized,
+                maximized: info.maximized.filter(|_| current),
                 fullscreen: info.fullscreen,
-                minimized: info.minimized,
+                minimized: info.minimized.filter(|_| current),
                 monitor: info.monitor_size,
             }
         });

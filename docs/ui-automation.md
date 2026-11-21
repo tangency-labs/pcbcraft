@@ -90,7 +90,9 @@ size as the window's size.
 
 `ui.window` takes `window` and reports what the last accepted paint measured:
 the `client` width and height, the display `scale`, `maximized`, `fullscreen`
-and `minimized` (`null` where the platform does not say), focus, the `monitor`
+and `minimized` (`null` where the platform does not say; macOS reports
+maximized and minimized only when the window opens, so they are `null` there),
+focus, the `monitor`
 size when known, the current `layout` and the latest request. Poll it until
 `resize.state` leaves `pending`:
 
@@ -101,7 +103,8 @@ size when known, the current `layout` and the latest request. Poll it until
 
 Requests are refused, changing nothing, for an unknown or closed window, a size
 below the window's minimum (640×400 for the main window, 480×400 for detached
-ones) or above its monitor, a maximized, fullscreen or minimized window, and
+ones) or above its monitor, a window reported as maximized, fullscreen or
+minimized, and
 detached editors on platforms that embed them in the main window.
 
 An accepted request cancels queued input and retires the current `layout`.

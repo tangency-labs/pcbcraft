@@ -74,7 +74,12 @@ fn constrained_and_refused_resizes_are_reported_separately() {
     assert!(command(&mut h, "ui.window", json!({"window":9})).unwrap_err().contains("Unknown editor window"));
     h.input_mut().viewports.get_mut(&egui::ViewportId::ROOT).unwrap().maximized = Some(true);
     h.step();
-    assert!(command(&mut h, "ui.resize", json!({"window":0,"width":1280.0,"height":800.0})).unwrap_err().contains("maximized"));
+    // macOS reports this flag only when the window opens, so a later value is unknown.
+    let maximized = if cfg!(target_os = "macos") { Value::Null } else { json!(true) };
+    assert_eq!(command(&mut h, "ui.window", json!({"window":0})).unwrap()["maximized"], maximized);
+    h.input_mut().viewports.get_mut(&egui::ViewportId::ROOT).unwrap().fullscreen = Some(true);
+    h.step();
+    assert!(command(&mut h, "ui.resize", json!({"window":0,"width":1280.0,"height":800.0})).unwrap_err().contains("fullscreen"));
     assert_eq!(command(&mut h, "ui.window", json!({"window":0})).unwrap()["resize"]["state"], "constrained");
 }
 
