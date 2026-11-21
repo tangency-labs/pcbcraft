@@ -518,26 +518,47 @@ transforms") and #86's model record uses; it follows the model-frame proposal in
 
 **Publishing and revisions** (PCBCraft).
 
-- Each board has its own export target: a path hint, auto-publish on or off, and
-  the last published revision. It is stored with the board, in a
-  board format step written only when a target exists. The default path is beside
-  the project, named after the project and the board, and chosen once.
-- `source_id` is `<project UUID>/<board UUID>` (question 18).
+- Each board has its own export target: its own `source_id` (a random UUID made
+  with the target), a path hint, auto-publish on or off, and a revision counter.
+  It is stored with the board, in a board format step written only when a target
+  exists. The default path is beside the project, named after the project and the
+  board, and chosen once. `board.json` also names the project and board UUIDs,
+  but they are not the link identity: a copied project keeps them.
+- Save As gives each copied target a new `source_id`, as SolidCraft's Save As does
+  for a design (the bridge RFC, section 5). A copy made outside PCBCraft cannot be
+  told apart from its original by its contents, so the writer checks instead.
+  The manifest records the project location that published it, as a hint. Before
+  overwriting an exchange file, PCBCraft reads its manifest and refuses if the
+  file was last published from another location, naming that location. The user
+  then chooses **Publish as Separate Board**, which gives this copy a new
+  `source_id` and its own file, or **Replace**, for a project that was moved. A
+  SolidCraft link never silently starts following a copy.
 - Publishing captures one immutable snapshot of the **saved** board (question 16)
   and follows the [export snapshot rules](../multiboard-assembly-and-outputs.md).
   Publish with unsaved changes saves first. With auto-publish on, each save that
   changes the board publishes; a no-op save publishes nothing and changes no
   bytes.
-- `revision` is the target's counter plus one, written in that same save. The
-  manifest also carries the content hash and the snapshot's capture ID. Revisions
-  only increase; a publish that fails leaves a gap, which is harmless.
+- `revision` is the target's counter. Each save that changes a board with a
+  target increases it by one, in that save; publishing itself never changes it.
+  Publishing a saved state therefore always writes the same revision and the same
+  bytes, and if the file already holds them, nothing is written. The manifest also
+  carries the content hash and the snapshot's capture ID. Revisions only increase;
+  saves that are not published leave gaps, which are harmless.
+- One publish job runs per target at a time. Publish requests made while a job
+  runs collapse into one follow-up job for the newest saved state. Just before
+  its rename, a job reads the file's revision again and stops without writing if
+  the file already holds the same or a newer one, and reports a newer one. The
+  linked path therefore never goes back to an older revision. A project restored
+  from an older copy is behind its own file in this way; **Replace** then
+  publishes it with the next revision above the file's.
 - The file is written under a temporary name and renamed over the previous one, so
   a reader sees a whole revision or the previous one, never part of one.
   Publishing runs as a bounded job off the editor thread and never waits for
   SolidCraft.
 - Publishing never changes authored board data. A refused publish (no thickness,
-  a model whose bytes do not match their hash, a write error) leaves the previous
-  file and says why; the save itself still succeeds.
+  a model whose bytes do not match their hash, a file published from another
+  location, a write error) leaves the previous file and says why; the save itself
+  still succeeds.
 
 **Refreshing in SolidCraft.** This is a proposal for SolidCraft's receiver, to be
 agreed in the bridge RFC's Phase 5; SolidCraft decides and builds it. It reuses
@@ -634,13 +655,16 @@ a board datum which follows that edge) is question 10.
 A zone gets a `region`: `drawn` (today) or `board` (the accepted outline, inset
 by edge clearance at fill time). Fill stays derived (#232). Because a pad can be
 connected only through a zone, the guard (C7) cannot ignore fill once fill
-exists: the update recomputes the fill of each zone whose region changed or whose
-area the moved copper crosses, with #232's fill rules, inside the same pure
-function (6.5), and compares connectivity including it. A connection that only
-the old fill made is refused like any other, naming the net and the zone. Whether
-that recomputed fill is then stored or recomputed again for display follows
-#232. Keepouts, once stored, get the same `region` and can be held like
-footprints.
+exists. The update recomputes, with #232's fill rules and inside the same pure
+function (6.5), the fill of each zone whose region changed and of each zone that
+moved copper comes within clearance of: the zone's area grown by the largest
+clearance its fill applies, tested against the moved copper at its old and new
+position. Copper of another net does not have to cross a zone to cut its fill;
+being within clearance of it is enough. The guard then compares connectivity
+including that fill. A connection that only the old fill made is refused like any
+other, naming the net and the zone. Whether the recomputed fill is then stored or
+recomputed again for display follows #232. Keepouts, once stored, get the same
+`region` and can be held like footprints.
 
 ## 7. Slices
 
@@ -666,12 +690,19 @@ the target. Components are listed without bodies until #86's model record lands.
 holes, parts on both sides, a declared thickness) publishes a file whose board
 body, hole positions, thickness and component transforms, read back with
 PCBCraft's own reader and `read_step`, match the known dimensions in millimetres,
-with bottom parts turned over, not mirrored; the same saved board publishes the
-same bytes; a no-op save publishes nothing; an edit and save publishes the next
-revision with a new hash; a board without a declared thickness and a model whose bytes
-do not match their hash are refused, naming the cause, and the previous file
-stays; a crash between writing and renaming leaves the previous file whole;
-publishing changes no board data and no undo history.
+with bottom parts turned over, not mirrored; publishing the same saved board
+again, by Publish or after a no-op save, writes nothing and leaves the file's
+bytes unchanged; an edit and save publishes the next revision with a new hash;
+with the revision 2 job held before its rename and revision 3 saved meanwhile, the
+file ends up holding revision 3, and a job that finds a newer revision in the
+file stops without writing; a copy of the project made in the file manager,
+edited and published to the same path, is refused, naming the original location,
+and leaves the file unchanged until Publish as Separate Board gives it its own
+`source_id` and file; Save As gives the copy a new `source_id` by itself; a board
+without a declared thickness and a model whose bytes do not match their hash are
+refused, naming the cause, and the previous file stays; a crash between writing
+and renaming leaves the previous file whole; publishing changes no board data and
+no undo history.
 
 #### Slice 2: the linked board updated in the open assembly
 
@@ -896,18 +927,13 @@ only suggest the targets are realistic.
     confused with SolidCraft's RFC numbers?
 16. **Publish saved state only?** Recommended (6.7): the assembly never shows a
     board that exists in no saved file, and the revision counter is written by the
-    save that publishes. The alternative is publishing unsaved state, as a
+    save that changes the board. The alternative is publishing unsaved state, as a
     fabrication export may, with a revision kept outside the project.
 17. **SolidCraft refresh and enclosure features.** When a refresh changes an
     enclosure feature that references the board, should SolidCraft recompute and
     report (recommended for the first milestone, as linked designs do today, one
     undo step) or preview before the feature changes?
-18. **`source_id` for a board.** `<project UUID>/<board UUID>` is proposed. A
-    copied project keeps its UUIDs, so two copies would publish under the same
-    ID, and a SolidCraft link could take revisions from either. Should copying a
-    project give it a new UUID, as Save As does for a SolidCraft design (the
-    bridge RFC, section 5)?
-19. **The second outbound milestone.** Which comes next after 6.7's first
+18. **The second outbound milestone.** Which comes next after 6.7's first
     milestone: copper and mask bodies, keep-outs and height zones, continuous
     updates while dragging, or labelled datums?
 
