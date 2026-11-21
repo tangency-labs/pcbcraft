@@ -18,6 +18,7 @@ mod validation;
 pub(crate) use anchor::schema as anchor_schema;
 pub use anchor::{Anchor, AnchorKind, Scope, ScopeKind};
 pub use commands::{PROMOTE, RESOLVE_AMBIGUITY};
+pub(crate) use validation::RegistryValidation;
 
 use crate::board::update::SourceCapture;
 use serde::{Deserialize, Serialize};

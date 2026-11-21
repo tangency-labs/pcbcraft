@@ -1654,6 +1654,7 @@ pub struct DocumentsEncoder {
     board_facts: BoardFacts,
     baseline_encoding: crate::board::update::BaselineEncoding,
     net_record_encoding: crate::nets::RecordEncoding,
+    registry_validation: crate::nets::RegistryValidation,
     dependency_encoding: crate::part_instances::storage::DependencyEncoding,
     profile_validation: crate::board::assembly_profile::CatalogValidation,
     profile_encoding: crate::board::assembly_profile::CatalogEncoding,
@@ -1705,6 +1706,7 @@ impl DocumentsEncoder {
             board_facts: BoardFacts::default(),
             baseline_encoding: crate::board::update::BaselineEncoding::default(),
             net_record_encoding: crate::nets::RecordEncoding::default(),
+            registry_validation: crate::nets::RegistryValidation::default(),
             dependency_encoding: crate::part_instances::storage::DependencyEncoding::default(),
             profile_validation: crate::board::assembly_profile::CatalogValidation::default(),
             profile_encoding: crate::board::assembly_profile::CatalogEncoding::default(),
@@ -1744,10 +1746,16 @@ impl DocumentsEncoder {
     }
 
     /// Designator-lock fact accumulated by the component scan (phase 26), exposed only while
-    /// the remaining header scans (27, 28, 29, 36) run and before phase 0 consumes it.
+    /// the remaining header scans (27, 28, 29, 36, 39) run and before phase 0 consumes it.
     #[cfg(test)]
     pub(crate) fn scanned_designator_locks(&mut self) -> Option<&mut bool> {
-        matches!(self.phase, 27 | 28 | 29 | 36).then_some(&mut self.header.has_locks)
+        matches!(self.phase, 27 | 28 | 29 | 36 | 39).then_some(&mut self.header.has_locks)
+    }
+
+    /// Current net-registry validation stage while phase 39 validates records and meters bytes.
+    #[cfg(test)]
+    pub(crate) fn registry_validation_stage(&self) -> Option<&'static str> {
+        (self.phase == 39).then(|| self.registry_validation.stage())
     }
 
     /// Copper-row emission progress while phase 30 streams tracks or vias:
@@ -1828,18 +1836,30 @@ impl DocumentsEncoder {
                 36 => {
                     let p = &self.project;
                     if self.profile_validation.step(&p.assembly_profiles, &p.board.assembly_profiles)? {
+                        if p.has_sheet_occurrences() && !p.net_registry.records.is_empty() {
+                            let records = p.occurrence_instances();
+                            Project::clone(p).install_sheet_instances(records.clone())?;
+                            self.instance_records = Some(records);
+                            self.phase = 39;
+                        } else {
+                            self.phase = 0;
+                        }
+                    }
+                }
+                39 => {
+                    let p = &self.project;
+                    if self.registry_validation.step(&p.net_registry, p)? {
                         self.phase = 0;
                     }
                 }
                 0 => {
                     let p = &self.project;
                     if p.has_sheet_occurrences() {
-                        let records = p.occurrence_instances();
-                        Project::clone(p).install_sheet_instances(records.clone())?;
-                        if !p.net_registry.records.is_empty() {
-                            self.validate_registry()?;
+                        if self.instance_records.is_none() {
+                            let records = p.occurrence_instances();
+                            Project::clone(p).install_sheet_instances(records.clone())?;
+                            self.instance_records = Some(records);
                         }
-                        self.instance_records = Some(records);
                         if p.layout.is_none() {
                             return Err("Occurrence records require the current project folder layout.".into());
                         }

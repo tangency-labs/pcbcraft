@@ -663,8 +663,10 @@ fn board_copper_encoding_is_step_bounded_cancellable_and_byte_exact() {
     assert_eq!(encode_documents(decode_documents(&incremental).unwrap()).unwrap(), incremental);
 }
 
-/// Native document encoding steps large net lineage rows incrementally via `RecordEncoding`,
-/// tolerates mid-record cancellation without mutating the snapshot, and matches Serde byte-for-byte.
+/// Native document encoding meters net-registry graph rebuild, record/lineage validation,
+/// compact 8 MiB byte metering, and Phase 16 `RecordEncoding` emission across budgeted steps,
+/// tolerates mid-validation and mid-record cancellation without mutating the snapshot, and
+/// matches Serde byte-for-byte.
 #[test]
 fn documents_encoder_steps_large_net_lineage_incrementally_and_matches_serde() {
     const LINEAGE_LEN: usize = 64;
@@ -704,13 +706,37 @@ fn documents_encoder_steps_large_net_lineage_incrementally_and_matches_serde() {
 
         let mut large_encoder = DocumentsEncoder::new(large.clone());
         let mut large_steps = 0usize;
+        let mut build_graph_steps = 0usize;
+        let mut validate_record_steps = 0usize;
+        let mut meter_record_steps = 0usize;
         let incremental_1 = loop {
             if let Some(docs) = large_encoder.step(1).unwrap() {
                 break docs;
             }
+            match large_encoder.registry_validation_stage() {
+                Some("build_graph") => build_graph_steps += 1,
+                Some("validate_records") => validate_record_steps += 1,
+                Some("meter_records") => meter_record_steps += 1,
+                _ => {}
+            }
             large_steps += 1;
         };
-        assert_eq!(large_steps, small_steps + LINEAGE_LEN + 2);
+        assert!(build_graph_steps > 1);
+        assert!(validate_record_steps >= LINEAGE_LEN);
+        assert!(meter_record_steps >= LINEAGE_LEN);
+        assert_eq!(large_steps, small_steps + 3 * LINEAGE_LEN + 4);
+
+        for target_stage in ["validate_records", "meter_records"] {
+            let mut cancelled = DocumentsEncoder::new(large.clone());
+            while cancelled.registry_validation_stage() != Some(target_stage) {
+                assert!(cancelled.step(1).unwrap().is_none());
+            }
+            for _ in 0..10 {
+                assert!(cancelled.step(1).unwrap().is_none());
+                assert_eq!(cancelled.registry_validation_stage(), Some(target_stage));
+            }
+            drop(cancelled);
+        }
 
         let mut cancelled = DocumentsEncoder::new(large.clone());
         for _ in 0..large_steps / 2 {
