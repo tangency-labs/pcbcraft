@@ -333,6 +333,37 @@ movement/deletion protection is provided yet. Diagnostic single-file encoding
 and the board clipboard explicitly refuse active footprint locks rather than
 silently losing them. See [the layout guide](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
 
+### Authored output recipes
+
+`pcbcraft-project/47` requires a nonempty `output_recipes` array of at most 32
+records and an explicit physical board registration. The entry point stores one
+`{id, content}` record per line in recipe UUID order. IDs must be unique and
+non-nil. The envelope permits the earlier fields accepted by project/36,
+including expanded or compact memberships, but does not require an assembly
+profile catalog. A project with both recipes and differential pairs uses /47
+with the existing board-owned `pcbcraft-instances/8`; board and sheet formats
+are unchanged. A project with both recipes and an active designator lock uses
+`pcbcraft-project/57`, which otherwise follows project/51. Other project
+envelopes, including /51, do not accept `output_recipes`.
+The diagnostic single-file writer also refuses recipes rather than losing them.
+
+`content` requires `board` (the registered board UUID), `name` (1–80 trimmed,
+non-control characters), `units` (`mm` or `in`), `file_stem` (1–48 lowercase
+ASCII letters, digits or interior hyphens; no reserved device names),
+`gerber_layers` (up to 128 distinct non-nil layer UUIDs in authored order), and
+`drill` (boolean). Select at least one layer or drill. `origin` may specify a
+board-zero, outline-lower-left or bounded integer-nanometre point anchor; omitted
+means use the board origin. `assembly_profile` may name a non-nil profile UUID
+and positive `revision`. Layer and profile references record intent, not a
+resolved snapshot; changes to those records do not invalidate a native save.
+Unknown members and null values inside the record are refused.
+
+`pcb.set_output_recipe` creates, replaces or removes a recipe in one Undo step.
+The first edit adopts current folder and occurrence metadata if needed. With no
+recipes, a save omits the field and uses the format required by the remaining
+project data. The existing export command does not consume recipes yet; no
+export path, generated files or release records are part of this document.
+
 ### Assembly profiles and stack fields
 
 Project format `pcbcraft-project/36` adds a required nonempty `assembly_profiles`
@@ -434,7 +465,7 @@ registry's retained identities.
 
 | File | Format | Contents |
 |---|---|---|
-| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45` or `/51` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 51 requires an active designator lock and can also carry differential pairs |
+| `project.json` | `pcbcraft-project/6`, `/7`, `/9`, `/11`, `/12`, `/13`, `/14`, `/15`, `/16`, `/17`, `/19`, `/20`, `/21`, `/22`, `/23`, `/24`, `/36`, `/39`, `/45`, `/47`, `/51` or `/57` | Project UUID, name, ordered sheets and components; version 7 adds the numeric allocation watermark, version 9 adds explicit zero-or-one board registration, version 11 adds component metadata for legacy ownership, version 12 combines metadata with explicit board registration, version 13 adds schematic-only package choices, and version 14 combines these fields with `layout_root` and board-folder registrations; version 15 adds native part selections, version 16 adds required single-use occurrence identities, version 17 adds the sparse net registry, and version 19 adds pin and wire-end no-connect intent; versions 20/21 add class catalogs and bindings, version 22 adds project parameters, version 23 adds net-owned generated numbers with optional project parameters, version 24 adds the part-group catalog with the earlier records optional, and version 39 adds compact part-group membership with the same catalog; version 36 adds pinned immutable assembly output profiles and can carry either membership representation; version 45 requires differential pairs and keeps the earlier extensions optional; version 51 requires an active designator lock and can also carry differential pairs; version 47 requires authored output recipes and accepts differential pairs and earlier extensions optionally; version 57 requires both output recipes and an active designator lock, with every other version 51 record optional. The writer chooses the lowest of 47, 51 and 57 that holds exactly the recipes and locks in use |
 | `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/1` through `/8` | Sheet UUID, unit placements, junctions and wires; version 2 adds hierarchical labels and child sheet symbols; version 3 adds named electrical anchors; version 4 adds per-unit field appearance; version 5 adds net-name appearance; version 6 adds placed-symbol mirroring; version 7 adds persisted provenance for generated named-contact legs; version 8 adds intentional wire-end records |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35` or `/37` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; versions 27–33 remain unsupported |
@@ -666,7 +697,8 @@ A sheet/9 document may carry a nonempty `parameters` object directly after
 project/23 accepts the same object optionally alongside generated net numbers;
 project/24 and project/39 accept it optionally alongside the part-group catalog;
 project/36 accepts it alongside the assembly profile catalog, and project/45
-alongside differential pairs. Project/51 accepts it alongside designator locks,
+alongside differential pairs. Project/47 accepts it alongside output recipes.
+Project/51 accepts it alongside designator locks, and project/57 alongside both,
 with differential pairs optional. In each of these project formats, the object appears directly before `sheets`:
 
 ```json
@@ -684,7 +716,7 @@ name, or from a standard name of its list (`Revision`, `Date`, `Company`,
 `DrawnBy` for the project; those and `Title` for a sheet), only in case is
 rejected. Empty objects, null and other value types are rejected. Sheet parameter
 objects require sheet/9; project parameter objects require project/22, project/23,
-project/24, project/36, project/39, project/45 or project/51 and are rejected in
+project/24, project/36, project/39, project/45, project/47, project/51 or project/57 and are rejected in
 other project versions. Project/22 is a superset
 of project/21 whose net-class catalog, class assignments, net registry and
 no-connect intent are optional, each with its existing rules. Project/23 requires
@@ -693,8 +725,10 @@ parameters. Project/24 adds the part-group catalog and keeps every record
 of project/23 optional, generated net numbers included. Project/39 keeps those
 same rules with compact part-group memberships. Project/36 permits the same optional records with either membership representation, alongside its required assembly profile catalog. Project/45 permits the same
 records and an optional profile catalog alongside its required differential
-pairs. Project/51 requires a designator lock and permits the same records with or
-without pairs. All these formats require adopted storage and occurrence metadata;
+pairs. Project/47 also permits these records, alongside its required recipes.
+Project/51 requires a designator lock and permits the same records with or
+without pairs; project/57 requires both a lock and recipes and permits the same records.
+All these formats require adopted storage and occurrence metadata;
 setting the first project value adopts them in the same undo step.
 Removing the last project value returns the entry point to the version its other
 content needs. The diagnostic single-file encoding refuses parameters.
@@ -703,7 +737,7 @@ content needs. The diagnostic single-file encoding refuses parameters.
 
 Both project/24 and project/39 require a nonempty `part_groups` catalog
 (`pcbcraft-part-groups/1`) directly after any `net_classes` record. Project/36,
-/45 and /51 also accept the group catalog, with either membership representation.
+/45, /47, /51 and /57 also accept the group catalog, with either membership representation.
 Board-owned pairs keep instances/8 regardless of membership representation.
 Project/24, the expanded representation, is a superset of project/23: generated net numbers, net classes and
 their assignments, project parameters and no-connect intent are optional, each

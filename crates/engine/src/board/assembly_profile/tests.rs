@@ -820,6 +820,28 @@ fn assembly_profiles_preserve_expanded_and_compact_group_memberships() {
         assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap()[&instance_path], original[&instance_path]);
         s.apply("edit.redo", &Value::Null).unwrap();
         assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), docs);
+
+        let board = s.project().unwrap().board_target().unwrap().board;
+        s.apply(
+            crate::SET_OUTPUT_RECIPE,
+            &json!({"recipe":Uuid::from_u128(86),"expected_revision":s.revision(),"content":{
+                "name":"Drill","board":board,"units":"mm","file_stem":"drill","gerber_layers":[],"drill":true,
+                "assembly_profile":{"profile":id,"revision":1}
+            }}),
+        )
+        .unwrap();
+        let recipes = encode_documents(s.snapshot().unwrap()).unwrap();
+        let entry: Value = serde_json::from_slice(&recipes["project.json"]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/47");
+        assert_eq!(entry["output_recipes"][0]["content"]["assembly_profile"]["profile"], json!(id));
+        for (path, bytes) in &docs {
+            if path != "project.json" {
+                assert_eq!(&recipes[path], bytes, "{path}");
+            }
+        }
+        assert_eq!(encode_documents(decode_documents(&recipes).unwrap()).unwrap(), recipes);
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), docs);
     }
 }
 

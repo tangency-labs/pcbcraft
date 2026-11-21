@@ -199,6 +199,10 @@ with zero area. Mask uses outer-layer pads without process expansion; paste excl
 through-hole pads. Persistent layer/width/via controls stay visible across PCB tabs, with
 routing in Layout and alignment in its Modify menu.
 
+[Output recipes](native-project-storage.md#authored-output-recipes) can be saved,
+inspected and undone through the shared command set. This stores the requested
+configuration only; the editor and export command do not run recipes yet.
+
 Typed primary quantities captured in accepted board history remain SI-formatted
 in PCB Properties and Browser after schematic deletion, until reviewed footprint
 removal. Older and untyped history retains its stored text; see the

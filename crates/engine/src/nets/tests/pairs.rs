@@ -71,6 +71,43 @@ fn pair_save_reopen_and_net_rename_preserve_identity_and_bytes() {
     }
 }
 
+/// Adding a recipe to a /45 board retains its pair registry in board-owned instances/8.
+#[test]
+fn output_recipe_preserves_differential_pairs_and_instance_header() {
+    let (mut session, pair, _) = paired(true);
+    let before = encode_documents(session.snapshot().unwrap()).unwrap();
+    let entry: Value = serde_json::from_slice(&before[ENTRY_POINT]).unwrap();
+    assert_eq!(entry["format"], "pcbcraft-project/45");
+    let reopened = decode_documents(&before).unwrap();
+    let board = reopened.board_target().unwrap().board;
+    let path = reopened.instances_document_path().unwrap();
+    let recipe = Uuid::from_u128(9001);
+    apply(
+        &mut session,
+        crate::SET_OUTPUT_RECIPE,
+        json!({"recipe":recipe,"content":{
+            "name":"Drill","board":board,"units":"mm","file_stem":"drill","gerber_layers":[],"drill":true
+        }}),
+    );
+    let after = encode_documents(session.snapshot().unwrap()).unwrap();
+    let entry: Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
+    assert_eq!(entry["format"], "pcbcraft-project/47");
+    assert_eq!(after[&path], before[&path]);
+    let reopened = decode_documents(&after).unwrap();
+    assert_eq!(reopened.output_recipes()[0].id, recipe);
+    assert_eq!(reopened.net_registry.pairs.as_ref(), &[Arc::new(pair)]);
+    let packed = encode_packed(session.snapshot().unwrap()).unwrap();
+    assert_eq!(decode_packed(&packed).unwrap().documents, after);
+
+    let mut instances: Value = serde_json::from_slice(&after[&path]).unwrap();
+    assert_eq!(instances["format"], "pcbcraft-instances/8");
+    instances["format"] = json!("pcbcraft-instances/2");
+    assert!(decode_documents(&replaced(&after, &path, &instances)).err().unwrap().contains("unsupported instances format"));
+
+    apply(&mut session, "edit.undo", json!({}));
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// A lock upgrades the existing pair project without changing its registry payload, and
 /// removing the last lock restores the previous envelope in both storage homes.
 #[test]
