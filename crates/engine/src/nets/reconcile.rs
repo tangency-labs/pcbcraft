@@ -129,6 +129,7 @@ fn member_invalidation_reason(
         }
         Some(State::Retired { reason: Retirement::Removed, .. }) => Some("Member net retired; review endpoints."),
         Some(State::Retired { reason: Retirement::Merged, .. }) => Some("Member net merged; review endpoints."),
+        Some(State::Retired { reason: Retirement::Resolution, .. }) => Some("Member net resolved to another net; review endpoints."),
         Some(State::Ambiguous { .. }) => Some("Member net split ambiguously; review endpoints."),
         None => Some("Member net is no longer active; review endpoints."),
     }

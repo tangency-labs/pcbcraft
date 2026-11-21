@@ -1,6 +1,6 @@
 //! Authored relationship edits leave net identity and connectivity untouched.
 
-use super::{MAX_PAIRS, MAX_REGISTRY_BYTES, Pair, RecordEncoding, Registry, pairs::PairValidation};
+use super::{MAX_PAIRS, MAX_REGISTRY_BYTES, Pair, PairState, RecordEncoding, Registry, pairs::PairValidation};
 use crate::{
     CommandError, Project, Session,
     persistence::{PairDocumentBudget, PairDocumentProbe, document_row_framing_bytes},
