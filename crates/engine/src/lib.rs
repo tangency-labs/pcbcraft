@@ -2079,7 +2079,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::arc::SET_ARCS,
         title: "Store Circular Tracks",
-        summary: "Replace exact circular copper records. Geometry consumers refuse boards containing arcs; no conductive validation is performed. One undo step; dry_run returns the full before/after lists without changes.",
+        summary: "Replace exact circular copper records. Connectivity, ratsnest and via inspection account for arcs; clearance, DRC, preparation, fabrication, transforms, clipboard and other PCB edits still refuse boards containing arcs. One undo step; dry_run returns the full before/after lists without changes.",
         params: &[
             Param { required: true, summary: "Board UUID from inspection; required even for a single board", ..BOARD },
             EXPECTED_REVISION,

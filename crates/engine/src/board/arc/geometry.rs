@@ -7,39 +7,38 @@
 //!
 //! ## Contact tolerance
 //! At the ±1 m (±10⁹ nm) coordinate limit, IEEE-754 `f64` has ~2.2×10⁻⁷ nm per ULP.
-//! [`CONTACT_TOLERANCE_NM`] (`1e-6` nm = 1 femtometer) absorbs floating-point rounding at exact
-//! tangencies and intersections while remaining six orders of magnitude below a 1 nm (or 0.5 nm
-//! odd-width half-step) near-miss.
+//! [`CONTACT_TOLERANCE_NM`] (`1e-6` nm) absorbs floating-point rounding at exact tangencies and
+//! intersections; gaps `<= 1e-6` nm count as contact (whereas the linear [`Contour::gap`]
+//! predicate uses no epsilon).
 use super::{ArcTrack, Direction};
 use crate::{
     board::{
         geometry::Contour,
         track::{MAX_VIA_DIAMETER_NM, MAX_WIDTH_NM, MIN_VIA_DRILL_NM, MIN_WIDTH_NM},
-        zones::Zone,
     },
     schematic::Point,
 };
 use std::f64::consts::{FRAC_PI_2, FRAC_PI_4, PI, SQRT_2, TAU};
 
 /// Documented floating-point tolerance for exact arc contact predicates, in board nanometers.
-/// Absorbs `f64` rounding at exact tangencies up to ±1 m while staying 10⁶× below a 1 nm miss.
+/// Gaps `<= 1e-6` nm count as contact; linear [`Contour::gap`] predicates use no epsilon.
 pub const CONTACT_TOLERANCE_NM: f64 = 1e-6;
 
 /// Validated circular arc centerline with round copper expansion in board nanometers
-/// (X right, Y down). Derived directly from [`ArcTrack`] without tessellation.
+/// (X right, Y down). Always constructed through [`ArcGeometry::from_track`].
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ArcGeometry {
-    pub center: (f64, f64),
-    pub radius: f64,
-    pub start: (f64, f64),
-    pub end: (f64, f64),
-    pub start_point: Point,
-    pub end_point: Point,
-    pub start_angle: f64,
+    center: (f64, f64),
+    radius: f64,
+    start: (f64, f64),
+    end: (f64, f64),
+    start_point: Point,
+    end_point: Point,
+    start_angle: f64,
     /// Positive angular span in `(0, TAU)` traversed in `direction` from `start` to `end`.
-    pub sweep: f64,
-    pub direction: Direction,
-    pub half_width: f64,
+    sweep: f64,
+    direction: Direction,
+    half_width: f64,
 }
 
 impl ArcGeometry {
@@ -61,15 +60,22 @@ impl ArcGeometry {
             Direction::Clockwise => (end_angle - start_angle).rem_euclid(TAU),
             Direction::Counterclockwise => (start_angle - end_angle).rem_euclid(TAU),
         };
-        if sweep == 0.0 {
+        // Near 0 or TAU, `atan2` subtraction can round to 0 or flip order across adjacent ULPs.
+        // Decide tiny sweep vs near-full circle from exact integer cross and dot products.
+        if sweep <= 1e-12 || sweep >= TAU - 1e-12 {
             let (sx, sy) = (arc.start.x_nm as i128 - arc.center.x_nm as i128, arc.start.y_nm as i128 - arc.center.y_nm as i128);
             let (ex, ey) = (arc.end.x_nm as i128 - arc.center.x_nm as i128, arc.end.y_nm as i128 - arc.center.y_nm as i128);
             let cross = sx * ey - sy * ex;
-            sweep = match arc.direction {
-                Direction::Clockwise if cross < 0 => TAU,
-                Direction::Counterclockwise if cross > 0 => TAU,
-                _ => return Err("an arc needs a nonzero angular sweep".into()),
-            };
+            let dot = sx * ex + sy * ey;
+            if dot > 0 {
+                let delta = (cross.unsigned_abs() as f64).atan2(dot as f64).max(f64::MIN_POSITIVE);
+                let is_tiny = match arc.direction {
+                    Direction::Clockwise => cross > 0,
+                    Direction::Counterclockwise => cross < 0,
+                };
+                let below_tau = f64::from_bits(TAU.to_bits() - 1);
+                sweep = if is_tiny { delta } else { (TAU - delta).min(below_tau) };
+            }
         }
         Ok(Self {
             center,
@@ -83,6 +89,56 @@ impl ArcGeometry {
             direction: arc.direction,
             half_width: arc.width_nm as f64 / 2.0,
         })
+    }
+
+    /// Circle center `(x, y)` in board nanometers.
+    pub fn center(&self) -> (f64, f64) {
+        self.center
+    }
+
+    /// Radius derived from `center` and `start`, in board nanometers.
+    pub fn radius(&self) -> f64 {
+        self.radius
+    }
+
+    /// Authored start point `(x, y)` in floating-point board nanometers.
+    pub fn start(&self) -> (f64, f64) {
+        self.start
+    }
+
+    /// Authored end point `(x, y)` in floating-point board nanometers.
+    pub fn end(&self) -> (f64, f64) {
+        self.end
+    }
+
+    /// Exact integer start point.
+    pub fn start_point(&self) -> Point {
+        self.start_point
+    }
+
+    /// Exact integer end point.
+    pub fn end_point(&self) -> Point {
+        self.end_point
+    }
+
+    /// Start angle in radians (`atan2(y - cy, x - cx)` in X-right, Y-down coordinates).
+    pub fn start_angle(&self) -> f64 {
+        self.start_angle
+    }
+
+    /// Positive angular span in `(0, TAU)` traversed in `self.direction()`.
+    pub fn sweep(&self) -> f64 {
+        self.sweep
+    }
+
+    /// Authored traversal direction in X-right, Y-down coordinates.
+    pub fn direction(&self) -> Direction {
+        self.direction
+    }
+
+    /// Copper half-width (`width_nm / 2.0`) in board nanometers.
+    pub fn half_width(&self) -> f64 {
+        self.half_width
     }
 
     /// Whether `angle` (in radians, standard `atan2(y - cy, x - cx)` in X-right, Y-down) lies
@@ -135,9 +191,9 @@ impl ArcGeometry {
         let mut max = [f64::NEG_INFINITY; 4];
         let mut include = |(x, y): (f64, f64)| {
             let coords = [x, y, x + y, x - y];
-            for axis in 0..4 {
-                min[axis] = min[axis].min(coords[axis]);
-                max[axis] = max[axis].max(coords[axis]);
+            for ((lo, hi), value) in min.iter_mut().zip(max.iter_mut()).zip(coords) {
+                *lo = lo.min(value);
+                *hi = hi.max(value);
             }
         };
         include(self.start);
@@ -321,16 +377,6 @@ impl ArcGeometry {
     pub fn touches_zone_edge(&self, a: Point, b: Point) -> bool {
         self.distance_to_segment(a, b) <= self.half_width + CONTACT_TOLERANCE_NM
     }
-
-    /// Exact contact test: arc copper vs any closed boundary edge of a [`Zone`] outline.
-    /// Layer matching is left to the caller so the geometric predicate stays plane-local.
-    pub fn touches_zone(&self, zone: &Zone) -> bool {
-        let n = zone.points.len();
-        if n < 2 {
-            return false;
-        }
-        (0..n).any(|i| self.touches_zone_edge(zone.points[i], zone.points[(i + 1) % n]))
-    }
 }
 
 /// Euclidean distance between two floating-point points.
@@ -349,7 +395,7 @@ fn point_to_segment_distance(p: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::board::{definition::PadShape, zones::Options};
+    use crate::board::definition::PadShape;
     use uuid::Uuid;
 
     fn pt(x_nm: i64, y_nm: i64) -> Point {
@@ -384,7 +430,7 @@ mod tests {
 
         // Near-full-circle limit: CW from (1_000_000, 0) to (1_000_000, -1) sweeps ~360 degrees.
         let near_full = ArcGeometry::from_track(&make_arc(pt(0, 0), pt(1_000_000, 0), pt(1_000_000, -1), 20_000, Direction::Clockwise)).unwrap();
-        assert!(near_full.sweep > TAU - 1e-4);
+        assert!(near_full.sweep() > TAU - 1e-4 && near_full.sweep() < TAU);
         assert!(near_full.contains_angle(FRAC_PI_2));
         assert!(near_full.contains_angle(PI));
         assert!(near_full.contains_angle(-FRAC_PI_2));
@@ -396,9 +442,28 @@ mod tests {
         // Complementary tiny CCW arc from (1_000_000, 0) to (1_000_000, -1) does NOT cover (-1_000_000, 0).
         let tiny_ccw =
             ArcGeometry::from_track(&make_arc(pt(0, 0), pt(1_000_000, 0), pt(1_000_000, -1), 20_000, Direction::Counterclockwise)).unwrap();
-        assert!(tiny_ccw.sweep < 1e-4);
+        assert!(tiny_ccw.sweep() > 0.0 && tiny_ccw.sweep() < 1e-4);
         assert!(!tiny_ccw.contains_angle(PI));
         assert!(!tiny_ccw.touches_point_radius(pt(-1_000_000, 0), 0.0));
+
+        // Sub-ULP atan2 collision: validate() accepts cross = -1 even when atan2 rounds equal.
+        let tiny_sub_ulp =
+            ArcGeometry::from_track(&make_arc(pt(0, 0), pt(-100_000_000, 1), pt(-99_999_999, 1), 200_000, Direction::Counterclockwise)).unwrap();
+        assert!(tiny_sub_ulp.sweep() > 0.0 && tiny_sub_ulp.sweep() < 1e-12);
+        assert!(tiny_sub_ulp.touches_point_radius(pt(-100_000_000, 100_001), 0.0));
+        assert!(!tiny_sub_ulp.touches_point_radius(pt(100_000_000, 0), 0.0));
+
+        // Complementary CW direction on the same sub-ULP endpoints is a near-full ring.
+        let full_sub_ulp =
+            ArcGeometry::from_track(&make_arc(pt(0, 0), pt(-100_000_000, 1), pt(-99_999_999, 1), 200_000, Direction::Clockwise)).unwrap();
+        assert!(full_sub_ulp.sweep() > TAU - 1e-12 && full_sub_ulp.sweep() < TAU);
+        assert!(full_sub_ulp.touches_point_radius(pt(100_000_000, 0), 0.0));
+
+        // Radius strictly below half-width (e.g. R = 50_000 nm, half_width = 100_000 nm).
+        let tight = ArcGeometry::from_track(&make_arc(pt(0, 0), pt(50_000, 0), pt(0, 50_000), 200_000, Direction::Clockwise)).unwrap();
+        assert!(tight.touches_point_radius(pt(0, 0), 0.0));
+        assert!(tight.touches_point_radius(pt(150_000, 0), 0.0));
+        assert!(!tight.touches_point_radius(pt(150_001, 0), 0.0));
     }
 
     #[test]
@@ -453,6 +518,21 @@ mod tests {
         .unwrap();
         assert!(!span_x.touches_arc(&right_miss));
 
+        // Transversal mid-sweep crossing (y != 0) with all endpoints far apart:
+        // Circle 1 centered at (0,0) R=5_000_000, Circle 2 centered at (6_000_000, 0) R=5_000_000
+        // intersect at (3_000_000, ±4_000_000).
+        let cross_b =
+            ArcGeometry::from_track(&make_arc(pt(6_000_000, 0), pt(6_000_000, 5_000_000), pt(6_000_000, -5_000_000), 200_000, Direction::Clockwise))
+                .unwrap();
+        assert!(span_x.touches_arc(&cross_b));
+        assert!(cross_b.touches_arc(&span_x));
+
+        // Same circles, but Circle 2's arc sweeps only the right side (outside both intersections).
+        let disjoint_circles =
+            ArcGeometry::from_track(&make_arc(pt(6_000_000, 0), pt(6_000_000, -5_000_000), pt(6_000_000, 5_000_000), 200_000, Direction::Clockwise))
+                .unwrap();
+        assert!(!span_x.touches_arc(&disjoint_circles));
+
         // Internal concentric tangency: inner arc R=4_800_000, hw=100_000 inside R=5_000_000, hw=100_000 -> gap = 0.
         let inner_tangent = ArcGeometry::from_track(&make_arc(pt(0, 0), pt(4_800_000, 0), pt(0, 4_800_000), 200_000, Direction::Clockwise)).unwrap();
         assert!(a.touches_arc(&inner_tangent));
@@ -472,6 +552,36 @@ mod tests {
         let opposite_quadrant =
             ArcGeometry::from_track(&make_arc(pt(0, 0), pt(-5_000_000, 0), pt(0, -5_000_000), 200_000, Direction::Clockwise)).unwrap();
         assert!(!a.touches_arc(&opposite_quadrant));
+
+        // +/-1 m scale Pythagorean tangency (3-4-5 triangle scaled by 100_000_000 nm):
+        // Center A = (-300_000_000, -400_000_000), Center B = (300_000_000, 400_000_000) -> dist = 1_000_000_000 nm.
+        // R_A = R_B = 499_900_000 nm, hw_A = hw_B = 100_000 nm -> exact tangency at origin (0, 0).
+        let large_a = ArcGeometry::from_track(&make_arc(
+            pt(-300_000_000, -400_000_000),
+            pt(-300_000_000 + 499_900_000, -400_000_000),
+            pt(-300_000_000, -400_000_000 + 499_900_000),
+            200_000,
+            Direction::Clockwise,
+        ))
+        .unwrap();
+        let large_b = ArcGeometry::from_track(&make_arc(
+            pt(300_000_000, 400_000_000),
+            pt(300_000_000 - 499_900_000, 400_000_000),
+            pt(300_000_000, 400_000_000 - 499_900_000),
+            200_000,
+            Direction::Clockwise,
+        ))
+        .unwrap();
+        assert!(large_a.touches_arc(&large_b));
+        let large_b_miss = ArcGeometry::from_track(&make_arc(
+            pt(300_000_001, 400_000_000),
+            pt(300_000_001 - 499_900_000, 400_000_000),
+            pt(300_000_001, 400_000_000 - 499_900_000),
+            200_000,
+            Direction::Clockwise,
+        ))
+        .unwrap();
+        assert!(!large_a.touches_arc(&large_b_miss));
     }
 
     #[test]
@@ -574,19 +684,11 @@ mod tests {
     #[test]
     fn arc_vs_zone_edge_tangency_crossing_and_near_miss() {
         let a = ArcGeometry::from_track(&make_arc(pt(0, 0), pt(0, -5_000_000), pt(0, 5_000_000), 200_000, Direction::Clockwise)).unwrap();
-        // Single zero-width zone edge tangent to outer copper at x = 5_100_000.
+        // Zero-width zone edge tangent to outer copper at x = 5_100_000.
         assert!(a.touches_zone_edge(pt(5_100_000, -2_000_000), pt(5_100_000, 2_000_000)));
+        // Near-miss by 1 nm.
         assert!(!a.touches_zone_edge(pt(5_100_001, -2_000_000), pt(5_100_001, 2_000_000)));
-
-        // Full Zone polygon whose left edge touches at x = 5_100_000 vs misses at 5_100_001.
-        let zone = |left: i64| Zone {
-            id: Uuid::from_u128(10),
-            layer: Uuid::from_u128(2),
-            net: Uuid::from_u128(20),
-            points: vec![pt(left, -2_000_000), pt(left + 4_000_000, -2_000_000), pt(left + 4_000_000, 2_000_000), pt(left, 2_000_000)],
-            options: Options::default(),
-        };
-        assert!(a.touches_zone(&zone(5_100_000)));
-        assert!(!a.touches_zone(&zone(5_100_001)));
+        // Crossing edge through the arc centerline.
+        assert!(a.touches_zone_edge(pt(4_000_000, 0), pt(6_000_000, 0)));
     }
 }

@@ -73,7 +73,7 @@ impl BoardView<'_> {
     }
 
     /// Inspect authored intent independently of resolved island membership and physical pad contact.
-    /// Unsupported circular geometry leaves derived fields null and reports its error, while
+    /// Unsupported teardrop geometry leaves derived fields null and reports its error, while
     /// retaining the authored assignment and its registry state.
     pub fn inspect_vias(self) -> Vec<Value> {
         if self.vias().is_empty() {
@@ -106,11 +106,16 @@ impl BoardView<'_> {
 
 /// One node's intrinsic intent: pad membership or an active authored via target, never a name.
 pub(super) fn node_membership(project: &Project, lands: &[Land], tracks: usize, vias: &[Via], memberships: &Memberships) -> Vec<Option<usize>> {
-    node_membership_with_arcs(project, lands, tracks, vias, 0, memberships)
+    node_membership_counts(project, lands, tracks, vias, 0, memberships)
 }
 
 /// One node's intrinsic intent across pads, tracks, vias and circular arcs.
-pub(super) fn node_membership_with_arcs(
+pub(super) fn node_membership_with_arcs(project: &Project, items: super::track::CopperItems<'_>, memberships: &Memberships) -> Vec<Option<usize>> {
+    node_membership_counts(project, items.lands, items.tracks.len(), items.vias, items.arcs.len(), memberships)
+}
+
+/// Internal helper shared by linear and arc-aware membership resolution.
+fn node_membership_counts(
     project: &Project,
     lands: &[Land],
     tracks: usize,

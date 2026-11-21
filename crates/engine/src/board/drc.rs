@@ -358,20 +358,21 @@ impl BoardView<'_> {
 
     /// Detect physical copper shorts across pads, straight tracks, vias and circular arcs.
     /// Reports one [`Kind::Short`] violation per copper island that joins distinct intended nets,
-    /// including direct pad contacts and arcs touching foreign copper. Does not run clearance,
-    /// dimension, outline or courtyard DRC checks; refuses teardrop boards.
-    pub fn copper_shorts(self) -> Result<Vec<Violation>, String> {
+    /// including direct pad contacts and arcs touching foreign copper. Listed violations are
+    /// capped at [`MAX_LISTED`] (1,000); `report.total > report.violations.len()` indicates
+    /// truncation. Does not run clearance, dimension, outline or courtyard DRC checks; refuses
+    /// teardrop boards.
+    pub fn copper_shorts(self) -> Result<Report, String> {
         self.require_no_teardrops()?;
         let lands = super::track::lands(self);
         let (tracks, vias, arcs) = (self.tracks(), self.vias(), self.arc_tracks());
-        let (copper, members) = super::track::islands_with_arcs(&lands, tracks, vias, arcs);
+        let arc_geoms = arcs.iter().map(super::arc::geometry::ArcGeometry::from_track).collect::<Result<Vec<_>, _>>()?;
+        let items = super::track::CopperItems { lands: &lands, tracks, vias, arcs };
+        let (copper, members) = super::track::islands_with_arcs(items)?;
         let members = super::track::with_pad_contacts(&lands, &copper, members);
         let mut found = Findings::default();
         self.collect_shorts(
-            &lands,
-            tracks,
-            vias,
-            arcs,
+            items,
             &members,
             |node| {
                 if let Some(land) = lands.get(node) {
@@ -380,16 +381,17 @@ impl BoardView<'_> {
                     (track.id.to_string(), midpoint(track.start, track.end))
                 } else if let Some(via) = vias.get(node - lands.len() - tracks.len()) {
                     (via.id.to_string(), via.at)
-                } else if let Some(arc) = arcs.get(node - lands.len() - tracks.len() - vias.len()) {
-                    let at = super::arc::geometry::ArcGeometry::from_track(arc).map_or(arc.start, |geometry| geometry.midpoint());
-                    (arc.id.to_string(), at)
+                } else if let Some((arc, geom)) =
+                    node.checked_sub(lands.len() + tracks.len() + vias.len()).and_then(|i| Some((arcs.get(i)?, arc_geoms.get(i)?)))
+                {
+                    (arc.id.to_string(), geom.midpoint())
                 } else {
                     (String::new(), Point { x_nm: 0, y_nm: 0 })
                 }
             },
             &mut found,
         );
-        Ok(found.listed.into_values().collect())
+        Ok(found.finish(Rules::default(), BTreeMap::new()))
     }
 
     /// Report one short per physical island containing pads from distinct intended nets.
@@ -427,17 +429,14 @@ impl BoardView<'_> {
                 });
             }
         }
-        self.collect_shorts(lands, self.tracks(), self.vias(), &[], members, |node| (items[node].name.clone(), items[node].at), found);
+        let copper = super::track::CopperItems { lands, tracks: self.tracks(), vias: self.vias(), arcs: &[] };
+        self.collect_shorts(copper, members, |node| (items[node].name.clone(), items[node].at), found);
     }
 
     /// Shared island short detection used by both [`Self::copper_shorts`] and DRC.
-    #[allow(clippy::too_many_arguments)]
     fn collect_shorts(
         self,
-        lands: &[Land],
-        tracks: &[super::track::Track],
-        vias: &[super::track::Via],
-        arcs: &[super::arc::ArcTrack],
+        items: super::track::CopperItems<'_>,
         members: &[Vec<usize>],
         item_info: impl Fn(usize) -> (String, Point),
         found: &mut Findings,
@@ -446,8 +445,9 @@ impl BoardView<'_> {
         let baseline = project.board.baseline.as_ref();
         let graph = baseline.is_none().then(|| project.electrical_connectivity());
         let intent = project.board_intent_memberships();
-        let intrinsic = super::via_nets::node_membership_with_arcs(project, lands, tracks.len(), vias, arcs.len(), &intent);
-        let memberships: Vec<_> = lands
+        let intrinsic = super::via_nets::node_membership_with_arcs(project, items, &intent);
+        let memberships: Vec<_> = items
+            .lands
             .iter()
             .map(|land| {
                 let pad = super::Pad::parse(&land.key.0, &land.key.1)?;

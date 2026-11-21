@@ -912,8 +912,10 @@ copper IDs are rejected with exact integer predicates. Formats 26 and 35 require
 nonempty `arcs`; other headers refuse the field. Readers without support for
 these formats refuse them. No data without arcs is upgraded to either format.
 Native documents and archives round-trip the exact records; the diagnostic
-single-file writer refuses them. Geometry consumers refuse rather than flatten
-these records until circular conductive contours are implemented.
+single-file writer refuses them. Copper connectivity, ratsnest, via inspection
+and engine short detection evaluate exact circular contact geometry; clearance,
+DRC, preparation, transforms, clipboard, rendering/editing and fabrication
+refuse rather than flatten these records.
 
 Board format 12 adds a `tracks` array and may carry every earlier field, so routing
 a board never drops its baseline, pending intent, graphics or setup. Each record is
