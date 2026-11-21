@@ -1,8 +1,9 @@
-//! Symbol Editor dialog for importing, mapping, validating and previewing a CSV/TSV pin table.
+//! Symbol Editor dialog for loading, mapping, validating and previewing a CSV/TSV pin table.
 //!
 //! Staging a valid preview stores an immutable [`ImportPlan`] (with its source text and base
 //! revision) on the active symbol document without creating pins or altering document/project
-//! history. Multi-unit symbol generation (P2) and re-import diffing (P3) consume that staged plan.
+//! history. The plan stays in memory and is not saved; symbol generation in units and re-import
+//! difference, the next slices of #78, will consume it.
 
 use super::*;
 use pcbcraft_chrome::{
@@ -50,7 +51,7 @@ struct LoadedFile {
     text: String,
 }
 
-/// Dialog-owned state for pin-table import and preview; never touches symbol history until P2 consumes it.
+/// Dialog-owned state for the pin-table preview; never touches symbol history.
 #[derive(Debug)]
 pub(crate) struct Draft {
     pub(super) document: u64,
@@ -69,10 +70,12 @@ pub(crate) struct Draft {
     confirm_error: Option<String>,
     revision_stale: bool,
     discard_prompt: DiscardPrompt,
+    /// Size of the dialog body last frame, to re-centre the modal after the body changes size.
+    body_size: egui::Vec2,
 }
 
 impl Draft {
-    /// Start a pin-table import draft bound to one open symbol document revision, restoring any
+    /// Start a pin-table preview draft bound to one open symbol document revision, restoring any
     /// previously staged source text and mapping so staging stays visible and editable.
     pub(super) fn new(document: u64, revision: u64, staged: Option<&StagedPinTable>) -> Self {
         let (raw_text, delimiter, has_header, manual_mapping, mapping_override) = match staged {
@@ -98,6 +101,7 @@ impl Draft {
             confirm_error: None,
             revision_stale: false,
             discard_prompt: DiscardPrompt::Hidden,
+            body_size: egui::Vec2::ZERO,
         }
     }
 
@@ -309,11 +313,11 @@ fn row_to_table_entry(preview: &Preview, row: &PreviewRow) -> TableEntry {
 }
 
 impl PcbApp {
-    /// Open the pin-table import dialog for an open symbol document without changing its revision.
+    /// Open the pin-table preview dialog for an open symbol document without changing its revision.
     pub(super) fn begin_library_pin_table(&mut self, document: u64) -> Result<(), String> {
         let doc = self.library_editors.documents.get(&document).ok_or("Unknown library document ID.")?;
         if doc.session.snapshot().kind != Kind::Symbol {
-            return Err("Pin-table import applies only to symbol definitions.".into());
+            return Err("Pin-table preview applies only to symbol definitions.".into());
         }
         let revision = doc.session.revision();
         let staged = doc.staged_pin_table.as_ref();
@@ -321,12 +325,13 @@ impl PcbApp {
         Ok(())
     }
 
-    /// Stage a validated [`ImportPlan`] on the owning symbol document as the P2/P3 hand-off seam.
+    /// Stage a validated [`ImportPlan`] in memory on the owning symbol document for symbol
+    /// generation in units (next slice of #78).
     /// Never mutates symbol geometry or project undo history.
     pub(super) fn stage_library_pin_table(&mut self, draft: &Draft, plan: ImportPlan) -> Result<(), String> {
         let doc = self.library_editors.documents.get_mut(&draft.document).ok_or("Symbol document was closed before staging.")?;
         if doc.session.snapshot().kind != Kind::Symbol {
-            return Err("Pin-table import applies only to symbol definitions.".into());
+            return Err("Pin-table preview applies only to symbol definitions.".into());
         }
         if doc.session.revision() != draft.revision {
             return Err("Symbol changed while the pin-table dialog was open; click Refresh revision to stage on the current revision.".into());
@@ -357,7 +362,7 @@ impl PcbApp {
         }
     }
 
-    /// Render the modal pin-table import and preview dialog in the Symbol Editor.
+    /// Render the modal pin-table preview dialog in the Symbol Editor.
     pub(crate) fn library_pin_table_dialog(&mut self, ctx: &Context, mut draft: Box<Draft>) {
         draft.poll_file_job();
         let tokens = Tokens::get();
@@ -392,9 +397,9 @@ impl PcbApp {
         let is_empty = draft.raw_text.trim().is_empty();
         let can_stage = !is_empty && draft.preview.can_accept() && !loading;
 
-        let dismissed = shell::scrolling_dialog_width(ctx, "library_pin_table", "Import pin table", DIALOG_WIDTH, |ui| {
+        let dismissed = shell::scrolling_dialog_width(ctx, "library_pin_table", "Pin table preview", DIALOG_WIDTH, |ui| {
             ui.label(shell::dim(
-                "Paste a CSV or TSV pin table or load a UTF-8 file. Staging validates and saves the plan on this symbol without creating pins yet.",
+                "Paste a CSV or TSV pin table or load a UTF-8 file to check it. Staging keeps the validated plan with this open symbol for symbol generation; it creates no pins and is not written to disk.",
             ));
             ui.add_space(tokens.space_8);
 
@@ -668,6 +673,16 @@ impl PcbApp {
                     }
                 });
             }
+
+            // The centred modal is placed from its previous frame's size and repaints by itself
+            // only after its first sizing pass. A body that grew or shrank without new input (a
+            // recomputed preview, a finished file load) would stay off-centre, with the footer
+            // below a short window, until the next event. One more frame settles it.
+            let body_size = ui.min_rect().size();
+            if (body_size - draft.body_size).abs().max_elem() > 0.5 {
+                draft.body_size = body_size;
+                ui.ctx().request_repaint();
+            }
         });
 
         if (cancel || discard) && !loading {
@@ -761,6 +776,21 @@ mod tests {
         h.get_by_label("Discard pin-table edits");
         assert!(h.query_by_label("Stage pin table").is_none());
         assert!(h.query_by_label("Cancel").is_none());
+    }
+
+    /// Everything staging must leave alone: the symbol session's revision, dirty flag, undo/redo
+    /// availability and item, the identity of its current snapshot, and the project session's
+    /// revision and undo/redo availability. Any recorded edit would advance a revision.
+    fn history_fingerprint(h: &Harness<'_, PcbApp>, doc_id: u64) -> (serde_json::Value, std::sync::Arc<Item>, serde_json::Value) {
+        let session = &h.state().library_editors.documents.get(&doc_id).unwrap().session;
+        (session.inspect(), session.snapshot(), h.state().session.inspect())
+    }
+
+    fn assert_history_unchanged(h: &Harness<'_, PcbApp>, doc_id: u64, before: &(serde_json::Value, std::sync::Arc<Item>, serde_json::Value)) {
+        let after = history_fingerprint(h, doc_id);
+        assert_eq!(after.0, before.0);
+        assert!(std::sync::Arc::ptr_eq(&after.1, &before.1));
+        assert_eq!(after.2, before.2);
     }
 
     fn draft_text(h: &Harness<'_, PcbApp>) -> String {
@@ -1098,7 +1128,7 @@ mod tests {
         assert!(draft_text(&h).contains("1,VCC,power_in,main,top"));
 
         // The header close button asks the same question; Discard closes without staging.
-        click(&mut h, "Close Import pin table");
+        click(&mut h, "Close Pin table preview");
         assert_discard_question(&h, DISCARD_QUESTION);
         click(&mut h, "Discard pin-table edits");
         assert!(matches!(h.state().dialog, Dialog::None));
@@ -1178,7 +1208,7 @@ mod tests {
 
     /// Short-host viewport (L7): scrolling the modal brings footer buttons cleanly inside the
     /// viewport; revision mismatch reports inline beside the footer with a Refresh revision button
-    /// that preserves text and mapping; non-symbol documents refuse pin-table import.
+    /// that preserves text and mapping; non-symbol documents refuse the pin-table preview.
     #[test]
     fn dialog_short_host_footer_reachable_revision_refresh_and_non_symbol_refusal() {
         let mut app = PcbApp::default();
@@ -1208,9 +1238,13 @@ mod tests {
 
         // Advance the underlying symbol revision behind the dialog's back.
         h.state_mut().library_editors.edit(doc_id, 0, Action::AddUnit { unit: "aux".into() }).unwrap();
+        let before_refusal = history_fingerprint(&h, doc_id);
         click(&mut h, "Stage pin table");
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
         h.get_by_label("Symbol changed while the pin-table dialog was open; click Refresh revision to stage on the current revision.");
+        // The refused stage stores nothing and records nothing.
+        assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
+        assert_history_unchanged(&h, doc_id, &before_refusal);
 
         // Refresh revision clears the error and preserves text and mapping so Stage pin table succeeds.
         h.get_by_label("Refresh revision").scroll_to_me();
@@ -1226,9 +1260,88 @@ mod tests {
         }
         h.get_by_label("Stage pin table").scroll_to_me();
         h.run();
+        let before_stage = history_fingerprint(&h, doc_id);
         click(&mut h, "Stage pin table");
         assert!(matches!(h.state().dialog, Dialog::None));
         assert_eq!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.as_ref().unwrap().plan.base_revision, 1);
+        // A successful stage keeps the plan in memory only: no symbol or project history entry.
+        assert_history_unchanged(&h, doc_id, &before_stage);
+    }
+
+    /// The modal is centred from its previous frame's size, so when the body grows without any
+    /// input (here, text set and recomputed directly) the dialog must settle within the same
+    /// `run`: further frames must not move the footer, and it must lie inside a short window.
+    #[test]
+    fn dialog_recentres_after_body_grows_without_input() {
+        let viewport_size = egui::vec2(960.0, 420.0);
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, viewport_size);
+        let (mut h, _doc_id) = symbol_harness(viewport_size);
+        let empty_cancel = h.get_by_label("Cancel").rect();
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n2,GND,power_in,main,bottom\n".into();
+            draft.recompute();
+        }
+        h.run();
+        let settled_header = h.get_by_label("Close Pin table preview").rect();
+        assert!(viewport.contains_rect(settled_header));
+        h.run_steps(3);
+        assert_eq!(h.get_by_label("Close Pin table preview").rect(), settled_header);
+        h.get_by_label("Cancel").scroll_to_me();
+        h.run();
+        let cancel = h.get_by_label("Cancel").rect();
+        assert!(viewport.contains_rect(cancel));
+        assert_ne!(cancel, empty_cancel);
+        h.run_steps(3);
+        assert_eq!(h.get_by_label("Cancel").rect(), cancel);
+    }
+
+    /// A table at both input caps (4,096 data rows padded to just under 256 KiB) still yields one
+    /// bounded page: every row is parsed once, the dialog renders only `ROWS_PER_PAGE` of them, and
+    /// the table-level pin limit blocks staging. One byte or one row past a cap is refused or
+    /// truncated with a stated finding rather than parsed further. Counts only; no timing.
+    #[test]
+    fn dialog_preview_at_size_and_row_caps_stays_bounded() {
+        let header = "Number,Name,Type,Unit,Side,Notes\n";
+        let rows = |count: usize, pad: usize| {
+            let mut text = String::from(header);
+            for i in 1..=count {
+                let side = if i % 2 == 1 { "left" } else { "right" };
+                text.push_str(&format!("{i},S{i:04},input,bank-{},{side},{}\n", (i - 1) / 128 + 1, "n".repeat(pad)));
+            }
+            text
+        };
+        let pad = (MAX_BYTES - rows(pin_table::MAX_ROWS, 0).len()) / pin_table::MAX_ROWS;
+        let at_caps = rows(pin_table::MAX_ROWS, pad);
+        assert!(at_caps.len() <= MAX_BYTES && at_caps.len() > MAX_BYTES - pin_table::MAX_ROWS, "fixture is {} bytes", at_caps.len());
+
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = at_caps;
+            draft.recompute();
+            assert_eq!(draft.preview.rows.len(), pin_table::MAX_ROWS);
+            assert!(draft.preview.findings.iter().any(|finding| finding.kind == pin_table::FindingKind::TooManyPins));
+            assert!(!draft.preview.can_accept());
+            assert_eq!(visible_page_rows(&draft.preview, false, 0).len(), ROWS_PER_PAGE);
+        }
+        h.run();
+        h.get_by_label(&format!("Page 1 of {} · {} shown", pin_table::MAX_ROWS.div_ceil(ROWS_PER_PAGE), pin_table::MAX_ROWS));
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::Button, "Stage pin table").accesskit_node().is_disabled());
+
+        let too_large = "x".repeat(MAX_BYTES + 1);
+        let refused = pin_table::preview(&too_large, Delimiter::Auto, true, None);
+        assert!(refused.rows.is_empty());
+        assert!(refused.findings.iter().any(|finding| finding.kind == pin_table::FindingKind::InputTooLarge));
+
+        let too_many = pin_table::preview(&rows(pin_table::MAX_ROWS + 1, 0), Delimiter::Auto, true, None);
+        assert_eq!(too_many.rows.len(), pin_table::MAX_ROWS);
+        assert!(too_many.findings.iter().any(|finding| finding.kind == pin_table::FindingKind::TooManyPins
+            && finding.message.contains(&format!("more than {} rows", pin_table::MAX_ROWS))));
     }
 
     /// Snapshot state: empty dialog on open, showing only the empty-state prompt with no red findings.
@@ -1407,7 +1520,10 @@ mod tests {
         h.state_mut().library_editors.edit(doc_id, 0, Action::AddUnit { unit: "aux".into() }).unwrap();
         h.get_by_label("Stage pin table").scroll_to_me();
         h.run();
+        let before_refusal = history_fingerprint(&h, doc_id);
         click(&mut h, "Stage pin table");
+        assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
+        assert_history_unchanged(&h, doc_id, &before_refusal);
         h.get_by_label("Refresh revision").scroll_to_me();
         h.run();
         h.get_by_label("Symbol changed while the pin-table dialog was open; click Refresh revision to stage on the current revision.");
@@ -1468,7 +1584,7 @@ mod tests {
         }
         h.run();
         assert_footer_without_discard_question(&h);
-        click(&mut h, "Close Import pin table");
+        click(&mut h, "Close Pin table preview");
         assert_discard_question(&h, DISCARD_QUESTION);
     }
 

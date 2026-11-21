@@ -57,7 +57,8 @@ struct Document {
     array_requested: bool,
     details_requested: bool,
     draft: Option<form::Draft>,
-    /// Validated pin-table plan and source state staged by the import dialog for P2/P3.
+    /// Validated pin-table plan and source state staged in memory by the preview dialog for symbol
+    /// generation in units (next slice of #78); not saved with the symbol.
     staged_pin_table: Option<pin_table::StagedPinTable>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
@@ -698,7 +699,7 @@ impl PcbApp {
                     }
                 });
                 menu::library(ui, |ui| {
-                    if pcbcraft_chrome::MenuItem::new("Import pin table…")
+                    if pcbcraft_chrome::MenuItem::new("Preview pin table…")
                         .enabled(can_save && self.library_editors.active_kind() == Some(Kind::Symbol))
                         .show(ui)
                     {
@@ -896,7 +897,7 @@ impl PcbApp {
                         (ToolIcon::Shared("copy"), "Edit copy", "Edit under a new item identity", can_save),
                         (ToolIcon::Sheet, "Save copy", "Save unfinished draft; does not publish to the catalog", can_save),
                         (ToolIcon::Sheet, "Export", "Export native definition", can_save),
-                        (ToolIcon::Sheet, "Pin table", "Import and preview a CSV or TSV pin table", can_save && kind == Kind::Symbol),
+                        (ToolIcon::Sheet, "Pin table", "Preview and validate a CSV or TSV pin table", can_save && kind == Kind::Symbol),
                     ]
                     .map(|(icon, label, description, enabled)| RibbonTool {
                         icon,

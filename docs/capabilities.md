@@ -217,12 +217,13 @@ do not yet provide comparison or connections.
 Desktop New library, New symbol/footprint, Edit and Edit copy use the existing
 authoring workspaces; Publish writes immutable native revisions into writable
 registered folders. Browser publishing remains unavailable.
-Symbol **Library → Import pin table…** (and the Library ribbon **Pin table** action)
+Symbol **Library → Preview pin table…** (and the Library ribbon **Pin table** action)
 and read-only `library.preview_pin_table` parse, column-map and validate CSV/TSV pin
-tables (up to 256 KiB, 1024 pins, 32 units) with per-row findings and grid-aligned unit
-body estimates. Confirming stages a validated import plan without creating pins or
-altering symbol history; multi-unit symbol generation and re-import diffing remain
-subsequent steps.
+tables (up to 256 KiB, 4096 rows, 1024 pins, 32 units) with per-row findings and
+grid-aligned unit body estimates. Staging keeps the validated plan in memory with the
+open symbol, without creating pins, altering symbol history or writing to disk; it is
+the input for multi-unit symbol generation, which with re-import diffing remains a
+subsequent step.
 Symbol **Library → Remap pins…** and live `app.library_pin_remap` preview explicit
 pin renumbering with separate draft names and pinned-before-number names/nets/native
 package-pad evidence before an effective

@@ -2003,6 +2003,7 @@ const CATALOG: &[Command] = &[
     library::sources::COMMANDS[8],
     library::sources::COMMANDS[9],
     library::sources::COMMANDS[10],
+    library::sources::COMMANDS[11],
     part_instances::commands::COMMANDS[0],
     part_instances::commands::COMMANDS[1],
     Command {

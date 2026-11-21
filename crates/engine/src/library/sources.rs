@@ -84,32 +84,6 @@ const SOURCE: Param = Param {
 };
 pub(crate) const COMMANDS: [Command; 12] = [
     Command {
-        id: PREVIEW_PIN_TABLE,
-        title: "Preview symbol pin table",
-        summary: "Parse and validate a CSV or TSV pin table and report per-row findings and unit layout estimates. Creates no pins and changes no document.",
-        params: &[
-            Param { name: "text", summary: "CSV or TSV pin table text", required: true, kind: ParamKind::PinTableText },
-            Param {
-                name: "delimiter",
-                summary: "Field delimiter: auto, comma, tab or semicolon",
-                required: false,
-                kind: ParamKind::PinTableDelimiter,
-            },
-            Param {
-                name: "has_header",
-                summary: "Whether the first non-empty row contains column headers (default true)",
-                required: false,
-                kind: ParamKind::Flag,
-            },
-            Param {
-                name: "mapping",
-                summary: "Optional zero-based column index overrides for number, name, electrical_type, unit and side",
-                required: false,
-                kind: ParamKind::PinTableMapping,
-            },
-        ],
-    },
-    Command {
         id: PREVIEW_PIN_REMAP,
         title: "Preview symbol pin remap",
         summary: "Prepare an explicit simultaneous draft remap and report current placed nets and native part maps. No save, project edit or history step.",
@@ -272,6 +246,32 @@ pub(crate) const COMMANDS: [Command; 12] = [
             },
             Param { name: "allow_older", summary: "Confirm publication without merging a newer revision", required: false, kind: ParamKind::Flag },
             Param { name: "copy", summary: "Publish a derivative under a fresh item identity", required: false, kind: ParamKind::Flag },
+        ],
+    },
+    Command {
+        id: PREVIEW_PIN_TABLE,
+        title: "Preview symbol pin table",
+        summary: "Parse and validate a CSV or TSV pin table and report per-row findings and unit layout estimates. Creates no pins and changes no document.",
+        params: &[
+            Param { name: "text", summary: "CSV or TSV pin table text", required: true, kind: ParamKind::PinTableText },
+            Param {
+                name: "delimiter",
+                summary: "Field delimiter: auto, comma, tab or semicolon",
+                required: false,
+                kind: ParamKind::PinTableDelimiter,
+            },
+            Param {
+                name: "has_header",
+                summary: "Whether the first non-empty row contains column headers (default true)",
+                required: false,
+                kind: ParamKind::Flag,
+            },
+            Param {
+                name: "mapping",
+                summary: "Optional complete column mapping replacing header auto-detection: zero-based indices for number, name, electrical_type, unit and side; omitted fields and indices past the last column are unmapped, and the reply echoes the mapping used",
+                required: false,
+                kind: ParamKind::PinTableMapping,
+            },
         ],
     },
 ];

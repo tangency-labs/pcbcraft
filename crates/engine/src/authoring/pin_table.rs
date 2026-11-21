@@ -1,9 +1,9 @@
 //! Pin-table parsing, column mapping, per-row validation and layout preview for symbol authoring.
 //!
-//! This module owns the shared domain model used by both the Symbol Editor's import dialog and
-//! the read-only `library.preview_pin_table` command. It never creates pins, mutates a symbol
-//! document or allocates undo history; confirming a valid preview produces an [`ImportPlan`] that
-//! later symbol-generation and re-import-diff stages consume.
+//! This module owns the shared domain model used by both the Symbol Editor's pin-table preview
+//! dialog and the read-only `library.preview_pin_table` command. It never creates pins, mutates a
+//! symbol document or allocates undo history; staging a valid preview produces an [`ImportPlan`]
+//! for symbol generation in units and re-import difference, the next slices of #78.
 
 use crate::{
     library::{MAX_DRAWING_NM, MAX_TERMINALS},
@@ -59,7 +59,7 @@ impl Delimiter {
         }
     }
 
-    /// Human-readable label shown in the import dialog.
+    /// Human-readable label shown in the pin-table preview dialog.
     pub const fn label(self) -> &'static str {
         match self {
             Self::Auto => "Auto",
@@ -110,7 +110,7 @@ pub enum PinSide {
 }
 
 impl PinSide {
-    /// Stable wire spelling used in previews and import plans.
+    /// Stable wire spelling used in previews and staged plans.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Left => "left",
@@ -336,7 +336,7 @@ impl PreviewRow {
     }
 }
 
-/// Per-unit pin counts and grid-aligned body-size estimate for preview and P2 layout hand-off.
+/// Per-unit pin counts and grid-aligned body-size estimate for preview and for symbol generation in units.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UnitSummary {
     pub unit: String,
@@ -386,7 +386,7 @@ impl Preview {
     pub fn into_import_plan(&self, base_revision: u64) -> Result<ImportPlan, String> {
         if !self.can_accept() {
             return Err(if self.rows.is_empty() {
-                "Pin table has no rows to import.".into()
+                "Pin table has no rows to stage.".into()
             } else {
                 let count = self.findings.len();
                 format!("Resolve {count} {} before staging the pin table.", plural(count, "finding", "findings"))
@@ -421,7 +421,7 @@ impl Preview {
     }
 }
 
-/// One validated pin ready for multi-unit symbol generation (P2) or re-import diffing (P3).
+/// One validated pin ready for symbol generation in units or re-import difference (next slices of #78).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlannedPin {
     pub number: String,
@@ -434,7 +434,7 @@ pub struct PlannedPin {
 /// Validated, immutable hand-off produced when a user stages a clean pin-table preview.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportPlan {
-    /// Owning symbol document revision when the plan was staged, for staleness checks in P2/P3.
+    /// Owning symbol document revision when the plan was staged, for staleness checks by the slices that consume it.
     pub base_revision: u64,
     pub pins: Vec<PlannedPin>,
     pub units: Vec<UnitSummary>,
@@ -872,7 +872,9 @@ pub fn mapping_schema() -> Value {
     })
 }
 
-/// Validate a JSON `mapping` parameter value against [`ColumnMapping`] bounds.
+/// Validate a JSON `mapping` parameter value against [`ColumnMapping`] bounds. The value is a
+/// complete mapping that replaces header auto-detection, as the dialog's manual mapping does:
+/// omitted fields stay unmapped rather than falling back to the detected columns.
 pub fn validate_mapping_value(value: &Value) -> Result<ColumnMapping, &'static str> {
     let Some(object) = value.as_object() else {
         return Err("must be an object mapping pin fields to zero-based column indices");
@@ -1309,5 +1311,26 @@ mod tests {
         assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "delimiter": "pipe"})).is_err());
         assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "mapping": {"unknown": 0}})).is_err());
         assert!(session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": "1,A\n", "mapping": {"number": 99}})).is_err());
+    }
+
+    /// The command's `mapping` is a complete mapping, not a per-field override of the detected
+    /// one: omitted fields are unmapped (so leaving out `number` blocks staging), an index past the
+    /// last column is unmapped, and the reply echoes the mapping that was used.
+    #[test]
+    fn command_mapping_is_complete_and_omitted_fields_stay_unmapped() {
+        let mut session = Session::default();
+        let text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n";
+        let detected = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": text})).unwrap();
+        assert_eq!(detected["mapping"], json!({"number": 0, "name": 1, "electrical_type": 2, "unit": 3, "side": 4}));
+        assert_eq!(detected["can_accept"], true);
+
+        let side_only = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": text, "mapping": {"side": 4}})).unwrap();
+        assert_eq!(side_only["mapping"], json!({"number": null, "name": null, "electrical_type": null, "unit": null, "side": 4}));
+        assert_eq!(side_only["can_accept"], false);
+        assert!(side_only["findings"].as_array().unwrap().iter().any(|finding| finding["kind"] == "missing_number_column"));
+
+        let past_end = session.execute(sources::PREVIEW_PIN_TABLE, &json!({"text": text, "mapping": {"number": 0, "side": 9}})).unwrap();
+        assert_eq!(past_end["mapping"], json!({"number": 0, "name": null, "electrical_type": null, "unit": null, "side": null}));
+        assert_eq!(past_end["can_accept"], true);
     }
 }
