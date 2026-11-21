@@ -466,7 +466,9 @@ Not in the first milestone: copper, solder mask, silkscreen and paste; vias
 (their drills matter electrically, not mechanically, and there can be thousands);
 keep-outs and height zones (not stored yet); zone fill; outline arcs (#260). A
 component without a usable model is listed with its state from #86 (no binding,
-record missing, bytes unavailable, hash mismatch, unreadable) and gets no body.
+record missing, bytes unavailable, hash mismatch, unreadable) and gets no body. A
+binding that says the part has no body on purpose (a fiducial, a test pad) is
+listed as such and is not a gap.
 No invented box or height stands in for a missing model (#70: missing data
 cannot become a mechanical boundary).
 
@@ -505,10 +507,13 @@ transforms") and #86's model record uses; it follows the model-frame proposal in
   component's side; Z = 0 is the model's seating plane.
 - **Component pose** in the board frame: `T(x, −y, 0) · Rz(r) · S · A`, where
   `(x, y)` is the footprint position, `r` its rotation counterclockwise as seen
-  from the top, `A` the binding's alignment (#86), and `S` is the identity on the
-  top side and `T(0, 0, −t) · Ry(180°)` on the bottom. A bottom part is turned
-  over, not mirrored; this matches PCBCraft's bottom placement, which mirrors
-  local X before the rotation ([footprint schema](../footprint-schema.md)).
+  from the top, `A` the model's placement in the footprint frame from #86 (the
+  binding's alignment, after any correction the model record holds for the
+  file's own frame), and `S` is the identity on the top side and
+  `T(0, 0, −t) · Ry(180°)` on the bottom. A bottom part is turned over, not
+  mirrored. The half turn is about Y because PCBCraft's bottom placement mirrors
+  local X before the rotation ([footprint schema](../footprint-schema.md)); a
+  turn about X would put an asymmetric part 180° round from its pads.
 - `board/1` carries each composed transform as a 4×4 matrix in millimetres, and
   the inputs it came from (position, rotation, side, alignment, t). Receivers
   place with the matrix and need not repeat PCBCraft's rules; tests check the
