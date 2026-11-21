@@ -81,11 +81,14 @@ pub(crate) struct ArrayDraft {
     document: u64,
     view: crate::ViewId,
     revision: u64,
+    footprint: bool,
     objects: Vec<u64>,
     columns: String,
     rows: String,
     column_pitch: String,
     row_pitch: String,
+    ball_grid: bool,
+    skip_jedec: bool,
     error: Option<String>,
 }
 impl ArrayDraft {
@@ -96,11 +99,14 @@ impl ArrayDraft {
             document,
             view,
             revision: doc.session.revision(),
+            footprint: doc.session.snapshot().kind == Kind::Footprint,
             objects: doc.selection.iter().copied().collect(),
             columns: "4".into(),
             rows: "1".into(),
             column_pitch: pitch.to_string(),
             row_pitch: pitch.to_string(),
+            ball_grid: false,
+            skip_jedec: true,
             error: None,
         }
     }
@@ -119,6 +125,8 @@ impl ArrayDraft {
             rows,
             column_step: Point { x_nm: x, y_nm: 0 },
             row_step: Point { x_nm: 0, y_nm: y },
+            numbering: (self.footprint && self.ball_grid)
+                .then_some(pcbcraft_engine::authoring::ArrayNumbering::BallGrid { skip_jedec: self.skip_jedec }),
         })
     }
 }
@@ -127,11 +135,28 @@ impl PcbApp {
     pub(crate) fn library_array_dialog(&mut self, ctx: &Context, mut draft: Box<ArrayDraft>) {
         let mut apply = false;
         let mut cancel = false;
+        let preview_summary = self
+            .library_editors
+            .documents
+            .get(&draft.document)
+            .and_then(|doc| draft.action().ok().and_then(|action| doc.session.preview(draft.revision, action).ok()))
+            .map(|record| record.summary);
         let dismissed = shell::dialog(ctx, "library_array", "Create Array", |ui| {
             properties::text(ui, "Columns", &mut draft.columns);
             properties::text(ui, "Rows", &mut draft.rows);
             properties::text(ui, "Column pitch (mm)", &mut draft.column_pitch);
             properties::text(ui, "Row pitch (mm)", &mut draft.row_pitch);
+            if draft.footprint {
+                pcbcraft_chrome::controls::checkbox(ui, &mut draft.ball_grid, "Ball-grid pad names (A1, A2, …)");
+                if draft.ball_grid {
+                    pcbcraft_chrome::controls::checkbox(ui, &mut draft.skip_jedec, "Skip JEDEC letters (I, O, Q, S, X, Z)");
+                }
+            }
+            if draft.ball_grid
+                && let Some(summary) = &preview_summary
+            {
+                ui.label(egui::RichText::new(summary).small());
+            }
             if let Some(error) = &draft.error {
                 ui.label(shell::error(error));
             }

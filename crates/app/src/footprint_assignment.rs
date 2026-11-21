@@ -358,15 +358,17 @@ impl PcbApp {
                             form::group(ui, "Pin mapping", |ui| {
                                 if let Some(component) = project.components().find(|c| c.id() == edit.component) {
                                     ui.add_enabled_ui(editable, |ui| {
-                                        let pins = component.definition.pins();
+                                        let mut pins: Vec<_> = component.definition.pins().iter().collect();
+                                        pins.sort_by(|a, b| pcbcraft_engine::authoring::natural_cmp(&a.number, &b.number));
                                         let numbers: std::collections::BTreeSet<_> = pins.iter().map(|p| p.number.as_str()).collect();
                                         let pads: std::collections::BTreeSet<_> = definition.pads.iter().map(|p| p.number.as_str()).collect();
                                         form::mapping_header(ui);
                                         let multiple = pads.len() > numbers.len()
                                             || !edit.unconnected_pads.is_empty()
                                             || edit.mapping.values().any(|ids| ids.pads().len() > 1);
-                                        let options: Vec<_> =
+                                        let mut options: Vec<_> =
                                             definition.pads.iter().map(|pad| (pad.number.as_str(), format!("Pad {}", pad.number))).collect();
+                                        options.sort_by(|a, b| pcbcraft_engine::authoring::natural_cmp(a.0, b.0));
                                         for pin in pins {
                                             let mapped = edit.mapping.entry(pin.number.clone()).or_insert_with(|| PadIds::Many(Vec::new()));
                                             let label = pin.name.as_ref().filter(|name| *name != &pin.number).map_or_else(

@@ -1102,11 +1102,23 @@ impl PcbApp {
             references.push(package.footprint.clone());
             chrome::detail(ui, &package.name, &format!("{} terminals mapped", package.mapping.len()));
             controls::collapsing(ui, ("package_mapping", &package.name), "Pin map", false, None, |ui| {
-                for (terminal, pads) in &package.mapping {
+                let mut rows: Vec<(&str, Vec<&str>)> = package
+                    .mapping
+                    .iter()
+                    .map(|(terminal, pads)| {
+                        let mut sorted_pads: Vec<&str> = pads.iter().map(String::as_str).collect();
+                        sorted_pads.sort_by(|a, b| pcbcraft_engine::authoring::natural_cmp(a, b));
+                        (terminal.as_str(), sorted_pads)
+                    })
+                    .collect();
+                rows.sort_by(|(a, _), (b, _)| pcbcraft_engine::authoring::natural_cmp(a, b));
+                for (terminal, pads) in rows {
                     chrome::detail(ui, terminal, &pads.join(", "));
                 }
                 if !package.unconnected_pads.is_empty() {
-                    chrome::detail(ui, "Unconnected pads", &package.unconnected_pads.join(", "));
+                    let mut unconnected: Vec<&str> = package.unconnected_pads.iter().map(String::as_str).collect();
+                    unconnected.sort_by(|a, b| pcbcraft_engine::authoring::natural_cmp(a, b));
+                    chrome::detail(ui, "Unconnected pads", &unconnected.join(", "));
                 }
             });
         }

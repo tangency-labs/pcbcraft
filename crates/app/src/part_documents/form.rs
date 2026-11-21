@@ -323,6 +323,7 @@ fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document
     let removed: std::collections::BTreeSet<_> =
         package.mapping.values().flatten().chain(&package.unconnected_pads).filter(|pad| !pads.contains(pad)).cloned().collect();
     pads.extend(removed.iter().cloned());
+    pcbcraft_engine::authoring::natural_sort(&mut pads);
     if doc.selected_pad.as_ref().is_some_and(|pad| !pads.contains(pad)) {
         doc.selected_pad = None;
     }
@@ -355,6 +356,7 @@ fn package_form(ui: &mut egui::Ui, part: &mut PartDefinition, doc: &mut Document
                 (pin.number.as_str(), format!("{}{}", pin.number, pin.name.as_ref().map(|name| format!(" · {name}")).unwrap_or_default()))
             }),
         );
+        options[2..].sort_by(|a, b| pcbcraft_engine::authoring::natural_cmp(a.0, b.0));
         let selected = options.iter().find(|(id, _)| *id == terminal).map(|(_, name)| name.as_str()).unwrap_or("Unassigned");
         let response = controls::Choice::from_id_salt(ui.scope_id().with(pad))
             .selected_text(selected)

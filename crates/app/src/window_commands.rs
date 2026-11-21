@@ -201,7 +201,7 @@ mod live {
                     json!({"type":"object","description":"A bounded native pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 record; inspection returns the current draft."})
                 }
                 Self::LibraryAction => {
-                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
+                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step and optional numbering {mode:\"ball_grid\",skip_jedec}; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
                 }
                 Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
                     json!({"type": "integer", "minimum": 0})
@@ -656,7 +656,7 @@ mod live {
         WindowCommand {
             id: "app.library_edit",
             title: "Edit Library Item",
-            summary: "Apply one revision-checked authoring transaction to a library document, using its separate undo history.",
+            summary: "Apply or dry-run one revision-checked authoring transaction on a library document, using its separate undo history.",
             params: &[
                 Param { name: "document", summary: "Runtime library document ID", required: true, kind: Kind::LibraryDocument },
                 Param {
@@ -666,6 +666,12 @@ mod live {
                     kind: Kind::LibraryRevision,
                 },
                 Param { name: "action", summary: "Typed authoring Action", required: true, kind: Kind::LibraryAction },
+                Param {
+                    name: "dry_run",
+                    summary: "Validate and record the change summary without mutating the document",
+                    required: false,
+                    kind: Kind::Bool,
+                },
             ],
         },
         WindowCommand {

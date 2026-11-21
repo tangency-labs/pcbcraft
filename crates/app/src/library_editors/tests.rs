@@ -1502,3 +1502,63 @@ fn native_paste_chord_only_arms_the_focused_library_view() {
         "the document bound to the detached view must not consume the chord"
     );
 }
+
+/// The shared GUI/MCP `app.library_edit` command supports dry-run change records, applies a
+/// ball-grid array in one undo step, and orders pads naturally in the definition browser.
+#[test]
+fn ball_grid_command_supports_dry_run_single_undo_and_natural_browser_sort() {
+    let mut app = PcbApp::default();
+    let ctx = Context::default();
+    app.run_window_command(&ctx, "app.library_new", &json!({"kind":"footprint"})).unwrap();
+    let id = app.library_editors.active.unwrap();
+    app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":0,"action":{"operation":"delete","objects":[2,3]}}))
+        .unwrap();
+
+    let action = json!({
+        "operation": "array",
+        "objects": [1],
+        "columns": 12,
+        "rows": 22,
+        "column_step": {"x_nm": 800_000, "y_nm": 0},
+        "row_step": {"x_nm": 0, "y_nm": 800_000},
+        "numbering": {"mode": "ball_grid", "skip_jedec": true}
+    });
+
+    // Dry run validates and records a readable change summary without mutating state or revision.
+    app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":1,"action":action,"dry_run":true})).unwrap();
+    let inspected = crate::window_commands::inspect_editor(&app);
+    let doc_state = &inspected["library_editors"]["documents"][0];
+    assert_eq!(doc_state["state"]["revision"], 1);
+    assert_eq!(doc_state["state"]["item"]["objects"].as_object().unwrap().len(), 1);
+    assert_eq!(doc_state["last_change"]["dry_run"], true);
+    assert_eq!(doc_state["last_change"]["changed"], true);
+    assert_eq!(doc_state["last_change"]["renamed_pads"], json!(["1 -> A1"]));
+    assert_eq!(doc_state["last_change"]["added_pads"].as_array().unwrap().len(), 263);
+
+    // Applying executes in one undo step and keeps the browser in natural pad order.
+    app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":1,"action":action})).unwrap();
+    let inspected = crate::window_commands::inspect_editor(&app);
+    let doc_state = &inspected["library_editors"]["documents"][0];
+    assert_eq!(doc_state["state"]["revision"], 2);
+    assert_eq!(doc_state["last_change"]["dry_run"], false);
+    assert_eq!(doc_state["state"]["item"]["objects"].as_object().unwrap().len(), 264);
+
+    let item = app.library_editors.documents[&id].session.snapshot();
+    let browser_pads: Vec<&str> = super::browser_objects(&item)
+        .into_iter()
+        .filter_map(|(_, primitive)| match primitive {
+            pcbcraft_engine::authoring::Primitive::Pad { pad } => Some(pad.number.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(browser_pads.len(), 264);
+    let pos = |label: &str| browser_pads.iter().position(|pad| *pad == label).unwrap();
+    assert!(pos("A2") < pos("A10"), "browser must sort A2 before A10");
+    assert!(pos("Y12") < pos("AA1"), "browser must sort Y12 before AA1");
+    assert_eq!(browser_pads.first().copied(), Some("A1"));
+    assert_eq!(browser_pads.last().copied(), Some("AB12"));
+
+    // One undo step restores the single seed pad.
+    app.run_window_command(&ctx, "app.library_edit", &json!({"document":id,"expected_revision":2,"action":{"operation":"undo"}})).unwrap();
+    assert_eq!(app.library_editors.documents[&id].session.snapshot().objects.len(), 1);
+}
