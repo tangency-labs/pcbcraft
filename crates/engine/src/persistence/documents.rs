@@ -3221,9 +3221,9 @@ mod board_facts_tests {
         let mut session = Session::default();
         session.apply("project.new", &json!({"name": "BoardFacts pending scan", "create_board": true})).unwrap();
         apply(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers": 2}));
+        apply(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
         apply(&mut session, PLACE_RESISTOR, json!({"x_nm": 0, "y_nm": 0}));
         apply(&mut session, PLACE_RESISTOR, json!({"x_nm": 10_000_000, "y_nm": 0}));
-        apply(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
         let ids: Vec<u64> = session.project().unwrap().components.keys().copied().collect();
         assert_eq!(ids.len(), 2);
         let definition = crate::board::definition::basic_components("resistor-0402").unwrap();
