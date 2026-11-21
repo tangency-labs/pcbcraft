@@ -368,6 +368,12 @@ pub(super) fn islands_with_arcs(items: CopperItems<'_>) -> Result<(Copper, Vec<V
     build_islands(items, false)
 }
 
+/// Union-find using pre-validated [`ArcGeometry`] values so callers that also inspect arc
+/// geometry do not convert each arc twice.
+pub(super) fn islands_with_arc_geoms(items: CopperItems<'_>, arc_geoms: &[ArcGeometry]) -> (Copper, Vec<Vec<usize>>) {
+    build_islands_with_geoms(items, arc_geoms, false)
+}
+
 /// Join direct pad contacts onto existing islands without repeating track/via contact searches.
 /// The original island map remains available for the separate clearance check. Returned members
 /// retain canonical node ordering, independently of the pad sweep's contact order.
@@ -408,13 +414,19 @@ fn join(parent: &mut [usize], a: usize, b: usize) {
 
 /// Build islands from copper contours and arcs. Footprint edit validation also joins direct pad pairs.
 fn build_islands(items: CopperItems<'_>, join_pad_pairs: bool) -> Result<(Copper, Vec<Vec<usize>>), String> {
+    let arc_geoms = items.arcs.iter().map(ArcGeometry::from_track).collect::<Result<Vec<_>, _>>()?;
+    Ok(build_islands_with_geoms(items, &arc_geoms, join_pad_pairs))
+}
+
+/// Build islands from pre-validated arc geometries, reusing pad contours when sweeping pad pairs.
+fn build_islands_with_geoms(items: CopperItems<'_>, arc_geoms: &[ArcGeometry], join_pad_pairs: bool) -> (Copper, Vec<Vec<usize>>) {
     let pad_contours: Vec<_> = items.lands.iter().map(Land::contour).collect();
-    let mut builder = IslandBuilder::try_with_arcs_and_pads(items, &pad_contours)?;
+    let mut builder = IslandBuilder::with_arcs_and_pads(items, &pad_contours, arc_geoms);
     while !builder.step(usize::MAX) {}
     if join_pad_pairs {
         for_each_pad_contact(items.lands, &pad_contours, &builder.bounds[..items.lands.len()], |i, j| join(&mut builder.parent, i, j));
     }
-    Ok(builder.finish_with_arcs(items))
+    builder.finish_with_arcs(items)
 }
 
 /// Copper contact primitive for island building: a linear pad/track/via contour or an arc.
@@ -493,10 +505,9 @@ enum Nearby {
 impl IslandBuilder {
     /// Capture bounded linear primitive contours once, without evaluating any contact pairs.
     pub(super) fn new(lands: &[Land], tracks: &[Track], vias: &[Via]) -> Self {
-        let pad_contours: Vec<_> = lands.iter().map(Land::contour).collect();
-        let shapes: Vec<_> = pad_contours
-            .into_iter()
-            .map(CopperShape::Linear)
+        let shapes: Vec<_> = lands
+            .iter()
+            .map(|l| CopperShape::Linear(l.contour()))
             .chain(tracks.iter().map(|t| CopperShape::Linear(PadContour::capsule(t.start, t.end, t.width_nm as f64 / 2.))))
             .chain(vias.iter().map(|v| CopperShape::Linear(PadContour::capsule(v.at, v.at, v.diameter_nm as f64 / 2.))))
             .collect();
@@ -513,22 +524,22 @@ impl IslandBuilder {
 
     /// Capture bounded pad, track, via and circular-arc primitives once, failing closed on any
     /// invalid arc geometry.
+    #[cfg(test)]
     pub(super) fn try_with_arcs(items: CopperItems<'_>) -> Result<Self, String> {
         let pad_contours: Vec<_> = items.lands.iter().map(Land::contour).collect();
-        Self::try_with_arcs_and_pads(items, &pad_contours)
+        let arc_geoms = items.arcs.iter().map(ArcGeometry::from_track).collect::<Result<Vec<_>, _>>()?;
+        Ok(Self::with_arcs_and_pads(items, &pad_contours, &arc_geoms))
     }
 
-    /// Capture primitives reusing precomputed pad contours so callers that also sweep pad pairs
-    /// do not rebuild pad contours twice.
-    fn try_with_arcs_and_pads(items: CopperItems<'_>, pad_contours: &[PadContour]) -> Result<Self, String> {
-        let arc_geoms = items.arcs.iter().map(ArcGeometry::from_track).collect::<Result<Vec<_>, _>>()?;
+    /// Capture primitives reusing precomputed pad contours and validated arc geometries.
+    fn with_arcs_and_pads(items: CopperItems<'_>, pad_contours: &[PadContour], arc_geoms: &[ArcGeometry]) -> Self {
         let shapes: Vec<_> = pad_contours
             .iter()
             .cloned()
             .map(CopperShape::Linear)
             .chain(items.tracks.iter().map(|t| CopperShape::Linear(PadContour::capsule(t.start, t.end, t.width_nm as f64 / 2.))))
             .chain(items.vias.iter().map(|v| CopperShape::Linear(PadContour::capsule(v.at, v.at, v.diameter_nm as f64 / 2.))))
-            .chain(arc_geoms.into_iter().map(CopperShape::Arc))
+            .chain(arc_geoms.iter().copied().map(CopperShape::Arc))
             .collect();
         let bounds: Vec<_> = shapes.iter().map(CopperShape::bounds).collect();
         let layers: Vec<_> = items
@@ -540,7 +551,7 @@ impl IslandBuilder {
             .chain(items.arcs.iter().map(|a| Some(vec![a.layer])))
             .collect();
         let pairwise = compares_every_pair(shapes.len());
-        Ok(Self::with_path(items.lands.len(), shapes, bounds, layers, pairwise))
+        Self::with_path(items.lands.len(), shapes, bounds, layers, pairwise)
     }
 
     /// Build on the chosen path; tests compare both paths on the same board.
