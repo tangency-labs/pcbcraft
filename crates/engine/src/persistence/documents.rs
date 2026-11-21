@@ -3249,7 +3249,7 @@ mod board_facts_tests {
         let base_snapshot = base_session.snapshot().unwrap();
         let make_project = |session: &Session| {
             let mut project = (*session.snapshot().unwrap()).clone();
-            project.board.assignments.get_mut(&second_id).unwrap().unconnected_pads.push("NC".to_owned());
+            std::sync::Arc::make_mut(&mut project.board).assignments.get_mut(&second_id).unwrap().unconnected_pads.push("NC".to_owned());
             project
         };
 

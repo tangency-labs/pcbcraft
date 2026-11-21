@@ -84,13 +84,15 @@ impl Project {
     }
 }
 
-/// Incremental builder for [`Graph`] so native Save validation can yield between sheets,
-/// symbols, labels, sheet symbols and network indexing.
+/// Incremental builder for [`Graph`] so native Save validation yields between sheets,
+/// symbols, labels, ports, sheet symbols and network indexing. Phase 0 warms
+/// `project.borrowed_electrical_connectivity()` without cloning it (building the snapshot's
+/// `OnceLock` connectivity once if not yet cached) and phase 3 sorts the derived networks
+/// vector in one step; all other phases advance one sheet item or network per step.
 #[derive(Default)]
 pub(super) struct GraphBuilder {
     phase: u8,
     substep: u8,
-    connectivity: Option<crate::schematic::Connectivity>,
     groups: BTreeMap<Group, Network>,
     endpoints: BTreeMap<(uuid::Uuid, WireEndpoint), Anchor>,
     sheet_index: usize,
@@ -101,9 +103,15 @@ pub(super) struct GraphBuilder {
 }
 
 impl GraphBuilder {
-    fn add_anchor(&mut self, sheet_id: uuid::Uuid, endpoint: WireEndpoint, anchor: Anchor, name: Option<&str>) -> Result<(), String> {
+    fn add_anchor(
+        &mut self,
+        graph: &crate::schematic::Connectivity,
+        sheet_id: uuid::Uuid,
+        endpoint: WireEndpoint,
+        anchor: Anchor,
+        name: Option<&str>,
+    ) -> Result<(), String> {
         anchor.validate_form()?;
-        let graph = self.connectivity.as_ref().ok_or("missing electrical connectivity during net graph build")?;
         let index = graph.net_index_for_endpoint(endpoint);
         let group = index.map_or_else(|| Group::Isolated(anchor.clone()), Group::Connected);
         let network = self.groups.entry(group).or_insert_with(|| Network { anchors: BTreeSet::new(), names: BTreeSet::new() });
@@ -118,11 +126,11 @@ impl GraphBuilder {
         Ok(())
     }
 
-    /// Advance one bounded graph-construction unit, returning `Some(graph)` when complete.
+    /// Advance one graph-construction step, returning `Some(graph)` when complete.
     pub(super) fn step(&mut self, project: &Project) -> Result<Option<Graph>, String> {
         match self.phase {
             0 => {
-                self.connectivity = Some(project.electrical_connectivity());
+                let _ = project.borrowed_electrical_connectivity();
                 self.phase = 1;
             }
             1 => {
@@ -142,6 +150,7 @@ impl GraphBuilder {
                         id
                     }
                 };
+                let graph = project.borrowed_electrical_connectivity();
                 let scope = project.net_scope();
                 let sheet_id = sheet.sheet_id;
                 match self.substep {
@@ -150,7 +159,7 @@ impl GraphBuilder {
                             for terminal in symbol.terminals() {
                                 // Bare pins are not networks. Avoid allocating persistent-address groups for
                                 // every unused pin on large devices; a connected appearance includes aliases.
-                                if self.connectivity.as_ref().is_some_and(|graph| graph.net_index_for(terminal).is_none()) {
+                                if graph.net_index_for(terminal).is_none() {
                                     continue;
                                 }
                                 let anchor = Anchor {
@@ -161,7 +170,7 @@ impl GraphBuilder {
                                     object: symbol.component,
                                     terminal: terminal.number().into(),
                                 };
-                                self.add_anchor(sheet_id, WireEndpoint::Terminal(terminal), anchor, None)?;
+                                self.add_anchor(graph, sheet_id, WireEndpoint::Terminal(terminal), anchor, None)?;
                             }
                             self.item_index += 1;
                         } else {
@@ -173,7 +182,7 @@ impl GraphBuilder {
                         if let Some(label) = sheet.net_labels.get(self.item_index) {
                             let anchor =
                                 Anchor { kind: AnchorKind::Label, project: project.id, scope, occurrence, object: label.id, terminal: String::new() };
-                            self.add_anchor(sheet_id, WireEndpoint::NetLabel(label.id), anchor, Some(&label.name))?;
+                            self.add_anchor(graph, sheet_id, WireEndpoint::NetLabel(label.id), anchor, Some(&label.name))?;
                             self.item_index += 1;
                         } else {
                             self.item_index = 0;
@@ -184,7 +193,7 @@ impl GraphBuilder {
                         if let Some(port) = sheet.labels.get(self.item_index) {
                             let anchor =
                                 Anchor { kind: AnchorKind::Port, project: project.id, scope, occurrence, object: port.id, terminal: String::new() };
-                            self.add_anchor(sheet_id, WireEndpoint::Label(port.id), anchor, Some(&port.name))?;
+                            self.add_anchor(graph, sheet_id, WireEndpoint::Label(port.id), anchor, Some(&port.name))?;
                             self.item_index += 1;
                         } else {
                             self.item_index = 0;
@@ -201,7 +210,6 @@ impl GraphBuilder {
                 let Some(sheet) = project.sheets.get(self.sheet_index) else {
                     self.sheet_index = 0;
                     self.item_index = 0;
-                    self.connectivity = None;
                     self.phase = 3;
                     return Ok(None);
                 };

@@ -30,10 +30,14 @@ fn history_ids(state: &State) -> Option<&[Uuid]> {
     }
 }
 
-/// Incremental validator and compact byte meter for [`Registry`]. Each `step` bounds work to one
-/// record header, one lineage or branch/successor item, one pair, one graph-build item, or one
-/// [`RecordEncoding`] fragment so native Save encoding can yield between frames without
-/// allocating an 8 MiB buffer.
+/// Incremental validator and compact byte meter for [`Registry`] so native Save encoding can
+/// yield between frames without allocating an 8 MiB buffer. Per-item stages step one record
+/// ID/number check, differential pair, sheet anchor item, network index entry, record header,
+/// lineage item, branch/successor UUID, or [`RecordEncoding`] byte-metering fragment per call.
+/// Three whole-project units remain single isolated steps that yield before and after: warming
+/// `project.borrowed_electrical_connectivity()` (`GraphBuilder` phase 0, once per snapshot if not
+/// already cached), sorting derived networks (`GraphBuilder` phase 3), and `numbering::plan`
+/// (phase 5).
 #[derive(Default)]
 pub(crate) struct RegistryValidation {
     phase: u8,
@@ -83,7 +87,7 @@ impl RegistryValidation {
         Ok(())
     }
 
-    /// Advance one bounded validation or byte-metering step, returning `Ok(true)` when complete.
+    /// Advance one validation or byte-metering step, returning `Ok(true)` when complete.
     pub(crate) fn step(&mut self, registry: &Registry, project: &Project) -> Result<bool, String> {
         match self.phase {
             0 => {
