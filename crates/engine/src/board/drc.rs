@@ -551,7 +551,7 @@ impl OutlineEdge {
 
 /// The edges of a closed polygon, including its closing edge.
 fn polygon_edges(polygon: &[Point]) -> impl Iterator<Item = (Point, Point)> + '_ {
-    (0..polygon.len()).map(move |i| (polygon[i], polygon[(i + 1) % polygon.len()]))
+    polygon.iter().copied().zip(polygon.iter().copied().cycle().skip(1))
 }
 
 /// Closed bounds `[min x, min y, max x, max y]` of a point set.
@@ -659,7 +659,7 @@ impl BoardView<'_> {
                 })
             })
             .collect();
-        let nested = !polygons.iter().enumerate().any(|(i, a)| polygons[i + 1..].iter().any(|b| polygons_meet(a, b)));
+        let nested = !polygons.iter().enumerate().any(|(i, a)| polygons.iter().skip(i + 1).any(|b| polygons_meet(a, b)));
         Outline { drawn: !outline.is_empty(), polygons, drawings, nested, edges }
     }
 }
