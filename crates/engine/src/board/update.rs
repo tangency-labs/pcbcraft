@@ -66,6 +66,186 @@ impl std::io::Write for BaselineWriter {
     }
 }
 
+/// Enforce [`MAX_BASELINE_BYTES`] on the unindented baseline stream while optionally indenting
+/// every line break by two spaces for embedding inside `board.json`.
+struct BoundedBaselineWrite<'a, W: ?Sized> {
+    inner: &'a mut W,
+    written: &'a mut usize,
+    indent: bool,
+}
+
+impl<W: std::io::Write + ?Sized> std::io::Write for BoundedBaselineWrite<'_, W> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let length = self
+            .written
+            .checked_add(bytes.len())
+            .filter(|length| *length <= MAX_BASELINE_BYTES)
+            .ok_or_else(|| std::io::Error::other("board baseline exceeds its byte limit"))?;
+        if self.indent {
+            for (index, chunk) in bytes.split(|byte| *byte == b'\n').enumerate() {
+                if index != 0 {
+                    self.inner.write_all(b"\n  ")?;
+                }
+                self.inner.write_all(chunk)?;
+            }
+        } else {
+            self.inner.write_all(bytes)?;
+        }
+        *self.written = length;
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+const BASELINE_OPEN: u8 = 0;
+const BASELINE_COMPONENTS: u8 = 1;
+const BASELINE_NETS: u8 = 2;
+const BASELINE_DONE: u8 = 3;
+
+/// Resumable validator and encoder for [`Baseline`].
+///
+/// The opening header/source check and write take one unit, each component takes one unit, and
+/// each net takes one unit. Standalone [`Baseline::encode`] and embedded board-header writing
+/// share this state machine so counted and saved bytes stay identical.
+pub(crate) struct BaselineSteps {
+    phase: u8,
+    last_component: Option<u64>,
+    component_cursor: usize,
+    net_cursor: usize,
+    first: bool,
+    saw_origin_net: bool,
+    seen_terminals: BTreeSet<TerminalKey>,
+    baseline_bytes: usize,
+}
+
+impl BaselineSteps {
+    /// Start before validating and writing the baseline header.
+    pub(crate) fn new() -> Self {
+        Self {
+            phase: BASELINE_OPEN,
+            last_component: None,
+            component_cursor: 0,
+            net_cursor: 0,
+            first: true,
+            saw_origin_net: false,
+            seen_terminals: BTreeSet::new(),
+            baseline_bytes: 0,
+        }
+    }
+
+    /// Work units for this baseline: one opening unit plus one per component and one per net.
+    pub(crate) fn total(baseline: &Baseline) -> usize {
+        1usize.saturating_add(baseline.components.len()).saturating_add(baseline.nets.len())
+    }
+
+    /// Advance at most `budget` units, writing the baseline indented by two spaces for `board.json`.
+    pub(crate) fn step_indented(&mut self, bytes: &mut impl std::io::Write, baseline: &Baseline, budget: &mut usize) -> Result<bool, String> {
+        self.step(bytes, baseline, budget, true)
+    }
+
+    /// Advance at most `budget` units, decrementing it by the units completed.
+    fn step(&mut self, bytes: &mut impl std::io::Write, baseline: &Baseline, budget: &mut usize, indent: bool) -> Result<bool, String> {
+        use std::io::Write;
+        loop {
+            let mut out = BoundedBaselineWrite { inner: &mut *bytes, written: &mut self.baseline_bytes, indent };
+            match self.phase {
+                BASELINE_OPEN => {
+                    if *budget == 0 {
+                        return Ok(false);
+                    }
+                    baseline.validate_header()?;
+                    write!(
+                        &mut out,
+                        "{{\n  \"format\": \"{}\",\n  \"project\": \"{}\",\n  \"board\": \"{}\",\n  \"source\": ",
+                        baseline.format, baseline.project, baseline.board
+                    )
+                    .map_err(|error| error.to_string())?;
+                    serde_json::to_writer(&mut out, &baseline.source).map_err(|error| error.to_string())?;
+                    out.write_all(b",\n  \"components\": {\n").map_err(|error| error.to_string())?;
+                    *budget -= 1;
+                    self.phase = BASELINE_COMPONENTS;
+                    self.first = true;
+                }
+                BASELINE_COMPONENTS => {
+                    if self.component_cursor < baseline.components.len() && *budget == 0 {
+                        return Ok(false);
+                    }
+                    let range = match self.last_component {
+                        Some(last) => baseline.components.range((std::ops::Bound::Excluded(last), std::ops::Bound::Unbounded)),
+                        None => baseline.components.range(..),
+                    };
+                    let mut count = 0usize;
+                    for (&id, component) in range.take(*budget) {
+                        baseline.validate_component(id, component)?;
+                        #[cfg(test)]
+                        if indent {
+                            crate::persistence::count_board_record_write();
+                        }
+                        if !self.first {
+                            out.write_all(b"    ,\n").map_err(|error| error.to_string())?;
+                        }
+                        self.first = false;
+                        write!(&mut out, "    \"{id}\":").map_err(|error| error.to_string())?;
+                        serde_json::to_writer(&mut out, component).map_err(|error| error.to_string())?;
+                        out.write_all(b"\n").map_err(|error| error.to_string())?;
+                        self.last_component = Some(id);
+                        count += 1;
+                    }
+                    *budget -= count;
+                    self.component_cursor += count;
+                    if self.component_cursor < baseline.components.len() {
+                        return Ok(false);
+                    }
+                    out.write_all(b"  },\n  \"nets\": [\n").map_err(|error| error.to_string())?;
+                    if baseline.nets.len() > MAX_SYMBOLS * 64 {
+                        return Err("board baseline nets exceed bounds or are not canonical".into());
+                    }
+                    self.phase = BASELINE_NETS;
+                    self.first = true;
+                }
+                BASELINE_NETS => {
+                    if self.net_cursor < baseline.nets.len() && *budget == 0 {
+                        return Ok(false);
+                    }
+                    let end = self.net_cursor.saturating_add(*budget).min(baseline.nets.len());
+                    if let Some(slice) = baseline.nets.get(self.net_cursor..end) {
+                        for (offset, net) in slice.iter().enumerate() {
+                            let index = self.net_cursor + offset;
+                            baseline.validate_net(index, net, &mut self.seen_terminals, &mut self.saw_origin_net)?;
+                            #[cfg(test)]
+                            if indent {
+                                crate::persistence::count_board_record_write();
+                            }
+                            if !self.first {
+                                out.write_all(b"    ,\n").map_err(|error| error.to_string())?;
+                            }
+                            self.first = false;
+                            out.write_all(b"    ").map_err(|error| error.to_string())?;
+                            serde_json::to_writer(&mut out, net).map_err(|error| error.to_string())?;
+                            out.write_all(b"\n").map_err(|error| error.to_string())?;
+                        }
+                    }
+                    *budget -= end - self.net_cursor;
+                    self.net_cursor = end;
+                    if self.net_cursor < baseline.nets.len() {
+                        return Ok(false);
+                    }
+                    if baseline.format == NET_ORIGIN_FORMAT && !self.saw_origin_net {
+                        return Err("board baseline format 5 requires an unnamed singleton net".into());
+                    }
+                    out.write_all(b"  ]\n}").map_err(|error| error.to_string())?;
+                    self.seen_terminals.clear();
+                    self.phase = BASELINE_DONE;
+                }
+                _ => return Ok(true),
+            }
+        }
+    }
+}
+
 /// A frozen input's incarnation and canonical content digest. Equal bytes from a
 /// separately captured allocation history cannot alias this source identity.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -439,129 +619,129 @@ impl Baseline {
 
     /// Serialize only a validated bounded baseline; a failed encode returns no partial bytes.
     pub fn encode(&self) -> Result<Vec<u8>, String> {
-        use std::io::Write;
-        self.validate()?;
         let mut bytes = BaselineWriter { bytes: Vec::new() };
-        write!(
-            &mut bytes,
-            "{{\n  \"format\": \"{}\",\n  \"project\": \"{}\",\n  \"board\": \"{}\",\n  \"source\": ",
-            self.format, self.project, self.board
-        )
-        .map_err(|error| error.to_string())?;
-        serde_json::to_writer(&mut bytes, &self.source).map_err(|error| error.to_string())?;
-        bytes.write_all(b",\n  \"components\": {\n").map_err(|error| error.to_string())?;
-        for (index, (id, component)) in self.components.iter().enumerate() {
-            if index != 0 {
-                bytes.write_all(b"    ,\n").map_err(|error| error.to_string())?;
-            }
-            write!(&mut bytes, "    \"{id}\":").map_err(|error| error.to_string())?;
-            serde_json::to_writer(&mut bytes, component).map_err(|error| error.to_string())?;
-            bytes.write_all(b"\n").map_err(|error| error.to_string())?;
-        }
-        bytes.write_all(b"  },\n  \"nets\": [\n").map_err(|error| error.to_string())?;
-        for (index, net) in self.nets.iter().enumerate() {
-            if index != 0 {
-                bytes.write_all(b"    ,\n").map_err(|error| error.to_string())?;
-            }
-            bytes.write_all(b"    ").map_err(|error| error.to_string())?;
-            serde_json::to_writer(&mut bytes, net).map_err(|error| error.to_string())?;
-            bytes.write_all(b"\n").map_err(|error| error.to_string())?;
-        }
-        bytes.write_all(b"  ]\n}").map_err(|error| error.to_string())?;
-        Ok(bytes.bytes)
+        let mut budget = usize::MAX;
+        if BaselineSteps::new().step(&mut bytes, self, &mut budget, false)? { Ok(bytes.bytes) } else { Err("board baseline did not complete".into()) }
     }
 
     /// Require bounded, canonical records and exact membership without resolving
     /// historical component IDs against the current schematic.
     pub fn validate(&self) -> Result<(), String> {
+        self.validate_header()?;
+        for (&id, component) in &self.components {
+            self.validate_component(id, component)?;
+        }
+        if self.nets.len() > MAX_SYMBOLS * 64 {
+            return Err("board baseline nets exceed bounds or are not canonical".into());
+        }
+        let mut seen = BTreeSet::new();
+        let mut saw_origin_net = false;
+        for (index, net) in self.nets.iter().enumerate() {
+            self.validate_net(index, net, &mut seen, &mut saw_origin_net)?;
+        }
+        if self.format == NET_ORIGIN_FORMAT && !saw_origin_net {
+            return Err("board baseline format 5 requires an unnamed singleton net".into());
+        }
+        Ok(())
+    }
+
+    /// Validate constant-size baseline header fields before stepping through records.
+    fn validate_header(&self) -> Result<(), String> {
         self.source.validate()?;
         if !matches!(self.format.as_str(), FORMAT | MULTIPAD_FORMAT | QUANTITY_FORMAT | DISPLAY_FORMAT | NET_ORIGIN_FORMAT)
-            || (self.format == FORMAT && self.components.values().any(|component| component.package.as_ref().is_some_and(Package::extended)))
             || self.project.is_nil()
             || self.board.is_nil()
             || self.components.len() > MAX_SYMBOLS
         {
             return Err("unsupported or invalid board baseline header".into());
         }
-        for (&id, component) in &self.components {
-            if !(1..=MAX_OBJECT_ID).contains(&id)
-                || component.revision == 0
-                || !super::definition::valid_id(&component.library)
-                || !super::definition::valid_id(&component.definition)
-                || component.terminals.is_empty()
-                || component.terminals.len() > crate::library::MAX_TERMINALS
-                || !strictly_sorted(&component.terminals)
-                || component.terminals.iter().any(|terminal| PinNumber::new(terminal).is_none())
-            {
-                return Err("invalid historical component identity or terminal set".into());
+        Ok(())
+    }
+
+    /// Validate one historical component record against the baseline format.
+    fn validate_component(&self, id: u64, component: &PartInstanceState) -> Result<(), String> {
+        if self.format == FORMAT && component.package.as_ref().is_some_and(Package::extended) {
+            return Err("unsupported or invalid board baseline header".into());
+        }
+        if !(1..=MAX_OBJECT_ID).contains(&id)
+            || component.revision == 0
+            || !super::definition::valid_id(&component.library)
+            || !super::definition::valid_id(&component.definition)
+            || component.terminals.is_empty()
+            || component.terminals.len() > crate::library::MAX_TERMINALS
+            || !strictly_sorted(&component.terminals)
+            || component.terminals.iter().any(|terminal| PinNumber::new(terminal).is_none())
+        {
+            return Err("invalid historical component identity or terminal set".into());
+        }
+        crate::schematic::check_reference(&component.reference)?;
+        crate::schematic::check_value(&component.value)?;
+        if let Some(quantity) = &component.primary_quantity {
+            if !matches!(self.format.as_str(), QUANTITY_FORMAT | DISPLAY_FORMAT | NET_ORIGIN_FORMAT) {
+                return Err("historical primary quantities require board baseline format 3".into());
             }
-            crate::schematic::check_reference(&component.reference)?;
-            crate::schematic::check_value(&component.value)?;
-            if let Some(quantity) = &component.primary_quantity {
-                if !matches!(self.format.as_str(), QUANTITY_FORMAT | DISPLAY_FORMAT | NET_ORIGIN_FORMAT) {
-                    return Err("historical primary quantities require board baseline format 3".into());
-                }
-                quantity.validate()?;
-                let Value::Quantity { value, unit } = quantity else {
-                    return Err("historical primary value must be a typed quantity".into());
-                };
-                if component.value != format!("{value} {unit}") {
-                    return Err("historical primary quantity disagrees with stored value text".into());
-                }
-            }
-            if let Some(package) = &component.package {
-                package.validate(&component.terminals)?;
+            quantity.validate()?;
+            let Value::Quantity { value, unit } = quantity else {
+                return Err("historical primary value must be a typed quantity".into());
+            };
+            if component.value != format!("{value} {unit}") {
+                return Err("historical primary quantity disagrees with stored value text".into());
             }
         }
-        if self.nets.len() > MAX_SYMBOLS * 64 || !self.nets.windows(2).all(|pair| pair[0].terminals < pair[1].terminals) {
+        if let Some(package) = &component.package {
+            package.validate(&component.terminals)?;
+        }
+        Ok(())
+    }
+
+    /// Validate one historical net record, its canonical ordering against the previous net, and
+    /// cross-net terminal uniqueness.
+    fn validate_net(&self, index: usize, net: &NetState, seen: &mut BTreeSet<TerminalKey>, saw_origin_net: &mut bool) -> Result<(), String> {
+        if let Some(previous) = index.checked_sub(1).and_then(|prev| self.nets.get(prev))
+            && previous.terminals >= net.terminals
+        {
             return Err("board baseline nets exceed bounds or are not canonical".into());
         }
         let stores_origin = self.format == NET_ORIGIN_FORMAT;
         let stores_display = matches!(self.format.as_str(), DISPLAY_FORMAT | NET_ORIGIN_FORMAT);
-        if stores_origin && !self.nets.iter().any(NetState::needs_origin) {
-            return Err("board baseline format 5 requires an unnamed singleton net".into());
+        if net.needs_origin() {
+            *saw_origin_net = true;
         }
-        let mut seen = BTreeSet::new();
-        for net in &self.nets {
-            if net.origin.is_some() != (stores_origin && net.needs_origin()) {
-                return Err("invalid accepted net origin or baseline version".into());
-            }
-            if net.display_name.is_some() != stores_display
-                || net.display_name.as_ref().is_some_and(|name| name.is_empty() || name.len() > 65_536 || name.chars().any(char::is_control))
-            {
-                return Err("invalid accepted net display name or baseline version".into());
-            }
-            if net.terminals.is_empty()
-                || (net.terminals.len() < 2
-                    && net.names.is_empty()
-                    && !net.terminals.iter().any(|terminal| {
-                        self.components
-                            .get(&terminal.component)
-                            .and_then(|component| component.package.as_ref())
-                            .and_then(|package| package.mapping.get(&terminal.terminal))
-                            .is_some_and(|pads| pads.pads().len() > 1)
-                    }))
-                || net.terminals.len() > MAX_SYMBOLS * crate::library::MAX_TERMINALS
-                || !strictly_sorted(&net.terminals)
-                || net.names.len() > crate::net_labels::MAX_LABELS * crate::sheets::MAX_SHEETS
-            {
-                return Err("invalid accepted net membership".into());
-            }
-            let mut names = BTreeSet::new();
-            for name in &net.names {
-                if name.is_empty() || name.trim() != name || name.chars().count() > 200 || name.chars().any(char::is_control) || !names.insert(name) {
-                    return Err("invalid accepted net name".into());
-                }
-            }
-            for terminal in &net.terminals {
-                if !seen.insert(terminal)
-                    || !self
-                        .components
+        if net.origin.is_some() != (stores_origin && net.needs_origin()) {
+            return Err("invalid accepted net origin or baseline version".into());
+        }
+        if net.display_name.is_some() != stores_display
+            || net.display_name.as_ref().is_some_and(|name| name.is_empty() || name.len() > 65_536 || name.chars().any(char::is_control))
+        {
+            return Err("invalid accepted net display name or baseline version".into());
+        }
+        if net.terminals.is_empty()
+            || (net.terminals.len() < 2
+                && net.names.is_empty()
+                && !net.terminals.iter().any(|terminal| {
+                    self.components
                         .get(&terminal.component)
-                        .is_some_and(|component| component.terminals.binary_search(&terminal.terminal).is_ok())
-                {
-                    return Err("accepted net has a duplicate or unknown component terminal".into());
-                }
+                        .and_then(|component| component.package.as_ref())
+                        .and_then(|package| package.mapping.get(&terminal.terminal))
+                        .is_some_and(|pads| pads.pads().len() > 1)
+                }))
+            || net.terminals.len() > MAX_SYMBOLS * crate::library::MAX_TERMINALS
+            || !strictly_sorted(&net.terminals)
+            || net.names.len() > crate::net_labels::MAX_LABELS * crate::sheets::MAX_SHEETS
+        {
+            return Err("invalid accepted net membership".into());
+        }
+        let mut names = BTreeSet::new();
+        for name in &net.names {
+            if name.is_empty() || name.trim() != name || name.chars().count() > 200 || name.chars().any(char::is_control) || !names.insert(name) {
+                return Err("invalid accepted net name".into());
+            }
+        }
+        for terminal in &net.terminals {
+            if !seen.insert(terminal.clone())
+                || !self.components.get(&terminal.component).is_some_and(|component| component.terminals.binary_search(&terminal.terminal).is_ok())
+            {
+                return Err("accepted net has a duplicate or unknown component terminal".into());
             }
         }
         Ok(())

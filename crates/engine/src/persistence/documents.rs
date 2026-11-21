@@ -2346,6 +2346,12 @@ thread_local! {
     static BOARD_RECORD_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// Record one serialized board record on the current test thread.
+#[cfg(test)]
+pub(crate) fn count_board_record_write() {
+    BOARD_RECORD_WRITES.with(|count| count.set(count.get().saturating_add(1)));
+}
+
 /// Return and reset the current test thread's serialized board-record count.
 #[cfg(test)]
 pub(crate) fn take_board_record_writes() -> usize {
@@ -2577,38 +2583,48 @@ const HEADER_OPEN: u8 = 0;
 const HEADER_MATERIALS: u8 = 1;
 const HEADER_LAYERS: u8 = 2;
 const HEADER_STRATA: u8 = 3;
-const HEADER_FIELDS: u8 = 4;
-const HEADER_GRAPHIC_LAYERS: u8 = 5;
-const HEADER_GRAPHIC_ITEMS: u8 = 6;
-const HEADER_ZONES: u8 = 7;
-const HEADER_ARCS: u8 = 8;
-const HEADER_DONE: u8 = 9;
+const HEADER_BASELINE: u8 = 4;
+const HEADER_FIELDS: u8 = 5;
+const HEADER_GRAPHIC_LAYERS: u8 = 6;
+const HEADER_GRAPHIC_ITEMS: u8 = 7;
+const HEADER_ZONES: u8 = 8;
+const HEADER_ARCS: u8 = 9;
+const HEADER_DONE: u8 = 10;
 
-/// Resumable board header writer. The validated opening and the single-value fields (baseline,
-/// rules, placement origin, assembly profiles, silkscreen and outline) are one unit each; every
-/// setup material, layer and stratum, graphics layer and item, zone and arc is one unit. Lists
-/// keep the full writer's openers, separators, closers and empty forms.
+/// Resumable board header writer. The validated opening and the remaining single-value fields
+/// (rules, placement origin, assembly profiles, silkscreen and outline) are one unit each; a
+/// baseline adds one opening unit plus one per baseline component and net; every setup material,
+/// layer and stratum, graphics layer and item, zone and arc is one unit. Lists keep the full
+/// writer's openers, separators, closers and empty forms.
 struct BoardHeaderSteps {
     phase: u8,
     cursor: usize,
     first: bool,
+    baseline: Option<crate::board::update::BaselineSteps>,
 }
 
 impl BoardHeaderSteps {
     /// Start before the validated opening.
     fn new() -> Self {
-        Self { phase: HEADER_OPEN, cursor: 0, first: true }
+        Self { phase: HEADER_OPEN, cursor: 0, first: true, baseline: None }
     }
 
-    /// Header units: the opening and field units plus one per variable-sized header record.
+    /// Header units: the opening and field units plus baseline units and one per variable-sized
+    /// header record.
     fn total(project: &Project) -> usize {
         let board = &project.board;
         let setup = board
             .setup
             .as_ref()
             .map_or(0, |setup| setup.materials().len().saturating_add(setup.layers().len()).saturating_add(setup.stackup().strata.len()));
+        let baseline = board.baseline.as_ref().map_or(0, crate::board::update::BaselineSteps::total);
         let graphics = board.drawings.as_ref().map_or(0, |graphics| graphics.layers.len().saturating_add(graphics.items.len()));
-        2usize.saturating_add(setup).saturating_add(graphics).saturating_add(board.zones.len()).saturating_add(board.arcs.len())
+        2usize
+            .saturating_add(setup)
+            .saturating_add(baseline)
+            .saturating_add(graphics)
+            .saturating_add(board.zones.len())
+            .saturating_add(board.arcs.len())
     }
 
     /// Enter the next header list with a fresh cursor and separator state.
@@ -2649,7 +2665,13 @@ impl BoardHeaderSteps {
                     }
                     board_header_open(bytes, project, validate_teardrops)?;
                     *budget -= 1;
-                    self.advance(if board.setup.is_some() { HEADER_MATERIALS } else { HEADER_FIELDS });
+                    self.advance(if board.setup.is_some() {
+                        HEADER_MATERIALS
+                    } else if board.baseline.is_some() {
+                        HEADER_BASELINE
+                    } else {
+                        HEADER_FIELDS
+                    });
                 }
                 HEADER_MATERIALS | HEADER_LAYERS | HEADER_STRATA => {
                     let setup = board.setup.as_ref().ok_or("board setup changed during the header count")?;
@@ -2684,8 +2706,25 @@ impl BoardHeaderSteps {
                             }
                         }
                         bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
-                        self.advance(HEADER_FIELDS);
+                        self.advance(if board.baseline.is_some() { HEADER_BASELINE } else { HEADER_FIELDS });
                     }
+                }
+                HEADER_BASELINE => {
+                    let baseline = board.baseline.as_ref().ok_or("board baseline changed during the header count")?;
+                    if self.first {
+                        if *budget == 0 {
+                            return Ok(false);
+                        }
+                        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
+                        self.first = false;
+                    }
+                    let steps = self.baseline.get_or_insert_with(crate::board::update::BaselineSteps::new);
+                    if !steps.step_indented(bytes, baseline, budget)? {
+                        return Ok(false);
+                    }
+                    self.baseline = None;
+                    bytes.write_all(b",\n").map_err(|error| error.to_string())?;
+                    self.advance(HEADER_FIELDS);
                 }
                 HEADER_FIELDS => {
                     if *budget == 0 {
@@ -2871,20 +2910,9 @@ fn board_header_open(bytes: &mut impl Write, project: &Project, validate_teardro
     Ok(())
 }
 
-/// Write the single-value header fields between the setup and the graphics, in saved order.
+/// Write the single-value header fields between the baseline and the graphics, in saved order.
 fn board_header_fields(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     let board = &project.board;
-    if let Some(baseline) = &board.baseline {
-        let encoded = baseline.encode()?;
-        bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
-        for (index, line) in encoded.split(|byte| *byte == b'\n').enumerate() {
-            if index != 0 {
-                bytes.write_all(b"\n  ").map_err(|error| error.to_string())?;
-            }
-            bytes.write_all(line).map_err(|error| error.to_string())?;
-        }
-        bytes.write_all(b",\n").map_err(|error| error.to_string())?;
-    }
     if let Some(rules) = &board.rules {
         rules.validate()?;
         writeln!(bytes, "  \"rules\": {},", serde_json::to_string(rules).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
