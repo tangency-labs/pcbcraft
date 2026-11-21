@@ -22,6 +22,17 @@ const DIALOG_WIDTH: f32 = 880.0;
 /// Stable widget ID for the pin-table source text editor so keyboard focus and Escape handling stay exact.
 const SOURCE_TEXT_ID: &str = "pin_table_source_text";
 
+/// Inline Discard / Keep editing confirmation shown when the header close button, Escape or a
+/// backdrop click would otherwise drop unsaved pin-table edits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum DiscardPrompt {
+    #[default]
+    Hidden,
+    /// Requested this frame: the next render focuses "Keep editing" and scrolls the prompt into view.
+    Opening,
+    Shown,
+}
+
 /// Validated pin-table plan and source state retained on an open symbol document after staging.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StagedPinTable {
@@ -57,6 +68,7 @@ pub(crate) struct Draft {
     io_error: Option<String>,
     confirm_error: Option<String>,
     revision_stale: bool,
+    discard_prompt: DiscardPrompt,
 }
 
 impl Draft {
@@ -85,6 +97,22 @@ impl Draft {
             io_error: None,
             confirm_error: None,
             revision_stale: false,
+            discard_prompt: DiscardPrompt::Hidden,
+        }
+    }
+
+    /// True when closing now would lose work: non-empty text that was never staged, or any change
+    /// to the source text, delimiter, header flag or column mapping of the staged plan.
+    fn has_unsaved_edits(&self, staged: Option<&StagedPinTable>) -> bool {
+        match staged {
+            Some(staged) => {
+                staged.raw_text != self.raw_text
+                    || staged.delimiter != self.delimiter
+                    || staged.has_header != self.has_header
+                    || staged.mapping != self.mapping
+                    || staged.manual_mapping != self.manual_mapping
+            }
+            None => !self.raw_text.trim().is_empty(),
         }
     }
 
@@ -101,6 +129,8 @@ impl Draft {
         self.page = self.page.min(pages.saturating_sub(1));
         self.confirm_error = None;
         self.revision_stale = false;
+        // Any edit answers a pending discard question with "keep editing".
+        self.discard_prompt = DiscardPrompt::Hidden;
     }
 
     /// Count rows matching the active All / Findings-only filter.
@@ -155,6 +185,7 @@ impl Draft {
                 Ok(_) => {
                     self.file_job = Some(receive);
                     self.io_error = None;
+                    self.discard_prompt = DiscardPrompt::Hidden;
                 }
                 Err(error) => self.io_error = Some(format!("Could not start file loader: {error}")),
             }
@@ -236,7 +267,7 @@ fn visible_page_rows(preview: &Preview, findings_only: bool, page: usize) -> Vec
 }
 
 /// Build one page of preview table entries. Pin name occupies column 0 (the widest flex column)
-/// and Status uses compact short labels so cells stay readable without hover-only truncation.
+/// and Status lists each finding's full-phrase label (or "OK") so the cell reads without a tooltip.
 fn preview_table_entries(preview: &Preview, page_rows: &[&PreviewRow]) -> Vec<TableEntry> {
     page_rows.iter().map(|row| row_to_table_entry(preview, row)).collect()
 }
@@ -330,12 +361,23 @@ impl PcbApp {
     pub(crate) fn library_pin_table_dialog(&mut self, ctx: &Context, mut draft: Box<Draft>) {
         draft.poll_file_job();
         let tokens = Tokens::get();
-        let staged_raw_text =
-            self.library_editors.documents.get(&draft.document).and_then(|doc| doc.staged_pin_table.as_ref().map(|staged| staged.raw_text.as_str()));
-        let has_staged = staged_raw_text.is_some();
-        let has_unsaved_edits = !draft.raw_text.trim().is_empty() && staged_raw_text != Some(draft.raw_text.as_str());
+        let staged = self.library_editors.documents.get(&draft.document).and_then(|doc| doc.staged_pin_table.as_ref());
+        let has_staged = staged.is_some();
+        let has_unsaved_edits = draft.has_unsaved_edits(staged);
         let source_id = egui::Id::new(SOURCE_TEXT_ID);
-        let source_was_focused = ctx.memory(|mem| mem.focused() == Some(source_id));
+        // egui drops keyboard focus on an unmodified Escape when the pass begins, before this code
+        // runs, so `focused()` can no longer tell that the press was meant for the source field.
+        // Read the previous frame's focus instead and consume that Escape, so leaving the text field
+        // never reaches the shared modal as a close request. An open dropdown keeps its own Escape.
+        let popup_open = egui::Popup::is_any_open(ctx);
+        let escape_left_source = !popup_open
+            && ctx.memory(|mem| mem.had_focus_last_frame(source_id))
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        // While the discard question is open, Escape answers it with "Keep editing".
+        let escape_kept_editing = !popup_open
+            && !escape_left_source
+            && draft.discard_prompt != DiscardPrompt::Hidden
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         let mut load_file = false;
         let mut clear_text = false;
         let mut auto_map = false;
@@ -344,6 +386,8 @@ impl PcbApp {
         let mut clear_staged = false;
         let mut refresh_revision = false;
         let mut cancel = false;
+        let mut discard = false;
+        let mut keep_editing = false;
         let loading = draft.file_job.is_some();
         let is_empty = draft.raw_text.trim().is_empty();
         let can_stage = !is_empty && draft.preview.can_accept() && !loading;
@@ -570,45 +614,74 @@ impl PcbApp {
                 ui.add_space(tokens.space_4);
             }
 
-            let readiness = if loading {
-                "Loading pin-table file…".to_owned()
-            } else if can_stage {
-                format!(
-                    "Ready to stage {total_rows} {} across {unit_count} {}.",
-                    plural(total_rows, "pin", "pins"),
-                    plural(unit_count, "unit", "units"),
-                )
-            } else if is_empty {
-                "Nothing to stage yet.".to_owned()
+            if draft.discard_prompt != DiscardPrompt::Hidden {
+                // The footer becomes the decision, so the question sits where the actions were.
+                let question = if has_staged {
+                    "Close without staging? Your pin-table edits will be lost. The previously staged plan stays on this symbol."
+                } else {
+                    "Close without staging? Your pin-table edits will be lost."
+                };
+                let prompt = ui.label(question);
+                ui.add_space(tokens.space_4);
+                ui.horizontal(|ui| {
+                    let keep = controls::button(ui, "Keep editing");
+                    if controls::enabled_button(ui, !loading, "Discard pin-table edits").clicked() {
+                        discard = true;
+                    }
+                    if draft.discard_prompt == DiscardPrompt::Opening {
+                        // Focus the safe answer so Enter or Space keeps the edits.
+                        keep.request_focus();
+                        prompt.scroll_to_me(Some(egui::Align::Center));
+                        draft.discard_prompt = DiscardPrompt::Shown;
+                    }
+                    if keep.clicked() {
+                        keep_editing = true;
+                    }
+                });
             } else {
-                format!("Resolve {finding_count} {} before staging.", plural(finding_count, "finding", "findings"))
-            };
-            ui.label(shell::dim(readiness));
-            ui.add_space(tokens.space_4);
-            ui.horizontal(|ui| {
-                if controls::enabled_button(ui, can_stage, "Stage pin table").clicked() {
-                    stage = true;
-                }
-                if has_staged && controls::enabled_button(ui, !loading, "Clear staged plan").clicked() {
-                    clear_staged = true;
-                }
-                if controls::enabled_button(ui, !loading, "Cancel").clicked() {
-                    cancel = true;
-                }
-            });
+                let readiness = if loading {
+                    "Loading pin-table file…".to_owned()
+                } else if can_stage {
+                    format!(
+                        "Ready to stage {total_rows} {} across {unit_count} {}.",
+                        plural(total_rows, "pin", "pins"),
+                        plural(unit_count, "unit", "units"),
+                    )
+                } else if is_empty {
+                    "Nothing to stage yet.".to_owned()
+                } else {
+                    format!("Resolve {finding_count} {} before staging.", plural(finding_count, "finding", "findings"))
+                };
+                ui.label(shell::dim(readiness));
+                ui.add_space(tokens.space_4);
+                ui.horizontal(|ui| {
+                    if controls::enabled_button(ui, can_stage, "Stage pin table").clicked() {
+                        stage = true;
+                    }
+                    if has_staged && controls::enabled_button(ui, !loading, "Clear staged plan").clicked() {
+                        clear_staged = true;
+                    }
+                    if controls::enabled_button(ui, !loading, "Cancel").clicked() {
+                        cancel = true;
+                    }
+                });
+            }
         });
 
-        if cancel && !loading {
+        if (cancel || discard) && !loading {
             return;
         }
-        if dismissed && !loading && !source_was_focused {
-            if has_unsaved_edits {
-                draft.confirm_error = Some("Use Cancel to discard unsaved pin-table edits, or Stage pin table to keep them.".into());
-                draft.revision_stale = false;
-                ctx.request_repaint();
-            } else {
+        if keep_editing || escape_kept_editing {
+            draft.discard_prompt = DiscardPrompt::Hidden;
+            ctx.memory_mut(|mem| mem.request_focus(source_id));
+        } else if dismissed && !loading {
+            if !has_unsaved_edits {
                 return;
             }
+            // Header close, Escape or a backdrop click asks before dropping edits. Repeating it
+            // re-focuses the open question and scrolls it back into view.
+            draft.discard_prompt = DiscardPrompt::Opening;
+            ctx.request_repaint();
         }
         if load_file {
             draft.start_file_load(ctx);
@@ -663,6 +736,37 @@ mod tests {
         Harness,
         kittest::{NodeT, Queryable},
     };
+
+    const DISCARD_QUESTION: &str = "Close without staging? Your pin-table edits will be lost.";
+    const DISCARD_QUESTION_STAGED: &str =
+        "Close without staging? Your pin-table edits will be lost. The previously staged plan stays on this symbol.";
+
+    /// Assert the inline discard question is not shown and the normal footer actions are.
+    fn assert_footer_without_discard_question(h: &Harness<'_, PcbApp>) {
+        assert!(h.query_by_label(DISCARD_QUESTION).is_none());
+        assert!(h.query_by_label(DISCARD_QUESTION_STAGED).is_none());
+        assert!(h.query_by_label("Keep editing").is_none());
+        assert!(h.query_by_label("Discard pin-table edits").is_none());
+        h.get_by_label("Stage pin table");
+        h.get_by_label("Cancel");
+    }
+
+    /// Assert the inline discard question replaced the footer and its safe answer has keyboard focus.
+    fn assert_discard_question(h: &Harness<'_, PcbApp>, question: &str) {
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+        h.get_by_label(question);
+        assert!(h.get_by_label("Keep editing").is_focused());
+        h.get_by_label("Discard pin-table edits");
+        assert!(h.query_by_label("Stage pin table").is_none());
+        assert!(h.query_by_label("Cancel").is_none());
+    }
+
+    fn draft_text(h: &Harness<'_, PcbApp>) -> String {
+        let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+            panic!("expected pin table dialog");
+        };
+        draft.raw_text.clone()
+    }
 
     fn synthetic_256_csv(with_duplicates: bool) -> String {
         let mut csv = String::from("Number,Name,Type,Unit,Side\n");
@@ -867,8 +971,9 @@ mod tests {
     }
 
     /// Column remapping via the labelled ComboBox updates the preview live; Escape closes an open
-    /// ComboBox popup before dismissing the modal, unsaved text is protected from stray Escape,
-    /// Cancel discards cleanly, and Escape closes an empty dialog immediately.
+    /// ComboBox popup before dismissing the modal; Escape with unsaved text asks Discard / Keep
+    /// editing and a second Escape keeps editing; Cancel discards cleanly; and Escape closes an
+    /// empty dialog immediately.
     #[test]
     fn dialog_column_remapping_choice_escape_and_cancel() {
         let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 760.0));
@@ -905,7 +1010,7 @@ mod tests {
             assert!(draft.preview.can_accept());
         }
 
-        // Open Pin number ComboBox again: first Escape closes popup only, second Escape protects unsaved text.
+        // Open Pin number ComboBox again: the first Escape closes the popup only and asks nothing.
         h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").click();
         h.run();
         h.get_by_label("Unmapped (required)");
@@ -913,11 +1018,18 @@ mod tests {
         h.run();
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
         assert!(h.query_by_label("Unmapped (required)").is_none());
+        assert_footer_without_discard_question(&h);
 
+        // The second Escape would close the modal, so it asks first; a third Escape keeps editing.
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_discard_question(&h, DISCARD_QUESTION);
         h.key_press(egui::Key::Escape);
         h.run();
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
-        h.get_by_label("Use Cancel to discard unsaved pin-table edits, or Stage pin table to keep them.");
+        assert_footer_without_discard_question(&h);
+        assert_eq!(h.ctx.memory(|mem| mem.focused()), Some(egui::Id::new(SOURCE_TEXT_ID)));
+        assert_eq!(draft_text(&h), "Signal\tPin\tType\nTXD\t1\toutput\nRXD\t2\tinput\n");
 
         // Explicit Cancel discards cleanly.
         h.get_by_label("Cancel").scroll_to_me();
@@ -925,6 +1037,9 @@ mod tests {
         click(&mut h, "Cancel");
         assert!(matches!(h.state().dialog, Dialog::None));
         assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
+        // Let egui drop focus from the source field that no longer exists.
+        h.run_steps(2);
+        assert_ne!(h.ctx.memory(|mem| mem.focused()), Some(egui::Id::new(SOURCE_TEXT_ID)));
 
         // Reopening an empty dialog allows Escape to close immediately.
         h.state_mut().begin_library_pin_table(doc_id).unwrap();
@@ -935,11 +1050,13 @@ mod tests {
     }
 
     /// Keyboard navigation and unsaved-edit protection: Tab enters and leaves the source text field
-    /// without inserting a tab character, Escape inside the focused text field drops focus without
-    /// losing pasted text, and a stray backdrop click keeps unsaved text intact until Cancel.
+    /// without inserting a tab character; Escape inside the focused text field only leaves the
+    /// field (no question, footer intact); a backdrop click then asks Discard / Keep editing with
+    /// focus on Keep editing, and Enter keeps editing with focus back in the field; the header
+    /// close button asks the same question, and Discard closes without staging.
     #[test]
     fn dialog_keyboard_tab_escape_and_backdrop_protection() {
-        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
 
         // Tab reaches the source field and Tab leaves it without inserting '\t'.
         let source_id = tab_to_source_field(&mut h);
@@ -956,33 +1073,105 @@ mod tests {
         // Type CSV into the source field via real keyboard input, then press Escape while focused.
         type_multiline(&mut h, &["Number,Name,Type,Unit,Side", "1,VCC,power_in,main,top"]);
         assert_eq!(h.ctx.memory(|mem| mem.focused()), Some(source_id));
+        assert_footer_without_discard_question(&h);
         h.key_press(egui::Key::Escape);
         h.run();
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
         assert_ne!(h.ctx.memory(|mem| mem.focused()), Some(source_id));
-        {
-            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
-                panic!("expected pin table dialog");
-            };
-            assert!(draft.raw_text.contains("1,VCC,power_in,main,top"));
-        }
+        assert_footer_without_discard_question(&h);
+        assert!(draft_text(&h).contains("1,VCC,power_in,main,top"));
 
-        // Clicking outside the dialog on the backdrop keeps the dialog and unsaved text intact.
+        // The question is absent before the backdrop click, so its appearance proves the click
+        // reached the backdrop and was turned into a question instead of a silent close.
         click_at(&mut h, egui::pos2(5.0, 5.0));
+        assert_discard_question(&h, DISCARD_QUESTION);
+        assert!(draft_text(&h).contains("1,VCC,power_in,main,top"));
+
+        // Enter on the focused Keep editing restores the footer and returns focus to the field.
+        h.key_press(egui::Key::Enter);
+        h.run();
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
-        h.get_by_label("Use Cancel to discard unsaved pin-table edits, or Stage pin table to keep them.");
+        assert_footer_without_discard_question(&h);
+        assert_eq!(h.ctx.memory(|mem| mem.focused()), Some(source_id));
+        assert!(draft_text(&h).contains("1,VCC,power_in,main,top"));
+
+        // The header close button asks the same question; Discard closes without staging.
+        click(&mut h, "Close Import pin table");
+        assert_discard_question(&h, DISCARD_QUESTION);
+        click(&mut h, "Discard pin-table edits");
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_none());
+    }
+
+    /// Escape in the focused source field of a reopened, unchanged staged plan leaves the field
+    /// without closing the dialog; a second Escape closes the clean dialog and keeps the plan. A
+    /// mapping-only change to the staged plan counts as unsaved: Escape asks, naming the kept plan,
+    /// "Keep editing" returns to the form, and Cancel leaves the staged plan untouched.
+    #[test]
+    fn dialog_escape_in_source_field_of_reopened_staged_plan() {
+        let (mut h, doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        let staged_text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n2,GND,power_in,main,bottom\n";
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = staged_text.into();
+            draft.recompute();
+        }
+        h.run();
+        h.get_by_label("Stage pin table").scroll_to_me();
+        h.run();
+        click(&mut h, "Stage pin table");
+        assert!(matches!(h.state().dialog, Dialog::None));
+
+        h.state_mut().begin_library_pin_table(doc_id).unwrap();
+        h.run();
         {
             let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
                 panic!("expected pin table dialog");
             };
-            assert!(draft.raw_text.contains("1,VCC,power_in,main,top"));
+            let staged = h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.as_ref();
+            assert!(!draft.has_unsaved_edits(staged));
         }
+        let source_id = tab_to_source_field(&mut h);
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+        assert_ne!(h.ctx.memory(|mem| mem.focused()), Some(source_id));
+        assert_footer_without_discard_question(&h);
+        h.get_by_label("Clear staged plan");
 
-        // Explicit Cancel still discards immediately.
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert!(h.state().library_editors.documents.get(&doc_id).unwrap().staged_pin_table.is_some());
+
+        // Unmapping the optional Pin name column changes the staged plan's mapping only.
+        h.state_mut().begin_library_pin_table(doc_id).unwrap();
+        h.run();
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin name").click();
+        h.run();
+        click(&mut h, "Not mapped");
+        {
+            let Dialog::LibraryPinTable(draft) = &h.state().dialog else {
+                panic!("expected pin table dialog");
+            };
+            assert_eq!(draft.raw_text, staged_text);
+            assert_eq!(draft.mapping.name, None);
+        }
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_discard_question(&h, DISCARD_QUESTION_STAGED);
+        click(&mut h, "Keep editing");
+        assert_footer_without_discard_question(&h);
         h.get_by_label("Cancel").scroll_to_me();
         h.run();
         click(&mut h, "Cancel");
         assert!(matches!(h.state().dialog, Dialog::None));
+        let doc = h.state().library_editors.documents.get(&doc_id).unwrap();
+        let staged = doc.staged_pin_table.as_ref().expect("staged plan kept");
+        assert_eq!(staged.raw_text, staged_text);
+        assert!(staged.mapping.name.is_some());
     }
 
     /// Short-host viewport (L7): scrolling the modal brings footer buttons cleanly inside the
@@ -1261,6 +1450,24 @@ mod tests {
         assert!(viewport.contains_rect(h.get_by_label("Cancel").rect()));
         assert!(viewport.contains_rect(h.get_by_label("Stage pin table").rect()));
         assert!(matches!(h.state().dialog, Dialog::LibraryPinTable(_)));
+    }
+
+    /// Snapshot state: inline Discard / Keep editing question after the header close button is
+    /// clicked with unsaved text, with keyboard focus on Keep editing.
+    #[test]
+    fn shot_discard_question() {
+        let (mut h, _doc_id) = symbol_harness(egui::vec2(1024.0, 820.0));
+        {
+            let Dialog::LibraryPinTable(draft) = &mut h.state_mut().dialog else {
+                panic!("expected pin table dialog");
+            };
+            draft.raw_text = "Number,Name,Type,Unit,Side\n1,VCC,power_in,main,top\n2,GND,power_in,main,bottom\n".into();
+            draft.recompute();
+        }
+        h.run();
+        assert_footer_without_discard_question(&h);
+        click(&mut h, "Close Import pin table");
+        assert_discard_question(&h, DISCARD_QUESTION);
     }
 
     /// Snapshot state: keyboard focus on the pin-table source text field reached by Tab from the first control.
