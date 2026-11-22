@@ -12,8 +12,10 @@ where to write the bytes. Export does not change the native project format.
 Export visits root sheets in project sheet order. It emits each page before
 its descendants, visiting sibling branches by ascending ID of the sheet symbol
 in their parent. The bookmark tree follows that same order and nesting. Each
-bookmark shows the sheet name and opens its own page. The active editor sheet
-does not affect the order or bytes.
+bookmark shows the sheet name and opens its own page. In project export, the
+Default frame's page number and total count the emitted occurrences in PDF order.
+Addressed single-sheet export keeps the editor's Browser numbering. The active
+editor sheet does not affect the order or bytes.
 
 The exporter associates pages with occurrences, not unique sheet definitions.
 PCBcraft's [current project model](sheet-occurrence-storage.md) still rejects

@@ -51,13 +51,14 @@ impl std::error::Error for PdfError {}
 /// This function never writes files, changes project state, or traverses pages for export.
 pub fn export(project: &Project, target: SheetTarget) -> Result<Vec<u8>, PdfError> {
     let sheet = project.for_sheet(target).ok_or(PdfError::UnknownSheet)?;
-    draw_page(&sheet)?.finish()
+    draw_page(&sheet, None)?.finish()
 }
 
 /// Export every project sheet occurrence, with a bookmark per page and nested child bookmarks.
 /// Visit roots in project sheet order, then children by ascending parent sheet-symbol ID,
-/// depth first. Separate occurrences of a definition always get separate pages.
-/// The active editor sheet has no effect. If any page cannot be drawn, return no document.
+/// depth first. The same order numbers the pages in the title block. Separate occurrences of
+/// a definition always get separate pages. The active editor sheet has no effect. If any page
+/// cannot be drawn, return no document.
 pub fn export_project(project: &Project) -> Result<Vec<u8>, PdfError> {
     export_occurrences(project, &project.occurrence_instances().sheet_occurrences)
 }
@@ -66,19 +67,24 @@ pub fn export_project(project: &Project) -> Result<Vec<u8>, PdfError> {
 fn export_occurrences(project: &Project, records: &[crate::instances::SheetOccurrence]) -> Result<Vec<u8>, PdfError> {
     let ordered = occurrences::ordered(project, records)?;
     let mut document = pdf::Document::new();
-    let mut bookmarks = Vec::with_capacity(ordered.len());
-    for (info, parent) in ordered {
+    let pages = ordered.len();
+    let mut bookmarks = Vec::with_capacity(pages);
+    for (index, (info, parent)) in ordered.into_iter().enumerate() {
         let sheet = project.for_sheet(info.target).ok_or(PdfError::UnknownSheet)?;
-        document.add_page(draw_page(&sheet)?);
+        document.add_page(draw_page(&sheet, Some((index + 1, pages)))?);
         bookmarks.push(pdf::Bookmark { title: info.name, parent });
     }
     document.finish(&bookmarks)
 }
 
-/// Render the saved paper, frame and geometry through the same path for both export modes.
-fn draw_page(sheet: &Project) -> Result<pdf::Page, PdfError> {
+/// Render the saved paper, frame and geometry. Project export supplies its occurrence's
+/// one-based page number and page count; addressed export keeps the editor frame values.
+fn draw_page(sheet: &Project, output_page: Option<(usize, usize)>) -> Result<pdf::Page, PdfError> {
     let paper = sheet.page().ok_or(PdfError::MissingPaper)?;
-    let frame = sheet.frame().ok_or(PdfError::MissingPaper)?;
+    let frame = match output_page {
+        Some((page, pages)) => paper.frame(&|text| sheet.resolve_text_for_output_page(sheet.sheet_target(), text, page, pages)),
+        None => sheet.frame().ok_or(PdfError::MissingPaper)?,
+    };
     let mut page = Drawing::new(paper);
     for line in frame.lines {
         page.path(line, STROKE_NM, false, Fill::None);

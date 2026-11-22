@@ -487,6 +487,52 @@ fn project_pages_follow_saved_roots_and_hierarchy() {
     assert!(extract(&objects, pages[2]).lines().any(|line| line == "SHARED_INK"));
 }
 
+/// Opposite definition and placement orders must not split frame numbers from PDF destinations.
+#[test]
+fn reverse_sibling_placement_numbers_pdf_pages_and_bookmarks_together() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let main = session.project().unwrap().sheet_target();
+    apply(&mut session, crate::sheets::RENAME_SHEET, json!({"sheet":main.id(),"name":"Main"}));
+    let [a, b] = ["A", "B"].map(|name| {
+        apply(&mut session, crate::sheets::CREATE_SHEET, json!({"name":name}));
+        session.project().unwrap().sheets().last().unwrap().target
+    });
+    for (child, x) in [(b, 20 * GRID_NM), (a, 60 * GRID_NM)] {
+        apply(&mut session, crate::hierarchy::PLACE_SHEET, json!({"sheet":main.id(),"child":child.id(),"x_nm":x,"y_nm":20*GRID_NM}));
+    }
+    // A nested, mixed-case reference uses the same occurrence context as the Default Page field.
+    apply(&mut session, crate::parameters::SET, json!({"scope":"sheet","sheet":b.id(),"name":"Title","value":"Index @instance.pAgE"}));
+    let project = session.project().unwrap();
+    assert_eq!(project.page_order(), [main, a, b]);
+    let bytes = export_project(project).unwrap();
+    let pdf = objects(&bytes);
+    let pages = kids(&pdf);
+    assert_eq!(pages.len(), 3);
+    check_outline(&pdf, reference(pdf[0], "/Outlines ").unwrap(), &pages, &mut 0, &[Outline("Main", &[Outline("B", &[]), Outline("A", &[])])]);
+    for (page, expected) in pages.iter().zip(["1 of 3", "2 of 3", "3 of 3"]) {
+        let text = extract(&pdf, *page);
+        assert!(text.lines().any(|line| line == expected), "missing {expected}: {text}");
+    }
+    assert!(extract(&pdf, pages[1]).lines().any(|line| line == "Index 2"));
+
+    let bytes = export(project, b).unwrap();
+    let pdf = objects(&bytes);
+    let pages = kids(&pdf);
+    assert_eq!(pages.len(), 1);
+    let text = extract(&pdf, pages[0]);
+    assert!(text.lines().any(|line| line == "3 of 3"));
+    assert!(text.lines().any(|line| line == "Index 3"));
+}
+
+/// The page content outside text objects, independent of that page's font codes.
+fn vector_ink<'a>(objects: &[&'a str], page: usize) -> Vec<&'a str> {
+    let id = reference(objects[page - 1], "/Contents ").unwrap();
+    let (_, stream) = objects[id - 1].split_once("\nstream\n").unwrap();
+    let mut sections = stream.split("BT\n");
+    std::iter::once(sections.next().unwrap()).chain(sections.map(|text| text.split_once("ET\n").unwrap().1)).collect()
+}
+
 /// The exporter accepts distinct occurrence IDs of the same definition without folding them.
 /// Until native repeated-instance authoring exists, only the extra occurrence is synthetic.
 #[test]
@@ -516,8 +562,12 @@ fn repeated_definition_has_two_destinations_and_reproducible_bytes() {
         ],
     );
     let first = extract(&objects, pages[2]);
+    let second = extract(&objects, pages[4]);
     assert!(first.lines().any(|line| line == "SHARED_INK"));
-    assert_eq!(extract(&objects, pages[4]), first);
+    assert!(first.lines().any(|line| line == "3 of 6"));
+    assert!(second.lines().any(|line| line == "5 of 6"));
+    assert!(first.lines().filter(|line| *line != "3 of 6").eq(second.lines().filter(|line| *line != "5 of 6")));
+    assert_eq!(vector_ink(&objects, pages[2]), vector_ink(&objects, pages[4]));
     for page in [pages[2], pages[4]] {
         let media = objects[page - 1].split_once("/MediaBox [0 0 ").unwrap().1.split_once(']').unwrap().0;
         let (width, height) = media.split_once(' ').unwrap();
