@@ -209,7 +209,7 @@ impl ColumnMapping {
                 } else if mapping.electrical_type.is_none()
                     && matches!(
                         norm.as_str(),
-                        "type" | "electrical type" | "electrical" | "elec" | "elec type" | "pin type" | "direction" | "io" | "i/o"
+                        "type" | "electrical type" | "electrical" | "elec" | "elec type" | "pin type" | "direction" | "dir" | "io" | "i/o"
                     )
                 {
                     mapping.electrical_type = Some(index);
