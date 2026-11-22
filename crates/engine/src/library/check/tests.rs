@@ -266,6 +266,44 @@ fn unaccounted_pad_is_a_finding() {
     assert!(check(&Capture::from_part_record(&accounted, &fixture.documents, &catalog).unwrap()).is_clean());
 }
 
+/// A symbol-less package carries no terminal map and is clean for `package.pad.unaccounted`,
+/// while a symbol-backed package with an empty map still reports every footprint pad.
+#[test]
+fn symbol_less_package_skips_unaccounted_pad_check_but_empty_symbol_map_reports_all_pads() {
+    let fixture = fixture();
+    let catalog = Catalog::bundled();
+    let mut symbol_less = Record::new_part(None).unwrap();
+    let Record::Part(part) = &mut symbol_less else { panic!("part expected") };
+    part.packages.insert(
+        "main".into(),
+        Package { name: "Main".into(), footprint: fixture.footprint.clone(), mapping: BTreeMap::new(), unconnected_pads: Vec::new() },
+    );
+    assert!(check(&Capture::from_part_record(&symbol_less, &fixture.documents, &catalog).unwrap()).is_clean());
+
+    let empty_map = connector_part(&fixture.footprint, &[], &[]);
+    let report = check(&Capture::from_part_record(&empty_map, &fixture.documents, &catalog).unwrap());
+    assert_eq!(
+        rules(&report),
+        [
+            RuleId::PackageTerminalUnmapped,
+            RuleId::PackageTerminalUnmapped,
+            RuleId::PackagePadUnaccounted,
+            RuleId::PackagePadUnaccounted,
+            RuleId::PackagePadUnaccounted,
+        ]
+    );
+    let unaccounted: Vec<_> = report
+        .findings()
+        .iter()
+        .filter(|finding| finding.rule == RuleId::PackagePadUnaccounted)
+        .map(|finding| match &finding.subject {
+            Subject::PackagePad { number, .. } => number.as_str(),
+            other => panic!("unexpected subject {other:?}"),
+        })
+        .collect();
+    assert_eq!(unaccounted, ["1", "2", "3"]);
+}
+
 /// Pad 3 assigned to two terminals is one finding measured two with a maximum of one.
 #[test]
 fn pad_mapped_twice_is_a_finding() {

@@ -69,6 +69,7 @@ pub struct PackageCapture {
     pub part: Reference,
     pub package: String,
     pub source: CaptureSource,
+    pub symbol: Option<Reference>,
     pub footprint: Reference,
     pub mapping: BTreeMap<String, Vec<String>>,
     pub unconnected_pads: Vec<String>,
@@ -120,7 +121,7 @@ pub enum RuleId {
     /// A symbol terminal has no pad in a package map.
     #[serde(rename = "package.terminal.unmapped")]
     PackageTerminalUnmapped,
-    /// A footprint pad is neither mapped nor explicitly unconnected.
+    /// A footprint pad on a package with a symbol is neither mapped nor explicitly unconnected.
     #[serde(rename = "package.pad.unaccounted")]
     PackagePadUnaccounted,
     /// A package names a pad number its footprint does not have.
@@ -488,6 +489,7 @@ impl Capture {
                     part: reference.clone(),
                     package: name.clone(),
                     source: source.clone(),
+                    symbol: part.symbol.clone(),
                     footprint: target.clone(),
                     mapping: package.mapping.clone(),
                     unconnected_pads: package.unconnected_pads.clone(),
@@ -567,9 +569,11 @@ pub fn check(capture: &Capture) -> Report {
         for number in package.mapping.values().flatten().chain(&package.unconnected_pads) {
             *assigned.entry(number.as_str()).or_default() += 1;
         }
-        for (number, occurrences) in &footprint {
-            if !assigned.contains_key(number) {
-                findings.push(Finding::new(RuleId::PackagePadUnaccounted, pad(number), 0, occurrences.clone()));
+        if package.symbol.is_some() {
+            for (number, occurrences) in &footprint {
+                if !assigned.contains_key(number) {
+                    findings.push(Finding::new(RuleId::PackagePadUnaccounted, pad(number), 0, occurrences.clone()));
+                }
             }
         }
         for (number, count) in &assigned {

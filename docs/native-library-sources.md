@@ -252,7 +252,7 @@ the authored pad `occurrences` it involves (`index` and 1-based `ordinal`), the
 | --- | --- |
 | `pad.number.repeated` | A footprint has more than one pad with the same number; one finding per number lists every occurrence. |
 | `package.terminal.unmapped` | A symbol terminal has no pad in a package map. |
-| `package.pad.unaccounted` | A footprint pad is neither mapped nor listed as unconnected. |
+| `package.pad.unaccounted` | A package with a symbol has a footprint pad that is neither mapped nor listed as unconnected. |
 | `package.pad.not_in_footprint` | A package names a pad number its footprint does not have. |
 | `package.pad.repeated` | A package assigns the same pad number more than once. |
 
