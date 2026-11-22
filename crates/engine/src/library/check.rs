@@ -13,6 +13,7 @@ use crate::{
     authoring::{Item, Kind, Primitive},
     board::definition::{FootprintDefinition, RectPad},
     part_authoring::Record,
+    persistence::reject_duplicate_json_keys,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -289,7 +290,10 @@ impl Transported {
         check_documents(documents).map_err(|reason| CheckError::Malformed { file: "documents".into(), reason })?;
         let library = documents
             .get("library.json")
-            .map(|text| parse_manifest(text).map(|manifest| manifest.id))
+            .map(|text| {
+                reject_duplicate_json_keys(text)?;
+                parse_manifest(text).map(|manifest| manifest.id)
+            })
             .transpose()
             .map_err(|reason| CheckError::Malformed { file: "library.json".into(), reason })?;
         let mut transported = Self::default();
@@ -308,6 +312,7 @@ impl Transported {
                 let pads = definition.pads.iter().enumerate().map(|(index, pad)| (u64::try_from(index).unwrap_or(u64::MAX), pad));
                 transported.footprints.push(capture_footprint(reference, CaptureSource::Document { path: path.clone() }, pads)?);
             } else if path.starts_with("symbols/") {
+                reject_duplicate_json_keys(text).map_err(|reason| malformed(&reason))?;
                 let symbol = parse_symbol(text).map_err(|reason| malformed(&reason))?;
                 let reference = Reference { library: library.into(), id: symbol.id.clone(), revision: symbol.revision() };
                 let terminals = symbol.pins().iter().map(|pin| pin.number.clone()).collect();

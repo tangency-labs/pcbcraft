@@ -404,3 +404,31 @@ fn editor_still_refuses_repeated_pad_numbers() {
     let source = NativeSource::load(&documents).unwrap();
     assert!(source.problems().iter().any(|problem| problem.starts_with(&fixture.footprint_path)), "{:?}", source.problems());
 }
+
+/// Repeated JSON keys in `library.json` or symbol documents (at top level or nested inside pins)
+/// are rejected before `serde_json::Value` decoding and surface as `InvalidParams`.
+#[test]
+fn repeated_keys_in_manifest_and_symbol_are_rejected_as_invalid_params() {
+    let mut fixture = fixture();
+    let symbol_path = fixture.documents.keys().find(|path| path.starts_with("symbols/")).unwrap().clone();
+    let cases = [
+        ("library.json".to_owned(), "\"name\":", "\"name\": \"Shadow\", \"name\":"),
+        (symbol_path.clone(), "\"name\":", "\"name\": \"Shadow\", \"name\":"),
+        (symbol_path.clone(), "\"number\":", "\"number\": \"99\", \"number\":"),
+    ];
+    for (target_path, needle, replacement) in cases {
+        let mut documents = fixture.documents.clone();
+        let original = documents[&target_path].clone();
+        let mutated = original.replacen(needle, replacement, 1);
+        assert_ne!(mutated, original, "expected {needle} in {target_path}");
+        documents.insert(target_path.clone(), mutated);
+
+        let error = Capture::from_documents(&documents, &Catalog::default()).unwrap_err();
+        assert!(
+            matches!(&error, CheckError::Malformed { file, reason } if *file == target_path && reason.contains("duplicate field")),
+            "expected duplicate-key Malformed error for {target_path}, got {error}"
+        );
+        let refused = fixture.session.execute(CHECK, &json!({"documents":documents})).unwrap_err();
+        assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
+    }
+}
