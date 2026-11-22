@@ -77,25 +77,36 @@ impl Draft {
             if self.value["pad"]["shape"] == "circle" {
                 hidden.push("height_nm");
             }
-            let mut kind = if self.value["pad"]["copper"] == "all_copper" { "through_hole" } else { "smd" }.to_owned();
+            let mut kind = if self.value["pad"].get("plated_slot").is_some() {
+                hidden.push("drill_nm");
+                "plated_slot"
+            } else if self.value["pad"]["copper"] == "all_copper" {
+                "through_hole"
+            } else {
+                "smd"
+            }
+            .to_owned();
             let before = kind.clone();
             properties::choice(
                 ui,
                 "Pad type",
                 egui::Id::unique("pad_type"),
                 &mut kind,
-                &[("smd", "SMD".into()), ("through_hole", "Through hole".into())],
+                &[("smd", "SMD".into()), ("through_hole", "Through hole".into()), ("plated_slot", "Plated slot".into())],
             );
             if kind != before {
                 self.value["pad"]["copper"] = json!(if kind == "smd" { "component_side" } else { "all_copper" });
-                self.value["pad"]["drill_nm"] = if kind == "smd" {
-                    Value::Null
-                } else {
-                    json!(
-                        self.value["pad"]["width_nm"].as_i64().unwrap_or(600_000).min(self.value["pad"]["height_nm"].as_i64().unwrap_or(600_000)) / 2
-                    )
-                };
-                self.numbers.remove(".pad.drill_nm");
+                let pad = &mut self.value["pad"];
+                let smaller_side = pad["width_nm"].as_i64().unwrap_or(600_000).min(pad["height_nm"].as_i64().unwrap_or(600_000));
+                pad["drill_nm"] = if kind == "through_hole" { json!(smaller_side / 2) } else { Value::Null };
+                if kind == "plated_slot" {
+                    pad["plated_slot"] = json!({"width_nm":(smaller_side / 4).max(1),"length_nm":(smaller_side / 2).max(1),"rotation_mdeg":0});
+                    hidden.push("drill_nm");
+                } else if let Some(fields) = pad.as_object_mut() {
+                    fields.remove("plated_slot");
+                    hidden.retain(|field| *field != "drill_nm");
+                }
+                self.numbers.retain(|path, _| path != ".pad.drill_nm" && !path.starts_with(".pad.plated_slot."));
             }
         }
         let old_shape = self.value["pad"]["shape"].clone();
@@ -193,6 +204,8 @@ fn label(path: &str) -> String {
             "default_value" => "Value".into(),
             "electrical_type" => "Electrical".into(),
             "length_nm" => "Length (mm)".into(),
+            "plated_slot" => "Slot".into(),
+            "rotation_mdeg" => "Rotation (°)".into(),
             "stroke_nm" => "Stroke (mm)".into(),
             "name_height_nm" => "Name size (mm)".into(),
             "number_height_nm" => "Number size (mm)".into(),
@@ -265,10 +278,17 @@ fn fields(ui: &mut Ui, value: &mut Value, numbers: &mut BTreeMap<String, (String
             pcbcraft_chrome::controls::checkbox(ui, value, label(path));
         }
         Value::Number(number) => {
-            let length = path.ends_with("_nm");
             let text = number
                 .as_i64()
-                .map(|n| if length { format!("{}", n as f64 / 1_000_000.0) } else { n.to_string() })
+                .map(|n| {
+                    if path.ends_with("_nm") {
+                        format!("{}", n as f64 / 1_000_000.0)
+                    } else if path.ends_with("_mdeg") {
+                        format_mdeg(n)
+                    } else {
+                        n.to_string()
+                    }
+                })
                 .unwrap_or_else(|| number.to_string());
             let field = numbers.entry(path.into()).or_insert_with(|| (text.clone(), text));
             properties::text(ui, &label(path), &mut field.1);
@@ -304,6 +324,8 @@ fn resolve(value: &mut Value, numbers: &BTreeMap<String, (String, String)>, path
         }
         let number = if path.ends_with("_nm") {
             units::parse_length(text, Unit::Mm).map_err(|e| format!("{}: {e}", label(path)))?
+        } else if path.ends_with("_mdeg") {
+            parse_mdeg(text).map_err(|e| format!("{} {e}", label(path)))?
         } else {
             text.parse::<i64>().map_err(|_| format!("{} must be a whole number.", label(path)))?
         };
@@ -364,6 +386,49 @@ fn priority(key: &str) -> usize {
     .position(|candidate| *candidate == key)
     .unwrap_or(100)
 }
+/// Format whole millidegrees as exact degrees without trailing fractional zeros.
+fn format_mdeg(mdeg: i64) -> String {
+    let frac = (mdeg % 1_000).unsigned_abs();
+    if frac == 0 {
+        (mdeg / 1_000).to_string()
+    } else {
+        let whole = mdeg / 1_000;
+        let sign = if mdeg < 0 && whole == 0 { "-" } else { "" };
+        let trimmed = format!("{frac:03}");
+        format!("{sign}{whole}.{}", trimmed.trim_end_matches('0'))
+    }
+}
+
+/// Parse a non-negative degree value in `[0, 360)` with up to three decimal places into whole millidegrees.
+fn parse_mdeg(text: &str) -> Result<i64, &'static str> {
+    const RANGE_ERR: &str = "must be at least 0° and less than 360°.";
+    let text = text.trim();
+    let text = text.strip_suffix('°').unwrap_or(text).trim();
+    if text.is_empty() {
+        return Err("must be a non-negative number in degrees (up to 3 decimal places).");
+    }
+    let (whole, frac) = match text.split_once('.') {
+        Some((w, f)) => (w, f),
+        None => (text, ""),
+    };
+    if whole.is_empty() && frac.is_empty() {
+        return Err("must be a non-negative number in degrees (up to 3 decimal places).");
+    }
+    if frac.len() > 3 || !whole.bytes().all(|b| b.is_ascii_digit()) || !frac.bytes().all(|b| b.is_ascii_digit()) {
+        return Err("must be a non-negative number in degrees (up to 3 decimal places).");
+    }
+    let whole: i64 = if whole.is_empty() { 0 } else { whole.parse().map_err(|_| RANGE_ERR)? };
+    let mut frac_mdeg: i64 = if frac.is_empty() { 0 } else { frac.parse().map_err(|_| RANGE_ERR)? };
+    for _ in frac.len()..3 {
+        frac_mdeg *= 10;
+    }
+    let mdeg = whole.checked_mul(1_000).and_then(|v| v.checked_add(frac_mdeg)).ok_or(RANGE_ERR)?;
+    if mdeg >= 360_000 {
+        return Err(RANGE_ERR);
+    }
+    Ok(mdeg)
+}
+
 /// Enum storage names remain unchanged while controls use ordinary readable labels.
 fn display(text: &str) -> String {
     let text = text.replace('_', " ");
@@ -392,5 +457,70 @@ mod category_tests {
         session.execute(0, draft.action().unwrap()).unwrap();
         assert_eq!(session.snapshot().category, symbol.category);
         assert_eq!(session.snapshot().export_native().unwrap()["format"], "pcbcraft-symbol/3");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod slot_form_tests {
+    use super::*;
+    use pcbcraft_engine::{
+        authoring::Primitive,
+        board::{
+            definition::{CopperBinding, PadShape},
+            slot::PlatedSlot,
+        },
+    };
+
+    /// Slot rotation uses degrees in the editor form while storing whole millidegrees.
+    #[test]
+    fn slot_rotation_field_formats_and_parses_degrees() {
+        assert_eq!(label(".pad.plated_slot.rotation_mdeg"), "Slot Rotation (°)");
+        assert_eq!(format_mdeg(0), "0");
+        assert_eq!(format_mdeg(30_000), "30");
+        assert_eq!(format_mdeg(30_500), "30.5");
+        assert_eq!(format_mdeg(30_050), "30.05");
+        assert_eq!(format_mdeg(30_005), "30.005");
+        assert_eq!(format_mdeg(359_999), "359.999");
+
+        assert_eq!(parse_mdeg("0"), Ok(0));
+        assert_eq!(parse_mdeg("30"), Ok(30_000));
+        assert_eq!(parse_mdeg("30.5"), Ok(30_500));
+        assert_eq!(parse_mdeg("30.05"), Ok(30_050));
+        assert_eq!(parse_mdeg("30.005"), Ok(30_005));
+        assert_eq!(parse_mdeg("30.5°"), Ok(30_500));
+        assert_eq!(parse_mdeg("359.999"), Ok(359_999));
+        for invalid in ["", "  ", ".", "-5", "30,5", "30.1234", "360", "400", "abc"] {
+            assert!(parse_mdeg(invalid).is_err(), "{invalid:?} should be rejected");
+        }
+        assert_eq!(parse_mdeg("360").unwrap_err(), "must be at least 0° and less than 360°.");
+        assert_eq!(parse_mdeg("99999999999999999999").unwrap_err(), "must be at least 0° and less than 360°.");
+
+        let item = Item::new(Kind::Footprint).unwrap();
+        let mut session = Session::new(item, false).unwrap();
+        let Primitive::Pad { mut pad } = session.snapshot().objects.get(&1).cloned().unwrap() else { panic!("expected pad 1") };
+        pad.width_nm = 2_400_000;
+        pad.height_nm = 1_200_000;
+        pad.shape = PadShape::Rectangle;
+        pad.corner_radius_nm = 0;
+        pad.copper = CopperBinding::AllCopper;
+        pad.drill_nm = None;
+        pad.plated_slot = Some(PlatedSlot::new(600_000, 1_400_000, 0).unwrap());
+        session.execute(0, Action::Replace { object: 1, primitive: Primitive::Pad { pad } }).unwrap();
+
+        let mut draft = Draft::new(&session.snapshot(), Some(1), session.revision());
+        draft.numbers.insert(".pad.plated_slot.rotation_mdeg".into(), ("0".into(), "30.5".into()));
+        let Action::Replace { object: 1, primitive: Primitive::Pad { pad } } = draft.action().unwrap() else {
+            panic!("expected pad replacement");
+        };
+        assert_eq!(pad.plated_slot.unwrap().dimensions(), (600_000, 1_400_000, 30_500));
+
+        draft.numbers.insert(".pad.plated_slot.rotation_mdeg".into(), ("0".into(), "30.1234".into()));
+        let error = draft.action().unwrap_err();
+        assert!(error.contains("Slot Rotation (°)"), "{error}");
+
+        draft.numbers.insert(".pad.plated_slot.rotation_mdeg".into(), ("0".into(), "360".into()));
+        let error = draft.action().unwrap_err();
+        assert_eq!(error, "Slot Rotation (°) must be at least 0° and less than 360°.");
     }
 }

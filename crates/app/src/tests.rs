@@ -2007,6 +2007,107 @@ mod live_mcp {
         assert!(Arc::ptr_eq(&predecessor, &session.snapshot().unwrap()));
     }
 
+    /// Preview, apply and undo a live sheet-scoped transfer with a large off-screen graph.
+    #[test]
+    fn package_completion_live_transfer_preserves_scope_and_history() {
+        use pcbcraft_engine::{COMPLETE_PACKAGES, CONNECT_PINS, library::sources, sheets::CREATE_SHEET};
+
+        const BACKGROUND_SYMBOLS: usize = 1_024;
+        const BACKGROUND_WIRES: usize = 256;
+        let mut h = harness();
+        new_project(&mut h);
+        let (sheet, host, donor) = {
+            let session = &mut h.state_mut().session;
+            session
+                .execute(
+                    sources::LOAD,
+                    &json!({"source":"completion-test","documents":{
+                        "library.json":include_str!("../../../examples/native-parts/library.json"),
+                        "symbols/dual.json":include_str!("../../../examples/native-parts/symbols/dual-amplifier.json"),
+                    }}),
+                )
+                .unwrap();
+            let definition = session.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+            let digest = sources::symbol_digest(&definition).unwrap();
+            let sheet = session.project().unwrap().sheet_target();
+            for (unit, x) in [("a", 0), ("b", 25_400_000)] {
+                session
+                    .apply(
+                        PLACE_SYMBOL,
+                        &json!({"library":"parts-demo","definition":"dual-amplifier","definition_revision":1,
+                    "definition_digest":digest,"sheet":sheet.id(),"unit":unit,"x_nm":x,"y_nm":0,"expected_revision":session.revision()}),
+                    )
+                    .unwrap();
+            }
+            let symbols = session.project().unwrap().symbols();
+            let host = symbols[0].clone();
+            let donor = symbols[1].clone();
+            session
+                .apply(
+                    CONNECT_PINS,
+                    &json!({"sheet":sheet.id(),"from":{"symbol":donor.id(),"terminal":"5"},
+                "to":{"symbol":donor.id(),"terminal":"6"},"expected_revision":session.revision()}),
+                )
+                .unwrap();
+            session.apply(CREATE_SHEET, &json!({"name":"Background","expected_revision":session.revision()})).unwrap();
+            let background = session.project().unwrap().sheets().nth(1).unwrap().target;
+            for i in 0..BACKGROUND_SYMBOLS as i64 {
+                session
+                    .apply(
+                        PLACE_SYMBOL,
+                        &json!({"definition":"resistor","sheet":background.id(),"auto_heal":false,
+                    "x_nm":(i%32)*25_400_000,"y_nm":(i/32)*25_400_000,"expected_revision":session.revision()}),
+                    )
+                    .unwrap();
+            }
+            let ids: Vec<_> = session.project().unwrap().for_sheet(background).unwrap().symbols().iter().map(|s| s.id()).collect();
+            assert_eq!(ids.len(), BACKGROUND_SYMBOLS);
+            for pair in ids.as_chunks::<2>().0.iter().take(BACKGROUND_WIRES) {
+                session
+                    .apply(
+                        CONNECT_PINS,
+                        &json!({"sheet":background.id(),"from":{"symbol":pair[0],"terminal":"2"},
+                    "to":{"symbol":pair[1],"terminal":"1"},"expected_revision":session.revision()}),
+                    )
+                    .unwrap();
+            }
+            assert_eq!(session.project().unwrap().for_sheet(background).unwrap().wires().len(), BACKGROUND_WIRES);
+            (sheet, host, donor)
+        };
+        h.run();
+        let (port, token) = connect(&mut h);
+        let before = h.state().session.snapshot().unwrap();
+        let revision = h.state().session.revision();
+        let expected_net = before.electrical_connectivity();
+        let expected_pin = before.wires()[0].terminals()[0];
+        let expected_name = expected_net.net_name(expected_net.net_index_for(expected_pin).unwrap());
+        let request = |dry_run| {
+            json!({"command":COMPLETE_PACKAGES,"inspect":false,"params":{
+            "scope":"sheet","sheet":sheet.id(),"dry_run":dry_run,"expected_revision":revision}})
+        };
+        let preview = payload(tool(&mut h, (port, &token), "execute", request(true)));
+        assert_eq!(preview["revision"], revision);
+        assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+        assert_eq!(preview["changes"][0]["symbol"], donor.id());
+        assert_eq!(preview["changes"][0]["to_part"], host.component_id());
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+
+        let apply = payload(tool(&mut h, (port, &token), "execute", request(false)));
+        assert_eq!(apply["revision"], revision + 1);
+        assert_eq!(apply["changes"], preview["changes"]);
+        let after = h.state().session.snapshot().unwrap();
+        assert_eq!(after.symbols()[1].id(), donor.id());
+        assert_eq!(after.symbols()[1].component_id(), host.component_id());
+        assert_eq!(after.wires(), before.wires());
+        let net = after.electrical_connectivity();
+        assert_eq!(net.net_name(net.net_index_for(expected_pin).unwrap()), expected_name);
+        let stale = tool(&mut h, (port, &token), "execute", request(false));
+        assert_eq!(stale["structuredContent"]["error"]["code"], "stale_revision");
+        assert!(Arc::ptr_eq(&after, &h.state().session.snapshot().unwrap()));
+        h.state_mut().session.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+    }
+
     /// Run a window command over the live connection and return the editor inspection it answers.
     fn window(harness: &mut Harness<'_, PcbApp>, connection: (u16, &str), command: &str, params: Value) -> Value {
         payload(tool(harness, connection, "execute", json!({"command": command, "params": params})))

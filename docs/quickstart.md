@@ -394,8 +394,15 @@ and review again after a concurrent edit.
 Inspection reports `designator_locked` even when false. Automatic annotation and
 its skipped-item report are not implemented yet; the engine's
 `PartInstance::can_annotate_designator()` predicate exposes this lock policy for
-that implementation. Unit-letter locks and package completion remain separate
-work. See the [storage contract](native-project-storage.md#designator-locks).
+that implementation. There is no separate unit-letter lock. See the
+[storage contract](native-project-storage.md#designator-locks).
+
+### Complete loose packages
+
+To group equivalent loose units, opt in through the headless or live MCP
+[`schematic.complete_packages`](mcp.md#native-part-definitions-and-quantities)
+command. Preview with `dry_run: true` before applying. Locked owners stay as
+placed; ordinary placement does not complete packages automatically.
 
 ## Inspect a board beside its schematic
 
@@ -816,8 +823,11 @@ Closing a pane retains its definition and unfinished Properties fields; the
 last window still asks about unsaved work.
 
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
-To make a plated hole, set Layers to All copper and enter a positive drill smaller
-than the land. Corner radius is zero for rectangular/circular pads.
+For a round plated hole, choose **Through hole** and enter a positive drill
+smaller than the land. For an obround cut-out, choose **Plated slot**, then set
+its finished width, overall length and independent rotation (in degrees, up to 3 decimal places).
+The entire opening must fit inside the copper. Corner radius is zero for
+rectangular and circular lands. Fabrication export does not yet machine slots.
 
 For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
 pins, enter each other's numbers and choose **Preview current nets** before
