@@ -2,7 +2,7 @@
 pub(crate) mod commands;
 pub(crate) mod storage;
 use crate::library::{
-    parts::{ManufacturerPart, Reference, Requirement, Value},
+    parts::{ManufacturerPart, Reference, Requirement, SupplyRange, Value},
     sources::ResolvedPart,
 };
 pub use commands::{PLACE_PART, SET_PART};
@@ -48,6 +48,7 @@ impl Selection {
         if part.symbol.as_ref() != Some(&Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision() }) {
             return Err("Pinned part symbol identity mismatch.".into());
         }
+        part.validate_rating_terminals(Some(symbol))?;
         if self.package.as_ref().is_some_and(|id| !part.packages.contains_key(id)) {
             return Err("Unavailable part package variant.".into());
         }
@@ -72,6 +73,11 @@ impl Selection {
             manufacturer.validate_part(&self.resolved)?;
         }
         Ok(())
+    }
+    /// Read a terminal's supply range from the pinned reusable device. An orderable or
+    /// instance requirement cannot override it, and a missing bound stays unknown.
+    pub fn supply_range(&self, terminal: &str) -> Option<&SupplyRange> {
+        self.resolved.definition.supply_range(terminal)
     }
     /// Effective requirements include fixed values, even if the instance does not repeat them.
     pub fn effective_requirements(&self) -> BTreeMap<String, Requirement> {
