@@ -162,6 +162,10 @@ fn unroute_preparation_yields_and_preserves_report() {
             assert!(job.take_result().unwrap().is_none());
         }
         assert!(pending > 1);
+        let finished = job.progress();
+        assert_eq!(finished.stage, "Prepared");
+        assert!(job.step(budget), "stepping a completed unroute must not restart it");
+        assert_eq!(job.progress(), finished);
         let prepared = job.take_result().unwrap().unwrap();
         let (unchanged, report) = session.commit_copper_edit_with_report(prepared).unwrap();
         assert_eq!(unchanged, revision);

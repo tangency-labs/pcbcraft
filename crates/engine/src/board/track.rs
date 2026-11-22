@@ -41,8 +41,10 @@ pub(crate) use unroute::{pad_address, pad_address_schema};
 /// Lock or unlock explicitly addressed tracks and vias without changing geometry.
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
 
+pub(crate) mod chains;
 mod locks;
 pub mod preparation;
+pub mod replacements;
 pub(crate) use locks::protect_locked;
 #[cfg(test)]
 mod capacity_tests;
@@ -834,6 +836,13 @@ impl Session {
     }
 }
 
+/// Private geometry candidate plus the exact identities the later validators must examine.
+struct CandidateEdit {
+    candidate: Option<Project>,
+    added: BTreeSet<Uuid>,
+    replacements: Option<BTreeMap<Uuid, Uuid>>,
+}
+
 /// Count-checked route input, still without sizes or allocated board item identities.
 struct RouteAddition {
     layer: Uuid,
@@ -874,7 +883,7 @@ fn route_addition(project: &Project, params: &Value) -> Result<RouteAddition, Co
 /// Edit a private candidate without publishing. Refuse inevitable count overflow before
 /// resolving source-contact defaults (which may build connectivity) or allocating identities.
 /// Preparation validates final membership and explicit hard limits before publication.
-fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<CandidateEdit, CommandError> {
     let route = (command == ADD_TRACKS).then(|| route_addition(project, params)).transpose()?;
     let via_at = if command == ADD_VIA {
         let at: Point = param(params, "at")?;
@@ -1000,12 +1009,12 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
             assigned.insert(via.id);
         }
         if assigned.is_empty() {
-            return Ok((None, assigned));
+            return Ok(CandidateEdit { candidate: None, added: assigned, replacements: None });
         }
         let mut next = next;
         std::sync::Arc::make_mut(&mut next.board).vias = vias;
         protect_locked(original, &next)?;
-        return Ok((Some(next), assigned));
+        return Ok(CandidateEdit { candidate: Some(next), added: assigned, replacements: None });
     } else if command == MOVE_TRACKS {
         let moved_tracks = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
         let moved_vias = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
@@ -1069,16 +1078,21 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         tracks.retain(|track| !gone_tracks.contains(&track.id));
         vias.retain(|via| !gone_vias.contains(&via.id));
     }
+    let replacements = if command == ADD_TRACKS {
+        params.get("replacements").map(|value| replacements::apply(&mut tracks, value, &mut added)).transpose()?
+    } else {
+        None
+    };
     validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
     if tracks == project.board.tracks && vias == project.board.vias {
-        return Ok((None, added));
+        return Ok(CandidateEdit { candidate: None, added, replacements });
     }
     let mut next = project.clone();
     let board = std::sync::Arc::make_mut(&mut next.board);
     board.tracks = tracks;
     board.vias = vias;
     protect_locked(project, &next)?;
-    Ok((Some(next), added))
+    Ok(CandidateEdit { candidate: Some(next), added, replacements })
 }
 
 /// Describe a route's layer changes for command clients.
