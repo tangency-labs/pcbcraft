@@ -373,7 +373,8 @@ fn format_one_part_without_symbol_is_an_error_while_format_two_is_accepted() {
     let error = Capture::from_documents(&legacy, &Catalog::default()).unwrap_err();
     assert_eq!(error, CheckError::UnsupportedFormat { file: path.clone(), format: LEGACY_PART_FORMAT.into() });
 
-    let metadata_only = Documents::from([("library.json".into(), manifest), (path, part(PART_FORMAT))]);
+    let metadata_part = part(PART_FORMAT);
+    let metadata_only = Documents::from([("library.json".into(), manifest), (path, metadata_part)]);
     let capture = Capture::from_documents(&metadata_only, &Catalog::default()).unwrap();
     assert!(check(&capture).is_clean());
 }
