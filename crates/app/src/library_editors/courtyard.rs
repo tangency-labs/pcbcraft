@@ -1046,6 +1046,53 @@ mod tests {
         assert_eq!(courtyard::courtyard_polygon(&after_undo.objects[&cy_id]).unwrap().0[0], orig_v0);
     }
 
+    /// A hand-drawn courtyard takes the selected drawing stroke width, whether it closes on the
+    /// first vertex or with Enter, instead of the generator's default width.
+    #[test]
+    fn drawn_courtyard_uses_the_selected_stroke_width() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+        zoom_out(&mut h, id, 4.0);
+        let area = h.get_by_label("Library canvas").rect();
+        let stroke_nm = 200_000;
+        assert_ne!(stroke_nm, courtyard::DEFAULT_STROKE_NM);
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().drawing_stroke_nm = stroke_nm;
+        let (p0, p1, p2) = {
+            let doc = &h.state().library_editors.documents[&id];
+            (
+                doc.camera.screen(Point { x_nm: -1_000_000, y_nm: -500_000 }, area),
+                doc.camera.screen(Point { x_nm: 1_000_000, y_nm: -500_000 }, area),
+                doc.camera.screen(Point { x_nm: 0, y_nm: 1_000_000 }, area),
+            )
+        };
+        for close_with_enter in [false, true] {
+            h.hover_at(area.center());
+            h.run();
+            h.key_press(egui::Key::C);
+            h.run();
+            click_at(&mut h, p0);
+            click_at(&mut h, p1);
+            click_at(&mut h, p2);
+            if close_with_enter {
+                h.key_press(egui::Key::Enter);
+                h.run();
+            } else {
+                click_at(&mut h, p0);
+            }
+            let doc = &h.state().library_editors.documents[&id];
+            assert!(doc.error.is_none(), "{:?}", doc.error);
+            let drawn = doc.selected.unwrap();
+            let snap = doc.session.snapshot();
+            let (pts, stroke) = courtyard::courtyard_polygon(&snap.objects[&drawn]).unwrap();
+            assert_eq!(pts.len(), 3);
+            assert_eq!(stroke, stroke_nm, "close_with_enter={close_with_enter}");
+            crate::tests::click(&mut h, "Undo Library Edit");
+        }
+    }
+
     /// Generate Courtyard dialog refuses a stale revision, rebases to the current document
     /// revision with guidance, and succeeds on the second Generate click.
     #[test]

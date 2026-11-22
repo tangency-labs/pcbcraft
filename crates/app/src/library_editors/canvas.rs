@@ -830,11 +830,8 @@ impl Document {
                             points.push(at);
                         }
                         if closing || points.len() >= pcbcraft_engine::authoring::courtyard::MAX_VERTICES {
-                            let result = pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(
-                                points,
-                                pcbcraft_engine::authoring::courtyard::DEFAULT_STROKE_NM,
-                            )
-                            .and_then(|primitive| self.execute(revision, Action::Insert { primitive }));
+                            let result = pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(points, self.drawing_stroke_nm)
+                                .and_then(|primitive| self.execute(revision, Action::Insert { primitive }));
                             if result.is_ok() {
                                 self.show_courtyard = true;
                                 self.tool = Tool::Select;
@@ -1026,11 +1023,8 @@ impl Document {
                             }
                         }
                         Tool::Courtyard { points, revision } => {
-                            match pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(
-                                points,
-                                pcbcraft_engine::authoring::courtyard::DEFAULT_STROKE_NM,
-                            )
-                            .and_then(|primitive| self.execute(revision, Action::Insert { primitive }))
+                            match pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(points, self.drawing_stroke_nm)
+                                .and_then(|primitive| self.execute(revision, Action::Insert { primitive }))
                             {
                                 Ok(()) => {
                                     self.show_courtyard = true;
