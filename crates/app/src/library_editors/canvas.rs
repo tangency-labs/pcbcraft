@@ -987,10 +987,13 @@ impl Document {
                     // With a courtyard vertex selected, Backspace only ever targets that vertex:
                     // pending property edits refuse it instead of falling through to deleting
                     // the whole outline. Without a selected vertex it deletes the selection.
+                    // Read the outline after this frame's edits: a midpoint click earlier in the
+                    // same frame has already inserted the vertex that is now selected.
+                    let current = self.session.snapshot();
                     if self.show_courtyard
-                        && let Some((object, pts, _)) = self.selected_courtyard(&item)
+                        && let Some((object, pts, _)) = self.selected_courtyard(&current)
                         && let Some(vertex) = self.selected_vertex
-                        && let Some(primitive) = item.objects.get(&object)
+                        && let Some(primitive) = current.objects.get(&object)
                     {
                         if self.pending() {
                             self.error = Some("Apply or reset the property fields before removing a vertex.".into());

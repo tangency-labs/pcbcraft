@@ -1968,4 +1968,49 @@ mod tests {
         assert!(courtyard::courtyard_polygon(&doc.session.snapshot().objects[&pasted]).is_some());
         assert_eq!(doc.selected_vertex, None);
     }
+
+    /// A Backspace that arrives in the same frame as a midpoint click removes the vertex that
+    /// click inserted, so the outline returns to its original corners, rather than reading the
+    /// frame-start outline and removing the old vertex at that index.
+    #[test]
+    fn courtyard_backspace_in_midpoint_click_frame_removes_the_inserted_vertex() {
+        let (mut h, id, cy_id) = harness_with_generated_courtyard();
+        let area = h.get_by_label("Library canvas").rect();
+        let (original, mid_screen) = {
+            let doc = &h.state().library_editors.documents[&id];
+            let snap = doc.session.snapshot();
+            let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+            (pts.to_vec(), doc.camera.screen(courtyard::edge_midpoint(pts, 1).unwrap(), area))
+        };
+        assert_eq!(original.len(), 4);
+        let revision = h.state().library_editors.documents[&id].session.revision();
+
+        h.hover_at(mid_screen);
+        h.run();
+        h.event(egui::Event::PointerButton {
+            pos: mid_screen,
+            button: egui::PointerButton::Primary,
+            pressed: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+        // The release completes the midpoint click; Backspace is queued into the same frame.
+        h.event(egui::Event::PointerButton {
+            pos: mid_screen,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.key_press(egui::Key::Backspace);
+        h.run_steps(1);
+        h.run();
+
+        let doc = &h.state().library_editors.documents[&id];
+        assert_eq!(doc.session.revision(), revision + 2, "insert and remove are two edits");
+        let snap = doc.session.snapshot();
+        let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+        assert_eq!(pts, original.as_slice());
+        assert_eq!(doc.selected_vertex, Some(2));
+        assert_eq!(doc.error, None);
+    }
 }
