@@ -1877,4 +1877,48 @@ mod tests {
         assert!(courtyard::with_moved_vertex(original, 0, Point { x_nm: -1_500_000, y_nm: -1_000_000 }).is_ok());
         assert_eq!(doc.session.snapshot().objects.get(&cy_id), Some(original));
     }
+
+    /// Pasting a copy of the selected courtyard, as Duplicate does, selects the copy with no
+    /// vertex chosen, so Backspace cannot remove a vertex the person never picked on it. An
+    /// edit that keeps the same outline selected keeps its chosen vertex.
+    #[test]
+    fn courtyard_vertex_selection_clears_when_an_edit_selects_another_object() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let doc = app.library_editors.documents.get_mut(&id).unwrap();
+        let cy_id = doc.selected.unwrap();
+        let snapshot = doc.session.snapshot();
+        let original = &snapshot.objects[&cy_id];
+        let (points, _) = courtyard::courtyard_polygon(original).unwrap();
+        assert!(points.len() > 2);
+
+        // Positive control: an edit of the same outline keeps the chosen vertex.
+        doc.selected_vertex = Some(2);
+        let candidate = courtyard::with_inserted_vertex(original, 0, courtyard::edge_midpoint(points, 0).unwrap()).unwrap();
+        let revision = doc.session.revision();
+        doc.execute(revision, Action::Replace { object: cy_id, primitive: candidate }).unwrap();
+        assert_eq!(doc.selected, Some(cy_id));
+        assert_eq!(doc.selected_vertex, Some(2));
+
+        let copy = doc.session.snapshot().objects[&cy_id].clone();
+        let revision = doc.session.revision();
+        doc.execute(revision, Action::Paste { primitives: vec![copy], offset: Point { x_nm: 1_000_000, y_nm: 0 } }).unwrap();
+        let pasted = doc.selected.unwrap();
+        assert_ne!(pasted, cy_id);
+        assert!(courtyard::courtyard_polygon(&doc.session.snapshot().objects[&pasted]).is_some());
+        assert_eq!(doc.selected_vertex, None);
+    }
 }

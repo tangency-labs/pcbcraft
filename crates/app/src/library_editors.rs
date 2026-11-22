@@ -393,6 +393,7 @@ impl Document {
         }
         let selecting_unit = matches!(&action, Action::SelectUnit { .. } | Action::AddUnit { .. });
         let remapping = matches!(&action, Action::RemapPins { .. });
+        let previous_selected = self.selected;
         let old = self.session.snapshot();
         self.session.execute(revision, action)?;
         let next = self.session.snapshot();
@@ -411,6 +412,10 @@ impl Document {
         self.tool = canvas::Tool::Select;
         if self.selected.is_some_and(|id| !self.session.snapshot().objects.contains_key(&id)) {
             self.selected = None;
+        }
+        // A vertex index belongs to the outline it was chosen on, never to a newly selected copy.
+        if self.selected != previous_selected {
+            self.selected_vertex = None;
         }
         if let Some(id) = self.selected
             && let Some((points, _)) = next.objects.get(&id).and_then(pcbcraft_engine::authoring::courtyard::courtyard_polygon)
