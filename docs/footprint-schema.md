@@ -7,13 +7,13 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-In board formats 34 and 35, the placed footprint owns `locked`, an optional
+In board formats 34, 35, and 37, the placed footprint owns `locked`, an optional
 boolean that defaults to false and is omitted by fresh canonical encoding when
-false. An active footprint lock requires format 34, or 35 when arcs are also
-present; the flag does not change
-the pinned library definition or mapping. This is
-[storage and inspection only](pcb-layout-workflow.md#footprint-lock-metadata-storage-only),
-not a lock command or edit-protection contract. The historical format-15
+false. Boards with active footprint locks use format 34, format 35 with arcs,
+or format 37 with straight-via teardrops. The flag leaves the pinned library
+definition and mapping unchanged. See
+[the placement edit policy](pcb-layout-workflow.md#placed-footprint-locks) for the
+commands that respect this flag. The historical format-15
 placement schema below remains frozen and does not accept this newer field.
 
 Board format 15 adds local reference position and print overrides. Earlier board
@@ -42,7 +42,7 @@ Additional arguments accept standalone native definitions. By default,
 `--placement` checks one historical format-15 physical placement record. Use
 `--placement-version 17` for the historical format-17 mapping described in the
 [part schema guide](part-schema.md). Use the native board reader to validate
-formats 34 and 35.
+formats 34, 35, and 37.
 
 ```sh
 python3 scripts/check-footprint-schemas.py

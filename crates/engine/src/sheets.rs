@@ -287,7 +287,7 @@ impl Session {
                 let removed = Arc::make_mut(&mut project.sheets).remove(index);
                 for symbol in removed.symbols.iter() {
                     if !project.all_symbols().any(|other| other.component == symbol.component) {
-                        project.retire_component(symbol.component);
+                        project.retire_component(symbol.component)?;
                     }
                     Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
                 }

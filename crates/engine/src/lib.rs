@@ -2942,10 +2942,17 @@ impl Project {
     /// Retire one live part through the board's accepted-state policy. Last
     /// visible shared fields become retained display metadata; package/terminal
     /// and connection acceptance remain unchanged until a reviewed update.
-    pub(crate) fn retire_component(&mut self, id: u64) {
+    /// Refuse retirement if it would immediately remove a locked footprint.
+    pub(crate) fn retire_component(&mut self, id: u64) -> Result<(), CommandError> {
+        if !self.board.retains_retired_component(id)
+            && let Some(footprint) = self.board.footprint_for_part_instance(id)
+        {
+            board::transform::require_unlocked_placements(self, [Some(footprint)])?;
+        }
         let component = Arc::make_mut(&mut self.components).remove(&id);
         Arc::make_mut(&mut self.schematic_packages).remove_component(id);
         Arc::make_mut(&mut self.board).remove_component(id, component.as_ref());
+        Ok(())
     }
 
     /// Return the owning component's reference, or empty text for a foreign placement.
@@ -4263,9 +4270,8 @@ impl Session {
         Ok(())
     }
 
-    /// Remove a unit and its wires. Removing the last unit retires its live component;
-    /// an enabled accepted baseline retains its physical footprint pending review.
-    /// Legacy mode removes that footprint immediately. Undo restores the full snapshot.
+    /// Remove a unit and its wires. Retiring the last unit keeps an accepted footprint
+    /// for review or removes an unaccepted placement if unlocked. Undo restores the snapshot.
     fn delete_symbol(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -4278,7 +4284,7 @@ impl Session {
         project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
         if !project.all_symbols().any(|other| other.component == symbol.component) {
-            project.retire_component(symbol.component);
+            project.retire_component(symbol.component)?;
         }
         project.sheet_mut().connectivity = Arc::default();
         self.change(project)?;
