@@ -218,6 +218,46 @@ fn copper_at_a_cut_out_edge_keeps_the_edge_findings() {
     assert_eq!(near[0].kind, Kind::EdgeClearance);
 }
 
+/// Copper that starts inside a cut-out and crosses both the cut-out boundary and the outer
+/// outline still names the cut-out drawing, even when the outer outline has a lower UUID.
+/// Copper outside every closed contour keeps the existing outer-outline result.
+#[test]
+fn copper_crossing_cut_out_and_outer_outline_names_cut_out_even_with_lower_outer_uuid() {
+    let mut s = routed_fixture();
+    let outer_orig = outline_square(&mut s, -5, -5, 40);
+    let cut_out_orig = outline_square(&mut s, 5, 15, 10);
+    let crossing = track_mm(&mut s, (10., 20.), (-10., 20.));
+    let outside = track_mm(&mut s, (-15., 20.), (-12., 20.));
+
+    let outer_id = Uuid::from_u128(1);
+    let cut_out_id = Uuid::from_u128(2);
+    assert!(outer_id < cut_out_id);
+    let mut project = (*s.snapshot().unwrap()).clone();
+    for drawing in &mut std::sync::Arc::make_mut(&mut project.board).drawings.as_mut().unwrap().items {
+        if drawing.id == outer_orig {
+            drawing.id = outer_id;
+        } else if drawing.id == cut_out_orig {
+            drawing.id = cut_out_id;
+        }
+    }
+    let board_view = project.board_view(project.board_target().unwrap()).unwrap();
+    let report = board_view.check_design(Rules::default());
+    let found = outline_findings(&report, &crossing);
+    assert_eq!(found.len(), 1, "{report:#?}");
+    assert_eq!(found[0].kind, Kind::OutsideBoard);
+    assert_eq!(found[0].message, "Copper lies inside a board cut-out");
+    assert_eq!(found[0].items, vec![crossing, cut_out_id.to_string()]);
+
+    let far = outline_findings(&report, &outside);
+    assert_eq!(far.len(), 1, "{report:#?}");
+    assert_eq!(far[0].kind, Kind::OutsideBoard);
+    assert_eq!(far[0].message, "Copper lies outside the Board Outline");
+    assert_eq!(far[0].items, vec![outside]);
+    let outline = board_view.outline_edges();
+    let far_contour = Contour::capsule(Point { x_nm: -15_000_000, y_nm: 20_000_000 }, Point { x_nm: -12_000_000, y_nm: 20_000_000 }, 125_000.);
+    assert_eq!(outline.blocking_edge(&far_contour, true).map(|(id, _, _)| id), Some(outer_id));
+}
+
 /// A contour nested inside the cut-out is board again. Copper on that island is legal; copper
 /// in the cut-out next to the island is still off the board and names the cut-out, not the
 /// nearer island.

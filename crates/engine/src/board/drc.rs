@@ -612,17 +612,41 @@ impl Outline {
         Some(self.polygons.iter().zip(&self.drawings).filter(|(polygon, _)| in_polygon(point, polygon)).map(|(_, drawing)| *drawing).collect())
     }
 
+    /// The innermost closed drawing enclosing the copper's first off-board anchor when that
+    /// anchor lies inside a cut-out (disjoint nested contours), or `None` when every anchor is
+    /// on the board or the first off-board anchor lies outside every closed contour.
+    fn innermost_cut_out(&self, contour: &Contour) -> Option<Uuid> {
+        let point = contour.core.iter().copied().find(|point| !self.on_board(*point))?;
+        let enclosing: Vec<(usize, &[Point], Uuid)> = self
+            .polygons
+            .iter()
+            .zip(&self.drawings)
+            .enumerate()
+            .filter(|(_, (polygon, _))| in_polygon(point, polygon))
+            .map(|(index, (polygon, drawing))| (index, polygon.as_slice(), *drawing))
+            .collect();
+        enclosing
+            .iter()
+            .map(|&(i, poly, drawing)| {
+                let depth = enclosing.iter().filter(|&&(j, outer, _)| j != i && poly.first().is_some_and(|&v| in_polygon(v, outer))).count();
+                (depth, drawing)
+            })
+            .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)))
+            .map(|(_, drawing)| drawing)
+    }
+
     /// Address the blocking drawing and the gap measured to its edge. For off-board copper use
-    /// the nearest closed path (open paths cannot enclose copper); inside a cut-out only the
-    /// contours around the copper count, so the nearest of them is the cut-out itself and not an
-    /// island inside it. Otherwise prefer crossing edges over merely near or touching ones.
-    /// Break distance ties by drawing UUID.
+    /// the nearest closed path (open paths cannot enclose copper); inside a cut-out restrict
+    /// candidate edges to the innermost closed contour enclosing the off-board anchor, so copper
+    /// that crosses both the cut-out and an outer contour still names the cut-out. Otherwise
+    /// prefer crossing edges over merely near or touching ones. Break distance ties by drawing
+    /// UUID.
     pub(super) fn blocking_edge(&self, contour: &Contour, outside: bool) -> Option<(Uuid, f64, bool)> {
-        let around = if outside { self.off_board(contour).unwrap_or_default() } else { Vec::new() };
+        let target = if outside { self.innermost_cut_out(contour) } else { None };
         self.edges
             .iter()
             .filter(|edge| !outside || edge.closed)
-            .filter(|edge| around.is_empty() || around.contains(&edge.drawing))
+            .filter(|edge| target.is_none_or(|drawing| edge.drawing == drawing))
             .map(|edge| {
                 let (gap, crosses) = edge.measure(contour);
                 (edge.drawing, gap, crosses)
