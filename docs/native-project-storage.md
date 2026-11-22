@@ -221,6 +221,11 @@ package footprint is pinned, including unselected variants. Missing or
 conflicting dependencies reject opening before adoption. Native part selections
 also travel with schematic clipboard fragments; diagnostic single-document
 export refuses to discard them.
+[Device supply ranges](part-schema.md#device-supply-range) live in the same
+pinned generic part closure, using `pcbcraft-part/4` only for records with a
+nonempty terminal rating map. Folders and packed projects carry the same bytes.
+Older readers refuse that unknown pinned record rather than dropping its data;
+no project, sheet, symbol, board, or accepted-baseline format changes.
 
 Board format `pcbcraft-board/17` extends the physical vocabulary through board/16
 with multi-pad terminal maps and explicitly `unconnected_pads`. Accepted input

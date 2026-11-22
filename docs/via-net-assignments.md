@@ -67,8 +67,9 @@ footprint lock at least board/34. The higher formats preserve explicit via inten
 The native codecs preserve current canonical bytes on a no-op round trip; accepted
 noncanonical input may be normalized, and opening an older project can require migration.
 
-**pcbcraft-clipboard/4** carries explicit targets. Copy, duplication and relocation
-within the same board preserve those addresses. Foreign destinations or foreign
+**pcbcraft-clipboard/4** carries explicit targets unless a newer [board clipboard
+format](clipboard.md#pcb-canvas) is required for other copied content. Copy,
+duplication and relocation within the same board preserve those addresses. Foreign destinations or foreign
 saved scopes are refused rather than silently reusing IDs; cross-project net
 remapping is not implemented. Native Undo/Redo and folder/archive codecs preserve
 authored intent, including unresolved historical targets.

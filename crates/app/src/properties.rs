@@ -549,7 +549,8 @@ thread_local! {
 }
 
 /// Render effective pin functions in the placed unit's pin list. A selection is a separate
-/// immediate edit rather than an uncommitted field on the placement draft.
+/// immediate edit rather than an uncommitted field on the placement draft. Supply ranges
+/// display the pinned part definition's ratings for the declared power inputs.
 fn terminal_functions(
     ui: &mut Ui,
     edit: &Edit,
@@ -557,14 +558,23 @@ fn terminal_functions(
     part: &pcbcraft_engine::schematic::PartInstance,
     enabled: bool,
 ) -> Option<(String, Option<String>)> {
+    use pcbcraft_engine::schematic::ElectricalType::PowerIn;
+
+    let pins = edit.definition.unit(&edit.unit).map_or(&[][..], |unit| unit.pins());
+    let definition = part.part.as_ref();
+    let show_supply = definition.is_some() && pins.iter().any(|pin| pin.electrical_type == PowerIn);
     let mut selected = None;
     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-        egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
+        egui::Grid::new("property_terminals").num_columns(if show_supply { 5 } else { 3 }).show(ui, |ui| {
             ui.strong("Terminal");
             ui.strong("Name");
             ui.strong("Electrical type");
+            if show_supply {
+                ui.strong("Supply minimum");
+                ui.strong("Supply maximum");
+            }
             ui.end_row();
-            for pin in edit.definition.unit(&edit.unit).into_iter().flat_map(|unit| unit.pins()) {
+            for pin in pins {
                 ui.label(&pin.number);
                 let (name, kind) = project.effective_pin(part, pin);
                 if pin.alternates.is_empty() {
@@ -588,6 +598,14 @@ fn terminal_functions(
                     }
                 }
                 ui.label(kind.as_str().replace('_', " "));
+                if show_supply {
+                    let range = definition.and_then(|part| part.supply_range(&pin.number));
+                    let show = |bound: Option<&pcbcraft_engine::library::parts::Value>| {
+                        bound.map_or_else(|| if pin.electrical_type == PowerIn { "Unknown" } else { "—" }.into(), |value| value.display())
+                    };
+                    ui.label(show(range.and_then(|range| range.supply_min.as_ref())));
+                    ui.label(show(range.and_then(|range| range.supply_max.as_ref())));
+                }
                 ui.end_row();
             }
         });
