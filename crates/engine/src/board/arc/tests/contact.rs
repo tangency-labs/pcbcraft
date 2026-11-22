@@ -4,6 +4,7 @@ use crate::board::{
     drc::Kind,
     teardrop::{EDIT_TEARDROPS, Length, Parameters, Record, UNSUPPORTED as TEARDROP_UNSUPPORTED},
     track::{CopperItems, IslandBuilder, lands, short_for_copper_edit},
+    view::BoardView,
 };
 
 /// Build a semicircular arc connecting two horizontally aligned points `(a.x_nm, y)` and `(b.x_nm, y)`.
@@ -24,7 +25,10 @@ fn arc_joins_same_net_pads_and_clears_ratsnest_airwire() {
     accepted.sort_by_key(|l| l.center.x_nm);
     assert_eq!(accepted.len(), 3);
 
-    let before_edges = view(&s).ratsnest().unwrap().edges.iter().filter(|e| e.net == "ACCEPTED").count();
+    let initial_ratsnest = view(&s).ratsnest().unwrap();
+    let accepted_net =
+        initial_ratsnest.lines.iter().find(|l| l.from.position == accepted[0].center || l.to.position == accepted[0].center).unwrap().net;
+    let before_edges = initial_ratsnest.lines.iter().filter(|l| l.net == accepted_net).count();
     assert_eq!(before_edges, 2);
 
     // Semicircle in +Y (Clockwise from right to left in X-right Y-down passes +pi/2) avoids neighboring pads.
@@ -43,7 +47,7 @@ fn arc_joins_same_net_pads_and_clears_ratsnest_airwire() {
     assert_eq!(v.copper_nets().unwrap(), nets);
     assert_eq!(v.copper().unwrap(), copper);
 
-    let after_edges = v.ratsnest().unwrap().edges.iter().filter(|e| e.net == "ACCEPTED").count();
+    let after_edges = v.ratsnest().unwrap().lines.iter().filter(|l| l.net == accepted_net).count();
     assert_eq!(after_edges, 1);
     let shorts = v.copper_shorts().unwrap();
     assert_eq!(shorts.total, 0);
@@ -59,6 +63,9 @@ fn arc_layer_isolation_and_multilayer_via_chain() {
     let mut accepted: Vec<_> = board_lands.iter().filter(|l| l.net.as_deref() == Some("ACCEPTED")).collect();
     accepted.sort_by_key(|l| l.center.x_nm);
 
+    let accepted_net =
+        view(&s).ratsnest().unwrap().lines.iter().find(|l| l.from.position == accepted[0].center || l.to.position == accepted[0].center).unwrap().net;
+
     // Back-layer arc over Front-only SMD pads does NOT connect them.
     let back_arc = semicircle_between(0xc002, back, accepted[1].center, accepted[0].center, 250_000, Direction::Clockwise);
     s.apply(SET_ARCS, &params(&s, std::slice::from_ref(&back_arc))).unwrap();
@@ -67,7 +74,7 @@ fn arc_layer_isolation_and_multilayer_via_chain() {
     assert_ne!(copper.pads[&accepted[0].key], copper.pads[&accepted[1].key]);
     assert_ne!(copper.arcs[&back_arc.id], copper.pads[&accepted[0].key]);
     assert!(!nets.contains_key(&back_arc.id));
-    assert_eq!(v.ratsnest().unwrap().edges.iter().filter(|e| e.net == "ACCEPTED").count(), 2);
+    assert_eq!(v.ratsnest().unwrap().lines.iter().filter(|l| l.net == accepted_net).count(), 2);
 
     // Remove the arc, place through vias at both pad centers, then re-add the Back-layer arc.
     s.apply(SET_ARCS, &params(&s, &[])).unwrap();
@@ -90,7 +97,7 @@ fn arc_layer_isolation_and_multilayer_via_chain() {
         assert_eq!(nets.get(id).map(String::as_str), Some("ACCEPTED"));
     }
     assert_eq!(nets.get(&back_arc.id).map(String::as_str), Some("ACCEPTED"));
-    assert_eq!(v.ratsnest().unwrap().edges.iter().filter(|e| e.net == "ACCEPTED").count(), 1);
+    assert_eq!(v.ratsnest().unwrap().lines.iter().filter(|l| l.net == accepted_net).count(), 1);
     assert_eq!(v.copper_shorts().unwrap().total, 0);
 }
 
@@ -287,7 +294,7 @@ fn teardrops_still_refused_in_connectivity_and_short_detection() {
     };
     s.apply(EDIT_TEARDROPS, &json!({"board":board,"expected_revision":s.revision(),"edits":{"add":[record],"remove":[]}})).unwrap();
 
-    let assert_refused = |v: crate::board::BoardView<'_>| {
+    let assert_refused = |v: BoardView<'_>| {
         assert_eq!(v.copper().unwrap_err(), TEARDROP_UNSUPPORTED);
         assert_eq!(v.copper_nets().unwrap_err(), TEARDROP_UNSUPPORTED);
         assert_eq!(v.copper_with_nets().unwrap_err(), TEARDROP_UNSUPPORTED);
