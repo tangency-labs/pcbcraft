@@ -193,9 +193,10 @@ impl eframe::App for Sized {
     }
 }
 
-/// Run on an isolated X11 display of at least 1920×1080 logical points plus decorations.
+/// Run on an isolated X11 display of at least 1920×1080 logical points plus decorations, managed by a
+/// window manager that enforces WM_NORMAL_HINTS (for example Openbox) so the constraint case is real.
 #[test]
-#[ignore = "requires isolated X11 of at least 1920×1080, a GPU/software adapter and local sockets"]
+#[ignore = "requires isolated X11 of at least 1920×1080 with a hint-enforcing window manager, a GPU/software adapter and local sockets"]
 fn native_window_resizes_to_recording_sizes() {
     use winit::platform::x11::EventLoopBuilderExtX11;
     let result = Arc::new(Mutex::new(None));
@@ -221,6 +222,7 @@ fn native_window_resizes_to_recording_sizes() {
             let control = crate::live_control::LiveControl::start(&cc.egui_ctx)?;
             let (port, token) = (control.port(), control.secret().to_owned());
             app.live_control = Some(control);
+            let ctx = cc.egui_ctx.clone();
             std::thread::spawn(move || {
                 let run = || -> Result<(), String> {
                     let mut remote = Remote::new(port, &token)?;
@@ -246,6 +248,18 @@ fn native_window_resizes_to_recording_sizes() {
                             return Err(format!("Targets were not measured at {width}×{height}: {at}"));
                         }
                         capture(&format!("{width}x{height}"))?;
+                    }
+                    // The window manager, not the app, caps the window below the next request.
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::MaxInnerSize(egui::vec2(1100.0, 700.0)));
+                    ctx.request_repaint();
+                    let window = resize(&mut remote, 1280.0, 800.0)?;
+                    let (width, height) = (window["client"]["width"].as_f64(), window["client"]["height"].as_f64());
+                    if window["resize"]["state"] != "constrained"
+                        || window["resize"]["requested"] != json!({"width":1280.0,"height":800.0})
+                        || !width.is_some_and(|w| w <= 1100.5)
+                        || !height.is_some_and(|h| h <= 700.5)
+                    {
+                        return Err(format!("A window-manager constraint was not reported with the measured size: {window}"));
                     }
                     let closed = remote.call("engine.execute", json!({"command":"ui.resize","params":{"window":9,"width":1280,"height":800}}));
                     if closed.is_ok() {
