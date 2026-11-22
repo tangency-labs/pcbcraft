@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:footprint:5",
+  "title": "PCBcraft canonical published footprint definition, format 5",
+  "description": "Slot-bearing footprints, optionally with circular non-plated holes. Geometric containment and length at least width are checked by the engine.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "library", "id", "revision", "name", "license", "source", "pads", "graphics"],
+  "dependentRequired": { "reference_offset": ["reference"] },
+  "properties": {
+    "format": { "const": "pcbcraft-footprint/5" },
+    "library": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/library" },
+    "id": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/id" },
+    "revision": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/revision" },
+    "name": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/name" },
+    "license": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/license" },
+    "source": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/source" },
+    "graphics": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/graphics" },
+    "artwork": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/artwork" },
+    "silkscreen": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/silkscreen" },
+    "reference": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/reference" },
+    "reference_offset": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/reference_offset" },
+    "pads": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1024,
+      "contains": { "$ref": "#/$defs/slotted_pad" },
+      "items": {
+        "oneOf": [
+          { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/pad" },
+          { "$ref": "#/$defs/slotted_pad" }
+        ]
+      }
+    },
+    "non_plated_holes": { "$ref": "urn:pcbcraft:schema:footprint:4#/properties/non_plated_holes" }
+  },
+  "$defs": {
+    "slotted_pad": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["number", "center", "width_nm", "height_nm", "rotation", "shape", "copper", "plated_slot"],
+      "allOf": [{ "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/pad/allOf/0" }],
+      "properties": {
+        "number": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/terminal_id" },
+        "center": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/point" },
+        "width_nm": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/size" },
+        "height_nm": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/size" },
+        "rotation": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/rotation" },
+        "shape": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/pad/properties/shape" },
+        "copper": { "const": "all_copper" },
+        "corner_radius_nm": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/pad/properties/corner_radius_nm" },
+        "plated_slot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["width_nm", "length_nm", "rotation_mdeg"],
+          "properties": {
+            "width_nm": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/size" },
+            "length_nm": { "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/size" },
+            "rotation_mdeg": { "type": "integer", "minimum": 0, "maximum": 359999 }
+          }
+        }
+      }
+    }
+  }
+}
