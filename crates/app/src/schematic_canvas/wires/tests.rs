@@ -28,6 +28,11 @@ fn grid(x: i64, y: i64) -> Point {
 /// the shared net appearance command: the pathological case where a net color equals the selection
 /// ink and the ink is already the widest stroke.
 fn styled_harness() -> Harness<'static, PcbApp> {
+    styled_harness_with(pcbcraft_chrome::Tokens::get().accent)
+}
+
+/// A single-wire project whose net is styled with `color` at the maximum drawn width.
+fn styled_harness_with(color: egui::Color32) -> Harness<'static, PcbApp> {
     let mut app = PcbApp::default();
     app.run("project.new", &json!({"name":"Styled"}));
     app.parts.open = false;
@@ -38,9 +43,8 @@ fn styled_harness() -> Harness<'static, PcbApp> {
     let pins: Vec<Value> = app.session.project().unwrap().symbols().iter().map(|symbol| json!({"symbol":symbol.id(),"terminal":"1"})).collect();
     app.run(CONNECT_PINS, &json!({"from":pins[0],"to":pins[1],"expected_revision":app.session.revision()}));
 
-    let accent = pcbcraft_chrome::Tokens::get().accent;
     let expected =
-        pcbcraft_engine::nets::Appearance { color: Some([accent.r(), accent.g(), accent.b()]), width_cp: Some(pcbcraft_engine::nets::MAX_WIDTH_CP) };
+        pcbcraft_engine::nets::Appearance { color: Some([color.r(), color.g(), color.b()]), width_cp: Some(pcbcraft_engine::nets::MAX_WIDTH_CP) };
     let project = app.session.project().unwrap();
     let wire = project.wires()[0].id();
     let sheet = project.sheet_target();
@@ -617,4 +621,18 @@ fn selected_wire_paints_the_contrasting_cue_under_its_ink() {
         super::emphasis_strokes(tokens.accent, pcbcraft_engine::nets::MAX_WIDTH_CP as f32 / 100.0);
     assert!(painted_stroke(&h, &points, ink_width, ink_color), "accent ink on the styled selected wire");
     assert!(painted_stroke(&h, &points, halo_width, halo_color), "selection cue under the styled selected wire");
+}
+
+/// An ordinary wire whose saved color equals the paper still gets the contrasting underlay, so it
+/// does not disappear into the background without being selected or highlighted.
+#[test]
+fn paper_colored_wire_keeps_a_cue_without_selection() {
+    let paper = pcbcraft_chrome::Tokens::get().schematic_paper;
+    let h = styled_harness_with(paper);
+    let project = h.state().session.project().unwrap();
+    let route = project.wire_path(&project.wires()[0]);
+    let points: Vec<_> = route.iter().map(|point| screen(&h, *point)).collect();
+    let [(halo_width, halo_color), (ink_width, ink_color)] = super::emphasis_strokes(paper, pcbcraft_engine::nets::MAX_WIDTH_CP as f32 / 100.0);
+    assert!(painted_stroke(&h, &points, ink_width, ink_color), "paper-colored ink on the unselected wire");
+    assert!(painted_stroke(&h, &points, halo_width, halo_color), "contrasting cue under the unselected wire");
 }

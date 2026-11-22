@@ -362,7 +362,8 @@ fn paint_emphasized(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<
 /// Local selection takes precedence over a counterpart highlight for the ink color; neither changes
 /// connectivity. A selected or highlighted wire gets the contrasting underlay from
 /// [`emphasis_strokes`] beneath its ink, so it stays distinguishable even when a net color matches
-/// the theme's selection accent and its drawn width is already the maximum.
+/// the theme's selection accent and its drawn width is already the maximum. A plain wire whose saved
+/// color equals the paper gets the same underlay so it cannot disappear into the background.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     painter: &Painter,
@@ -407,7 +408,10 @@ pub(super) fn paint(
         let width =
             override_.and_then(|appearance| appearance.width_cp).map_or(theme::SCHEMATIC_SYMBOL_STROKE, |width_cp| f32::from(width_cp) / 100.0);
         let route = pcbcraft_engine::wire::wire_path(wire, from, to);
-        if is_selected || is_highlighted {
+        // A saved color can equal the paper, which would otherwise make an ordinary wire vanish.
+        // The same contrasting underlay keeps it readable without changing its saved color.
+        let matches_paper = color == tokens.schematic_paper;
+        if is_selected || is_highlighted || matches_paper {
             paint_emphasized(painter, rect, camera, route, color, width);
         } else {
             paint_stroked_route(painter, rect, camera, route, color, width);
