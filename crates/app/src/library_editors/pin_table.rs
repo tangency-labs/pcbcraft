@@ -240,22 +240,23 @@ fn column_option_label(headers: &[String], index: usize) -> String {
     }
 }
 
-/// Render one labelled column-mapping dropdown and return whether the selection changed.
-fn column_selector(ui: &mut Ui, role: ColumnRole, headers: &[String], column_count: usize, value: &mut Option<usize>, required: bool) -> bool {
+/// Render one labelled column-mapping dropdown at the given bounded width and return whether the
+/// selection changed.
+fn column_selector(ui: &mut Ui, role: ColumnRole, preview: &Preview, value: &mut Option<usize>, required: bool, width: f32) -> bool {
     let selected_text = match *value {
-        Some(index) => column_option_label(headers, index),
+        Some(index) => column_option_label(&preview.headers, index),
         None if required => "Unmapped (required)".to_owned(),
         None => "Not mapped".to_owned(),
     };
     let mut changed = false;
-    controls::Choice::from_label(role.label()).selected_text(selected_text).width(184.0).show_ui(ui, |ui| {
+    controls::Choice::from_label(role.label()).selected_text(selected_text).width(width).show_ui(ui, |ui| {
         let none_label = if required { "Unmapped (required)" } else { "Not mapped" };
         if ui.selectable_label(value.is_none(), none_label).clicked() && value.is_some() {
             *value = None;
             changed = true;
         }
-        for index in 0..column_count {
-            let label = column_option_label(headers, index);
+        for index in 0..preview.column_count {
+            let label = column_option_label(&preview.headers, index);
             if ui.selectable_label(*value == Some(index), label).clicked() && *value != Some(index) {
                 *value = Some(index);
                 changed = true;
@@ -472,31 +473,31 @@ impl PcbApp {
             if draft.preview.column_count == 0 {
                 ui.label(shell::dim("Paste or load a table to map its columns to pin fields."));
             } else {
-                ui.horizontal_wrapped(|ui| {
-                    if column_selector(ui, ColumnRole::Number, &draft.preview.headers, draft.preview.column_count, &mut draft.mapping.number, true) {
+                // `Choice::from_label` lays out each label and trigger in a nested `ui.horizontal`,
+                // which does not wrap inside `ui.horizontal_wrapped`. Split the five selectors into
+                // two explicit rows sized to the dialog width so the modal never widens past the
+                // viewport and clips left-aligned controls off the left edge.
+                let dropdown_width = ((ui.available_width() - 280.0) / 3.0).clamp(120.0, 168.0);
+                ui.horizontal(|ui| {
+                    if column_selector(ui, ColumnRole::Number, &draft.preview, &mut draft.mapping.number, true, dropdown_width) {
                         draft.manual_mapping = true;
                         changed = true;
                     }
-                    if column_selector(ui, ColumnRole::Name, &draft.preview.headers, draft.preview.column_count, &mut draft.mapping.name, false) {
+                    if column_selector(ui, ColumnRole::Name, &draft.preview, &mut draft.mapping.name, false, dropdown_width) {
                         draft.manual_mapping = true;
                         changed = true;
                     }
-                    if column_selector(
-                        ui,
-                        ColumnRole::ElectricalType,
-                        &draft.preview.headers,
-                        draft.preview.column_count,
-                        &mut draft.mapping.electrical_type,
-                        false,
-                    ) {
+                    if column_selector(ui, ColumnRole::ElectricalType, &draft.preview, &mut draft.mapping.electrical_type, false, dropdown_width) {
                         draft.manual_mapping = true;
                         changed = true;
                     }
-                    if column_selector(ui, ColumnRole::Unit, &draft.preview.headers, draft.preview.column_count, &mut draft.mapping.unit, false) {
+                });
+                ui.horizontal(|ui| {
+                    if column_selector(ui, ColumnRole::Unit, &draft.preview, &mut draft.mapping.unit, false, dropdown_width) {
                         draft.manual_mapping = true;
                         changed = true;
                     }
-                    if column_selector(ui, ColumnRole::Side, &draft.preview.headers, draft.preview.column_count, &mut draft.mapping.side, false) {
+                    if column_selector(ui, ColumnRole::Side, &draft.preview, &mut draft.mapping.side, false, dropdown_width) {
                         draft.manual_mapping = true;
                         changed = true;
                     }
@@ -1294,6 +1295,11 @@ mod tests {
         h.run();
         let cancel = h.get_by_label("Cancel").rect();
         assert!(viewport.contains_rect(cancel));
+        assert!(viewport.contains_rect(h.get_by_label("Stage pin table").rect()));
+        let pin_number = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Pin number").rect();
+        let side = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Side").rect();
+        assert!(pin_number.min.x >= viewport.min.x && pin_number.max.x <= viewport.max.x);
+        assert!(side.min.x >= viewport.min.x && side.max.x <= viewport.max.x);
         assert_ne!(cancel, empty_cancel);
         h.run_steps(3);
         assert_eq!(h.get_by_label("Cancel").rect(), cancel);
