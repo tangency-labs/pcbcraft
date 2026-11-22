@@ -110,10 +110,21 @@ fn appearance_patch_schema_advertises_supported_clear_channels() {
     let clear = &crate::nets::appearance_param_schema()["oneOf"][1]["properties"]["clear"];
     assert_eq!(clear["type"], "array");
     assert_eq!(clear["items"]["enum"], json!(["color", "width_cp"]));
+    assert_eq!(clear["minItems"], json!(1), "an empty clear list is not a valid patch");
+
+    let conflicting = &crate::nets::appearance_param_schema()["oneOf"][1]["allOf"];
+    assert_eq!(conflicting.as_array().map(Vec::len), Some(2), "each channel must have a set/clear exclusion");
+    let snapshot = include_str!("../../../../../docs/schemas/command-contracts.json");
+    let snapshot: serde_json::Value = serde_json::from_str(snapshot).unwrap();
+    let published = &snapshot["commands"]["nets.set_appearance"]["params"]["properties"]["appearance"]["oneOf"][1];
+    assert_eq!(published["properties"]["clear"]["minItems"], json!(1));
+    assert_eq!(published["allOf"], *conflicting, "published snapshot must match the command schema");
 
     for channel in ["color", "width_cp"] {
         assert!(crate::nets::validate_appearance_patch(&json!({"clear":[channel]})).is_ok());
     }
     assert!(crate::nets::validate_appearance_patch(&json!({"clear":[]})).is_err());
     assert!(crate::nets::validate_appearance_patch(&json!({"clear":["unknown"]})).is_err());
+    assert!(crate::nets::validate_appearance_patch(&json!({"color":[1,2,3],"clear":["color"]})).is_err());
+    assert!(crate::nets::validate_appearance_patch(&json!({"width_cp":100,"clear":["width_cp"]})).is_err());
 }

@@ -307,11 +307,17 @@ impl Project {
 
 /// The JSON schema of the command patch object, kept separate from [`Appearance::schema`] so the
 /// saved record never advertises command-only markers. This adds the `clear` channel array with
-/// exactly the values [`validate_appearance_patch`] accepts; `color` and `width_cp` keep the
-/// saved record's shape and bounds.
+/// exactly the values [`validate_appearance_patch`] accepts, with at least one channel so an empty
+/// list cannot be mistaken for the reset patch, and `not` clauses matching the command's refusal
+/// to set and clear the same channel; `color` and `width_cp` keep the saved record's shape and
+/// bounds.
 fn patch_schema() -> Value {
     let mut schema = Appearance::schema();
-    schema["properties"]["clear"] = json!({"type":"array","items":{"type":"string","enum":["color","width_cp"]}});
+    schema["properties"]["clear"] = json!({"type":"array","minItems":1,"items":{"type":"string","enum":["color","width_cp"]}});
+    // A channel cannot be set and cleared by the same patch. The command refuses these shapes; the
+    // published contract must refuse them too so schema-validating clients see the same boundary.
+    let not_both = |channel: &str| json!({"not":{"allOf":[{"required":["clear", channel]},{"properties":{"clear":{"contains":{"const":channel}}}}]}});
+    schema["allOf"] = json!([not_both("color"), not_both("width_cp")]);
     schema
 }
 
