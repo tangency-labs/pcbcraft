@@ -195,8 +195,8 @@ fn maximum_memberships_save_and_reload_in_both_storage_homes() {
                     assert_eq!(value["format"], "pcbcraft-instances/7");
                 }
                 let downgraded = edited(&docs, ENTRY_POINT, |project| project["format"] = json!("pcbcraft-project/24"));
-                refused_on_read(&downgraded, if board { "unsupported instances format" } else { "require project format 39" });
-                for (remove, reason) in [(true, "require project format 39"), (false, "exactly one membership encoding")] {
+                refused_on_read(&downgraded, if board { "unsupported instances format" } else { "require project format 36, 39, 45, 49, 51 or 54" });
+                for (remove, reason) in [(true, "require project format 36, 39, 45, 49, 51 or 54"), (false, "exactly one membership encoding")] {
                     let malformed = edited(&docs, home, |value| {
                         let scope = if board { value } else { &mut value["schematic_instances"] };
                         if remove {
