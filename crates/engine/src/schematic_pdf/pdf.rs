@@ -152,8 +152,11 @@ impl Document {
             let _ = write!(fonts, "/F{i} {font} 0 R ");
         }
         let [width, height] = page.size;
-        self.objects.0[id - 1] = format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.5} {height:.5}] /Resources << /Font << {fonts}>> >> /Contents {contents} 0 R >>"
+        self.objects.fill(
+            id,
+            format!(
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {width:.5} {height:.5}] /Resources << /Font << {fonts}>> >> /Contents {contents} 0 R >>"
+            ),
         );
         self.pages.push(id);
     }
@@ -165,14 +168,14 @@ impl Document {
             let sep = if i == 0 { "" } else { " " };
             let _ = write!(kids, "{sep}{page} 0 R");
         }
-        self.objects.0[1] = format!("<< /Type /Pages /Count {} /Kids [{kids}] >>", self.pages.len());
+        self.objects.fill(2, format!("<< /Type /Pages /Count {} /Kids [{kids}] >>", self.pages.len()));
         let mut catalog = String::from("<< /Type /Catalog /Pages 2 0 R");
         if !bookmarks.is_empty() {
             let outline = self.add_outlines(bookmarks);
             let _ = write!(catalog, " /Outlines {outline} 0 R /PageMode /UseOutlines");
         }
         catalog.push_str(" >>");
-        self.objects.0[0] = catalog;
+        self.objects.fill(1, catalog);
         self.objects.encode()
     }
 
@@ -182,31 +185,36 @@ impl Document {
         let root = bookmarks.len();
         let mut edges: Vec<_> = (0..=root).map(|_| OutlineLinks::default()).collect();
         for (i, bookmark) in bookmarks.iter().enumerate().rev() {
+            // Children follow their parent, so each entry's descendants are complete here.
             let parent = bookmark.parent.unwrap_or(root);
-            let next = edges[parent].first.replace(i);
-            edges[parent].last.get_or_insert(i);
-            let descendants = edges[i].descendants;
-            edges[parent].descendants += 1 + descendants;
-            edges[i].next = next;
-            if let Some(sibling) = next {
-                edges[sibling].prev = Some(i);
+            let descendants = edges.get(i).map_or(0, |links| links.descendants);
+            let next = edges.get_mut(parent).and_then(|links| {
+                links.last.get_or_insert(i);
+                links.descendants += 1 + descendants;
+                links.first.replace(i)
+            });
+            if let Some(links) = edges.get_mut(i) {
+                links.next = next;
+            }
+            if let Some(links) = next.and_then(|sibling| edges.get_mut(sibling)) {
+                links.prev = Some(i);
             }
         }
         let base = self.objects.0.len() + 1;
         let entry = |index: usize| base + 1 + index;
         let mut outline = String::from("<< /Type /Outlines");
-        edges[root].write_children(&mut outline, entry);
+        if let Some(links) = edges.get(root) {
+            links.write_children(&mut outline, entry);
+        }
         outline.push_str(" >>");
         self.objects.push(outline);
-        for (i, bookmark) in bookmarks.iter().enumerate() {
+        for ((bookmark, page), links) in bookmarks.iter().zip(&self.pages).zip(&edges) {
             let parent = bookmark.parent.map_or(base, entry);
-            let page = self.pages[i];
             let mut item = String::from("<< /Title <FEFF");
             for unit in bookmark.title.encode_utf16() {
                 let _ = write!(item, "{unit:04X}");
             }
             let _ = write!(item, "> /Parent {parent} 0 R /Dest [{page} 0 R /Fit]");
-            let links = &edges[i];
             for (name, sibling) in [("Prev", links.prev), ("Next", links.next)] {
                 if let Some(sibling) = sibling {
                     let _ = write!(item, " /{name} {} 0 R", entry(sibling));
@@ -256,6 +264,16 @@ impl Objects {
     fn push(&mut self, object: String) -> usize {
         self.0.push(object);
         self.0.len()
+    }
+
+    /// Replace a reserved object by its one-based reference number. References come only from
+    /// [`Objects::push`] or the two slots that [`Document::new`] reserves.
+    fn fill(&mut self, id: usize, object: String) {
+        let slot = id.checked_sub(1).and_then(|index| self.0.get_mut(index));
+        debug_assert!(slot.is_some(), "unreserved PDF object {id}");
+        if let Some(slot) = slot {
+            *slot = object;
+        }
     }
 
     /// Build the Type 3 CharProcs, widths and ToUnicode CMap for one code range.
