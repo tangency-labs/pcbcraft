@@ -273,12 +273,13 @@ Copy and paste of board objects is in progress separately in #197 through #202.
 ## Footprint lock metadata (storage only)
 
 Placed footprints retain an optional `locked` flag in native board format 34,
-or 35 when the board also contains arcs. Inspection and typed board views report
+35 when the board also contains arcs, 37 when it contains straight-via teardrop
+intents, or 40 when it contains test-point marks. Inspection and typed board views report
 a boolean, defaulting to false for older files. Fresh canonical encoding omits
 false and preserves true; Native Save can reuse an unchanged board document
 verbatim, including explicit false. Without active locks the encoder chooses
 the format required by the remaining board data. Reports are optional under
-formats 34 and 35. This slice
+formats 34, 35, 37 and 40. This slice
 does **not** expose a lock/unlock command or GUI action, nor does the flag yet
 protect footprint movement, rotation, flipping, alignment or deletion. It is not
 a fixed-obstacle promise. Those shared-command and enforcement workflows remain

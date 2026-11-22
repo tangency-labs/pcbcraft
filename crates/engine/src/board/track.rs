@@ -121,13 +121,19 @@ pub struct Via {
     pub at: Point,
     pub diameter_nm: i64,
     pub drill_nm: i64,
+    /// Authored face markings; the native board document owns their encoding.
+    #[serde(skip)]
+    pub test_points: super::test_points::Flags,
 }
 
 impl Via {
-    /// Inspection always exposes lock state, including the default false omitted from native files.
+    /// Inspect lock state and any authored test-point marks without changing the board.
     pub fn inspect(&self) -> Value {
         let mut value = json!(self);
         value["locked"] = json!(self.locked);
+        if !self.test_points.is_empty() {
+            value["test_point"] = json!(self.test_points);
+        }
         value
     }
 
@@ -918,7 +924,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
                 layer = change.layer;
                 let id = crate::fresh_id()?;
                 added.insert(id);
-                vias.push(Via { id, net_assignment: None, locked: false, at: pair[0], diameter_nm, drill_nm });
+                vias.push(Via { id, net_assignment: None, locked: false, at: pair[0], diameter_nm, drill_nm, test_points: Default::default() });
             }
             let id = crate::fresh_id()?;
             added.insert(id);
@@ -928,7 +934,7 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         if let Some(change) = changes.next() {
             let id = crate::fresh_id()?;
             added.insert(id);
-            vias.push(Via { id, net_assignment: None, locked: false, at: points[change.at], diameter_nm, drill_nm });
+            vias.push(Via { id, net_assignment: None, locked: false, at: points[change.at], diameter_nm, drill_nm, test_points: Default::default() });
         }
     } else if let Some(at) = via_at {
         let id = crate::fresh_id()?;
@@ -939,7 +945,15 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
             Some(policy) => policy.via_sizes(explicit_diameter, explicit_drill)?,
             None => (explicit_diameter.unwrap_or(effective.preferred_via_diameter_nm), explicit_drill.unwrap_or(effective.preferred_via_drill_nm)),
         };
-        vias.push(Via { id, net_assignment: promoted.as_ref().map(|(_, a)| *a), locked: false, at, diameter_nm, drill_nm });
+        vias.push(Via {
+            id,
+            net_assignment: promoted.as_ref().map(|(_, a)| *a),
+            locked: false,
+            at,
+            diameter_nm,
+            drill_nm,
+            test_points: Default::default(),
+        });
     } else if command == super::via_nets::SET_VIA_NET {
         let changed = ids(params, "vias", |id| vias.binary_search_by_key(id, |v| v.id).is_ok())?;
         if changed.is_empty()

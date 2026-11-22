@@ -16,6 +16,13 @@ has its own highlight and read-only Properties label without selecting an owner
 for editing. These filters start off to preserve existing picking defaults;
 project edits and reopened documents do not restore stale inspection selections.
 
+`pcb.set_test_point` marks individual placed pads and vias for assembly or
+bare-board fabrication testing. The two marks are independent, name the board
+face, and survive Undo/Redo and native save/reopen. Marked boards use board
+format 40 (which earlier releases refuse); clearing the last mark restores the
+format required by the remaining board data, and unmarked boards keep their
+existing format and bytes. This change does not add reports.
+
 `list_commands` adds the command API version, a catalog revision and the
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
