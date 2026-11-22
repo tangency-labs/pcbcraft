@@ -719,10 +719,10 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     assert_eq!(decode_packed(&packed).unwrap().documents, custom);
 }
 
-/// Native Save reuses an unchanged lock-bearing board verbatim but rewrites it after
-/// deletion of the only locked placement.
+/// Native Save reuses lock-bearing board bytes after a refused delete, but rewrites them
+/// after deletion of an unlocked neighbor without losing the remaining lock.
 #[test]
-fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() {
+fn working_documents_preserves_lock_bytes_after_refused_delete() {
     let mut s = Session::default();
     s.apply("project.new", &json!({"create_board":true})).unwrap();
     for x_nm in [0, 25_400_000] {
@@ -736,7 +736,7 @@ fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() 
     assert_eq!(board["format"], "pcbcraft-board/1");
     assert_eq!(board["footprints"].as_array().unwrap().len(), 2);
     let locked_id = board["footprints"][0]["id"].as_u64().unwrap();
-    let survivor = board["footprints"][1].clone();
+    let unlocked_id = board["footprints"][1]["id"].as_u64().unwrap();
     board["format"] = json!("pcbcraft-board/34");
     board["footprints"][0]["locked"] = json!(true);
     board["footprints"][1]["locked"] = json!(false);
@@ -750,12 +750,18 @@ fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() 
     assert!(saved.iter().any(|(name, bytes)| name.starts_with("sheets/") && original.get(name) != Some(bytes)));
     assert_eq!(saved[&path], original[&path]);
 
-    apply(&mut s, pcbcraft_engine::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{locked_id}")]}));
+    let refused = s
+        .apply(pcbcraft_engine::DELETE_FOOTPRINTS, &json!({"footprints":[format!("footprint-{locked_id}")],"expected_revision":s.revision()}))
+        .unwrap_err();
+    assert!(refused.to_string().contains(&format!("footprint-{locked_id}")), "{refused}");
+    assert_eq!(working_documents(&s.snapshot().unwrap(), Some(&moved), Some(&saved)).unwrap(), saved);
+
+    apply(&mut s, pcbcraft_engine::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{unlocked_id}")]}));
     let rewritten = working_documents(&s.snapshot().unwrap(), Some(&moved), Some(&saved)).unwrap();
-    let board: serde_json::Value = serde_json::from_slice(&rewritten[&path]).unwrap();
+    let canonical: serde_json::Value = serde_json::from_slice(&rewritten[&path]).unwrap();
     assert_ne!(rewritten[&path], saved[&path]);
-    assert_eq!(board["format"], "pcbcraft-board/1");
-    assert_eq!(board["footprints"], json!([survivor]));
+    assert_eq!(canonical["format"], "pcbcraft-board/34");
+    assert_eq!(canonical["footprints"], json!([board["footprints"][0]]));
     assert_eq!(encode_documents(decode_documents(&rewritten).unwrap()).unwrap(), rewritten);
 }
 

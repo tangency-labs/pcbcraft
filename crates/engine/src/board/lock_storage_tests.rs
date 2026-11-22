@@ -1,5 +1,5 @@
-//! Storage-only footprint lock coverage. Valid geometry is authored through production commands;
-//! private snapshot edits supply metadata until a separate lock command/enforcement slice exists.
+//! Footprint lock storage and edit refusals. Geometry is authored through production commands;
+//! private snapshot edits supply lock metadata because there is no authoring command.
 use super::*;
 use crate::persistence::{
     decode_documents, decode_packed, diagnostic_snapshot, encode_documents, encode_packed, encode_packed_documents, test_board_path,
@@ -52,6 +52,46 @@ fn marker_fixture() -> Session {
         )
         .unwrap();
     session
+}
+
+/// Last-unit deletion on a board without a baseline leaves the locked placement and history intact.
+/// The same deletion on an unlocked placement still removes both the component and its footprint.
+#[test]
+fn last_unit_delete_refuses_locked_legacy_placement_atomically() {
+    let mut session = marker_fixture();
+    let original = session.snapshot().unwrap();
+    assert!(original.board.baseline.is_none());
+    let symbol = &original.symbols[0];
+    let footprint = &original.board.footprints[0];
+    let locked_name = format!("{} (footprint-{})", original.reference(symbol), footprint.id);
+    session.open_snapshot(with_lock(&original, true));
+    session.apply("project.rename", &json!({"name":"Locked legacy board"})).unwrap();
+    add_redo_control(&mut session);
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let root = session.history_root_revision();
+    let history = |session: &Session| {
+        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.as_ref().map(Arc::as_ptr)).collect::<Vec<_>>())
+    };
+    let before_history = history(&session);
+    assert!(before_history.iter().all(|entries| entries.iter().any(Option::is_some)));
+    let direct = json!({"symbol":symbol.id(),"expected_revision":revision});
+    let selection = json!({"items":{"symbols":[symbol.id()],"wires":[]},"expected_revision":revision});
+    for (command, params) in [(crate::DELETE_SYMBOL, &direct), (crate::DELETE_ITEMS, &selection), (crate::clipboard::CUT, &selection)] {
+        let error = session.apply(command, params).unwrap_err();
+        assert!(matches!(&error, crate::CommandError::InvalidParams(message) if message.contains(&locked_name)), "{command}: {error}");
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()), "{command}");
+        assert!(session.project().unwrap().board.footprint_for_part_instance(symbol.component).unwrap().locked);
+        assert_eq!((session.revision(), session.history_root_revision()), (revision, root), "{command}");
+        assert_eq!(history(&session), before_history, "{command}");
+    }
+
+    session.open_snapshot(original.clone());
+    session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol.id(),"expected_revision":session.revision()})).unwrap();
+    assert!(session.project().unwrap().symbols.is_empty());
+    assert!(session.project().unwrap().board.footprint_for_part_instance(symbol.component).is_none());
+    session.apply("edit.undo", &Value::Null).unwrap();
+    crate::assert_same_content(&original, &session.snapshot().unwrap());
 }
 
 /// Split documents and packed bytes retain a legacy marker lock and a non-first physical lock,
@@ -725,10 +765,204 @@ fn clipboard_commands_refuse_footprint_locks_without_a_state_change() {
     assert_eq!(source.project().unwrap().board.footprints.len(), original.board.footprints.len());
 }
 
+/// Direct layout edits refuse all selected locks, even a stationary alignment anchor. The same
+/// requests succeed on the unlocked fixture, and refusal never replaces a snapshot or its history.
+#[test]
+fn locked_placements_refuse_direct_edits_atomically() {
+    use crate::{ALIGN_FOOTPRINTS, DELETE_FOOTPRINTS, PLACE_FOOTPRINT, PLACE_RESISTOR, SET_FOOTPRINT_TRANSFORM};
+    use clipboard::{BoardSelection, DELETE};
+    use movement::{MOVE_ITEMS, MovePlan};
+
+    let mut fixture = Session::default();
+    fixture.apply("project.new", &json!({"create_board":true})).unwrap();
+    for (x_nm, y_nm) in [(0, 0), (10_000_000, 8_000_000), (30_000_000, 16_000_000)] {
+        fixture.apply(PLACE_RESISTOR, &json!({"x_nm":x_nm,"y_nm":0,"expected_revision":fixture.revision()})).unwrap();
+        let symbol = fixture.project().unwrap().symbols().last().unwrap().id();
+        fixture
+            .apply(
+                PLACE_FOOTPRINT,
+                &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x_nm,"y_nm":y_nm,
+                    "expected_revision":fixture.revision()}),
+            )
+            .unwrap();
+    }
+    let original = fixture.snapshot().unwrap();
+    let target = original.board_target().unwrap();
+    let board = target.board;
+    let view = original.board_view(target).unwrap();
+    let ids: Vec<_> = view.footprint_ids().collect();
+    let locked_ref = view.footprint(&ids[0]).unwrap().reference;
+    let other_ref = view.footprint(&ids[2]).unwrap().reference;
+    let items = BoardSelection { footprints: ids.iter().cloned().collect(), ..Default::default() };
+    let commands = [
+        (MOVE_ITEMS, json!({"board":board,"items":items,"dx_nm":1_000_000,"dy_nm":0})),
+        (SET_FOOTPRINT_TRANSFORM, json!({"board":board,"footprint":ids[0],"x_nm":1_000_000,"y_nm":0,"rotation":0})),
+        (SET_FOOTPRINT_TRANSFORM, json!({"board":board,"footprint":ids[0],"x_nm":0,"y_nm":0,"rotation":90})),
+        (SET_FOOTPRINT_TRANSFORM, json!({"board":board,"footprint":ids[0],"x_nm":0,"y_nm":0,"rotation":0,"side":"back"})),
+        (ALIGN_FOOTPRINTS, json!({"board":board,"footprints":ids,"mode":"left"})),
+        (ALIGN_FOOTPRINTS, json!({"board":board,"footprints":ids,"mode":"distribute_x"})),
+        (DELETE_FOOTPRINTS, json!({"board":board,"footprints":ids})),
+        (DELETE, json!({"board":board,"items":items})),
+    ];
+    let marked = with_placement_lock(&original, original.board.footprints[0].id, true);
+    let mut locked = Session::default();
+    locked.open_snapshot(decode_documents(&encode_documents(marked.clone()).unwrap()).unwrap());
+    locked.apply("project.rename", &json!({"name":"Locked layout fixture"})).unwrap();
+    add_redo_control(&mut locked);
+    let before = locked.snapshot().unwrap();
+    let bytes = encode_documents(before.clone()).unwrap();
+    let revision = locked.revision();
+    let root = locked.history_root_revision();
+    let undo = locked.undo.len();
+    let redo = locked.redo.len();
+    assert!(undo > 0 && redo > 0);
+    let expect_name = format!("{locked_ref} ({})", ids[0]);
+    let preview = MovePlan::new(before.clone(), target, items).unwrap_err();
+    assert!(preview.to_string().contains(&expect_name), "{preview}");
+    for (command, mut params) in commands {
+        params["expected_revision"] = json!(revision);
+        let error = locked.execute(command, &params).unwrap_err();
+        assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{command}: {error}");
+        assert!(error.to_string().contains(&expect_name), "{command}: {error}");
+        assert!(Arc::ptr_eq(&before, &locked.snapshot().unwrap()), "{command}");
+        assert_eq!(encode_documents(locked.snapshot().unwrap()).unwrap(), bytes, "{command}");
+        assert_eq!(
+            (locked.revision(), locked.history_root_revision(), locked.undo.len(), locked.redo.len()),
+            (revision, root, undo, redo),
+            "{command}"
+        );
+
+        let mut control = Session::default();
+        control.open_snapshot(original.clone());
+        let base = control.revision();
+        params["expected_revision"] = json!(base);
+        control.execute(command, &params).unwrap();
+        assert_eq!(control.revision(), base + 1, "{command}");
+        control.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&original, &control.snapshot().unwrap()), "{command}");
+    }
+    locked
+        .execute(
+            SET_FOOTPRINT_TRANSFORM,
+            &json!({"board":board,"footprint":ids[0],"x_nm":0,"y_nm":0,"rotation":0,
+            "side":"front","expected_revision":revision}),
+        )
+        .unwrap();
+    assert_eq!(locked.revision(), revision);
+
+    let missing = "footprint-999999";
+    for (command, mut params) in [
+        (ALIGN_FOOTPRINTS, json!({"board":board,"footprints":[ids[0],missing],"mode":"left"})),
+        (DELETE_FOOTPRINTS, json!({"board":board,"footprints":[ids[0],missing]})),
+        (DELETE, json!({"board":board,"items":{"footprints":[ids[0],missing]}})),
+    ] {
+        params["expected_revision"] = json!(revision);
+        assert_eq!(locked.execute(command, &params).unwrap_err().code(), crate::error_codes::ErrorCode::NotFound, "{command}");
+    }
+    let missing_move = json!({"board":board,"items":{"footprints":[ids[0],missing]},"dx_nm":1_000_000,"dy_nm":0,"expected_revision":revision});
+    assert_eq!(
+        locked.execute(MOVE_ITEMS, &missing_move).unwrap_err(),
+        crate::CommandError::InvalidParams("Select existing objects on this board to move.".into())
+    );
+    assert!(Arc::ptr_eq(&before, &locked.snapshot().unwrap()));
+    assert_eq!(locked.revision(), revision);
+    locked.apply("edit.redo", &Value::Null).unwrap();
+    locked.apply("edit.undo", &Value::Null).unwrap();
+    assert!(Arc::ptr_eq(&before, &locked.snapshot().unwrap()));
+
+    let both = with_placement_lock(&marked, original.board.footprints[2].id, true);
+    locked.open_snapshot(both);
+    let error = locked
+        .execute(ALIGN_FOOTPRINTS, &json!({"board":board,"footprints":ids,"mode":"left","expected_revision":locked.revision()}))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains(&expect_name) && error.contains(&format!("{other_ref} ({})", ids[2])), "{error}");
+    let revision = locked.revision();
+    locked
+        .execute(
+            SET_FOOTPRINT_TRANSFORM,
+            &json!({"board":board,"footprint":ids[1],"x_nm":10_000_000,"y_nm":9_000_000,
+            "rotation":0,"expected_revision":revision}),
+        )
+        .unwrap();
+    assert_eq!(locked.revision(), revision + 1);
+}
+
+/// Count selected lookup and geometry work through live commands and real preview capture.
+#[test]
+fn sparse_placement_edits_bound_lookups_and_bounds_on_large_boards() {
+    use crate::{ALIGN_FOOTPRINTS, PLACE_FOOTPRINT, PLACE_RESISTOR};
+    use clipboard::BoardSelection;
+    use movement::MovePlan;
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    for i in 0..512 {
+        let (x_nm, y_nm) = match i {
+            0 => (0, 0),
+            255 => (10_000_000, 0),
+            511 => (20_000_000, 0),
+            _ => (i % 32 * 5_000_000, (i / 32 + 2) * 5_000_000),
+        };
+        session.apply(PLACE_RESISTOR, &json!({"x_nm":x_nm,"y_nm":y_nm,"expected_revision":session.revision()})).unwrap();
+        let symbol = session.project().unwrap().symbols().last().unwrap().id();
+        session
+            .apply(
+                PLACE_FOOTPRINT,
+                &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x_nm,"y_nm":y_nm,
+                    "expected_revision":session.revision()}),
+            )
+            .unwrap();
+    }
+    let original = session.snapshot().unwrap();
+    assert_eq!(original.board.footprints.len(), 512);
+    let target = original.board_target().unwrap();
+    let ids = [0, 255, 511].map(|i| format!("footprint-{}", original.board.footprints[i].id));
+    let selection = BoardSelection { footprints: ids.iter().cloned().collect(), ..Default::default() };
+    let measure = |run: &mut dyn FnMut()| {
+        PLACEMENT_LOOKUP_PROBES.set(0);
+        PLACEMENT_GEOMETRY_VISITS.set(0);
+        run();
+        (PLACEMENT_LOOKUP_PROBES.get(), PLACEMENT_GEOMETRY_VISITS.get())
+    };
+    // No movement is needed; the live commands still resolve the selected bounds.
+    // Test the unchanged snapshot to exclude publication and copper rebuilds from this bound.
+    for snapshot in [original.clone(), with_placement_lock(&original, original.board.footprints[511].id, true)] {
+        let locked = snapshot.board.footprints[511].locked;
+        session.open_snapshot(snapshot.clone());
+        for mode in ["top", "distribute_x"] {
+            let params = json!({"board":target.board,"footprints":ids,"mode":mode,"expected_revision":session.revision()});
+            let (probes, resolved) = measure(&mut || {
+                let result = session.execute(ALIGN_FOOTPRINTS, &params);
+                if locked {
+                    let error = result.unwrap_err();
+                    assert!(error.to_string().contains(&ids[2]), "{mode}: {error}");
+                } else {
+                    result.unwrap();
+                }
+            });
+            assert!((3..=72).contains(&probes), "{mode}: {probes} ID probes");
+            assert_eq!(resolved, if locked { 0 } else { 3 }, "{mode}: visit only selected bounds");
+            assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()), "{mode}");
+        }
+        let (probes, resolved) = measure(&mut || {
+            let result = MovePlan::new(snapshot.clone(), target, selection.clone());
+            if locked {
+                let error = result.unwrap_err();
+                assert!(error.to_string().contains(&ids[2]), "{error}");
+            } else {
+                result.unwrap();
+            }
+        });
+        assert!((3..=36).contains(&probes), "MovePlan: {probes} ID probes");
+        assert_eq!(resolved, 0, "no track ends to capture on the unrouted fixture");
+    }
+}
+
 /// Create a real Redo entry without changing the active snapshot or its existing Undo entry.
 fn add_redo_control(session: &mut Session) {
     let before = session.snapshot().unwrap();
-    session.apply("project.rename", &json!({"name":"Clipboard redo control"})).unwrap();
+    session.apply("project.rename", &json!({"name":"Redo control"})).unwrap();
     session.apply("edit.undo", &Value::Null).unwrap();
     assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
