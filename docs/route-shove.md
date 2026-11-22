@@ -54,7 +54,12 @@ left to push, the whole result is checked again: every route leg with the union 
 every net the route touches, and every dragged, pushed or moved item. An island's
 exemption then holds only for copper still joined to the item in the result, so a
 drag that pulls a track off copper it touched is checked as DRC will check it once
-it rebuilds islands from the committed copper. Hulls only guide the search.
+it rebuilds islands from the committed copper. Such a track may also have lost the net
+it was captured with, so its same-net exemptions then hold only for copper it is still
+joined to. A non-plated hole blocks at contact, even at zero clearance, before any net
+or island exemption, and never moves. A shove that would take the board past its track
+limit is blocked, counting route legs and added segments less removed ones. Hulls
+only guide the search.
 
 ## Results
 

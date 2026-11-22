@@ -691,3 +691,76 @@ fn a_prepared_shove_steps_in_bounded_units_and_cancels_between_them() {
         assert!(canceled.probes < k, "{} probes after {k} checks", canceled.probes);
     }
 }
+
+/// The fixture board with a 3.2 mm non-plated hole added to its two-pad footprint definition,
+/// 6 mm from the footprint origin, reopened as a snapshot. Returns the first hole's board centre.
+fn with_hole(s: &mut Session) -> Point {
+    let mut project = s.project().unwrap().clone();
+    let board = std::sync::Arc::make_mut(&mut project.board);
+    let key = board.definitions.keys().find(|k| board.definitions[*k].pads.len() == 2).cloned().unwrap();
+    let definition = std::sync::Arc::make_mut(board.definitions.get_mut(&key).unwrap());
+    definition.non_plated_holes.push(crate::board::definition::CircularNpth { center: p(0, 6 * MM), diameter_nm: 3_200_000 });
+    definition.format = crate::board::definition::FootprintDefinition::format_for(true).into();
+    s.open_snapshot(std::sync::Arc::new(project));
+    let q = s.clearance_query_with_rules(view(s).target, &json!({})).unwrap();
+    q.objects().iter().find(|o| o.mechanical).expect("the fixture places the hole").at
+}
+
+/// A non-plated hole sits after tracks and vias in the captured query. It does not shift the
+/// track and via ranges, so a shove far from it plans and commits; a route crossing it is
+/// blocked by the hole even at contact, as mechanical clearance comes before any electrical
+/// exemption.
+#[test]
+fn non_plated_holes_neither_shift_copper_nor_let_a_route_through() {
+    let mut s = board();
+    track(&mut s, &[p(2 * MM, 20 * MM), p(18 * MM, 20 * MM)]);
+    let hole = with_hole(&mut s);
+    let line = [p(5 * MM, 20_400_000), p(15 * MM, 20_400_000)];
+    let planned = plan_route_shove(&mut s, &line);
+    assert_eq!(kind(&planned), "reached", "{planned}");
+    commit_route(&mut s, &line);
+    let across = [p(hole.x_nm - 4 * MM, hole.y_nm), p(hole.x_nm + 4 * MM, hole.y_nm)];
+    let planned = plan_route_shove(&mut s, &across);
+    assert_ne!(kind(&planned), "reached", "{planned}");
+    assert!(planned["blocker"].as_str().is_some_and(|b| b.contains("npth")), "{planned}");
+}
+
+/// A shove that would take the board past its track limit is not reached, as the commit would
+/// refuse it.
+#[test]
+fn a_shove_past_the_track_limit_is_not_reached() {
+    let mut s = board();
+    let front = layer(&s);
+    let mut project = s.project().unwrap().clone();
+    let board = std::sync::Arc::make_mut(&mut project.board);
+    let spare = crate::board::track::MAX_TRACKS - board.tracks.len();
+    board.tracks.extend((0..spare).map(|i| {
+        let start = p((-600 + (i % 256) as i64) * MM, (-800 + (i / 256) as i64) * MM);
+        Track { id: Uuid::from_u128(i as u128 + 1), locked: false, layer: front, width_nm: 200_000, start, end: p(start.x_nm + 200_000, start.y_nm) }
+    }));
+    s.open_snapshot(std::sync::Arc::new(project));
+    let line = [p(5 * MM, 12 * MM), p(15 * MM, 12 * MM)];
+    let planned = plan_route_shove(&mut s, &line);
+    assert_ne!(kind(&planned), "reached", "{planned}");
+}
+
+/// A drag that pulls a track off the net-assigned via that gave it its net loses that net, so
+/// the via's same-net exemption no longer holds: 0.1 mm from it under the 0.2 mm rule, the drag
+/// is not reached. A drag that keeps the track on the via is reached and DRC agrees.
+#[test]
+fn a_drag_off_its_net_source_loses_the_same_net_exemption() {
+    let mut s = board();
+    let registry = s.project().unwrap().inspect_net_registry().unwrap();
+    let target = json!({"kind":"derived","anchor":registry["nets"][0]["anchor"]});
+    let at = p(5 * MM, 20 * MM);
+    s.apply(ADD_VIA, &json!({"at":at,"target":target,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()})).unwrap();
+    let via = view(&s).vias().iter().find(|v| v.at == at).unwrap().id;
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"vias":[via],"locked":true,"expected_revision":s.revision()})).unwrap();
+    let [stub] = track(&mut s, &[at, p(10 * MM, 20 * MM)])[..] else { panic!() };
+    let front = layer(&s);
+    let off = json!({"layer":front,"tracks":[{"track":stub,"start":p(5 * MM, 20_525_000),"end":p(10 * MM, 20_525_000)}]});
+    let planned = plan(&mut s, &off);
+    assert_ne!(kind(&planned), "reached", "{planned}");
+    let kept = json!({"layer":front,"tracks":[{"track":stub,"start":at,"end":p(10 * MM, 21 * MM)}]});
+    commit_and_agree(&mut s, &kept);
+}

@@ -333,6 +333,10 @@ struct Verdict {
     /// islands on the captured board, without touching the item now. Confirmation keeps the
     /// exemption only while that copper is still joined to the item.
     joined: Vec<ObstacleId>,
+    /// Copper closer than its clearance that is exempt only because its net equals the item's
+    /// captured net, without touching the item. Confirmation keeps the exemption for a dragged
+    /// track only while that track still has its net (see [`Solver::keeps_contacts`]).
+    same_net: Vec<ObstacleId>,
 }
 
 /// One try at shoving one shover: an overlay of moved copper over the captured board.
@@ -389,8 +393,13 @@ impl<'a> Solver<'a> {
         }
         let view = query.authority().view().ok_or_else(|| CommandError::Unavailable("The captured board is no longer available.".into()))?;
         let (tracks, vias) = (view.tracks().to_vec(), view.vias().to_vec());
-        let lands = query.objects().len().saturating_sub(tracks.len() + vias.len());
-        if query.objects().get(lands..lands + tracks.len()).is_none_or(|o| o.iter().zip(&tracks).any(|(o, t)| o.name != t.id.to_string())) {
+        // The query lists pads, tracks, vias, then mechanical openings, which never move.
+        let openings = query.objects().iter().rev().take_while(|o| o.mechanical).count();
+        let lands = query.objects().len().saturating_sub(openings + tracks.len() + vias.len());
+        let copper = query.objects().get(lands..lands + tracks.len() + vias.len());
+        if copper.is_none_or(|o| {
+            o.iter().zip(tracks.iter().map(|t| t.id).chain(vias.iter().map(|v| v.id))).any(|(o, id)| o.mechanical || o.name != id.to_string())
+        }) {
             return Err(CommandError::Unavailable("The captured copper does not match its board.".into()));
         }
         let layer = [request.layer];
@@ -602,6 +611,11 @@ impl<'a> Solver<'a> {
         items.extend(self.dragged.iter().map(|(i, _, _)| Item::Dragged(*i)));
         items.extend(attempt.chains.keys().map(|c| Item::Chain(*c)));
         items.extend(attempt.vias.keys().map(|v| Item::Via(*v)));
+        let edits = self.edits(attempt);
+        let legs = attempt.route.len().saturating_sub(1);
+        if self.tracks.len() + legs + edits.added.len() > crate::board::track::MAX_TRACKS + edits.removed.len() {
+            return Err(Halt::Blocked(None));
+        }
         let nets = self.route_membership(attempt)?;
         let (layer, islands) = (self.layer.to_vec(), self.route_islands.clone());
         for item in items {
@@ -623,7 +637,19 @@ impl<'a> Solver<'a> {
                 }
                 // Island exemptions hold only for copper the item is still joined to: a drag can
                 // split an island, and DRC rebuilds islands from the committed copper.
-                for obstacle in verdict.joined {
+                // A dragged track that lost a contact may have lost the net it was captured with,
+                // so its same-net exemptions then hold only for copper it is still joined to.
+                let same_net = match item {
+                    Item::Dragged(_) if !verdict.same_net.is_empty() => {
+                        let joined = match &component {
+                            Some(joined) => joined,
+                            None => component.insert(self.component(attempt, item).await?),
+                        };
+                        if self.keeps_contacts(item, joined) { Vec::new() } else { verdict.same_net }
+                    }
+                    _ => Vec::new(),
+                };
+                for obstacle in verdict.joined.into_iter().chain(same_net) {
                     let joined = match &component {
                         Some(joined) => joined,
                         None => component.insert(self.component(attempt, item).await?),
@@ -635,6 +661,21 @@ impl<'a> Solver<'a> {
             }
         }
         Ok(())
+    }
+
+    /// Whether a dragged track still reaches every copper it touched on the captured board, so
+    /// its connectivity, and with it the net it was captured with, are unchanged. `joined` is the
+    /// track's [`Self::component`] in the attempt.
+    fn keeps_contacts(&self, item: Item, joined: &BTreeSet<ObstacleId>) -> bool {
+        let Item::Dragged(i) = item else { return true };
+        let objects = self.query.objects();
+        let contour = &objects[i].contour;
+        self.query.candidates(contour, &objects[i].layers).is_ok_and(|candidates| {
+            candidates
+                .into_iter()
+                .filter(|j| *j != i && !objects[*j].mechanical && objects[*j].contour.gap(contour) <= 0.)
+                .all(|j| joined.contains(&ObstacleId::Source(j)))
+        })
     }
 
     /// The copper joined to `item` as it stands in the attempt: a walk over touching copper of
@@ -947,10 +988,22 @@ impl<'a> Solver<'a> {
         self.probes += 1;
         self.progress.store(self.probes, Ordering::Relaxed);
         let results = attempt.overlay.probe_membership(contour, layers, nets, None)?;
-        let mut verdict = Verdict { edge: false, offenders: Vec::new(), illegal: false, joined: Vec::new() };
+        let mut verdict = Verdict { edge: false, offenders: Vec::new(), illegal: false, joined: Vec::new(), same_net: Vec::new() };
         for decision in &results.decisions {
             let Some(object) = attempt.overlay.object(decision.obstacle) else { continue };
+            // A mechanical opening blocks at contact even at zero clearance, before any net or
+            // island exemption: it is never a conductor and belongs to no island.
+            if object.mechanical {
+                if decision.clearance_violation {
+                    verdict.illegal = true;
+                    verdict.offenders.push((decision.obstacle, decision.clearance_nm));
+                }
+                continue;
+            }
             let same_net = nets.len() == 1 && object.intended_nets == nets;
+            if same_net && decision.gap_nm > 0. && decision.gap_nm < decision.clearance_nm as f64 {
+                verdict.same_net.push(decision.obstacle);
+            }
             let violation = !same_net && decision.gap_nm < decision.clearance_nm as f64;
             if !violation && !decision.conflicting_nets {
                 continue;
@@ -997,7 +1050,7 @@ impl<'a> Solver<'a> {
 
     /// Whether an obstacle is a via of the captured board.
     fn is_via(&self, id: ObstacleId) -> bool {
-        matches!(id, ObstacleId::Source(i) if i >= self.lands + self.tracks.len())
+        matches!(id, ObstacleId::Source(i) if (self.lands + self.tracks.len()..self.lands + self.tracks.len() + self.vias.len()).contains(&i))
     }
 
     /// The item an obstacle belongs to, or `None` for copper that never moves: pads, locked
@@ -1007,7 +1060,7 @@ impl<'a> Solver<'a> {
             ObstacleId::Added(u) if attempt.route_ids.contains(&u) => Ok(Some(Item::Route)),
             ObstacleId::Added(u) => Ok(attempt.owners.get(&u).map(|c| Item::Chain(*c))),
             ObstacleId::Source(i) if self.dragged.iter().any(|(d, _, _)| *d == i) => Ok(Some(Item::Dragged(i))),
-            ObstacleId::Source(i) if i < self.lands => Ok(None),
+            ObstacleId::Source(i) if i < self.lands || i >= self.lands + self.tracks.len() + self.vias.len() => Ok(None),
             ObstacleId::Source(i) if i < self.lands + self.tracks.len() => Ok(self.chain(i)?.map(Item::Chain)),
             ObstacleId::Source(i) => Ok(self.joint(i)?.then_some(Item::Via(i))),
         }
