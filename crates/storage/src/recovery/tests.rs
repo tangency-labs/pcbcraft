@@ -866,6 +866,53 @@ fn a_timed_snapshot_keeps_a_detected_removed_entry_disabled() {
     assert!(!entry_file(dir.path(), "entry", "journal").exists());
 }
 
+/// On Unix, a timed snapshot checks entry lock ownership before skipping or publishing:
+/// removing and recreating the recovery directory (with or without a replacement lock file)
+/// disables the entry and reports a removal fault instead of publishing unprotected files.
+#[cfg(unix)]
+#[test]
+fn a_timed_snapshot_checks_entry_lock_ownership_before_publishing() {
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().join("recreated-dirty");
+    let (mut journal, states) = journal_with(&dir, 1);
+    fs::remove_dir_all(&dir).unwrap();
+    fs::create_dir_all(&dir).unwrap();
+    assert_eq!(journal.snapshot(states[1].clone()).unwrap_err(), REMOVED_ENTRY);
+    assert!(journal.removed);
+    assert!(journal.file.is_none());
+    assert!(!entry_file(&dir, "entry", "pc").exists());
+    assert!(!entry_file(&dir, "entry", "journal").exists());
+
+    let dir_unchanged = work.path().join("recreated-unchanged");
+    let (mut intact, intact_states) = journal_with(&dir_unchanged, 0);
+    assert!(!intact.snapshot(intact_states[0].clone()).unwrap(), "intact unchanged entry skips publication");
+    fs::remove_dir_all(&dir_unchanged).unwrap();
+    fs::create_dir_all(&dir_unchanged).unwrap();
+    fs::write(entry_file(&dir_unchanged, "entry", "lock"), b"").unwrap();
+    assert_eq!(intact.snapshot(intact_states[0].clone()).unwrap_err(), REMOVED_ENTRY);
+    assert!(intact.removed);
+    assert!(intact.file.is_none());
+    assert!(!entry_file(&dir_unchanged, "entry", "pc").exists());
+    assert!(!entry_file(&dir_unchanged, "entry", "journal").exists());
+
+    let recorder_dir = work.path().join("recreated-recorder");
+    let recorder = Arc::new(JournalRecorder::start(recorder_dir.clone(), "entry".to_owned()).unwrap());
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Owned"})).unwrap();
+    session.observe_edits(Some(recorder.clone()));
+    session.apply("project.rename", &json!({"name":"Edited"})).unwrap();
+    recorder.sync().unwrap();
+    fs::remove_dir_all(&recorder_dir).unwrap();
+    fs::create_dir_all(&recorder_dir).unwrap();
+    recorder.snapshot(session.snapshot().unwrap());
+    assert_eq!(recorder.sync().unwrap_err(), REMOVED_ENTRY);
+    assert_eq!(recorder.fault(), Some(RecordingFault { message: REMOVED_ENTRY.to_owned(), removed: true }));
+    assert!(!entry_file(&recorder_dir, "entry", "pc").exists());
+    assert!(!entry_file(&recorder_dir, "entry", "journal").exists());
+    session.observe_edits(None);
+    Arc::into_inner(recorder).unwrap().finish().unwrap();
+}
+
 /// The first snapshot of a recorder that has seen nothing yet creates the entry.
 #[test]
 fn a_first_snapshot_creates_the_entry() {

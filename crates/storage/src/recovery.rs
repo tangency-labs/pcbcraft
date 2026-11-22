@@ -569,6 +569,38 @@ impl EditJournal {
         &self.sha256
     }
 
+    /// Verify the entry's lock path still identifies the lock handle held by this journal.
+    /// If the lock file or its directory was removed or replaced, disable the entry so a
+    /// timed snapshot or rebase cannot publish unprotected files into a recreated directory.
+    fn ensure_lock_owned(&mut self) -> Result<(), String> {
+        if self.removed {
+            return Err(REMOVED_ENTRY.to_owned());
+        }
+        let lock_path = entry_file(&self.dir, &self.id, "lock");
+        let path_meta = match fs::symlink_metadata(&lock_path) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == ErrorKind::NotFound => {
+                self.file = None;
+                self.removed = true;
+                return Err(REMOVED_ENTRY.to_owned());
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let held_meta = self._lock.metadata().map_err(|e| e.to_string())?;
+            if (path_meta.dev(), path_meta.ino()) != (held_meta.dev(), held_meta.ino()) {
+                self.file = None;
+                self.removed = true;
+                return Err(REMOVED_ENTRY.to_owned());
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = path_meta;
+        Ok(())
+    }
+
     /// Replace the snapshot with `base` and start an empty journal. A failure before the
     /// snapshot's rename preserves the existing pair and the open journal. After that rename,
     /// `base` becomes the recorded state and the old journal is closed, even if the folder flush
@@ -578,9 +610,7 @@ impl EditJournal {
     /// Once removal was detected, the entry stays disabled even if its folder is recreated: its
     /// original lock handle cannot protect a recreated lock path.
     pub fn rebase(&mut self, base: Documents) -> Result<(), String> {
-        if self.removed {
-            return Err(REMOVED_ENTRY.to_owned());
-        }
+        self.ensure_lock_owned()?;
         let (staged, header, snapshot_bytes) = stage_snapshot(&self.dir, &base)?;
         let published = publish_staged(&self.dir, &entry_file(&self.dir, &self.id, "pc"), staged);
         if let Err(PublishError { replaced: false, message }) = published {
@@ -603,6 +633,7 @@ impl EditJournal {
     /// Checking the recorded result matters if a notification failed to return the journal to
     /// its base, for example when an undo could not be encoded. Returns whether it wrote.
     pub fn snapshot(&mut self, documents: Documents) -> Result<bool, String> {
+        self.ensure_lock_owned()?;
         if self.file.is_some() && self.base_sha256 == self.sha256 && documents_sha256(&documents) == self.base_sha256 {
             return Ok(false);
         }
