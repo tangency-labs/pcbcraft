@@ -5,6 +5,6 @@
   "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)",
   "profile": "release",
   "power": "AC power; macOS default power mode; developer desktop with other build and agent load; CPU exclusivity and thermal state not controlled.",
-  "notes": "Issue247 shove review revision: board_perf shove (report schema 2) on channels-v1 and dense-v1, 100 iterations. Adds a command-generated pushing case, plan/commit agreement and connection checks, the pushing job's longest uninterrupted step per stage and its cancellation acknowledgement. No latency-tail, allocation, presentation or endurance qualification.",
-  "revision": "ff529625"
+  "notes": "Issue247 shove second review round: board_perf shove (report schema 2) on channels-v1 and dense-v1, 100 iterations. Adds a command-generated pushing case, plan/commit agreement and connection checks, the pushing job's longest uninterrupted step per stage and its cancellation acknowledgement. No latency-tail, allocation, presentation or endurance qualification.",
+  "revision": "6754a9f3"
 }

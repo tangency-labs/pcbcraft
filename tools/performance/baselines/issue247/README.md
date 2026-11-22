@@ -54,26 +54,34 @@ build load on the host and support no latency claim; all-plan p50 values are bel
 These are solver service costs on one host. Route-tool preview and commit latency,
 the browser runtime, allocations and presentation remain **unmeasured**.
 
-## Review revision (`ff529625`)
+## Review revision (`6754a9f3`)
 
-The revision for the PR #446 review merges upstream main and changes the solver and
-the diagnostic: a route settles with the nets it touches, probes apply contacted
-net-class width minimums, confirmation checks island exemptions against the
-connectivity after the shove, off-lattice legs enter hulls on the crossed edge, and
-`pcb.shove_tracks` runs in the copper job's bounded steps. The `shove` diagnostic
-(report schema 2) now compares each committed shove with its plan and with the
-connections that existed before, adds a command-generated pushing case, and times
-the pushing case's copper job and its cancellation.
+The revision for the PR #446 reviews merges upstream main and changes the solver and
+the diagnostic. In the solver, a route settles with the nets it touches, and probes
+apply the width minimums of the net classes the route touches. Confirmation checks
+island and same-net exemptions against the connectivity after the shove. Off-lattice
+legs enter hulls on the crossed edge, non-plated holes block before any electrical
+exemption, and the board's track limit is checked. `pcb.shove_tracks` now runs in the
+copper job's bounded steps. The `shove` diagnostic (report schema 2) now:
 
-`board_perf` was rebuilt at `ff529625` with rustc 1.100.0 in the release profile on
+- compares each committed shove with its plan and with the connections that existed
+  before;
+- refuses any violating pair that is new after the shove;
+- adds a command-generated pushing case;
+- times the pushing case's copper job and its confirmed cancellation.
+
+The results of the first review run, at `ff529625`, were replaced. They remain in
+the history at `6fc4d203`.
+
+`board_perf` was rebuilt at `6754a9f3` with rustc 1.100.0 in the release profile on
 the same host, again under other build and agent load; see the
 [environment](environment-review.json). Its SHA-256 is
-`7643603e686f46f43aec4d929479df801eecdde5d8ab15768457c24e3a3371de`. The fixtures
+`3b7ab9603e1f9c3fbe3507f2ca0e181e9eef457446e22f1963adca238d16daef`. The fixtures
 are the same artifacts as above. The pushing case is generated on a copy of each
-fixture through `pcb.add_tracks` and `pcb.add_via` (four parallel 0.25 mm tracks
-0.45 mm apart, a via with a track ending on it, a route along them at y = 80.4 mm);
-its project digests are recorded in each report (`push_case.project_sha256`):
-`a32cac83…a48cc` (channels-v1) and `9225ae92…1b574` (dense-v1).
+fixture through `pcb.add_tracks` and `pcb.add_via`: four parallel 0.25 mm tracks
+0.45 mm apart, a via with a track ending on it, and a route along them at
+y = 80.4 mm. New identities are random, so its project digest differs between runs;
+each report records its own digest (`push_case.project_sha256`).
 
 ```sh
 cargo build --locked --release -p pcbcraft-app --features performance-harness --example board_perf
@@ -81,34 +89,35 @@ board_perf shove FIXTURE environment-review.json 100 shove-FIXTURE-review.json
 ```
 
 Raw reports: [channels-v1](shove-channels-v1-review.json.gz),
-[dense-v1](shove-dense-v1-review.json.gz). The run was 100 iterations per fixture
-and was not repeated.
+[dense-v1](shove-dense-v1-review.json.gz). The run was 100 iterations per fixture.
 
 | Fixture | Straight cases reached / blocked | Pushing case | Straight plans p50 / p95 | Pushing plan p50 / p95 |
 | --- | ---: | --- | ---: | ---: |
-| channels-v1 | 6 / 2 | reached, depth 4, 22 changed (5 reshaped, 16 added, 1 via), 91 probes | 0.548 / 0.585 ms | 0.207 / 0.224 ms |
-| dense-v1 | 7 / 1 | reached, depth 4, 22 changed (5 reshaped, 16 added, 1 via), 91 probes | 0.818 / 0.888 ms | 0.261 / 0.283 ms |
+| channels-v1 | 6 / 2 | reached, depth 4, 22 changed (5 reshaped, 16 added, 1 via), 91 probes | 0.626 / 0.839 ms | 0.241 / 0.307 ms |
+| dense-v1 | 7 / 1 | reached, depth 4, 22 changed (5 reshaped, 16 added, 1 via), 91 probes | 0.954 / 1.277 ms | 0.304 / 0.368 ms |
 
-One airwire case per fixture (`airwire.1` on channels-v1, `airwire.3` on dense-v1)
-was blocked by its own target pad `footprint-5:1` in the first runs and is now
-reached: that is the route-membership correction. Both commits pass the plan,
-connection and exhaustive clearance checks.
+In the first runs, one airwire case per fixture (`airwire.1` on channels-v1,
+`airwire.3` on dense-v1) was blocked by its own target pad `footprint-5:1`. Both are
+now reached, which is the effect of the route-membership correction. Both commits
+pass the plan, connection and exhaustive clearance checks.
 
-The pushing case's `pcb.shove_tracks` job, driven in 256-unit host batches
-(748 steps on channels-v1, 1,505 on dense-v1, the same on every iteration):
+The pushing case's `pcb.shove_tracks` job was driven in 256-unit host batches. It
+took 747–748 steps on channels-v1 and 1,494–1,495 on dense-v1; the count varies by a
+step between iterations.
 
-| Fixture | Longest uninterrupted step p50 / p95 / max | of which planning | Cancel acknowledged p50 / p95 / max | Whole job p50 |
+| Fixture | Longest uninterrupted step p50 / p95 / max | of which planning | Confirmed cancel p50 / p95 / max | Whole job p50 |
 | --- | ---: | ---: | ---: | ---: |
-| channels-v1 | 0.180 / 0.194 / 0.383 ms | 0.097 / 0.109 / 0.150 ms | 0.081 / 0.090 / 0.135 ms | 3.378 ms |
-| dense-v1 | 0.334 / 0.365 / 0.536 ms | 0.164 / 0.176 / 0.231 ms | 0.133 / 0.145 / 0.173 ms | 7.137 ms |
+| channels-v1 | 0.205 / 0.252 / 0.459 ms | 0.109 / 0.139 / 0.162 ms | 0.106 / 0.129 / 0.222 ms | 3.818 ms |
+| dense-v1 | 0.401 / 0.480 / 0.716 ms | 0.187 / 0.247 / 0.451 ms | 0.167 / 0.195 / 0.208 ms | 8.114 ms |
 
 The longest steps are obstacle-preparation batches, which the walkaround planner
-shares. Every one of the 200 cancels was issued while the job reported planning, and
-the snapshot worker retired it within 0.173 ms. Before this revision the whole
-obstacle preparation and search ran in one advance; that advance was not timed, but it
-contained the full obstacle preparation, which alone takes 1.929 ms (channels-v1) and
-4.137 ms (dense-v1) at p50 here (`shove.push.prepare`). The browser's incremental
-host yields after 2 ms of batches, so no measured step exceeds one slice.
+shares. All 200 cancels were issued while the job reported planning. The queue
+confirmed each as a cancellation, with no output, within 0.222 ms. Before this
+revision, the whole obstacle preparation and search ran in one advance. That advance
+was not timed, but it contained the full obstacle preparation, which alone takes
+2.101 ms (channels-v1) and 4.602 ms (dense-v1) at p50 here (`shove.push.prepare`).
+The browser's incremental host yields after 2 ms of batches, so no measured step
+exceeds one slice.
 
 These remain service costs on one loaded host. Route-tool preview and commit
 latency, the browser runtime, allocations and presentation are still **unmeasured**.
