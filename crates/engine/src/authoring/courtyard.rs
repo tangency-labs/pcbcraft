@@ -699,6 +699,41 @@ mod tests {
         assert_eq!(session.revision(), rev);
     }
 
+    /// Raw insert and replace actions enforce the 0.001 mm (1,000 nm) courtyard minimum stroke,
+    /// leaving the draft and its revision unchanged when refused.
+    #[test]
+    fn raw_insert_and_replace_enforce_courtyard_minimum_stroke() {
+        let message = "Stroke (mm) must be between 0.001 and 2 mm.";
+        let square = |stroke_nm| Primitive::Artwork {
+            artwork: footprint::Artwork {
+                purpose: GraphicPurpose::Courtyard,
+                graphic: Graphic {
+                    geometry: Geometry::Polyline {
+                        points: vec![pt(0, 0), pt(2_000_000, 0), pt(2_000_000, 2_000_000), pt(0, 2_000_000)],
+                        closed: true,
+                    },
+                    stroke_nm,
+                    fill: Fill::None,
+                },
+            },
+        };
+        let mut session = Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let before = session.snapshot();
+        let error = session.execute(0, Action::Insert { primitive: square(MIN_STROKE_NM - 1) }).unwrap_err();
+        assert_eq!(error, message);
+        assert_eq!(session.snapshot(), before);
+        assert_eq!(session.revision(), 0);
+
+        let rev = session.execute(0, Action::Insert { primitive: square(MIN_STROKE_NM) }).unwrap();
+        assert_eq!(rev, 1);
+        let accepted = session.snapshot();
+        let id = *accepted.objects.iter().find(|(_, p)| is_courtyard_primitive(p)).unwrap().0;
+        let error = session.execute(rev, Action::Replace { object: id, primitive: square(MIN_STROKE_NM - 1) }).unwrap_err();
+        assert_eq!(error, message);
+        assert_eq!(session.snapshot(), accepted);
+        assert_eq!(session.revision(), rev);
+    }
+
     /// GenerateCourtyard replaces existing courtyard primitives in one undoable transaction
     /// and rejects symbol documents.
     #[test]

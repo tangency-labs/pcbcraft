@@ -1023,13 +1023,14 @@ impl Session {
                 }
                 next.validate()?;
                 // Every action that adds or changes a closed courtyard outline must leave it a
-                // simple polygon. This runs after the bounds check above, so the polygon arithmetic
-                // only sees bounded coordinates. Unchanged outlines are not rechecked, so a loaded
-                // definition stays editable.
+                // valid courtyard stroke and simple polygon. This runs after the bounds check
+                // above, so the polygon arithmetic only sees bounded coordinates. Unchanged
+                // outlines are not rechecked, so a loaded definition stays editable.
                 for (id, primitive) in &next.objects {
                     if self.item.objects.get(id) != Some(primitive)
-                        && let Some((points, _)) = courtyard::courtyard_polygon(primitive)
+                        && let Some((points, stroke_nm)) = courtyard::courtyard_polygon(primitive)
                     {
+                        courtyard::validate_stroke(stroke_nm)?;
                         courtyard::validate_polygon(points)?;
                     }
                 }
