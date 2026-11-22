@@ -310,3 +310,68 @@ fn cross_line_absorption_frees_blocked_join_in_one_merge() {
     assert_eq!(again["changed"], false);
     assert_eq!(s.revision(), merged_revision, "a single merge must reach the fixed point");
 }
+
+/// With an intermediate overlapping segment `B = [5, 15]` between `A = [0, 10]` and
+/// `C = [10, 20]`, `C` still joins the earlier span `A` at the free end `10` and `B` is then
+/// absorbed into the resulting `[0, 20]` track, with the lowest UUID surviving. A via or pad
+/// at `10` blocks that join, and a partial overlap alone (`[0, 10]` and `[5, 15]`) stays two
+/// tracks.
+#[test]
+fn overlapping_bridge_joins_earlier_span_when_free_and_stays_separate_when_blocked_or_partial() {
+    let mut s = tests::routed_fixture();
+    let front = tests::copper_layers(&s)[0];
+    let y = 40 * MM;
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(0, y), at(10 * MM, y)]);
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(5 * MM, y), at(15 * MM, y)]);
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(10 * MM, y), at(20 * MM, y)]);
+    let tracks = all_tracks(&s);
+    assert_eq!(tracks.len(), 3);
+    let lowest = tracks[0];
+
+    let report = merge(&mut s, &tracks, false);
+    assert_eq!(report["changed"], true, "{report}");
+    assert_eq!(report["removed"].as_array().unwrap().len(), 2, "{report}");
+    let merged = tests::view(&s).tracks().to_vec();
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].id, lowest, "the lowest UUID survives");
+    assert_eq!(ends(merged[0].start, merged[0].end), ends(at(0, y), at(20 * MM, y)));
+
+    // A via at the shared end 10 blocks A and C from joining across B.
+    let mut with_via = tests::routed_fixture();
+    let front = tests::copper_layers(&with_via)[0];
+    add(&mut with_via, front, DEFAULT_WIDTH_NM, &[at(0, y), at(10 * MM, y)]);
+    add(&mut with_via, front, DEFAULT_WIDTH_NM, &[at(5 * MM, y), at(15 * MM, y)]);
+    add(&mut with_via, front, DEFAULT_WIDTH_NM, &[at(10 * MM, y), at(20 * MM, y)]);
+    with_via
+        .apply(
+            ADD_VIA,
+            &json!({"board":board(&with_via),"at":at(10 * MM, y),"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":with_via.revision()}),
+        )
+        .unwrap();
+    let tracks = all_tracks(&with_via);
+    let report = merge(&mut with_via, &tracks, false);
+    assert_eq!(report["changed"], false, "a via at 10 must block the join: {report}");
+    assert_eq!(tests::view(&with_via).tracks().len(), 3);
+
+    // A pad at the shared end blocks A and C from joining across B too.
+    let mut with_pad = tests::routed_fixture();
+    let front = tests::copper_layers(&with_pad)[0];
+    let pad = tests::view(&with_pad).ratsnest().unwrap().lines[0].from.position;
+    add(&mut with_pad, front, DEFAULT_WIDTH_NM, &[at(pad.x_nm, pad.y_nm - 3 * MM), pad]);
+    add(&mut with_pad, front, DEFAULT_WIDTH_NM, &[at(pad.x_nm, pad.y_nm - 3 * MM / 2), at(pad.x_nm, pad.y_nm + 3 * MM / 2)]);
+    add(&mut with_pad, front, DEFAULT_WIDTH_NM, &[pad, at(pad.x_nm, pad.y_nm + 3 * MM)]);
+    let tracks = all_tracks(&with_pad);
+    let report = merge(&mut with_pad, &tracks, false);
+    assert_eq!(report["changed"], false, "a pad at the shared end must block the join: {report}");
+    assert_eq!(tests::view(&with_pad).tracks().len(), 3);
+
+    // A partial overlap alone ([0, 10] and [5, 15]) has no shared free end and stays two tracks.
+    let mut partial = tests::routed_fixture();
+    let front = tests::copper_layers(&partial)[0];
+    add(&mut partial, front, DEFAULT_WIDTH_NM, &[at(0, y), at(10 * MM, y)]);
+    add(&mut partial, front, DEFAULT_WIDTH_NM, &[at(5 * MM, y), at(15 * MM, y)]);
+    let tracks = all_tracks(&partial);
+    let report = merge(&mut partial, &tracks, false);
+    assert_eq!(report["changed"], false, "partial overlap alone stays two tracks: {report}");
+    assert_eq!(tests::view(&partial).tracks().len(), 2);
+}

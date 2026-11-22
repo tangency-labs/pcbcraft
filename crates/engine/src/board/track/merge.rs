@@ -234,27 +234,44 @@ struct Join<'a> {
 
 impl Join<'_> {
     /// Merge the spans of one line until none can merge, returning whether any span merged.
-    /// Each pass sweeps the spans in order along the line; the last kept span always reaches
-    /// furthest. A span inside it is absorbed, and a span starting exactly at its far end is
-    /// joined when that end is free (see [`Self::free_end`]). Every merge removes a span, so
-    /// the passes end; a later pass only adds the joins that duplicates absorbed in an earlier
-    /// pass were blocking.
+    /// Each pass sweeps the spans in order along the line, tracking the furthest-reaching kept
+    /// span and indexing kept spans by their far end. A span covered by the furthest-reaching
+    /// kept span is absorbed into it; otherwise a span starting at any earlier kept span's far
+    /// end joins that span when `continues_straight` holds and the shared end is free (see
+    /// [`Self::free_end`]). Every merge removes a span, so the passes end; a later pass absorbs
+    /// any intermediate overlapping spans now covered by the extended run and adds joins that
+    /// earlier absorptions unblocked.
     fn merge_line(&self, spans: &mut Vec<Span>, ends: &mut BTreeMap<End, usize>, removed: &mut BTreeSet<Uuid>) -> bool {
         let mut any = false;
         loop {
             spans.sort_by(|a, b| a.low_t.cmp(&b.low_t).then(b.high_t.cmp(&a.high_t)).then(a.id.cmp(&b.id)));
             let mut merged = false;
             let mut kept: Vec<Span> = Vec::with_capacity(spans.len());
+            let mut by_high: BTreeMap<i128, usize> = BTreeMap::new();
+            let mut furthest = 0usize;
             for span in spans.drain(..) {
-                if let Some(reach) = kept.last_mut()
-                    && (span.high_t <= reach.high_t
-                        || (span.low_t == reach.high_t && continues_straight(reach.low, reach.high, span.high) && self.free_end(reach.high, ends)))
-                {
-                    self.absorb(reach, span, ends, removed);
-                    merged = true;
-                    continue;
+                if !kept.is_empty() {
+                    if span.high_t <= kept[furthest].high_t {
+                        self.absorb(&mut kept[furthest], span, ends, removed);
+                        merged = true;
+                        continue;
+                    }
+                    if let Some(&idx) = by_high.get(&span.low_t)
+                        && continues_straight(kept[idx].low, kept[idx].high, span.high)
+                        && self.free_end(kept[idx].high, ends)
+                    {
+                        by_high.remove(&span.low_t);
+                        self.absorb(&mut kept[idx], span, ends, removed);
+                        by_high.insert(kept[idx].high_t, idx);
+                        furthest = idx;
+                        merged = true;
+                        continue;
+                    }
                 }
+                let idx = kept.len();
+                by_high.insert(span.high_t, idx);
                 kept.push(span);
+                furthest = idx;
             }
             *spans = kept;
             if !merged {
