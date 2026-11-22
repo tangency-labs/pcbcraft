@@ -279,6 +279,10 @@ fn teardrops_still_refused_in_connectivity_and_short_detection() {
     let mut s = routed_fixture();
     let front = copper_layers(&s)[0];
     let board = view(&s).target.board;
+    let outline = view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let corners = [(-5_000_000, -5_000_000), (25_000_000, -5_000_000), (25_000_000, 45_000_000), (-5_000_000, 45_000_000)]
+        .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    s.apply(crate::ADD_DRAWING, &json!({"board":board,"layer":outline,"points":corners,"closed":true,"expected_revision":s.revision()})).unwrap();
     let at = Point { x_nm: 0, y_nm: 20_000_000 };
     let end = Point { x_nm: 600_000, y_nm: 20_000_000 };
     s.apply(crate::ADD_VIA, &json!({"board":board,"at":at,"via_diameter_nm":500_000,"via_drill_nm":300_000,"expected_revision":s.revision()}))
@@ -293,6 +297,7 @@ fn teardrops_still_refused_in_connectivity_and_short_detection() {
         parameters: Parameters { length: Length::Percent(20), max_length_nm: None, width_pct: 80, max_width_nm: None },
     };
     s.apply(EDIT_TEARDROPS, &json!({"board":board,"expected_revision":s.revision(),"edits":{"add":[record],"remove":[]}})).unwrap();
+    assert_eq!(view(&s).teardrops().len(), 1);
 
     let assert_refused = |v: BoardView<'_>| {
         assert_eq!(v.copper().unwrap_err(), TEARDROP_UNSUPPORTED);
