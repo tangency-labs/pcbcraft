@@ -341,3 +341,59 @@ fn cut_out_findings_agree_between_direct_and_resumable_checks() {
         assert_eq!(json!(job.take_report().unwrap()), expected, "budget={budget}");
     }
 }
+
+/// A disjoint cut-out stays off the board even when other Board Outlines overlap each other
+/// elsewhere on the board: copper inside the cut-out still reports `outside_board` naming the
+/// cut-out drawing, while the overlapping pair is reported explicitly as `ambiguous_outline`.
+#[test]
+fn cut_out_stays_off_board_when_other_outlines_overlap() {
+    let mut s = routed_fixture();
+    let outer = outline_square(&mut s, -5, -5, 40);
+    let cut_out = outline_square(&mut s, 5, 15, 10);
+    let overlap = outline_square(&mut s, 25, -5, 20);
+    let inside = track_mm(&mut s, (8., 20.), (12., 20.));
+    let shared = track_mm(&mut s, (28., 10.), (32., 10.));
+
+    let report = check(&s);
+    let found = outline_findings(&report, &inside);
+    assert_eq!(found.len(), 1, "{report:#?}");
+    assert_eq!(found[0].kind, Kind::OutsideBoard);
+    assert_eq!(found[0].message, "Copper lies inside a board cut-out");
+    assert_eq!(found[0].items, vec![inside, cut_out.to_string()]);
+    assert!(outline_findings(&report, &shared).is_empty(), "{report:#?}");
+
+    let ambiguous: Vec<_> = report.violations.iter().filter(|v| v.kind == Kind::AmbiguousOutline).collect();
+    assert_eq!(ambiguous.len(), 1, "{report:#?}");
+    let mut expected_ambiguous = vec![outer.to_string(), overlap.to_string()];
+    expected_ambiguous.sort();
+    assert_eq!(ambiguous[0].items, expected_ambiguous);
+    assert!(!ambiguous[0].items.contains(&cut_out.to_string()));
+
+    let expected = s.check_design(&json!({})).unwrap();
+    for budget in [1, 3, 256] {
+        let mut job = s.design_check_job(&json!({})).unwrap();
+        while !job.step(budget) {}
+        assert_eq!(json!(job.take_report().unwrap()), expected, "budget={budget}");
+    }
+}
+
+/// Meeting closed Board Outlines (overlapping, duplicated or touching) report `ambiguous_outline`
+/// naming the exact drawings involved, whereas disjoint nested contours report no ambiguity.
+#[test]
+fn ambiguous_meeting_outlines_report_ambiguity_with_drawing_ids() {
+    let (mut disjoint, _) = cut_out_board();
+    outline_square(&mut disjoint, 8, 18, 4);
+    assert_eq!(count(&check(&disjoint), Kind::AmbiguousOutline), 0);
+
+    for (x, y, size) in [(25, -5, 20), (-5, -5, 40), (-5, 15, 10)] {
+        let mut s = routed_fixture();
+        let a = outline_square(&mut s, -5, -5, 40);
+        let b = outline_square(&mut s, x, y, size);
+        let report = check(&s);
+        let ambiguous: Vec<_> = report.violations.iter().filter(|v| v.kind == Kind::AmbiguousOutline).collect();
+        assert_eq!(ambiguous.len(), 1, "({x},{y},{size}): {report:#?}");
+        let mut ids = vec![a.to_string(), b.to_string()];
+        ids.sort();
+        assert_eq!(ambiguous[0].items, ids, "({x},{y},{size}): {report:#?}");
+    }
+}

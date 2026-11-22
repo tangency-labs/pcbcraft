@@ -529,10 +529,11 @@ most 1000 findings. Saved board defaults apply unless a request supplies a
 supported hard-limit override; authored minimums can only tighten upward and
 maximums downward. The report includes per-property `sources`. Kinds are `short`,
 `clearance`, `track_width`, `via_diameter`, `via_drill`, `annular_ring`, `unconnected`,
-`no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`. Closed Board
-Outline drawings that do not cross, touch or share an edge nest by even-odd parity, so a
-closed outline inside another is a cut-out; when any two closed outlines meet, the board
-is their union, with no cut-outs. An `outside_board` finding for a copper item or
+`no_outline`, `ambiguous_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
+Closed Board Outline drawings whose boundaries cross, touch or share an edge are grouped into one
+union component and reported as `ambiguous_outline` (listing those drawings' UUIDs), while
+disjoint closed outlines still nest by even-odd parity so a cut-out away from an overlap remains
+a cut-out. An `outside_board` finding for a copper item or
 non-plated hole inside a cut-out also lists the cut-out drawing's UUID after that item. A
 `courtyard_overlap` lists both footprints and marks a point inside the overlap; touching
 courtyards pass. When unsupported courtyard geometry (circles, arcs, open paths) decided

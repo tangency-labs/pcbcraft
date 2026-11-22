@@ -766,11 +766,13 @@ remain documentation in the native board.
 Select **Board Outline** when drawing the physical boundary. Its centerline
 continues to define the board edge; a closed boundary is required for fabrication.
 A closed Board Outline drawn inside another is a cut-out, a hole through the board,
-and one drawn inside a cut-out is board again: a point is on the board when it lies
-inside an odd number of closed outlines. This applies only when no two closed outlines
-cross, touch or share an edge. When any two do, such as an L-shaped board drawn as two
-overlapping rectangles or an outline drawn twice, there are no cut-outs: the board is
-everywhere inside any closed outline.
+and one drawn inside a cut-out is board again: closed outlines whose boundaries cross,
+touch or share an edge (such as an L-shaped board drawn as two overlapping rectangles or
+an outline drawn twice) form one union component, while disjoint outlines remain separate
+components, and a point is on the board when it lies inside an odd number of components.
+When closed outlines meet, DRC reports an `ambiguous_outline` finding naming those
+drawings so the ambiguity is visible, while disjoint cut-outs elsewhere on the board
+remain cut-outs.
 Board Outline is also available without a copper setup. Fit and layer visibility
 include these graphics, while DRC reports a missing closed outline and copper
 outside it, inside a cut-out or too close to an edge. Routing and teardrops treat a

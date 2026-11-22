@@ -61,6 +61,10 @@ pub enum Kind {
     AnnularRing,
     Unconnected,
     NoOutline,
+    /// Two or more closed Board Outline drawings cross, touch or share an edge, so their
+    /// nesting cannot be resolved; they are treated as a union while disjoint contours still
+    /// nest by parity.
+    AmbiguousOutline,
     OutsideBoard,
     EdgeClearance,
     CourtyardOverlap,
@@ -116,13 +120,17 @@ pub struct Report {
 struct Findings {
     listed: BTreeMap<(Kind, i64, i64, Vec<String>, usize), Violation>,
     counts: BTreeMap<Kind, usize>,
+    ambiguous_outlines: std::collections::BTreeSet<Vec<String>>,
     total: usize,
 }
 
 impl Findings {
-    /// Retain bounded detail without losing totals; a missing outline is one board finding.
+    /// Retain bounded detail without losing totals; board-level outline findings are reported once.
     fn push(&mut self, violation: Violation) {
         if violation.kind == Kind::NoOutline && self.counts.contains_key(&Kind::NoOutline) {
+            return;
+        }
+        if violation.kind == Kind::AmbiguousOutline && !self.ambiguous_outlines.insert(violation.items.clone()) {
             return;
         }
         let key = (violation.kind, violation.at.x_nm, violation.at.y_nm, violation.items.clone(), self.total);
@@ -449,14 +457,14 @@ impl BoardView<'_> {
     }
 
     /// Require a closed Board Outline, every copper item on the board, and copper at least the
-    /// edge clearance from every outline segment. Disjoint closed contours nest by even-odd
-    /// parity, so a contour inside the outer one is a cut-out and copper inside it is off the
-    /// board; the finding then names the cut-out drawing. Contours that meet form a union.
-    /// Penetration remains a finding at zero required clearance. Open outline paths still count
-    /// as edges.
+    /// edge clearance from every outline segment. Closed contours whose boundaries meet are
+    /// grouped into one union component and reported as `ambiguous_outline`, while disjoint
+    /// contours continue to nest by even-odd parity so a cut-out away from an overlap stays a
+    /// cut-out and names its drawing. Penetration remains a finding at zero required clearance.
+    /// Open outline paths still count as edges.
     fn check_outline(self, items: &[Item], rules: Rules, context: Option<&super::class_rules::Context>, found: &mut Findings) {
         let outline = self.outline_edges();
-        let Outline { drawn, polygons, edges, .. } = &outline;
+        let Outline { drawn, polygons, ambiguous, edges, .. } = &outline;
         if polygons.is_empty() {
             if !items.is_empty() || *drawn {
                 found.push(Violation {
@@ -468,6 +476,15 @@ impl BoardView<'_> {
                 });
             }
             return;
+        }
+        for (at, drawings) in ambiguous {
+            found.push(Violation {
+                kind: Kind::AmbiguousOutline,
+                message: "Closed Board Outline drawings meet; their nesting is ambiguous and they are treated as one union".into(),
+                at: *at,
+                items: drawings.iter().map(Uuid::to_string).collect(),
+                nets: Vec::new(),
+            });
         }
         for item in items {
             let subject = if item.mechanical { "Non-plated hole" } else { "Copper" };
@@ -516,20 +533,26 @@ impl BoardView<'_> {
 }
 
 /// The board's Board Outline drawings: closed polygons that bound the board, and every
-/// edge, closed or open, that copper must keep its edge clearance from. When the closed
-/// polygons are disjoint, the board is where an odd number of them overlap: the outer contour
-/// is board, a contour nested in it is a cut-out, and one nested in a cut-out is board again,
-/// as for the 3D board substrate. When any two of them cross, touch or share an edge, such as
-/// an L-shaped board drawn as two overlapping rectangles or a duplicated outline, nesting is
-/// ambiguous and the board is their union, with no cut-outs.
+/// edge, closed or open, that copper must keep its edge clearance from. Closed polygons whose
+/// boundaries cross, touch or share an edge are grouped into one union component, while each
+/// disjoint closed polygon forms its own component. A point is on the board when it lies
+/// inside an odd number of components: an outer contour (or union of meeting outer contours)
+/// is board, a disjoint contour nested inside it is a cut-out, and one nested inside a
+/// cut-out is board again, as for the 3D board substrate. Each multi-polygon component is
+/// recorded in `ambiguous` so DRC reports that nesting among those meeting drawings could not
+/// be resolved.
 pub(super) struct Outline {
     /// Whether any outline drawing exists, even one that is not closed.
     pub(super) drawn: bool,
     pub(super) polygons: Vec<Vec<Point>>,
     /// The drawing of each closed polygon, in the order of `polygons`.
     drawings: Vec<Uuid>,
-    /// Whether the closed polygons are disjoint, so that nesting by parity makes cut-outs.
-    nested: bool,
+    /// Connected component index of each closed polygon under boundary meeting.
+    component: Vec<usize>,
+    /// Number of connected components in `component`.
+    component_count: usize,
+    /// Multi-polygon components whose boundaries meet: marker point and sorted drawing UUIDs.
+    ambiguous: Vec<(Point, Vec<Uuid>)>,
     pub(super) edges: Vec<OutlineEdge>,
 }
 
@@ -600,17 +623,24 @@ impl Outline {
         !crosses && gap >= clearance_nm as f64 && self.contains(contour)
     }
 
-    /// Whether every core anchor of the copper lies on the board. With disjoint contours that is
-    /// inside an odd number of closed polygons, so copper inside a cut-out is not contained;
-    /// otherwise it is inside any closed polygon.
+    /// Whether every core anchor of the copper lies on the board. A point is on the board when
+    /// it lies inside an odd number of boundary-meeting components, so a disjoint contour
+    /// nested inside the board stays a cut-out even when other contours overlap each other.
     pub(super) fn contains(&self, contour: &Contour) -> bool {
         contour.core.iter().all(|point| self.on_board(*point))
     }
 
-    /// Even-odd parity of the closed polygons around a point, or any of them when contours meet.
+    /// Even-odd parity of the boundary-meeting components containing `point`.
     fn on_board(&self, point: Point) -> bool {
-        let around = self.polygons.iter().filter(|polygon| in_polygon(point, polygon)).count();
-        if self.nested { around % 2 == 1 } else { around > 0 }
+        let mut seen = vec![false; self.component_count];
+        let mut around = 0usize;
+        for (polygon, &comp) in self.polygons.iter().zip(&self.component) {
+            if !seen[comp] && in_polygon(point, polygon) {
+                seen[comp] = true;
+                around += 1;
+            }
+        }
+        around % 2 == 1
     }
 
     /// The closed drawings around the copper's first core anchor that is off the board, or
@@ -622,22 +652,30 @@ impl Outline {
     }
 
     /// The innermost closed drawing enclosing the copper's first off-board anchor when that
-    /// anchor lies inside a cut-out (disjoint nested contours), or `None` when every anchor is
-    /// on the board or the first off-board anchor lies outside every closed contour.
+    /// anchor lies inside a cut-out, or `None` when every anchor is on the board or the first
+    /// off-board anchor lies outside every closed contour. Nesting depth counts distinct
+    /// enclosing components so meeting outer contours do not outrank a nested cut-out.
     fn innermost_cut_out(&self, contour: &Contour) -> Option<Uuid> {
         let point = contour.core.iter().copied().find(|point| !self.on_board(*point))?;
         let enclosing: Vec<(usize, &[Point], Uuid)> = self
             .polygons
             .iter()
             .zip(&self.drawings)
-            .enumerate()
-            .filter(|(_, (polygon, _))| in_polygon(point, polygon))
-            .map(|(index, (polygon, drawing))| (index, polygon.as_slice(), *drawing))
+            .zip(&self.component)
+            .filter(|((polygon, _), _)| in_polygon(point, polygon))
+            .map(|((polygon, drawing), &comp)| (comp, polygon.as_slice(), *drawing))
             .collect();
         enclosing
             .iter()
-            .map(|&(i, poly, drawing)| {
-                let depth = enclosing.iter().filter(|&&(j, outer, _)| j != i && poly.first().is_some_and(|&v| in_polygon(v, outer))).count();
+            .map(|&(comp, poly, drawing)| {
+                let mut seen = vec![false; self.component_count];
+                let mut depth = 0usize;
+                for &(other_comp, outer, _) in &enclosing {
+                    if other_comp != comp && !seen[other_comp] && poly.first().is_some_and(|&v| in_polygon(v, outer)) {
+                        seen[other_comp] = true;
+                        depth += 1;
+                    }
+                }
                 (depth, drawing)
             })
             .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)))
@@ -678,7 +716,7 @@ impl BoardView<'_> {
             .filter(|drawing| layers.iter().any(|layer| layer.id == drawing.layer && layer.purpose == LayerPurpose::Outline))
             .collect();
         let polygons: Vec<Vec<Point>> = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.points.clone()).collect();
-        let drawings = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.id).collect();
+        let drawings: Vec<Uuid> = outline.iter().filter(|drawing| drawing.closed).map(|drawing| drawing.id).collect();
         let edges = outline
             .iter()
             .flat_map(|drawing| {
@@ -692,8 +730,38 @@ impl BoardView<'_> {
                 })
             })
             .collect();
-        let nested = !polygons.iter().enumerate().any(|(i, a)| polygons.iter().skip(i + 1).any(|b| polygons_meet(a, b)));
-        Outline { drawn: !outline.is_empty(), polygons, drawings, nested, edges }
+        let mut component = vec![usize::MAX; polygons.len()];
+        let mut component_count = 0usize;
+        let mut ambiguous = Vec::new();
+        for start in 0..polygons.len() {
+            if component[start] != usize::MAX {
+                continue;
+            }
+            component[start] = component_count;
+            let mut stack = vec![start];
+            let mut members = Vec::new();
+            while let Some(i) = stack.pop() {
+                members.push(i);
+                for (j, other) in polygons.iter().enumerate() {
+                    if component[j] == usize::MAX && polygons_meet(&polygons[i], other) {
+                        component[j] = component_count;
+                        stack.push(j);
+                    }
+                }
+            }
+            if members.len() > 1 {
+                let mut pairs: Vec<(Uuid, Point)> =
+                    members.into_iter().map(|idx| (drawings[idx], polygons[idx].first().copied().unwrap_or(Point { x_nm: 0, y_nm: 0 }))).collect();
+                pairs.sort_by_key(|(id, _)| *id);
+                if let Some(&(_, at)) = pairs.first() {
+                    let ids: Vec<Uuid> = pairs.into_iter().map(|(id, _)| id).collect();
+                    ambiguous.push((at, ids));
+                }
+            }
+            component_count += 1;
+        }
+        ambiguous.sort_by(|a, b| a.1.cmp(&b.1));
+        Outline { drawn: !outline.is_empty(), polygons, drawings, component, component_count, ambiguous, edges }
     }
 }
 
