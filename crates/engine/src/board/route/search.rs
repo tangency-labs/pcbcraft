@@ -10,23 +10,48 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
-/// Suspend before one exact probe or contact scan; the host explicitly drives the next unit.
-/// No executor, thread, timer, wake callback or shared mutable document is needed.
-pub(super) async fn yield_unit() {
-    let mut yielded = false;
-    std::future::poll_fn(move |_| if std::mem::replace(&mut yielded, true) { Poll::Ready(()) } else { Poll::Pending }).await
-}
+pub(super) use crate::board::work::yield_unit;
 
 /// Retain the walk's own stack and local geometry across budget boundaries without replay.
-async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
-    super::validate(query, request, budget)?;
+pub(super) async fn walk(
+    query: crate::board::clearance::RouteObstacles<'_>,
+    request: &Request,
+    budget: usize,
+    progress: Arc<AtomicUsize>,
+) -> Result<Plan, CommandError> {
     let mut walker = walkaround::Walker::new(query, request, budget, progress)?;
-    match walker.run(request).await {
-        Ok(plan) => Ok(plan),
-        Err(walkaround::Stop::Exhausted) => {
-            Ok(Plan { points: vec![request.head], outcome: Outcome::Incomplete, blocker: None, probes: walker.probes() })
+    match walker.run_target(request).await {
+        Ok(mut plan) => {
+            if request.mode == Mode::Walkaround
+                && !plan.start_blocked
+                && plan.points.len() >= 2
+                && let Outcome::Blocked { last_legal } = plan.outcome
+            {
+                // The whole prefix was exact-confirmed, even if no nearby-goal refinement
+                // succeeded. Its displayed endpoint is still a valid vertex to fix.
+                plan.adjusted_target = Some(last_legal);
+            }
+            Ok(plan)
         }
+        Err(walkaround::Stop::Exhausted) => Ok(Plan {
+            adjusted_target: None,
+            start_blocked: false,
+            replacements: Vec::new(),
+            shove: None,
+            points: vec![request.head],
+            outcome: Outcome::Incomplete,
+            blocker: None,
+            probes: walker.probes(),
+        }),
         Err(walkaround::Stop::Failed(error)) => Err(error),
+    }
+}
+
+/// Select a read-only solver for inputs already validated by the caller.
+async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
+    match request.mode {
+        Mode::Walkaround => walk(query.into(), request, budget, progress).await,
+        Mode::Shove => shove::run(query, request, budget, progress).await,
     }
 }
 
@@ -38,7 +63,16 @@ pub(super) fn complete(query: &ClearanceQuery, request: &Request, budget: usize,
     let mut cx = Context::from_waker(Waker::noop());
     loop {
         if cancel() {
-            return Ok(Plan { points: vec![request.head], outcome: Outcome::Canceled, blocker: None, probes: progress.load(Ordering::Relaxed) });
+            return Ok(Plan {
+                adjusted_target: None,
+                start_blocked: false,
+                replacements: Vec::new(),
+                shove: None,
+                points: vec![request.head],
+                outcome: Outcome::Canceled,
+                blocker: None,
+                probes: progress.load(Ordering::Relaxed),
+            });
         }
         if let Poll::Ready(plan) = future.as_mut().poll(&mut cx) {
             return plan;
@@ -56,7 +90,11 @@ impl Search {
     pub(super) fn new(query: Arc<ClearanceQuery>, request: Request, budget: usize) -> Self {
         let progress = Arc::new(AtomicUsize::new(0));
         let counter = progress.clone();
-        Self { future: Box::pin(async move { run(&query, &request, budget, counter).await }), progress }
+        let future = Box::pin(async move {
+            super::validate(&query, &request, budget)?;
+            run(&query, &request, budget, counter).await
+        });
+        Self { future, progress }
     }
     /// Exact probes completed so far, independent of host scheduling frequency.
     pub(super) fn probes(&self) -> usize {

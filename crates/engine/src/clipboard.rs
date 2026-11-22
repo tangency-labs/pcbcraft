@@ -573,7 +573,7 @@ impl Session {
         Arc::make_mut(&mut next.units).retain(|_, s| !removed_symbols.contains(s));
         for component in project.symbols().iter().filter(|s| removed_symbols.contains(&s.ordinal)).map(|s| s.component) {
             if !next.all_symbols().any(|symbol| symbol.component == component) {
-                next.retire_component(component);
+                next.retire_component(component)?;
             }
         }
         next.prune_junctions();
