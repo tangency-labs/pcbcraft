@@ -294,7 +294,7 @@ fn ohm_and_common_unit_symbols_draw_real_glyphs() {
     apply(&mut session, crate::SET_SYMBOL_FIELDS, json!({"sheet":id,"symbol":r3,"reference":"R3","value":"±5% 25°C ?"}));
     let bytes = export(session.project().unwrap(), target).unwrap();
     let objects = objects(&bytes);
-    let text = extract(&objects);
+    let text = extract(&objects, 3);
     for expected in ["10 kΩ", "10 k\u{2126} 10 µF 10 μF", "±5% 25°C ?"] {
         assert!(text.lines().any(|line| line == expected), "missing {expected}: {text}");
     }
