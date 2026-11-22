@@ -280,6 +280,27 @@ here, it does not gate CI. The first iteration checks clearance pairs against th
 exhaustive reference, so envelope-size runs take much longer than the timed
 boundaries alone.
 
+### Local regression gate
+
+`scripts/check-performance-regression.py` compares two matched
+`pcbcraft-performance-budgets/1` reports on Linux, Windows or macOS and fails
+when any action's nearest-rank p95 regresses by more than 20 % (configurable with
+`--max-regression-pct`):
+
+```sh
+python3 -B scripts/check-performance-regression.py /tmp/budgets-before.json /tmp/budgets-after.json
+```
+
+The script validates every raw sample and recomputes each action's quantiles and
+verdict from `metrics`, refuses confounded environment, artifact, project,
+iteration or geometry mismatches, and refuses unmeasured actions. It exits `0`
+when every action stays at or below the threshold, `1` when any action regresses
+(naming each regressed action in the report and in `--json` output), and `2` on
+invalid or incomparable reports. Shared-runner CI still collects no performance
+samples and enforces no wall-clock threshold; running this gate in three-platform
+CI (Linux, Windows and macOS) on dedicated hardware is a maintainer decision
+tracked under #237.
+
 ## Property-edit service-time diagnostic
 
 `property_edit_perf` in `pcbcraft-engine` measures synchronous shared property

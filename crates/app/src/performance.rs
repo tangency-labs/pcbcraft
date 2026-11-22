@@ -921,6 +921,119 @@ mod tests {
         assert!(verify_pairs_bounded(&query, &flipped).is_err());
     }
 
+    /// A deliberate 30 % slowdown injected into one action's measured samples fails the
+    /// regression gate and names that action; without the slowdown the gate passes.
+    #[test]
+    fn regression_gate_fails_on_deliberate_30_percent_slowdown_and_passes_without_it() {
+        use budget::{BUDGETS, DEFAULT_MAX_REGRESSION_PCT, assess, check_regression, collect_metrics};
+
+        let artifact = generate("reference-v1", "test").unwrap();
+        let (_, baseline_metrics) = collect_metrics(&artifact, environment(), 2).unwrap();
+        let baseline = assess(BUDGETS, &baseline_metrics);
+
+        let clean = check_regression(&baseline, &baseline, DEFAULT_MAX_REGRESSION_PCT).unwrap();
+        assert!(clean.passed);
+        assert!(clean.regressed_actions.is_empty());
+        assert_eq!(clean.actions.len(), BUDGETS.len());
+
+        let slowed_metrics: Vec<Metric> = baseline_metrics
+            .iter()
+            .map(|metric| {
+                let samples = if metric.id == "drc.synchronous" {
+                    metric.samples_ms.iter().map(|&sample| if sample > 0.0 { sample * 1.30 } else { 1.30 }).collect()
+                } else {
+                    metric.samples_ms.clone()
+                };
+                Metric::new(&metric.id, samples)
+            })
+            .collect();
+        let candidate = assess(BUDGETS, &slowed_metrics);
+        let regressed = check_regression(&baseline, &candidate, DEFAULT_MAX_REGRESSION_PCT).unwrap();
+        assert!(!regressed.passed);
+        assert_eq!(regressed.regressed_actions, vec!["drc".to_owned()]);
+        let drc_row = regressed.actions.iter().find(|row| row.action == "drc").unwrap();
+        assert!(drc_row.regressed);
+        if drc_row.baseline_p95_ms > 0.0 {
+            let change = drc_row.change_pct.unwrap();
+            assert!((change - 30.0).abs() < 1e-6, "expected ~30% slowdown, got {change}");
+        } else {
+            assert_eq!(drc_row.change_pct, None);
+        }
+        assert!(regressed.actions.iter().filter(|row| row.action != "drc").all(|row| !row.regressed));
+    }
+
+    /// The regression gate enforces strict > threshold semantics, handles zero baselines
+    /// without dividing by zero, and rejects invalid thresholds, mismatched actions or
+    /// unmeasured boundaries.
+    #[test]
+    fn regression_gate_checks_threshold_boundaries_and_rejects_invalid_inputs() {
+        use budget::{Boundary, Budget, DEFAULT_MAX_REGRESSION_PCT, assess, check_regression};
+
+        let budgets = [
+            Budget { action: "steady", boundary: Boundary::Metric("m.steady"), p95_ms: None, basis: "test" },
+            Budget { action: "faster", boundary: Boundary::Metric("m.faster"), p95_ms: None, basis: "test" },
+            Budget { action: "at_limit", boundary: Boundary::Metric("m.at_limit"), p95_ms: None, basis: "test" },
+            Budget { action: "over_limit", boundary: Boundary::Metric("m.over_limit"), p95_ms: None, basis: "test" },
+            Budget { action: "zero_same", boundary: Boundary::Metric("m.zero_same"), p95_ms: None, basis: "test" },
+            Budget { action: "zero_regressed", boundary: Boundary::Metric("m.zero_regressed"), p95_ms: None, basis: "test" },
+        ];
+        let base_metrics = vec![
+            Metric::new("m.steady", vec![10.0, 10.0]),
+            Metric::new("m.faster", vec![10.0, 10.0]),
+            Metric::new("m.at_limit", vec![10.0, 10.0]),
+            Metric::new("m.over_limit", vec![10.0, 10.0]),
+            Metric::new("m.zero_same", vec![0.0, 0.0]),
+            Metric::new("m.zero_regressed", vec![0.0, 0.0]),
+        ];
+        let cand_metrics = vec![
+            Metric::new("m.steady", vec![10.0, 10.0]),
+            Metric::new("m.faster", vec![8.5, 8.5]),
+            Metric::new("m.at_limit", vec![12.0, 12.0]),
+            Metric::new("m.over_limit", vec![12.01, 12.01]),
+            Metric::new("m.zero_same", vec![0.0, 0.0]),
+            Metric::new("m.zero_regressed", vec![0.1, 0.1]),
+        ];
+        let baseline = assess(&budgets, &base_metrics);
+        let candidate = assess(&budgets, &cand_metrics);
+
+        let report = check_regression(&baseline, &candidate, DEFAULT_MAX_REGRESSION_PCT).unwrap();
+        assert!(!report.passed);
+        assert_eq!(report.regressed_actions, vec!["over_limit".to_owned(), "zero_regressed".to_owned()]);
+        let row = |name: &str| report.actions.iter().find(|r| r.action == name).unwrap();
+        assert!(!row("steady").regressed);
+        assert!(!row("faster").regressed);
+        assert!(!row("at_limit").regressed);
+        assert!(row("over_limit").regressed);
+        assert!(!row("zero_same").regressed);
+        assert_eq!(row("zero_same").change_pct, Some(0.0));
+        assert!(row("zero_regressed").regressed);
+        assert_eq!(row("zero_regressed").change_pct, None);
+
+        assert!(check_regression(&baseline, &baseline, -1.0).is_err());
+        assert!(check_regression(&baseline, &baseline, f64::NAN).is_err());
+        assert!(check_regression(&baseline, &baseline, f64::INFINITY).is_err());
+        assert!(check_regression(&[], &[], DEFAULT_MAX_REGRESSION_PCT).is_err());
+        assert!(check_regression(&baseline, &candidate[..1], DEFAULT_MAX_REGRESSION_PCT).is_err());
+
+        let mut duplicate = baseline.clone();
+        duplicate.push(baseline[0].clone());
+        assert!(check_regression(&baseline, &duplicate, DEFAULT_MAX_REGRESSION_PCT).is_err());
+
+        let mut unexpected = baseline.clone();
+        let mut extra_row = baseline[0].clone();
+        extra_row.action = "unexpected".into();
+        unexpected.push(extra_row);
+        assert!(check_regression(&baseline, &unexpected, DEFAULT_MAX_REGRESSION_PCT).is_err());
+
+        let mut wrong_boundary = baseline.clone();
+        wrong_boundary[0].boundary = "m.other".into();
+        assert!(check_regression(&baseline, &wrong_boundary, DEFAULT_MAX_REGRESSION_PCT).is_err());
+
+        let unmeasured_budgets = [Budget { action: "missing", boundary: Boundary::Metric("m.absent"), p95_ms: Some(10.0), basis: "test" }];
+        let unmeasured = assess(&unmeasured_budgets, &base_metrics);
+        assert!(check_regression(&unmeasured, &unmeasured, DEFAULT_MAX_REGRESSION_PCT).is_err());
+    }
+
     /// Corrupt archives, unsupported recipes and invalid sample/environment metadata must
     /// fail before timings can be mistaken for baseline evidence.
     #[test]
