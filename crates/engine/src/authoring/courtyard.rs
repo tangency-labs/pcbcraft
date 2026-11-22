@@ -217,6 +217,10 @@ pub fn validate_polygon(points: &[Point]) -> Result<(), String> {
     if points.len() > MAX_VERTICES {
         return Err(format!("A courtyard outline can have at most {MAX_VERTICES} vertices."));
     }
+    let limit = footprint::MAX_OFFSET_NM;
+    if points.iter().any(|p| !(-limit..=limit).contains(&p.x_nm) || !(-limit..=limit).contains(&p.y_nm)) {
+        return Err("Drawing extends outside the definition bounds.".into());
+    }
     let n = points.len();
     for i in 0..n {
         let Some(&a) = points.get(i) else {
@@ -511,6 +515,28 @@ mod tests {
         let primitive = generate(&item, 100_000, CourtyardSource::PadsOnly, DEFAULT_STROKE_NM).unwrap();
         let (points, _) = courtyard_polygon(&primitive).unwrap();
         assert_eq!(points, &[pt(-850_000, -400_000), pt(850_000, -400_000), pt(850_000, 400_000), pt(-850_000, 400_000),]);
+    }
+
+    /// Out-of-bounds coordinates (including extreme `i64::MIN..=i64::MAX` corners that would
+    /// overflow `i128` polygon area arithmetic) are rejected before area or intersection math.
+    #[test]
+    fn validate_polygon_and_make_reject_out_of_bounds_coordinates_without_overflow() {
+        let message = "Drawing extends outside the definition bounds.";
+        let extreme = vec![pt(i64::MIN, i64::MIN), pt(i64::MAX, i64::MIN), pt(i64::MAX, i64::MAX), pt(i64::MIN, i64::MAX)];
+        assert_eq!(validate_polygon(&extreme).unwrap_err(), message);
+        assert_eq!(make_courtyard_polygon(extreme, DEFAULT_STROKE_NM).unwrap_err(), message);
+
+        let limit = footprint::MAX_OFFSET_NM;
+        let just_outside = vec![pt(0, 0), pt(limit + 1, 0), pt(limit + 1, 1_000_000), pt(0, 1_000_000)];
+        assert_eq!(validate_polygon(&just_outside).unwrap_err(), message);
+        assert_eq!(make_courtyard_polygon(just_outside, DEFAULT_STROKE_NM).unwrap_err(), message);
+
+        let negative_outside = vec![pt(-limit - 1, 0), pt(0, 0), pt(0, 1_000_000)];
+        assert_eq!(validate_polygon(&negative_outside).unwrap_err(), message);
+
+        let at_limit = vec![pt(-limit, -limit), pt(limit, -limit), pt(limit, limit), pt(-limit, limit)];
+        assert!(validate_polygon(&at_limit).is_ok());
+        assert!(make_courtyard_polygon(at_limit, DEFAULT_STROKE_NM).is_ok());
     }
 
     /// Out-of-range clearance and empty footprints are rejected cleanly.
