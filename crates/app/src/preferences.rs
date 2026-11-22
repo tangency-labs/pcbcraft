@@ -1029,11 +1029,14 @@ mod tests {
             save_to_project_minutes: 10,
         };
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        let (expected_autosave, expected_save_to_project) = {
             restore_page_defaults(&mut preferences, SAVING);
             assert_eq!((preferences.autosave_minutes, preferences.save_to_project_minutes), (0, 0));
             assert_eq!(preferences.theme, ThemeChoice::Light, "the Saving reset leaves other pages alone");
-        }
+            (0, 0)
+        };
+        #[cfg(target_arch = "wasm32")]
+        let (expected_autosave, expected_save_to_project) = (10, 10);
         restore_page_defaults(&mut preferences, NAVIGATION);
         // Grid spacing is chosen in the views, not on a page, so no page reset touches it.
         assert_eq!(preferences.schematic_grid_nm, 10 * grid::NM_PER_MIL);
@@ -1051,13 +1054,21 @@ mod tests {
                 schematic_grid_nm: 10 * grid::NM_PER_MIL,
                 board_grid_nm: 25 * grid::NM_PER_MIL,
                 auto_heal_wires: false,
+                autosave_minutes: expected_autosave,
+                save_to_project_minutes: expected_save_to_project,
                 ..Preferences::default()
             }
         );
         restore_page_defaults(&mut preferences, SCHEMATIC);
         assert_eq!(
             preferences,
-            Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, board_grid_nm: 25 * grid::NM_PER_MIL, ..Preferences::default() }
+            Preferences {
+                schematic_grid_nm: 10 * grid::NM_PER_MIL,
+                board_grid_nm: 25 * grid::NM_PER_MIL,
+                autosave_minutes: expected_autosave,
+                save_to_project_minutes: expected_save_to_project,
+                ..Preferences::default()
+            }
         );
     }
 
