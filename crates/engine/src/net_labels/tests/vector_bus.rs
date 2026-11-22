@@ -135,15 +135,19 @@ fn malformed_bus_names_are_refused_atomically() {
     assert_eq!(paste["params"]["properties"]["style"]["enum"], json!(["local", "global"]));
 }
 
-/// A bus label is no wire endpoint: drawing a wire to it is refused, and a wired local label
-/// cannot become a bus.
+/// A bus label is no wire endpoint: drawing a wire to or from it, attaching a junction to it,
+/// or turning a wired local label into a bus are all refused atomically.
 #[test]
 fn bus_labels_cannot_end_wires() {
     let (mut s, main, bus) = bus_fixture();
     let before = s.snapshot().unwrap();
-    let params = json!({"sheet":main.id(),"from":{"net_label":bus},"to":{"x_nm":10*G,"y_nm":-20*G},"bends":[],"expected_revision":s.revision()});
-    assert!(s.apply(DRAW_WIRE, &params).unwrap_err().to_string().contains("a bus label cannot end a wire"));
-    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    for params in [
+        json!({"sheet":main.id(),"from":{"net_label":bus},"to":{"x_nm":10*G,"y_nm":-20*G},"bends":[],"expected_revision":s.revision()}),
+        json!({"sheet":main.id(),"from":{"x_nm":10*G,"y_nm":-20*G},"to":{"net_label":bus},"bends":[],"expected_revision":s.revision()}),
+    ] {
+        assert!(s.apply(DRAW_WIRE, &params).unwrap_err().to_string().contains("a bus label cannot end a wire"));
+        assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    }
     let inspected = s.project().unwrap().inspect_schematic();
     let label = inspected["net_labels"].as_array().unwrap().iter().find(|label| label["id"] == bus).unwrap().clone();
     assert!(label.get("endpoint").is_none());
@@ -151,7 +155,11 @@ fn bus_labels_cannot_end_wires() {
     apply(&mut s, ADD, json!({"sheet":main.id(),"name":"X","style":"local","x_nm":0,"y_nm":-40*G}));
     let wired = s.project().unwrap().for_sheet(main).unwrap().net_labels().last().unwrap().object_id();
     apply(&mut s, DRAW_WIRE, json!({"sheet":main.id(),"from":{"net_label":wired},"to":{"x_nm":10*G,"y_nm":-40*G},"bends":[]}));
+    let free_end = s.project().unwrap().for_sheet(main).unwrap().wires().last().unwrap().endpoints()[1].inspect()["junction"].clone();
     let before = s.snapshot().unwrap();
+    let attach = json!({"sheet":main.id(),"junction":free_end,"to":{"net_label":bus},"expected_revision":s.revision()});
+    assert!(s.apply(ATTACH_JUNCTION, &attach).unwrap_err().to_string().contains("a bus label cannot end a wire"));
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
     let params = json!({"sheet":main.id(),"id":wired,"name":"X[0..1]","style":"bus","x_nm":0,"y_nm":-40*G,"expected_revision":s.revision()});
     assert!(s.apply(SET, &params).unwrap_err().to_string().contains("a bus label cannot end a wire"));
     assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));

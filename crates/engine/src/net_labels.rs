@@ -11,6 +11,8 @@ pub const SET: &str = "schematic.set_net_label";
 pub const DELETE: &str = "schematic.delete_net_label";
 /// Per-sheet limit independent of component and wire counts.
 pub const MAX_LABELS: usize = 256;
+/// Refusal returned whenever a command or document tries to end a wire on a bus label.
+pub(crate) const BUS_WIRE_ENDPOINT_REFUSAL: &str = "a bus label cannot end a wire; connect its members through ordinary labels";
 
 pub mod bus;
 
@@ -133,7 +135,7 @@ impl Project {
                 if label.style == Style::Bus {
                     bus::members(&label.name)?;
                     if sheet.wires.iter().any(|wire| wire.endpoints.contains(&WireEndpoint::NetLabel(label.id))) {
-                        return Err("a bus label cannot end a wire; connect its members through ordinary labels".into());
+                        return Err(BUS_WIRE_ENDPOINT_REFUSAL.into());
                     }
                 }
                 if let Some(text) = &label.text {
