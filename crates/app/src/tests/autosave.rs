@@ -671,3 +671,46 @@ fn status_bar_recovery_notice() {
     run_at(&mut h, 2.5);
     assert!(h.query_by_label_contains("Unsaved work isn’t being kept for recovery").is_some());
 }
+
+/// Turning off Recovery snapshots retires the recorder without resetting an already-pending timed
+/// Save schedule on the same project.
+#[test]
+fn turning_off_recovery_keeps_the_timed_save_deadline() {
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("project");
+    let recovery = work.path().join("recovery");
+    let mut source = Session::default();
+    source.apply("project.new", &json!({"name":"Keep save deadline"})).unwrap();
+    pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
+
+    let mut h = harness();
+    h.state_mut().autosave.dir = Some(recovery);
+    let revision = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&root.join("project.json"), revision);
+    run_at(&mut h, 1.0);
+    let saved = tree(&root);
+
+    h.state_mut().preferences.autosave_minutes = 1;
+    h.state_mut().preferences.save_to_project_minutes = 1;
+    place(&mut h, 0);
+    run_at(&mut h, 2.0);
+    assert!(h.state().recovery_entry().is_some());
+    assert!(h.state().files.dirty(&h.state().session));
+
+    // Turn off only Recovery snapshots at t=52; the timed Save must keep its t=62 deadline.
+    h.state_mut().preferences.autosave_minutes = 0;
+    run_at(&mut h, 52.0);
+    assert!(h.state().recovery_entry().is_none());
+    if let Some(finished) = h.state_mut().wait_for_recovery_retirement() {
+        finished.unwrap();
+    }
+    assert_eq!(tree(&root), saved, "timed Save must not run early");
+    assert!(h.state().files.dirty(&h.state().session));
+
+    // At t=63, the original one-minute Save deadline fires instead of waiting until t=112.
+    run_at(&mut h, 63.0);
+    finish_file_job(&mut h);
+    assert!(!h.state().files.dirty(&h.state().session));
+    assert_eq!(pcbcraft_storage::load(&root).unwrap(), encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    eframe::App::on_exit(h.state_mut());
+}

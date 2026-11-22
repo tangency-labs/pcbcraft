@@ -71,6 +71,7 @@ impl EditObserver for ProjectRecorder {
 pub(crate) struct Autosave {
     pub(crate) dir: Option<PathBuf>,
     resolved: bool,
+    project: Option<(uuid::Uuid, u64)>,
     recorder: Option<Arc<ProjectRecorder>>,
     retiring: Option<RecorderExit>,
     snapshots: Schedule,
@@ -207,7 +208,12 @@ impl PcbApp {
                 autosave.dir = recovery::default_dir();
             }
         }
-        let target = self.session.project().filter(|_| enabled).map(|project| (project.id(), self.session.history_root_revision()));
+        let current_project = self.session.project().map(|project| (project.id(), self.session.history_root_revision()));
+        if autosave.project != current_project {
+            autosave.project = current_project;
+            autosave.saves.taken();
+        }
+        let target = current_project.filter(|_| enabled);
         if let Some(recorder) = &autosave.recorder {
             if target == Some((recorder.id, recorder.root)) && !recorder.obsolete.load(Ordering::Relaxed) {
                 return;
@@ -217,7 +223,6 @@ impl PcbApp {
                 autosave.retiring = Some(recorder.writer.retire(Some(Instant::now() + EXIT_BUDGET)));
             }
             autosave.snapshots.taken();
-            autosave.saves.taken();
             autosave.retry_at = None;
         }
         if let Some(retiring) = &autosave.retiring {
