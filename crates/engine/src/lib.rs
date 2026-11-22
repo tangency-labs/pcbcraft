@@ -3011,22 +3011,27 @@ impl Project {
         self.components.get(&symbol.component)
     }
 
-    /// Retire one live part through the board's accepted-state policy. Last
-    /// visible shared fields become retained display metadata; package/terminal
-    /// and connection acceptance remain unchanged until a reviewed update.
-    /// Refuse retirement if it would immediately remove a locked footprint.
-    pub(crate) fn retire_component(&mut self, id: u64) -> Result<(), CommandError> {
-        if !self.board.retains_retired_component(id)
-            && let Some(footprint) = self.board.footprint_for_part_instance(id)
-        {
-            board::transform::require_unlocked_placements(self, [Some(footprint)])?;
+    /// Retire live parts through the board's accepted-state policy. Last visible
+    /// shared fields become retained display metadata; package/terminal and
+    /// connection acceptance remain unchanged until a reviewed update. Refuse
+    /// the batch before mutating when any part would immediately remove a
+    /// locked footprint.
+    pub(crate) fn retire_components(&mut self, ids: impl IntoIterator<Item = u64>) -> Result<(), CommandError> {
+        let ids: std::collections::BTreeSet<u64> = ids.into_iter().collect();
+        let immediate = ids
+            .iter()
+            .filter(|&&id| !self.board.retains_retired_component(id))
+            .filter_map(|&id| self.board.footprint_for_part_instance(id))
+            .map(Some);
+        board::transform::require_unlocked_placements(self, immediate)?;
+        for id in ids {
+            let component = Arc::make_mut(&mut self.components).remove(&id);
+            if self.pin_functions.owner(id).is_some() {
+                Arc::make_mut(&mut self.pin_functions).remove(id);
+            }
+            Arc::make_mut(&mut self.schematic_packages).remove_component(id);
+            Arc::make_mut(&mut self.board).remove_component(id, component.as_ref());
         }
-        let component = Arc::make_mut(&mut self.components).remove(&id);
-        if self.pin_functions.owner(id).is_some() {
-            Arc::make_mut(&mut self.pin_functions).remove(id);
-        }
-        Arc::make_mut(&mut self.schematic_packages).remove_component(id);
-        Arc::make_mut(&mut self.board).remove_component(id, component.as_ref());
         Ok(())
     }
 
@@ -4408,7 +4413,7 @@ impl Session {
         project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
         if !project.all_symbols().any(|other| other.component == symbol.component) {
-            project.retire_component(symbol.component)?;
+            project.retire_components([symbol.component])?;
         }
         project.sheet_mut().connectivity = Arc::default();
         self.change(project)?;

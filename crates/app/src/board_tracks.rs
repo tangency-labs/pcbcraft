@@ -512,25 +512,59 @@ impl State {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct Kinds {
     pub(super) tracks: bool,
-    pub(super) vias: bool,
+    vias: bool,
+    include_locked: bool,
 }
 
 impl Kinds {
     /// Every kind, for lookups that are not selection, such as net highlighting.
-    pub(super) const ALL: Self = Self { tracks: true, vias: true };
+    pub(super) const ALL: Self = Self { tracks: true, vias: true, include_locked: true };
+
+    /// Copper kinds and lock states allowed by the addressed view.
+    pub(super) fn from(filters: crate::selection_filters::Filters) -> Self {
+        Self { tracks: filters.tracks, vias: filters.vias, include_locked: filters.include_locked }
+    }
+
+    /// Whether a track is selectable, independently of its layer visibility.
+    fn track(self, track: &Track) -> bool {
+        self.tracks && (self.include_locked || !track.locked)
+    }
+
+    /// Whether a via is selectable, independently of layer visibility.
+    fn via(self, via: &Via) -> bool {
+        self.vias && (self.include_locked || !via.locked)
+    }
+}
+
+/// Check a selected ID in one ID-sorted kind. Disabled kinds need no record probes;
+/// only a matched record needs its visibility or lock state checked.
+fn selected_copper_is_selectable<T>(
+    id: &Uuid,
+    ordered: &[T],
+    enabled: bool,
+    id_of: impl FnMut(&T) -> Uuid,
+    allowed: impl FnOnce(&T) -> bool,
+) -> bool {
+    enabled && ordered.binary_search_by_key(id, id_of).is_ok_and(|i| ordered.get(i).is_some_and(allowed))
 }
 
 /// The topmost visible via or track under a screen point, among the allowed kinds.
 pub(super) fn copper_at(pointer: Pos2, camera: &Camera, rect: Rect, view: BoardView<'_>, hidden: &BTreeSet<String>, kinds: Kinds) -> Option<Uuid> {
-    let via = view.vias().iter().rev().filter(|_| kinds.vias).find(|via| hit_via(pointer, camera, rect, via)).map(|via| via.id);
-    via.or_else(|| {
+    if kinds.vias
+        && let Some(via) = view.vias().iter().rev().find(|via| kinds.via(via) && hit_via(pointer, camera, rect, via))
+    {
+        return Some(via.id);
+    }
+    if kinds.tracks {
         view.tracks()
             .iter()
             .rev()
-            .filter(|track| kinds.tracks && !hidden.contains(&track.layer.to_string()))
+            .filter(|track| kinds.track(track) && !hidden.contains(&track.layer.to_string()))
             .find(|track| hit(pointer, camera, rect, track))
             .map(|track| track.id)
-    })
+    } else {
+        None
+    }
 }
 
 /// Whether a press here would start a copper drag rather than a box selection.
@@ -856,11 +890,18 @@ pub(super) fn interact(
         state.committed = None;
     }
     let rect = response.rect;
-    let visible: Vec<_> = view.tracks().iter().filter(|track| !hidden.contains(&track.layer.to_string())).collect();
+    let tracks = view.tracks();
     let vias = view.vias();
-    let vias_visible = view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
+    let vias_visible =
+        kinds.vias && view.layers().iter().any(|layer| layer.purpose == LayerPurpose::Copper && !hidden.contains(&layer.id.to_string()));
     let selectable = |id: &Uuid| {
-        (kinds.tracks && visible.iter().any(|track| track.id == *id)) || (kinds.vias && vias_visible && vias.iter().any(|via| via.id == *id))
+        selected_copper_is_selectable(
+            id,
+            tracks,
+            kinds.tracks,
+            |track| track.id,
+            |track| kinds.track(track) && !hidden.contains(&track.layer.to_string()),
+        ) || selected_copper_is_selectable(id, vias, vias_visible, |via| via.id, |via| kinds.via(via))
     };
     state.selected.retain(selectable);
     let stale_route = state.draft.as_ref().is_some_and(|draft| Some(draft.source) != source || Some(draft.layer.as_str()) != active);
@@ -1181,7 +1222,7 @@ pub(super) fn interact(
             vias.iter()
                 .find(|via| state.selected.contains(&via.id))
                 .map(|via| via.at)
-                .or_else(|| visible.iter().find(|track| state.selected.contains(&track.id)).map(|track| track.start))
+                .or_else(|| tracks.iter().find(|track| state.selected.contains(&track.id)).map(|track| track.start))
                 .unwrap_or(Point { x_nm: 0, y_nm: 0 })
         });
         state.moving = Some(MoveDraft { source, anchor, offset: (0, 0), drag: false });
@@ -1520,6 +1561,44 @@ pub(super) fn paint_draft(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
+
+    /// The frame keeper must not probe a disabled kind or scan an enabled kind's sorted slice.
+    #[test]
+    fn frame_selection_probes_only_enabled_copper_by_id() {
+        let copper: Vec<_> = (1..=4096).map(Uuid::from_u128).collect();
+        let probes = Cell::new(0);
+        let permissions = Cell::new(0);
+        let keep = |id, enabled| {
+            probes.set(0);
+            permissions.set(0);
+            selected_copper_is_selectable(
+                &id,
+                copper.as_slice(),
+                enabled,
+                |item| {
+                    probes.set(probes.get() + 1);
+                    *item
+                },
+                |item| {
+                    permissions.set(permissions.get() + 1);
+                    *item != Uuid::from_u128(4095)
+                },
+            )
+        };
+
+        assert!(!keep(Uuid::from_u128(4096), false));
+        assert_eq!((probes.get(), permissions.get()), (0, 0), "a disabled kind must not be traversed");
+        assert!(keep(Uuid::from_u128(4096), true));
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 1);
+        assert!(!keep(Uuid::from_u128(4095), true), "an existing item can be disallowed");
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 1);
+        assert!(!keep(Uuid::from_u128(4097), true), "an ID can belong to the other kind");
+        assert!((1..=16).contains(&probes.get()));
+        assert_eq!(permissions.get(), 0);
+    }
 
     /// The target stays latched in the release band and changes only beyond it or on a new layer.
     #[test]
