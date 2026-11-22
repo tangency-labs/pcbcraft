@@ -414,7 +414,7 @@ impl PcbApp {
             menu_check: None,
         }];
         if workspace::ribbon_group(ui, "Cross-probe", &reveal).is_some() {
-            self.views.reveal_highlight(self.views.active.id(), &self.session);
+            self.views.reveal_highlight(self.views.active.id(), &self.session, self.preferences.selection_follow);
         }
     }
 

@@ -161,6 +161,7 @@ impl CheckJob {
             4 => {
                 view.check_dimensions(rules, self.class_rules.as_ref(), &mut self.found);
                 if let Some(g) = &self.geometry {
+                    view.check_slot_rings(&g.lands, rules, self.class_rules.as_ref(), &mut self.found);
                     view.check_shorts(&g.lands, &g.members, &g.items, &mut self.found);
                 }
             }

@@ -40,3 +40,10 @@ pub struct Progress {
     pub completed: usize,
     pub total: usize,
 }
+
+/// Suspend one snapshot work unit without timers, executors or authored-state access.
+/// Synchronous and batched hosts explicitly poll the same continuation.
+pub(crate) async fn yield_unit() {
+    let mut yielded = false;
+    std::future::poll_fn(move |_| if std::mem::replace(&mut yielded, true) { std::task::Poll::Ready(()) } else { std::task::Poll::Pending }).await
+}
