@@ -43,7 +43,7 @@ Each edit is one undo step.
 | Route | Tracks with an explicit width and clearance-aware 45° walkaround. Stable snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
 | Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
-| Output | Gerber X2 copper, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
+| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
 Copper connectivity is derived from overlap on shared layers. Track edits and
@@ -55,6 +55,26 @@ not the identity used to compare memberships. DRC checks the board without editi
 it. A `pcb.check_design` request can override the fixed defaults for that run. Short
 findings include sorted copper references and the involved component-terminal keys,
 grouped by snapshot-local net index. Those indices must not be used as saved bindings.
+
+### Unroute one connection
+
+`pcb.unroute_connection` takes two pads on the same intended net. Choose `from`
+on the arm to remove and `to` on the side to keep. For a T-shaped route, this
+removes the chosen arm and leaves the trunk serving the other pads, including
+when the arm meets the interior of a track. Floating tracks and automatic vias
+severed by the cut are removed together, unless a locked or explicitly assigned
+via anchors the group. An explicitly assigned via on the arm itself is kept
+with the copper beyond it; the cut stops before it. Already isolated copper is
+unchanged.
+
+Use `dry_run` to preview the same removal and newly displayed ratsnest edges
+without making an edit. Applying it
+is one Undo step and changes no storage format. If a locked object would have
+to be removed, or there is no exclusive arm that safely separates the pads,
+the command refuses the whole request. It also refuses when the pad to detach
+overlaps another pad, or when overlapping pads elsewhere would keep the two
+sides joined. This is a shared command available in
+headless and live MCP, not a canvas tool or a net-wide removal.
 
 ## Gaps, in recommended order
 

@@ -35,11 +35,16 @@ pub const SET_TRACK_WIDTH: &str = "pcb.set_track_width";
 pub const SET_VIA_SIZE: &str = "pcb.set_via_size";
 /// Remove addressed track segments and vias without changing footprints or other copper.
 pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
+mod unroute;
+pub use unroute::UNROUTE_CONNECTION;
+pub(crate) use unroute::{pad_address, pad_address_schema};
 /// Lock or unlock explicitly addressed tracks and vias without changing geometry.
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
 
+pub(crate) mod chains;
 mod locks;
 pub mod preparation;
+pub mod replacements;
 pub(crate) use locks::protect_locked;
 #[cfg(test)]
 mod capacity_tests;
@@ -170,25 +175,43 @@ pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]
     let copper = copper_layer_ids(project);
     let mut ids = BTreeSet::new();
     for track in tracks.iter() {
-        track.validate()?;
-        if !ids.insert(track.id) {
-            return Err("duplicate track identity".into());
-        }
-        if !copper.contains(&track.layer) {
-            return Err("tracks must stay on a copper layer of the board setup".into());
-        }
+        check_track(track, &copper, &mut ids)?;
     }
-    if !vias.is_empty() && copper.len() < 2 {
-        return Err("vias need at least two copper layers in the board setup".into());
-    }
+    check_via_layers(!vias.is_empty(), &copper)?;
     for via in vias.iter() {
-        via.validate()?;
-        if !ids.insert(via.id) {
-            return Err("duplicate track or via identity".into());
-        }
+        check_via(via, &mut ids)?;
     }
     tracks.sort_by_key(|track| track.id);
     vias.sort_by_key(|via| via.id);
+    Ok(())
+}
+
+/// Check one segment of a candidate in `validate` order, recording its identity.
+fn check_track(track: &Track, copper: &BTreeSet<Uuid>, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    track.validate()?;
+    if !ids.insert(track.id) {
+        return Err("duplicate track identity".into());
+    }
+    if !copper.contains(&track.layer) {
+        return Err("tracks must stay on a copper layer of the board setup".into());
+    }
+    Ok(())
+}
+
+/// Vias pass between copper layers, so a candidate with any needs at least two.
+fn check_via_layers(any_vias: bool, copper: &BTreeSet<Uuid>) -> Result<(), String> {
+    if any_vias && copper.len() < 2 {
+        return Err("vias need at least two copper layers in the board setup".into());
+    }
+    Ok(())
+}
+
+/// Check one via of a candidate after every segment, recording its identity.
+fn check_via(via: &Via, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    via.validate()?;
+    if !ids.insert(via.id) {
+        return Err("duplicate track or via identity".into());
+    }
     Ok(())
 }
 
@@ -524,17 +547,25 @@ impl IslandBuilder {
                 self.nearby = Nearby::Lookup;
                 continue;
             };
-            let layers = match (self.layers.get(i), self.layers.get(j)) {
-                (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
-                (None, Some(b)) => !b.is_empty(),
-                _ => true,
-            };
-            let (a, b) = (self.bounds[i], self.bounds[j]);
-            if layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j]) {
+            if self.routed_contact(i, j) {
                 join(&mut self.parent, i, j);
             }
         }
         self.node >= end
+    }
+
+    /// Test one routed pair in node order (`i > j`), with any via first. Pad-only pairs
+    /// are checked separately by callers that need direct land overlap.
+    fn routed_contact(&self, i: usize, j: usize) -> bool {
+        routed_contact(&self.layers, &self.bounds, &self.contours, i, j)
+    }
+
+    /// Resolve export-only contact groups. Start a fresh builder's traversal at the first pad
+    /// so direct pad contacts count, using the same index and contact rules as ordinary copper.
+    pub(super) fn fabrication_roots(mut self) -> Vec<usize> {
+        self.node = 0;
+        while !self.step(usize::MAX) {}
+        (0..self.parent.len()).map(|i| find(&mut self.parent, i)).collect()
     }
 
     /// Canonicalize completed roots to the existing pad/track/via identity maps.
@@ -561,6 +592,17 @@ impl IslandBuilder {
         }
         (copper, members)
     }
+}
+
+/// Test a routed pair in descending node order. Via nodes follow all explicitly layered nodes.
+fn routed_contact(layers: &[Vec<Uuid>], bounds: &[[f64; 4]], contours: &[PadContour], i: usize, j: usize) -> bool {
+    let shares_layer = match (layers.get(i), layers.get(j)) {
+        (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
+        (None, Some(b)) => !b.is_empty(),
+        _ => true,
+    };
+    let (a, b) = (bounds[i], bounds[j]);
+    shares_layer && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && contours[i].touches(&contours[j])
 }
 
 /// Sweep overlapping pad bounds and visit each pair whose copper touches on a shared layer.
@@ -798,6 +840,13 @@ impl Session {
     }
 }
 
+/// Private geometry candidate plus the exact identities the later validators must examine.
+struct CandidateEdit {
+    candidate: Option<Project>,
+    added: BTreeSet<Uuid>,
+    replacements: Option<BTreeMap<Uuid, Uuid>>,
+}
+
 /// Count-checked route input, still without sizes or allocated board item identities.
 struct RouteAddition {
     layer: Uuid,
@@ -838,7 +887,7 @@ fn route_addition(project: &Project, params: &Value) -> Result<RouteAddition, Co
 /// Edit a private candidate without publishing. Refuse inevitable count overflow before
 /// resolving source-contact defaults (which may build connectivity) or allocating identities.
 /// Preparation validates final membership and explicit hard limits before publication.
-fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<CandidateEdit, CommandError> {
     let route = (command == ADD_TRACKS).then(|| route_addition(project, params)).transpose()?;
     let via_at = if command == ADD_VIA {
         let at: Point = param(params, "at")?;
@@ -964,12 +1013,12 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
             assigned.insert(via.id);
         }
         if assigned.is_empty() {
-            return Ok((None, assigned));
+            return Ok(CandidateEdit { candidate: None, added: assigned, replacements: None });
         }
         let mut next = next;
         std::sync::Arc::make_mut(&mut next.board).vias = vias;
         protect_locked(original, &next)?;
-        return Ok((Some(next), assigned));
+        return Ok(CandidateEdit { candidate: Some(next), added: assigned, replacements: None });
     } else if command == MOVE_TRACKS {
         let moved_tracks = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
         let moved_vias = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
@@ -1033,16 +1082,21 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         tracks.retain(|track| !gone_tracks.contains(&track.id));
         vias.retain(|via| !gone_vias.contains(&via.id));
     }
+    let replacements = if command == ADD_TRACKS {
+        params.get("replacements").map(|value| replacements::apply(&mut tracks, value, &mut added)).transpose()?
+    } else {
+        None
+    };
     validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
     if tracks == project.board.tracks && vias == project.board.vias {
-        return Ok((None, added));
+        return Ok(CandidateEdit { candidate: None, added, replacements });
     }
     let mut next = project.clone();
     let board = std::sync::Arc::make_mut(&mut next.board);
     board.tracks = tracks;
     board.vias = vias;
     protect_locked(project, &next)?;
-    Ok((Some(next), added))
+    Ok(CandidateEdit { candidate: Some(next), added, replacements })
 }
 
 /// Describe a route's layer changes for command clients.
