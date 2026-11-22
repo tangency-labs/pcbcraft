@@ -160,7 +160,11 @@ pub(super) fn show(
         state.zones.delete_requested = false;
         state.drawing.delete_requested = false;
         ui.label(error);
-        ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
+        if project.teardrops().is_empty() {
+            ui.label("Exact arc records are preserved. Board display, picking and edits are unavailable until circular copper is supported.");
+        } else {
+            ui.label("Remove the saved teardrop intents with pcb.edit_teardrops to resume board editing.");
+        }
         return Interaction::default();
     }
     let idle = !crate::board_clipboard::busy(state);
@@ -537,6 +541,9 @@ pub(super) fn show(
     if requested && let Some(connectivity) = &connectivity {
         state.highlight_net =
             response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
+    }
+    if route.consumed {
+        crate::board_tracks::prepare_preview(&response, camera, project, &mut state.tracks, state.active_layer.as_deref());
     }
     let focus = connectivity.as_deref().and_then(|data| CopperFocus::new(data, state.tracks.route_contact(), state.highlight_net.as_deref()));
     let context = board::context_painter(&p, focus.is_some());

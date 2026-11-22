@@ -175,8 +175,90 @@ An unresolvable latest part is `Unresolved` even when it equals or is older than
 the project pin, unless an immutable-address conflict takes precedence.
 A valid newer revision means available, **not compatible or adopted**. Geometry,
 pins, project revision, dirty state, source registrations and Undo/Redo are unchanged.
-Reviewed differences, compatibility decisions and revision-checked adoption remain
-separate work.
+The pad preview below is read-only. Compatibility decisions, pad map resolution
+and revision-checked adoption remain separate work.
+
+## Preview footprint pad changes
+
+`library.preview_footprint_revision` takes the explicit `board` UUID and one
+`part_instance` ID from `library.available_revisions`. It works through the same
+engine command in live and headless MCP and returns the report with `inspect: false`.
+It compares the currently placed native footprint with its latest available
+update. A standalone footprint follows its exact library/item identity. A native
+part follows its owning part revision and retains its chosen package ID; a removed
+package is not silently replaced. A conflicting or unresolved latest revision
+is refused. Unplaced parts and placements whose current package choice differs
+from the placed footprint cannot be previewed.
+
+The result identifies the project, board, instance, placed footprint, project
+revision, catalog generation, exact pinned and candidate roots, candidate root
+digest and both footprint addresses. `delta.pads` lists changed pad numbers in
+lexical order, with `before` and `after` land geometry and board positions, their
+change flags, and `center_shift_nm` for a same-number pair. An added or removed
+land has one absent side. Renumbering appears as an addition and removal; the
+query does not pair them or resolve the pad map. `delta.pad_numbers_changed`
+reports whether the complete number sets differ. The mask/paste fields describe
+nominal pad openings (native lands have no independent process expansions), not
+separate technical-layer artwork. A geometry-identical revision has no pad rows.
+
+A `loose_ends` row means an existing straight track cap or through via touches
+the old pad on shared copper but would no longer touch its same-number
+counterpart. Standalone circular track ends are not evaluated. Each row labels
+the copper ID and end (`track_start`, `track_end` or `via`), its existing board
+position and its track layer, if applicable. `gap_nm` measures separation between
+filled outer contours, not pad center displacement. It is null if the pad is
+removed or no longer shares a copper layer. This native approximation ignores
+bores in pads and vias: a cap inside a bore may count as old contact without
+touching the annular copper. A drill-only change does not trigger a contact
+check. This is not a net connectivity or DRC report.
+On an unconfigured board no copper contact is evaluated. Each reply can report
+up to 10,240 loose-end rows, independent of board capacity. An over-limit request
+returns `cap_exceeded`, not a partial list. If the full report exceeds the limit,
+try an exact string pad number in `pad`. If that pad also exceeds the limit,
+inspect its copper in the board editor; the query cannot split one pad's list.
+The query does not move copper or alter pins, saved bytes, project revision or
+Undo/Redo.
+
+## Find where a revision is used
+
+With a project open, select an exact item revision in Parts Library and click
+**Where used** in Preview. Category rows are available in **All** for loaded
+sources and for categories pinned in the Project inventory. A standalone symbol
+uses its exact category binding; a selected native part uses its own category,
+not the symbol's default. The report lists actual instances with their reference
+designators and board names where applicable. Run the query again after a project
+or source change. The Project table's **Used by** column instead describes the
+saved dependency inventory; it can include unselected package options and
+accepted history that no longer has a placement.
+
+`library.where_used` takes `library`, `kind`, `definition` and
+`definition_revision`; `kind` is `symbol`, `footprint`, `part`, `category` or
+`manufacturer_part`. This is the same read-only query in live or headless MCP,
+including with `inspect: false` and in read-only headless sessions. The item
+address includes its exact revision; a later revision is not substituted. An unused or unknown address has no
+instances. The query does not refresh sources or change project state or Undo.
+
+`instances` has one row per matching logical instance, even when multiple units
+are placed or a footprint is both assigned and placed. Each row includes the
+stable `part_instance` ID, display `reference`, optional generic `part` address,
+and optional `board` with its `id`, `name`, `footprint` placement ID (or null)
+and `pending_removal` flag. For footprint queries, `assigned` distinguishes a
+current exact package choice from a physical footprint still awaiting a
+reviewed replacement or removal. `assignment_excluded` marks a desired package
+for a component excluded from the board. It has `board: null` unless a real
+placement of that revision is still pending removal. A retained placement keeps
+its former instance ID and reference; a boardless assignment also has
+`board: null`. Unselected package options and history with no placement do not
+count as uses.
+
+The report also returns `project`, runtime `revision`, `catalog_generation` and
+the requested `item`. `revision_info` follows [the loaded-source comparison
+above](#query-available-revisions) for a project pin or exact loaded item; it is
+null when neither can be inspected. `newest_revision` is true for `Matches
+source`, false for `Update available`, and null when the loaded catalog cannot
+establish either status. This is not a compatibility or adoption decision.
+The query does not search other projects or address future model and reusable
+module records.
 
 ## Edit and publish native items
 

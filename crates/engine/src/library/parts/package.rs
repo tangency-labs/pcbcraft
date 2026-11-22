@@ -1,6 +1,6 @@
 //! Physical package choices with logical-terminal maps when a symbol is present.
-use super::{Reference, codec::unique_map};
-use crate::schematic::SymbolDefinition;
+use super::{Reference, codec::terminal_map};
+use crate::{board::definition::MAX_PADS, library::MAX_TERMINALS, schematic::SymbolDefinition};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 /// One package option owns an exact footprint and its optional logical-terminal map.
@@ -9,24 +9,28 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Package {
     pub name: String,
     pub footprint: Reference,
-    #[serde(deserialize_with = "unique_map")]
+    #[serde(deserialize_with = "terminal_map")]
     pub mapping: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unconnected_pads: Vec<String>,
 }
 impl Package {
     /// Check syntax and exclusive pad ownership even before its symbol/footprint is available.
+    /// The terminal and pad limits are those of symbols and footprints; size errors name the field, limit and observed count.
     pub fn validate(&self) -> Result<(), String> {
         crate::library::check_text("package name", &self.name, 64)?;
         self.footprint.validate()?;
-        if self.mapping.len() > 128 || self.unconnected_pads.len() > 128 {
-            return Err("A package supports at most 128 terminals and unconnected pads.".into());
+        if self.mapping.len() > MAX_TERMINALS {
+            return Err(format!("A package's `mapping` holds at most {MAX_TERMINALS} terminal entries, not {}.", self.mapping.len()));
+        }
+        if self.unconnected_pads.len() > MAX_PADS {
+            return Err(format!("A package's `unconnected_pads` holds at most {MAX_PADS} pads, not {}.", self.unconnected_pads.len()));
         }
         let mut pads = BTreeSet::new();
         for (terminal, numbers) in &self.mapping {
             crate::library::check_pin_number(terminal)?;
-            if numbers.is_empty() || numbers.len() > 128 {
-                return Err(format!("Terminal {terminal} requires 1–128 pads."));
+            if numbers.is_empty() || numbers.len() > MAX_PADS {
+                return Err(format!("A package's `mapping` for terminal {terminal} requires 1–{MAX_PADS} pads, not {}.", numbers.len()));
             }
             for pad in numbers {
                 crate::library::check_pin_number(pad)?;
@@ -41,8 +45,8 @@ impl Package {
                 return Err(format!("Pad {pad} cannot be both mapped and unconnected, or repeated."));
             }
         }
-        if pads.len() > 128 {
-            return Err("A package supports at most 128 pads in this format.".into());
+        if pads.len() > MAX_PADS {
+            return Err(format!("A package has at most {MAX_PADS} pads, not {}.", pads.len()));
         }
         Ok(())
     }

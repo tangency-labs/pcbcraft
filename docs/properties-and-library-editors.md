@@ -167,13 +167,16 @@ or circular non-plated hole for a footprint.
 
 The editable JSON envelope uses `pcbcraft-library-item/1` for single-unit symbols
 and footprints without non-plated holes, `pcbcraft-library-item/2` for multi-unit
-symbols, and `pcbcraft-library-item/3` for footprints with non-plated holes. It records definition identity,
+symbols, `pcbcraft-library-item/3` for footprints with non-plated holes, and
+`pcbcraft-library-item/5` for symbols with alternate pin functions, single- or
+multi-unit; removing the last alternate keeps format 5. It records definition identity,
 revision, provenance (including a forked footprint’s original source record)
 and stable primitive IDs separately from project storage.
 Its object order is deterministic, with a 1 MiB encoded size limit, 512 primitives
-and 64 undo snapshots per document. The current footprint schema further limits
-a definition to 128 pads, 128 parameterized artwork objects, 64 legacy technical
-rectangles and 64 legacy silkscreen paths.
+and 64 undo snapshots per document, so footprints with more pads than that cannot
+yet be edited here. The footprint schema itself allows 1,024 pads, 256
+parameterized artwork objects, 64 legacy technical rectangles and 64 legacy
+silkscreen paths.
 Object/content allocation counters survive
 Undo and save/reopen, so deleted IDs and observed content revisions are not reused.
 Undo can therefore leave allocation bookkeeping unsaved even when geometry returns
@@ -211,6 +214,28 @@ navigation. `app.set_workspace` accepts source pane and placement; ordinary
 that library revision and use the same engine authoring transactions as the GUI.
 Headless project sessions do not yet host these editor documents. Bulk tables, arbitrary pad shapes, mask/paste, 3D, browser/remote publishing
 and reviewed updates to placed components remain follow-up scope under #78/#79.
+
+## Alternate pin functions
+
+Select a pin in the symbol editor, add a pin lead if it has none, then open
+**Alternate pin functions** in the pin properties. Add or remove rows, set a
+name and electrical type for each, then apply the primitive edit. Other drawings
+of the terminal share that definition. Live MCP can use the same
+`app.library_edit` `replace` action with the `alternates` list on the pin primitive.
+Publishing a definition does not update already pinned instances.
+
+For a placed symbol, open **More properties → Pin functions** and use the name
+menu beside a terminal with alternates. Choosing a function applies immediately
+and changes the effective name and type across that part's placed units.
+**Primary** restores the definition's default. Undo reverses one choice; closing
+the properties form does not undo it. The choice doesn't move any wires or
+change terminal numbers or the pin-to-pad mapping.
+
+MCP uses `part_instances.set_pin_function` with `target: {part, terminal}`,
+`function` (exact name or `null` for the primary) and `expected_revision`.
+`dry_run: true` returns the same before/after function report without editing.
+A stale revision or unknown selection is refused; selecting the current function
+is a no-op.
 
 ## Review pin renumbering
 

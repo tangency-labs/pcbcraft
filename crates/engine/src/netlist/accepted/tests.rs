@@ -440,6 +440,69 @@ fn multipad() -> Fixture {
     fixture
 }
 
+/// Real pad-only nets can share a name and have no persistent IDs. A rename or removal still
+/// names the exact affected export row, even if file order changes. Pad ordering itself is not
+/// an electrical difference, but a changed pad membership is.
+#[test]
+fn compare_disambiguates_pad_only_nets_and_compares_pad_membership() {
+    use crate::netlist::COMPARE_NETLIST;
+
+    let Fixture { mut session, sheets, r2, .. } = multipad();
+    let parts_before: BTreeSet<_> = session.project().unwrap().components().map(|part| part.id()).collect();
+    apply(&mut session, PLACE_RESISTOR, json!({"sheet":sheets[0].id(),"x_nm":50_800_000,"y_nm":50_800_000}));
+    let new_part = session.project().unwrap().components().map(|part| part.id()).find(|id| !parts_before.contains(id)).unwrap();
+    apply(
+        &mut session,
+        ASSIGN_FOOTPRINT,
+        json!({"component":new_part,"library":"units","definition":"illustrative-six-pad","definition_revision":1,
+            "mapping":{"1":["1"],"2":["2","3","4","5","6"]}}),
+    );
+    update(&mut session);
+    let design = board(&session).netlist;
+    let pad_only: Vec<_> = design.nets.iter().enumerate().filter(|(_, net)| net.id.is_none() && net.name == "Unconnected").collect();
+    assert_eq!(pad_only.len(), 2);
+    assert!(pad_only.iter().all(|(_, net)| net.terminals.len() == 1 && net.terminals[0].terminal == "2"));
+    assert_ne!(pad_only[0].1.terminals[0].part, pad_only[1].1.terminals[0].part);
+
+    for (index, _) in pad_only {
+        let mut file = design.clone();
+        file.nets.reverse();
+        let found_index = file.nets.len() - 1 - index;
+        file.nets[found_index].name = "Renamed pad net".into();
+        let result = session.execute(COMPARE_NETLIST, &json!({"netlist":file.to_text().unwrap()})).unwrap();
+        let report = &result["comparison"];
+        assert_eq!(report["matches"], true);
+        assert_eq!(report["notes"].as_array().unwrap().len(), 1);
+        let note = &report["notes"][0];
+        assert_eq!(note["kind"], "net_renamed");
+        assert_eq!((&note["expected_net"], &note["found_net"]), (&json!(index), &json!(found_index)));
+
+        let removed = file.nets.remove(found_index);
+        file.unconnected.extend(removed.terminals);
+        let result = session.execute(COMPARE_NETLIST, &json!({"netlist":file.to_text().unwrap()})).unwrap();
+        let rows = result["comparison"]["differences"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["expected"], json!({"net":{"id":null,"index":index}}));
+        assert_eq!(rows[0]["found"], "unconnected");
+        assert_eq!(rows[1]["kind"], "net_missing");
+        assert_eq!(rows[1]["expected_net"], index);
+        assert!(rows[1].get("found_net").is_none());
+    }
+
+    let mut file = design;
+    let part_index = file.components.iter().position(|part| part.id == r2).unwrap();
+    let terminal_index = file.components[part_index].terminals.iter().position(|t| t.terminal == "2").unwrap();
+    file.components[part_index].terminals[terminal_index].pads.as_mut().unwrap().reverse();
+    let result = session.execute(COMPARE_NETLIST, &json!({"netlist":file.to_text().unwrap()})).unwrap();
+    let report = &result["comparison"];
+    assert_eq!((&report["matches"], &report["identical"]), (&json!(true), &json!(false)));
+    assert_eq!(report["differences"], json!([]));
+    file.components[part_index].terminals[terminal_index].pads.as_mut().unwrap().pop();
+    let result = session.execute(COMPARE_NETLIST, &json!({"netlist":file.to_text().unwrap()})).unwrap();
+    assert_eq!(result["comparison"]["matches"], false);
+    assert_eq!(result["comparison"]["differences"][0]["kind"], "pads_changed");
+}
+
 /// An unwired terminal mapped to several pads still needs copper between them, so the board keeps
 /// a net of that one terminal. The schematic has no such net: its id is null and a `pad_net`
 /// finding names it, while the board is otherwise in sync.
@@ -563,7 +626,9 @@ fn accepted_terminals_include_unplaced_units() {
     let mut fixture = fixture();
     let unit_b = symbol_of(&fixture.session, fixture.sheets[1], &fixture.u1);
     apply(&mut fixture.session, DELETE_SYMBOL, json!({"sheet":fixture.sheets[1].id(),"symbol":unit_b}));
-    let Fixture { session, u1, .. } = with_packages(fixture);
+    use crate::{CommandError, netlist::COMPARE_NETLIST};
+
+    let Fixture { mut session, u1, .. } = with_packages(fixture);
     let accepted = board(&session).netlist;
     let schematic = schematic(&session);
     let partition = |netlist: &Netlist| {
@@ -583,6 +648,13 @@ fn accepted_terminals_include_unplaced_units() {
     assert_eq!(component.terminals.iter().filter(|terminal| terminal.terminal == "3" || terminal.terminal == "4").count(), 2);
     validate_v2(&serde_json::to_value(&accepted).unwrap());
     assert_eq!(Netlist::parse(&accepted.to_text().unwrap()).unwrap(), accepted);
+    let same = session.execute(COMPARE_NETLIST, &json!({"netlist":schematic.to_text().unwrap()})).unwrap();
+    assert_eq!(same["comparison"]["identical"], true);
+    let mut incomplete = accepted;
+    incomplete.unconnected.retain(|terminal| !(terminal.part == u1 && terminal.terminal == "5"));
+    let err = session.execute(COMPARE_NETLIST, &json!({"netlist":incomplete.to_text().unwrap()})).unwrap_err();
+    assert!(matches!(err, CommandError::InvalidParams(_)), "{err}");
+    assert!(err.to_string().contains(&format!("omits the placement of {u1} terminal 5")), "{err}");
 }
 
 /// The board's definition and package revisions accept integral JSON number spellings

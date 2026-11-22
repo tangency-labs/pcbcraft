@@ -40,7 +40,7 @@
     "mapping": {
       "type": "object",
       "minProperties": 1,
-      "maxProperties": 128,
+      "maxProperties": 1024,
       "propertyNames": {
         "$ref": "urn:pcbcraft:schema:footprint:1#/$defs/terminal_id"
       },

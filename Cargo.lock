@@ -2941,6 +2941,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pcbcraft-board-solid"
+version = "0.1.0"
+dependencies = [
+ "pcbcraft-engine",
+ "pcbcraft-geometry",
+ "serde_json",
+]
+
+[[package]]
 name = "pcbcraft-chrome"
 version = "0.1.0"
 dependencies = [
@@ -2953,6 +2962,7 @@ dependencies = [
  "solidcraft-ui-kit",
  "solidcraft-ui-registry",
  "solidcraft-ui-text",
+ "ttf-parser",
 ]
 
 [[package]]
@@ -2989,6 +2999,7 @@ dependencies = [
  "solidcore-ops",
  "solidcore-record",
  "solidcore-step",
+ "solidcore-tess",
 ]
 
 [[package]]

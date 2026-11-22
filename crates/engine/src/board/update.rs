@@ -18,6 +18,7 @@ use uuid::Uuid;
 #[cfg(test)]
 std::thread_local! {
     pub(super) static TERMINAL_NET_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static REMOVAL_PLACEMENT_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Explicitly adopt current supported logical inputs before retaining physical removals.
@@ -150,7 +151,7 @@ impl Package {
             || !super::definition::valid_id(&self.definition)
             || self.library.as_ref().is_some_and(|library| !super::definition::valid_id(library))
             || keys != terminals.iter().cloned().collect()
-            || values.len() > 128
+            || values.len() > super::definition::MAX_PADS
             || self.mapping.values().map(|pads| pads.pads().len()).sum::<usize>() + self.unconnected_pads.len() != values.len()
             || self.mapping.values().any(|value| !value.valid())
             || self.unconnected_pads.iter().any(|pad| PinNumber::new(pad).is_none())
@@ -489,7 +490,7 @@ impl Baseline {
                 || !super::definition::valid_id(&component.library)
                 || !super::definition::valid_id(&component.definition)
                 || component.terminals.is_empty()
-                || component.terminals.len() > 128
+                || component.terminals.len() > crate::library::MAX_TERMINALS
                 || !strictly_sorted(&component.terminals)
                 || component.terminals.iter().any(|terminal| PinNumber::new(terminal).is_none())
             {
@@ -541,7 +542,7 @@ impl Baseline {
                             .and_then(|package| package.mapping.get(&terminal.terminal))
                             .is_some_and(|pads| pads.pads().len() > 1)
                     }))
-                || net.terminals.len() > MAX_SYMBOLS * 128
+                || net.terminals.len() > MAX_SYMBOLS * crate::library::MAX_TERMINALS
                 || !strictly_sorted(&net.terminals)
                 || net.names.len() > crate::net_labels::MAX_LABELS * crate::sheets::MAX_SHEETS
             {
@@ -771,7 +772,8 @@ pub fn preview(accepted: &Baseline, proposed: &Baseline) -> Result<Preview, Stri
 
 /// Build a complete physical candidate with its matching accepted baseline installed,
 /// without changing the input project. Revision checks and single-step publication
-/// belong to the caller; unsupported/missing assets produce no partial mutation.
+/// belong to the caller. Missing or unsupported assets and removal of locked
+/// placements are refused without a partial candidate.
 pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseline) -> Result<(Project, Baseline), String> {
     let target = project.boards().next().map(|board| board.target).ok_or("no physical board is available")?;
     if target.project != proposed.project || target.board != proposed.board {
@@ -794,6 +796,13 @@ pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseli
     if plan.is_noop() {
         return Ok((project.clone(), accepted.clone()));
     }
+    let removed_placements = plan.components.iter().filter_map(|change| {
+        let ComponentChange::Removed { component } = change else { return None };
+        #[cfg(test)]
+        REMOVAL_PLACEMENT_LOOKUPS.set(REMOVAL_PLACEMENT_LOOKUPS.get() + 1);
+        project.board.footprints().get(*project.board.by_component.get(component)?)
+    });
+    super::transform::require_unlocked_placements(project, removed_placements.map(Some)).map_err(|error| error.to_string())?;
     let mut next = project.clone();
     let board = Arc::make_mut(&mut next.board);
     board.footprints.retain(|footprint| proposed.components.contains_key(&footprint.component));
@@ -849,7 +858,7 @@ fn mapping_records<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMa
 
         /// Describe the exact mapping vocabulary and its supported terminal count.
         fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("at most 128 unique terminal-to-pad mappings")
+            write!(formatter, "at most {} unique terminal-to-pad mappings", crate::library::MAX_TERMINALS)
         }
 
         /// Check bounds and uniqueness while consuming entries, including duplicate
@@ -857,7 +866,11 @@ fn mapping_records<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMa
         fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
             let mut mapping = BTreeMap::new();
             while let Some((terminal, pad)) = map.next_entry::<String, crate::library::parts::PadIds>()? {
-                if mapping.len() >= 128 || PinNumber::new(&terminal).is_none() || !pad.valid() || mapping.insert(terminal, pad).is_some() {
+                if mapping.len() >= crate::library::MAX_TERMINALS
+                    || PinNumber::new(&terminal).is_none()
+                    || !pad.valid()
+                    || mapping.insert(terminal, pad).is_some()
+                {
                     return Err(serde::de::Error::custom("duplicate, excessive or invalid accepted terminal mapping"));
                 }
             }

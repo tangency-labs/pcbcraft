@@ -201,6 +201,21 @@ impl ProjectFiles {
     /// or disk access runs on the editor thread; an existing job retains its receiver.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn open_path(&mut self, path: std::path::PathBuf, revision: u64, ctx: &egui::Context) -> Result<(), String> {
+        self.start_open(path, false, revision, ctx)
+    }
+
+    /// Open a target named on the desktop command line. The worker first canonicalizes the whole
+    /// target, so a final component that is a symlink to a project folder or `.pc` archive opens
+    /// as its target would; the ordinary loader resolves only the parent of a named target. A
+    /// target that can't be canonicalized loads as given and reports the ordinary error.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn open_startup_path(&mut self, path: std::path::PathBuf, revision: u64, ctx: &egui::Context) -> Result<(), String> {
+        self.start_open(path, true, revision, ctx)
+    }
+
+    /// Start the shared open worker; `resolve` canonicalizes the target there, off the editor thread.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn start_open(&mut self, path: std::path::PathBuf, resolve: bool, revision: u64, ctx: &egui::Context) -> Result<(), String> {
         if self.busy() {
             return Err("A project file operation is already running".to_owned());
         }
@@ -214,6 +229,7 @@ impl ProjectFiles {
         std::thread::Builder::new()
             .name("pcbcraft-open-recent".to_owned())
             .spawn(move || {
+                let path = if resolve { std::fs::canonicalize(&path).unwrap_or(path) } else { path };
                 let result = native::load(&path).map(Outcome::Opened).map_err(|error| format!("Could not open {}: {error}", path.display()));
                 let _ = send.send(result);
                 ctx.request_repaint();

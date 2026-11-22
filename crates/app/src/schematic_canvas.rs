@@ -215,7 +215,7 @@ pub(crate) fn paint_preview_transformed(
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
     paint_symbol(
         painter,
-        definition.default_unit(),
+        definition.default_unit().graphics(),
         center,
         step,
         0,
@@ -483,7 +483,7 @@ pub(crate) fn show(
     {
         let position = moved.as_ref().filter(|(moving, _)| moving.id() == symbol.id()).map_or(symbol.position, |(_, point)| *point);
         let center = screen(position);
-        if visible.contains(center) {
+        if let Some(graphics) = visible_symbol_graphics(project, symbol, center, visible) {
             let color = if selected.symbols.contains(&symbol.id()) {
                 tokens.accent
             } else if highlighted.symbols.contains(&symbol.id()) {
@@ -493,7 +493,7 @@ pub(crate) fn show(
             };
             paint_symbol(
                 &painter,
-                symbol.unit_definition(),
+                graphics,
                 center,
                 unit_step,
                 symbol.turns(),
@@ -1278,7 +1278,7 @@ fn paint_unit_template(
 ) {
     paint_symbol(
         painter,
-        symbol.unit_definition(),
+        symbol.unit_definition().graphics(),
         center,
         step,
         symbol.turns(),
@@ -1459,7 +1459,7 @@ fn body(definition: &pcbcraft_engine::schematic::SymbolUnit, turns: u8, mirrored
 #[allow(clippy::too_many_arguments)]
 fn paint_symbol(
     painter: &Painter,
-    definition: &pcbcraft_engine::schematic::SymbolUnit,
+    graphics: Vec<Shape>,
     center: Pos2,
     step: f32,
     turns: u8,
@@ -1473,7 +1473,7 @@ fn paint_symbol(
         let (x, y) = turn(x, y, turns, mirrored);
         pos2(center.x + x * step, center.y + y * step)
     };
-    for shape in &definition.graphics() {
+    for shape in &graphics {
         match shape {
             Shape::Graphic(graphic) => {
                 if matches!(graphic.geometry, pcbcraft_engine::library_graphics::Geometry::Text { .. }) {
@@ -1514,6 +1514,11 @@ fn paint_symbol(
     }
 }
 
+/// Project current pin labels only when this placement passes the canvas's normal culling.
+pub(super) fn visible_symbol_graphics(project: &Project, symbol: &SymbolPlacement, center: Pos2, visible: Rect) -> Option<Vec<Shape>> {
+    visible.contains(center).then(|| project.symbol_graphics(symbol))
+}
+
 /// A part's correspondence preview uses the native symbol painter and the exact selected unit.
 /// Highlighting never infers a logical terminal from display text or coordinates.
 pub(crate) fn paint_part_preview(
@@ -1529,7 +1534,7 @@ pub(crate) fn paint_part_preview(
     let step = (rect.width() / extent.x).min(rect.height() / extent.y).min(theme::SCHEMATIC_PREVIEW_MAX_STEP) * zoom;
     let center = rect.center() + pan - bounds.center().to_vec2() * step;
     let t = pcbcraft_chrome::Tokens::get();
-    paint_symbol(painter, unit, center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.canvas_ink), t.canvas);
+    paint_symbol(painter, unit.graphics(), center, step, 0, false, Stroke::new(theme::SCHEMATIC_PREVIEW_STROKE, t.canvas_ink), t.canvas);
     if let Some(pin) = terminal.and_then(|terminal| unit.pins().iter().find(|pin| pin.number == terminal)) {
         let at = center + egui::vec2(pin.offset.x_nm as f32, pin.offset.y_nm as f32) * (step / pcbcraft_engine::schematic::GRID_NM as f32);
         painter.circle_stroke(at, 6., Stroke::new(2., pcbcraft_chrome::Tokens::get().accent));
