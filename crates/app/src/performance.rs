@@ -763,6 +763,126 @@ mod tests {
         assert_eq!((rows[5].samples, rows[5].p50_ms, rows[5].p95_ms), (4, Some(2.0), Some(40.0)));
     }
 
+    /// Idle pointer input has no active route reversal, so `routing_input` must stay
+    /// `unmeasured` regardless of what step ID the trace assigns to it (including `reverse.0`).
+    #[test]
+    fn budget_routing_input_stays_unmeasured_for_idle_steps_even_with_reverse_id() {
+        let base = generate("reference-v1", "test").unwrap();
+        for step_id in ["idle", "reverse.0"] {
+            let mut artifact: serde_json::Value = serde_json::from_str(&base).unwrap();
+            artifact["trace_id"] = json!("custom-idle-v1");
+            artifact["trace"] = json!([{
+                "id": step_id,
+                "action": {"kind": "pointer", "at": {"x_nm": 0, "y_nm": -5_080_000}, "pressed": null},
+                "routing_after": false,
+            }]);
+            let report = budget::suite(&artifact.to_string(), environment(), 1).unwrap();
+            let row = report["actions"].as_array().unwrap().iter().find(|row| row["action"] == "routing_input").unwrap();
+            assert_eq!(row["verdict"], "unmeasured", "step id {step_id}: {row}");
+            assert_eq!(row["samples"], 0, "step id {step_id}: {row}");
+            assert_eq!(row["p50_ms"], serde_json::Value::Null, "step id {step_id}: {row}");
+            assert_eq!(row["p95_ms"], serde_json::Value::Null, "step id {step_id}: {row}");
+        }
+    }
+
+    /// Build a minimal stored-mode ZIP archive with deterministic headers for repacking tests.
+    fn stored_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        fn crc32(bytes: &[u8]) -> u32 {
+            let mut crc = 0xFFFF_FFFFu32;
+            for &byte in bytes {
+                crc ^= u32::from(byte);
+                for _ in 0..8 {
+                    crc = if crc & 1 != 0 { (crc >> 1) ^ 0xEDB8_8320 } else { crc >> 1 };
+                }
+            }
+            !crc
+        }
+        let mut out = Vec::new();
+        let mut directory = Vec::new();
+        for &(name, payload) in entries {
+            let offset = u32::try_from(out.len()).unwrap();
+            let crc = crc32(payload);
+            let size = u32::try_from(payload.len()).unwrap();
+            let name_bytes = name.as_bytes();
+            let name_len = u16::try_from(name_bytes.len()).unwrap();
+            out.extend_from_slice(b"PK\x03\x04");
+            out.extend_from_slice(&20u16.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(&0x0021u16.to_le_bytes());
+            out.extend_from_slice(&crc.to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&size.to_le_bytes());
+            out.extend_from_slice(&name_len.to_le_bytes());
+            out.extend_from_slice(&0u16.to_le_bytes());
+            out.extend_from_slice(name_bytes);
+            out.extend_from_slice(payload);
+
+            directory.extend_from_slice(b"PK\x01\x02");
+            directory.extend_from_slice(&20u16.to_le_bytes());
+            directory.extend_from_slice(&20u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0x0021u16.to_le_bytes());
+            directory.extend_from_slice(&crc.to_le_bytes());
+            directory.extend_from_slice(&size.to_le_bytes());
+            directory.extend_from_slice(&size.to_le_bytes());
+            directory.extend_from_slice(&name_len.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u16.to_le_bytes());
+            directory.extend_from_slice(&0u32.to_le_bytes());
+            directory.extend_from_slice(&offset.to_le_bytes());
+            directory.extend_from_slice(name_bytes);
+        }
+        let cd_offset = u32::try_from(out.len()).unwrap();
+        let cd_size = u32::try_from(directory.len()).unwrap();
+        let count = u16::try_from(entries.len()).unwrap();
+        out.extend_from_slice(&directory);
+        out.extend_from_slice(b"PK\x05\x06");
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&count.to_le_bytes());
+        out.extend_from_slice(&cd_size.to_le_bytes());
+        out.extend_from_slice(&cd_offset.to_le_bytes());
+        out.extend_from_slice(&0u16.to_le_bytes());
+        out
+    }
+
+    /// Repacking a valid fixture in stored ZIP mode changes container bytes without changing
+    /// project contents: `budget::suite` must still produce a report and retain the original
+    /// input archive hash.
+    #[test]
+    fn budget_suite_accepts_repacked_stored_archive_and_retains_input_hash() {
+        let base_json = generate("reference-v1", "test").unwrap();
+        let original = load_artifact(&base_json).unwrap();
+        let decoded = decode_packed(&original.project).unwrap();
+        let parts: Vec<_> =
+            decoded.documents.iter().map(|(path, bytes)| json!({"path": path, "size_bytes": bytes.len(), "sha256": digest(bytes)})).collect();
+        let manifest = serde_json::to_vec(&json!({"format": "pcbcraft-container/3", "parts": parts, "assets": []})).unwrap();
+        let mut entries: Vec<(&str, &[u8])> = decoded.documents.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect();
+        entries.push(("manifest.json", manifest.as_slice()));
+        let repacked = stored_zip(&entries);
+        assert_ne!(repacked, original.project, "stored-mode archive bytes must differ from deflated output");
+        let repacked_sha = digest(&repacked);
+        assert_ne!(repacked_sha, original.project_sha256);
+
+        let mut artifact: serde_json::Value = serde_json::from_str(&base_json).unwrap();
+        artifact["project"] = json!(repacked);
+        artifact["project_sha256"] = json!(repacked_sha);
+        let report = budget::suite(&artifact.to_string(), environment(), 1).unwrap();
+        assert_eq!(report["project_sha256"], repacked_sha);
+        let actions = report["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), budget::BUDGETS.len());
+        let save = actions.iter().find(|row| row["action"] == "save").unwrap();
+        assert_eq!(save["samples"], 1);
+        assert_eq!(save["verdict"], "no_budget");
+    }
+
     /// Tampering with the envelope trace under its versioned ID must be rejected by `load_artifact`.
     #[test]
     fn envelope_trace_identity_rejects_unrelated_steps() {

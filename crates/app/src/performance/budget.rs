@@ -1,8 +1,8 @@
 //! Benchmark suite for large boards: each named action's nearest-rank p50/p95 against a
 //! committed budget table. Budgeted boundaries are CPU proxies for the proposed #237 gates;
 //! a verdict describes one machine and build and never gates CI.
-use super::{Environment, Metric, Result, clock_ms, digest, load_artifact, run};
-use pcbcraft_engine::persistence::{decode_packed, encode_packed};
+use super::{Environment, Metric, Result, clock_ms, load_artifact, replay::ROUTE_REVERSAL_METRIC, run};
+use pcbcraft_engine::persistence::{decode_packed, encode_documents, encode_packed};
 use serde::Serialize;
 use serde_json::json;
 
@@ -53,7 +53,7 @@ pub const BUDGETS: &[Budget] = &[
     },
     Budget {
         action: "routing_input",
-        boundary: Boundary::Pooled { prefix: "replay.reverse.", suffix: ".ui" },
+        boundary: Boundary::Metric(ROUTE_REVERSAL_METRIC),
         p95_ms: Some(4.0),
         basis: "proposed #237 routing-input target; CPU service-cost proxy, does not certify the window input budget",
     },
@@ -143,19 +143,22 @@ pub fn assess(budgets: &[Budget], metrics: &[Metric]) -> Vec<Assessment> {
 }
 
 /// Run the shared CPU workloads on one saved artifact, time a packed save of the same
-/// project, and assess every action against `BUDGETS`. The save output must equal the saved
-/// archive bytes; that check stays outside the timed boundary.
+/// project, and assess every action against `BUDGETS`. The timed save must reopen with
+/// equivalent project contents and a valid manifest; that check stays outside the timed
+/// boundary, and the report retains the original input archive hash.
 pub fn suite(artifact_json: &str, environment: Environment, iterations: usize) -> Result<serde_json::Value> {
     let report = run(artifact_json, environment, iterations)?;
     let artifact = load_artifact(artifact_json)?;
+    let expected = encode_documents(decode_packed(&artifact.project)?.project)?;
     let mut save_samples = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let project = decode_packed(&artifact.project)?.project;
         let start = clock_ms();
         let bytes = encode_packed(project)?;
         save_samples.push(clock_ms() - start);
-        if digest(&bytes) != artifact.project_sha256 {
-            return Err("packed save differs from the saved archive bytes".into());
+        let reopened = decode_packed(&bytes)?;
+        if reopened.needs_manifest || reopened.documents != expected || encode_documents(reopened.project)? != expected {
+            return Err("packed save did not reopen with equivalent project contents".into());
         }
     }
     let mut metrics = report.metrics;

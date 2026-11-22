@@ -21,6 +21,8 @@ pub(super) const STANDARD_TRACE_ID: &str = "route-reverse-layer-cancel-edit-v1";
 pub(super) const ENVELOPE_TRACE_ID: &str = "route-reverse-capacity-cancel-edit-v1";
 pub(super) const SHOVE_TRACE_ID: &str = "route-shove-preview-cancel-commit-v1";
 pub(super) const COMMIT_TRACE_ID: &str = "route-contact-commit-history-v1";
+/// Pooled UI frame samples from runtime-validated active-route pointer moves that reverse direction.
+pub(super) const ROUTE_REVERSAL_METRIC: &str = "replay.route_reversal.ui";
 
 /// One 60 Hz logical input frame; wall-clock measurements do not sleep to simulate pacing.
 #[derive(Serialize, Deserialize)]
@@ -192,7 +194,7 @@ impl Step {
 
 /// Paint and tessellate a real editor frame. These CPU boundaries exclude event-loop waits,
 /// renderer submission, compositor presentation and physical visibility.
-fn frame(app: &mut PcbApp, ctx: &egui::Context, events: Vec<Event>, number: usize, samples: &mut BTreeMap<String, Vec<f64>>, id: &str) {
+fn frame(app: &mut PcbApp, ctx: &egui::Context, events: Vec<Event>, number: usize, samples: &mut BTreeMap<String, Vec<f64>>, id: &str) -> f64 {
     let input = RawInput {
         screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0))),
         time: Some(number as f64 / 60.0),
@@ -200,9 +202,62 @@ fn frame(app: &mut PcbApp, ctx: &egui::Context, events: Vec<Event>, number: usiz
         events,
         ..Default::default()
     };
-    let mut output = timed(samples, &format!("replay.{id}.ui"), || ctx.run_ui(input, |ui| app.frame(ui)));
+    let start = super::clock_ms();
+    let mut output = ctx.run_ui(input, |ui| app.frame(ui));
+    let ui_ms = super::clock_ms() - start;
+    samples.entry(format!("replay.{id}.ui")).or_default().push(ui_ms);
     output.textures_delta.clear();
     timed(samples, &format!("replay.{id}.tessellate"), || std::hint::black_box(ctx.tessellate(output.shapes, output.pixels_per_point)));
+    ui_ms
+}
+
+/// Track contiguous active-route pointer moves and emit their UI frame samples only when
+/// the validated runtime route actually reverses direction.
+#[derive(Default)]
+struct RouteReversalTracker {
+    prev_point: Option<Point>,
+    prev_delta: Option<(i128, i128)>,
+    reversed: bool,
+    ui_samples: Vec<f64>,
+}
+
+impl RouteReversalTracker {
+    fn flush(&mut self, samples: &mut BTreeMap<String, Vec<f64>>) {
+        if self.reversed && !self.ui_samples.is_empty() {
+            samples.entry(ROUTE_REVERSAL_METRIC.into()).or_default().extend(self.ui_samples.drain(..));
+        } else {
+            self.ui_samples.clear();
+        }
+        self.prev_point = None;
+        self.prev_delta = None;
+        self.reversed = false;
+    }
+
+    fn observe(&mut self, was_routing: bool, now_routing: bool, action: &Action, ui_ms: f64, samples: &mut BTreeMap<String, Vec<f64>>) {
+        match (was_routing, now_routing, action) {
+            (false, true, Action::Pointer { at, .. }) => {
+                self.flush(samples);
+                self.prev_point = Some(*at);
+            }
+            (true, true, Action::Pointer { at, pressed: None }) => {
+                if let Some(prev) = self.prev_point {
+                    let dx = i128::from(at.x_nm) - i128::from(prev.x_nm);
+                    let dy = i128::from(at.y_nm) - i128::from(prev.y_nm);
+                    if dx != 0 || dy != 0 {
+                        if let Some((prev_dx, prev_dy)) = self.prev_delta
+                            && dx * prev_dx + dy * prev_dy < 0
+                        {
+                            self.reversed = true;
+                        }
+                        self.prev_delta = Some((dx, dy));
+                    }
+                }
+                self.prev_point = Some(*at);
+                self.ui_samples.push(ui_ms);
+            }
+            _ => self.flush(samples),
+        }
+    }
 }
 
 /// Physical contacts and publication baseline, captured only for contact-dependent traces.
@@ -550,13 +605,17 @@ pub(super) fn run(artifact: &Artifact, samples: &mut BTreeMap<String, Vec<f64>>)
         frame(&mut app, &ctx, Vec::new(), i, &mut warmup, "warmup");
     }
     let mut frame_id = WARMUP;
+    let mut reversal = RouteReversalTracker::default();
     for (index, step) in artifact.trace.iter().enumerate() {
+        let was_routing = app.views.active.board.tracks.routing();
         let events = driver.input(&mut app, artifact, index, samples)?;
-        frame(&mut app, &ctx, events, frame_id, samples, &step.id);
+        let ui_ms = frame(&mut app, &ctx, events, frame_id, samples, &step.id);
         frame_id += 1;
         driver.settle(&mut app, &ctx, artifact, index, &mut frame_id, samples)?;
         driver.verify(&app, artifact, index)?;
+        reversal.observe(was_routing, app.views.active.board.tracks.routing(), &step.action, ui_ms, samples);
     }
+    reversal.flush(samples);
     driver.finish(&app)
 }
 

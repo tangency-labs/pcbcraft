@@ -257,7 +257,7 @@ target/release/examples/board_perf budgets /tmp/envelope-v1.json /tmp/native-env
 | `drc` | `drc.synchronous` | no target yet |
 | `connectivity` | `electrical_connectivity.first` | no target yet |
 | `move_commit` | `command.move_tracks` | below 100 ms (proposed #237 commit target; track-edit proxy) |
-| `routing_input` | every `replay.reverse.*.ui` sample, pooled | below 4 ms (proposed #237 routing-input target; CPU service-cost proxy) |
+| `routing_input` | validated active-route reversal `replay.route_reversal.ui` samples | below 4 ms (proposed #237 routing-input target; CPU service-cost proxy) |
 
 Open, save, DRC and connectivity have no agreed target, so the suite reports their
 quantiles with the verdict **no budget**. The two budgeted rows use the proposed
@@ -271,8 +271,9 @@ there, so a pass certifies neither the window's routing-input budget nor either
 visible-preview budget (p95 < 16.7 ms / p99 < 33 ms); `move_commit` times a
 validated track edit and does not qualify walkaround or shove commits. The report
 lists the window routing-input budget, the visible-preview budget, process memory,
-a 10,000-object agent change and multi-core speedup as unmeasured. The save must
-reproduce the saved archive bytes; that check runs outside the timed boundary.
+a 10,000-object agent change and multi-core speedup as unmeasured. The timed save must reopen with equivalent project contents and a valid manifest,
+while the report retains the original input archive hash; that check runs outside
+the timed boundary.
 `open` covers unpacking, decoding and validating the archive, not process startup
 or the file dialog. A verdict describes one machine and build; like other timings
 here, it does not gate CI. The first iteration checks clearance pairs against the
