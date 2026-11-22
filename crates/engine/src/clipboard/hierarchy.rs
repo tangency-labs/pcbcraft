@@ -390,7 +390,7 @@ impl Session {
         Arc::make_mut(&mut next.units).retain(|_, id| !symbols.contains(id));
         for component in project.symbols().iter().filter(|s| symbols.contains(&s.ordinal)).map(|s| s.component) {
             if !next.all_symbols().any(|symbol| symbol.component == component) {
-                next.retire_component(component);
+                next.retire_component(component)?;
             }
         }
         for index in 0..next.sheets.len() {

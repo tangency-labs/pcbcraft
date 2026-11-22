@@ -9,8 +9,21 @@ use super::{
     Pad,
     update::SourceCapture,
     view::{BoardTarget, BoardView},
+    work::yield_unit,
 };
 use crate::schematic::Point;
+use std::{
+    collections::BTreeMap,
+    future::Future,
+    task::{Context, Poll, Waker},
+};
+
+// Counts accepted terminals each build resolves, so a regression can show that unselected
+// nets add no display work. The count applies only to the calling test thread.
+#[cfg(test)]
+std::thread_local! {
+    pub(in crate::board) static TERMINALS_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 /// A logical terminal qualified by its project and physical board, including retained removals.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,7 +102,23 @@ impl BoardView<'_> {
     }
 
     /// Reuse completed copper connectivity when checking the same immutable snapshot.
+    /// The non-cooperative build never yields; a pending poll is reported as an error, not a panic.
     pub(super) fn ratsnest_with_copper(self, copper: &super::track::Copper) -> Result<Ratsnest, String> {
+        let mut work = std::pin::pin!(self.build_ratsnest::<false>(copper, None));
+        match work.as_mut().poll(&mut Context::from_waker(Waker::noop())) {
+            Poll::Ready(result) => result,
+            Poll::Pending => Err("ratsnest computation unexpectedly suspended".into()),
+        }
+    }
+
+    /// Share display ordering and membership, yielding during published unroute preparation.
+    /// `nets` selects accepted net indices in increasing order; each selected net keeps the
+    /// complete membership and display order it has in the full build. Others cost nothing.
+    pub(super) async fn build_ratsnest<const COOPERATIVE: bool>(
+        self,
+        copper: &super::track::Copper,
+        nets: Option<&[usize]>,
+    ) -> Result<Ratsnest, String> {
         self.require_no_teardrops()?;
         let board = &self.project().board;
         let baseline = board
@@ -105,10 +134,22 @@ impl BoardView<'_> {
             net_count: baseline.nets.len(),
             terminal_count: 0,
         };
-        for (net, state) in baseline.nets.iter().enumerate() {
+        let selected = nets.map_or(baseline.nets.len(), <[usize]>::len);
+        for position in 0..selected {
+            if COOPERATIVE {
+                yield_unit().await;
+            }
+            let net = nets.map_or(position, |nets| nets[position]);
+            let Some(state) = baseline.nets.get(net) else { continue };
             let mut endpoints = Vec::with_capacity(state.terminals.len());
+            let mut ordered = BTreeMap::new();
             result.terminal_count += state.terminals.len();
             for key in &state.terminals {
+                if COOPERATIVE {
+                    yield_unit().await;
+                }
+                #[cfg(test)]
+                TERMINALS_BUILT.with(|built| built.set(built.get() + 1));
                 let terminal = TerminalAddress { board: self.target, component: key.component, terminal: key.terminal.clone() };
                 let resolution = (|| {
                     let footprint =
@@ -127,33 +168,76 @@ impl BoardView<'_> {
                         .collect::<Result<Vec<_>, _>>()
                 })();
                 match resolution {
+                    Ok(resolved) if COOPERATIVE => {
+                        for endpoint in resolved {
+                            yield_unit().await;
+                            let Point { x_nm, y_nm } = endpoint.position;
+                            // The ordinal preserves the synchronous stable sort's tie order.
+                            ordered.insert((x_nm, y_nm, endpoint.terminal.component, endpoint.terminal.terminal.clone(), ordered.len()), endpoint);
+                        }
+                    }
                     Ok(resolved) => endpoints.extend(resolved),
                     Err(reason) => result.missing.push(MissingEndpoint { terminal, reason }),
                 }
             }
-            endpoints.sort_by(|a, b| {
-                (a.position.x_nm, a.position.y_nm, a.terminal.component, &a.terminal.terminal).cmp(&(
-                    b.position.x_nm,
-                    b.position.y_nm,
-                    b.terminal.component,
-                    &b.terminal.terminal,
-                ))
-            });
+            if COOPERATIVE {
+                for endpoint in ordered.into_values() {
+                    yield_unit().await;
+                    endpoints.push(endpoint);
+                }
+            } else {
+                endpoints.sort_by(|a, b| {
+                    (a.position.x_nm, a.position.y_nm, a.terminal.component, &a.terminal.terminal).cmp(&(
+                        b.position.x_nm,
+                        b.position.y_nm,
+                        b.terminal.component,
+                        &b.terminal.terminal,
+                    ))
+                });
+            }
             // Untracked terminals get their own island past every copper island index.
-            let mut islands: Vec<usize> = endpoints
-                .iter()
-                .enumerate()
-                .map(|(index, endpoint)| {
-                    copper.pads.get(&(endpoint.footprint.clone(), endpoint.pad.number.as_str().to_owned())).copied().unwrap_or(usize::MAX - index)
-                })
-                .collect();
+            let mut compact = BTreeMap::new();
+            let mut parent = Vec::new();
+            let mut rank = Vec::new();
+            let mut nodes = Vec::with_capacity(endpoints.len());
+            for (index, endpoint) in endpoints.iter().enumerate() {
+                if COOPERATIVE {
+                    yield_unit().await;
+                }
+                let raw =
+                    copper.pads.get(&(endpoint.footprint.clone(), endpoint.pad.number.as_str().to_owned())).copied().unwrap_or(usize::MAX - index);
+                let node = *compact.entry(raw).or_insert_with(|| {
+                    let next = parent.len();
+                    parent.push(next);
+                    rank.push(0_u8);
+                    next
+                });
+                nodes.push(node);
+            }
             for (index, pair) in endpoints.windows(2).enumerate() {
-                let (a, b) = (islands[index], islands[index + 1]);
+                if COOPERATIVE {
+                    yield_unit().await;
+                }
+                let (Some(from), Some(to), Some(&left), Some(&right)) = (pair.first(), pair.get(1), nodes.get(index), nodes.get(index + 1)) else {
+                    continue;
+                };
+                let a = find_root(&mut parent, left);
+                let b = find_root(&mut parent, right);
                 if a != b {
-                    result.lines.push(Airwire { net, from: pair[0].clone(), to: pair[1].clone() });
-                    for island in &mut islands {
-                        if *island == b {
-                            *island = a;
+                    result.lines.push(Airwire { net, from: from.clone(), to: to.clone() });
+                    let (ra, rb) = (rank.get(a).copied().unwrap_or(0), rank.get(b).copied().unwrap_or(0));
+                    if ra < rb {
+                        if let Some(slot) = parent.get_mut(a) {
+                            *slot = b;
+                        }
+                    } else {
+                        if let Some(slot) = parent.get_mut(b) {
+                            *slot = a;
+                        }
+                        if ra == rb
+                            && let Some(slot) = rank.get_mut(a)
+                        {
+                            *slot = ra.saturating_add(1);
                         }
                     }
                 }
@@ -161,6 +245,24 @@ impl BoardView<'_> {
         }
         Ok(result)
     }
+}
+
+/// Resolve a disjoint-set root with path halving and checked indexing.
+fn find_root(parent: &mut [usize], mut node: usize) -> usize {
+    while let Some(&next) = parent.get(node) {
+        if next == node {
+            break;
+        }
+        if let Some(&grand) = parent.get(next) {
+            if let Some(slot) = parent.get_mut(node) {
+                *slot = grand;
+            }
+            node = grand;
+        } else {
+            node = next;
+        }
+    }
+    node
 }
 
 #[cfg(test)]
