@@ -3829,7 +3829,9 @@ impl Session {
         }
         if id.starts_with("pcb.")
             && id != board::teardrop::EDIT_TEARDROPS
-            && !board::track::preparation::is_copper_edit(id)
+            // Copper edits regenerate active teardrops while preparing; unroute does not, so it
+            // keeps the upfront refusal and its preview cannot promise an edit Apply refuses.
+            && (id == UNROUTE_CONNECTION || !board::track::preparation::is_copper_edit(id))
             && let Some(project) = self.project().filter(|p| !p.board.teardrops.is_empty())
         {
             project.resolve_board(params.get("board").and_then(Value::as_str))?;

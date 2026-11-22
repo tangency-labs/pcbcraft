@@ -213,6 +213,28 @@ mod regeneration {
         assert_eq!(intent.derive(view(&session)), Ok(moved));
     }
 
+    /// Unroute does not regenerate teardrops, so on a board with active teardrops it is refused
+    /// before planning. Preview and Apply agree, and neither touches the snapshot or history.
+    #[test]
+    fn unroute_with_active_teardrops_is_refused_alike_by_preview_and_apply() {
+        use crate::UNROUTE_CONNECTION;
+        let (mut session, intent) = checked_site();
+        let before = session.snapshot().unwrap();
+        let bytes = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        let pad = |pad: &str| json!({"footprint":"footprint-1","pad":pad});
+        for dry_run in [true, false] {
+            let params = json!({"board":intent.board.board,"from":pad("1"),"to":pad("2"),"dry_run":dry_run,"expected_revision":revision});
+            let error = session.execute(UNROUTE_CONNECTION, &params).unwrap_err();
+            assert!(matches!(&error, CommandError::Unavailable(reason) if reason == crate::board::teardrop::UNSUPPORTED), "{dry_run}: {error:?}");
+            assert!(std::sync::Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+            assert_eq!(session.revision(), revision);
+            assert_eq!((session.undo.len(), session.redo.len()), history);
+            assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), bytes);
+        }
+    }
+
     /// A lone via move or deletion of either source drops the now-detached intent; Undo restores it.
     #[test]
     fn detached_or_deleted_via_teardrop_is_removed_atomically() {
