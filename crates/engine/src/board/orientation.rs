@@ -9,14 +9,14 @@
 //! neither gets one warning.
 use super::{
     Footprint,
-    definition::{CopperBinding, FootprintDefinition, GraphicPurpose, Key, PadShape},
-    silkscreen::Settings as SilkscreenSettings,
+    definition::{CopperBinding, FootprintDefinition, GraphicPurpose, Key, PadShape, RectPad},
+    silkscreen::{self, Settings},
     view::BoardView,
 };
 use crate::{
     CommandError, Session,
     library_graphics::{Fill, Geometry},
-    schematic::TextAlign,
+    schematic::{Point, TextAlign},
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -66,6 +66,35 @@ impl Frame {
     fn point(&self, x: i64, y: i64) -> Doubled {
         (2 * i128::from(x) - self.pivot.0, 2 * i128::from(y) - self.pivot.1)
     }
+
+    /// The same doubled offset as a board point, for the shared silkscreen clipping. Definition
+    /// offsets are bounded far below a quarter of the `i64` range, so the value always fits.
+    fn local(&self, point: Point) -> Point {
+        let (x, y) = self.point(point.x_nm, point.y_nm);
+        Point { x_nm: x as i64, y_nm: y as i64 }
+    }
+
+    /// The definition's lands scaled into the doubled frame, for clipping in that frame.
+    fn pads(&self, definition: &FootprintDefinition) -> Vec<RectPad> {
+        definition
+            .pads
+            .iter()
+            .map(|pad| RectPad { center: self.local(pad.center), width_nm: 2 * pad.width_nm, height_nm: 2 * pad.height_nm, ..pad.clone() })
+            .collect()
+    }
+}
+
+/// Clip silkscreen centerlines in the doubled frame exactly as the board does, with the
+/// clearance and the stroke that sets the clipping margin both doubled to match. Clipping
+/// about the pivot keeps a drawing that is symmetric on the board symmetric here. Return the
+/// visible nonzero segments, and whether clipping removed any part of the paths.
+fn clipped(paths: Vec<Vec<Point>>, pads: &[RectPad], style: Settings, stroke_nm: i64) -> (Vec<(Doubled, Doubled)>, bool) {
+    let whole: Vec<_> = paths.iter().flat_map(|path| path.windows(2).filter(|pair| pair[0] != pair[1]).map(<[Point]>::to_vec)).collect();
+    let style = Settings { stroke_width_nm: 2 * stroke_nm, pad_clearance_nm: 2 * style.pad_clearance_nm, ..style };
+    let visible = silkscreen::clipped(paths, pads, style);
+    let changed = visible != whole;
+    let doubled = |point: Point| (i128::from(point.x_nm), i128::from(point.y_nm));
+    (visible.into_iter().map(|pair| (doubled(pair[0]), doubled(pair[1]))).collect(), changed)
 }
 
 /// Put a rectangle's size and rotation in one form: width at most height, and the rotation
@@ -238,15 +267,22 @@ fn normalize_marks(inked: Vec<(Ink, Mark)>) -> Vec<(Ink, Mark)> {
 
 /// Collect the silkscreen and fabrication drawing of a definition turned by `q` quarter turns,
 /// each piece with its ink. The assembly drawing comes from the fabrication layer, so a mark
-/// there counts as much as one in the silkscreen. Courtyards mark nothing.
-fn marks(definition: &FootprintDefinition, frame: &Frame, silkscreen: SilkscreenSettings, q: u8) -> Vec<(Ink, Mark)> {
+/// there counts as much as one in the silkscreen. Courtyards mark nothing. Silkscreen paths
+/// and artwork are taken as printed: the board's pad clearance clips them first, so a stroke
+/// that the board removes from the print cannot mark the part.
+fn marks(definition: &FootprintDefinition, frame: &Frame, q: u8, style: Settings) -> Vec<(Ink, Mark)> {
     let at = |x: i64, y: i64| turn(frame.point(x, y), q);
-    let mut marks = Vec::new();
-    for silk in &definition.silkscreen {
-        let points: Vec<_> = silk.points.iter().map(|p| at(p.x_nm, p.y_nm)).collect();
-        path(&points, silk.closed, &mut marks);
-    }
-    let mut inked: Vec<_> = marks.into_iter().map(|mark| ((0, silkscreen.stroke_width_nm, 0), mark)).collect();
+    let pads = frame.pads(definition);
+    let closed_path = |points: &[Point], closed: bool| {
+        let mut points: Vec<_> = points.iter().map(|point| frame.local(*point)).collect();
+        if closed && points.first() != points.last() {
+            points.push(points[0]);
+        }
+        points
+    };
+    let paths: Vec<_> = definition.silkscreen.iter().map(|silk| closed_path(&silk.points, silk.closed)).collect();
+    let (visible, _) = clipped(paths, &pads, style, style.stroke_width_nm);
+    let mut inked: Vec<_> = visible.into_iter().map(|(a, b)| ((0, style.stroke_width_nm, 0), segment(turn(a, q), turn(b, q)))).collect();
     for rect in &definition.graphics {
         let Some(layer) = marking_layer(rect.purpose) else { continue };
         let mut marks = Vec::new();
@@ -271,6 +307,16 @@ fn marks(definition: &FootprintDefinition, frame: &Frame, silkscreen: Silkscreen
             Fill::Solid => 1,
             Fill::Background => 2,
         };
+        if artwork.purpose == GraphicPurpose::Silkscreen {
+            let paths = artwork.graphic.paths().iter().map(|points| closed_path(points, artwork.graphic.closed())).collect();
+            // A clipped drawing is compared by its visible segments; whole ones keep their
+            // exact form below.
+            if let (visible, true) = clipped(paths, &pads, style, artwork.graphic.stroke_nm) {
+                let ink = (layer, artwork.graphic.stroke_nm, fill);
+                inked.extend(visible.into_iter().map(|(a, b)| (ink, segment(turn(a, q), turn(b, q)))));
+                continue;
+            }
+        }
         match &artwork.graphic.geometry {
             Geometry::Line { from, to } => marks.push(segment(at(from.x_nm, from.y_nm), at(to.x_nm, to.y_nm))),
             Geometry::Rectangle { min, max } => {
@@ -314,25 +360,23 @@ fn marks(definition: &FootprintDefinition, frame: &Frame, silkscreen: Silkscreen
 /// change under the same turn, as a cathode bar or a pin 1 dot does. Courtyards do not count.
 /// The test is exact: lengths stay integer nanometres.
 ///
+/// Silkscreen counts as the board prints it with `silkscreen`, its effective settings: a
+/// stroke that pad clearance clips away does not mark the part.
+///
 /// A definition without pads shows nothing and is not marked.
-pub fn orientation_marked(definition: &FootprintDefinition) -> bool {
-    orientation_marked_with(definition, SilkscreenSettings::default())
-}
-
-/// Like [`orientation_marked`], evaluated with a specific board's effective silkscreen settings.
-fn orientation_marked_with(definition: &FootprintDefinition, silkscreen: SilkscreenSettings) -> bool {
+pub fn orientation_marked(definition: &FootprintDefinition, silkscreen: Settings) -> bool {
     if definition.pads.is_empty() {
         return false;
     }
     let Some(frame) = Frame::new(definition) else { return true };
     let base = pad_forms(definition, &frame, 0);
-    let printed = marks(definition, &frame, silkscreen, 0);
+    let printed = marks(definition, &frame, 0, silkscreen);
     (1..4).all(|q| {
         let turned = pad_forms(definition, &frame, q);
         if turned.iter().map(|(form, _)| form).ne(base.iter().map(|(form, _)| form)) || turned == base {
             return true;
         }
-        marks(definition, &frame, silkscreen, q) != printed
+        marks(definition, &frame, q, silkscreen) != printed
     })
 }
 
@@ -359,7 +403,7 @@ impl BoardView<'_> {
         let mut findings = Vec::new();
         for ((library, id, revision), (definition, placements)) in packages {
             let Some(orientation) = definition.orientation.as_ref() else { continue };
-            if !orientation.polarized || orientation.zero.is_some() || orientation_marked_with(definition, silkscreen) {
+            if !orientation.polarized || orientation.zero.is_some() || orientation_marked(definition, silkscreen) {
                 continue;
             }
             // Only a reference is needed; do not resolve pad nets or render placement graphics.

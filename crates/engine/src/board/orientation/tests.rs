@@ -19,6 +19,11 @@ fn refused<T: std::fmt::Debug, E: std::fmt::Display>(result: Result<T, E>, needl
 }
 const LIBRARY: &str = "orientation-test";
 
+/// The geometry check as a board with the default silkscreen settings prints the package.
+fn orientation_marked(definition: &FootprintDefinition) -> bool {
+    super::orientation_marked(definition, Settings::default())
+}
+
 /// A test package copied from a bundled footprint under a new library identity, with an
 /// optional orientation statement. A statement selects format 7.
 fn package(base: &str, id: &str, orientation: Option<Value>) -> Value {
@@ -278,6 +283,37 @@ fn centerline_silkscreen_uses_effective_board_stroke_width() {
     .unwrap();
     let updated: Vec<_> = findings(&mut s).into_iter().map(|f| f["package"]["id"].as_str().unwrap().to_owned()).collect();
     assert_eq!(updated, vec!["match-custom-width"]);
+}
+
+/// Silkscreen counts only as the board prints it. A stroke lying wholly inside pad 1 is clipped
+/// away by pad clearance, so it cannot clear the warning; the same stroke beyond the clearance
+/// does. The board's own setting decides: a stroke just outside pad 1 is clipped by the default
+/// clearance and marks the part once a smaller clearance leaves part of it printed.
+#[test]
+fn silkscreen_clipped_by_pad_clearance_does_not_clear_the_warning() {
+    // Pad 1 spans x from -825 to -225 um and y from -300 to 300 um.
+    let stroke = |id: &str, y1: i64, y2: i64| {
+        let mut diode = package("resistor-0402", id, Some(json!({"polarized":true})));
+        diode["silkscreen"].as_array_mut().unwrap().push(json!({"points":[{"x_nm":-700_000,"y_nm":y1},{"x_nm":-700_000,"y_nm":y2}],"closed":false}));
+        diode
+    };
+    let mut s =
+        fixture(&[stroke("inside-pad", -100_000, 100_000), stroke("near-pad", 320_000, 500_000), stroke("beyond-clearance", 700_000, 900_000)]);
+    // The board view prints the two bundled lines of each package, plus only the visible strokes.
+    let printed = |s: &Session| -> Vec<usize> {
+        let project = s.project().unwrap();
+        let view = project.board_view(project.board_target().unwrap()).unwrap();
+        view.footprints()
+            .map(|footprint| footprint.graphics.iter().filter(|g| g.purpose == GraphicPurpose::Silkscreen && !g.reference).count())
+            .collect()
+    };
+    let ids = |s: &mut Session| -> Vec<String> { findings(s).iter().map(|finding| finding["package"]["id"].as_str().unwrap().to_owned()).collect() };
+    assert_eq!(printed(&s), [2, 2, 3]);
+    assert_eq!(ids(&mut s), ["inside-pad", "near-pad"]);
+    let style = Settings { pad_clearance_nm: 0, ..Settings::default() };
+    s.apply(crate::SET_SILKSCREEN, &json!({"settings":style,"expected_revision":s.revision()})).unwrap();
+    assert_eq!(printed(&s), [2, 3, 3]);
+    assert_eq!(ids(&mut s), ["inside-pad"]);
 }
 
 /// A stated zero orientation, a silkscreen polarity mark or no polarity at all clears it.
