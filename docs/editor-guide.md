@@ -589,8 +589,10 @@ view in amber; blue remains each view's own edit selection. Highlights follow th
 latest selection without taking focus. **View → Settings → Follow selection**
 offers highlight only (the default), all views, other views following primary,
 or primary following other views. Following reveals out-of-view items once while
-preserving zoom. Primary is the original view even if detached; closing it
-transfers that role to the main window's focused view. Delete acts only on the
+preserving zoom. When you select a PCB footprint, a following schematic pane
+can switch to the sheet containing its linked symbol. The pane does not take
+focus or select that symbol for editing. Primary is the original view even if detached, and its
+pane keeps the role whichever sheet it shows; closing it transfers that role to the main window's focused view. Delete acts only on the
 focused view's own selection, and clearing the source selection clears its
 highlights.
 
@@ -855,8 +857,23 @@ same shape and size. Pad regions carry a descriptive aperture attribute but are
 not pad flashes. Copper obrounds emitted as strokes are not tagged as pads. Mask,
 paste and silkscreen artwork use `Material`. Closed Board Outline drawings are
 tagged `Profile`; open outline artwork is still plotted but untagged. Remove stray
-open artwork before sending the profile to fabrication. The attributes do not
-change plotted geometry or add net and pin information.
+open artwork before sending the profile to fabrication. The aperture attributes do
+not change plotted geometry.
+
+On copper, X2 `.N` identifies the intended net of pads, tracks and vias. Component pads
+carry `.C` (reference designator) and, on outer copper, `.P` (reference and physical pin
+number). A footprint land explicitly unmapped to a pin has an empty pin number.
+A short between intended nets or an unresolved via assignment leaves the affected
+tracks and vias without `.N`; individually assigned pads keep their intended net.
+Pads, tracks and vias use the same Gerber name for a given intended net. Distinct
+nets with the same display name get distinct Gerber names. Separate unwired
+terminals that each join several pads get distinct names even before the board
+has an accepted update baseline. Copper with no net has an empty `.N`.
+To avoid the reserved `N/C` marker, net names
+that equal `N/C` or begin with `N/C:` gain one `N/C:` prefix in Gerber only.
+These attributes change neither the plotted geometry nor the saved board. They describe
+intent, not verification of connectivity. Layer exports include the actual net and pin
+names; review what you are sharing before sending files to a fabricator.
 
 For pads exported on a layer, round pads use standard circular (`C`) flashes.
 Rectangular (`R`) and obround (`O`) flashes require library-pad and placement rotations
@@ -869,9 +886,16 @@ match the engine land contour. Mixed-parity or other rotated obrounds retain the
 approximate round-ended stroke (a C flash when both resolved sides are equal). Other
 rectangles remain regions, including net-cardinal poses reached through non-cardinal
 intermediate rotations. Very small collapsed rectangular pads can emit a retraced path
-with zero area. Rounded rectangles emit polygon regions with chorded corners when the
-resolved radius is positive, or the four resolved corners when it clamps to zero.
-Export adds no native arcs and does not change saved pad geometry.
+with zero area. Rounded rectangles flash a Gerber aperture macro with circular
+corners when the inner shape is a convex quadrilateral, a line or a point and the
+emitted radius is within 1 nm of the authored radius. The diameter is rounded to
+the nearest nanometre after projection. The macro uses the placed pad's geometry,
+including rotation and side. Export stops without a file set if a convex macro
+core is not covered by its edge strips under Gerber coordinate and size
+tolerances and its outline could cross under coordinate perturbation.
+Rounded pads that do not qualify for the macro retain resolved polygon regions.
+This changes only generated pad artwork, not saved pad geometry, track or Board
+Outline output.
 
 Copper filenames receive numeric suffixes when sanitized names collide with
 another output, including names that differ only in case. Fixed mask, paste,

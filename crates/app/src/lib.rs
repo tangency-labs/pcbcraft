@@ -99,6 +99,7 @@ use pcbcraft_engine::{
 use serde_json::{Value, json};
 
 pub use editor_windows::APP_TITLE;
+pub use pcbcraft_chrome::i18n::LanguageChoice;
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
 use project_files::SaveFormat;
 
@@ -313,6 +314,8 @@ pub struct PcbApp {
     remote_copper: live_control::RemoteCopper,
     #[cfg(not(target_arch = "wasm32"))]
     remote_pair: live_control::RemotePair,
+    #[cfg(not(target_arch = "wasm32"))]
+    remote_package_completion: live_control::RemotePackageCompletion,
     files: project_files::ProjectFiles,
     file_notice: Option<String>,
     preferences: Preferences,
@@ -2580,8 +2583,12 @@ impl PcbApp {
             self.start_remote_pair(ctx, request, false);
             return;
         }
+        if self.defer_package_completion(request.body()) {
+            self.start_remote_package_completion(ctx, request, false);
+            return;
+        }
         let revision = self.session.revision();
-        let result = pcbcraft_mcp::live::call_editor(&mut live_control::LiveEditor { app: self, ctx }, request.body());
+        let result = request.dispatch(self, ctx);
         if let Some(live) = &self.live_control {
             self.automation.authorize(live.automation_owner(false, request.generation()));
         }
@@ -2604,6 +2611,7 @@ impl PcbApp {
         self.poll_library_sources(&ctx);
         let before = (self.session.revision(), self.preferences, std::mem::discriminant(&self.dialog), self.home, self.library_editors.stamp());
         self.sync_style(&ctx);
+        let _language_scope = pcbcraft_chrome::i18n::scope(self.preferences.language);
         self.checkpoint_arrangements();
         self.handle_close_request(&ctx);
         self.library_editors.poll();
@@ -2654,6 +2662,7 @@ impl PcbApp {
             self.poll_remote_check(&ctx);
             self.poll_remote_copper(&ctx);
             self.poll_remote_pair(&ctx);
+            self.poll_remote_package_completion(&ctx);
             self.poll_live_control(&ctx);
         }
         self.poll_route_previews();

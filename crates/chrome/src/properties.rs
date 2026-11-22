@@ -77,7 +77,8 @@ pub fn text_action(ui: &mut Ui, label: &str, value: &mut String, action: &str) -
 
 /// A labelled choice field keeps stored enum names separate from readable option labels and
 /// supplies an accessible name even when the selected value contains no field identity.
-pub fn choice(ui: &mut Ui, label: &str, id: egui::Id, value: &mut String, options: &[(&str, String)]) -> egui::Response {
+/// The shared dropdown resolves the supplied salt within its UI scope.
+pub fn choice(ui: &mut Ui, label: &str, id: impl egui::AsIdSalt, value: &mut String, options: &[(&str, String)]) -> egui::Response {
     let t = Tokens::get();
     ui.horizontal(|ui| {
         let label = ui.add_sized(vec2(72.0, t.control_height), egui::Label::new(label).halign(Align::Min));

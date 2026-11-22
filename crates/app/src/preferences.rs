@@ -5,6 +5,7 @@
 use egui::Ui;
 use pcbcraft_chrome::{
     grid,
+    i18n::{self, LanguageChoice},
     menu::MenuIcon,
     settings::{self, Footer, Page, WindowState},
     units::Unit,
@@ -107,6 +108,8 @@ pub enum PaperBackground {
 #[serde(default)]
 pub struct Preferences {
     pub theme: ThemeChoice,
+    /// Interface language preference (`system`, `en`, or `he`).
+    pub language: LanguageChoice,
     pub scale_percent: u16,
     pub navigation: Navigation,
     /// How strongly visible canvas grids show, in percent; 0 hides them. Shared across views
@@ -160,6 +163,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             theme: ThemeChoice::default(),
+            language: LanguageChoice::default(),
             scale_percent: 100,
             navigation: Navigation::default(),
             grid_opacity_percent: grid::OPACITY_DEFAULT,
@@ -446,6 +450,7 @@ fn restore_page_defaults(preferences: &mut Preferences, page: usize) {
     match page {
         APPEARANCE => {
             preferences.theme = defaults.theme;
+            preferences.language = defaults.language;
             preferences.scale_percent = defaults.scale_percent;
             preferences.grid_opacity_percent = defaults.grid_opacity_percent;
             preferences.schematic_grid_visible = defaults.schematic_grid_visible;
@@ -573,6 +578,14 @@ fn appearance(ui: &mut Ui, data: &mut PageData<'_>) {
             settings::segmented(ui, &mut preferences.units, &[(Unit::Mil, "mil"), (Unit::Mm, "mm")]);
         });
         settings::hint(ui, "Coordinates and the grid show in this unit, and numbers typed without one use it. Stored geometry never changes.");
+    });
+    settings::section(ui, "Language", |ui| {
+        let options = i18n::language_options(preferences.language);
+        let refs: Vec<(LanguageChoice, &str)> = options.iter().map(|(choice, label)| (*choice, label.as_str())).collect();
+        settings::row_with_keywords(ui, "Language", &["language", "locale", "hebrew", "rtl", "עברית"], |ui| {
+            settings::choice(ui, "Language", &mut preferences.language, &refs);
+        });
+        settings::hint(ui, "System follows your desktop or browser language.");
     });
 }
 
@@ -724,6 +737,7 @@ mod tests {
     fn saved_settings_come_back() {
         let preferences = Preferences {
             theme: ThemeChoice::Light,
+            language: LanguageChoice::Hebrew,
             scale_percent: 110,
             navigation: Navigation {
                 scroll: ScrollAction::Pan,
@@ -853,6 +867,7 @@ mod tests {
     fn page_defaults_reset_only_that_page() {
         let mut preferences = Preferences {
             theme: ThemeChoice::Light,
+            language: LanguageChoice::Hebrew,
             scale_percent: 150,
             navigation: Navigation { reverse_zoom: true, ..Navigation::default() },
             grid_opacity_percent: 20,
@@ -897,5 +912,20 @@ mod tests {
             preferences,
             Preferences { schematic_grid_nm: 10 * grid::NM_PER_MIL, board_grid_nm: 25 * grid::NM_PER_MIL, ..Preferences::default() }
         );
+    }
+
+    #[test]
+    fn language_preferences_normalize_legacy_iw_and_reject_non_strings() {
+        for choice in [LanguageChoice::System, LanguageChoice::English, LanguageChoice::Hebrew] {
+            let prefs = Preferences { language: choice, ..Preferences::default() };
+            assert_eq!(Preferences::parse(&prefs.to_text()).language, choice);
+        }
+        assert_eq!(Preferences::parse(r#"{"language":"iw"}"#).language, LanguageChoice::Hebrew);
+        assert_eq!(Preferences::parse(r#"{"language":"iw-IL"}"#).language, LanguageChoice::Hebrew);
+        assert_eq!(Preferences::parse(r#"{"language":"iw_IL.UTF-8"}"#).language, LanguageChoice::Hebrew);
+        assert_eq!(Preferences::parse(r#"{"language":"en-US"}"#).language, LanguageChoice::English);
+        assert_eq!(Preferences::parse(r#"{"language":"x-he"}"#).language, LanguageChoice::System);
+        assert_eq!(Preferences::parse(r#"{"language":"unknown-lang"}"#).language, LanguageChoice::System);
+        assert_eq!(Preferences::parse(r#"{"theme":"Light","language":123}"#), Preferences::default());
     }
 }
