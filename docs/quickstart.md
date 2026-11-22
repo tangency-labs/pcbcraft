@@ -407,7 +407,7 @@ cargo run --locked -p pcbcraft-engine --example board_workspace -- ../pcbcraft-b
 Open `board-inspection/project.json` from that directory on desktop, or
 upload the generated `board-inspection.pc` in the browser. The example has a
 resistor, a two-pin connector, two connections and two generic footprint
-placements inside a board outline. It is an inspection fixture, not a
+placements. It draws no board outline and is an inspection fixture, not a
 fabrication-ready board. The generic placements have no assigned package, so each
 footprint appears only as pad-center markers, without copper pad shapes, body
 outlines, courtyards or silkscreen. The [sensor node demo](../examples/README.md)
@@ -417,7 +417,9 @@ section show complete packages.
 Click the workspace tile and choose **PCB layout** to switch the focused pane.
 To select several footprints, start a drag on empty canvas. Dragging left to right
 selects only footprints entirely inside the box; dragging right to left also
-selects footprints the box crosses. Hold Shift to add to the current selection,
+selects footprints the box crosses. The selectable area of each footprint
+extends a little beyond its markers, so leave some space around them when
+dragging left to right. Hold Shift to add to the current selection,
 or Ctrl/Command to toggle footprints in or out of it. If nothing can be selected,
 check the **Selection filters** card described below; **Reset** enables every
 object type again.
