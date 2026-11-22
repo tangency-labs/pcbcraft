@@ -534,6 +534,30 @@ mod tests {
         }
     }
 
+    /// Send two complete primary clicks within the double-click interval.
+    fn double_click_at(h: &mut Harness<'_, PcbApp>, pos: Pos2) {
+        h.hover_at(pos);
+        h.run();
+        for _ in 0..2 {
+            for pressed in [true, false] {
+                h.input_mut().time = Some(h.ctx.input(|i| i.time) + 0.03);
+                h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run_steps(1);
+            }
+        }
+        h.input_mut().time = None;
+        h.run();
+    }
+
+    /// Find the sole enabled node with `label` (distinguishing an active modal field from a
+    /// disabled background inspector field of the same name).
+    fn enabled_by_label<'a>(h: &'a Harness<'_, PcbApp>, label: &'a str) -> egui_kittest::Node<'a> {
+        let mut nodes = h.query_all_by_label(label).filter(|node| !node.accesskit_node().is_disabled());
+        let node = nodes.next().unwrap_or_else(|| panic!("no enabled node labelled {label:?}"));
+        assert!(nodes.next().is_none(), "expected one enabled node labelled {label:?}");
+        node
+    }
+
     fn drag_at(h: &mut Harness<'_, PcbApp>, from: Pos2, to: Pos2) {
         h.hover_at(from);
         h.run();
@@ -953,8 +977,7 @@ mod tests {
         h.run();
         click_at(&mut h, p0);
         click_at(&mut h, p1);
-        click_at(&mut h, p2);
-        click_at(&mut h, p2);
+        double_click_at(&mut h, p2);
         let dbl_close_id = h.state().library_editors.documents[&id].selected.unwrap();
         assert_eq!(
             courtyard::courtyard_polygon(&h.state().library_editors.documents[&id].session.snapshot().objects[&dbl_close_id]).unwrap().0.len(),
@@ -1372,10 +1395,10 @@ mod tests {
 
         // Enter in Stroke (mm) submits the dialog.
         crate::tests::click(&mut h, "Regenerate…");
-        h.get_by_label("Stroke (mm)").click();
+        enabled_by_label(&h, "Stroke (mm)").click();
         h.run();
         h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
-        h.get_by_label("Stroke (mm)").type_text("0.15");
+        enabled_by_label(&h, "Stroke (mm)").type_text("0.15");
         h.key_press(egui::Key::Enter);
         h.run();
         assert!(matches!(h.state().dialog, Dialog::None));

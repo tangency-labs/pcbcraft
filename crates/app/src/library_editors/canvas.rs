@@ -1519,6 +1519,8 @@ mod tests {
         let mut editors = super::super::Editors::default();
         let id = editors.open(Item::new(Kind::Footprint).unwrap(), false).unwrap();
         let doc = editors.documents.get_mut(&id).unwrap();
+        // Zoom in so the 0.25 mm courtyard clearance sits well outside the pad pick padding.
+        doc.camera.set_zoom(20.0);
         doc.execute(
             0,
             Action::GenerateCourtyard {
@@ -1569,8 +1571,8 @@ mod tests {
         assert_eq!(snapped.x_nm % 250_000, 0);
         assert_eq!(snapped.y_nm % 250_000, 0);
 
-        // Moving vertex 0 diagonally past the opposite corner creates a self-intersection and is refused.
-        let crossed = Point { x_nm: pts[2].x_nm + 1_000_000, y_nm: pts[2].y_nm + 1_000_000 };
+        // Moving vertex 0 across the opposite edge creates a self-intersection and is refused.
+        let crossed = Point { x_nm: (pts[2].x_nm + pts[3].x_nm) / 2, y_nm: pts[2].y_nm + 1_000_000 };
         assert!(pcbcraft_engine::authoring::courtyard::with_moved_vertex(&original, 0, crossed).is_err());
 
         let moved = pcbcraft_engine::authoring::courtyard::with_moved_vertex(&original, 0, snapped).unwrap();
