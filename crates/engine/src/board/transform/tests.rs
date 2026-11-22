@@ -728,20 +728,18 @@ fn reference_alignment_uses_rotated_round_land_extent() {
 #[test]
 fn large_routed_board_reference_alignment_has_bounded_geometry_work() {
     use crate::board::{
-        track::tests::{copper_layers, route, routed_fixture, view},
-        update::TERMINAL_NET_INDEX_BUILDS,
+        ratsnest::tests::fixture,
+        track::tests::{copper_layers, route, view},
+        update::{INITIALIZE_BASELINE, TERMINAL_NET_INDEX_BUILDS},
         view::FOOTPRINT_GEOMETRY_RESOLUTIONS,
     };
     const FILLERS: i64 = 256;
     const SHIFT: i64 = 5_000_000;
-    let mut s = routed_fixture();
-    let ids: Vec<_> = view(&s).footprint_ids().collect();
-    let (mover, reference) = (&ids[0], &ids[1]);
-    let fixed = view(&s).footprint(reference).unwrap();
-    let (anchor, rotation) = (fixed.position, fixed.rotation);
+    let mut s = fixture();
+    let symbols: Vec<_> = s.project().unwrap().symbols().iter().map(|symbol| symbol.id()).collect();
     s.apply(
-        SET_FOOTPRINT_TRANSFORM,
-        &json!({"footprint":reference,"x_nm":anchor.x_nm,"y_nm":anchor.y_nm + SHIFT,"rotation":rotation,"expected_revision":s.revision()}),
+        crate::CONNECT_PINS,
+        &json!({"from":{"symbol":symbols[1],"terminal":"2"},"to":{"symbol":symbols[2],"terminal":"2"},"expected_revision":s.revision()}),
     )
     .unwrap();
     for i in 0..FILLERS {
@@ -756,6 +754,17 @@ fn large_routed_board_reference_alignment_has_bounded_geometry_work() {
         )
         .unwrap();
     }
+    s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"resolve_existing_footprints":true,"expected_revision":s.revision()})).unwrap();
+    s.apply(INITIALIZE_BASELINE, &json!({"expected_revision":s.revision()})).unwrap();
+    let ids: Vec<_> = view(&s).footprint_ids().collect();
+    let (mover, reference) = (&ids[0], &ids[1]);
+    let fixed = view(&s).footprint(reference).unwrap();
+    let (anchor, rotation) = (fixed.position, fixed.rotation);
+    s.apply(
+        SET_FOOTPRINT_TRANSFORM,
+        &json!({"footprint":reference,"x_nm":anchor.x_nm,"y_nm":anchor.y_nm + SHIFT,"rotation":rotation,"expected_revision":s.revision()}),
+    )
+    .unwrap();
     let moving = view(&s).footprint(mover).unwrap();
     let pad = moving.pads.iter().find(|p| p.net.as_deref() == Some("ACCEPTED")).unwrap().center;
     let free = Point { x_nm: pad.x_nm, y_nm: pad.y_nm - 3_000_000 };
