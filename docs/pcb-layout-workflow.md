@@ -43,7 +43,7 @@ Each edit is one undo step.
 | Route | Tracks with an explicit width and clearance-aware 45° walkaround. Stable snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
 | Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
-| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
+| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus separate [Excellon drill files](#fabrication-drill-files) in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
 Copper connectivity is derived from overlap on shared layers. Track edits and
@@ -279,9 +279,9 @@ ribbon's planned entries and the editor guide have a stated destination.
 - **Board text** on copper and silkscreen needs independently
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for tracks and vias is implemented under #249 through per-object
-  flags and the shared snapshot publication guard. Footprint lock commands/protection, zone locks and an
-  optional locked-object selection filter remain broader #81 work; footprint
-  lock metadata has the storage-only contract below.
+  flags and the shared snapshot publication guard. Existing footprint locks protect
+  direct placement edits as described below. Footprint lock authoring, zone locks
+  and a locked-object selection filter are not available yet.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
@@ -290,20 +290,47 @@ ribbon's planned entries and the editor guide have a stated destination.
 
 Copy and paste of board objects is in progress separately in #197 through #202.
 
-## Footprint lock metadata (storage only)
+## Fabrication drill files
+
+**Manufacture › Fabrication › Outputs** and `pcb.export_fabrication` keep
+plated pad drills and through vias in `-PTH.drl`. If the board contains circular
+non-plated footprint holes, `-NPTH.drl` contains just those holes and the
+fabrication archive's manifest lists both files. A board without those holes
+has no `-NPTH.drl` member. Non-plated openings do not create copper, mask or
+paste features.
+
+Both files measure from the selected placement origin, with Y reversed from
+board coordinates and lengths written in millimeters to three decimal places.
+The non-plated tool size is the finished diameter, with no plating allowance.
+A non-plated diameter that rounds to zero stops export instead of writing a
+zero-size tool. This is a file precision limit, not a fabrication rule.
+
+## Placed-footprint locks
 
 Placed footprints retain an optional `locked` flag in native board format 34,
-or 35 when the board also contains arcs. Inspection and typed board views report
-a boolean, defaulting to false for older files. Fresh canonical encoding omits
+35 when the board also contains arcs, or 37 when it contains straight-via
+teardrops. Inspection and typed board views report a boolean, defaulting to
+false for older files. Fresh canonical encoding omits
 false and preserves true; Native Save can reuse an unchanged board document
 verbatim, including explicit false. Without active locks the encoder chooses
-the format required by the remaining board data. Reports are optional under
-formats 34 and 35. This slice
-does **not** expose a lock/unlock command or GUI action, nor does the flag yet
-protect footprint movement, rotation, flipping, alignment or deletion. It is not
-a fixed-obstacle promise. Those shared-command and enforcement workflows remain
-under #81. Clipboard Copy, Cut, Duplicate and Paste refuse active footprint
-locks; that is a clipboard restriction, not Delete protection. Diagnostic
+the format required by the remaining board data. Reports are optional in all
+three formats.
+
+A locked footprint remains selectable and inspectable. The shared move, rotate,
+flip, align/distribute and delete commands protect existing locks. A selection
+containing a locked footprint is refused as a whole, naming each locked placement,
+even if it would serve as a stationary alignment anchor. A single-footprint
+transform that explicitly leaves the pose unchanged remains a no-op. Applying a
+reviewed schematic-to-board update that would remove a locked footprint also
+refuses the whole update and names the locked placement. Removing a component’s
+last schematic unit, including through group Delete, Cut, or sheet deletion,
+is refused if it would immediately remove a locked footprint. An accepted
+placement stays on the board pending review. Refusals make no board
+or Undo/Redo changes. These locks do not govern package changes that retain the
+placement, reference-text edits or routing obstacles. There is no lock/unlock
+command or GUI toggle for footprints yet.
+
+Clipboard Copy, Cut, Duplicate and Paste still refuse active footprint locks. Diagnostic
 single-file storage also refuses the flag when true. Canonical clipboard
 fragments without active footprint locks keep their previous encoding. See
 [clipboard](clipboard.md#pcb-canvas) and
@@ -351,6 +378,7 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 | 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
 | Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
+| Named layer groups | [board/41](native-project-storage.md#named-layer-groups) | Written only when named groups exist; derived groups are not stored |
 
 These are selected layout formats, not a consecutive version list. Canonical
 saves use the highest supported format required by the authored data; compatible

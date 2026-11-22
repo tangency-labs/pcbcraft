@@ -285,6 +285,7 @@ impl BoardView<'_> {
         let class_rules = capture_class_rules(self, &geometry, &effective, &mut found);
         let items = &geometry.items;
         self.check_dimensions(rules, class_rules.as_ref(), &mut found);
+        self.check_slot_rings(&geometry.lands, rules, class_rules.as_ref(), &mut found);
 
         self.check_shorts(&geometry.lands, &geometry.members, items, &mut found);
 
@@ -362,6 +363,25 @@ impl BoardView<'_> {
                     message: format!("Via annular ring is {}, below the {} minimum", mm(ring as f64), mm(rules.min_annular_ring_nm as f64)),
                     at: via.at,
                     items: vec![via.id.to_string()],
+                    nets: Vec::new(),
+                });
+            }
+        }
+    }
+
+    /// Report slot ring minima on the same resolved geometry used for copper preparation.
+    fn check_slot_rings(self, lands: &[Land], rules: Rules, context: Option<&super::class_rules::Context>, found: &mut Findings) {
+        for land in lands {
+            let Some(slot) = land.plated_slot else { continue };
+            let key = format!("{}:{}", land.key.0, land.key.1);
+            let minimum = context.map_or(rules, |context| context.limits_for(&key, rules)).min_annular_ring_nm;
+            let ring = slot.annular_ring_nm(&land.contour());
+            if ring < minimum as f64 {
+                found.push(Violation {
+                    kind: Kind::AnnularRing,
+                    message: format!("Plated slot annular ring is {}, below the {} minimum", mm(ring), mm(minimum as f64)),
+                    at: land.center,
+                    items: vec![key],
                     nets: Vec::new(),
                 });
             }

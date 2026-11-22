@@ -1,0 +1,18 @@
+{
+  "parts": [
+    [2, "J1", "Input", [["1", null, "passive"], ["2", null, "passive"]]],
+    [3, "R1", "1k", [["1", null, "passive"], ["2", null, "passive"]]],
+    [4, "D1", "Green", [["1", "Anode", "passive"], ["2", "Cathode", "passive"]]],
+    [6, "R2", "1k", [["1", null, "passive"], ["2", null, "passive"]]],
+    [7, "D2", "Amber", [["1", "Anode", "passive"], ["2", "Cathode", "passive"]]],
+    [9, "C1", "100nF", [["1", null, "passive"], ["2", null, "passive"]]],
+    [26, "Q1", "PMBT3904", [["1", "Base", "passive"], ["2", "Emitter", "passive"], ["3", "Collector", "passive"]]]
+  ],
+  "nets": [
+    [[2, "1"], [3, "1"], [6, "1"], [9, "1"]],
+    [[2, "2"], [4, "2"], [7, "2"], [9, "2"]],
+    [[3, "2"], [4, "1"]],
+    [[6, "2"], [7, "1"]]
+  ],
+  "unconnected": [[26, "1"], [26, "2"], [26, "3"]]
+}

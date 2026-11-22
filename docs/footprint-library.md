@@ -125,9 +125,16 @@ counterclockwise `rotation` in 0…359 and a `shape` of `rectangle`,
 `corner_radius_nm` at most half the shorter dimension. Other shapes omit that
 field (zero); circles require equal width and height. Surface lands use
 `copper: "component_side"` without a drill. Plated through-hole lands use
-`copper: "all_copper"` and a positive `drill_nm` smaller than both land dimensions.
-Slots and arbitrary pad stacks remain unsupported. Format 1 allows 1…1,024 distinct pads and up to 64
-graphics. Graphics use the same rectangular geometry and a `purpose` of
+`copper: "all_copper"` and either a positive `drill_nm` smaller than both land
+dimensions or a [plated slot](footprint-schema.md#published-definition-fields).
+The slot has independent finished width, full length and rotation. It remains
+on all copper layers when the footprint is rotated or moved to the back. The
+hole must fit inside the land; the design check reports the smallest copper
+margin around the opening. Non-plated slots and arbitrary pad stacks remain
+unsupported. Fabrication export refuses a board with a plated slot rather than
+omitting the machining operation. Formats 1 and 5 allow 1…1,024 distinct pads;
+format 4 allows 0…1,024. Each format allows up to 64 graphics. Graphics use the
+same rectangular geometry and a `purpose` of
 `fabrication`, `silkscreen` or `courtyard`. Coordinates and dimensions are bounded
 by 100,000,000 nm; unknown fields and invalid geometry fail validation.
 
@@ -135,12 +142,12 @@ In the Footprint Editor, choose **Draw → Non-plated hole**, place the center,
 then edit its center and finished diameter in Properties. The shared editor
 accepts the same `non_plated_hole` primitive through `app.library_edit`. These
 holes belong to the footprint, not to any schematic terminal. A definition with
-holes uses `pcbcraft-footprint/4` and may have zero pads. When placed, holes
+holes uses `pcbcraft-footprint/4` without slots (and may have zero pads), or `pcbcraft-footprint/5` with slots. When placed, holes
 follow rotation, side changes and movement; board inspection lists their
 transformed centers and diameters, separately from pads. Routing and design
 checks treat the circle as a mechanical obstacle without adding a net.
-Fabrication output refuses boards containing these holes until a separate
-non-plated drill export is supported.
+Fabrication sends these openings to a [separate non-plated drill file](pcb-layout-workflow.md#fabrication-drill-files),
+not to the plated drill or copper, mask or paste layers.
 
 Optional `artwork` adds up to 256 parameterized drawing objects. Each carries a
 `purpose` (`fabrication`, `silkscreen`, `courtyard`) and `graphic` with editable

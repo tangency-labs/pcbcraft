@@ -28,10 +28,11 @@ impl Primitive {
     /// Pin rotation changes its lead direction; the wire attachment point remains its anchor.
     pub fn transformed(&self, t: Transform) -> Result<Self, String> {
         Ok(match self {
-            Self::Pin { number, name, electrical_type, at, appearance } => Self::Pin {
+            Self::Pin { number, name, electrical_type, alternates, at, appearance } => Self::Pin {
                 number: number.clone(),
                 name: name.clone(),
                 electrical_type: *electrical_type,
+                alternates: alternates.clone(),
                 at: t.point(*at)?,
                 appearance: appearance.as_ref().map(|a| crate::schematic::PinAppearance { orientation: a.orientation.transformed(t), ..a.clone() }),
             },
@@ -58,9 +59,14 @@ impl Primitive {
                 }
                 .transformed(t)?,
             },
-            Self::Pad { pad } => {
-                Self::Pad { pad: footprint::RectPad { center: t.point(pad.center)?, rotation: t.angle(pad.rotation as i16), ..pad.clone() } }
-            }
+            Self::Pad { pad } => Self::Pad {
+                pad: footprint::RectPad {
+                    center: t.point(pad.center)?,
+                    rotation: t.angle(pad.rotation as i16),
+                    plated_slot: pad.plated_slot.map(|slot| slot.transformed(t)),
+                    ..pad.clone()
+                },
+            },
             Self::NonPlatedHole { hole } => Self::NonPlatedHole { hole: footprint::CircularNpth { center: t.point(hole.center)?, ..*hole } },
             Self::Outline { graphic } => Self::Outline {
                 graphic: footprint::GraphicRect { center: t.point(graphic.center)?, rotation: t.angle(graphic.rotation as i16), ..graphic.clone() },

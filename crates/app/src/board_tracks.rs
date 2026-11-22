@@ -467,6 +467,11 @@ impl State {
     pub(super) fn committing(&self) -> bool {
         self.preparation.committing() || self.planning.committing()
     }
+    /// Whether either route planning or copper preparation has an active job to advance.
+    #[cfg(all(test, feature = "performance-harness"))]
+    pub(crate) fn route_queue_busy(&self) -> bool {
+        self.planning.queue_busy() || self.preparation.queue_busy()
+    }
 
     /// The displacement to paint selected copper with: a move in progress, or one just submitted.
     fn shift(&self) -> Option<(i64, i64)> {

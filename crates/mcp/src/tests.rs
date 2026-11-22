@@ -153,6 +153,26 @@ fn designator_lock_preview_and_apply_share_mcp_dispatch() {
     assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
+/// An opt-in package dry run returns its report even when broad project inspection is suppressed.
+#[test]
+fn package_completion_report_survives_inspect_false() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let result = crate::backend::call_session(
+        &mut session,
+        "engine.execute",
+        &json!({
+            "command":pcbcraft_engine::COMPLETE_PACKAGES,"inspect":false,
+            "params":{"scope":"project","dry_run":true,"expected_revision":revision}
+        }),
+    )
+    .unwrap();
+    assert_eq!(result, json!({"revision":revision,"changes":[],"skipped":[]}));
+    assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+}
+
 /// Annotation previews stay identical across headless and live dispatch with inspection omitted.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -760,8 +780,8 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
     }
 }
 
-/// Discovery retains every native library command alongside pin-remap preview over MCP;
-/// source loading/removal leave the project's electrical revision and history alone.
+/// Required library commands, including pin-remap preview, remain discoverable as the catalog grows.
+/// Source search and placement share a session; source loading/removal leave project revision and history alone.
 #[test]
 fn native_source_search_and_placement_share_the_mcp_session() {
     let mut s = server();
@@ -769,30 +789,23 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    let mut command_ids = commands
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|command| command["id"].as_str().unwrap())
-        .filter(|id| id.starts_with("library."))
-        .collect::<Vec<_>>();
-    command_ids.sort_unstable();
-    assert_eq!(
-        command_ids,
-        [
-            "library.available_revisions",
-            "library.list_sources",
-            "library.load_source",
-            "library.parse_quantity",
-            "library.prepare_part_publication",
-            "library.prepare_publication",
-            "library.preview_footprint_revision",
-            "library.preview_pin_remap",
-            "library.remove_source",
-            "library.resolve_part",
-            "library.search",
-        ]
-    );
+    let commands = commands.as_array().expect("library command list");
+    for id in [
+        "library.available_revisions",
+        "library.list_sources",
+        "library.load_source",
+        "library.parse_quantity",
+        "library.prepare_part_publication",
+        "library.prepare_publication",
+        "library.preview_footprint_revision",
+        "library.preview_pin_remap",
+        "library.remove_source",
+        "library.resolve_part",
+        "library.search",
+        "library.where_used",
+    ] {
+        assert!(commands.iter().any(|command| command["id"].as_str() == Some(id)), "missing required command {id}");
+    }
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);
@@ -858,6 +871,13 @@ fn board_setup_preview_is_shared_by_live_and_headless_mcp() {
     let mut editor = OpenEditor(live);
     let before = editor.0.inspect();
     let revision = editor.0.revision();
+    let query = json!({"command":pcbcraft_engine::INSPECT_LAYER_GROUPS,"params":{},"inspect":false});
+    let headless_groups = headless.call("engine.execute", query.clone()).unwrap();
+    let live_groups = call_editor(&mut editor, &json!({"method":"engine.execute","params":query})).unwrap();
+    assert_eq!(headless_groups, live_groups);
+    assert_eq!(live_groups["layer_groups"]["outer"].as_array().unwrap().len(), 2);
+    assert_eq!(live_groups["layer_groups"]["inner"].as_array().unwrap().len(), 2);
+    assert_eq!(editor.0.inspect(), before);
     let params = json!({"command":PREVIEW_BOARD_SETUP,"params":{"setup":candidate,"expected_revision":revision},"inspect":false});
     let a = headless.call("engine.execute", params.clone()).unwrap()["board_setup_preview"].clone();
     let b = call_editor(&mut editor, &json!({"method":"engine.execute","params":params})).unwrap()["board_setup_preview"].clone();
@@ -1011,6 +1031,25 @@ fn headless_read_only_reports_scope_and_refuses_edits_in_both_modes() {
     let query = body(&call(&mut s, "execute", json!({"command":"project.export_netlist","inspect":false})));
     assert_eq!(query["revision"], before["revision"]);
     assert!(query["netlist"].is_object());
+    assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
+}
+
+/// A read-only headless session runs the layer-group query without changing the revision,
+/// the project or its Undo history.
+#[test]
+fn headless_read_only_inspects_layer_groups() {
+    let mut editor = Session::default();
+    editor.apply("project.new", &json!({"create_board":true})).unwrap();
+    editor.apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":4,"expected_revision":editor.revision()})).unwrap();
+    let mut s = Server::new(Box::new(Headless::with_scope(pcbcraft_engine::SessionScope::ReadOnly, editor.snapshot())));
+    let before = body(&call(&mut s, "inspect_project", json!({})));
+    assert_eq!(before["scope"], "read_only");
+    let result = call(&mut s, "execute", json!({"command":pcbcraft_engine::INSPECT_LAYER_GROUPS,"inspect":false}));
+    assert_ne!(result["isError"], true, "{result}");
+    let query = body(&result);
+    assert_eq!(query["revision"], before["revision"]);
+    assert_eq!(query["layer_groups"]["outer"].as_array().unwrap().len(), 2);
+    assert_eq!(query["layer_groups"]["inner"].as_array().unwrap().len(), 2);
     assert_eq!(body(&call(&mut s, "inspect_project", json!({}))), before);
 }
 

@@ -11,9 +11,9 @@ and cancellation. The two-resistor example below is an original
 development fixture; the polished MVP demo and its end-to-end acceptance remain
 separate work.
 
-Footprint lock flags currently have a [storage-only contract](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
-There is no footprint lock toggle/command or move/delete protection to try yet;
-track/via locks remain the supported interactive locking workflow.
+Boards with [existing footprint locks](pcb-layout-workflow.md#placed-footprint-locks)
+refuse move, rotate, flip, align and delete edits on those footprints. Track/via
+locks remain the supported way to lock and unlock objects interactively.
 
 ## Build and open an example
 
@@ -349,8 +349,11 @@ expanded form. **E** opens the same form. **OK** applies the supported propertie
 as one undo step, with attached wires following a position change. Coordinates
 accept explicit units such as `100 mil` or `2.54 mm`; a bare number uses the
 display unit. **Reset changes** discards the compact draft, and **Cancel** discards the
-expanded draft without changing the project. The Pin functions and
-Library tabs show the exact definition retained by the project. The **Footprint**
+expanded draft without changing the project. On **Pin functions**, choose a
+function for a terminal that offers alternates, or select **Primary** to clear
+it. Each choice applies immediately as one undo step and changes the shown name
+and electrical type without moving wires. The **Library** tab shows the exact
+pinned definition. The **Footprint**
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
@@ -391,8 +394,15 @@ and review again after a concurrent edit.
 Inspection reports `designator_locked` even when false. Automatic annotation and
 its skipped-item report are not implemented yet; the engine's
 `PartInstance::can_annotate_designator()` predicate exposes this lock policy for
-that implementation. Unit-letter locks and package completion remain separate
-work. See the [storage contract](native-project-storage.md#designator-locks).
+that implementation. There is no separate unit-letter lock. See the
+[storage contract](native-project-storage.md#designator-locks).
+
+### Complete loose packages
+
+To group equivalent loose units, opt in through the headless or live MCP
+[`schematic.complete_packages`](mcp.md#native-part-definitions-and-quantities)
+command. Preview with `dry_run: true` before applying. Locked owners stay as
+placed; ordinary placement does not complete packages automatically.
 
 ## Inspect a board beside its schematic
 
@@ -433,7 +443,11 @@ Choose any even copper count from 2 through 64; 10- and 12-layer boards are incl
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
 construction, with a laminate total and a cross-section aligned to the table rows. **Fit unlocked dielectrics**
 fits a target thickness while retaining copper and locked gaps. Values accept mm
-or mil, and blanks remain unspecified.
+or mil, and blanks remain unspecified. Select a copper stratum to set its role.
+**Layer groups** adds named sets of copper layers in the same draft; removing a
+layer drops its membership, and one Undo restores the complete setup. Mixed role
+belongs to both plane and signal. `pcb.inspect_layer_groups` reads these groups
+and the derived outer/inner/plane/signal sets without changing the board.
 
 **Materials** offers generic family choices and custom materials. **Add material**
 starts with basic identity fields; **Technical properties** expands sourced Tg/Dk/Df
@@ -749,6 +763,17 @@ would change and which straight track ends or through vias would lose contact;
 standalone circular track ends are not checked. Nothing is applied; pad map
 resolution and adoption remain future work.
 
+To find where an exact revision is used in the open project, select that item in
+Parts Library and click **Where used** in Preview. From MCP, pass its exact
+address (replace these example values with your library item's address):
+
+```json
+{"command":"library.where_used","params":{"library":"parts-demo","kind":"footprint","definition":"resistor-0603","definition_revision":1},"inspect":false}
+```
+
+See [where-used](native-library-sources.md#find-where-a-revision-is-used) for
+what counts as a use and how to distinguish assignments from board placements.
+
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and
@@ -802,8 +827,11 @@ Closing a pane retains its definition and unfinished Properties fields; the
 last window still asks about unsaved work.
 
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
-To make a plated hole, set Layers to All copper and enter a positive drill smaller
-than the land. Corner radius is zero for rectangular/circular pads.
+For a round plated hole, choose **Through hole** and enter a positive drill
+smaller than the land. For an obround cut-out, choose **Plated slot**, then set
+its finished width, overall length and independent rotation (in degrees, up to 3 decimal places).
+The entire opening must fit inside the copper. Corner radius is zero for
+rectangular and circular lands. Fabrication export does not yet machine slots.
 
 For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
 pins, enter each other's numbers and choose **Preview current nets** before
@@ -875,6 +903,8 @@ mapping; Windows Shift+Delete remains Cut.
 With a configured board, a closed Board Outline and a resolvable placement origin,
 **Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
 The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
+If the board has circular non-plated holes, the ZIP includes `-NPTH.drl`
+separately from the plated `-PTH.drl` file.
 Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
 destination errors can prevent a successful save. In the browser, Outputs requests
 one download; check that your browser saved it.
@@ -884,9 +914,12 @@ R/O flashes require individually quarter-turn library and placement rotations an
 nondegenerate resolved axis rectangle. Rectangles also need an integral centered midpoint;
 obrounds need matching width/height parity. Other rectangles retain resolved regions;
 other obrounds retain approximate round-ended strokes or equal-sided C flashes.
-Rounded rectangles use regions with chorded corners only if a positive radius survives
-resolution. A collapsed tiny rectangle can emit a retraced path with no area. Mask uses
-outer-layer pads without process expansion; paste excludes through-hole pads.
+Rounded rectangles can flash with circular corners, including at non-quarter-turn angles.
+Rounded rectangles that do not qualify for the macro use polygon regions. If a macro
+core needs a fill but its outline could self-intersect and no exact fill is supported,
+export stops without a file set. A collapsed tiny rectangle can emit a retraced path with
+no area. Mask uses outer-layer pads without process expansion; paste excludes through-hole
+pads.
 Output names remain unique when layer names collide after sanitization; the
 [editor guide](editor-guide.md) describes the eligibility, shape approximations,
 file contents and save behavior.

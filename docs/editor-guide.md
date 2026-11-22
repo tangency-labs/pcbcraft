@@ -589,8 +589,10 @@ view in amber; blue remains each view's own edit selection. Highlights follow th
 latest selection without taking focus. **View → Settings → Follow selection**
 offers highlight only (the default), all views, other views following primary,
 or primary following other views. Following reveals out-of-view items once while
-preserving zoom. Primary is the original view even if detached; closing it
-transfers that role to the main window's focused view. Delete acts only on the
+preserving zoom. When you select a PCB footprint, a following schematic pane
+can switch to the sheet containing its linked symbol. The pane does not take
+focus or select that symbol for editing. Primary is the original view even if detached, and its
+pane keeps the role whichever sheet it shows; closing it transfers that role to the main window's focused view. Delete acts only on the
 focused view's own selection, and clearing the source selection clears its
 highlights.
 
@@ -844,7 +846,9 @@ not a manufacturing sign-off.
 (suggested name `<project>-fabrication.zip`), with Gerber X2 files for each
 copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
-through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
+through-hole pads). Circular non-plated footprint holes, when present, go in a separate
+`-NPTH.drl` file (see [Fabrication drill files](pcb-layout-workflow.md#fabrication-drill-files)).
+Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
 with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Gerber coordinates
 are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves going up,
@@ -895,9 +899,16 @@ match the engine land contour. Mixed-parity or other rotated obrounds retain the
 approximate round-ended stroke (a C flash when both resolved sides are equal). Other
 rectangles remain regions, including net-cardinal poses reached through non-cardinal
 intermediate rotations. Very small collapsed rectangular pads can emit a retraced path
-with zero area. Rounded rectangles emit polygon regions with chorded corners when the
-resolved radius is positive, or the four resolved corners when it clamps to zero.
-Export adds no native arcs and does not change saved pad geometry.
+with zero area. Rounded rectangles flash a Gerber aperture macro with circular
+corners when the inner shape is a convex quadrilateral, a line or a point and the
+emitted radius is within 1 nm of the authored radius. The diameter is rounded to
+the nearest nanometre after projection. The macro uses the placed pad's geometry,
+including rotation and side. Export stops without a file set if a convex macro
+core is not covered by its edge strips under Gerber coordinate and size
+tolerances and its outline could cross under coordinate perturbation.
+Rounded pads that do not qualify for the macro retain resolved polygon regions.
+This changes only generated pad artwork, not saved pad geometry, track or Board
+Outline output.
 
 Copper filenames receive numeric suffixes when sanitized names collide with
 another output, including names that differ only in case. Fixed mask, paste,
