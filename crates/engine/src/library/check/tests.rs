@@ -312,6 +312,34 @@ fn unsupported_or_mismatched_format_is_an_error() {
     }
 }
 
+/// Format-1 parts require a symbol; format-2 metadata-only parts without a symbol stay accepted.
+#[test]
+fn format_one_part_without_symbol_is_an_error_while_format_two_is_accepted() {
+    let fixture = fixture();
+    let path = "parts/spacer-r1.json".to_owned();
+    let part = |format: &str| {
+        json!({
+            "format": format,
+            "library": LIBRARY,
+            "id": "spacer",
+            "revision": 1,
+            "name": "Spacer",
+            "license": "MIT",
+            "source": {"kind": "authored", "reference": "local", "locator": path},
+            "packages": {}
+        })
+        .to_string()
+    };
+    let manifest = fixture.documents["library.json"].clone();
+    let legacy = Documents::from([("library.json".into(), manifest.clone()), (path.clone(), part(LEGACY_PART_FORMAT))]);
+    let error = Capture::from_documents(&legacy, &Catalog::default()).unwrap_err();
+    assert_eq!(error, CheckError::UnsupportedFormat { file: path.clone(), format: LEGACY_PART_FORMAT.into() });
+
+    let metadata_only = Documents::from([("library.json".into(), manifest), (path, part(PART_FORMAT))]);
+    let capture = Capture::from_documents(&metadata_only, &Catalog::default()).unwrap();
+    assert!(check(&capture).is_clean());
+}
+
 /// An exact footprint or symbol found neither in the documents nor in the catalog is an error.
 #[test]
 fn unresolved_reference_is_an_error() {

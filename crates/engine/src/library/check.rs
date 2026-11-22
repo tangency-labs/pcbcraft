@@ -370,7 +370,11 @@ fn decode_part(path: &str, text: &str) -> Result<PartDefinition, CheckError> {
     if header.format != PART_FORMAT && header.format != LEGACY_PART_FORMAT {
         return Err(CheckError::UnsupportedFormat { file: path.into(), format: header.format });
     }
-    serde_json::from_str(text).map_err(malformed)
+    let part: PartDefinition = serde_json::from_str(text).map_err(malformed)?;
+    if part.format == LEGACY_PART_FORMAT && part.symbol.is_none() {
+        return Err(CheckError::UnsupportedFormat { file: path.into(), format: part.format });
+    }
+    Ok(part)
 }
 
 /// Keep every pad in authored order and number its same-number occurrences.
