@@ -557,7 +557,7 @@ fn repeated_keys_in_manifest_and_symbol_are_rejected_as_invalid_params() {
     let cases = [
         ("library.json".to_owned(), "\"name\":", "\"name\": \"Shadow\", \"name\":"),
         (symbol_path.clone(), "\"name\":", "\"name\": \"Shadow\", \"name\":"),
-        (symbol_path.clone(), "\"number\":", "\"number\": \"99\", \"number\":"),
+        (symbol_path.clone(), "\"terminal\":", "\"terminal\": \"99\", \"terminal\":"),
     ];
     for (target_path, needle, replacement) in cases {
         let mut documents = fixture.documents.clone();
