@@ -457,7 +457,7 @@ pub(crate) fn show(
     // A transformed snapshot already contains the preview's pin positions and orientation.
     // Overriding them with the captured starting symbol would draw wires to its old rotation.
     let moved_wires = if group_preview.is_some() { None } else { moved.clone() };
-    let appearances = draft.appearances(project, revision, !std::ptr::eq(project, base_project));
+    let appearances: wires::Appearances = draft.appearances(project, revision, !std::ptr::eq(project, base_project));
     wires::paint(&painter, rect, project, camera, moved_wires, &whole_wires, &highlighted.wires, &appearances);
     if group_preview.is_some()
         && let Some(target) = reshape_target

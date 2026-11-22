@@ -20,8 +20,9 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 /// The command API compatibility version. Raise it only by an explicit decision that a published
-/// change breaks existing callers; it never falls.
-pub const COMMAND_API_VERSION: u32 = 2;
+/// change breaks existing callers; backward-compatible catalog additions change
+/// [`catalog_revision`] instead, and the version never falls.
+pub const COMMAND_API_VERSION: u32 = 1;
 
 /// The optional protocol features this build offers, so a client can check before relying on
 /// one. Features are only ever appended.

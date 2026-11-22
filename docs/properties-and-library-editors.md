@@ -43,17 +43,19 @@ form does not create another draft or undo history. Invalid input stays editable
 Cancel leaves the document unchanged and stale view/project revisions are refused.
 
 A schematic wire selection also offers **Net rules…** and **Net appearance…**.
-Appearance applies to the whole logical net, across sheets and repeated
-instances: the form edits an optional RGB color and drawn stroke width in
-hundredths of a point, with a reset to the theme default. The shared
-`nets.set_appearance` and `nets.inspect_appearance` commands back the form, so
-MCP sees the same fields, bounds, revision refusal and one-step undo. Stroke
-width is a screen-space width and stays readable at every zoom. Color is
-presentation only; selection, hover and error indicators keep their own colors,
-although a net color matching the active theme's selection accent can make a selected
-wire indistinguishable from an unselected one. Handles appear only for a single selected
-wire with an interior corner or a junction end, so straight wires and multi-wire
-selections may have no additional selection cue.
+Appearance follows the whole logical net across supported sheets: wires joined
+into one net by matching global labels all repaint, while same-named local labels
+on different sheets remain separate nets. The form edits an optional RGB color
+and drawn stroke width in hundredths of a point, with a reset to the theme
+default. The shared `nets.set_appearance` and `nets.inspect_appearance` commands
+back the form, so MCP sees the same fields, bounds, revision refusal and one-step
+undo. Stroke width is a screen-space width and stays readable at every zoom. Color is
+presentation only; selection, hover and error indicators keep their own colors and
+a contrasting screen-space underlay, so a selected wire stays readable even when its
+net color matches the active theme's selection accent or its stroke is at the maximum
+width. Handles still appear only for a single selected wire with an interior corner
+or a junction end. Repeated instances are not supported; appearance across them is
+tracked in [#441](https://github.com/tangency-labs/pcbcraft/issues/441).
 
 Footprint selection includes a physical preview, explicit terminal-to-pad map
 and an expandable source/license section. Assignment pins a definition without

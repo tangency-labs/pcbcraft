@@ -13,14 +13,51 @@ use egui_kittest::{
     kittest::{NodeT, Queryable},
 };
 use pcbcraft_engine::{
-    DRAW_WIRE,
+    CONNECT_PINS, DRAW_WIRE, PLACE_RESISTOR,
     schematic::{GRID_NM, Point},
 };
 use serde_json::{Value, json};
+use std::rc::Rc;
 
 /// A model point on the schematic grid.
 fn grid(x: i64, y: i64) -> Point {
     Point { x_nm: x * GRID_NM, y_nm: y * GRID_NM }
+}
+
+/// A project whose wire is styled with the active theme accent at the maximum drawn width through
+/// the shared net appearance command: the pathological case where a net color equals the selection
+/// ink and the ink is already the widest stroke.
+fn styled_harness() -> Harness<'static, PcbApp> {
+    let mut app = PcbApp::default();
+    app.run("project.new", &json!({"name":"Styled"}));
+    app.parts.open = false;
+    app.browser.open = false;
+    for x in [0, 25_400_000] {
+        app.run(PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}));
+    }
+    let pins: Vec<Value> = app.session.project().unwrap().symbols().iter().map(|symbol| json!({"symbol":symbol.id(),"terminal":"1"})).collect();
+    app.run(CONNECT_PINS, &json!({"from":pins[0],"to":pins[1],"expected_revision":app.session.revision()}));
+
+    let accent = pcbcraft_chrome::Tokens::get().accent;
+    let expected =
+        pcbcraft_engine::nets::Appearance { color: Some([accent.r(), accent.g(), accent.b()]), width_cp: Some(pcbcraft_engine::nets::MAX_WIDTH_CP) };
+    let project = app.session.project().unwrap();
+    let wire = project.wires()[0].id();
+    let sheet = project.sheet_target();
+    let target = project.net_class_target_for_endpoint(sheet, project.wires()[0].endpoints()[0]).unwrap().unwrap();
+    app.run(
+        pcbcraft_engine::nets::SET_APPEARANCE,
+        &json!({
+            "target": serde_json::to_value(&target).unwrap(),
+            "appearance": {"color":expected.color.unwrap(), "width_cp":expected.width_cp.unwrap()},
+            "expected_revision": app.session.revision(),
+        }),
+    );
+    assert_eq!(app.session.project().unwrap().wire_appearances().unwrap().get(&wire), Some(&expected));
+
+    let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(|ui, app| app.frame(ui), app);
+    h.run();
+    h
 }
 
 /// A project with one bent free wire, (-8, 0) → (8, 0) → (8, 6), drawn through the shared command.
@@ -41,6 +78,16 @@ fn harness() -> Harness<'static, PcbApp> {
 /// The screen position of a model point through the actual canvas transform.
 fn screen(h: &Harness<'_, PcbApp>, point: Point) -> Pos2 {
     h.state().views.active.camera.screen(point, h.get_by_label("Schematic canvas").rect())
+}
+
+/// Whether a polyline with exactly `points`, `width` and `color` was painted this frame.
+fn painted_stroke(h: &Harness<'_, PcbApp>, points: &[Pos2], width: f32, color: egui::Color32) -> bool {
+    h.output().shapes.iter().any(|shape| match &shape.shape {
+        egui::Shape::Path(path) => {
+            path.points.as_slice() == points && path.stroke.width == width && path.stroke.color == egui::epaint::ColorMode::Solid(color)
+        }
+        _ => false,
+    })
 }
 
 /// Press and release the secondary button `offset` points from a model point, opening the
@@ -225,10 +272,12 @@ fn split_wire_actions_share_history_and_keep_highlights_view_local() {
                         egui::Shape::Circle(circle) if action == "Slice" => {
                             circle.center == view(&h, id).camera.screen(grid(8, 3), rect) && circle.stroke.color == preview_color
                         }
-                        egui::Shape::Path(path) if action != "Slice" => {
-                            path.stroke.width == 2.0 * pcbcraft_chrome::theme::SCHEMATIC_SYMBOL_STROKE
-                                && path.stroke.color == egui::epaint::ColorMode::Solid(preview_color)
-                                && path.points.iter().all(|point| rect.contains(*point))
+                        egui::Shape::Path(path)
+                            if action != "Slice"
+                                && path.stroke.width == 2.0 * pcbcraft_chrome::theme::SCHEMATIC_SYMBOL_STROKE
+                                && path.stroke.color == egui::epaint::ColorMode::Solid(preview_color) =>
+                        {
+                            path.points.iter().all(|point| rect.contains(*point))
                         }
                         _ => false,
                     });
@@ -433,8 +482,9 @@ fn dragging_an_explicitly_selected_wire_moves_it_whole() {
     assert_eq!(routes(&h), vec![vec![grid(-8, 2), grid(8, 2), grid(8, 8)]]);
 }
 
-/// The paint cache reuses one derivation for the same committed snapshot and revision, never
-/// stores a preview snapshot, and recomputes once the document revision moves on.
+/// The paint cache reuses one derivation for the same committed snapshot and revision, sharing
+/// the reference-counted map instead of copying its entries. It never stores a preview snapshot
+/// and recomputes once the document revision moves on.
 #[test]
 fn appearance_cache_reuses_committed_snapshot_and_bypasses_previews() {
     let h = harness();
@@ -444,16 +494,97 @@ fn appearance_cache_reuses_committed_snapshot_and_bypasses_previews() {
 
     let first = draft.appearances(&project, revision, false);
     assert!(draft.appearance_cache.borrow().snapshot.is_some());
-    assert_eq!(draft.appearances(&project, revision, false), first);
+    let second = draft.appearances(&project, revision, false);
+    assert_eq!(second, first);
+    assert!(Rc::ptr_eq(&first, &second), "a cache hit must share the map allocation, not clone it");
 
     let cached_revision = draft.appearance_cache.borrow().revision;
     let cached_wires = draft.appearance_cache.borrow().snapshot.as_ref().map(|snapshot| snapshot.wires().as_ptr());
-    // A preview is derived at a later revision but must not replace the committed cache.
-    let _ = draft.appearances(&project, revision + 1, true);
+    // A preview at another revision is derived fresh and must not replace the committed cache.
+    let preview = draft.appearances(&project, revision + 1, true);
+    assert!(!Rc::ptr_eq(&preview, &first), "a different revision cannot reuse the cached map");
     assert_eq!(draft.appearance_cache.borrow().revision, cached_revision);
     assert_eq!(draft.appearance_cache.borrow().snapshot.as_ref().map(|snapshot| snapshot.wires().as_ptr()), cached_wires);
 
     let recomputed = draft.appearances(&project, revision + 1, false);
     assert_eq!(recomputed, first);
     assert_eq!(draft.appearance_cache.borrow().revision, revision + 1);
+}
+
+/// Headless stand-in for the camera-movement and drag-preview replay: repeated paints at one
+/// revision share one map, a reshape preview borrows it when endpoints stay identical, and a
+/// changed revision derives a fresh map. No preview snapshot is ever stored in the cache.
+#[test]
+fn appearance_replay_shares_one_map_for_camera_and_drag_previews() {
+    let h = harness();
+    let project = h.state().session.project().unwrap().clone();
+    let revision = h.state().session.revision();
+    let draft = super::Draft::default();
+    let committed = draft.appearances(&project, revision, false);
+    assert_eq!(Rc::strong_count(&committed), 2, "one local handle and one cache handle");
+
+    // Simulated camera-only repaints: same snapshot and revision, no new derivation.
+    for _ in 0..8 {
+        assert!(Rc::ptr_eq(&draft.appearances(&project, revision, false), &committed));
+    }
+    assert_eq!(Rc::strong_count(&committed), 2);
+
+    // A reshape drag rebuilds the wire collection but keeps every endpoint identity, so the
+    // net-wide appearance still comes from the committed map.
+    let edit = pcbcraft_engine::wire::Reshape::Segment { wire: "wire-4".to_owned(), at: grid(0, 0) };
+    let preview = project.reshaped(&edit, grid(0, 1)).unwrap();
+    assert_ne!(preview.wires().as_ptr(), project.wires().as_ptr(), "the preview must be fresh geometry");
+    for _ in 0..8 {
+        assert!(Rc::ptr_eq(&draft.appearances(&preview, revision, true), &committed));
+    }
+    assert_eq!(Rc::strong_count(&committed), 2);
+    assert!(draft.appearance_cache.borrow().snapshot.as_ref().is_some_and(|snapshot| std::ptr::eq(snapshot.wires(), project.wires())));
+
+    // A genuine revision change cannot reuse the stale map.
+    let changed = draft.appearances(&project, revision + 1, true);
+    assert!(!Rc::ptr_eq(&changed, &committed));
+}
+
+/// The emphasis cue is a contrasting underlay wider than the ink, distinct from both the accent
+/// and the paper in either theme. It covers selected, hover/error and ordinary ink at the narrow
+/// and maximum screen-space widths.
+#[test]
+fn emphasis_cue_contrasts_with_paper_and_ink_in_both_themes() {
+    let ctx = egui::Context::default();
+    for dark in [false, true] {
+        pcbcraft_chrome::theme::apply(&ctx, dark);
+        let tokens = pcbcraft_chrome::Tokens::get();
+        for (color, width) in [
+            (tokens.accent, pcbcraft_engine::nets::MAX_WIDTH_CP as f32 / 100.0),
+            (tokens.error, 2.0 * pcbcraft_chrome::theme::SCHEMATIC_SYMBOL_STROKE),
+            (tokens.schematic_wire, pcbcraft_chrome::theme::SCHEMATIC_SYMBOL_STROKE),
+        ] {
+            let [(halo_width, halo_color), (ink_width, ink_color)] = super::emphasis_strokes(color, width);
+            assert_eq!((ink_width, ink_color), (width, color));
+            assert!(halo_width > ink_width, "the underlay must extend past the ink at every zoom");
+            assert_eq!(halo_color, tokens.text);
+            assert_ne!(halo_color, ink_color, "the cue must survive a net color equal to the ink");
+            assert_ne!(halo_color, tokens.schematic_paper, "the cue must read against the paper");
+        }
+    }
+    pcbcraft_chrome::theme::apply(&ctx, true);
+}
+
+/// A whole-wire selection paints both the accent ink and its wider contrasting underlay on the
+/// wire's route. The net color equals the accent and the drawn width is the maximum, so this is the
+/// pathological case where color and width alone cannot show that the wire is selected.
+#[test]
+fn selected_wire_paints_the_contrasting_cue_under_its_ink() {
+    let mut h = styled_harness();
+    let wire = h.state().session.project().unwrap().wires()[0].id();
+    let project = h.state().session.project().unwrap();
+    let route = project.wire_path(&project.wires()[0]);
+    let points: Vec<_> = route.iter().map(|point| screen(&h, *point)).collect();
+    h.state_mut().select(pcbcraft_engine::selection::Selection::one_wire(wire));
+    h.run();
+    let tokens = pcbcraft_chrome::Tokens::get();
+    let [(halo_width, halo_color), (ink_width, ink_color)] =
+        super::emphasis_strokes(tokens.accent, pcbcraft_engine::nets::MAX_WIDTH_CP as f32 / 100.0);
+    assert!(painted_stroke(&h, &points, ink_width, ink_color), "accent ink on the styled selected wire");
+    assert!(painted_stroke(&h, &points, halo_width, halo_color), "selection cue under the styled selected wire");
 }

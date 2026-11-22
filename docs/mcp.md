@@ -242,7 +242,7 @@ edits or reach file controls. Headless sessions cannot run them.
 
 `list_commands` keeps returning the command array as its first text part. A
 second text part, also given as the result's `structuredContent`, reads
-`{"command_api_version": 2, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
+`{"command_api_version": 1, "catalog_revision": "<64 hex digits>", "capabilities": ["command_api", "error_codes", "version_check", "deprecation_warnings"]}`.
 These are three separate things:
 
 - `command_api_version` is one number for the whole public command contract,
@@ -854,8 +854,10 @@ and identity status without promoting it. `nets.set_appearance` takes
 `color` array and/or a `width_cp` integer from 50 to 800 hundredths of a point.
 An optional `clear` array may name `"color"` and/or `"width_cp"` to remove just
 those channels; explicit null channels are refused. An empty object or a null
-patch resets to theme defaults. Publishing `clear` in the command schema raised
-`command_api_version` to 2. Both schematic Properties and
+patch resets to theme defaults. Both commands are backward-compatible additions:
+they change `catalog_revision` so clients can refresh discovery, while the
+command API stays at version 1 (see [Command API version](#command-api-version)).
+Both schematic Properties and
 the headless/live catalogs use these commands; the edit promotes an eligible
 derived net in one history step, refuses stale revisions, changes no electrical
 or PCB data and is saved with stable net identity in project/52 or instances/9.
