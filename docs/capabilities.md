@@ -4,6 +4,11 @@ For a first session, use the [quickstart](quickstart.md) or
 [editor guide](editor-guide.md). The [documentation map](README.md) links topic
 guides, format references, design plans and verification records.
 
+The physical stack also exposes [derived and named layer groups](board-materials.md#layer-groups).
+Physical stackup stages copper roles and named memberships; `pcb.inspect_layer_groups`
+reads the same IDs/names headlessly. Rule-scoping consumers and live simulation links
+remain future work.
+
 ## Capability inventory
 
 | Workflow | Implemented slices | Remaining scope |
@@ -41,6 +46,11 @@ are authored and inspected independently from the copper land. The board shows
 the finished opening on rotated and back-side placements and checks its full
 annular ring. Fabrication export refuses slot-bearing boards until plated-slot
 machining is supported; non-plated slots are not supported.
+
+The engine's [object-query parser](object-queries.md) provides bounded boolean
+syntax, text selectors and exact numeric property comparisons with byte-offset
+diagnostics. It is a Rust API only; query evaluation, object selection, paging,
+area predicates and search UI are not implemented by this parser.
 
 Setup edits can be reviewed through `pcb.preview_board_setup` before the shared
 Apply command: layer removals/renumbering, affected objects and consent/refusal
