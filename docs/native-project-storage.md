@@ -766,7 +766,7 @@ With compact memberships, the encoder selects project/54 with authored electrica
 intent and an active designator lock, project/49 with intent alone, otherwise
 project/51 if a designator lock is active, otherwise project/45 if pairs are present, otherwise project/36 if an
 assembly profile catalog is retained, otherwise project/39. Board-owned compact
-memberships use instances/8 with pairs and instances/7 without pairs.
+memberships use instances/10 with authored electrical intent, otherwise instances/8 with pairs and instances/7 without pairs.
 Schematic-only memberships remain embedded in the entry point. The compact
 record contains a sorted UUID `groups` dictionary
 and sorted `part_instances` rows (`part_instance` plus sorted numeric `groups`

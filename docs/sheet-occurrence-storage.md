@@ -19,10 +19,11 @@ When a sparse net registry is authored, project/17 and instances/2 add it beside
 these records. Without another feature selecting a later project format,
 registry-free projects retain project/16. Active designator locks select
 project/51 even without a registry (project/54 alongside authored electrical
-intent); board-owned instances retain the header their
+intent); authored electrical intent without a lock selects project/49;
+board-owned instances retain the header their
 content requires: instances/1–4, /5 with expanded memberships, /7 with compact
-memberships or /8 with differential pairs. A lock alone does not change that
-instance header.
+memberships, /8 with differential pairs, or /10 with authored electrical intent.
+A lock alone does not change that instance header.
 
 The instance payload contains `circuit_uses` and `sheet_occurrences`. There is
 exactly one circuit-use record, containing its non-nil UUID `id`. Every sheet

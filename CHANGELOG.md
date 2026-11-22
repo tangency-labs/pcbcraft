@@ -2,6 +2,8 @@
 
 ## 0.1.0 (unreleased)
 
+- **Analyze → Rules → Working voltage** lets designers declare and inspect a working-voltage requirement (`DC` or `Peak AC`, referenced to `Earth` or a named net) on a saved net or net class, backed by the shared `electrical_intent.set` and `electrical_intent.inspect` MCP commands. Reports state the authored source, mark the requirement unverified (no ERC, DRC or solver consumes it yet), and flag `needs_review` with the reason when an owning or reference net is split, merged, left ambiguous, or deleted. Declarations save in `pcbcraft-project/49` (or `/54` with active designator locks), `pcbcraft-instances/10`, and `pcbcraft-net-classes/4` only when present; earlier releases cannot open files carrying authored electrical intent, while files without declarations retain their existing formats and canonical bytes.
+
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
 its old slot. Splitting a pane itself opens another view. Separate Split window
@@ -67,9 +69,11 @@ manage the catalog, and `part_instances.set_groups` and
 `part_instances.inspect_groups` set and read a part instance's groups by its
 stable ID, so annotation does not change membership. A group that still has
 members cannot be removed. Projects with part groups use project/24 (expanded
-memberships) or project/39 (compact) unless profiles, pairs or a designator lock
-select project/36, /45 or /51. Board instance documents use instances/5 or /7
-for the two representations, or instances/8 when pairs are present. The compact
+memberships) or project/39 (compact) unless profiles, pairs, authored electrical
+intent or a designator lock select project/36, /45, /49, /51 or /54. Board
+instance documents use instances/5 or /7 for the two representations,
+instances/8 when pairs are present, or instances/10 when authored electrical
+intent is present. The compact
 UUID dictionary keeps dense memberships within the existing size limits without
 dropping supported membership. Earlier files
 keep the expanded representation while it fits, and compact files keep their
