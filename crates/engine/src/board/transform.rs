@@ -1,5 +1,6 @@
 //! Atomic board placement edits shared by the GUI and MCP.
-use crate::{CommandError, Session, schematic::Point};
+use super::Footprint;
+use crate::{CommandError, Project, Session, schematic::Point};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -61,6 +62,35 @@ impl AlignMode {
     /// The fewest footprints the mode applies to: three to distribute, two to align.
     pub const fn minimum(self) -> usize {
         if self.distributes() { 3 } else { 2 }
+    }
+}
+
+/// Refuse an unknown or locked placement before editing or removing the supplied placements.
+/// Report each lock using its stable ID and, when available, its live or last accepted reference.
+pub(crate) fn require_unlocked_placements<'a>(
+    project: &Project,
+    placements: impl IntoIterator<Item = Option<&'a Footprint>>,
+) -> Result<(), CommandError> {
+    let mut locked = Vec::new();
+    for placement in placements {
+        let footprint = placement.ok_or_else(|| CommandError::NotFound("unknown footprint ID".into()))?;
+        if footprint.locked {
+            let id = footprint.id;
+            let reference = project
+                .components
+                .get(&footprint.component)
+                .map(|part| part.reference())
+                .or_else(|| project.board.baseline.as_ref()?.components.get(&footprint.component).map(|part| part.reference.as_str()));
+            locked.push(match reference {
+                Some(reference) => format!("{reference} (footprint-{id})"),
+                None => format!("footprint-{id}"),
+            });
+        }
+    }
+    if locked.is_empty() {
+        Ok(())
+    } else {
+        Err(CommandError::InvalidParams(format!("Locked footprints: {}. Unlock them before editing or deleting them.", locked.join(", "))))
     }
 }
 
@@ -174,8 +204,8 @@ impl Session {
         Ok(())
     }
 
-    /// Validate every selected placement and the source revision before deleting any. Physical
-    /// placements retain their pinned package assignment for re-placement; schematic geometry,
+    /// Validate the source revision and refuse the whole selection if any placement is locked
+    /// or unknown. Physical placements retain their pinned package assignment; schematic geometry,
     /// components, drawings and setup remain unchanged. Undo restores exact placement identities.
     pub(crate) fn delete_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -186,9 +216,10 @@ impl Session {
             .filter_map(|id| id.as_str().and_then(|id| crate::schematic::wiring::parse_id(id, "footprint-")))
             .collect();
         let project = self.open_project()?;
-        if ids.is_empty() || ids.iter().any(|id| project.board.footprints.binary_search_by_key(id, |f| f.id).is_err()) {
+        if ids.is_empty() {
             return Err(CommandError::NotFound("unknown footprint ID".into()));
         }
+        require_unlocked_placements(project, ids.iter().map(|&id| project.board.placement(id)))?;
         let mut next = project.clone();
         let board = Arc::make_mut(&mut next.board);
         for footprint in board.footprints.iter().filter(|f| ids.contains(&f.id)) {
@@ -210,8 +241,8 @@ impl Session {
     }
 
     /// Align (two or more) or distribute (three or more) the addressed footprints by their
-    /// resolved bounds, carrying track ends on pads that move. Invalid input, a result outside
-    /// the coordinate range or a new short leaves the board unchanged. Distribution also
+    /// resolved bounds, carrying track ends on pads that move. A locked placement, invalid input,
+    /// a result outside the coordinate range or a new short leaves the board unchanged. Distribution also
     /// preserves its outer anchors and span. An alignment that moves nothing creates no edit.
     pub(crate) fn align_footprints(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -230,9 +261,9 @@ impl Session {
         }
         let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
         let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("board unavailable".into()))?;
+        require_unlocked_placements(project, ids.iter().map(|&id| project.board.placement(id)))?;
         let wanted: std::collections::BTreeSet<String> = ids.iter().map(|id| format!("footprint-{id}")).collect();
-        let mut found: std::collections::BTreeMap<String, [i64; 4]> =
-            view.footprints().filter(|f| wanted.contains(&f.id)).map(|f| (f.id.clone(), bounds(&f))).collect();
+        let mut found: std::collections::BTreeMap<String, [i64; 4]> = view.footprints_for_ids(&wanted).map(|f| (f.id.clone(), bounds(&f))).collect();
         let boxes = ids
             .iter()
             .map(|id| found.remove(&format!("footprint-{id}")))
@@ -265,8 +296,8 @@ impl Session {
 
     /// Validate revision, identity and transform before replacing a board snapshot. An optional
     /// `side` (front or back) places the footprint on that side; omitted keeps its side. Track
-    /// ends on its pads follow them (see `track::carry_copper`), and the edit is refused if the
-    /// moved pads or tracks would join two nets. Mapping, component identity and schematic
+    /// ends on its pads follow them (see `track::carry_copper`). Refuse a changed transform if
+    /// the placement is locked or moved pads or tracks would join two nets. Mapping, component identity and schematic
     /// geometry are retained; unchanged input creates no history.
     pub(crate) fn set_footprint_transform(&mut self, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
@@ -294,6 +325,7 @@ impl Session {
         if (current.x_nm, current.y_nm, current.rotation, current.bottom) == (footprint.x_nm, footprint.y_nm, footprint.rotation, footprint.bottom) {
             return Ok(());
         }
+        require_unlocked_placements(project, [Some(current)])?;
         let mut next = project.clone();
         Arc::make_mut(&mut next.board).footprints[index] = footprint;
         super::track::carry_copper(project, &mut next, &std::collections::BTreeSet::from([format!("footprint-{}", current.id)]))?;
