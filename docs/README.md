@@ -55,6 +55,7 @@ supported versions and deferred work before extending a format or consumer.
 | Netlist export | [JSON netlist format](netlist-format.md) · [Schema, format 1](schemas/netlist-v1.schema.json) · [Schema, format 2 (board)](schemas/netlist-v2.schema.json) |
 | Schematic document output | [Single-sheet PDF writer](schematic-pdf.md) |
 | Object identities | [Identity inventory](object-identity.md) |
+| Object-query parsing | [Syntax, trees and byte-offset diagnostics](object-queries.md), without evaluation or UI |
 | Pin/pad correspondence | [Complete counterparts and unavailable states](pin-pad-correspondence.md) |
 | Dimensional net classes | [Catalog and resolver](net-classes.md) · [Assignments and topology reconciliation](net-class-assignments.md) · [Routing and checking consumers](net-class-consumers.md) |
 | Part groups | [Catalog, membership and storage](part-groups.md) |
