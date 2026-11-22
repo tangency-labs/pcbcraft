@@ -165,17 +165,18 @@ slots in existing multi-unit packages, then combines remaining loose units in
 stable part order. It never moves a part that already holds several units.
 
 The pinned symbol, Value, reusable part/manufacturer selection, package
-assignment, authored fields and part groups must match. A spare slot must have
-the same drawing and an unambiguous pin-role and position correspondence. Shared
-pins keep their terminal numbers; completion refuses the whole edit if
+assignment, authored fields and part groups must match. A spare slot needs
+the same drawing and an unambiguous match for each pin's role, position and
+alternate functions. Shared pins keep their terminal numbers. Completion refuses the whole edit if
 reassignment changes which pins are connected or joins or splits a net.
 If a transfer would change net anchors, every meaningful net in the project
 must already have an active identity record with a saved net number. This
 includes nets on other sheets, even when completion is scoped to one sheet.
 Preview and Apply both refuse the entire operation if any such record or number
 is missing; neither changes the project or its Undo history.
-Designator-locked owners, owners with authored terminal no-connect intent, and
-placed packages without an accepted board counterpart are skipped.
+Completion skips designator-locked owners, owners with authored terminal
+no-connect intent or selected alternate functions, and placed packages without
+an accepted board counterpart.
 
 The command keeps placement IDs, positions, orientations and wire geometry.
 The surviving owner keeps its ID and reference. Removed owners are retired;

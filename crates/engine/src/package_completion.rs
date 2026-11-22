@@ -276,13 +276,13 @@ fn match_key(project: &Project, id: u64, digests: &mut BTreeMap<*const crate::Sy
     .map_err(|error| CommandError::InvalidParams(error.to_string()))
 }
 
-/// Exclude locked owners and ones whose authored terminal intent cannot be transferred implicitly.
+/// Exclude locked owners and owners with no-connect intent or selected alternate functions.
 /// A physical footprint without an accepted counterpart cannot be retired through board review.
 fn skip_reason(project: &Project, unreviewable: &BTreeSet<u64>, id: u64) -> Option<&'static str> {
     let part = &project.components[&id];
     if part.designator_locked() {
         Some("designator_locked")
-    } else if !part.no_connects.is_empty() {
+    } else if !part.no_connects.is_empty() || project.pin_functions.owner(id).is_some() {
         Some("terminal_intent")
     } else if unreviewable.contains(&id) {
         Some("board_review_required")
@@ -299,8 +299,8 @@ fn offer(slots: &mut Slots, id: u64, owner: &Owner<'_>) {
     }
 }
 
-/// Match the selected drawing with another unit only when each pin has a unique exact role and
-/// position. Same-token matches take precedence for pins that are shared across unit drawings.
+/// Match the selected drawing only when pins have uniquely corresponding roles, positions and
+/// alternate functions. Same-token matches take precedence for shared pins.
 fn pin_map(symbol: &SymbolPlacement, slot: usize) -> Option<Vec<(Terminal, Terminal)>> {
     let from = symbol.unit_definition();
     let to = &symbol.definition.units[slot];
@@ -325,6 +325,7 @@ fn pin_map(symbol: &SymbolPlacement, slot: usize) -> Option<Vec<(Terminal, Termi
                 pin.offset == other.offset
                     && pin.name == other.name
                     && pin.electrical_type == other.electrical_type
+                    && pin.alternates == other.alternates
                     && pin.appearance == other.appearance
             };
             let candidate = if let Some(same) = to.pins().iter().filter(compatible).find(|other| other.number == pin.number) {

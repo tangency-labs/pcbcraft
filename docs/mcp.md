@@ -749,8 +749,9 @@ validate the same plan without editing. Both modes return `{revision, changes,
 skipped}`, even with `inspect: false`. Each change names `sheet`, `symbol`,
 `from_part`, `from_unit`, `to_part`, `to_unit` and `remapped_terminals` (changed
 pin numbers as an old-to-new map). A source part in `changes` is retired; its
-symbol is retained. Skipped entries name `part` and `reason`. A read-only
-session refuses the command with `out_of_scope`, even for a dry run, because the
+symbol is retained. Skipped entries name `part` and `reason`. Authored
+no-connect markers or selected alternate pin functions report `terminal_intent`.
+A read-only session refuses the command with `out_of_scope`, even for a dry run, because the
 same command applies the transfer. In the live editor, Preview and Apply prepare
 the plan off the editor thread, so the canvas stays responsive; just before
 publishing, the editor re-checks the revision, open dialogs, the request deadline

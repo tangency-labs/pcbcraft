@@ -7,6 +7,11 @@ fn quad() -> Session {
 
 /// Optionally keep the second unit's drawing and pin roles while reversing its terminal order.
 fn quad_with_pin_order(reverse_second: bool) -> Session {
+    quad_with_alternates(reverse_second, &[])
+}
+
+/// Define the same alternate input function on the specified terminals of the quad.
+fn quad_with_alternates(reverse_second: bool, alternate_inputs: &[&str]) -> Session {
     let mut symbol: Value = serde_json::from_str(SYMBOL).unwrap();
     symbol["name"] = json!("Illustrative quad amplifier");
     symbol["default_value"] = json!("Quad amplifier");
@@ -26,6 +31,14 @@ fn quad_with_pin_order(reverse_second: bool) -> Session {
     }
     symbol["terminals"] = json!(terminals);
     symbol["units"] = json!(units);
+    if !alternate_inputs.is_empty() {
+        symbol["format"] = json!(library::SYMBOL_FORMAT_V5);
+        for pin in symbol["terminals"].as_array_mut().unwrap() {
+            if pin["id"].as_str().is_some_and(|id| alternate_inputs.contains(&id)) {
+                pin["alternates"] = json!([{"name":"ADC_IN","electrical_type":"input"}]);
+            }
+        }
+    }
     session_with_symbol(&symbol.to_string())
 }
 
@@ -47,6 +60,47 @@ fn complete(session: &mut Session, scope: Option<&str>, dry_run: bool) -> Result
         params["scope"] = json!(scope);
     }
     session.execute(COMPLETE_PACKAGES, &params)
+}
+
+/// A selected alternate protects a loose owner from retirement or from acting as the destination.
+#[test]
+fn package_completion_skips_owners_with_selected_alternate_functions() {
+    for owner_index in [0, 1] {
+        let mut session = quad_with_alternates(false, &["5", "7"]);
+        place_loose(&mut session, 1, None);
+        let owner = session.project().unwrap().symbols()[owner_index].clone();
+        apply(&mut session, crate::pin_functions::SET, json!({"target":{"part":owner.component_id(),"terminal":"5"},"function":"ADC_IN"}));
+        let before = session.snapshot().unwrap();
+        let saved = encode_documents(before.clone()).unwrap();
+        let revision = session.revision();
+        let history = (session.undo.len(), session.redo.len());
+        for dry_run in [true, false] {
+            let report = complete(&mut session, Some("project"), dry_run).unwrap();
+            assert_eq!(report["changes"], json!([]));
+            assert_eq!(report["skipped"], json!([{"part":owner.component_id(),"reason":"terminal_intent"}]));
+            assert_eq!(session.revision(), revision);
+            assert_eq!((session.undo.len(), session.redo.len()), history);
+            assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+        }
+        let after = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(after, saved);
+        let reopened = decode_documents(&after).unwrap();
+        assert_eq!(reopened.pin_function(reopened.component(&owner).unwrap(), "5"), Some("ADC_IN"));
+    }
+}
+
+/// Equivalent unselected choices allow a transfer; a unit missing the alternate cannot match.
+#[test]
+fn package_completion_matches_the_declared_alternate_functions() {
+    for (inputs, can_merge) in [(&["5"][..], false), (&["5", "7"][..], true)] {
+        let mut session = quad_with_alternates(false, inputs);
+        place_loose(&mut session, 1, None);
+        let before = session.snapshot().unwrap();
+        let report = complete(&mut session, Some("project"), true).unwrap();
+        assert_eq!(report["changes"].as_array().unwrap().len(), usize::from(can_merge));
+        assert_eq!(report["skipped"], json!([]));
+        assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+    }
 }
 
 /// Pin a command-loaded synthetic ten-pad footprint to all three complete logical terminal sets.
