@@ -240,8 +240,17 @@ impl PcbApp {
             if net_rules {
                 self.begin_net_rules();
             }
-            if let (Some(change), Some(sheet)) = (parameter_change, sheet) {
-                self.run(pcbcraft_engine::parameters::SET, &change.params(sheet, revision));
+            // A paper or frame pick takes the Browser's deferred path, so it is validated against
+            // this view and revision exactly like the sheet's context menu.
+            match (parameter_change, sheet) {
+                (Some(crate::sheet_parameters::Edit::Parameter(change)), Some(sheet)) => {
+                    self.run(pcbcraft_engine::parameters::SET, &change.params(sheet, revision));
+                }
+                (Some(crate::sheet_parameters::Edit::Page(action)), Some(_)) => {
+                    let view = self.views.active.id();
+                    self.queue_view_action(ui.ctx(), view, crate::editor_windows::ViewAction::Browse(action));
+                }
+                _ => {}
             }
             return rect;
         };
