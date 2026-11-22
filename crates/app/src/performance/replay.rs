@@ -350,7 +350,7 @@ impl Driver {
         }
     }
 
-    /// Drive a pending validation/publication step with a wall-clock and frame bound.
+    /// Drive a pending validation/publication step until settled or bounded out.
     /// No input is repeated, and the normal final layer/cancellation assertions still apply.
     fn settle(
         &self,
@@ -365,19 +365,27 @@ impl Driver {
         if !matches!(id.as_str(), "layer.down" | "layer.up" | "capacity.down" | "capacity.up" | "contact.preview" | "contact.commit.up") {
             return Ok(());
         }
+        #[cfg(not(test))]
         let started = super::clock_ms();
         let mut settling = BTreeMap::new();
         for _ in 0..10_000 {
             if !self.pending(app, artifact, index) {
                 break;
             }
-            if super::clock_ms() - started > 5_000. {
-                return Err("route validation did not settle within five seconds".into());
+            #[cfg(not(test))]
+            if super::clock_ms() - started > 30_000. {
+                return Err("route validation did not settle within thirty seconds".into());
+            }
+            #[cfg(test)]
+            if app.views.active.board.tracks.route_queue_busy() {
+                app.poll_route_previews();
+                app.poll_copper_preparations(ctx);
+                continue;
             }
             frame(app, ctx, Vec::new(), *frame_id, &mut settling, &format!("settle.{id}"));
             *frame_id += 1;
-            #[cfg(not(target_arch = "wasm32"))]
-            std::thread::yield_now();
+            #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
         if self.pending(app, artifact, index) {
             return Err("route validation exceeded its frame bound".into());

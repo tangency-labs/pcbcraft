@@ -210,6 +210,11 @@ impl Preparation {
     fn busy(&self) -> bool {
         self.queue.busy() || (self.wanted.is_some() && self.ready.is_none() && !self.failed)
     }
+    /// Whether an incremental or background preparation job is currently queued or running.
+    #[cfg(all(test, feature = "performance-harness"))]
+    pub(super) fn queue_busy(&self) -> bool {
+        self.queue.busy()
+    }
 }
 impl PcbApp {
     /// Consume completed read-only plans before a new pointer target can supersede them.
