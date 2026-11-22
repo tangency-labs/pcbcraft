@@ -547,6 +547,42 @@ mod tests {
         assert!(with_removed_vertex(&triangle, 0).is_err());
     }
 
+    /// Raw insert and replace actions cannot commit a self-intersecting courtyard outline, and a
+    /// refused edit leaves the draft and its revision unchanged.
+    #[test]
+    fn raw_insert_and_replace_refuse_a_self_intersecting_courtyard() {
+        let bowtie = Primitive::Artwork {
+            artwork: footprint::Artwork {
+                purpose: GraphicPurpose::Courtyard,
+                graphic: Graphic {
+                    geometry: Geometry::Polyline {
+                        // An uneven bowtie: its first and third edges cross, but its signed area
+                        // is not zero, so the self-intersection check is what refuses it.
+                        points: vec![pt(0, 0), pt(2_000_000, 2_000_000), pt(2_000_000, 0), pt(0, 1_000_000)],
+                        closed: true,
+                    },
+                    stroke_nm: DEFAULT_STROKE_NM,
+                    fill: Fill::None,
+                },
+            },
+        };
+        let mut session = Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let before = session.snapshot();
+        let error = session.execute(0, Action::Insert { primitive: bowtie.clone() }).unwrap_err();
+        assert_eq!(error, "A courtyard outline cannot intersect itself.");
+        assert_eq!(session.snapshot(), before);
+        assert_eq!(session.revision(), 0);
+
+        let square = make_courtyard_polygon(vec![pt(0, 0), pt(2_000_000, 0), pt(2_000_000, 2_000_000), pt(0, 2_000_000)], DEFAULT_STROKE_NM).unwrap();
+        let rev = session.execute(0, Action::Insert { primitive: square }).unwrap();
+        let accepted = session.snapshot();
+        let id = *accepted.objects.iter().find(|(_, p)| is_courtyard_primitive(p)).unwrap().0;
+        let error = session.execute(rev, Action::Replace { object: id, primitive: bowtie }).unwrap_err();
+        assert_eq!(error, "A courtyard outline cannot intersect itself.");
+        assert_eq!(session.snapshot(), accepted);
+        assert_eq!(session.revision(), rev);
+    }
+
     /// GenerateCourtyard replaces existing courtyard primitives in one undoable transaction
     /// and rejects symbol documents.
     #[test]

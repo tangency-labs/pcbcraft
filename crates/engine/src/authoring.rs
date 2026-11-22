@@ -1022,6 +1022,17 @@ impl Session {
                     next.format = if next.has_npth() { NPTH_FORMAT } else { FORMAT }.into();
                 }
                 next.validate()?;
+                // Every action that adds or changes a closed courtyard outline must leave it a
+                // simple polygon. This runs after the bounds check above, so the polygon arithmetic
+                // only sees bounded coordinates. Unchanged outlines are not rechecked, so a loaded
+                // definition stays editable.
+                for (id, primitive) in &next.objects {
+                    if self.item.objects.get(id) != Some(primitive)
+                        && let Some((points, _)) = courtyard::courtyard_polygon(primitive)
+                    {
+                        courtyard::validate_polygon(points)?;
+                    }
+                }
                 let next_content_revision = self.next_content_revision.checked_add(1).ok_or("Content revision limit reached.")?;
                 let next_id = cursor;
                 self.undo.push(std::mem::replace(&mut self.item, Arc::new(next)));
