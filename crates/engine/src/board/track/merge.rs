@@ -191,14 +191,22 @@ pub(crate) fn plan(view: BoardView<'_>, selected: &BTreeSet<Uuid>) -> Plan {
     }
     let obstacles = OnceCell::new();
     let mut removed = BTreeSet::new();
-    let mut survivors = Vec::new();
-    for ((layer, width_nm, ..), mut spans) in lines {
-        if spans.len() > 1 {
-            let join = Join { layer, width_nm, view, obstacles: &obstacles };
-            join.merge_line(&mut spans, &mut ends, &mut removed);
+    // Repeat across all line groups until a full pass changes nothing, because absorbing a
+    // covered segment on one line can drop a shared end's count to 2 and free a join on an
+    // earlier line group. Every merge removes at least one span, so the loop always ends.
+    loop {
+        let mut changed = false;
+        for (&(layer, width_nm, ..), spans) in &mut lines {
+            if spans.len() > 1 {
+                let join = Join { layer, width_nm, view, obstacles: &obstacles };
+                changed |= join.merge_line(spans, &mut ends, &mut removed);
+            }
         }
-        survivors.extend(spans);
+        if !changed {
+            break;
+        }
     }
+    let survivors = lines.into_values().flatten();
     let original = move |id: &Uuid| tracks.binary_search_by_key(id, |track| track.id).ok().map(|index| &tracks[index]);
     let mut plan = Plan { locked, removed: removed.into_iter().collect(), ..Plan::default() };
     for span in survivors {
@@ -225,12 +233,14 @@ struct Join<'a> {
 }
 
 impl Join<'_> {
-    /// Merge the spans of one line until none can merge. Each pass sweeps the spans in order
-    /// along the line; the last kept span always reaches furthest. A span inside it is
-    /// absorbed, and a span starting exactly at its far end is joined when that end is free
-    /// (see [`Self::free_end`]). Every merge removes a span, so the passes end; a later pass
-    /// only adds the joins that duplicates absorbed in an earlier pass were blocking.
-    fn merge_line(&self, spans: &mut Vec<Span>, ends: &mut BTreeMap<End, usize>, removed: &mut BTreeSet<Uuid>) {
+    /// Merge the spans of one line until none can merge, returning whether any span merged.
+    /// Each pass sweeps the spans in order along the line; the last kept span always reaches
+    /// furthest. A span inside it is absorbed, and a span starting exactly at its far end is
+    /// joined when that end is free (see [`Self::free_end`]). Every merge removes a span, so
+    /// the passes end; a later pass only adds the joins that duplicates absorbed in an earlier
+    /// pass were blocking.
+    fn merge_line(&self, spans: &mut Vec<Span>, ends: &mut BTreeMap<End, usize>, removed: &mut BTreeSet<Uuid>) -> bool {
+        let mut any = false;
         loop {
             spans.sort_by(|a, b| a.low_t.cmp(&b.low_t).then(b.high_t.cmp(&a.high_t)).then(a.id.cmp(&b.id)));
             let mut merged = false;
@@ -248,8 +258,9 @@ impl Join<'_> {
             }
             *spans = kept;
             if !merged {
-                return;
+                return any;
             }
+            any = true;
         }
     }
 

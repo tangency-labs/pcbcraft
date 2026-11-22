@@ -273,3 +273,40 @@ fn an_oversized_report_is_refused_before_publishing() {
     assert_eq!(s.revision(), revision + 1);
     assert_eq!(tests::view(&s).tracks().len(), 1);
 }
+
+/// Absorbing a covered segment on a later line group can drop a shared endpoint's count to 2
+/// and free a join on an earlier line group; one merge reaches the fixed point so a second
+/// merge is a no-op.
+#[test]
+fn cross_line_absorption_frees_blocked_join_in_one_merge() {
+    let mut s = tests::routed_fixture();
+    let front = tests::copper_layers(&s)[0];
+    let (cx, cy) = (2 * MM, 40 * MM);
+    // Vertical line (ux=0, uy=1) sorts before horizontal line (ux=1, uy=0).
+    // Initially (cx, cy) has three track ends, blocking the vertical join until the covered
+    // horizontal stub is absorbed into the longer horizontal segment.
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(cx, cy - MM), at(cx, cy), at(cx, cy + MM)]);
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(cx - MM, cy), at(cx, cy)]);
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(cx - 2 * MM, cy), at(cx + 2 * MM, cy)]);
+
+    let tracks = all_tracks(&s);
+    assert_eq!(tracks.len(), 4);
+    let revision = s.revision();
+
+    let report = merge(&mut s, &tracks, false);
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(report["changed"], true);
+    assert_eq!(report["removed"].as_array().unwrap().len(), 2);
+
+    let mut remaining: Vec<_> = tests::view(&s).tracks().iter().map(|track| ends(track.start, track.end)).collect();
+    remaining.sort_unstable();
+    let mut expected = vec![ends(at(cx, cy - MM), at(cx, cy + MM)), ends(at(cx - 2 * MM, cy), at(cx + 2 * MM, cy))];
+    expected.sort_unstable();
+    assert_eq!(remaining, expected);
+
+    let merged_revision = s.revision();
+    let remaining_ids = all_tracks(&s);
+    let again = merge(&mut s, &remaining_ids, false);
+    assert_eq!(again["changed"], false);
+    assert_eq!(s.revision(), merged_revision, "a single merge must reach the fixed point");
+}
