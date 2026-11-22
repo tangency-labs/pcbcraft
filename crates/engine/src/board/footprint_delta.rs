@@ -252,7 +252,7 @@ fn describe(before: Option<&Land<'_>>, after: Option<&Land<'_>>) -> (Vec<Change>
         (rotated, Change::Rotated),
         (shape, Change::Shape),
         (layers, Change::CopperLayers),
-        (a.drill_nm != b.drill_nm, Change::Drill),
+        (a.drill_nm != b.drill_nm || a.plated_slot != b.plated_slot, Change::Drill),
         (mask, Change::Mask),
         (paste, Change::Paste),
     ]

@@ -13,6 +13,7 @@ The machine-readable schemas describe canonical standalone library files:
 | `pcbcraft-symbol/2` | [Version 2](schemas/symbol-v2.schema.json) | Optional explicit electrical behavior and instance defaults |
 | `pcbcraft-symbol/3` | [Version 3](schemas/symbol-v3.schema.json) | An explicit default category binding |
 | `pcbcraft-symbol/4` | [Version 4](schemas/symbol-v4.schema.json) | Up to 32 independently placed units sharing logical terminals; category remains optional |
+| `pcbcraft-symbol/5` | [Version 5](schemas/symbol-v5.schema.json) | Optional alternate functions on logical terminals |
 
 [The dispatcher](schemas/symbol.schema.json) accepts these versions. All schemas
 use JSON Schema Draft 2020-12 and registered URNs; validation needs no network
@@ -38,10 +39,9 @@ Version 1 refuses electrical behavior/default fields, and versions 1–2 refuse
 older definitions retain their existing format and saved bytes.
 
 The [symbol guide](symbol-library.md) defines the existing geometry, pin
-appearance, defaults and power behavior. Formats 1–3 retain their one-unit limit. Format 4 supports multiple units
-within the 1,024-terminal and per-unit drawing bounds. A unit can contain at most
-441 pins on the 1.27 mm grid. Formats 1–3 have one unit and therefore accept at
-most 441 terminals; format 4 allows up to 1,024 logical terminals across multiple
+appearance, defaults and power behavior. A unit can contain at most 441 pins on
+the 1.27 mm grid. Formats 1–3 have one unit and therefore accept at most 441
+terminals; formats 4 and 5 allow up to 1,024 logical terminals across multiple
 units. The schema and engine validate the declared supported
 fields rather than accepting arbitrary extension properties.
 
@@ -52,6 +52,23 @@ letters have no separate lock. Inspection includes false explicitly, and
 [Project/51](native-project-storage.md#designator-locks) stores active locks
 without changing any library symbol schema. Manual reference edits remain
 available; automatic annotation itself is not implemented.
+
+## Alternate pin functions
+
+A logical terminal may declare `"alternates": [{"name":"ADC_IN","electrical_type":"input"}]`
+alongside its primary `name` and `electrical_type`. Each present list contains one
+through sixteen alternate functions. Names are case-sensitive, trimmed, single-line,
+1–32 characters, unique within the terminal and distinct from its primary name.
+Types use the existing terminal vocabulary. Every appearance of that terminal must
+have an integrated pin lead; the choice does not override the lead's name visibility.
+Alternates and their order belong to the shared terminal, not its individual unit drawings.
+Formats 1–4 refuse the field. Adding an alternate switches the draft to
+`pcbcraft-library-item/5` and its published symbol to `pcbcraft-symbol/5`.
+Removing the last alternate does not switch either record back.
+
+A placed part can select one alternate per terminal. Selection does not renumber,
+swap or move terminals or change connectivity. See [placed-part storage](native-project-storage.md#alternate-pin-function-records).
+A project with both a selected alternate and an active designator lock saves as project/56.
 
 ## Explicit category defaults
 
@@ -130,8 +147,8 @@ a hierarchy subtree, allocates that part only once.
 The symbol editor can add and select units through the shared authoring actions.
 It retains source unit order, inactive drawings and globally unique primitive IDs in
 `pcbcraft-library-item/2`; single-unit items keep format 1. Shared terminal
-name/type edits propagate to the other appearances. Native export emits format 4
-when several units exist. Explicit [reviewed pin renumbering](properties-and-library-editors.md#review-pin-renumbering)
+name, type and alternate-list edits propagate to other appearances. Without
+alternates, native export emits format 4 when several units exist. Explicit [reviewed pin renumbering](properties-and-library-editors.md#review-pin-renumbering)
 changes only the authored definition, including its shared terminal appearances;
 it adds no saved fields. It does not swap terminals/gates in placed instances or
 update their native package mappings. Alternative symbol definitions for a part,

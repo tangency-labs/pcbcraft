@@ -486,9 +486,11 @@ impl PcbApp {
             } else {
                 completion.report.map_err(|message| snapshot_worker_failure(completion.schedule_failure, message)).and_then(|edit| {
                     let edit = edit.ok_or_else(|| Failure::new(ErrorCode::Cancelled, "Copper preparation canceled"))??;
-                    self.session.commit_copper_edit(edit)?;
-                    Ok(if request.body()["params"]["inspect"].as_bool() == Some(false) {
-                        json!({"revision":self.session.revision()})
+                    let (revision, report) = self.session.commit_copper_edit_with_report(edit)?;
+                    Ok(if let Some(report) = report {
+                        report
+                    } else if request.body()["params"]["inspect"].as_bool() == Some(false) {
+                        json!({"revision":revision})
                     } else {
                         self.session.inspect()
                     })
@@ -1123,9 +1125,11 @@ mod checker_tests {
 #[cfg(test)]
 mod copper_tests {
     use super::*;
+    use pcbcraft_engine::board::setup::{LayerPurpose, Side};
     use std::net::{Ipv4Addr, TcpStream};
 
-    /// Existing commands provide a board and copper parameters without fixture file surgery.
+    /// Existing commands provide a board and front copper for top-side pads. The layer
+    /// catalog is sorted by ID, so its first copper layer can be the back.
     fn fixture() -> (PcbApp, egui::Context, Value) {
         let ctx = egui::Context::default();
         let mut app = PcbApp::default();
@@ -1134,7 +1138,7 @@ mod copper_tests {
         app.live_control = Some(LiveControl::start(&ctx).unwrap());
         let p = app.session.project().unwrap();
         let view = p.board_view(p.board_target().unwrap()).unwrap();
-        let layer = view.layers().into_iter().find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper).unwrap().id;
+        let layer = view.layers().into_iter().find(|l| l.purpose == LayerPurpose::Copper && l.side == Some(Side::Front)).unwrap().id;
         let body = json!({"method":"engine.execute","params":{"command":pcbcraft_engine::ADD_TRACKS,"inspect":false,"params":{
             "board":view.target.board,"layer":layer,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":0},{"x_nm":1_000_000,"y_nm":0}],"expected_revision":app.session.revision()}}});
         (app, ctx, body)
@@ -1232,6 +1236,70 @@ mod copper_tests {
             assert!(!app.remote_copper.queue.busy());
         }
     }
+    /// A valid unroute is deferred and cannot publish after its lease expires. A fresh
+    /// request returns the same report as headless preview and publishes exactly once.
+    #[test]
+    fn deferred_unroute_honors_expiry_and_returns_report() {
+        use pcbcraft_engine as engine;
+        let (mut app, ctx, body) = fixture();
+        let board = body["params"]["params"]["board"].clone();
+        let layer = body["params"]["params"]["layer"].clone();
+        let apply = |session: &mut Session, command, mut params: Value| {
+            params["expected_revision"] = json!(session.revision());
+            session.apply(command, &params).unwrap();
+        };
+        for x_nm in [0, 10_000_000] {
+            apply(&mut app.session, engine::PLACE_RESISTOR, json!({"x_nm":x_nm,"y_nm":0}));
+            let symbol = app.session.project().unwrap().symbols().last().unwrap().id();
+            apply(
+                &mut app.session,
+                engine::PLACE_FOOTPRINT,
+                json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":x_nm,"y_nm":0}),
+            );
+        }
+        let symbols = app.session.project().unwrap().symbols();
+        let connection = json!({"from":{"symbol":symbols[0].id(),"terminal":"1"},"to":{"symbol":symbols[1].id(),"terminal":"1"}});
+        apply(&mut app.session, engine::CONNECT_PINS, connection);
+        apply(&mut app.session, engine::INITIALIZE_UPDATE_BASELINE, json!({}));
+        let line = app.session.project().unwrap().boards().next().unwrap().ratsnest().unwrap().lines.remove(0);
+        let (a, b) = (line.from.position, line.to.position);
+        apply(
+            &mut app.session,
+            engine::ADD_TRACKS,
+            json!({"board":board,"layer":layer,"width_nm":250_000,
+            "points":[a,{"x_nm":a.x_nm,"y_nm":2_000_000},{"x_nm":b.x_nm,"y_nm":2_000_000},b]}),
+        );
+        let revision = app.session.revision();
+        let snapshot = app.session.snapshot().unwrap();
+        let mut params = json!({"board":board,"expected_revision":revision,"dry_run":true,
+            "from":{"footprint":line.from.footprint,"pad":"1"},"to":{"footprint":line.to.footprint,"pad":"1"}});
+        let mut expected = app.session.execute(engine::UNROUTE_CONNECTION, &params).unwrap();
+        params["dry_run"] = json!(false);
+        let body = json!({"method":"engine.execute","params":{"command":engine::UNROUTE_CONNECTION,"inspect":false,"params":params}});
+        assert!(app.defer_copper(&body));
+        let (first, cancelled, _) = request(&app, body.clone());
+        app.start_remote_copper(&ctx, first, false);
+        assert!(app.remote_copper.queue.busy());
+        app.remote_copper.request.as_mut().unwrap().0.deadline = Instant::now();
+        for _ in 0..100 {
+            app.poll_remote_copper(&ctx);
+        }
+        assert_eq!(cancelled.try_recv().unwrap()["code"], "cancelled");
+        assert!(Arc::ptr_eq(&snapshot, &app.session.snapshot().unwrap()));
+        assert_eq!(app.session.revision(), revision);
+
+        let (next, reply, _) = request(&app, body);
+        app.start_remote_copper(&ctx, next, false);
+        for _ in 0..100 {
+            app.poll_remote_copper(&ctx);
+        }
+        expected["revision"] = json!(revision + 1);
+        expected["dry_run"] = json!(false);
+        assert_eq!(reply.try_recv().unwrap()["result"], expected);
+        assert_eq!(app.session.revision(), revision + 1);
+        assert!(!app.remote_copper.queue.busy());
+    }
+
     /// Deferred admission shares headless validation, after live lease/queue/host checks.
     #[test]
     fn malformed_deferred_copper_matches_headless_before_queuing() {

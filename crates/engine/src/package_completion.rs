@@ -205,6 +205,7 @@ impl Session {
             return Err(CommandError::StaleRevision { current: self.revision() });
         }
         if let Some((candidate, highest)) = prepared.candidate {
+            let candidate = self.retain_allocation_watermark(Arc::new(candidate));
             self.publish_change(candidate, highest);
             self.report_committed(COMPLETE_PACKAGES, &prepared.params);
             prepared.report["revision"] = json!(self.revision());
