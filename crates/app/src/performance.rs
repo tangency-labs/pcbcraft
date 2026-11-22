@@ -693,7 +693,8 @@ mod tests {
     fn envelope_trace_identity_rejects_unrelated_steps() {
         let mut artifact: serde_json::Value = serde_json::from_str(&generate("reference-v1", "test").unwrap()).unwrap();
         artifact["trace_id"] = json!(replay::ENVELOPE_TRACE_ID);
-        assert!(load_artifact(&artifact.to_string()).unwrap_err().contains("envelope trace ID"));
+        let err = load_artifact(&artifact.to_string()).err().unwrap();
+        assert!(err.contains("envelope trace ID"), "{err}");
     }
 
     /// The bounded pair oracle must match valid candidate pairs and reject omitted or altered findings.
