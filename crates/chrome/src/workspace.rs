@@ -482,10 +482,11 @@ pub fn ribbon_with_controls(
                                     && ui.available_width() >= quick.len() as f32 * (t.space_24 + ui.spacing().item_spacing.x);
                                 for (index, tool) in quick.iter().enumerate().rev().filter(|_| show_quick) {
                                     let (_, rect) = ui.allocate_space(vec2(t.space_24, t.space_24));
-                                    let response = crate::controls::glyph_target(
+                                    let response = crate::controls::glyph_target_with_hover(
                                         ui,
                                         ui.scope_id().with(("ribbon_quick", tool.description)),
                                         rect,
+                                        tool.description,
                                         tool.description,
                                         tool.enabled,
                                         tool.active,
@@ -494,7 +495,7 @@ pub fn ribbon_with_controls(
                                         WidgetInfo::selected(Role::Button, tool.enabled && ui.is_enabled(), tool.active, tool.description)
                                     });
                                     paint_icon(ui.painter(), tool.icon, rect.center(), t.space_16, t, tool.enabled);
-                                    if response.on_hover_text(tool.description).clicked() {
+                                    if response.clicked() {
                                         quick_pick = Some(index);
                                     }
                                 }

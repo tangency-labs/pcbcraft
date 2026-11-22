@@ -42,14 +42,15 @@ fn top<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> egui::Inn
 pub fn quick_action(ui: &mut Ui, icon: MenuIcon, label: &str, shortcut: &str, enabled: bool) -> Response {
     let t = Tokens::get();
     let (_, rect) = ui.allocate_space(vec2(t.space_24, t.control_height));
-    let response = crate::controls::glyph_target(ui, ui.scope_id().with(("quick_action", label)), rect, label, enabled, false);
+    let tooltip = if shortcut.is_empty() { label.to_owned() } else { format!("{label} ({shortcut})") };
+    let response = crate::controls::glyph_target_with_hover(ui, ui.scope_id().with(("quick_action", label)), rect, label, &tooltip, enabled, false);
     let mut painter = ui.painter().clone();
     if !enabled {
         painter.multiply_opacity(0.4);
     }
     icon.paint(&painter, rect.center(), t, enabled);
-    let tooltip = if shortcut.is_empty() { label.to_owned() } else { format!("{label} ({shortcut})") };
-    response.on_hover_text(tooltip.clone()).on_disabled_hover_text(tooltip)
+    // The toolkit already shows `tooltip` for enabled pointers; disabled pointers need it explicitly.
+    response.on_disabled_hover_text(tooltip)
 }
 
 /// Draw a bordered app bar action with its icon leading the visible label.
