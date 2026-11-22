@@ -132,12 +132,16 @@ struct Patch {
 
 impl Patch {
     /// Parse a strictly typed patch, rejecting unknown keys, null channels, contradictory clear
-    /// markers and unbounded widths. A null patch is the documented full reset.
+    /// markers, an explicitly empty clear list and unbounded widths. A null patch and an object
+    /// without a `clear` key are the documented full resets.
     fn parse(value: &Value) -> Result<Self, CommandError> {
         if value.is_null() {
             return Ok(Self { color: None, width_cp: None, clear: Vec::new() });
         }
         let patch: Self = serde_json::from_value(value.clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
+        if value.as_object().is_some_and(|object| object.contains_key("clear")) && patch.clear.is_empty() {
+            return Err(CommandError::InvalidParams("A clear list must name at least one channel.".into()));
+        }
         let candidate = Appearance { color: patch.color, width_cp: patch.width_cp };
         candidate.validate().map_err(CommandError::InvalidParams)?;
         if patch.color.is_some() && patch.clear.contains(&ClearChannel::Color) {

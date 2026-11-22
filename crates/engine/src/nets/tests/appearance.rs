@@ -54,6 +54,7 @@ fn appearance_fields_reject_explicit_null_but_allow_omission() {
         json!({"color":[1,2,3],"width_cp":null}),
         json!({"color":null,"width_cp":100}),
         json!({"clear":null}),
+        json!({"clear":[]}),
         json!({"clear":["unknown"]}),
         json!({"unknown":1}),
         json!({"width_cp":49}),
@@ -62,6 +63,7 @@ fn appearance_fields_reject_explicit_null_but_allow_omission() {
         assert!(s.apply(SET_APPEARANCE, &json!({"target":target,"appearance":patch,"expected_revision":revision})).is_err());
     }
     assert_eq!(s.revision(), revision);
+    assert_eq!(s.project().unwrap().net_registry.record(id).unwrap().appearance, None);
 }
 
 /// A clear marker removes one saved channel while the other is inherited, in one command and one
@@ -112,5 +114,6 @@ fn appearance_patch_schema_advertises_supported_clear_channels() {
     for channel in ["color", "width_cp"] {
         assert!(crate::nets::validate_appearance_patch(&json!({"clear":[channel]})).is_ok());
     }
+    assert!(crate::nets::validate_appearance_patch(&json!({"clear":[]})).is_err());
     assert!(crate::nets::validate_appearance_patch(&json!({"clear":["unknown"]})).is_err());
 }

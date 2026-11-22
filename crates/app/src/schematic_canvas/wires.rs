@@ -359,10 +359,10 @@ fn paint_emphasized(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<
 /// KiCad, a free point on one wire end is unconnected and drawn as a small open square; where two
 /// wire ends meet the route reads as continuous, so nothing is drawn; three or more get a filled
 /// junction dot.
-/// Local selection takes precedence over a counterpart highlight; neither changes connectivity.
-/// A selected wire gets the contrasting underlay from [`emphasis_strokes`] beneath its ink, so it
-/// stays distinguishable even when a net color matches the theme's selection accent and its
-/// drawn width is already the maximum.
+/// Local selection takes precedence over a counterpart highlight for the ink color; neither changes
+/// connectivity. A selected or highlighted wire gets the contrasting underlay from
+/// [`emphasis_strokes`] beneath its ink, so it stays distinguishable even when a net color matches
+/// the theme's selection accent and its drawn width is already the maximum.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     painter: &Painter,
@@ -393,9 +393,10 @@ pub(super) fn paint(
         };
         let override_ = appearances.get(&wire.id());
         let is_selected = selected.contains(&wire.id());
+        let is_highlighted = highlighted.contains(&wire.id());
         let color = if is_selected {
             tokens.accent
-        } else if highlighted.contains(&wire.id()) {
+        } else if is_highlighted {
             tokens.schematic_highlight
         } else if let Some(appearance) = override_.and_then(|appearance| appearance.color) {
             Color32::from_rgb(appearance[0], appearance[1], appearance[2])
@@ -406,7 +407,7 @@ pub(super) fn paint(
         let width =
             override_.and_then(|appearance| appearance.width_cp).map_or(theme::SCHEMATIC_SYMBOL_STROKE, |width_cp| f32::from(width_cp) / 100.0);
         let route = pcbcraft_engine::wire::wire_path(wire, from, to);
-        if is_selected {
+        if is_selected || is_highlighted {
             paint_emphasized(painter, rect, camera, route, color, width);
         } else {
             paint_stroked_route(painter, rect, camera, route, color, width);

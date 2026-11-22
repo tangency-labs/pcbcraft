@@ -238,6 +238,36 @@ fn assert_painted(h: &Harness<'_, PcbApp>, id: u64, route: &[Point], color: egui
     );
 }
 
+/// Match the wire's rendered route, colour and screen-space stroke width in one pane.
+fn assert_painted_width(h: &Harness<'_, PcbApp>, id: u64, route: &[Point], color: egui::Color32, width: f32) {
+    let points: Vec<_> = route.iter().map(|point| view(h, id).camera.screen(*point, canvas(h, id))).collect();
+    assert!(
+        h.output().shapes.iter().any(|shape| match &shape.shape {
+            egui::Shape::Path(path) =>
+                path.points == points && path.stroke.color == egui::epaint::ColorMode::Solid(color) && path.stroke.width == width,
+            _ => false,
+        }),
+        "wire route missing from pane {id} at width {width}: {route:?}"
+    );
+}
+
+/// A counterpart highlight gets the same contrasting underlay as a local selection. The ink keeps
+/// the highlight colour while the other pane keeps its accent-selected ink, so local selection
+/// still decides the colour when both states could apply to the same wire.
+#[test]
+fn highlight_paints_the_contrasting_cue_with_its_own_ink() {
+    let mut h = split_harness(false);
+    h.run();
+    let route = routes(&h)[0].clone();
+    right_click_in(&mut h, 0, grid(8, 3));
+    let tokens = pcbcraft_chrome::Tokens::get();
+    let [(halo_width, halo_color), (ink_width, ink_color)] =
+        super::emphasis_strokes(tokens.schematic_highlight, pcbcraft_chrome::theme::SCHEMATIC_SYMBOL_STROKE);
+    assert_painted_width(&h, 1, &route, ink_color, ink_width);
+    assert_painted_width(&h, 1, &route, halo_color, halo_width);
+    assert_painted(&h, 0, &route[1..], tokens.accent);
+}
+
 /// Every menu action operates from either pane in both layouts, including the first click in
 /// an inactive pane. Highlights are painted without granting edit selection, then both panes
 /// repaint the shared result and use one undo history without changing the grid preference.
