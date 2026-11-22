@@ -77,10 +77,7 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
             return Err("shove plans differ between iterations".into());
         }
         let steps = job(&pushing, artifact.board, &push_request, &push, &mut samples)?;
-        if job_steps.is_some_and(|first| first != steps) {
-            return Err("the pushing job's steps differ between iterations".into());
-        }
-        job_steps = Some(steps);
+        job_steps = Some(job_steps.map_or((steps, steps), |(low, high): (usize, usize)| (low.min(steps), high.max(steps))));
         cancels.push(cancel(&pushing, artifact.board, &push_request, &mut samples)?);
     }
     let push = first_push.ok_or("missing pushing plan")?;
@@ -103,7 +100,7 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         "artifact_sha256":digest(artifact_json.as_bytes()),"project_sha256":artifact.project_sha256,"recipe":artifact.recipe,
         "push_case":{"project_sha256":digest(&pcbcraft_engine::persistence::encode_packed(pushing).map_err(|e| e.to_string())?),
             "request":{"layer":push_request.layer,"shover":match &push_request.shover { Shover::Route { points, width_nm } => json!({"points":points,"width_nm":width_nm}), Shover::Drag { tracks } => json!({"tracks":tracks}) }}},
-        "iterations":iterations,"budget":DEFAULT_BUDGET,"batch_units":BATCH,"push_job_steps":job_steps,"outcomes":outcomes,
+        "iterations":iterations,"budget":DEFAULT_BUDGET,"batch_units":BATCH,"push_job_steps":job_steps.map(|(min, max)| json!({"min":min,"max":max})),"outcomes":outcomes,
         "cancel_requested_while":canceled_while,
         "metrics":samples.into_iter().map(|(id,s)|Metric::new(&id,s)).collect::<Vec<_>>(),
         "correctness":"identical plans on every iteration; first-iteration reached plans committed through pcb.shove_tracks equal the plan (every kept track and via, new tracks up to fresh identities), keep every connection that existed before and have no exhaustive clearance or short decision about the changed copper; the batched pushing job yields the planned board every iteration",
@@ -196,17 +193,29 @@ fn job(
     Ok(steps)
 }
 
-/// Submit the pushing case to a snapshot worker queue, cancel it as soon as its progress
-/// reports planning (or at once if it has already finished preparing and planning), and time
-/// how long the queue takes to retire it (`shove.job.cancel_acknowledgement`). Returns the
-/// stage the job reported when the cancel was issued.
+/// Submit the pushing case to a snapshot worker queue and cancel it as soon as its progress
+/// reports planning, polling for a terminal result meanwhile on every target. Only a
+/// cancellation the queue confirms (a completion without output) is timed, as
+/// `shove.job.cancel_acknowledgement`; a job that finished before the cancel took effect is
+/// reported as `finished`, and a worker failure or engine refusal fails the run. Returns the
+/// stage the job reported when the cancel was issued, or `finished`.
 fn cancel(
     project: &std::sync::Arc<pcbcraft_engine::Project>,
     board: BoardTarget,
     request: &Request,
     samples: &mut BTreeMap<String, Vec<f64>>,
 ) -> Result<String> {
-    use crate::board_drc::jobs::{Queue, Request as Queued};
+    use crate::board_drc::jobs::{Completion, Queue, Request as Queued};
+    use pcbcraft_engine::{CommandError, board::track::preparation::PreparedCopperEdit};
+    /// Fail on a worker or engine error; otherwise whether the queue confirmed a cancellation.
+    fn canceled(completion: Completion<std::result::Result<PreparedCopperEdit, CommandError>>) -> Result<bool> {
+        match completion.report {
+            Ok(None) => Ok(true),
+            Ok(Some(Ok(_))) => Ok(false),
+            Ok(Some(Err(error))) => Err(format!("canceled shove job was refused: {error}")),
+            Err(error) => Err(format!("canceled shove job failed: {error}")),
+        }
+    }
     let mut session = Session::default();
     session.open_snapshot(project.clone());
     let mut params = params(board, request)?;
@@ -217,28 +226,39 @@ fn cancel(
     let waited = clock_ms();
     let stage = loop {
         let stage = queue.progress().map(|p| p.stage);
-        if stage == Some("Planning shove") || clock_ms() - waited > 10_000. {
+        if stage == Some("Planning shove") {
             break stage.unwrap_or("unknown");
         }
-        // Incremental (browser and test) queues advance only when polled; native workers run.
-        #[cfg(any(target_arch = "wasm32", test))]
-        if queue.poll().is_some() {
-            break "finished";
+        if clock_ms() - waited > 10_000. {
+            return Err("the shove job never reported planning".into());
+        }
+        // Incremental queues advance only when polled; a native worker may already be done.
+        if let Some(completion) = queue.poll() {
+            return if canceled(completion)? { Err("the shove job was canceled before planning".into()) } else { Ok("finished".into()) };
         }
         #[cfg(not(any(target_arch = "wasm32", test)))]
         std::hint::spin_loop();
     };
     let began = clock_ms();
     queue.cancel();
-    while queue.busy() {
-        let _ = queue.poll();
+    let completion = loop {
+        if let Some(completion) = queue.poll() {
+            break completion;
+        }
+        if !queue.busy() {
+            return Err("the canceled shove job left no completion".into());
+        }
         if clock_ms() - began > 10_000. {
             return Err("shove cancellation timed out".into());
         }
         #[cfg(not(target_arch = "wasm32"))]
         std::hint::spin_loop();
+    };
+    let elapsed = clock_ms() - began;
+    if !canceled(completion)? {
+        return Ok("finished".into());
     }
-    samples.entry("shove.job.cancel_acknowledgement".into()).or_default().push(clock_ms() - began);
+    samples.entry("shove.job.cancel_acknowledgement".into()).or_default().push(elapsed);
     Ok(stage.to_owned())
 }
 
@@ -323,7 +343,7 @@ fn joined(query: &ClearanceQuery, pairs: &Results) -> BTreeMap<String, usize> {
 
 /// Commit a reached plan on a fresh session and require [`agree`], that every connection that
 /// existed before (two objects joined by contact) still exists, and that the exhaustive pair
-/// reference finds no clearance violation or short about the changed copper. Other plans move
+/// reference finds no clearance violation or short the shove is responsible for ([`regressions`]). Other plans move
 /// nothing and pass.
 fn verify(project: &std::sync::Arc<pcbcraft_engine::Project>, board: BoardTarget, request: &Request, plan: &Shove) -> Result<()> {
     if matches!(plan.outcome, Outcome::Stale | Outcome::Canceled) {
@@ -341,7 +361,9 @@ fn verify(project: &std::sync::Arc<pcbcraft_engine::Project>, board: BoardTarget
     let before_view = project.board_view(board).ok_or("missing board")?;
     let before = copper(before_view.tracks(), before_view.vias());
     let query = session.clearance_query_with_rules(board, &json!({})).map_err(|e| e.to_string())?;
-    let connected = joined(&query, &query.exhaustive_pairs());
+    let before_pairs = query.exhaustive_pairs();
+    let connected = joined(&query, &before_pairs);
+    let before_query = query;
     fixture::apply(&mut session, SHOVE_TRACKS, params)?;
     let shoved = session.project().and_then(|project| project.board_view(board)).ok_or("missing shoved board")?;
     let after = copper(shoved.tracks(), shoved.vias());
@@ -365,13 +387,70 @@ fn verify(project: &std::sync::Arc<pcbcraft_engine::Project>, board: BoardTarget
     if groups.values().any(|islands| islands.len() > 1) {
         return Err("committed shove loses a connection".into());
     }
-    let objects = query.objects();
-    let offending = pairs.decisions.into_iter().any(|decision| {
-        (decision.clearance_violation || decision.conflicting_nets)
-            && (decision.first.is_some_and(|index| changed.contains(&objects[index].name)) || changed.contains(&objects[decision.second].name))
-    });
-    if offending {
-        return Err("committed shove breaks clearance in the exhaustive reference".into());
+    if let Some((a, b)) = regressions(&violations(&before_query, &before_pairs), &query, &pairs, &changed).into_iter().next() {
+        return Err(format!("committed shove breaks clearance in the exhaustive reference: {a} / {b}"));
     }
     Ok(())
+}
+
+/// Violating pairs (clearance or short) of a query's exhaustive reference, by object names.
+fn violations(query: &ClearanceQuery, pairs: &Results) -> BTreeSet<(String, String)> {
+    let objects = query.objects();
+    pairs
+        .decisions
+        .iter()
+        .filter(|d| d.clearance_violation || d.conflicting_nets)
+        .filter_map(|d| {
+            let (a, b) = (objects[d.first?].name.clone(), objects[d.second].name.clone());
+            Some(if a <= b { (a, b) } else { (b, a) })
+        })
+        .collect()
+}
+
+/// Violating pairs after a shove that it is responsible for: every pair involving `changed`
+/// copper, and every pair that did not violate before (`before`, by object names), even when
+/// neither object moved, as when a route joins a track to a net with a wider class clearance.
+fn regressions(before: &BTreeSet<(String, String)>, query: &ClearanceQuery, pairs: &Results, changed: &BTreeSet<String>) -> Vec<(String, String)> {
+    violations(query, pairs).into_iter().filter(|pair| changed.contains(&pair.0) || changed.contains(&pair.1) || !before.contains(pair)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pcbcraft_engine::{
+        INITIALIZE_BOARD_SETUP,
+        board::rules::{SET_RULES, Values},
+    };
+
+    /// A violation between copper that did not move still counts when it is new: here a rule
+    /// change, standing in for a route that gives an untouched track a wider class clearance,
+    /// makes two unmoved tracks 0.3 mm apart violate a 0.4 mm rule.
+    #[test]
+    fn regressions_include_new_violations_between_unmoved_copper() {
+        let mut s = Session::default();
+        s.apply("project.new", &json!({"name":"Pairs","create_board":true})).unwrap();
+        s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"expected_revision":s.revision()})).unwrap();
+        let project = s.project().unwrap();
+        let target = project.board_target().unwrap();
+        let layer = project
+            .board_view(target)
+            .unwrap()
+            .layers()
+            .into_iter()
+            .find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+            .unwrap()
+            .id;
+        for y in [0, 550_000] {
+            let points = [Point { x_nm: 0, y_nm: y }, Point { x_nm: 5_000_000, y_nm: y }];
+            s.apply(ADD_TRACKS, &json!({"layer":layer,"width_nm":250_000,"points":points,"expected_revision":s.revision()})).unwrap();
+        }
+        let before = s.clearance_query_with_rules(target, &json!({})).unwrap();
+        let before = violations(&before, &before.exhaustive_pairs());
+        assert!(before.is_empty());
+        let rules = Values { clearance_nm: 400_000, ..Values::default() };
+        s.apply(SET_RULES, &json!({"board":target.board,"rules":rules,"expected_revision":s.revision()})).unwrap();
+        let after = s.clearance_query_with_rules(target, &json!({})).unwrap();
+        let found = regressions(&before, &after, &after.exhaustive_pairs(), &BTreeSet::new());
+        assert_eq!(found.len(), 1, "{found:?}");
+    }
 }

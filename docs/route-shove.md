@@ -146,8 +146,10 @@ tracks up to their fresh identities), keep every connection that existed before
 violation or short about the changed copper. Each iteration also drives the pushing
 case's `pcb.shove_tracks` copper job in 256-unit host batches, records the longest
 uninterrupted step of each stage and requires its result to be the plan, then
-measures how long a snapshot worker takes to retire the job after a cancel issued
-while it plans. These are solver and job service costs, not editor preview or
+measures how long a snapshot worker takes to confirm a cancel issued while it plans;
+a job that finishes first is counted apart and is not timed. The clearance check
+also refuses any violating pair that was not there before the shove, even between
+copper that did not move. These are solver and job service costs, not editor preview or
 commit latency.
 
 The [#247 evidence](../tools/performance/baselines/issue247/README.md) records the
