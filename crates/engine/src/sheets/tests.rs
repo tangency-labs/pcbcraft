@@ -139,6 +139,38 @@ fn multi_sheet_storage_is_lossless_local_and_rejects_cross_sheet_links() {
     assert!(adopted.revision() > snapshot.highest_id());
 }
 
+/// A last-sheet match must visit only a logarithmic number of units per sheet, even at
+/// both project limits. Decoys share the same symbol definition but never the same placement ID.
+#[test]
+fn late_sheet_reveal_search_is_bounded_by_selected_units() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    apply(&mut session, PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
+    let mut project = session.project().unwrap().clone();
+    let template = project.symbols()[0].clone();
+    // Populate only the sorted immutable geometry consulted by this lookup. Do not build
+    // thousands of edit-history entries just to test the number of ID comparisons.
+    let per_sheet = MAX_SYMBOLS / MAX_SHEETS;
+    let sheets = Arc::make_mut(&mut project.sheets);
+    for index in 1..MAX_SHEETS {
+        sheets.push(SchematicSheet::empty(uuid::Uuid::from_u128(index as u128), format!("Sheet {index}")));
+    }
+    for (index, sheet) in sheets.iter_mut().enumerate() {
+        sheet.symbols =
+            Arc::new((1..=per_sheet).map(|offset| SymbolPlacement { ordinal: (index * per_sheet + offset) as u64, ..template.clone() }).collect());
+    }
+    let last = project.sheets().last().unwrap().target;
+    let selection = Selection::one_symbol(format!("symbol-{MAX_SYMBOLS}"));
+    let mut comparisons = 0;
+    let found = project.first_sheet_for_symbols_by(&selection, |unit| {
+        comparisons += 1;
+        unit.ordinal
+    });
+    assert_eq!(found, Some(last));
+    assert_eq!(project.first_sheet_for_symbols(&selection), Some(last));
+    assert!(comparisons > 0 && comparisons <= MAX_SHEETS * (per_sheet.ilog2() as usize + 2), "{comparisons} unit comparisons");
+}
+
 /// Ambiguous targets are documented in the MCP schema; UUID/null and unknown inputs stay strict.
 #[test]
 fn every_schematic_command_discovers_its_sheet_parameter() {

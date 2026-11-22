@@ -91,10 +91,10 @@ fn outputs_and_drc_follow_the_side() {
     let outputs = view(&s).fabrication_outputs().unwrap();
     let file = |suffix: &str| outputs.iter().find(|o| o.name.ends_with(suffix)).unwrap().contents.clone();
     let total: usize = footprints.iter().map(|f| f.3).sum();
-    assert_eq!(file("-Bottom.gbr").matches("G36*").count(), pads);
-    assert_eq!(file("-Top.gbr").matches("G36*").count(), total - pads);
-    assert_eq!(file("-Paste_Bottom.gbr").matches("G36*").count(), pads);
-    assert_eq!(file("-Mask_Bottom.gbr").matches("G36*").count(), pads);
+    assert_eq!(file("-Bottom.gbr").matches("D03*").count(), pads);
+    assert_eq!(file("-Top.gbr").matches("D03*").count(), total - pads);
+    assert_eq!(file("-Paste_Bottom.gbr").matches("D03*").count(), pads);
+    assert_eq!(file("-Mask_Bottom.gbr").matches("D03*").count(), pads);
     assert!(file("-Silkscreen_Bottom.gbr").contains("%TF.FileFunction,Legend,Bot*%"));
     assert!(file("-Silkscreen_Bottom.gbr").contains("D01*"), "the bottom part's silkscreen is drawn");
 

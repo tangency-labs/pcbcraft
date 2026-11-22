@@ -102,7 +102,7 @@ impl Session {
         if !Arc::ptr_eq(&edit.catalog, &self.libraries) {
             return Err(invalid("Library catalog changed during footprint preparation; preview again."));
         }
-        self.install_prepared_change(edit.candidate.clone(), edit.highest);
+        self.publish_change(edit.candidate.clone(), edit.highest);
         Ok(())
     }
 
