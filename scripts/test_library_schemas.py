@@ -201,6 +201,14 @@ class LibrarySchemaTests(unittest.TestCase):
                 changed = copy.deepcopy(model)
                 changed[field] = value
                 self.assertFalse(validator.is_valid(changed))
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary)
+            (source / "models").mkdir()
+            (source / "models" / "sot-23.r1.json").write_text(json.dumps(model))
+            checker.validate([], [source])
+            (source / "models" / "wrong-kind.json").write_text(json.dumps(self.category))
+            with self.assertRaisesRegex(ValueError, "does not belong in models/"):
+                checker.validate([], [source])
 
     def test_duplicate_keys_are_rejected_before_validation(self):
         with self.assertRaisesRegex(ValueError, "Duplicate JSON key"):

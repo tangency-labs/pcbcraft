@@ -75,7 +75,7 @@ def validators():
 
 def records(root):
     """Discover flat native item directories; manifests are validated by the source loader."""
-    return [path for name in ("symbols", "footprints", "categories", "parts", "manufacturer-parts") for path in sorted((root / name).glob("*.json"))]
+    return [path for name in ("symbols", "footprints", "categories", "parts", "manufacturer-parts", "models") for path in sorted((root / name).glob("*.json"))]
 
 
 def validate(paths, sources):
@@ -85,7 +85,7 @@ def validate(paths, sources):
     examples = records(ROOT / "examples/native-library") + records(ROOT / "examples/native-parts") + records(ROOT / "examples/sensor-node-library")
     discovered = bundled + examples + [path for source in sources for path in records(source)]
     inputs = [(path, path.parent.name) for path in discovered] + [(path, None) for path in paths]
-    prefixes = {"symbols":"pcbcraft-symbol/", "footprints":"pcbcraft-footprint/", "categories":"pcbcraft-category/", "parts":"pcbcraft-part/", "manufacturer-parts":"pcbcraft-manufacturer-part/"}
+    prefixes = {"symbols":"pcbcraft-symbol/", "footprints":"pcbcraft-footprint/", "categories":"pcbcraft-category/", "parts":"pcbcraft-part/", "manufacturer-parts":"pcbcraft-manufacturer-part/", "models":"pcbcraft-model/"}
     for path, directory in inputs:
         try:
             value = read_json(path)

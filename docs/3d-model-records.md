@@ -233,8 +233,8 @@ saving. Each placed footprint reports exactly one state, through GUI and MCP:
 | `no_body` | The package has no body on purpose |
 | `unbound` | No binding, including symbol-only instances |
 | `record_missing` | The bound record is not pinned or cannot be read |
-| `geometry_unavailable` | Link mode and the bytes are in no installed library or cache |
-| `hash_mismatch` | Bytes were found but their SHA-256 or size differs |
+| `geometry_unavailable` | The record is readable but its bytes are missing: in Link mode from every installed library and the cache, in Embed mode from the project's `assets/` |
+| `hash_mismatch` | Bytes are present but their SHA-256 or size differs |
 | `unreadable` | The bytes match but the STEP reader refused them |
 
 An embedded project reopens offline with all its models. A linked project reopens
