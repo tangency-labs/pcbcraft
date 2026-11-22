@@ -27,6 +27,7 @@ pub mod net_labels;
 pub mod netlist;
 pub mod nets;
 pub mod no_connect;
+pub mod package_completion;
 pub mod parameters;
 pub mod part_authoring;
 pub mod part_groups;
@@ -208,6 +209,8 @@ enum ParamKind {
     SheetTemplate,
     /// `project` or `sheet`.
     ParameterScope,
+    /// `none`, `sheet` or `project` for opt-in package completion.
+    PackageScope,
     /// A parameter name: an ASCII letter, then letters, digits and `_`.
     ParameterName,
     /// A bounded parameter value, or null to remove it.
@@ -344,6 +347,7 @@ impl ParamKind {
                 json!({"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["library","name","revision"],"properties":{"library":{"type":"string","minLength":1,"maxLength":64},"name":{"type":"string","minLength":1,"maxLength":64},"revision":{"type":"integer","minimum":1}}}]})
             }
             Self::ParameterScope => json!({"type":"string", "enum":["project","sheet"]}),
+            Self::PackageScope => json!({"type":"string", "enum":["none","sheet","project"], "default":"none"}),
             Self::ParameterName => json!({"type":"string", "pattern":"^[A-Za-z][A-Za-z0-9_]*$", "maxLength":parameters::MAX_NAME_LEN}),
             Self::ParameterValue => json!({"type":["string","null"], "maxLength":parameters::MAX_VALUE_LEN}),
             Self::ParameterText => json!({"type":"string", "maxLength":parameters::MAX_TEXT_LEN}),
@@ -748,6 +752,7 @@ impl ParamKind {
             Self::Orientation if value.as_str().and_then(sheets::page::Orientation::parse).is_some() => Ok(()),
             Self::SheetTemplate if value.is_null() || serde_json::from_value::<sheets::template::TemplateRef>(value.clone()).is_ok() => Ok(()),
             Self::ParameterScope if matches!(value.as_str(), Some("project" | "sheet")) => Ok(()),
+            Self::PackageScope if matches!(value.as_str(), Some("none" | "sheet" | "project")) => Ok(()),
             Self::ParameterName if value.as_str().is_some_and(parameters::valid_name) => Ok(()),
             Self::LogicalPartTerminal if no_connect::Target::parse(value).is_some() => Ok(()),
             Self::LogicalPartTerminal => Err("must be a logical {part, terminal} address"),
@@ -820,6 +825,7 @@ impl ParamKind {
             Self::SheetTemplate => Err("must be {library, name, revision} or null"),
             Self::Orientation => Err("must be landscape or portrait"),
             Self::ParameterScope => Err("must be project or sheet"),
+            Self::PackageScope => Err("must be none, sheet or project"),
             Self::ParameterName => Err("must be 1 to 64 ASCII letters, digits and _, starting with a letter"),
             Self::ParameterValue => Err("must be a string of at most 1000 bytes, or null"),
             Self::ParameterText => Err("must be a string of at most 4096 bytes"),
@@ -927,6 +933,8 @@ const NEW_BOARD_NAME: Param = Param { required: false, name: "name", summary: "T
 pub const PLACE_RESISTOR: &str = "schematic.place_resistor";
 /// Place an unplaced unit of an existing part using its pinned definition.
 pub const PLACE_UNIT: &str = "schematic.place_unit";
+/// Complete equivalent loose units into packages only with an explicit sheet or project scope.
+pub const COMPLETE_PACKAGES: &str = "schematic.complete_packages";
 
 /// Place a new part from a native symbol and select its initial schematic unit.
 pub const PLACE_SYMBOL: &str = "schematic.place_symbol";
@@ -1484,6 +1492,27 @@ const CATALOG: &[Command] = &[
             SYMBOL_Y,
             EXPECTED_REVISION,
             AUTO_HEAL,
+        ],
+    },
+    Command {
+        id: COMPLETE_PACKAGES,
+        title: "Complete packages",
+        summary: "Fit equivalent loose units into open package slots without changing connectivity. No change unless sheet or project scope is selected. Undoable.",
+        params: &[
+            Param {
+                required: false,
+                name: "scope",
+                summary: "None (default), the addressed sheet, or the whole project",
+                kind: ParamKind::PackageScope,
+            },
+            Param {
+                required: false,
+                name: "sheet",
+                summary: "Sheet UUID for sheet scope; required in a multi-sheet project",
+                kind: ParamKind::SheetId,
+            },
+            Param { required: false, name: "dry_run", summary: "Report the transfers without applying them", kind: ParamKind::Flag },
+            EXPECTED_REVISION,
         ],
     },
     Command {
@@ -3411,6 +3440,7 @@ impl Session {
             | PLACE_RESISTOR
             | PLACE_SYMBOL
             | PLACE_UNIT
+            | COMPLETE_PACKAGES
             | part_instances::PLACE_PART
             | part_instances::SET_PART
             | CONNECT_PINS
@@ -3629,6 +3659,9 @@ impl Session {
         if id.starts_with("library.") {
             return self.library_command(id, params);
         }
+        if id == COMPLETE_PACKAGES {
+            return self.complete_packages(params);
+        }
         if id == PREVIEW_ASSEMBLY_PROFILE {
             self.validate_project_command(id, params)?;
             return self.preview_assembly_profile(params);
@@ -3704,7 +3737,7 @@ impl Session {
     /// Run the shared command without building an inspection snapshot. Returns the current
     /// revision, which remains unchanged on a no-op. Failed commands leave the project intact.
     /// Preview commands may replace runtime-only cached authority without an authored edit.
-    /// Symbol-field dry runs validate a disposable candidate without notifying the edit observer.
+    /// Property and package dry runs validate a candidate without notifying the edit observer.
     /// Setup handlers retain their revision checks and specific state diagnostics even when
     /// availability disables the command on an open project.
     /// New projects allocate independent use/occurrence UUIDs; ordinary sheet creation shares
@@ -3724,6 +3757,10 @@ impl Session {
         }
         if id == SET_SYMBOL_FIELDS && params["dry_run"].as_bool() == Some(true) {
             self.preview_symbol_fields(params)?;
+            return Ok(self.revision);
+        }
+        if id == COMPLETE_PACKAGES {
+            self.complete_packages(params)?;
             return Ok(self.revision);
         }
         let before = self.revision;
@@ -3895,6 +3932,7 @@ impl Session {
                 | PLACE_RESISTOR
                 | PLACE_SYMBOL
                 | PLACE_UNIT
+                | COMPLETE_PACKAGES
                 | part_instances::PLACE_PART
                 | part_instances::SET_PART
                 | CONNECT_PINS
@@ -4633,14 +4671,35 @@ impl Session {
     /// metadata, nets and zone ownership are checked here so previews share Apply's preparation.
     /// Adopt required no-connect metadata; lock-introducing edits prepare their own metadata.
     /// Drop memberships of removed part instances; skip that scan when the part map is unchanged.
-    fn prepare_change(&self, mut project: Project) -> Result<(Project, u64), CommandError> {
+    fn prepare_change(&self, project: Project) -> Result<(Project, u64), CommandError> {
+        self.prepare_change_with_nets(project, Project::reconcile_nets)
+    }
+
+    /// Run the shared preparation with the command's electrical continuation rule. Scoped edits
+    /// defer reconciliation until they rejoin the canonical project; whole-project edits do not.
+    fn prepare_change_with_nets(
+        &self,
+        project: Project,
+        reconcile: impl FnOnce(&mut Project, Option<&Project>) -> Result<(), CommandError>,
+    ) -> Result<(Project, u64), CommandError> {
+        Self::prepare_change_from_snapshot(self.project.as_ref(), self.defer_net_reconciliation, project, reconcile)
+    }
+
+    /// Validate and reconcile a detached candidate against a captured immutable snapshot, so
+    /// preparation can run off the editor thread without mutating session state.
+    pub(crate) fn prepare_change_from_snapshot(
+        previous: Option<&Arc<Project>>,
+        defer_net_reconciliation: bool,
+        mut project: Project,
+        reconcile: impl FnOnce(&mut Project, Option<&Project>) -> Result<(), CommandError>,
+    ) -> Result<(Project, u64), CommandError> {
         #[cfg(test)]
         pin_functions::FULL_PREPARATIONS.set(pin_functions::FULL_PREPARATIONS.get() + 1);
         project.prepare_no_connect_metadata().map_err(CommandError::InvalidParams)?;
-        if !self.project.as_ref().is_some_and(|previous| previous.shares_part_instances(&project)) {
+        if !previous.is_some_and(|previous| previous.shares_part_instances(&project)) {
             project.prune_part_group_memberships();
         }
-        if let Some(previous) = self.project.as_ref().filter(|previous| previous.id == project.id) {
+        if let Some(previous) = previous.filter(|previous| previous.id == project.id) {
             board::track::protect_locked(previous, &project)?;
             if !previous.board.arcs.is_empty() && previous.board.arcs == project.board.arcs && previous.board != project.board {
                 return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
@@ -4651,9 +4710,7 @@ impl Session {
         }
         // Materialize the legacy board address on the first physical edit, preserving
         // untouched files and keeping the prior representation available to Undo.
-        let physical_changed = self
-            .project
-            .as_ref()
+        let physical_changed = previous
             .is_some_and(|previous| previous.id == project.id && !Arc::ptr_eq(&previous.board, &project.board) && previous.board != project.board);
         if physical_changed
             && matches!(project.board.ownership, board::identity::Ownership::Legacy)
@@ -4670,7 +4727,7 @@ impl Session {
         project.refresh_board_folder();
         // Whole-project presentation is snapshot-owned. Sheet caches may retain unchanged
         // topology/metadata, but component names and occurrence paths invalidate their labels.
-        let topology_changed = self.project.as_ref().is_none_or(|old| {
+        let topology_changed = previous.is_none_or(|old| {
             old.net_scope() != project.net_scope()
                 || old.sheets.len() != project.sheets.len()
                 || old
@@ -4679,7 +4736,7 @@ impl Session {
                     .zip(project.sheets.iter())
                     .any(|(before, after)| before.sheet_id != after.sheet_id || !Arc::ptr_eq(&before.connectivity, &after.connectivity))
         });
-        let presentation_changed = self.project.as_ref().is_none_or(|old| {
+        let presentation_changed = previous.is_none_or(|old| {
             old.net_scope() != project.net_scope()
                 || (!Arc::ptr_eq(&old.components, &project.components)
                     && (old.components.len() != project.components.len()
@@ -4695,26 +4752,26 @@ impl Session {
             project.named_graph = Arc::default();
         }
         // Named anchors can attach to moving geometry and join other sheets.
-        if presentation_changed || project.requires_project_graph() || self.project.as_ref().is_some_and(|p| p.requires_project_graph()) {
+        if presentation_changed || project.requires_project_graph() || previous.is_some_and(|p| p.requires_project_graph()) {
             project.named_graph = Arc::default();
             for sheet in Arc::make_mut(&mut project.sheets) {
                 sheet.connectivity = Arc::default();
             }
         }
         let highest = project.highest_id();
-        let previous_highest = self.project.as_ref().filter(|old| old.same_document(&project)).map_or(0, |old| old.highest_id());
+        let previous_highest = previous.filter(|old| old.same_document(&project)).map_or(0, |old| old.highest_id());
         if project.numeric_id_high_water.is_some()
             || highest != previous_highest
             || project.components.values().any(|component| !component.metadata.is_empty())
         {
             project.numeric_id_high_water = Some(project.numeric_id_high_water.unwrap_or(0).max(highest).max(previous_highest));
         }
-        if !self.defer_net_reconciliation {
-            project.reconcile_nets(self.project.as_deref())?;
+        if !defer_net_reconciliation {
+            reconcile(&mut project, previous.map(Arc::as_ref))?;
         }
         // Copper and package maps can exhaust the native board document even before the
         // record-count limits. Check the changed board before publishing snapshot or history.
-        if self.project.as_ref().is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
+        if previous.is_none_or(|previous| !Arc::ptr_eq(&previous.board, &project.board))
             && (!project.board.tracks.is_empty()
                 || !project.board.vias.is_empty()
                 || !project.board.assignments.is_empty()

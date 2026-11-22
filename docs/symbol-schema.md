@@ -155,3 +155,32 @@ update their native package mappings. Alternative symbol definitions for a part,
 repeated circuit occurrences, high-pin-count geometry and a new BOM/ERC subsystem
 remain separate work. Existing single-unit files keep their original
 symbol formats and no-op serialization.
+
+### Complete loose packages
+
+Package completion is an explicit command, not a placement or annotation default.
+With sheet scope, it only uses owners whose placed units are all on that sheet.
+Project scope can combine placements across sheets. It first fills equivalent
+slots in existing multi-unit packages, then combines remaining loose units in
+stable part order. It never moves a part that already holds several units.
+
+The pinned symbol, Value, reusable part/manufacturer selection, package
+assignment, authored fields and part groups must match. A spare slot needs
+the same drawing and an unambiguous match for each pin's role, position and
+alternate functions. Shared pins keep their terminal numbers. Completion refuses the whole edit if
+reassignment changes which pins are connected or joins or splits a net.
+If a transfer would change net anchors, every meaningful net in the project
+must already have an active identity record with a saved net number. This
+includes nets on other sheets, even when completion is scoped to one sheet.
+Preview and Apply both refuse the entire operation if any such record or number
+is missing; neither changes the project or its Undo history.
+Completion skips designator-locked owners, owners with authored terminal
+no-connect intent or selected alternate functions, and placed packages without
+an accepted board counterpart.
+
+The command keeps placement IDs, positions, orientations and wire geometry.
+The surviving owner keeps its ID and reference. Removed owners are retired;
+accepted board footprints and copper are unchanged until reviewed through
+[Update PCB](single-board-update.md#preview-and-apply). The operation adds no
+saved format and Undo restores the previous grouping in one step. See the
+[MCP parameters and report](mcp.md#native-part-definitions-and-quantities).
