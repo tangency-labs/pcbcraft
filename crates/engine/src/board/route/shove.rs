@@ -25,7 +25,7 @@ use crate::board::clearance::{RouteFragments, RouteObstacles};
 /// A coordinated retry reopens the directly hit runs with shared spacing.
 #[derive(Clone, Copy)]
 enum Cascade {
-    Walk { reverse: bool, flipped: bool, posture: Posture },
+    Walk { reverse: bool, flipped: bool, posture: Posture, keep_bends: bool },
     Shared { positive: bool, advance: i64 },
 }
 
@@ -391,6 +391,7 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
 /// continuation must be certified again and never becomes part of the fixed gesture.
 enum Approach {
     Walk(bool),
+    BoardEdge,
     Continue(Vec<Point>),
 }
 
@@ -508,15 +509,17 @@ impl<'a> Search<'a> {
         chains::legal_stroke(&prefix, spacing).await
     }
 
-    /// Try the requested posture first. If its cascade fails, allow a distinct
-    /// incoming geometry to succeed under the same exact clearance and contact rules.
+    /// Try both elbow directions before carrying turns forward from an earlier cursor target.
+    /// All approaches use the same exact clearance and contact rules.
     async fn solve(&self, request: &Request) -> Result<Plan, CommandError> {
-        let guides = std::iter::once(Approach::Walk(request.flipped))
-            .chain(std::iter::once_with(|| continuations(request)).flatten())
-            .chain([Approach::Walk(!request.flipped)]);
+        let guides = [Approach::Walk(request.flipped), Approach::Walk(!request.flipped)]
+            .into_iter()
+            .chain([Approach::BoardEdge, Approach::BoardEdge])
+            .chain(std::iter::once_with(|| continuations(request)).flatten());
         let reuse_previous = request.previous.last() != Some(&request.target) || self.legal_incoming(request, &request.previous).await;
         let incoming = RouteObstacles::new(&self.geometry, &self.incoming);
         let mut tested = Vec::new();
+        let mut edge_approaches = Vec::new();
         let mut stats = self.stats.clone();
         let mut blocker = None;
         let mut incomplete = false;
@@ -529,10 +532,27 @@ impl<'a> Search<'a> {
             if !reuse_previous {
                 route.previous.clear();
             }
-            let proposed = match guide {
+            let mut proposed = match guide {
                 Approach::Walk(flipped) => {
                     route.flipped = flipped;
-                    super::search::walk(incoming, &route, self.budget, self.progress.clone()).await?
+                    let plan = super::search::walk(incoming, &route, self.budget, self.progress.clone()).await?;
+                    if let Some(edge) = plan.adjusted_target {
+                        // Try the prefix nearest the cursor first, so an elbow that
+                        // hits the edge early cannot stop the preview along it.
+                        let dx = i128::from(edge.x_nm) - i128::from(request.target.x_nm);
+                        let dy = i128::from(edge.y_nm) - i128::from(request.target.y_nm);
+                        edge_approaches.push((dx * dx + dy * dy, flipped, plan));
+                        continue;
+                    }
+                    plan
+                }
+                Approach::BoardEdge => {
+                    let Some((index, _)) = edge_approaches.iter().enumerate().min_by_key(|(_, (distance, _, _))| *distance) else {
+                        continue;
+                    };
+                    let (_, flipped, plan) = edge_approaches.swap_remove(index);
+                    route.flipped = flipped;
+                    plan
                 }
                 Approach::Continue(points) => {
                     if tested.contains(&points) {
@@ -553,6 +573,11 @@ impl<'a> Search<'a> {
                     }
                 }
             };
+            let adjusted_target = proposed.adjusted_target.take();
+            if let Some(target) = adjusted_target {
+                route.target = target;
+                proposed.outcome = Outcome::Reached;
+            }
             if proposed.outcome != Outcome::Reached {
                 if proposed.start_blocked {
                     let mut refused = proposed;
@@ -571,11 +596,11 @@ impl<'a> Search<'a> {
                 continue;
             }
             let orders = [(false, route.flipped), (true, route.flipped), (false, !route.flipped), (true, !route.flipped)];
-            let walk = orders.map(|(reverse, flipped)| Cascade::Walk { reverse, flipped, posture: route.posture });
+            let walk = orders.map(|(reverse, flipped)| Cascade::Walk { reverse, flipped, posture: route.posture, keep_bends: true });
             // A square return is also a legal diagonal-route candidate. Try it
             // when a short chamfer would break the full run's return spacing.
             let square = (route.posture == Posture::Diagonal)
-                .then(|| orders.map(|(reverse, flipped)| Cascade::Walk { reverse, flipped, posture: Posture::Orthogonal }))
+                .then(|| orders.map(|(reverse, flipped)| Cascade::Walk { reverse, flipped, posture: Posture::Orthogonal, keep_bends: true }))
                 .into_iter()
                 .flatten();
             // A short move can still need a deeper shove when a distant leg
@@ -586,13 +611,20 @@ impl<'a> Search<'a> {
             let advances =
                 std::iter::once(0).chain(std::iter::successors(Some(first), |step| step.checked_mul(2)).take_while(|step| *step <= extent));
             let shared = advances.flat_map(|advance| [true, false].map(move |positive| Cascade::Shared { positive, advance }));
-            for strategy in walk.into_iter().chain(shared).chain(square) {
+            // A bend may clear on its own but trap the return between it and a
+            // neighboring attachment. Retry with only the protected anchors fixed.
+            let reopen = orders.map(|(reverse, flipped)| Cascade::Walk { reverse, flipped, posture: route.posture, keep_bends: false });
+            for strategy in walk.into_iter().chain(shared).chain(square).chain(reopen) {
                 let mut attempt = self.propagate(&route, proposed.clone(), strategy).await?;
                 let mut attempt_stats = attempt.shove.take().unwrap_or_default();
                 let could_retry = attempt_stats.queued_tracks > 0 && self.progress.load(Ordering::Relaxed) < self.budget;
                 attempt_stats.include_previous(&stats);
                 stats = attempt_stats;
                 if attempt.outcome == Outcome::Reached {
+                    if let Some(last_legal) = adjusted_target {
+                        attempt.outcome = Outcome::Blocked { last_legal };
+                        attempt.adjusted_target = Some(last_legal);
+                    }
                     attempt.shove = Some(stats);
                     return Ok(attempt);
                 }
@@ -721,12 +753,12 @@ impl<'a> Search<'a> {
             .enqueue(query, &route, nets, islands)
             .await?;
         incomplete |= segment_count > MAX_TRACKS;
-        let (mut corridor, reverse_displacements, displacement_flipped, displacement_posture) = match strategy {
-            Cascade::Walk { reverse, flipped, posture } => (None, reverse, flipped, posture),
+        let (mut corridor, reverse_displacements, displacement_flipped, displacement_posture, keep_bends) = match strategy {
+            Cascade::Walk { reverse, flipped, posture, keep_bends } => (None, reverse, flipped, posture, keep_bends),
             Cascade::Shared { .. } => {
                 let corridor = corridor::Corridor::new(self, request, &plan, &route, &queue, &pushes, strategy);
                 legal &= corridor.is_some();
-                (corridor, false, request.flipped, request.posture)
+                (corridor, false, request.flipped, request.posture, true)
             }
         };
         while legal && !queue.is_empty() {
@@ -766,6 +798,9 @@ impl<'a> Search<'a> {
                 for (position, anchor) in chain.anchors.iter().enumerate() {
                     if anchor.protected {
                         retained.push(position);
+                        continue;
+                    }
+                    if !keep_bends {
                         continue;
                     }
                     let probe = Request {

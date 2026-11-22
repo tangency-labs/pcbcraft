@@ -68,7 +68,7 @@ pub enum Outcome {
     /// The points run from the head to the target.
     Reached,
     /// The requested target is obstructed or no legal way round was found. Points end at the
-    /// last legal point; `adjusted_target` identifies a certified placeable walkaround endpoint when available.
+    /// last legal point; `adjusted_target` identifies a certified placeable endpoint when available.
     /// When the head itself is illegal, points are the head alone and nothing can be added.
     Blocked { last_legal: Point },
     /// The probe budget or a search bound ran out first; the points are the head alone.
@@ -82,8 +82,8 @@ pub enum Outcome {
 /// A planned route. Consecutive points are distinct; fewer than two points mean nothing to add.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Plan {
-    /// Certified endpoint of a blocked walkaround prefix, including a refined clearance
-    /// boundary. Clients may fix this vertex, without claiming contact at the raw cursor.
+    /// Certified endpoint of a blocked route, including a refined clearance boundary.
+    /// Clients may fix this vertex without claiming contact at the raw cursor.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub adjusted_target: Option<Point>,
     /// The captured head itself violates a rule, rather than merely having a blocked target.

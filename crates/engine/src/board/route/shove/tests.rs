@@ -872,6 +872,32 @@ fn shove_checks_fixed_segments_and_vias_against_the_outline() {
     }
 }
 
+#[test]
+fn shove_approaches_the_board_edge_and_recovers_when_the_cursor_returns() {
+    let mut s = board();
+    crate::board::drc::tests::outline(&mut s);
+    let head = Point { x_nm: -4_550_000, y_nm: 13_223_000 };
+    let target = Point { x_nm: -4_756_000, y_nm: 10_807_000 };
+    let edge = Point { x_nm: -4_575_000, y_nm: 10_988_000 };
+    let mut request = Request { head, target, ..request(&s) };
+    for flipped in [false, true] {
+        request.flipped = flipped;
+        let plan = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+        assert_eq!(plan.outcome, Outcome::Blocked { last_legal: edge }, "{plan:?}");
+        assert_eq!(plan.adjusted_target, Some(edge));
+        assert_eq!(plan.points.last(), Some(&edge));
+        assert!(!plan.start_blocked);
+        request.previous = plan.points;
+    }
+    let recovered = Request { target: Point { x_nm: -4_400_000, y_nm: target.y_nm }, ..request.clone() };
+    let plan = s.plan_route(&query(&s), &recovered, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached);
+    assert_eq!(plan.adjusted_target, None);
+
+    let plan = s.plan_route(&query(&s), &request, DEFAULT_BUDGET, &|| false).unwrap();
+    s.apply(ADD_TRACKS, &json!({"layer":request.layer,"width_nm":request.width_nm,"points":plan.points,"expected_revision":s.revision()})).unwrap();
+}
+
 /// A short overlapping return on an existing trace is an anchored contact. Shove elsewhere
 /// on the trace may move the adjacent rail while preserving the original return and its branch.
 #[test]
@@ -915,6 +941,31 @@ fn a_self_crossing_trace_can_shove_away_from_its_junction() {
     assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
     assert!(plan.replacements.iter().any(|path| path.track == original), "{plan:?}");
     commit(&mut s, &request, &plan);
+}
+
+/// Once the other elbow reaches a new cursor target, turns needed by earlier
+/// targets should not keep accumulating in the unfixed preview.
+#[test]
+fn shove_tries_both_elbows_before_carrying_previous_turns() {
+    let mut session = board();
+    let point = |x_nm, y_nm| Point { x_nm, y_nm };
+    add(
+        &mut session,
+        vec![point(4_052_000, 11_938_000), point(8_636_000, 11_938_000), point(9_144_000, 12_446_000), point(12_046_000, 12_446_000)],
+        250_000,
+    );
+    let head = point(4_826_000, 12_700_000);
+    let previous =
+        vec![head, point(5_501_000, 12_025_000), point(9_520_000, 12_025_000), point(9_630_000, 11_915_000), point(10_000_000, 11_915_000)];
+    for (target, previous) in [(point(10_650_000, 11_915_000), previous), (point(8_890_000, 11_557_000), Vec::new())] {
+        let request = Request { head, target, previous, flipped: true, ..request(&session) };
+        let plan = session.plan_route(&query(&session), &request, DEFAULT_BUDGET, &|| false).unwrap();
+        assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+        assert!([false, true].into_iter().any(|flipped| plan.points == super::super::posture::elbow(head, target, request.posture, flipped)));
+        assert!(!plan.replacements.is_empty());
+        commit(&mut session, &request, &plan);
+        session.apply("edit.undo", &Value::Null).unwrap();
+    }
 }
 
 /// A cursor advance can reopen an earlier choice of approach. Retrying the last

@@ -213,12 +213,16 @@ The original pickup is checked against the original copper before any movable
 bodies are hidden. A free start inside an existing clearance band is refused,
 while a valid contact retains its captured membership through later vertices.
 
+When the board edge blocks the cursor, shove can approach the edge clearance
+with an adjusted endpoint. The complete path and its displacements must pass
+the same checks as a route that reaches the cursor. A click can fix the adjusted
+vertex.
+
 When propagation cannot complete, it discards every replacement and returns a
-head-only blocked or incomplete result. It does not
-switch to walking around the original movable tracks. Fixed pads, vias and locked
-tracks still guide the initial walkaround approach. The editor keeps its last
-valid shove preview when the new target cannot be reached, but that retained
-preview cannot authorize placement at the blocked target.
+head-only blocked or incomplete result. Fixed pads, vias and locked tracks guide
+the initial walkaround approach. The editor can display the last valid shove
+preview during a blocked search. Only a certified result for the current cursor
+can authorize placement.
 
 **Merge same-net copper** defaults off. Displaced source tracks that were
 originally separated must retain clearance, even if they already belong to one

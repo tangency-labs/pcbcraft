@@ -48,6 +48,7 @@ pub(super) enum Stop {
 /// The exact verdict for one leg.
 struct Leg {
     legal: bool,
+    edge_blocked: bool,
     /// Copper of other memberships that breaks clearance, with each pair's actual requirement.
     blockers: Vec<(usize, i64)>,
 }
@@ -240,6 +241,16 @@ impl<'a> Walker<'a> {
                 }
             }
             return first.map(|mut plan| {
+                // Shove can try a board-edge prefix on its overlay. Placement still
+                // requires successful propagation, and a copper blocker stays blocked.
+                if request.mode == super::Mode::Shove
+                    && goal.edge_blocked
+                    && plan.blocker.is_none()
+                    && plan.points.len() >= 2
+                    && let Outcome::Blocked { last_legal } = plan.outcome
+                {
+                    plan.adjusted_target = Some(last_legal);
+                }
                 plan.probes = self.probes;
                 plan
             });
@@ -342,7 +353,7 @@ impl<'a> Walker<'a> {
     async fn check(&mut self, a: Point, b: Point) -> Result<Leg, Stop> {
         let key = (a.x_nm, a.y_nm, b.x_nm, b.y_nm);
         if self.clear.contains(&key) {
-            return Ok(Leg { legal: true, blockers: Vec::new() });
+            return Ok(Leg { legal: true, edge_blocked: false, blockers: Vec::new() });
         }
         super::search::yield_unit().await;
         if self.probes >= self.budget {
@@ -393,11 +404,12 @@ impl<'a> Walker<'a> {
         if self.half * 2. < rules.min_track_width_nm as f64 {
             legal = false;
         }
-        legal &= self.outline.allows_copper(&contour, rules.edge_clearance_nm);
+        let edge_blocked = !self.outline.allows_copper(&contour, rules.edge_clearance_nm);
+        legal &= !edge_blocked;
         if legal {
             self.clear.insert(key);
         }
-        Ok(Leg { legal, blockers })
+        Ok(Leg { legal, edge_blocked, blockers })
     }
 
     /// The farthest lattice point of the leg `a`–`b` reached legally, by bisection. Each kept
