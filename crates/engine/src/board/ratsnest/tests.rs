@@ -156,3 +156,31 @@ fn unavailable_accepted_endpoints_are_explicit_without_bogus_coordinates() {
         assert!(result.lines.iter().all(|line| line.from.terminal.component != component && line.to.terminal.component != component));
     }
 }
+
+/// Disjoint-set island merging preserves the exact chain edges and order when copper
+/// islands interleave with sparse untracked endpoints, in both sync and cooperative paths.
+#[test]
+fn interleaved_copper_islands_merge_transitively_in_endpoint_order() {
+    let mut session = fixture();
+    session.apply(super::super::update::INITIALIZE_BASELINE, &json!({"expected_revision":session.revision()})).unwrap();
+    let project = session.project().unwrap();
+    let view = project.board_view(project.board_target().unwrap()).unwrap();
+    let full = view.ratsnest().unwrap();
+    assert_eq!(full.lines.len(), 2);
+    let mut copper = super::super::track::Copper::default();
+    for end in [&full.lines[0].from, &full.lines[1].to] {
+        copper.pads.insert((end.footprint.clone(), end.pad.number.as_str().to_owned()), 0);
+    }
+    let sync_result = view.ratsnest_with_copper(&copper).unwrap();
+    let mut work = std::pin::pin!(view.build_ratsnest::<true>(&copper, None));
+    let mut context = Context::from_waker(Waker::noop());
+    let coop_result = loop {
+        if let Poll::Ready(result) = work.as_mut().poll(&mut context) {
+            break result.unwrap();
+        }
+    };
+    assert_eq!(sync_result.lines.len(), 1);
+    assert_eq!(sync_result.lines[0].from, full.lines[0].from);
+    assert_eq!(sync_result.lines[0].to, full.lines[0].to);
+    assert_eq!(coop_result, sync_result);
+}

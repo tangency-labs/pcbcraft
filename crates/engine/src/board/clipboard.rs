@@ -24,6 +24,7 @@ use uuid::Uuid;
 mod connectivity;
 
 const NPTH_FORMAT: &str = "pcbcraft-clipboard/7";
+const RATED_CIRCUIT_FORMAT: &str = "pcbcraft-clipboard/9";
 
 /// Keep the released format ladder when no newer embedded dependency is present.
 fn legacy_format(assigned: bool, locked: bool, stroked: bool) -> &'static str {
@@ -440,8 +441,10 @@ impl BoardFragment {
         }
         let assigned = envelope.vias.iter().any(|v| v.net_assignment.is_some());
         let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
+        let rated = envelope.format == RATED_CIRCUIT_FORMAT;
         let npth_format = envelope.format == NPTH_FORMAT;
-        if (!npth_format && envelope.format != legacy_format(assigned, locked, envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some())))
+        let stroked = envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some());
+        if (!rated && !npth_format && envelope.format != legacy_format(assigned, locked, stroked))
             || envelope.kind != "board"
             || envelope.source_project.is_nil()
             || envelope.source_board.is_nil()
@@ -484,8 +487,11 @@ impl BoardFragment {
             }
             circuits.push(Circuit { source_sheet: circuit.sheet, name: circuit.name, fragment });
         }
-        if npth_format != circuits.iter().any(|c| c.fragment.has_npth()) {
+        if !rated && npth_format != circuits.iter().any(|c| c.fragment.has_npth()) {
             return Err(invalid("board clipboard format does not match its pinned non-plated holes"));
+        }
+        if rated != circuits.iter().any(|c| c.fragment.has_rated_parts()) {
+            return Err(invalid("Only board clipboard /9 carries device supply ranges, and it requires one."));
         }
         let mut owners = BTreeSet::new();
         for footprint in &envelope.footprints {
@@ -598,7 +604,9 @@ impl BoardFragment {
             .map(|c| Ok(CircuitEnvelope { sheet: c.source_sheet, name: c.name.clone(), text: c.fragment.to_text()? }))
             .collect::<Result<_, CommandError>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.circuits.iter().any(|c| c.fragment.has_npth()) {
+            format: if self.circuits.iter().any(|c| c.fragment.has_rated_parts()) {
+                RATED_CIRCUIT_FORMAT
+            } else if self.circuits.iter().any(|c| c.fragment.has_npth()) {
                 NPTH_FORMAT
             } else {
                 legacy_format(

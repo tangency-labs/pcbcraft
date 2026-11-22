@@ -354,6 +354,16 @@ fn unknown_probe_bridging_two_nets_agrees_with_commit_short_rejection() {
     let result = q.probe(&contour, &[layer], None).unwrap();
     assert!(result.decisions.iter().filter(|d| d.conflicting_nets).count() >= 2);
     assert!(result.decisions.iter().all(|d| !d.clearance_violation), "zero rule does not replace short detection");
+    let source = result.decisions.iter().find(|d| d.conflicting_nets).unwrap().second;
+    let retained_nets = &q.objects()[source].intended_nets;
+    let current = q
+        .probe_membership_excluding(&contour, &[layer], retained_nets, |index| {
+            let candidate = &q.objects()[index].intended_nets;
+            !candidate.is_empty() && candidate != retained_nets
+        })
+        .unwrap();
+    assert!(current.decisions.iter().any(|d| d.second == source && d.touches));
+    assert!(current.decisions.iter().all(|d| !d.conflicting_nets));
     let bytes = encode_documents(s.snapshot().unwrap()).unwrap();
     let revision = s.revision();
     assert!(
