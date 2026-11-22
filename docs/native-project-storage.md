@@ -970,7 +970,8 @@ requires at least one authored lock. It is a superset of format 17, including
 multi-pad mappings, physical graphics, accepted baselines and pending intent.
 Absent copper lock flags mean false; canonical saves omit false. Removing the
 last active copper lock leaves the format required by the remaining data; for
-example, an active footprint lock still requires format 34 or, with arcs, 35. Headers below 18
+example, a board with an active footprint lock uses format 34, 35 with arcs,
+or 37 with straight-via teardrops. Headers below 18
 refuse active copper locks, and older readers refuse format 18.
 Flags survive folder/archive reopen and undo/redo without changing object IDs,
 geometry or connectivity. The shared lock command and protection policy are in

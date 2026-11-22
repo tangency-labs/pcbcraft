@@ -293,12 +293,13 @@ Copy and paste of board objects is in progress separately in #197 through #202.
 ## Placed-footprint locks
 
 Placed footprints retain an optional `locked` flag in native board format 34,
-or 35 when the board also contains arcs. Inspection and typed board views report
-a boolean, defaulting to false for older files. Fresh canonical encoding omits
+35 when the board also contains arcs, or 37 when it contains straight-via
+teardrops. Inspection and typed board views report a boolean, defaulting to
+false for older files. Fresh canonical encoding omits
 false and preserves true; Native Save can reuse an unchanged board document
 verbatim, including explicit false. Without active locks the encoder chooses
-the format required by the remaining board data. Reports are optional under
-formats 34 and 35.
+the format required by the remaining board data. Reports are optional in all
+three formats.
 
 A locked footprint remains selectable and inspectable. The shared move, rotate,
 flip, align/distribute and delete commands protect existing locks. A selection
