@@ -111,7 +111,7 @@ pub(super) fn preview_footprint(project: &Project, catalog: &Catalog, revision: 
 }
 
 /// Present the same discovery fields for every update root without computing any geometry.
-fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catalog) -> Value {
+pub(super) fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catalog) -> Value {
     let (status, latest, digest, diagnostic) = revision_details(inventory, pinned, catalog);
     json!({"pinned":pinned.key,"status":status,"latest":latest,"latest_digest":digest,"diagnostic":diagnostic})
 }

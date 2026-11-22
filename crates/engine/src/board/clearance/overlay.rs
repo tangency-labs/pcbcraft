@@ -53,19 +53,34 @@ fn rule_key(id: ObstacleId) -> String {
 }
 
 /// Disposable query data, never authored geometry or an authorization to publish an edit.
-/// Up to 8,192 changed/added objects are retained; the source index is never modified/rebuilt.
+/// The source index remains immutable and the overlay has bounded capacity.
 pub struct Overlay<'a> {
     query: &'a ClearanceQuery,
     changed: BTreeMap<usize, Option<Object>>,
     added: BTreeMap<Uuid, Object>,
+    added_from: BTreeMap<Uuid, Option<usize>>,
     identity: Arc<()>,
     generation: u64,
+    limit: usize,
 }
 
 impl ClearanceQuery {
     /// Start an empty disposable overlay sharing this captured board's index and authority.
     pub fn overlay(&self) -> Overlay<'_> {
-        Overlay { query: self, changed: BTreeMap::new(), added: BTreeMap::new(), identity: Arc::new(()), generation: 0 }
+        self.overlay_with_limit(8192)
+    }
+
+    /// Bind capacity to the owner of the disposable work.
+    fn overlay_with_limit(&self, limit: usize) -> Overlay<'_> {
+        Overlay {
+            query: self,
+            changed: BTreeMap::new(),
+            added: BTreeMap::new(),
+            added_from: BTreeMap::new(),
+            identity: Arc::new(()),
+            generation: 0,
+            limit,
+        }
     }
 }
 
@@ -77,8 +92,8 @@ impl Overlay<'_> {
     }
     /// Replacing a previous change consumes no extra slot; reject excess work before mutation.
     fn room(&self, existing: bool) -> Result<(), CommandError> {
-        if !existing && self.changed.len() + self.added.len() >= 8192 {
-            return Err(CommandError::CapExceeded("overlay supports at most 8192 changed objects".into()));
+        if !existing && self.changed.len() + self.added.len() >= self.limit {
+            return Err(CommandError::CapExceeded(format!("overlay supports at most {} changed objects", self.limit)));
         }
         Ok(())
     }
@@ -121,15 +136,18 @@ impl Overlay<'_> {
         if self.added.contains_key(&id) {
             return Err(CommandError::InvalidParams("duplicate overlay object identity".into()));
         }
-        let nets = match intended_from {
-            Some(source) => self.source(source)?.intended_nets.clone(),
-            None => Vec::new(),
+        let (nets, island) = match intended_from {
+            Some(source) => {
+                let object = self.source(source)?;
+                (object.intended_nets.clone(), object.island)
+            }
+            None => (Vec::new(), usize::MAX),
         };
         self.room(false)?;
         self.advance()?;
         let at = contour.core[0];
-        self.added
-            .insert(id, Object { name: id.to_string(), contour, layers, intended_nets: nets, at, island: usize::MAX, net: None, mechanical: false });
+        self.added.insert(id, Object { name: id.to_string(), contour, layers, intended_nets: nets, at, island, net: None, mechanical: false });
+        self.added_from.insert(id, intended_from);
         Ok(())
     }
 
@@ -140,6 +158,7 @@ impl Overlay<'_> {
         }
         self.advance()?;
         self.added.remove(&id);
+        self.added_from.remove(&id);
         Ok(())
     }
 

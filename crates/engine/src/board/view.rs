@@ -297,9 +297,7 @@ impl<'a> BoardView<'a> {
         if id != format!("footprint-{ordinal}") {
             return None;
         }
-        let placements = self.project.board.footprints();
-        let index = placements.binary_search_by_key(&ordinal, |footprint| footprint.id).ok()?;
-        placements.get(index)
+        self.project.board.placement(ordinal)
     }
 
     /// Resolve only supplied placements against one immutable accepted-net index. Empty or
@@ -311,6 +309,8 @@ impl<'a> BoardView<'a> {
         let mut placements = placements.peekable();
         let accepted = placements.peek().and(self.project.board.baseline.as_ref()).map(|baseline| (baseline, baseline.terminal_net_index()));
         placements.filter_map(move |footprint| {
+            #[cfg(test)]
+            super::PLACEMENT_GEOMETRY_VISITS.set(super::PLACEMENT_GEOMETRY_VISITS.get() + 1);
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;

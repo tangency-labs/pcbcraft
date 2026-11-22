@@ -38,6 +38,7 @@ pub(super) struct State {
     browser: chrome::Browser,
     preview_width: chrome::ColumnWidth,
     preview_key: Option<Key>,
+    where_used: Option<project::WhereUsedPreview>,
     symbol_camera: crate::library_preview::Camera,
     footprint_camera: crate::library_preview::Camera,
 }
@@ -50,11 +51,12 @@ impl State {
     pub(crate) fn source_id(&self) -> Option<&str> {
         self.source.as_deref()
     }
-    /// Selection changes reset both independent cameras exactly once, including when
-    /// a command selects an item and configures its camera in the same request.
+    /// Selection changes clear usage results and reset both independent cameras exactly once,
+    /// including when a command selects an item and configures its camera in the same request.
     fn sync_preview(&mut self) {
         if self.preview_key != self.selected {
             self.preview_key = self.selected.clone();
+            self.where_used = None;
             self.symbol_camera = Default::default();
             self.footprint_camera = Default::default();
         }
@@ -863,7 +865,7 @@ impl PcbApp {
             state.sync_preview();
         }
         let mut latest: BTreeMap<(Kind, &str), &Item> = BTreeMap::new();
-        for item in all.iter().filter(|i| i.key.kind != Kind::Category) {
+        for item in all {
             let key = (item.key.kind, item.key.id.as_str());
             if latest.get(&key).is_none_or(|old| old.key.revision < item.key.revision) {
                 latest.insert(key, item);
@@ -980,7 +982,7 @@ impl PcbApp {
             chrome::ItemAction::Toggle(index) => toggle(&mut state.expanded, items[index].0.key.clone()),
         });
     }
-    /// Preview metadata and exact dependency references from the selected source revision.
+    /// Preview exact metadata and dependencies, with an opt-in use report for an open project.
     fn library_item_preview(&self, ui: &mut egui::Ui, state: &mut State) {
         state.sync_preview();
         let inventory = state.project.and_then(|_| self.project_library_inventory().ok());
@@ -1009,6 +1011,7 @@ impl PcbApp {
             } else if self.session.libraries().conflicting(&item.key) {
                 ui.label(egui::RichText::new("Quarantined: conflicting content at this revision").color(pcbcraft_chrome::Tokens::get().error));
             }
+            self.where_used_preview(ui, state, &item.key);
             if let Some(symbol) = item.symbol() {
                 crate::library_preview::workspace_symbol(ui, &symbol, &mut state.symbol_camera);
                 chrome::detail(ui, "Units", &symbol.units().len().to_string());
