@@ -1,9 +1,9 @@
 //! Runtime authority for command dispatch. Project snapshots do not carry permission to edit.
 
 use crate::{
-    CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_ASSEMBLY, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, PREVIEW_ASSEMBLY_PROFILE,
-    PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, library::sources, net_classes, netlist,
-    nets, no_connect, parameters, part_groups, sheets,
+    CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_ASSEMBLY, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, INSPECT_LAYER_GROUPS,
+    PREVIEW_ASSEMBLY_PROFILE, PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command, library::sources,
+    net_classes, netlist, nets, no_connect, parameters, part_groups, sheets,
 };
 
 /// Command access set by the host when a session is created.
@@ -72,6 +72,7 @@ fn is_read_command(id: &str) -> bool {
             | CANCEL_UPDATE
             | PREVIEW_BOARD_SETUP
             | CANCEL_BOARD_SETUP_PREVIEW
+            | INSPECT_LAYER_GROUPS
             | PREVIEW_ASSEMBLY_PROFILE
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE

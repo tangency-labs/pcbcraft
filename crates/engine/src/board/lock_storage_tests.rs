@@ -254,6 +254,29 @@ fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), lock_docs);
 }
 
+/// Named groups, circular copper and active footprint locks coexist under board format 41.
+#[test]
+fn current_board_round_trips_named_groups_with_arcs_and_locks() {
+    let mut session = track::tests::routed_fixture();
+    let layer = track::tests::copper_layers(&session)[0];
+    let group = json!({"id":crate::fresh_id().unwrap(),"name":"Return","layers":[layer]});
+    let mut setup = json!(session.project().unwrap().board_setup().unwrap());
+    setup["stackup"]["layer_groups"] = json!([group]);
+    // Setup edits refuse boards that already carry arcs, so stage the group first.
+    session.apply(crate::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":session.revision()})).unwrap();
+    let arc = add_arc(&mut session);
+    let saved = encode_documents(with_lock(&session.snapshot().unwrap(), true)).unwrap();
+    let path = test_board_path(&saved);
+    let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/41");
+    assert_eq!(board["arcs"], json!([arc]));
+    assert_eq!(board["footprints"][0]["locked"], true);
+    assert_eq!(board["setup"]["stackup"]["layer_groups"], json!([group]));
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    board["format"] = json!("pcbcraft-board/35");
+    assert_invalid_board_record(&saved, &board, "layer_groups field requires board format 41");
+}
+
 /// Both features are required in format 35 and cannot be relabeled as either single-feature format.
 #[test]
 fn combined_format_requires_both_features() {
