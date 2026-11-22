@@ -589,8 +589,10 @@ view in amber; blue remains each view's own edit selection. Highlights follow th
 latest selection without taking focus. **View → Settings → Follow selection**
 offers highlight only (the default), all views, other views following primary,
 or primary following other views. Following reveals out-of-view items once while
-preserving zoom. Primary is the original view even if detached; closing it
-transfers that role to the main window's focused view. Delete acts only on the
+preserving zoom. When you select a PCB footprint, a following schematic pane
+can switch to the sheet containing its linked symbol. The pane does not take
+focus or select that symbol for editing. Primary is the original view even if detached, and its
+pane keeps the role whichever sheet it shows; closing it transfers that role to the main window's focused view. Delete acts only on the
 focused view's own selection, and clearing the source selection clears its
 highlights.
 
@@ -833,7 +835,9 @@ not a manufacturing sign-off.
 (suggested name `<project>-fabrication.zip`), with Gerber X2 files for each
 copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
-through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
+through-hole pads). Circular non-plated footprint holes, when present, go in a separate
+`-NPTH.drl` file (see [Fabrication drill files](pcb-layout-workflow.md#fabrication-drill-files)).
+Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
 with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Gerber coordinates
 are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves going up,

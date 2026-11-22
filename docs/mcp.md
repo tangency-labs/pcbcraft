@@ -8,6 +8,15 @@ same engine commands and undo history within each session.
 with affected object IDs, consent/refusal and a session-local token, even with
 `inspect: false`. `pcb.set_board_setup` optionally consumes that token;
 `pcb.cancel_board_setup_preview` revokes it without an authored edit.
+`pcb.inspect_layer_groups` returns derived outer/inner/plane/signal and user groups
+with layer IDs and names, including with `inspect: false`. It is read-only and also
+runs in a `--read-only` session. User
+memberships are edited in the complete setup candidate, not a separate mutation.
+Omitting `stackup.layer_groups` in a setup request preserves existing named groups
+(pruning memberships only for removed copper); pass an explicit `[]` to clear them.
+Mixed copper belongs to plane and signal. Preview reports
+members of removed copper by proposed group UUID, even for newly added groups.
+See [layer groups](board-materials.md#layer-groups).
 
 The built-in Assistant instructions and the server instructions sent to external
 MCP clients ask agents working in a live editor to keep the area they are editing
@@ -418,7 +427,7 @@ a malformed reply from another editor may omit the facts it describes.
 | `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
 | `stale_revision` | `expected_revision` is not the current revision. `details.current_revision` gives the current one; inspect it and retry. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
-| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs. |
+| `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs, or a live `schematic.complete_packages` report would exceed the 16 MiB reply limit (nothing is edited). |
 | `needs_live_editor` | A window or `ui.` command, or `inspect_editor`, in a session without an open editor. |
 | `denied` | The person declined the request in the editor's assistant. |
 | `cancelled` | The request was stopped, timed out or lost its connection before it finished; nothing changed. |
@@ -540,9 +549,10 @@ the finding by bounds, its message says the comparison is conservative.
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
 and `fabrication.origin`, the placement origin every coordinate is measured from:
 Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
-plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
-resolvable placement origin. It refuses boards containing placed circular non-plated holes
-until separate non-plated drill export is available; no partial set is returned.
+plus one Excellon plated drill file. Boards with placed circular non-plated holes also get
+a separate non-plated drill file. It needs a board setup, a closed Board Outline and a
+resolvable placement origin. It refuses a non-plated hole whose diameter rounds to zero in
+the drill file; no partial set is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns
@@ -743,6 +753,29 @@ Schematic inspection reports `available_units` and `display_reference`; the
 base `reference` stays shared by the part. The library authoring transaction
 accepts `select_unit` and `add_unit` actions. See the
 [multi-unit contract](symbol-schema.md#multiple-schematic-units).
+
+`schematic.complete_packages` requires `expected_revision`. Set `scope` to
+`"sheet"` (include the addressed `sheet` UUID when several sheets exist) or
+`"project"` to opt in; omission or `"none"` does nothing. Set `dry_run: true` to
+validate the same plan without editing. Both modes return `{revision, changes,
+skipped}`, even with `inspect: false`. Each change names `sheet`, `symbol`,
+`from_part`, `from_unit`, `to_part`, `to_unit` and `remapped_terminals` (changed
+pin numbers as an old-to-new map). A source part in `changes` is retired; its
+symbol is retained. Skipped entries name `part` and `reason`. Authored
+no-connect markers or selected alternate pin functions report `terminal_intent`.
+A read-only session refuses the command with `out_of_scope`, even for a dry run, because the
+same command applies the transfer. In the live editor, Preview and Apply prepare
+the plan off the editor thread, so the canvas stays responsive; just before
+publishing, the editor re-checks the revision, open dialogs, the request deadline
+and the connection. If the report would exceed the 16 MiB live reply limit,
+Preview and Apply both return `cap_exceeded` and nothing is edited; use `"sheet"`
+scope or headless MCP for very large projects. For a live Apply, the editor
+checks its request deadline after preparing the transfer and does not publish if
+the deadline or an observed disconnect wins. Once publication is authorized, that server
+deadline no longer ends the reply wait. A client timeout or transport failure can
+still lose the reply to a committed edit; inspect before retrying. See [package
+completion](symbol-schema.md#complete-loose-packages) for the matching and
+electrical restrictions.
 
 ## Placement origin
 

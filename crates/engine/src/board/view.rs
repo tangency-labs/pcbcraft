@@ -89,6 +89,8 @@ pub struct PadView {
     pub shape: super::definition::PadShape,
     pub corner_radius_nm: i64,
     pub drill_nm: Option<i64>,
+    /// Finished plated slot resolved after placement mirroring and rotation.
+    pub plated_slot: Option<super::slot::ResolvedPlatedSlot>,
     pub through_hole: bool,
     /// Snapshot-local connectivity label, matching Net Inspector; not a persisted net identity.
     pub net: Option<String>,
@@ -347,6 +349,9 @@ impl<'a> BoardView<'a> {
                             shape: physical.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
                             corner_radius_nm: physical.map_or(0, |p| p.corner_radius_nm),
                             drill_nm: physical.and_then(|p| p.drill_nm),
+                            plated_slot: physical
+                                .and_then(|p| p.plated_slot)
+                                .and_then(|slot| slot.resolve(center, footprint.rotation, footprint.bottom)),
                             through_hole: physical.is_some_and(|p| p.copper == super::definition::CopperBinding::AllCopper),
                             net,
                         }
@@ -455,21 +460,28 @@ impl<'a> BoardView<'a> {
             .collect()
     }
 
-    /// Resolve this board's selected placements to schematic units through their shared component.
-    /// The result is a highlight suggestion, not authorization to edit those schematic units.
+    /// Resolve selected placements through their shared components and the part/unit index.
+    /// Unrelated board placements and schematic symbols are not visited. The result is a
+    /// highlight suggestion, not authorization to edit those schematic units.
     pub fn selection_for_footprints(self, footprints: &BTreeSet<String>) -> Selection {
-        let components: BTreeSet<_> = self
-            .project
-            .board
-            .footprints()
+        let placements = self.project.board.footprints();
+        let components: BTreeSet<_> = footprints
             .iter()
-            .filter(|footprint| footprints.contains(&format!("footprint-{}", footprint.id)))
-            .map(|footprint| footprint.component)
+            .filter_map(|id| crate::schematic::wiring::parse_id(id, "footprint-"))
+            .filter_map(|id| placements.binary_search_by_key(&id, |footprint| footprint.id).ok())
+            .map(|index| placements[index].component)
             .collect();
-        Selection {
-            symbols: self.project.all_symbols().filter(|symbol| components.contains(&symbol.component)).map(|symbol| symbol.id()).collect(),
-            ..Selection::default()
-        }
+        let symbols = components
+            .into_iter()
+            .flat_map(|component| {
+                self.project
+                    .units
+                    .range((component, String::new())..)
+                    .take_while(move |((owner, _), _)| *owner == component)
+                    .map(|(_, &id)| crate::schematic::symbol_id(id))
+            })
+            .collect();
+        Selection { symbols, ..Selection::default() }
     }
 }
 

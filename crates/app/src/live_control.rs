@@ -3,7 +3,7 @@
 use std::{
     io,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
@@ -15,7 +15,7 @@ use craft_control::loopback::{AcceptedPeer, Listener, Token};
 use pcbcraft_engine::{Session, error_codes::ErrorCode};
 use pcbcraft_mcp::{
     Failure,
-    live::{Editor, TOKEN_ENV, call_editor, check_deferred_version, normalize_request, success_reply},
+    live::{Editor, TOKEN_ENV, call_editor_with_package_commit, check_deferred_version, normalize_request, success_reply},
 };
 use serde_json::{Value, json};
 
@@ -38,14 +38,75 @@ pub(super) struct LiveControl {
     worker: Thread,
 }
 
-/// Keep the response channel and deadline with the request until the editor sees it.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum RequestDecision {
+    #[default]
+    Pending,
+    Cancelled,
+    Committing,
+}
+
+/// Serialize server cancellation and publication authorization. Never hold this lock while
+/// preparing an edit, publishing it, waiting for a response or talking to the peer.
+#[derive(Default)]
+struct RequestAuthority(Mutex<RequestDecision>);
+
+impl RequestAuthority {
+    /// A disconnect or listener stop can cancel only before the editor has acquired the grant.
+    fn cancel(&self) {
+        let mut decision = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *decision == RequestDecision::Pending {
+            *decision = RequestDecision::Cancelled;
+        }
+    }
+
+    fn cancelled(&self) -> bool {
+        *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) == RequestDecision::Cancelled
+    }
+
+    /// Sample the deadline under the same lock used by the socket wait, including when its
+    /// next poll has not yet run. Only the first decision can authorize publication.
+    fn grant_commit(&self, deadline: Instant) -> bool {
+        let mut decision = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if *decision != RequestDecision::Pending {
+            return false;
+        }
+        if Instant::now() >= deadline {
+            *decision = RequestDecision::Cancelled;
+            return false;
+        }
+        *decision = RequestDecision::Committing;
+        true
+    }
+
+    /// Pending requests retain the original deadline. Once granted, wait for the editor's
+    /// response or actual transport loss instead of abandoning at that deadline.
+    fn next_wait(&self, deadline: Instant) -> Option<Duration> {
+        let mut decision = self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        match *decision {
+            RequestDecision::Cancelled => None,
+            RequestDecision::Committing => Some(ACCEPT_POLL),
+            RequestDecision::Pending => {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    *decision = RequestDecision::Cancelled;
+                    None
+                } else {
+                    Some(remaining.min(ACCEPT_POLL))
+                }
+            }
+        }
+    }
+}
+
+/// Keep the response channel and deadline with the request until the editor answers it.
 pub(super) struct Request {
     body: Value,
     deadline: Instant,
     reply: SyncSender<Value>,
     /// The endpoint's generation when the request authenticated.
     generation: u64,
-    connected: Arc<AtomicBool>,
+    authority: Arc<RequestAuthority>,
 }
 
 impl Request {
@@ -61,7 +122,19 @@ impl Request {
 
     /// Whether the peer has given up waiting, so an answer would be dropped.
     pub(super) fn expired(&self) -> bool {
-        Instant::now() >= self.deadline || !self.connected.load(Ordering::Acquire)
+        Instant::now() >= self.deadline || self.authority.cancelled()
+    }
+
+    /// Dispatch on the editor thread and acquire the socket's grant only for an effectful
+    /// package completion, after validation and preparation have finished.
+    pub(super) fn dispatch(&self, app: &mut PcbApp, ctx: &egui::Context) -> Result<Value, Failure> {
+        call_editor_with_package_commit(&mut LiveEditor { app, ctx }, self.body(), || {
+            if self.authority.grant_commit(self.deadline) {
+                Ok(())
+            } else {
+                Err(Failure::new(ErrorCode::Cancelled, "Package completion request expired or disconnected before publication"))
+            }
+        })
     }
 
     /// Send the editor's answer. A failure keeps its message in `error` and adds its stable
@@ -189,6 +262,56 @@ pub(super) struct RemoteCheck {
 pub(super) struct RemoteCopper {
     queue: crate::board_drc::jobs::Queue<pcbcraft_engine::board::track::preparation::CopperEditJob>,
     request: Option<(Request, bool, u16)>,
+}
+
+struct CancelOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    /// Cancel any still-running background preparation on teardown without blocking the editor.
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
+/// Background preparation result: `None` when the worker observed cancellation.
+type PackageCompletionOutcome = Result<Option<pcbcraft_engine::package_completion::PreparedPackageCompletion>, pcbcraft_engine::CommandError>;
+
+struct PendingPackageCompletion {
+    source: pcbcraft_engine::package_completion::PackageCompletionSource,
+    _cancel: CancelOnDrop,
+    result: Receiver<PackageCompletionOutcome>,
+    request: Request,
+    chat: bool,
+    port: u16,
+}
+
+/// One deferred package-completion preparation running off the editor thread so large schematics
+/// do not stall the UI frame while planning or reconciling nets.
+#[derive(Default)]
+pub(super) struct RemotePackageCompletion {
+    pending: Option<PendingPackageCompletion>,
+    #[cfg(test)]
+    reply_limit: Option<usize>,
+}
+
+impl std::fmt::Debug for RemotePackageCompletion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemotePackageCompletion").field("busy", &self.pending.is_some()).finish()
+    }
+}
+
+impl RemotePackageCompletion {
+    fn busy(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn reply_limit(&self) -> usize {
+        #[cfg(test)]
+        if let Some(limit) = self.reply_limit {
+            return limit;
+        }
+        pcbcraft_mcp::live::MAX_REPLY_BYTES
+    }
 }
 
 impl std::fmt::Debug for Request {
@@ -393,6 +516,131 @@ impl PcbApp {
         }
     }
 
+    /// Recognize package completion so planning and net reconciliation run off the editor thread.
+    pub(super) fn defer_package_completion(&self, body: &Value) -> bool {
+        body["method"] == "engine.execute" && body["params"]["command"] == pcbcraft_engine::COMPLETE_PACKAGES
+    }
+
+    /// Validate policy, version, scope and revision on the editor thread, then move planning and
+    /// net reconciliation onto a background worker without mutating session state.
+    pub(super) fn start_remote_package_completion(&mut self, ctx: &egui::Context, request: Request, chat: bool) {
+        if request.expired() {
+            request.answer(Err(Failure::new(ErrorCode::Cancelled, "Package completion request expired or disconnected")));
+            return;
+        }
+        if self.remote_package_completion.busy() {
+            request.answer(Err(Failure::new(ErrorCode::Busy, "Package completion is already preparing; retry after it completes")));
+            return;
+        }
+        if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(pcbcraft_engine::COMPLETE_PACKAGES) {
+            request.answer(Err(Failure::new(ErrorCode::Unavailable, reason)));
+            return;
+        }
+        if let Err(failure) = check_deferred_version(pcbcraft_engine::COMPLETE_PACKAGES, &request.body()["params"]) {
+            request.answer(Err(failure));
+            return;
+        }
+        match self.session.prepare_package_completion(&request.body()["params"]["params"]) {
+            Ok(job) => {
+                let source = job.source().clone();
+                let cancel = Arc::new(AtomicBool::new(false));
+                let worker_cancel = Arc::clone(&cancel);
+                let worker_ctx = ctx.clone();
+                let (tx, result) = mpsc::sync_channel(1);
+                match thread::Builder::new().name("pcbcraft-pkg-complete".to_owned()).spawn(move || {
+                    let outcome = job.run_cancellable(&worker_cancel);
+                    let _ = tx.try_send(outcome);
+                    worker_ctx.request_repaint();
+                }) {
+                    Ok(_) => {
+                        let port = self.live_control.as_ref().map_or(0, LiveControl::port);
+                        self.remote_package_completion.pending =
+                            Some(PendingPackageCompletion { source, _cancel: CancelOnDrop(cancel), result, request, chat, port });
+                        ctx.request_repaint();
+                    }
+                    Err(error) => {
+                        request.answer(Err(Failure::new(ErrorCode::Unavailable, format!("Could not start package completion worker: {error}"))));
+                    }
+                }
+            }
+            Err(error) => request.answer(Err(error.into())),
+        }
+    }
+
+    /// Recheck endpoint, turn, modal, snapshot currency, reply size and commit grant immediately
+    /// before atomic publication. Refused, oversized, stale or canceled runs never alter history.
+    pub(super) fn poll_remote_package_completion(&mut self, ctx: &egui::Context) {
+        let Some((valid, current)) = self.remote_package_completion.pending.as_ref().map(|pending| {
+            let valid = !pending.request.expired()
+                && if pending.chat {
+                    self.assistant.turn_open() && self.assistant.generation() == Some(pending.request.generation())
+                } else {
+                    self.live_control.as_ref().is_some_and(|live| live.port() == pending.port && live.current() == pending.request.generation())
+                };
+            (valid, pending.source.is_current(&self.session))
+        }) else {
+            return;
+        };
+        if !valid || !current {
+            if let Some(pending) = self.remote_package_completion.pending.take() {
+                let PendingPackageCompletion { request, .. } = pending;
+                request.answer(Err(obsolete(valid, "Package completion canceled, disconnected or stale", self.session.revision())));
+            }
+            return;
+        }
+        let outcome = match self.remote_package_completion.pending.as_ref().map(|pending| pending.result.try_recv()) {
+            Some(Ok(outcome)) => Ok(outcome),
+            Some(Err(mpsc::TryRecvError::Empty)) => {
+                ctx.request_repaint_after(Duration::from_millis(8));
+                return;
+            }
+            Some(Err(mpsc::TryRecvError::Disconnected)) => {
+                Err(Failure::new(ErrorCode::Unavailable, "Package completion worker stopped before completing"))
+            }
+            None => return,
+        };
+        let Some(PendingPackageCompletion { source, request, chat, .. }) = self.remote_package_completion.pending.take() else {
+            return;
+        };
+        let revision = self.session.revision();
+        let refusal = (LiveEditor { app: self, ctx }).refusal(pcbcraft_engine::COMPLETE_PACKAGES);
+        let reply_limit = self.remote_package_completion.reply_limit();
+        let result = if request.expired() {
+            Err(Failure::new(ErrorCode::Cancelled, "Package completion canceled, disconnected or stale"))
+        } else if !source.is_current(&self.session) {
+            Err(Failure::new(ErrorCode::StaleRevision, "Package completion canceled, disconnected or stale")
+                .with_details(serde_json::Map::from_iter([("current_revision".into(), revision.into())])))
+        } else if let Some(reason) = refusal {
+            Err(Failure::new(ErrorCode::Unavailable, reason))
+        } else {
+            outcome.and_then(|worker_result| {
+                let prepared =
+                    worker_result.map_err(Failure::from)?.ok_or_else(|| Failure::new(ErrorCode::Cancelled, "Package completion canceled"))?;
+                pcbcraft_mcp::live::check_package_completion_reply_size_limit(
+                    request.body(),
+                    prepared.report(),
+                    prepared.is_effectful(),
+                    reply_limit,
+                )?;
+                if prepared.is_effectful() && !request.authority.grant_commit(request.deadline) {
+                    return Err(Failure::new(ErrorCode::Cancelled, "Package completion request expired or disconnected before publication"));
+                }
+                self.session.commit_package_completion(prepared).map_err(Failure::from)
+            })
+        };
+        if self.session.revision() != revision {
+            self.views.sync(&self.session);
+            let title = pcbcraft_engine::command(pcbcraft_engine::COMPLETE_PACKAGES).map_or("Edit", |c| c.title);
+            self.message = None;
+            self.file_notice = Some(format!("{title} {}", if chat { "by the Assistant" } else { "through MCP" }));
+            if chat {
+                self.assistant.note(format!("Edited: {title}. Undo reverts it."));
+            }
+            self.repaint_editors(ctx);
+        }
+        request.answer(result);
+    }
+
     /// Serve the in-app chat's endpoint on the editor thread while a message is being answered:
     /// run the tool calls the person answered, then gate the next request. Reading and allowed commands run through the same
     /// dispatcher as live MCP, with its refusals; the rest wait in the chat for Allow or Deny.
@@ -452,8 +700,12 @@ impl PcbApp {
             self.start_remote_copper(ctx, request, true);
             return;
         }
+        if self.defer_package_completion(request.body()) {
+            self.start_remote_package_completion(ctx, request, true);
+            return;
+        }
         let revision = self.session.revision();
-        let result = call_editor(&mut LiveEditor { app: self, ctx }, request.body());
+        let result = request.dispatch(self, ctx);
         if let Some(owner) = self.assistant.automation_owner(request.generation()) {
             self.automation.authorize(owner);
         }
@@ -626,17 +878,20 @@ fn serve_peer(
     let deadline = Instant::now() + wait;
     // Stamped once authenticated: a request belongs to the generation it arrived in.
     let generation = generation.load(Ordering::Acquire);
-    let connected = Arc::new(AtomicBool::new(true));
-    if send.try_send(Request { body, deadline, reply, generation, connected: connected.clone() }).is_err() {
+    let authority = Arc::new(RequestAuthority::default());
+    if send.try_send(Request { body, deadline, reply, generation, authority: authority.clone() }).is_err() {
         let _ = peer.send(&json!({"error": "The PCBCraft editor is busy", "code": ErrorCode::Busy.as_str(), "details": {}}));
         return;
     }
     ctx.request_repaint();
-    while Instant::now() < deadline && !stop.load(Ordering::Acquire) {
+    while !stop.load(Ordering::Acquire) {
         if peer.peer_closed_or_pending_input().unwrap_or(true) {
             break;
         }
-        match response.recv_timeout(ACCEPT_POLL.min(deadline.saturating_duration_since(Instant::now()))) {
+        let Some(wait) = authority.next_wait(deadline) else {
+            break;
+        };
+        match response.recv_timeout(wait) {
             Ok(response) => {
                 let _ = peer.send(&response);
                 break;
@@ -645,7 +900,7 @@ fn serve_peer(
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
         }
     }
-    connected.store(false, Ordering::Release);
+    authority.cancel();
     ctx.request_repaint();
 }
 
@@ -656,6 +911,89 @@ mod tests {
     use craft_control::loopback::Connection;
 
     use super::*;
+
+    /// A server timeout cannot abandon a granted edit, and either ordering has one winner.
+    #[test]
+    fn package_commit_and_socket_timeout_are_one_decision() {
+        let expired = Instant::now();
+        let live = expired + Duration::from_secs(86_400);
+        let socket_won = RequestAuthority::default();
+        assert_eq!(socket_won.next_wait(expired), None);
+        assert!(!socket_won.grant_commit(live));
+
+        let editor_saw_deadline = RequestAuthority::default();
+        assert!(!editor_saw_deadline.grant_commit(expired));
+        assert_eq!(editor_saw_deadline.next_wait(live), None);
+
+        let editor_won = RequestAuthority::default();
+        assert!(editor_won.grant_commit(live));
+        assert_eq!(editor_won.next_wait(expired), Some(ACCEPT_POLL));
+        assert!(!editor_won.grant_commit(live));
+    }
+
+    /// A dequeued request reaches validation and preparation, but a lost grant cannot edit or
+    /// add an undo step. A live grant on the same request publishes exactly one undoable edit.
+    #[test]
+    fn package_completion_dispatch_requires_the_live_commit_grant() {
+        use pcbcraft_engine::{COMPLETE_PACKAGES, PLACE_SYMBOL, library::sources};
+
+        let mut h = crate::tests::harness();
+        let ctx = h.ctx.clone();
+        let app = h.state_mut();
+        app.session.apply("project.new", &json!({})).unwrap();
+        app.session
+            .execute(
+                sources::LOAD,
+                &json!({"source":"completion-test","documents":{
+                    "library.json":include_str!("../../../examples/native-parts/library.json"),
+                    "symbols/dual.json":include_str!("../../../examples/native-parts/symbols/dual-amplifier.json"),
+                }}),
+            )
+            .unwrap();
+        let definition = app.session.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+        let digest = sources::symbol_digest(&definition).unwrap();
+        for (unit, x) in [("a", 0), ("b", 25_400_000)] {
+            app.session
+                .apply(
+                    PLACE_SYMBOL,
+                    &json!({"library":"parts-demo","definition":"dual-amplifier","definition_revision":1,
+                            "definition_digest":digest,"unit":unit,"x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}),
+                )
+                .unwrap();
+        }
+        let before = app.session.snapshot().unwrap();
+        let inspect = app.session.inspect();
+        let revision = app.session.revision();
+        let now = Instant::now();
+        for (deadline, cancelled) in [(now, false), (now + Duration::from_secs(86_400), true), (now + Duration::from_secs(86_400), false)] {
+            let (reply, response) = mpsc::sync_channel(1);
+            let authority = Arc::new(RequestAuthority::default());
+            if cancelled {
+                authority.cancel();
+            }
+            let request = Request {
+                body: json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"inspect":false,
+                    "params":{"scope":"project","expected_revision":revision}}}),
+                deadline,
+                reply,
+                generation: 0,
+                authority,
+            };
+            let result = request.dispatch(app, &ctx);
+            request.answer(result);
+            let answer = response.try_recv().unwrap();
+            if deadline == now || cancelled {
+                assert_eq!(answer["code"], "cancelled", "{answer}");
+                assert_eq!(app.session.inspect(), inspect);
+                assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+            } else {
+                assert_eq!(answer["result"]["changes"].as_array().unwrap().len(), 1);
+                assert_eq!(answer["result"]["revision"], revision + 1);
+                app.session.apply("edit.undo", &Value::Null).unwrap();
+                assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+            }
+        }
+    }
 
     /// A silent peer must not hold up a valid request until the authentication timeout.
     #[test]
@@ -706,13 +1044,13 @@ mod tests {
         )
         .unwrap();
         let request = live.requests.recv_timeout(Duration::from_secs(2)).expect("socket worker did not queue the request");
-        let connected = request.connected.clone();
+        let authority = request.authority.clone();
         let (send, receive) = mpsc::sync_channel(1);
         send.try_send(request).unwrap();
         live.requests = receive;
         drop(client);
         let deadline = Instant::now() + Duration::from_secs(2);
-        while connected.load(Ordering::Acquire) {
+        while !authority.cancelled() {
             assert!(Instant::now() < deadline, "socket worker did not publish peer disconnect");
             thread::sleep(Duration::from_millis(1));
         }
@@ -742,7 +1080,7 @@ mod checker_tests {
                     deadline,
                     reply,
                     generation: app.live_control.as_ref().unwrap().current(),
-                    connected: Arc::new(AtomicBool::new(true)),
+                    authority: Arc::new(RequestAuthority::default()),
                 },
                 receive,
             )
@@ -808,20 +1146,20 @@ mod copper_tests {
             "board":view.target.board,"layer":layer,"width_nm":250_000,"points":[{"x_nm":0,"y_nm":0},{"x_nm":1_000_000,"y_nm":0}],"expected_revision":app.session.revision()}}});
         (app, ctx, body)
     }
-    /// Keep the request's response and connection lease available for failure-path tests.
-    fn request(app: &PcbApp, body: Value) -> (Request, Receiver<Value>, Arc<AtomicBool>) {
+    /// Keep the request's response and cancellation authority available for failure-path tests.
+    fn request(app: &PcbApp, body: Value) -> (Request, Receiver<Value>, Arc<RequestAuthority>) {
         let (reply, receive) = mpsc::sync_channel(1);
-        let connected = Arc::new(AtomicBool::new(true));
+        let authority = Arc::new(RequestAuthority::default());
         (
             Request {
                 body,
                 deadline: Instant::now() + Duration::from_secs(10),
                 reply,
                 generation: app.live_control.as_ref().unwrap().current(),
-                connected: connected.clone(),
+                authority: authority.clone(),
             },
             receive,
-            connected,
+            authority,
         )
     }
     /// Both deferred command paths refuse a mismatched pin without queuing work or editing.
@@ -855,14 +1193,14 @@ mod copper_tests {
         for mode in 0..7 {
             let (mut app, ctx, body) = fixture();
             let revision = app.session.revision();
-            let (r, reply, connected) = request(&app, body.clone());
+            let (r, reply, authority) = request(&app, body.clone());
             app.start_remote_copper(&ctx, r, false);
             assert_eq!(app.session.revision(), revision);
             match mode {
                 1 => {
                     app.session.apply("project.rename", &json!({"name":"Concurrent MCP edit"})).unwrap();
                 }
-                2 => connected.store(false, Ordering::Release),
+                2 => authority.cancel(),
                 3 => app.remote_copper.request.as_mut().unwrap().0.deadline = Instant::now(),
                 4 => app.live_control = None,
                 5 => app.dialog = Dialog::About,
@@ -1131,13 +1469,13 @@ mod copper_tests {
             frame.push(b'\n');
             client.write_all(&frame).unwrap();
             let r = endpoint.requests.recv_timeout(Duration::from_secs(2)).unwrap();
-            let connected = r.connected.clone();
+            let authority = r.authority.clone();
             let revision = app.session.revision();
             app.start_remote_copper(&ctx, r, false);
             client.write_all(trailing).unwrap();
             drop(client);
             let deadline = Instant::now() + Duration::from_secs(2);
-            while connected.load(Ordering::Acquire) {
+            while !authority.cancelled() {
                 assert!(Instant::now() < deadline);
                 thread::yield_now();
             }
@@ -1167,5 +1505,178 @@ mod item_delete_tests {
         assert!(editor.refusal("app.part_edit").is_some());
         editor.app.dialog = Dialog::About;
         assert!(editor.refusal("app.library_delete_part").is_some());
+    }
+}
+
+#[cfg(test)]
+mod package_completion_tests {
+    use super::*;
+    use pcbcraft_engine::{COMPLETE_PACKAGES, PLACE_SYMBOL, library::sources};
+
+    fn fixture() -> (PcbApp, egui::Context) {
+        let ctx = egui::Context::default();
+        let mut app = PcbApp::default();
+        app.session.apply("project.new", &json!({})).unwrap();
+        app.session
+            .execute(
+                sources::LOAD,
+                &json!({"source":"completion-test","documents":{
+                    "library.json":include_str!("../../../examples/native-parts/library.json"),
+                    "symbols/dual.json":include_str!("../../../examples/native-parts/symbols/dual-amplifier.json"),
+                }}),
+            )
+            .unwrap();
+        let definition = app.session.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+        let digest = sources::symbol_digest(&definition).unwrap();
+        for (unit, x) in [("a", 0), ("b", 25_400_000)] {
+            app.session
+                .apply(
+                    PLACE_SYMBOL,
+                    &json!({"library":"parts-demo","definition":"dual-amplifier","definition_revision":1,
+                        "definition_digest":digest,"unit":unit,"x_nm":x,"y_nm":0,"expected_revision":app.session.revision()}),
+                )
+                .unwrap();
+        }
+        app.live_control = Some(LiveControl::start(&ctx).unwrap());
+        (app, ctx)
+    }
+
+    fn request(app: &PcbApp, body: Value) -> (Request, Receiver<Value>, Arc<RequestAuthority>) {
+        let (reply, receive) = mpsc::sync_channel(1);
+        let authority = Arc::new(RequestAuthority::default());
+        (
+            Request {
+                body,
+                deadline: Instant::now() + Duration::from_secs(10),
+                reply,
+                generation: app.live_control.as_ref().unwrap().current(),
+                authority: authority.clone(),
+            },
+            receive,
+            authority,
+        )
+    }
+
+    fn poll_until_reply(app: &mut PcbApp, ctx: &egui::Context, reply: &Receiver<Value>) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            app.poll_remote_package_completion(ctx);
+            if let Ok(value) = reply.try_recv() {
+                return value;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for deferred package completion");
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// Live package completion prepares off the editor thread for both Preview and Apply,
+    /// while rechecking revision, endpoint lease, cancellation, deadline and modal policy
+    /// immediately before atomic publication.
+    #[test]
+    fn deferred_package_completion_runs_off_editor_thread_and_rechecks_before_commit() {
+        let (mut app, ctx) = fixture();
+        let revision = app.session.revision();
+        let before = app.session.snapshot().unwrap();
+        let preview_body = json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"inspect":false,"params":{
+            "scope":"project","dry_run":true,"expected_revision":revision}}});
+        assert!(app.defer_package_completion(&preview_body));
+        let (req, reply, _) = request(&app, preview_body);
+        app.start_remote_package_completion(&ctx, req, false);
+        assert!(app.remote_package_completion.busy());
+        let preview = poll_until_reply(&mut app, &ctx, &reply);
+        assert_eq!(preview["result"]["revision"], revision);
+        assert_eq!(preview["result"]["changes"].as_array().unwrap().len(), 1);
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+        assert!(!app.remote_package_completion.busy());
+
+        for mode in 0..7 {
+            let (mut app, ctx) = fixture();
+            let revision = app.session.revision();
+            let before = app.session.snapshot().unwrap();
+            let body = json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"inspect":false,"params":{
+                "scope":"project","dry_run":false,"expected_revision":revision}}});
+            let (req, reply, authority) = request(&app, body.clone());
+            app.start_remote_package_completion(&ctx, req, false);
+            assert!(app.remote_package_completion.busy());
+            assert_eq!(app.session.revision(), revision);
+            match mode {
+                1 => {
+                    app.session.apply("project.rename", &json!({"name":"Concurrent MCP edit"})).unwrap();
+                }
+                2 => authority.cancel(),
+                3 => app.remote_package_completion.pending.as_mut().unwrap().request.deadline = Instant::now(),
+                4 => app.live_control = None,
+                5 => app.dialog = Dialog::About,
+                6 => {
+                    let (second_req, second_reply, _) = request(&app, body);
+                    app.start_remote_package_completion(&ctx, second_req, false);
+                    let busy = second_reply.try_recv().unwrap();
+                    assert_eq!(busy["code"], "busy");
+                }
+                _ => {}
+            }
+            let result = poll_until_reply(&mut app, &ctx, &reply);
+            if mode == 0 || mode == 6 {
+                assert_eq!(result["result"]["revision"], revision + 1, "{mode}: {result}");
+                assert_eq!(result["result"]["changes"].as_array().unwrap().len(), 1);
+                assert_eq!(app.session.revision(), revision + 1);
+                app.session.apply("edit.undo", &Value::Null).unwrap();
+                assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+            } else {
+                let code = match mode {
+                    1 => "stale_revision",
+                    5 => "unavailable",
+                    _ => "cancelled",
+                };
+                assert_eq!(result["code"], code, "{mode}: {result}");
+                if mode != 1 {
+                    assert_eq!(app.session.revision(), revision);
+                    assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+                }
+            }
+            assert!(!app.remote_package_completion.busy());
+        }
+    }
+
+    /// An oversized live package completion returns `cap_exceeded` before publication on Apply
+    /// and on dry runs, leaving revision, snapshot and Undo history unchanged.
+    #[test]
+    fn deferred_package_completion_refuses_oversized_apply_and_dry_run_before_commit() {
+        let (mut app, ctx) = fixture();
+        let before_rename = app.session.snapshot().unwrap();
+        app.session.apply("project.rename", &json!({"name":"Prior edit"})).unwrap();
+        let before = app.session.snapshot().unwrap();
+        let revision = app.session.revision();
+        app.remote_package_completion.reply_limit = Some(128);
+
+        for dry_run in [true, false] {
+            let body = json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"inspect":false,"params":{
+                "scope":"project","dry_run":dry_run,"expected_revision":revision}}});
+            let (req, reply, _) = request(&app, body);
+            app.start_remote_package_completion(&ctx, req, false);
+            let answer = poll_until_reply(&mut app, &ctx, &reply);
+            assert_eq!(answer["code"], "cap_exceeded", "dry_run={dry_run}: {answer}");
+            assert!(answer["error"].as_str().unwrap().contains("16 MiB"), "{answer}");
+            assert_eq!(app.session.revision(), revision);
+            assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+            assert!(!app.remote_package_completion.busy());
+        }
+
+        // Undo reverts the prior rename rather than a refused package completion.
+        app.session.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before_rename, &app.session.snapshot().unwrap()));
+        app.session.apply("edit.redo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+        let redo_revision = app.session.revision();
+
+        app.remote_package_completion.reply_limit = None;
+        let apply_body = json!({"method":"engine.execute","params":{"command":COMPLETE_PACKAGES,"inspect":false,"params":{
+            "scope":"project","dry_run":false,"expected_revision":redo_revision}}});
+        let (req, reply, _) = request(&app, apply_body);
+        app.start_remote_package_completion(&ctx, req, false);
+        let answer = poll_until_reply(&mut app, &ctx, &reply);
+        assert_eq!(answer["result"]["changes"].as_array().unwrap().len(), 1);
+        assert_eq!(answer["result"]["revision"], redo_revision + 1);
+        assert_eq!(app.session.revision(), redo_revision + 1);
     }
 }

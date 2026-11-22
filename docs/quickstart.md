@@ -350,8 +350,11 @@ expanded form. **E** opens the same form. **OK** applies the supported propertie
 as one undo step, with attached wires following a position change. Coordinates
 accept explicit units such as `100 mil` or `2.54 mm`; a bare number uses the
 display unit. **Reset changes** discards the compact draft, and **Cancel** discards the
-expanded draft without changing the project. The Pin functions and
-Library tabs show the exact definition retained by the project. The **Footprint**
+expanded draft without changing the project. On **Pin functions**, choose a
+function for a terminal that offers alternates, or select **Primary** to clear
+it. Each choice applies immediately as one undo step and changes the shown name
+and electrical type without moving wires. The **Library** tab shows the exact
+pinned definition. The **Footprint**
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
@@ -392,8 +395,15 @@ and review again after a concurrent edit.
 Inspection reports `designator_locked` even when false. Automatic annotation and
 its skipped-item report are not implemented yet; the engine's
 `PartInstance::can_annotate_designator()` predicate exposes this lock policy for
-that implementation. Unit-letter locks and package completion remain separate
-work. See the [storage contract](native-project-storage.md#designator-locks).
+that implementation. There is no separate unit-letter lock. See the
+[storage contract](native-project-storage.md#designator-locks).
+
+### Complete loose packages
+
+To group equivalent loose units, opt in through the headless or live MCP
+[`schematic.complete_packages`](mcp.md#native-part-definitions-and-quantities)
+command. Preview with `dry_run: true` before applying. Locked owners stay as
+placed; ordinary placement does not complete packages automatically.
 
 ## Inspect a board beside its schematic
 
@@ -434,7 +444,11 @@ Choose any even copper count from 2 through 64; 10- and 12-layer boards are incl
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
 construction, with a laminate total and a cross-section aligned to the table rows. **Fit unlocked dielectrics**
 fits a target thickness while retaining copper and locked gaps. Values accept mm
-or mil, and blanks remain unspecified.
+or mil, and blanks remain unspecified. Select a copper stratum to set its role.
+**Layer groups** adds named sets of copper layers in the same draft; removing a
+layer drops its membership, and one Undo restores the complete setup. Mixed role
+belongs to both plane and signal. `pcb.inspect_layer_groups` reads these groups
+and the derived outer/inner/plane/signal sets without changing the board.
 
 **Materials** offers generic family choices and custom materials. **Add material**
 starts with basic identity fields; **Technical properties** expands sourced Tg/Dk/Df
@@ -814,8 +828,11 @@ Closing a pane retains its definition and unfinished Properties fields; the
 last window still asks about unsaved work.
 
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
-To make a plated hole, set Layers to All copper and enter a positive drill smaller
-than the land. Corner radius is zero for rectangular/circular pads.
+For a round plated hole, choose **Through hole** and enter a positive drill
+smaller than the land. For an obround cut-out, choose **Plated slot**, then set
+its finished width, overall length and independent rotation (in degrees, up to 3 decimal places).
+The entire opening must fit inside the copper. Corner radius is zero for
+rectangular and circular lands. Fabrication export does not yet machine slots.
 
 For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
 pins, enter each other's numbers and choose **Preview current nets** before
@@ -887,6 +904,8 @@ mapping; Windows Shift+Delete remains Cut.
 With a configured board, a closed Board Outline and a resolvable placement origin,
 **Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
 The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
+If the board has circular non-plated holes, the ZIP includes `-NPTH.drl`
+separately from the plated `-PTH.drl` file.
 Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
 destination errors can prevent a successful save. In the browser, Outputs requests
 one download; check that your browser saved it.

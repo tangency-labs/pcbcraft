@@ -282,6 +282,7 @@ impl Edit {
         if let Some(error) = Self::stratum_details(ui, candidate, self.selected_stratum, self.unit) {
             self.error = Some(error);
         }
+        Self::layer_groups(ui, candidate);
         properties::section(ui, "Adjust dielectric thickness");
         form::card(ui, |ui| {
             form::text(ui, "Target thickness", &mut self.target_thickness);
@@ -289,6 +290,54 @@ impl Edit {
                 self.error = self.fit().err();
             }
         });
+    }
+
+    /// Edit authored memberships in the same draft as the stack; Apply remains one shared command.
+    /// Invalid partial names stay visible until corrected, while layer IDs survive renames.
+    fn layer_groups(ui: &mut Ui, candidate: &mut Candidate) {
+        properties::section(ui, "Layer groups");
+        let copper: Vec<_> = candidate
+            .setup
+            .copper_stack()
+            .filter_map(|s| candidate.setup.layers().iter().position(|l| l.id == s.layer).map(|i| (s.layer, candidate.names[i].clone())))
+            .collect();
+        let mut remove = None;
+        for (index, group) in candidate.groups.iter_mut().enumerate() {
+            ui.push_id(group.id, |ui| {
+                form::card(ui, |ui| {
+                    form::text(ui, "Group name", &mut group.name);
+                    for (id, name) in &copper {
+                        let mut selected = group.layers.contains(id);
+                        if pcbcraft_chrome::controls::checkbox(ui, &mut selected, name).changed() {
+                            if selected {
+                                group.layers.push(*id);
+                            } else {
+                                group.layers.retain(|member| member != id);
+                            }
+                        }
+                    }
+                    if pcbcraft_chrome::controls::button(ui, "Remove group").clicked() {
+                        remove = Some(index);
+                    }
+                })
+            });
+        }
+        if let Some(index) = remove {
+            candidate.groups.remove(index);
+        }
+        ui.add_enabled_ui(candidate.groups.len() < pcbcraft_engine::board::setup::groups::MAX_GROUPS, |ui| {
+            if pcbcraft_chrome::controls::button(ui, "Add group").clicked() {
+                match UserLayerGroup::new() {
+                    Ok(group) => candidate.groups.push(group),
+                    Err(error) => {
+                        ui.label(pcbcraft_chrome::shell::error(error.to_string()));
+                    }
+                }
+            }
+        });
+        ui.label(
+            "Outer/inner follow physical order. Mixed copper belongs to both plane and signal. Removed layers leave their user groups automatically.",
+        );
     }
 
     /// Show each stratum and its illustration cell in one grid, so row geometry and scrolling
@@ -392,6 +441,29 @@ impl Edit {
             ui.push_id(i, |ui| {
                 form::card(ui, |ui| {
                     properties::identity(ui, &title, if matches!(stratum, Stratum::Copper { .. }) { "Copper" } else { "Dielectric" });
+                    if matches!(stratum, Stratum::Copper { .. }) {
+                        form::field(ui, "Copper role", |ui| {
+                            pcbcraft_chrome::controls::Choice::from_id_salt("copper_role")
+                                .selected_text(match candidate.roles[i] {
+                                    None => "Unspecified",
+                                    Some(CopperRole::Signal) => "Signal",
+                                    Some(CopperRole::Plane) => "Plane",
+                                    Some(CopperRole::Mixed) => "Mixed",
+                                })
+                                .show_ui(ui, |ui| {
+                                    for (value, label) in [
+                                        (None, "Unspecified"),
+                                        (Some(CopperRole::Signal), "Signal"),
+                                        (Some(CopperRole::Plane), "Plane"),
+                                        (Some(CopperRole::Mixed), "Mixed"),
+                                    ] {
+                                        ui.selectable_value(&mut candidate.roles[i], value, label);
+                                    }
+                                })
+                                .response
+                                .widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, "Copper role"));
+                        });
+                    }
                     if let Stratum::Dielectric { .. } = stratum {
                         form::text(ui, "Thickness tolerance", &mut candidate.tolerance[i].text);
                         form::text(ui, "Material label", &mut candidate.material_labels[i]);

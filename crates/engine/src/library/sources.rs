@@ -711,6 +711,7 @@ impl Catalog {
             .transpose()?;
         let category = part.category.as_ref().map(|binding| self.category(&binding.definition)).transpose()?;
         part.validate_category(category.as_deref())?;
+        part.validate_rating_terminals(symbol.as_deref())?;
         let mut footprints = BTreeMap::new();
         for (id, package) in &part.packages {
             let footprint = self.exact(&package.footprint, Kind::Footprint)?.footprint().ok_or("Expected a footprint record.")?;
