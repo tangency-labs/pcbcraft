@@ -281,12 +281,14 @@ async fn plan(view: BoardView<'_>, from: &Value, to: &Value) -> Result<Cut, Comm
                     endpoint.get_or_insert(lands.len());
                 }
             }
+            let center = footprint.point(pad.center);
             lands.push(Land {
                 key: (id.clone(), number.to_owned()),
                 corners: rectangle_points(footprint, pad.center, pad.width_nm, pad.height_nm, pad.rotation),
                 layers,
                 net: None,
-                center: footprint.point(pad.center),
+                plated_slot: pad.plated_slot.and_then(|slot| slot.resolve(center, footprint.rotation, footprint.bottom)),
+                center,
                 shape: pad.shape,
                 corner_radius_nm: pad.corner_radius_nm,
                 size_nm: (pad.width_nm, pad.height_nm),

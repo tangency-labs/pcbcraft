@@ -816,8 +816,11 @@ Closing a pane retains its definition and unfinished Properties fields; the
 last window still asks about unsaved work.
 
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
-To make a plated hole, set Layers to All copper and enter a positive drill smaller
-than the land. Corner radius is zero for rectangular/circular pads.
+For a round plated hole, choose **Through hole** and enter a positive drill
+smaller than the land. For an obround cut-out, choose **Plated slot**, then set
+its finished width, overall length and independent rotation (in degrees, up to 3 decimal places).
+The entire opening must fit inside the copper. Corner radius is zero for
+rectangular and circular lands. Fabrication export does not yet machine slots.
 
 For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
 pins, enter each other's numbers and choose **Preview current nets** before

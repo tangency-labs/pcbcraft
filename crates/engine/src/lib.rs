@@ -1202,7 +1202,7 @@ const CATALOG: &[Command] = &[
                 name: "text",
                 required: true,
                 kind: ParamKind::ClipboardText,
-                summary: "pcbcraft-clipboard/1, /2, /3, /6 or /8 schematic UTF-8 envelope",
+                summary: "Schematic UTF-8 clipboard envelope in format 1, 2, 3, 6, 7, 8 or 10",
             },
             SYMBOL_X,
             SYMBOL_Y,

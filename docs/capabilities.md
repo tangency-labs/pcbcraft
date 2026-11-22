@@ -35,6 +35,12 @@ obstacles for routing and design checks. They have no copper or net. Boards
 containing them cannot yet produce fabrication outputs; a separate non-plated
 drill file remains future work.
 
+[Plated footprint slots](footprint-library.md#definition-and-placement-contract)
+are authored and inspected independently from the copper land. The board shows
+the finished opening on rotated and back-side placements and checks its full
+annular ring. Fabrication export refuses slot-bearing boards until plated-slot
+machining is supported; non-plated slots are not supported.
+
 Setup edits can be reviewed through `pcb.preview_board_setup` before the shared
 Apply command: layer removals/renumbering, affected objects and consent/refusal
 are returned with a disposable session-local token. Preview does not dirty the

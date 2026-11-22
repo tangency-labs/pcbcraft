@@ -43,6 +43,7 @@ pub mod setup;
 #[cfg(test)]
 mod side_tests;
 pub mod silkscreen;
+pub mod slot;
 pub mod teardrop;
 pub mod track;
 pub(crate) mod transform;
@@ -298,6 +299,13 @@ impl Footprint {
                 }
                 if let Some(physical) = physical {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),physical.copper,self.bottom));
+                    if let Some(slot) = physical.plated_slot
+                        && let Some(resolved) = slot.resolve(point, self.rotation, self.bottom)
+                    {
+                        let (_, length_nm, _) = slot.dimensions();
+                        record["plated_slot"] = json!({"width_nm":resolved.width_nm(),"length_nm":length_nm,
+                            "rotation_mdeg":slot.placement_angle(self.rotation,self.bottom),"cap_centres":resolved.cap_centres()});
+                    }
                 }
                 record
             }).collect::<Vec<_>>()});
