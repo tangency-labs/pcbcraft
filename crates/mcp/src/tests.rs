@@ -153,6 +153,59 @@ fn designator_lock_preview_and_apply_share_mcp_dispatch() {
     assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
 }
 
+/// Annotation previews stay identical across headless and live dispatch with inspection omitted.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn annotation_preview_survives_suppressed_inspection_in_live_and_headless_mcp() {
+    use crate::{
+        Backend, Failure,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::annotation::PREVIEW;
+
+    struct OpenEditor(Session);
+    impl Editor for OpenEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            None
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn inspect(&self) -> Value {
+            Value::Null
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Err("not a window command".into())
+        }
+    }
+
+    let mut editor = OpenEditor(Session::default());
+    editor.0.apply("project.new", &json!({})).unwrap();
+    editor.0.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":editor.0.revision()})).unwrap();
+    editor
+        .0
+        .apply(pcbcraft_engine::SET_SYMBOL_FIELDS, &json!({"symbol":"symbol-2","reference":"R?","value":"R","expected_revision":editor.0.revision()}))
+        .unwrap();
+    let snapshot = editor.0.snapshot().unwrap();
+    editor.0.open_snapshot(snapshot.clone());
+    let mut headless = Headless::with_project(snapshot.clone());
+    let revision = headless.call("project.inspect", json!({})).unwrap()["revision"].clone();
+    let request = json!({"command":PREVIEW,"params":{},"inspect":false});
+    let before = editor.0.inspect();
+    let live = call_editor(&mut editor, &json!({"method":"engine.execute","params":request})).unwrap();
+    let report = headless.call("engine.execute", request).unwrap();
+    assert_eq!(report["annotation_preview"], live["annotation_preview"]);
+    assert_eq!(report["annotation_preview"]["rows"][0]["proposed"], "R1");
+    assert_eq!(report["revision"], revision);
+    assert_eq!(live["revision"], before["revision"]);
+    assert!(report.get("project").is_none());
+    assert_eq!(editor.0.inspect(), before);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &editor.0.snapshot().unwrap()));
+}
+
 /// Shared MCP dispatch preserves focused query data with inspect:false and uses the same edit.
 #[test]
 fn no_connect_commands_and_focused_check_are_shared_with_mcp() {
@@ -707,8 +760,8 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
     }
 }
 
-/// Discovery retains every native library command alongside pin-remap preview over MCP;
-/// source loading/removal leave the project's electrical revision and history alone.
+/// Required library commands, including pin-remap preview, remain discoverable as the catalog grows.
+/// Source search and placement share a session; source loading/removal leave project revision and history alone.
 #[test]
 fn native_source_search_and_placement_share_the_mcp_session() {
     let mut s = server();
@@ -716,29 +769,23 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    let mut command_ids = commands
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|command| command["id"].as_str().unwrap())
-        .filter(|id| id.starts_with("library."))
-        .collect::<Vec<_>>();
-    command_ids.sort_unstable();
-    assert_eq!(
-        command_ids,
-        [
-            "library.available_revisions",
-            "library.list_sources",
-            "library.load_source",
-            "library.parse_quantity",
-            "library.prepare_part_publication",
-            "library.prepare_publication",
-            "library.preview_pin_remap",
-            "library.remove_source",
-            "library.resolve_part",
-            "library.search",
-        ]
-    );
+    let commands = commands.as_array().expect("library command list");
+    for id in [
+        "library.available_revisions",
+        "library.list_sources",
+        "library.load_source",
+        "library.parse_quantity",
+        "library.prepare_part_publication",
+        "library.prepare_publication",
+        "library.preview_footprint_revision",
+        "library.preview_pin_remap",
+        "library.remove_source",
+        "library.resolve_part",
+        "library.search",
+        "library.where_used",
+    ] {
+        assert!(commands.iter().any(|command| command["id"].as_str() == Some(id)), "missing required command {id}");
+    }
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);
@@ -2160,6 +2207,28 @@ fn netlist_file_survives_suppressed_project_inspection() {
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
 
+/// A netlist comparison with inspect:false still returns its result and leaves the project unchanged.
+#[test]
+fn netlist_comparison_survives_suppressed_project_inspection() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({})).unwrap();
+    setup.apply(PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":setup.revision()})).unwrap();
+    let mut server = Server::new(Box::new(Headless::with_project(setup.snapshot().unwrap())));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let exported = body(&call(&mut server, "execute", json!({"command":pcbcraft_engine::netlist::EXPORT_NETLIST,"params":{},"inspect":false})));
+    let text = exported["netlist"]["files"][0]["contents"].clone();
+    let params = json!({"netlist":text});
+    let response = call(&mut server, "execute", json!({"command":pcbcraft_engine::netlist::COMPARE_NETLIST,"params":params,"inspect":false}));
+    assert_ne!(response["isError"], true, "{response}");
+    let result = body(&response);
+    assert_eq!(result["comparison"]["matches"], true);
+    assert_eq!(result["comparison"]["identical"], true);
+    assert_eq!(result["comparison"]["found"]["components"], 1);
+    assert_eq!(result["revision"], before["revision"]);
+    assert!(result.get("project").is_none());
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
+}
+
 /// Board Copy/Cut return native payloads with inspect:false, and a same-project cut can relocate
 /// its existing logical component through the ordinary shared paste transaction.
 #[test]
@@ -2380,4 +2449,72 @@ fn copper_lock_commands_and_protected_edits_share_mcp_inspection() {
     }
     let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
     assert_eq!(undone["project"]["boards"][0]["tracks"][0]["locked"], false);
+}
+
+/// Suppressing project inspection must not discard the command's own dry-run report.
+#[test]
+fn unroute_preview_returns_its_diff_with_inspection_disabled() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    let edit = |setup: &mut Session, id: &str, mut params: Value| {
+        params["expected_revision"] = json!(setup.revision());
+        setup.apply(id, &params).unwrap();
+    };
+    edit(&mut setup, pcbcraft_engine::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    for index in 0..2 {
+        let x_nm = index * 10_000_000;
+        edit(&mut setup, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":x_nm,"y_nm":0}));
+        let symbol = setup.project().unwrap().symbols().last().unwrap().id();
+        edit(
+            &mut setup,
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":x_nm,"y_nm":0}),
+        );
+    }
+    let symbols = setup.project().unwrap().symbols();
+    let args = json!({"from":{"symbol":symbols[0].id(),"terminal":"1"},"to":{"symbol":symbols[1].id(),"terminal":"1"}});
+    edit(&mut setup, pcbcraft_engine::CONNECT_PINS, args);
+    edit(&mut setup, pcbcraft_engine::INITIALIZE_UPDATE_BASELINE, json!({}));
+    use pcbcraft_engine::board::setup::{LayerPurpose, Side};
+    let project = setup.project().unwrap();
+    let board = project.board_target().unwrap();
+    let view = project.board_view(board).unwrap();
+    let layers = view.layers();
+    let copper = |side| layers.iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(side)).unwrap().id;
+    let (front, back) = (copper(Side::Front), copper(Side::Back));
+    let line = view.ratsnest().unwrap().lines.remove(0);
+    let (a, b) = (line.from.position, line.to.position);
+    setup
+        .apply(
+            pcbcraft_engine::ADD_TRACKS,
+            &json!({"board":board.board,"layer":front,"width_nm":250_000,
+        "points":[a,{"x_nm":a.x_nm,"y_nm":2_000_000},{"x_nm":b.x_nm,"y_nm":2_000_000},b],
+        "layer_changes":[{"at":1,"layer":back},{"at":2,"layer":front}],"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let project = setup.snapshot().unwrap();
+    let view = project.board_view(board).unwrap();
+    let ids: Vec<_> = view.tracks().iter().map(|t| t.id).collect();
+    let vias: Vec<_> = view.vias().iter().map(|v| v.id).collect();
+    assert_eq!((ids.len(), vias.len()), (3, 2));
+    let mut server = Server::new(Box::new(Headless::with_project(project)));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let preview = json!({"command":pcbcraft_engine::UNROUTE_CONNECTION,"inspect":false,"params":{
+        "board":board.board,"expected_revision":before["revision"],"dry_run":true,
+        "from":{"footprint":line.from.footprint,"pad":"1"},"to":{"footprint":line.to.footprint,"pad":"1"}}});
+    let reply = body(&call(&mut server, "execute", preview.clone()));
+    assert_eq!(reply["removed"], json!({"tracks":ids,"vias":vias}));
+    let requested = json!({"from":preview["params"]["from"],"to":preview["params"]["to"]});
+    assert_eq!(reply["requested"], requested);
+    assert_eq!(reply["unrouted"], json!([requested]));
+    assert_eq!(reply["revision"], before["revision"]);
+    let mut missing = preview;
+    missing["params"]["from"]["pad"] = json!("999");
+    let error = call(&mut server, "execute", missing.clone());
+    assert_eq!(error["structuredContent"]["error"]["code"], "not_found");
+    missing["params"]["expected_revision"] = json!(before["revision"].as_u64().unwrap() + 1);
+    let error = call(&mut server, "execute", missing);
+    assert_eq!(error["structuredContent"]["error"]["code"], "stale_revision");
+    assert_eq!(error["structuredContent"]["error"]["details"], json!({"current_revision":before["revision"]}));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }

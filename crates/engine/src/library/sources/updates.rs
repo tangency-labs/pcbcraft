@@ -1,9 +1,11 @@
 //! Revision discovery for existing project instances; adoption remains a separate transaction.
-use super::{Catalog, Definition, Key, Kind, PartDefinition, inventory::Inventory, matches_pinned};
-use crate::Project;
+use super::{Catalog, Definition, Key, Kind, PartDefinition, Reference, inventory::Inventory, matches_pinned};
+use crate::{CommandError, Project, board::footprint_delta, part_groups::part_instance_key};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(test)]
+mod preview_tests;
 #[cfg(test)]
 mod tests;
 
@@ -48,10 +50,74 @@ pub(super) fn inspect(project: &Project, catalog: &Catalog, revision: u64) -> Re
         "board":project.board_target().map(|target| target.board),"instances":instances,"outdated_instances":outdated}))
 }
 
-/// Compare an immutable project pin with the highest loaded address of the same kind and
-/// identity. A conflicting or unresolved latest revision is reported without falling back to
-/// an older candidate. Availability alone makes no assertion about adoption compatibility.
-fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catalog) -> Value {
+/// Compare a placed instance's pinned geometry against the same update root as discovery.
+/// Native parts retain their selected package ID; a missing package is not replaced with any other.
+pub(super) fn preview_footprint(project: &Project, catalog: &Catalog, revision: u64, params: &Value) -> Result<Value, CommandError> {
+    let invalid = |message: &str| CommandError::InvalidParams(message.into());
+    let target = project.resolve_board(params["board"].as_str())?;
+    let instance = params["part_instance"]
+        .as_str()
+        .and_then(part_instance_key)
+        .and_then(|id| project.components.get(&id))
+        .ok_or_else(|| CommandError::NotFound("Unknown part instance ID".into()))?;
+    let placement = project
+        .board
+        .footprint_for_part_instance(instance.ordinal)
+        .ok_or_else(|| CommandError::Unavailable("Part instance has no placed footprint".into()))?;
+    let pinned =
+        project.board.definition_for(placement).ok_or_else(|| CommandError::Unavailable("Placed footprint has no pinned native geometry".into()))?;
+    let assignment = project.package_assignments().get(&instance.ordinal);
+    if !assignment.is_some_and(|assignment| placement.key().as_ref() == Some(&assignment.key())) {
+        return Err(invalid("Placed footprint and current package choice differ; preview needs a matching pinned choice"));
+    }
+    let footprint_key = |definition: &crate::board::definition::FootprintDefinition| Key {
+        library: definition.library.clone(),
+        kind: Kind::Footprint,
+        id: definition.id.clone(),
+        revision: definition.revision,
+    };
+    let (root, package) = if let Some(selection) = &instance.part {
+        let part = &selection.resolved.definition;
+        let package = selection.package.as_deref().ok_or_else(|| invalid("Part instance has no selected native package"))?;
+        let old = selection.resolved.footprints.get(package).ok_or_else(|| invalid("Selected package has no pinned native geometry"))?;
+        if footprint_key(old) != footprint_key(pinned) {
+            return Err(invalid("Placed footprint does not match the pinned native package"));
+        }
+        (Key { library: part.library.clone(), kind: Kind::Part, id: part.id.clone(), revision: part.revision }, Some(package))
+    } else {
+        (footprint_key(pinned), None)
+    };
+    let inventory = Inventory::from_project(project).map_err(CommandError::InvalidParams)?;
+    let item = inventory.item(&root).ok_or_else(|| invalid("Missing pinned update root"))?;
+    let (status, latest, digest, diagnostic) = revision_details(&inventory, item, catalog);
+    let Some(latest) = latest.filter(|_| status == "Update available") else {
+        let reason = diagnostic.as_deref().unwrap_or("No unambiguous newer revision is loaded");
+        return Err(CommandError::Unavailable(format!("{status}: {reason}")));
+    };
+    let candidate = if let Some(package) = package {
+        let part = catalog
+            .resolve_part(&Reference { library: latest.library.clone(), id: latest.id.clone(), revision: latest.revision })
+            .map_err(CommandError::Unavailable)?;
+        part.footprints.get(package).cloned().ok_or_else(|| invalid("Newer part revision does not contain the selected package"))?
+    } else {
+        catalog.item(latest).map_err(CommandError::Unavailable)?.footprint().ok_or_else(|| invalid("Newer revision has no footprint geometry"))?
+    };
+    let delta = footprint_delta::compare(&project.board, placement, pinned, &candidate, params["pad"].as_str())?;
+    Ok(json!({"project": project.id(), "board": target.board, "revision": revision, "catalog_generation": catalog.generation(),
+        "part_instance": instance.id(), "reference": instance.reference(), "footprint": format!("footprint-{}", placement.id),
+        "pinned_root": root, "candidate_root": latest, "candidate_root_digest": digest,
+        "pinned_footprint": footprint_key(pinned), "candidate_footprint": footprint_key(&candidate), "delta": delta}))
+}
+
+/// Present the same discovery fields for every update root without computing any geometry.
+pub(super) fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catalog) -> Value {
+    let (status, latest, digest, diagnostic) = revision_details(inventory, pinned, catalog);
+    json!({"pinned":pinned.key,"status":status,"latest":latest,"latest_digest":digest,"diagnostic":diagnostic})
+}
+
+/// Compare the immutable pin with the highest loaded address of the same kind and identity.
+/// Conflicting or unresolved latest revisions do not fall back to an older candidate.
+fn revision_details<'a>(inventory: &Inventory, pinned: &super::Item, catalog: &'a Catalog) -> (&'static str, Option<&'a Key>, Value, Option<String>) {
     let mut status = inventory.status(pinned, catalog);
     let latest = if status == "Project-only" {
         None
@@ -93,7 +159,7 @@ fn inspect_revision(inventory: &Inventory, pinned: &super::Item, catalog: &Catal
         }
     }
     let diagnostic = (!diagnostics.is_empty()).then(|| diagnostics.join(" "));
-    json!({"pinned":pinned.key,"status":status,"latest":latest,"latest_digest":digest,"diagnostic":diagnostic})
+    (status, latest, digest, diagnostic)
 }
 
 /// Identify changed content at an exact address shared by this candidate and the saved project.

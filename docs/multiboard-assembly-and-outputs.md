@@ -172,6 +172,21 @@ not in otherwise unchanged working design documents. Generated outputs should be
 optional in version control and should not advance electrical history or mark
 the authored design dirty merely because they were generated.
 
+The engine's Gerber X3 assembly-layer writer reads one addressed board snapshot.
+It produces a file per populated side with one flash per placed footprint, in
+the generic placement frame (Y up, viewed from the top on both sides). A flash
+uses the transformed centroid offset when the board's adopted assembly profiles
+supply one and agree. If absent or conflicting, it uses the footprint's placed
+reference point. The writer does not estimate a centroid from the pads.
+An ambiguous reference anywhere on the board prevents export, including when
+an accepted footprint remains pending removal. Orderable metadata appears
+only when the pinned selection still meets the part requirements. The writer
+omits angles without an IPC zero and does not infer a mounting process from
+holes. It does not declare registration with separately exported layers.
+This writer is not yet called by the fabrication archive or placement export;
+it does not apply variants or write pins, outlines, or manifest entries.
+Bare-board fabrication is unchanged.
+
 Use a new export destination or a deliberate replace operation, with failures
 leaving the previous complete output intact. Deleting a board must separately
 account for associated documents and export history; removing a design object

@@ -1,6 +1,7 @@
 //! Sheet ownership, immutable schematic projections and atomic sheet transactions.
 
 use super::*;
+use crate::selection::Selection;
 use std::collections::BTreeSet;
 use std::ops::Deref;
 
@@ -139,12 +140,31 @@ impl Project {
         Some(Self { sheet_index, ..self.clone() })
     }
 
-    /// Resolve explicit UUIDs. Omission is accepted only for legacy single-sheet callers.
+    /// Find the first sheet in project order containing a selected symbol. The bounded sheet
+    /// list and each sheet's sorted placement IDs avoid scanning unrelated units or projecting
+    /// candidate sheets. Non-symbol selection members and stale IDs do not match.
+    pub fn first_sheet_for_symbols(&self, selection: &Selection) -> Option<SheetTarget> {
+        self.first_sheet_for_symbols_by(selection, |unit| unit.ordinal)
+    }
+
+    /// Use the same ordinal comparison path for production and the lookup work-bound test.
+    fn first_sheet_for_symbols_by(&self, selection: &Selection, mut ordinal: impl FnMut(&SymbolPlacement) -> u64) -> Option<SheetTarget> {
+        let ids: Vec<_> = selection.symbols.iter().filter_map(|id| schematic::wiring::parse_id(id, "symbol-")).collect();
+        if ids.is_empty() {
+            return None;
+        }
+        let sheet = self.sheets.iter().find(|sheet| ids.iter().any(|id| sheet.symbols.binary_search_by_key(id, &mut ordinal).is_ok()))?;
+        Some(SheetTarget { project: self.id, sheet: sheet.sheet_id })
+    }
+
+    /// Resolve explicit UUIDs by value, so every spelling the parameter check accepts (any case,
+    /// braced, URN or simple) finds the same sheet. Omission is accepted only for legacy
+    /// single-sheet callers.
     pub fn resolve_sheet(&self, id: Option<&str>) -> Result<SheetTarget, CommandError> {
         match id {
-            Some(id) => self
-                .sheets()
-                .find(|sheet| sheet.target.sheet.to_string() == id)
+            Some(id) => uuid::Uuid::parse_str(id)
+                .ok()
+                .and_then(|id| self.sheets().find(|sheet| sheet.target.sheet == id))
                 .map(|sheet| sheet.target)
                 .ok_or_else(|| CommandError::NotFound("unknown sheet ID".into())),
             None if self.sheets.len() == 1 => Ok(self.sheet_target()),
@@ -285,7 +305,7 @@ impl Session {
                 let removed = Arc::make_mut(&mut project.sheets).remove(index);
                 for symbol in removed.symbols.iter() {
                     if !project.all_symbols().any(|other| other.component == symbol.component) {
-                        project.retire_component(symbol.component);
+                        project.retire_component(symbol.component)?;
                     }
                     Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
                 }

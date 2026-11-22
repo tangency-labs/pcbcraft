@@ -17,21 +17,26 @@ payload only when selected; endpoints whose owners are omitted become shared
 free endpoints. Copy/Cut return portable text through `Session::execute` and MCP,
 including with inspection suppressed.
 
-Without locks or non-plated holes, flat data stays `pcbcraft-clipboard/1`;
-a rooted hierarchy/interface payload uses `pcbcraft-clipboard/2`, with
-`kind: "schematic"`, an anchor, explicit `root_sheet` UUID, native
-`documents` and optional `cut_sheets` metadata. Native document display order
+Without locks, non-plated holes or rated parts, flat data stays
+`pcbcraft-clipboard/1`; a rooted hierarchy/interface payload uses
+`pcbcraft-clipboard/2`. Pinned non-plated holes require `/6` in either scope. A
+payload carrying a [device supply range](part-schema.md#device-supply-range) uses
+`pcbcraft-clipboard/8`, which can also carry pinned non-plated holes and
+designator locks. All have `kind: "schematic"`, an anchor and native `documents`.
+Rooted payloads also carry an explicit `root_sheet` UUID and may carry
+`cut_sheets` metadata. Native document display order
 never determines the clipboard root. Native codecs qualify records, definitions,
 geometry, endpoint references and topology. Additional scope checks reject board
 owners, orphan sheets/components, empty roots and a hierarchy disguised as a
 legacy flat payload. The 8 MiB bound applies before JSON parsing. Older clients
-reject version 2; source project paths and runtime providers are not required.
+reject unsupported versions; source project paths and runtime providers are not required.
 A payload with part-instance designator locks uses project/51 documents within
-`pcbcraft-clipboard/3`, or within `pcbcraft-clipboard/6` if it also carries
-non-plated holes. Both versions use flat scope when `root_sheet` is omitted or
-null; hierarchy requires an explicit non-nil root UUID. Copy and Cut relocation
-preserve locks under the same scope and authority checks. Earlier envelopes
-refuse locks instead of dropping them. See [clipboard](clipboard.md).
+`pcbcraft-clipboard/3`, within `pcbcraft-clipboard/6` if it also carries
+non-plated holes, or within `pcbcraft-clipboard/8` if it carries a rated part.
+These versions use flat scope when `root_sheet` is omitted or null; hierarchy
+requires an explicit non-nil root UUID. Copy and Cut relocation preserve locks
+under the same scope and authority checks. Earlier envelopes refuse locks instead
+of dropping them. See [clipboard](clipboard.md).
 
 Default paste creates fresh child UUIDs and numeric object/component/interface
 IDs. Existing names are retained when free, otherwise bounded copy names are

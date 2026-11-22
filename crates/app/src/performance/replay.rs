@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 pub(super) const WARMUP: usize = 8;
 /// Stable identity for the exact versioned route, reversal, layer, cancellation and edit steps.
 pub(super) const STANDARD_TRACE_ID: &str = "route-reverse-layer-cancel-edit-v1";
+pub(super) const SHOVE_TRACE_ID: &str = "route-shove-preview-cancel-commit-v1";
 pub(super) const COMMIT_TRACE_ID: &str = "route-contact-commit-history-v1";
 
 /// One 60 Hz logical input frame; wall-clock measurements do not sleep to simulate pacing.
@@ -36,6 +37,9 @@ enum Action {
     Contact { target: bool, pressed: Option<bool> },
     ContactPreview,
     HistoryCheck,
+    SelectShove,
+    ShovePreview,
+    ShoveHistory,
 }
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +47,7 @@ enum ReplayKey {
     Route,
     Cancel,
     BackLayer,
+    Finish,
 }
 impl ReplayKey {
     /// Map stable trace vocabulary to production keyboard events.
@@ -51,6 +56,7 @@ impl ReplayKey {
             Self::Route => Key::X,
             Self::Cancel => Key::Escape,
             Self::BackLayer => Key::PageDown,
+            Self::Finish => Key::Enter,
         }
     }
 }
@@ -98,6 +104,44 @@ impl Step {
                 routing_after: false,
             });
         }
+        steps
+    }
+
+    /// Exercise a real shove preview, cancellation and one atomic commit using saved geometry.
+    pub(super) fn shove() -> Vec<Self> {
+        let start = Point { x_nm: -58_000_000, y_nm: -18_000_000 };
+        let target = Point { x_nm: -52_000_000, y_nm: -19_900_000 };
+        let mut steps = vec![Self { id: "shove.mode".into(), action: Action::SelectShove, routing_after: false }];
+        let key = |steps: &mut Vec<Self>, id: &str, key: ReplayKey, routing_after| {
+            for pressed in [true, false] {
+                steps.push(Self { id: format!("{id}.{}", if pressed { "down" } else { "up" }), action: Action::Key { key, pressed }, routing_after });
+            }
+        };
+        key(&mut steps, "arm", ReplayKey::Route, false);
+        for attempt in ["cancel", "commit"] {
+            for pressed in [true, false] {
+                steps.push(Self {
+                    id: format!("shove.{attempt}.start.{}", if pressed { "down" } else { "up" }),
+                    action: Action::Pointer { at: start, pressed: Some(pressed) },
+                    routing_after: !pressed,
+                });
+            }
+            steps.push(Self { id: format!("shove.{attempt}.preview"), action: Action::ShovePreview, routing_after: true });
+            if attempt == "cancel" {
+                key(&mut steps, "cancel", ReplayKey::Cancel, false);
+            } else {
+                for pressed in [true, false] {
+                    steps.push(Self {
+                        id: format!("shove.vertex.{}", if pressed { "down" } else { "up" }),
+                        action: Action::Pointer { at: target, pressed: Some(pressed) },
+                        routing_after: true,
+                    });
+                }
+                key(&mut steps, "shove.finish", ReplayKey::Finish, false);
+                steps.push(Self { id: "shove.history".into(), action: Action::ShoveHistory, routing_after: false });
+            }
+        }
+        key(&mut steps, "exit", ReplayKey::Cancel, false);
         steps
     }
 
@@ -185,7 +229,11 @@ impl Driver {
         let track = board.tracks().first().ok_or("missing replay track")?.id.to_owned();
         app.views.active.board.active_layer = Some(top.clone());
         app.views.active.filters_open = false;
-        app.views.active.camera.center_on(Point { x_nm: 10_160_000, y_nm: 0 });
+        app.views.active.camera.center_on(if artifact.trace_id == SHOVE_TRACE_ID {
+            Point { x_nm: -55_000_000, y_nm: -20_000_000 }
+        } else {
+            Point { x_nm: 10_160_000, y_nm: 0 }
+        });
         let contacts =
             if artifact.trace.iter().any(|step| matches!(step.action, Action::Contact { .. } | Action::ContactPreview | Action::HistoryCheck)) {
                 let lines = board.ratsnest()?.lines;
@@ -221,6 +269,9 @@ impl Driver {
         let mut events = Vec::new();
         match &step.action {
             Action::Key { key, pressed } => {
+                if matches!(key, ReplayKey::Finish) && *pressed {
+                    self.edits += 1;
+                }
                 events.push(Event::Key { key: key.egui(), physical_key: None, pressed: *pressed, repeat: false, modifiers: Modifiers::NONE })
             }
             Action::Pointer { at, pressed } => events = Self::pointer(app, *at, *pressed)?,
@@ -269,6 +320,16 @@ impl Driver {
                 if encode_packed(app.session.snapshot().ok_or("missing redo project")?)? != committed {
                     return Err("redo did not restore committed bytes".into());
                 }
+                self.edits += 2;
+            }
+            Action::SelectShove => {
+                if !app.views.active.board.tracks.select_mode(pcbcraft_engine::board::route::Mode::Shove) {
+                    return Err("could not select shove mode".into());
+                }
+            }
+            Action::ShovePreview => events = Self::pointer(app, Point { x_nm: -52_000_000, y_nm: -19_900_000 }, None)?,
+            Action::ShoveHistory => {
+                super::shove::verify_replay(&mut app.session, &self.original, artifact.board)?;
                 self.edits += 2;
             }
             Action::SharedEdit => {
@@ -322,6 +383,11 @@ impl Driver {
     pub(super) fn pending(&self, app: &PcbApp, artifact: &Artifact, index: usize) -> bool {
         match artifact.trace[index].id.as_str() {
             "layer.down" | "layer.up" => app.views.active.board.tracks.committing(),
+            "shove.cancel.preview" | "shove.commit.preview" => {
+                app.message.is_none() && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared")
+            }
+            "shove.vertex.up" => app.message.is_none() && app.views.active.board.tracks.committing(),
+            "shove.finish.down" | "shove.finish.up" => app.message.is_none() && app.session.revision() < self.revision + self.edits,
             "contact.preview" => app.message.is_none() && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared"),
             "contact.commit.up" => app.message.is_none() && app.session.revision() < self.revision + self.edits,
             _ => false,
@@ -340,7 +406,18 @@ impl Driver {
         samples: &mut BTreeMap<String, Vec<f64>>,
     ) -> Result<()> {
         let id = &artifact.trace[index].id;
-        if !matches!(id.as_str(), "layer.down" | "layer.up" | "contact.preview" | "contact.commit.up") {
+        if !matches!(
+            id.as_str(),
+            "layer.down"
+                | "layer.up"
+                | "contact.preview"
+                | "contact.commit.up"
+                | "shove.cancel.preview"
+                | "shove.commit.preview"
+                | "shove.vertex.up"
+                | "shove.finish.down"
+                | "shove.finish.up"
+        ) {
             return Ok(());
         }
         let started = super::clock_ms();
@@ -379,6 +456,15 @@ impl Driver {
         }
         if matches!(step.id.as_str(), "layer.down" | "layer.up") && app.views.active.board.active_layer.as_deref() == Some(&self.top) {
             return Err("layer key did not change the route layer".into());
+        }
+        if matches!(step.id.as_str(), "shove.cancel.preview" | "shove.commit.preview")
+            && (app.views.active.board.tracks.displacement_preview() == 0
+                || app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared"))
+        {
+            return Err("shove preview did not displace and validate its original track".into());
+        }
+        if step.id == "shove.finish.up" && app.session.revision() != self.revision + self.edits {
+            return Err("shove did not publish exactly once".into());
         }
         if step.id == "contact.preview" && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared") {
             return Err("preview did not finish validated preparation".into());

@@ -222,7 +222,7 @@ fn recipe_and_designator_lock_save_as_project_57_and_fall_back() {
     let downgraded = replace_entry(&both, |entry| entry["format"] = json!("pcbcraft-project/51"));
     assert!(decode_documents(&downgraded).err().unwrap().contains("output_recipes"));
     let downgraded = replace_entry(&both, |entry| entry["format"] = json!("pcbcraft-project/47"));
-    assert!(decode_documents(&downgraded).err().unwrap().contains("Designator locks require project format 51 or 57"));
+    assert!(decode_documents(&downgraded).err().unwrap().contains("Designator locks require project format 51, 56, 57 or 60"));
     let unlocked = replace_entry(&recipes_only, |entry| entry["format"] = json!("pcbcraft-project/57"));
     assert!(decode_documents(&unlocked).err().unwrap().contains("at least one true"));
 
