@@ -43,6 +43,7 @@ pub mod setup;
 #[cfg(test)]
 mod side_tests;
 pub mod silkscreen;
+pub mod slot;
 pub mod teardrop;
 pub mod track;
 pub(crate) mod transform;
@@ -298,6 +299,13 @@ impl Footprint {
                 }
                 if let Some(physical) = physical {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),physical.copper,self.bottom));
+                    if let Some(slot) = physical.plated_slot
+                        && let Some(resolved) = slot.resolve(point, self.rotation, self.bottom)
+                    {
+                        let (_, length_nm, _) = slot.dimensions();
+                        record["plated_slot"] = json!({"width_nm":resolved.width_nm(),"length_nm":length_nm,
+                            "rotation_mdeg":slot.placement_angle(self.rotation,self.bottom),"cap_centres":resolved.cap_centres()});
+                    }
                 }
                 record
             }).collect::<Vec<_>>()});
@@ -439,6 +447,11 @@ impl Board {
         self.footprints.push(footprint);
         Ok(())
     }
+    /// Whether retiring this component keeps its accepted physical placement for review.
+    pub(super) fn retains_retired_component(&self, component: u64) -> bool {
+        self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component))
+    }
+
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
     /// Format 3 and later also retain the last visible typed quantity; older history
@@ -464,7 +477,7 @@ impl Board {
             historical.value = part.value().into();
             historical.primary_quantity = quantity;
         }
-        if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
+        if self.retains_retired_component(component) {
             let used = self.used_package_keys();
             self.definitions.retain(|key, _| used.contains(key));
             return;

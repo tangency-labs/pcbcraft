@@ -58,7 +58,7 @@ Intended behavior is distinguished from current capabilities below.
 | Components | Project-owned logical components; the optional board owns the whole supported capture scope | Stable logical instances with optional board association; distinguish schematic-only and assigned/unplaced states |
 | Board setup | One setup on the sole board; the dialog already captures a board target | Independent layers, stackup, materials and output settings for each board |
 | Named connections | Global, power and ground names resolve across the current project | Resolve globals within the board; resolve ordinary local names within the sheet occurrence |
-| Cross-probing | Identity-based correspondence with board addresses; reveal across sheets is still planned | Include sheet occurrence and circuit-use context and navigate to the exact physical instance |
+| Cross-probing | Identity-based correspondence with board addresses; schematic panes can follow selected footprints across single-use sheets | Include sheet occurrence and circuit-use context and navigate to the exact physical instance |
 | Storage | `project.json`, `sheets/`, a registered board folder when present, and pinned libraries | Shared sheet definitions plus a folder for each board; explicit associated-file policies |
 
 The [representation plan](pcb-representation.md#board-addresses-and-multiboard-migration),
@@ -339,6 +339,12 @@ delete its files; pruning a retirement record requires the explicit empty-area
 or reviewed relocation operation defined by the storage contract.
 
 ## Cross-probing and navigation
+
+Today each sheet has one occurrence. A following schematic pane uses the
+selected placement's part instance and its placed units to find that occurrence;
+see the [current sheet choice](board-workspace-plan.md#correspondence-and-cross-probing).
+Repeated uses of one definition are not yet supported. In that future model,
+reveal must use the occurrence that owns the placement, as in the example below.
 
 Selecting a symbol in `Controller > Power` resolves occurrence A and its
 component instance, then finds that component's Controller footprint. Selecting

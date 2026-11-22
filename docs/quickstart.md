@@ -349,8 +349,11 @@ expanded form. **E** opens the same form. **OK** applies the supported propertie
 as one undo step, with attached wires following a position change. Coordinates
 accept explicit units such as `100 mil` or `2.54 mm`; a bare number uses the
 display unit. **Reset changes** discards the compact draft, and **Cancel** discards the
-expanded draft without changing the project. The Pin functions and
-Library tabs show the exact definition retained by the project. The **Footprint**
+expanded draft without changing the project. On **Pin functions**, choose a
+function for a terminal that offers alternates, or select **Primary** to clear
+it. Each choice applies immediately as one undo step and changes the shown name
+and electrical type without moving wires. The **Library** tab shows the exact
+pinned definition. The **Footprint**
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
@@ -648,6 +651,10 @@ before moving, reshaping or deleting them. Copy/duplicate retain locks, and Cut
 refuses protected copper. See the [lock policy](pcb-layout-workflow.md#fixed-tracks-and-vias)
 for mixed selections and indirect footprint/segment changes.
 
+To remove one arm from a routed connection without deleting the rest of the net,
+use [`pcb.unroute_connection`](mcp.md) through MCP. Start with `dry_run: true`
+to see which tracks and vias would be removed.
+
 ## Try the same project through MCP
 
 For repeatable UI demonstrations in the native app, the live connection can
@@ -745,6 +752,17 @@ would change and which straight track ends or through vias would lose contact;
 standalone circular track ends are not checked. Nothing is applied; pad map
 resolution and adoption remain future work.
 
+To find where an exact revision is used in the open project, select that item in
+Parts Library and click **Where used** in Preview. From MCP, pass its exact
+address (replace these example values with your library item's address):
+
+```json
+{"command":"library.where_used","params":{"library":"parts-demo","kind":"footprint","definition":"resistor-0603","definition_revision":1},"inspect":false}
+```
+
+See [where-used](native-library-sources.md#find-where-a-revision-is-used) for
+what counts as a use and how to distinguish assignments from board placements.
+
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
 and include it as `sheet` in schematic edits and footprint placement. Use
 `sheet.create`, `sheet.rename` and `sheet.delete` for lifecycle changes, and
@@ -798,8 +816,11 @@ Closing a pane retains its definition and unfinished Properties fields; the
 last window still asks about unsaved work.
 
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
-To make a plated hole, set Layers to All copper and enter a positive drill smaller
-than the land. Corner radius is zero for rectangular/circular pads.
+For a round plated hole, choose **Through hole** and enter a positive drill
+smaller than the land. For an obround cut-out, choose **Plated slot**, then set
+its finished width, overall length and independent rotation (in degrees, up to 3 decimal places).
+The entire opening must fit inside the copper. Corner radius is zero for
+rectangular and circular lands. Fabrication export does not yet machine slots.
 
 For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
 pins, enter each other's numbers and choose **Preview current nets** before
@@ -880,9 +901,12 @@ R/O flashes require individually quarter-turn library and placement rotations an
 nondegenerate resolved axis rectangle. Rectangles also need an integral centered midpoint;
 obrounds need matching width/height parity. Other rectangles retain resolved regions;
 other obrounds retain approximate round-ended strokes or equal-sided C flashes.
-Rounded rectangles use regions with chorded corners only if a positive radius survives
-resolution. A collapsed tiny rectangle can emit a retraced path with no area. Mask uses
-outer-layer pads without process expansion; paste excludes through-hole pads.
+Rounded rectangles can flash with circular corners, including at non-quarter-turn angles.
+Rounded rectangles that do not qualify for the macro use polygon regions. If a macro
+core needs a fill but its outline could self-intersect and no exact fill is supported,
+export stops without a file set. A collapsed tiny rectangle can emit a retraced path with
+no area. Mask uses outer-layer pads without process expansion; paste excludes through-hole
+pads.
 Output names remain unique when layer names collide after sanitization; the
 [editor guide](editor-guide.md) describes the eligibility, shape approximations,
 file contents and save behavior.

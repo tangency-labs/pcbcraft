@@ -438,6 +438,24 @@ impl EditorView {
         }
     }
 
+    /// Point a fresh copy of a schematic view at another sheet for a counterpart reveal, keeping
+    /// the copied camera and parked workspace. Old-sheet edit state and input tokens must not apply.
+    pub(super) fn reveal_sheet(&mut self, sheet: SheetTarget, session: &Session) -> Option<Arc<pcbcraft_engine::Project>> {
+        if !matches!(self.target(), Some(DocumentTarget::Sheet(current)) if current != sheet) {
+            return None;
+        }
+        let root = session.snapshot()?;
+        let projection = root.for_sheet(sheet).map(Arc::new)?;
+        self.release_input();
+        self.schematic = SchematicState::default();
+        self.inspection.clear();
+        self.sheet = Some(sheet);
+        self.binding = Some(Binding { target: DocumentTarget::Sheet(sheet), history_root_revision: session.history_root_revision() });
+        self.sheet_snapshot = Some(projection.clone());
+        self.snapshot_root = Some(root);
+        Some(projection)
+    }
+
     /// Read a project view's sheet from the current authoritative revision; definition panes return None.
     /// A cached immutable
     /// projection avoids rebuilding geometry caches on every frame; stale caches never authorize input.

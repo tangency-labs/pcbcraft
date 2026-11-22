@@ -58,7 +58,7 @@ fn last_unit_delete_stages_locked_accepted_placement_removal() {
     let (component, footprint_id) = (footprint.component, footprint.id);
     let symbol = project.all_symbols().find(|symbol| symbol.component == component).unwrap().id();
     session.open_snapshot(Arc::new(project));
-    edit(&mut session, DELETE_SYMBOL, json!({"symbol":symbol}));
+    edit(&mut session, crate::DELETE_ITEMS, json!({"items":{"symbols":[symbol],"wires":[]}}));
 
     let staged = session.snapshot().unwrap();
     assert!(!staged.all_symbols().any(|symbol| symbol.component == component));
