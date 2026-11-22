@@ -55,9 +55,9 @@ resulting documents, not the token.
 Apply refuses a proposal with errors or a revision that changed even if Undo
 has since restored the same design. A stale-token refusal carries
 `details.current_revision` and `details.part_instances`, with IDs for parts
-added, removed, renamed, locked or unlocked, or with moved, added or removed
-units. An empty list means no such differences remain; it does not make the
-token valid. Preview again before applying.
+added, removed, renamed, locked or unlocked, or with moved, rotated, mirrored,
+added or removed units. An empty list means no such differences remain; it does
+not make the token valid. Preview again before applying.
 
 All proposed renames publish as one edit and one undo step; empty proposals do
 not change the revision or history. Part instance IDs, placements and native

@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    PLACE_RESISTOR, PLACE_SYMBOL, SET_SYMBOL_FIELDS,
+    MIRROR_SYMBOL, PLACE_RESISTOR, PLACE_SYMBOL, ROTATE_SYMBOL, SET_SYMBOL_FIELDS,
     persistence::{decode_packed, encode_packed},
 };
 
@@ -119,4 +119,44 @@ fn annotation_apply_checks_the_final_designators_not_intermediate_names() {
     let locked = project.symbols()[0].id();
     reference(&mut session, &locked, "R1", true);
     assert!(matches!(with_designators(session.project().unwrap(), &edits), Err(CommandError::InvalidParams(message)) if message.contains("locked")));
+}
+
+/// Rotating or mirroring a symbol in place reports that part in stale placement-change
+/// diagnostics even when its center does not move; value-only edits remain excluded.
+#[test]
+fn annotation_apply_reports_rotated_and_mirrored_parts_but_excludes_value_only_edits() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let rotated_sym = place(&mut session, "resistor", 0);
+    let mirrored_sym = place(&mut session, "capacitor", 4_000_000);
+    let parts: Vec<_> = session.project().unwrap().components().map(|part| part.id()).collect();
+    let (rotated_part, mirrored_part) = (parts[0].clone(), parts[1].clone());
+    reference(&mut session, &rotated_sym, "R?", false);
+    reference(&mut session, &mirrored_sym, "C?", false);
+
+    let preview = session.execute(PREVIEW, &json!({})).unwrap();
+    session.apply(ROTATE_SYMBOL, &json!({"symbol":rotated_sym,"expected_revision":session.revision()})).unwrap();
+    let rev = session.revision();
+    let stale = session.apply(APPLY, &json!({"token":preview["token"]})).unwrap_err();
+    assert_eq!(stale.code(), crate::error_codes::ErrorCode::StaleRevision);
+    assert_eq!(stale.details(), json!({"current_revision":rev,"part_instances":[rotated_part]}));
+
+    let preview = session.execute(PREVIEW, &json!({})).unwrap();
+    session.apply(MIRROR_SYMBOL, &json!({"symbol":mirrored_sym,"axis":"horizontal","expected_revision":session.revision()})).unwrap();
+    let rev = session.revision();
+    let stale = session.apply(APPLY, &json!({"token":preview["token"]})).unwrap_err();
+    assert_eq!(stale.code(), crate::error_codes::ErrorCode::StaleRevision);
+    assert_eq!(stale.details(), json!({"current_revision":rev,"part_instances":[mirrored_part]}));
+
+    let preview = session.execute(PREVIEW, &json!({})).unwrap();
+    session
+        .apply(
+            SET_SYMBOL_FIELDS,
+            &json!({"symbol":rotated_sym,"reference":"R?","value":"10k","designator_locked":false,"expected_revision":session.revision()}),
+        )
+        .unwrap();
+    let rev = session.revision();
+    let stale = session.apply(APPLY, &json!({"token":preview["token"]})).unwrap_err();
+    assert_eq!(stale.code(), crate::error_codes::ErrorCode::StaleRevision);
+    assert_eq!(stale.details(), json!({"current_revision":rev,"part_instances":[]}));
 }

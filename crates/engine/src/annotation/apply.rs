@@ -28,7 +28,7 @@ fn changed_parts(before: &Project, after: &Project) -> Vec<String> {
             for unit in sheet.symbols.iter() {
                 #[cfg(test)]
                 super::tests::count_work(|work| work.stale_units += 1);
-                by_part.entry(unit.component).or_default().push((unit.ordinal, sheet.sheet_id, unit.position));
+                by_part.entry(unit.component).or_default().push((unit.ordinal, sheet.sheet_id, unit.position, unit.rotation, unit.mirrored));
             }
         }
         by_part
