@@ -956,6 +956,29 @@ const SCAN_LIMIT: usize = 16_384;
 /// session are never touched. Returns how many entries were removed; while another entry is
 /// being opened or removed it removes nothing and does not wait.
 pub fn prune(dir: &Path, retention: Retention) -> Result<usize, String> {
+    prune_with_scan_limit(dir, retention, SCAN_LIMIT)
+}
+
+/// Newest modification time across all three known files of recovery entry `id`.
+/// Returns `None` if a metadata error prevents determining any existing file's time, or if none
+/// of the files exist, so retention leaves the entry in place rather than treating it as expired.
+fn entry_modified(dir: &Path, id: &str) -> Option<SystemTime> {
+    let mut newest: Option<SystemTime> = None;
+    for ext in ["pc", "journal", "lock"] {
+        let path = entry_file(dir, id, ext);
+        match fs::metadata(&path) {
+            Ok(metadata) => {
+                let modified = metadata.modified().ok()?;
+                newest = Some(newest.map_or(modified, |prev| prev.max(modified)));
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(_) => return None,
+        }
+    }
+    newest
+}
+
+fn prune_with_scan_limit(dir: &Path, retention: Retention, scan_limit: usize) -> Result<usize, String> {
     // A folder not created yet holds nothing; failing to create one is the recorder's to report.
     if !dir.is_dir() {
         return Ok(0);
@@ -968,19 +991,17 @@ pub fn prune(dir: &Path, retention: Retention) -> Result<usize, String> {
     if gate.try_lock().is_err() {
         return Ok(0);
     }
-    let mut written: std::collections::BTreeMap<String, SystemTime> = std::collections::BTreeMap::new();
-    for entry in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.take(SCAN_LIMIT) {
+    let mut ids = std::collections::BTreeSet::new();
+    for entry in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.take(scan_limit) {
         let Ok(entry) = entry else { continue };
         let name = entry.file_name();
         let Some((id, ext)) = name.to_str().and_then(|name| name.rsplit_once('.')) else { continue };
         if !matches!(ext, "pc" | "journal" | "lock") || !valid_id(id) {
             continue;
         }
-        let modified = entry.metadata().and_then(|metadata| metadata.modified()).unwrap_or(UNIX_EPOCH);
-        let newest = written.entry(id.to_owned()).or_insert(modified);
-        *newest = (*newest).max(modified);
+        ids.insert(id.to_owned());
     }
-    let mut entries: Vec<(SystemTime, String)> = written.into_iter().map(|(id, modified)| (modified, id)).collect();
+    let mut entries: Vec<(SystemTime, String)> = ids.into_iter().filter_map(|id| entry_modified(dir, &id).map(|modified| (modified, id))).collect();
     entries.sort_by(|a, b| b.cmp(a));
     let now = SystemTime::now();
     let (mut kept, mut removed) = (0, 0);

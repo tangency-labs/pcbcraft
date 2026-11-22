@@ -855,6 +855,50 @@ fn pruning_keeps_held_entries_and_bounds_the_rest() {
     assert_eq!(prune(&dir.path().join("missing"), retention), Ok(0));
 }
 
+/// Even when the scan cap stops before visiting an entry's newest file, retention inspects all
+/// three known paths for each discovered ID so a recently updated entry is not treated as expired.
+/// An entry whose age cannot be determined due to a metadata error is also left in place.
+#[test]
+fn pruning_reads_complete_entry_times_under_scan_cap() {
+    let dir = tempfile::tempdir().unwrap();
+    let (journal, states) = journal_with(dir.path(), 1);
+    drop(journal);
+
+    // Discover the filesystem's directory iteration order for the three files of "entry",
+    // age the first two past max_age, keep the third fresh, and cap the scan before the third.
+    let mut positions: Vec<(usize, String)> = fs::read_dir(dir.path())
+        .unwrap()
+        .enumerate()
+        .filter_map(|(index, entry)| {
+            let name = entry.unwrap().file_name().into_string().ok()?;
+            let (id, ext) = name.rsplit_once('.')?;
+            (id == "entry" && matches!(ext, "pc" | "journal" | "lock")).then(|| (index + 1, ext.to_owned()))
+        })
+        .collect();
+    assert_eq!(positions.len(), 3);
+    let old_time = std::time::SystemTime::now() - DAY * 20;
+    for (_, ext) in &positions[..2] {
+        File::options().write(true).open(entry_file(dir.path(), "entry", ext)).unwrap().set_modified(old_time).unwrap();
+    }
+    let fresh_ext = positions.pop().unwrap().1;
+    let cutoff = positions.last().unwrap().0;
+    let retention = Retention { max_age: DAY * 14, max_entries: 16 };
+
+    assert_eq!(prune_with_scan_limit(dir.path(), retention, cutoff), Ok(0));
+    assert!(entry_file(dir.path(), "entry", &fresh_ext).exists());
+    assert_eq!(recover(dir.path(), "entry").unwrap().documents, states[1]);
+
+    // If a metadata error prevents determining an entry's age, leave the entry in place.
+    #[cfg(unix)]
+    {
+        fs::write(entry_file(dir.path(), "unreadable", "pc"), b"stale").unwrap();
+        File::options().write(true).open(entry_file(dir.path(), "unreadable", "pc")).unwrap().set_modified(old_time).unwrap();
+        std::os::unix::fs::symlink("unreadable.journal", entry_file(dir.path(), "unreadable", "journal")).unwrap();
+        assert_eq!(prune(dir.path(), retention), Ok(0));
+        assert!(entry_file(dir.path(), "unreadable", "pc").exists());
+    }
+}
+
 /// A recorder started with a retention prunes earlier runs' entries before its first barrier
 /// returns; the default recorder prunes nothing.
 #[test]
