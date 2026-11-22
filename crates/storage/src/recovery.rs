@@ -687,8 +687,9 @@ enum Message {
     Sync(mpsc::SyncSender<Result<(), String>>),
 }
 
-/// Max queued state notifications between barriers. A burst beyond this limit is represented
-/// by a new history root for its latest complete state, not an unbounded list of edits.
+/// Max queued state notifications between barriers before compacting to a new history root.
+/// Committed edits are compacted only when `coalesce` is enabled; non-coalescing recorders
+/// retain every queued edit so individual command records are not dropped.
 const PENDING_LIMIT: usize = 32;
 
 #[derive(Default)]
@@ -738,7 +739,9 @@ impl Mailbox {
             return;
         }
         let tail = state.queue.iter().rev().take_while(|m| !matches!(m, Message::Sync(_))).count();
-        let message = if tail >= PENDING_LIMIT {
+        let compactable = self.coalesce
+            || (!matches!(message, Message::Committed(_)) && state.queue.iter().rev().take(tail).all(|m| !matches!(m, Message::Committed(_))));
+        let message = if compactable && tail >= PENDING_LIMIT {
             match message {
                 Message::Opened(project) | Message::Snapshot(project) => Message::Opened(project),
                 Message::Committed(edit) => Message::Opened(edit.project),

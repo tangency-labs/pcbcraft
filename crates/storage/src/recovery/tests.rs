@@ -744,6 +744,44 @@ fn coalescing_hands_the_worker_only_the_newest_queued_edit() {
     }
 }
 
+/// With a stalled worker above `PENDING_LIMIT`, a default (non-coalescing) recorder retains
+/// every queued edit and recovers all individual command records; an opted-in coalescing mailbox
+/// still compacts a burst above `PENDING_LIMIT`.
+#[test]
+fn non_coalescing_recorder_keeps_all_edits_above_pending_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let mailbox = Mailbox::default();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"AllEdits"})).unwrap();
+    mailbox.push(Message::Opened(session.snapshot().unwrap()));
+    let count = PENDING_LIMIT + 5;
+    let mut edits = Vec::with_capacity(count);
+    for index in 0..count {
+        let name = format!("Edit {index}");
+        let revision = session.apply("project.rename", &json!({"name": name})).unwrap();
+        let edit =
+            CommittedEdit { command: "project.rename".to_owned(), params: json!({"name": name}), revision, project: session.snapshot().unwrap() };
+        edits.push(edit.clone());
+        mailbox.push(Message::Committed(edit));
+    }
+    assert_eq!(mailbox.state.lock().unwrap().queue.len(), count + 1);
+    mailbox.close(None);
+    record(dir.path(), "entry", &mailbox, &|| {}, None).unwrap();
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.commands, vec!["project.rename".to_owned(); count]);
+    assert_eq!(recovered.project.name, format!("Edit {}", count - 1));
+    assert_eq!(recovered.documents, encode_documents(session.snapshot().unwrap()).unwrap());
+
+    let coalescing = Mailbox { coalesce: true, ..Mailbox::default() };
+    for edit in edits {
+        coalescing.push(Message::Committed(edit));
+    }
+    let pending = coalescing.state.lock().unwrap();
+    assert!(pending.queue.len() <= PENDING_LIMIT);
+    assert!(matches!(pending.queue.front(), Some(Message::Opened(_))));
+}
+
 /// A coalescing recorder recovers exactly the session's documents.
 #[test]
 fn a_coalescing_recorder_recovers_the_current_state() {
