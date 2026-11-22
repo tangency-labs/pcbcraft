@@ -438,6 +438,24 @@ impl EditorView {
         }
     }
 
+    /// Point a fresh copy of a schematic view at another sheet for a counterpart reveal, keeping
+    /// the copied camera and parked workspace. Old-sheet edit state and input tokens must not apply.
+    pub(super) fn reveal_sheet(&mut self, sheet: SheetTarget, session: &Session) -> Option<Arc<pcbcraft_engine::Project>> {
+        if !matches!(self.target(), Some(DocumentTarget::Sheet(current)) if current != sheet) {
+            return None;
+        }
+        let root = session.snapshot()?;
+        let projection = root.for_sheet(sheet).map(Arc::new)?;
+        self.release_input();
+        self.schematic = SchematicState::default();
+        self.inspection.clear();
+        self.sheet = Some(sheet);
+        self.binding = Some(Binding { target: DocumentTarget::Sheet(sheet), history_root_revision: session.history_root_revision() });
+        self.sheet_snapshot = Some(projection.clone());
+        self.snapshot_root = Some(root);
+        Some(projection)
+    }
+
     /// Read a project view's sheet from the current authoritative revision; definition panes return None.
     /// A cached immutable
     /// projection avoids rebuilding geometry caches on every frame; stale caches never authorize input.
@@ -828,9 +846,8 @@ impl EditorView {
         {
             self.board.highlight_net = None;
         }
-        if !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new))
-            || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet
-        {
+        let snapshot_changed = !self.snapshot_root.as_ref().zip(root.as_ref()).is_some_and(|(old, new)| std::sync::Arc::ptr_eq(old, new));
+        if snapshot_changed || self.sheet_snapshot.as_ref().map(|p| p.sheet_target()) != self.sheet {
             self.sheet_snapshot = root.as_ref().and_then(|p| {
                 let target = self.sheet?;
                 if p.sheet_target() == target { Some(p.clone()) } else { p.for_sheet(target).map(std::sync::Arc::new) }
@@ -877,7 +894,14 @@ impl EditorView {
             if self.board.reference.selected.as_ref().is_some_and(|id| !placed.contains(id)) {
                 self.board.reference = Default::default();
             }
-            let setup = self.board.target.and_then(|target| project.board_view(target)).and_then(|board| board.setup());
+            let board = self.board.target.and_then(|target| project.board_view(target));
+            if snapshot_changed
+                && !self.filters.include_locked
+                && let Some(board) = board
+            {
+                self.filters.prune_locked_board_selection(board, &mut self.board);
+            }
+            let setup = board.and_then(|board| board.setup());
             let layers: std::collections::BTreeSet<_> = self
                 .board
                 .target

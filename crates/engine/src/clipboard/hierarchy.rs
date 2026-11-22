@@ -388,11 +388,13 @@ impl Session {
         let block_ids: BTreeSet<_> = blocks.iter().map(|b| b.id).collect();
         Arc::make_mut(&mut sheet.subsheets).retain(|b| !block_ids.contains(&b.id));
         Arc::make_mut(&mut next.units).retain(|_, id| !symbols.contains(id));
-        for component in project.symbols().iter().filter(|s| symbols.contains(&s.ordinal)).map(|s| s.component) {
-            if !next.all_symbols().any(|symbol| symbol.component == component) {
-                next.retire_component(component);
-            }
-        }
+        let removed: BTreeSet<_> = project
+            .symbols()
+            .iter()
+            .filter(|s| symbols.contains(&s.ordinal) && !next.all_symbols().any(|symbol| symbol.component == s.component))
+            .map(|s| s.component)
+            .collect();
+        next.retire_components(removed)?;
         for index in 0..next.sheets.len() {
             next.sheet_index = index;
             next.prune_junctions();

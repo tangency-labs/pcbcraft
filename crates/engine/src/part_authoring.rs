@@ -33,6 +33,7 @@ impl Record {
             category: None,
             fixed_parameters: BTreeMap::new(),
             packages: BTreeMap::new(),
+            terminal_ratings: BTreeMap::new(),
         }))
     }
     /// Orderable drafts require a resolved published generic part and an explicit package.
@@ -101,6 +102,12 @@ impl Record {
         }
         Ok(())
     }
+    /// Keep session drafts and the publication preview on the same lazy native envelope.
+    fn select_rating_format(&mut self) {
+        if let Self::Part(part) = self {
+            part.select_rating_format();
+        }
+    }
     /// A derivative retains the original record's licence and portable provenance.
     pub fn copy(&self) -> Result<Self, String> {
         let mut copy = self.clone();
@@ -128,8 +135,11 @@ impl Record {
             return Err("Part draft exceeds 1 MiB.".into());
         }
         match self {
-            Self::Part(p) if p.packages.len() > 64 || p.fixed_parameters.len() > 64 => {
-                return Err("A part supports at most 64 packages and fixed parameters.".into());
+            Self::Part(p) => {
+                if p.packages.len() > 64 || p.fixed_parameters.len() > 64 {
+                    return Err("A part supports at most 64 packages and fixed parameters.".into());
+                }
+                p.validate_rating_values()?;
             }
             Self::Orderable(p) if p.specifications.len() > 64 => return Err("At most 64 specifications are supported.".into()),
             _ => {}
@@ -159,7 +169,10 @@ pub struct Session {
 }
 impl Session {
     /// Admit a bounded draft or already published record without allocating a content revision.
-    pub fn new(record: Record, published: bool) -> Result<Self, String> {
+    pub fn new(mut record: Record, published: bool) -> Result<Self, String> {
+        if !published {
+            record.select_rating_format();
+        }
         record.bounded()?;
         Ok(Self { saved: published.then(|| record.clone()), record, revision: 1, undo: Vec::new(), redo: Vec::new() })
     }
@@ -179,12 +192,22 @@ impl Session {
     pub fn published(&self) -> Option<Reference> {
         self.saved.as_ref().map(Record::reference)
     }
-    /// Replace one captured draft atomically. Stale clients and identity changes preserve history.
-    pub fn replace(&mut self, expected: u64, record: Record) -> Result<(), String> {
+    /// Replace one captured draft atomically. Stale clients, identity changes and implicit
+    /// transfer of device ratings across symbol references leave history intact.
+    pub fn replace(&mut self, expected: u64, mut record: Record) -> Result<(), String> {
         self.check(expected)?;
         if self.record.kind() != record.kind() || self.record.reference() != record.reference() {
             return Err("Part document identity cannot change during editing.".into());
         }
+        if let (Record::Part(old), Record::Part(new)) = (&self.record, &record)
+            && old.symbol != new.symbol
+        {
+            if same_symbol_lineage(old.symbol.as_ref(), new.symbol.as_ref()) {
+                require_supply_range_reentry(old)?;
+            }
+            require_supply_range_reentry(new)?;
+        }
+        record.select_rating_format();
         record.bounded()?;
         if record == self.record {
             return Ok(());
@@ -321,6 +344,7 @@ pub fn prepare_record(
     let mut published = if copy { record.copy()? } else { record.clone() };
     let next = if copy { 1 } else { latest.checked_add(1).ok_or("Library revision limit reached.")? };
     published.rebind(&Reference { library, id: published.reference().id, revision: next });
+    published.select_rating_format();
     published.validate(catalog)?;
     let (directory, text) = match &published {
         Record::Part(p) => ("parts", p.encode()?),
@@ -338,8 +362,9 @@ pub fn prepare_record(
 }
 
 impl Record {
-    /// Advance an exact symbol or footprint reference in a derived draft, preserving every
-    /// mapping and authored value. Complete validation remains required before publication.
+    /// Advance an exact drawing reference without guessing terminal correspondence. A rated
+    /// symbol must be edited explicitly in the part draft before switching revisions; footprint
+    /// updates preserve authored values. Complete validation is still required before publication.
     pub fn advance_dependency(&self, kind: Kind, old: &Reference, new: &Reference) -> Result<Self, String> {
         if old.library != new.library || old.id != new.id || new.revision <= old.revision {
             return Err("Dependency update requires a later revision of the same item.".into());
@@ -350,6 +375,7 @@ impl Record {
         let mut part = part.clone();
         let mut changed = false;
         if kind == Kind::Symbol && part.symbol.as_ref() == Some(old) {
+            require_supply_range_reentry(&part)?;
             part.symbol = Some(new.clone());
             changed = true;
         }
@@ -365,6 +391,21 @@ impl Record {
             return Err("The part does not reference this exact earlier definition.".into());
         }
         Ok(Self::Part(part))
+    }
+}
+
+/// Match a symbol lineage by address, without treating its revisions' terminal IDs as related.
+fn same_symbol_lineage(old: Option<&Reference>, new: Option<&Reference>) -> bool {
+    old.zip(new).is_some_and(|(old, new)| old.library == new.library && old.id == new.id)
+}
+
+/// A terminal number can be reassigned in the next revision, even between two power inputs.
+/// Refuse the switch until the user explicitly removes the old ranges for re-entry.
+fn require_supply_range_reentry(part: &PartDefinition) -> Result<(), String> {
+    if part.terminal_ratings.is_empty() {
+        Ok(())
+    } else {
+        Err("In Device supply ranges, remove the existing bounds before changing the symbol, then re-enter them on the correct inputs.".into())
     }
 }
 
@@ -437,6 +478,12 @@ impl Record {
         let mut candidate = self.clone();
         match (&mut candidate, field, reference) {
             (Self::Part(p), ReferenceField::Symbol, reference) => {
+                if same_symbol_lineage(p.symbol.as_ref(), reference.as_ref()) {
+                    require_supply_range_reentry(p)?;
+                } else {
+                    p.terminal_ratings.clear();
+                    p.select_rating_format();
+                }
                 p.symbol = reference;
                 if p.symbol.is_none() {
                     p.format = crate::library::parts::PART_FORMAT.into();
