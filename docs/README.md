@@ -36,6 +36,7 @@ before treating an older plan as implemented behavior.
 | Schematic-to-board review and airwires | [Single-board updates](single-board-update.md) · [Accepted board connections](board-ratsnest.md) |
 | Inspect individual pins and pads | [Per-view inspection selection](pin-pad-selection.md) |
 | Explicit via nets | [Placement, Properties and storage](via-net-assignments.md) |
+| Remove one routed arm | [Unroute one connection](pcb-layout-workflow.md#unroute-one-connection) |
 | Copper-zone outline authoring | [Zone drawing, editing and storage](copper-zone-outlines.md) |
 | Board rules and materials | [Board rules](board-rules.md) · [Materials and dielectric construction](board-materials.md) |
 | Create classes, assign nets and inspect effective rules | [Shared net-class editor](net-class-editor.md) |

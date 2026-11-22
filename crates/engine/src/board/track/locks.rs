@@ -17,7 +17,7 @@ pub(crate) fn protect_locked(before: &Project, after: &Project) -> Result<(), Co
             geometry.locked = previous.locked;
             geometry == *previous
         }) {
-            return Err(CommandError::InvalidParams(format!("Track {} is locked; unlock it before editing or deleting it.", previous.id)));
+            return Err(locked("Track", previous.id));
         }
     }
     for previous in before.board.vias.iter().filter(|via| via.locked) {
@@ -26,10 +26,15 @@ pub(crate) fn protect_locked(before: &Project, after: &Project) -> Result<(), Co
             geometry.locked = previous.locked;
             geometry == *previous
         }) {
-            return Err(CommandError::InvalidParams(format!("Via {} is locked; unlock it before editing or deleting it.", previous.id)));
+            return Err(locked("Via", previous.id));
         }
     }
     Ok(())
+}
+
+/// Refuse a change to one locked track or via, named by its kind.
+pub(super) fn locked(kind: &str, id: Uuid) -> CommandError {
+    CommandError::InvalidParams(format!("{kind} {id} is locked; unlock it before editing or deleting it."))
 }
 
 impl Session {

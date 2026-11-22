@@ -35,6 +35,9 @@ pub const SET_TRACK_WIDTH: &str = "pcb.set_track_width";
 pub const SET_VIA_SIZE: &str = "pcb.set_via_size";
 /// Remove addressed track segments and vias without changing footprints or other copper.
 pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
+mod unroute;
+pub use unroute::UNROUTE_CONNECTION;
+pub(crate) use unroute::{pad_address, pad_address_schema};
 /// Lock or unlock explicitly addressed tracks and vias without changing geometry.
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
 
@@ -172,25 +175,43 @@ pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]
     let copper = copper_layer_ids(project);
     let mut ids = BTreeSet::new();
     for track in tracks.iter() {
-        track.validate()?;
-        if !ids.insert(track.id) {
-            return Err("duplicate track identity".into());
-        }
-        if !copper.contains(&track.layer) {
-            return Err("tracks must stay on a copper layer of the board setup".into());
-        }
+        check_track(track, &copper, &mut ids)?;
     }
-    if !vias.is_empty() && copper.len() < 2 {
-        return Err("vias need at least two copper layers in the board setup".into());
-    }
+    check_via_layers(!vias.is_empty(), &copper)?;
     for via in vias.iter() {
-        via.validate()?;
-        if !ids.insert(via.id) {
-            return Err("duplicate track or via identity".into());
-        }
+        check_via(via, &mut ids)?;
     }
     tracks.sort_by_key(|track| track.id);
     vias.sort_by_key(|via| via.id);
+    Ok(())
+}
+
+/// Check one segment of a candidate in `validate` order, recording its identity.
+fn check_track(track: &Track, copper: &BTreeSet<Uuid>, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    track.validate()?;
+    if !ids.insert(track.id) {
+        return Err("duplicate track identity".into());
+    }
+    if !copper.contains(&track.layer) {
+        return Err("tracks must stay on a copper layer of the board setup".into());
+    }
+    Ok(())
+}
+
+/// Vias pass between copper layers, so a candidate with any needs at least two.
+fn check_via_layers(any_vias: bool, copper: &BTreeSet<Uuid>) -> Result<(), String> {
+    if any_vias && copper.len() < 2 {
+        return Err("vias need at least two copper layers in the board setup".into());
+    }
+    Ok(())
+}
+
+/// Check one via of a candidate after every segment, recording its identity.
+fn check_via(via: &Via, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    via.validate()?;
+    if !ids.insert(via.id) {
+        return Err("duplicate track or via identity".into());
+    }
     Ok(())
 }
 
@@ -526,17 +547,17 @@ impl IslandBuilder {
                 self.nearby = Nearby::Lookup;
                 continue;
             };
-            let layers = match (self.layers.get(i), self.layers.get(j)) {
-                (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
-                (None, Some(b)) => !b.is_empty(),
-                _ => true,
-            };
-            let (a, b) = (self.bounds[i], self.bounds[j]);
-            if layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j]) {
+            if self.routed_contact(i, j) {
                 join(&mut self.parent, i, j);
             }
         }
         self.node >= end
+    }
+
+    /// Test one routed pair in node order (`i > j`), with any via first. Pad-only pairs
+    /// are checked separately by callers that need direct land overlap.
+    fn routed_contact(&self, i: usize, j: usize) -> bool {
+        routed_contact(&self.layers, &self.bounds, &self.contours, i, j)
     }
 
     /// Resolve export-only contact groups. Start a fresh builder's traversal at the first pad
@@ -571,6 +592,17 @@ impl IslandBuilder {
         }
         (copper, members)
     }
+}
+
+/// Test a routed pair in descending node order. Via nodes follow all explicitly layered nodes.
+fn routed_contact(layers: &[Vec<Uuid>], bounds: &[[f64; 4]], contours: &[PadContour], i: usize, j: usize) -> bool {
+    let shares_layer = match (layers.get(i), layers.get(j)) {
+        (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
+        (None, Some(b)) => !b.is_empty(),
+        _ => true,
+    };
+    let (a, b) = (bounds[i], bounds[j]);
+    shares_layer && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && contours[i].touches(&contours[j])
 }
 
 /// Sweep overlapping pad bounds and visit each pair whose copper touches on a shared layer.

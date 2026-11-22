@@ -43,7 +43,9 @@ pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
 pub use board::origin::SET_PLACEMENT_ORIGIN;
 pub use board::rules::SET_RULES;
-pub use board::track::{ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE};
+pub use board::track::{
+    ADD_TRACKS, ADD_VIA, DELETE_TRACKS, MOVE_TRACKS, RESHAPE_TRACKS, SET_COPPER_LOCKED, SET_TRACK_WIDTH, SET_VIA_SIZE, UNROUTE_CONNECTION,
+};
 pub use board::via_nets::SET_VIA_NET;
 pub use session_scope::SessionScope;
 
@@ -139,6 +141,7 @@ enum ParamKind {
     ResolveExistingFootprints,
     BoardRotation,
     PadNumber,
+    PadAddress,
     Coordinate,
     Displacement,
     Revision,
@@ -375,6 +378,7 @@ impl ParamKind {
                 json!({"type":"object","minProperties":1,"maxProperties":library::MAX_TERMINALS,"additionalProperties":{"oneOf":[{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"},{"type":"array","minItems":1,"maxItems":board::MAX_COMMAND_PADS_PER_TERMINAL,"uniqueItems":true,"items":{"type":"string","pattern":"^[A-Za-z0-9+_-]{1,8}$"}}]}})
             }
             Self::PadNumber => json!({"type":"integer", "enum":[1, 2]}),
+            Self::PadAddress => board::track::pad_address_schema(),
             Self::SymbolDefinition => json!({"type":"string","minLength":1,"maxLength":64}),
             Self::Displacement => json!({"type": "integer", "minimum": -2 * MAX_CENTER_NM, "maximum": 2 * MAX_CENTER_NM}),
             Self::Coordinate => json!({"type": "integer", "minimum": -MAX_CENTER_NM, "maximum": MAX_CENTER_NM}),
@@ -779,6 +783,7 @@ impl ParamKind {
             Self::PartIds if board::assignment::component_ids(value).is_some() => Ok(()),
             Self::ResolveExistingFootprints if value.is_boolean() => Ok(()),
             Self::PadNumber if matches!(value.as_u64(), Some(1 | 2)) => Ok(()),
+            Self::PadAddress if board::track::pad_address(value).is_some() => Ok(()),
             Self::NetLabelStyle if serde_json::from_value::<net_labels::Style>(value.clone()).is_ok() => Ok(()),
             Self::NetLabelId if value.as_str().and_then(|id| schematic::wiring::parse_id(id, "net-label-")).is_some() => Ok(()),
             Self::Name | Self::Text if value.is_string() => Ok(()),
@@ -823,6 +828,7 @@ impl ParamKind {
             Self::FootprintIds => Err("must contain unique placed footprint IDs within the symbol limit"),
             Self::ResolveExistingFootprints => Err("must be a boolean"),
             Self::PadNumber => Err("must be physical pad 1 or 2"),
+            Self::PadAddress => Err("must give a footprint ID and a pad number on the addressed board"),
             Self::NetLabelStyle => Err("must be local or global"),
             Self::NetLabelId => Err("must identify a named net label"),
             Self::Name | Self::Text => Err("must be a string"),
@@ -2533,6 +2539,18 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: UNROUTE_CONNECTION,
+        title: "Unroute Connection",
+        summary: "Remove the routed arm leaving one pad toward another, keeping other routed pads connected and refusing locked deletions. Execute returns removed IDs and the separated pair; dry_run changes nothing.",
+        params: &[
+            Param { required: true, ..BOARD },
+            EXPECTED_REVISION,
+            Param { name: "from", required: true, summary: "Pad whose routed arm should be removed", kind: ParamKind::PadAddress },
+            Param { name: "to", required: true, summary: "Pad on the retained side of the connection", kind: ParamKind::PadAddress },
+            Param { name: "dry_run", required: false, summary: "Return the validated deletion without editing the board", kind: ParamKind::Flag },
+        ],
+    },
+    Command {
         id: nets::PROMOTE,
         title: "Promote Net",
         summary: "Give a meaningful derived network a persistent UUID without changing connectivity. Existing identities are retained.",
@@ -3388,6 +3406,7 @@ impl Session {
             | SET_VIA_NET
             | SET_VIA_SIZE
             | DELETE_TRACKS
+            | UNROUTE_CONNECTION
             | SET_COPPER_LOCKED
             | DRAW_WIRE
             | DELETE_WIRE
@@ -3596,6 +3615,9 @@ impl Session {
             self.validate_project_command(id, params)?;
             return self.parameter_query(id, params);
         }
+        if id == UNROUTE_CONNECTION {
+            return self.unroute_connection(params);
+        }
         self.apply(id, params)?;
         if id == no_connect::CHECK {
             return self.no_connect_report();
@@ -3752,6 +3774,7 @@ impl Session {
                 | SET_VIA_NET
                 | SET_VIA_SIZE
                 | DELETE_TRACKS
+                | UNROUTE_CONNECTION
                 | SET_COPPER_LOCKED
         ) {
             self.open_project()?.resolve_board(params.get("board").and_then(Value::as_str))?;
@@ -4059,6 +4082,9 @@ impl Session {
                 }
             }
             SET_COPPER_LOCKED => self.set_copper_locked(params)?,
+            UNROUTE_CONNECTION => {
+                self.unroute_connection(params)?;
+            }
             ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_NET | SET_VIA_SIZE | DELETE_TRACKS => {
                 self.edit_tracks(id, params)?
             }
