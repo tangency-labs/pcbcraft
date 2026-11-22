@@ -13,7 +13,15 @@ use std::sync::{Arc, Mutex, TryLockError};
 pub fn is_copper_edit(command: &str) -> bool {
     matches!(
         command,
-        super::super::via_nets::SET_VIA_NET | ADD_TRACKS | ADD_VIA | MOVE_TRACKS | RESHAPE_TRACKS | SET_TRACK_WIDTH | SET_VIA_SIZE | DELETE_TRACKS
+        super::super::via_nets::SET_VIA_NET
+            | ADD_TRACKS
+            | ADD_VIA
+            | MOVE_TRACKS
+            | RESHAPE_TRACKS
+            | SET_TRACK_WIDTH
+            | SET_VIA_SIZE
+            | DELETE_TRACKS
+            | unroute::UNROUTE_CONNECTION
     )
 }
 
@@ -31,6 +39,7 @@ pub struct CopperPreparation {
     source: Source,
     base: Arc<Mutex<BaseProjection>>,
     defer_net_reconciliation: bool,
+    replacement_source: Arc<Mutex<crate::board::clearance::preparation::Preparation>>,
 }
 impl std::fmt::Debug for CopperPreparation {
     /// Do not format project contents or lock a worker's projection state for diagnostics.
@@ -56,6 +65,7 @@ pub struct PreparedCopperEdit {
     /// The parameters the edit was prepared with, reported with it once committed.
     params: Value,
     class_rules: Option<crate::board::class_rules::Context>,
+    report: Option<Value>,
 }
 impl PreparedCopperEdit {
     /// Captured policies explain changed-copper validation, with source identities and conflicts.
@@ -73,7 +83,7 @@ impl PreparedCopperEdit {
     }
 }
 
-const PHASE_DONE: u8 = 6;
+const PHASE_DONE: u8 = 7;
 
 struct PendingRegeneration {
     state: teardrop::Regeneration,
@@ -107,12 +117,17 @@ pub struct CopperEditJob {
     added: BTreeSet<Uuid>,
     lands: Option<Arc<Vec<Land>>>,
     builder: Option<IslandBuilder>,
+    unroute: Option<unroute::Planner>,
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
     regeneration: Option<PendingRegeneration>,
     finalize: Option<PendingFinalize>,
     check_route_vias: bool,
+    replacement_origins: Option<BTreeMap<Uuid, Uuid>>,
+    replacement_geometry: Option<Arc<crate::board::clearance::BoardGeometry>>,
+    replacement_validation: Option<replacements::Validation>,
+    class_rules: Option<crate::board::class_rules::Context>,
 }
 
 /// A cooperative browser job runs on the editor thread. Refuse active intents before
@@ -135,15 +150,17 @@ impl Session {
         // uses the headless engine and can prepare active intents like native builds.
         check_teardrop_preparation(!view.teardrops().is_empty(), cfg!(all(target_arch = "wasm32", target_os = "unknown")))?;
         let effective = view.effective_rules();
+        let source = Source {
+            snapshot,
+            session: self.clearance_identity.clone(),
+            opening: self.history_root_revision(),
+            revision: self.revision(),
+            target,
+            effective,
+        };
         Ok(CopperPreparation {
-            source: Source {
-                snapshot,
-                session: self.clearance_identity.clone(),
-                opening: self.history_root_revision(),
-                revision: self.revision(),
-                target,
-                effective,
-            },
+            replacement_source: Arc::new(Mutex::new(crate::board::clearance::preparation::Preparation::new(source.clone()))),
+            source,
             base: Arc::default(),
             defer_net_reconciliation: self.defer_net_reconciliation,
         })
@@ -194,12 +211,17 @@ impl Session {
             added: BTreeSet::new(),
             lands: None,
             builder: None,
+            unroute: None,
             work: 0,
             result: None,
             class_islands: None,
             regeneration: None,
             finalize: None,
             check_route_vias: false,
+            replacement_origins: None,
+            replacement_geometry: None,
+            replacement_validation: None,
+            class_rules: None,
         }
     }
     /// Prepare one existing copper command without adopting any authored state. Headless callers
@@ -213,6 +235,11 @@ impl Session {
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
     /// A regenerated candidate is already validated; publication does not rebuild its geometry.
     pub fn commit_copper_edit(&mut self, prepared: PreparedCopperEdit) -> Result<u64, CommandError> {
+        self.commit_copper_edit_with_report(prepared).map(|(revision, _)| revision)
+    }
+
+    /// Recheck command scope, then publish an edit or finish a preview and return its report, if any.
+    pub fn commit_copper_edit_with_report(&mut self, mut prepared: PreparedCopperEdit) -> Result<(u64, Option<Value>), CommandError> {
         self.authorize_command(prepared.command)?;
         if !prepared.source.is_current(self) {
             return Err(CommandError::InvalidParams("prepared copper edit is stale".into()));
@@ -225,23 +252,57 @@ impl Session {
             }
             self.report_committed(prepared.command, &prepared.params);
         }
-        Ok(self.revision())
+        let revision = self.revision();
+        if let Some(report) = &mut prepared.report {
+            report["revision"] = json!(revision);
+        }
+        Ok((revision, prepared.report))
     }
 }
 impl CopperEditJob {
+    /// Keep the unroute continuation private until the shared deletion checks finish.
+    fn advance_unroute(&mut self, budget: usize) -> Result<bool, CommandError> {
+        let source = &self.context.source;
+        let planner = self.unroute.get_or_insert_with(|| unroute::Planner::new(source.snapshot.clone(), source.target(), self.params.clone()));
+        let prepared = planner.step(budget);
+        self.work = planner.completed();
+        let Some(prepared) = prepared else { return Ok(false) };
+        self.unroute = None;
+        let (candidate, report) = prepared?;
+        self.phase = PHASE_DONE;
+        self.result = Some(Ok(PreparedCopperEdit {
+            source: source.clone(),
+            candidate: candidate.map(Arc::new),
+            prepared_highest: None,
+            command: self.command,
+            params: self.params.clone(),
+            class_rules: None,
+            report: Some(report),
+        }));
+        Ok(true)
+    }
+
     /// Captured source authority; the host also owns and validates its input generation.
     pub fn source(&self) -> &Source {
         &self.context.source
     }
     /// Report work progress without treating partial validation as a valid candidate.
     pub fn progress(&self) -> Progress {
-        if self.phase == 4
+        if self.command == unroute::UNROUTE_CONNECTION {
+            let done = self.phase == PHASE_DONE;
+            return Progress {
+                stage: if done { "Prepared" } else { "Planning connection unroute" },
+                completed: self.work,
+                total: self.work.saturating_add(usize::from(!done)),
+            };
+        }
+        if self.phase == 5
             && let Some(regeneration) = &self.regeneration
         {
             let (completed, total) = regeneration.state.progress();
             return Progress { stage: "Regenerating teardrops", completed, total };
         }
-        if self.phase == 5
+        if self.phase == 6
             && let Some(finalize) = &self.finalize
         {
             return match &finalize.final_check {
@@ -265,8 +326,9 @@ impl CopperEditJob {
                 1 => "Preparing pad contacts",
                 2 => "Checking copper contacts",
                 3 => "Validating route",
-                4 => "Regenerating teardrops",
-                5 => "Checking board size",
+                4 => "Checking route replacements",
+                5 => "Regenerating teardrops",
+                6 => "Checking board size",
                 _ => "Prepared",
             },
             completed: self.work.min(total),
@@ -287,6 +349,7 @@ impl CopperEditJob {
             Err(error) => {
                 self.regeneration = None;
                 self.finalize = None;
+                self.replacement_validation = None;
                 self.result = Some(Err(error));
                 self.phase = PHASE_DONE;
                 true
@@ -351,23 +414,35 @@ impl CopperEditJob {
         Ok(())
     }
 
+    /// Finish the existing path immediately after its own checks. Compound routes reach this
+    /// only after replacement validation, avoiding an extra browser batch for ordinary edits.
+    fn finish_prepared(&mut self) {
+        self.result = Some(Ok(PreparedCopperEdit {
+            source: self.context.source.clone(),
+            candidate: self.candidate.take(),
+            prepared_highest: None,
+            command: self.command,
+            params: self.params.clone(),
+            class_rules: self.class_rules.take(),
+            report: None,
+        }));
+        self.phase = PHASE_DONE;
+        self.work = 0;
+    }
+
     /// Shared native/browser phases use exactly the synchronous command's geometry and short policy.
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
+        if self.command == unroute::UNROUTE_CONNECTION {
+            return self.advance_unroute(budget);
+        }
         match self.phase {
             0 => {
-                let (candidate, added) = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
+                let CandidateEdit { candidate, added, replacements } = edit_candidate(&self.context.source.snapshot, self.command, &self.params)?;
                 self.added = added;
+                self.replacement_origins = replacements;
                 self.candidate = candidate.map(Arc::new);
                 if self.candidate.as_ref().is_none_or(|candidate| self.added.is_empty() && candidate.board.teardrops.is_empty()) {
-                    self.phase = PHASE_DONE;
-                    self.result = Some(Ok(PreparedCopperEdit {
-                        source: self.context.source.clone(),
-                        candidate: self.candidate.take(),
-                        prepared_highest: None,
-                        command: self.command,
-                        params: self.params.clone(),
-                        class_rules: None,
-                    }));
+                    self.finish_prepared();
                     return Ok(true);
                 }
             }
@@ -407,6 +482,7 @@ impl CopperEditJob {
                         return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
                     }
                     if self.check_route_vias
+                        || self.replacement_origins.is_some()
                         || !candidate.board.teardrops.is_empty()
                         || candidate.has_dimensional_net_classes()
                         || candidate.board.vias.iter().any(|v| v.net_assignment.is_some())
@@ -439,9 +515,12 @@ impl CopperEditJob {
                         let geometry = BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
                         class_rules = self.candidate_class_rules(view, &geometry)?;
                         self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
+                        if self.replacement_origins.is_some() {
+                            self.replacement_geometry = Some(Arc::new(geometry));
+                        }
                     } else {
                         // Reuse the worker's contact batches. Map candidate memberships after
-                        // reconciliation and validate teardrops in bounded phase-4 batches.
+                        // reconciliation and validate teardrops in bounded phase-5 batches.
                         let (next, highest) = Session::prepare_change_before_regeneration(
                             Some(&source.snapshot),
                             self.context.defer_net_reconciliation,
@@ -450,30 +529,61 @@ impl CopperEditJob {
                         )?;
                         let view = next.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
                         let geometry = Arc::new(BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged));
-                        if self.check_route_vias || next.has_dimensional_net_classes() || view.vias().iter().any(|via| via.net_assignment.is_some()) {
+                        if self.check_route_vias
+                            || self.replacement_origins.is_some()
+                            || next.has_dimensional_net_classes()
+                            || view.vias().iter().any(|via| via.net_assignment.is_some())
+                        {
                             class_rules = self.candidate_class_rules(view, &geometry)?;
                         }
                         self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
+                        if self.replacement_origins.is_some() {
+                            self.replacement_geometry = Some(geometry.clone());
+                        }
                         self.regeneration =
                             Some(PendingRegeneration { state: teardrop::Regeneration::new(next, source.clone(), geometry), highest, class_rules });
-                        self.phase = 4;
+                        self.phase = if self.replacement_origins.is_some() { 4 } else { 5 };
                         self.work = 0;
                         return Ok(false);
                     }
                 }
-                self.result = Some(Ok(PreparedCopperEdit {
-                    source: source.clone(),
-                    candidate,
-                    prepared_highest: None,
-                    command: self.command,
-                    params: self.params.clone(),
-                    class_rules,
-                }));
-                self.phase = PHASE_DONE;
-                self.work = 0;
-                return Ok(true);
+                self.candidate = candidate;
+                self.class_rules = class_rules;
+                if self.replacement_origins.is_none() {
+                    self.finish_prepared();
+                    return Ok(true);
+                }
             }
             4 => {
+                if self.replacement_validation.is_none()
+                    && let Some(origins) = self.replacement_origins.take()
+                {
+                    let geometry =
+                        self.replacement_geometry.take().ok_or_else(|| CommandError::Unavailable("Missing final copper geometry.".into()))?;
+                    self.replacement_validation = Some(replacements::Validation::new(
+                        self.context.source.clone(),
+                        self.context.replacement_source.clone(),
+                        geometry,
+                        origins,
+                        self.added.clone(),
+                        &self.params,
+                    )?);
+                }
+                if let Some(validation) = &mut self.replacement_validation
+                    && !validation.step(budget)?
+                {
+                    return Ok(false);
+                }
+                self.replacement_validation = None;
+                if self.regeneration.is_some() {
+                    self.phase = 5;
+                    self.work = 0;
+                    return Ok(false);
+                }
+                self.finish_prepared();
+                return Ok(true);
+            }
+            5 => {
                 let Some(regeneration) = self.regeneration.as_mut() else {
                     return Err(CommandError::Unavailable("teardrop regeneration state is unavailable".into()));
                 };
@@ -494,11 +604,11 @@ impl CopperEditJob {
                 };
                 self.finalize =
                     Some(PendingFinalize { project: next, highest: regeneration.highest, class_rules: regeneration.class_rules, final_check });
-                self.phase = 5;
+                self.phase = 6;
                 self.work = 0;
                 return Ok(false);
             }
-            5 => {
+            6 => {
                 let Some(finalize) = self.finalize.as_mut() else {
                     return Err(CommandError::Unavailable("board finalization state is unavailable".into()));
                 };
@@ -525,6 +635,7 @@ impl CopperEditJob {
                     command: self.command,
                     params: self.params.clone(),
                     class_rules: finalize.class_rules,
+                    report: None,
                 }));
                 self.phase = PHASE_DONE;
                 self.work = 0;
@@ -732,7 +843,7 @@ mod tests {
         let pads = view(&s).footprints().flat_map(|f| f.pads).collect::<Vec<_>>();
         for (a, b) in pads.iter().flat_map(|a| pads.iter().map(move |b| (a, b))).filter(|(a, b)| a.center != b.center) {
             let p = json!({"layer":copper_layers(&s)[0],"width_nm":250_000,"points":[a.center,b.center],"expected_revision":s.revision()});
-            let (candidate, added) = edit_candidate(s.project().unwrap(), ADD_TRACKS, &p).unwrap();
+            let CandidateEdit { candidate, added, .. } = edit_candidate(s.project().unwrap(), ADD_TRACKS, &p).unwrap();
             let expected_short = short(candidate.as_ref().unwrap(), &added).is_some();
             let mut job = s.prepare_copper_edit(ADD_TRACKS, &p).unwrap();
             while !job.step(7) {}

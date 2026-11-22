@@ -20,6 +20,7 @@ std::thread_local! {
     pub(super) static TERMINAL_NET_INDEX_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BASELINE_TERMINALS_STEPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static BASELINE_TOTAL_NET_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static REMOVAL_PLACEMENT_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -1041,7 +1042,8 @@ pub fn preview(accepted: &Baseline, proposed: &Baseline) -> Result<Preview, Stri
 
 /// Build a complete physical candidate with its matching accepted baseline installed,
 /// without changing the input project. Revision checks and single-step publication
-/// belong to the caller; unsupported/missing assets produce no partial mutation.
+/// belong to the caller. Missing or unsupported assets and removal of locked
+/// placements are refused without a partial candidate.
 pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseline) -> Result<(Project, Baseline), String> {
     let target = project.boards().next().map(|board| board.target).ok_or("no physical board is available")?;
     if target.project != proposed.project || target.board != proposed.board {
@@ -1064,6 +1066,13 @@ pub fn apply_candidate(project: &Project, accepted: &Baseline, proposed: &Baseli
     if plan.is_noop() {
         return Ok((project.clone(), accepted.clone()));
     }
+    let removed_placements = plan.components.iter().filter_map(|change| {
+        let ComponentChange::Removed { component } = change else { return None };
+        #[cfg(test)]
+        REMOVAL_PLACEMENT_LOOKUPS.set(REMOVAL_PLACEMENT_LOOKUPS.get() + 1);
+        project.board.footprints().get(*project.board.by_component.get(component)?)
+    });
+    super::transform::require_unlocked_placements(project, removed_placements.map(Some)).map_err(|error| error.to_string())?;
     let mut next = project.clone();
     let board = Arc::make_mut(&mut next.board);
     board.footprints.retain(|footprint| proposed.components.contains_key(&footprint.component));

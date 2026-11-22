@@ -39,8 +39,9 @@ save the schematic and board together with shared undo/redo.
   track width, via annular rings, unrouted connections, board edges and courtyard
   overlap, using saved board rules and supported dimensional net-class rules.
 - **Outputs:** export supported board geometry as Gerber X2 copper, mask, paste,
-  silkscreen and outline layers with aperture functions, and circular plated holes
-  in an Excellon drill file, together in one archive.
+  silkscreen and outline layers with aperture functions, plus net and pin attributes
+  on copper. Circular plated holes are included as an Excellon drill file
+  in the same archive.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
 - **Libraries:** browse built-in, project-pinned and registered native libraries
