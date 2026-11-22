@@ -460,13 +460,13 @@ fn assert_recipe_edits_and_geometry_refusal(session: &mut Session, content: &Val
 
     let mut replaced = content.clone();
     replaced["units"] = json!("in");
-    replaced["file_stem"] = json!("prototype_rev2");
+    replaced["file_stem"] = json!("prototype-rev2");
     set(session, ID, &replaced).unwrap();
     let updated = session.snapshot().unwrap();
     let reopened = decode_documents(&encode_documents(updated.clone()).unwrap()).unwrap();
     assert_eq!(reopened.output_recipes(), updated.output_recipes());
     assert_eq!(reopened.output_recipes()[0].content.units, Units::In);
-    assert_eq!(reopened.output_recipes()[0].content.file_stem, "prototype_rev2");
+    assert_eq!(reopened.output_recipes()[0].content.file_stem, "prototype-rev2");
 
     set(session, ID, &Value::Null).unwrap();
     let removed = session.snapshot().unwrap();
