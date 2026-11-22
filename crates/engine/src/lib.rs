@@ -2563,7 +2563,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: EXPORT_FABRICATION,
         title: "Generate Fabrication Outputs",
-        summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and an Excellon drill file. Edits nothing; execute returns every file's name and text.",
+        summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and Excellon plated and, when present, non-plated drill files. Edits nothing; execute returns every file's name and text.",
         params: &[BOARD],
     },
     Command {
