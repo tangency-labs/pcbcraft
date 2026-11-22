@@ -1,4 +1,6 @@
 //! Opt-in native-window proof, using the same authenticated transport as a demonstration.
+//! Each ignored scenario owns a winit event loop, which a process can create only once:
+//! run one scenario per process, e.g. `cargo test -p pcbcraft-app -- --ignored native_window_resizes`.
 use super::*;
 use pcbcraft_mcp::{Backend, live::Remote};
 use std::sync::{Arc, Mutex, mpsc};
@@ -168,6 +170,7 @@ struct Sized {
     app: PcbApp,
     done: mpsc::Receiver<Result<(), String>>,
     result: Arc<Mutex<Option<Result<(), String>>>>,
+    closing: bool,
 }
 
 impl eframe::App for Sized {
@@ -175,9 +178,15 @@ impl eframe::App for Sized {
         self.app.automation_input(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Skip the app once closing, so its unsaved-project guard cannot cancel the test's Close.
+        if self.closing {
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            return;
+        }
         self.app.frame(ui);
         if let Ok(result) = self.done.try_recv() {
             *self.result.lock().unwrap() = Some(result);
+            self.closing = true;
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
         }
         ui.ctx().request_repaint_after(Duration::from_millis(16));
@@ -246,7 +255,7 @@ fn native_window_resizes_to_recording_sizes() {
                 };
                 let _ = send.send(run());
             });
-            Ok(Box::new(Sized { app, done, result: outcome }))
+            Ok(Box::new(Sized { app, done, result: outcome, closing: false }))
         }),
     )
     .unwrap();
