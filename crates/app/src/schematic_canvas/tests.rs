@@ -28,7 +28,7 @@ fn rotated_led_labels_clear_the_drawing() {
             let painter = ctx.layer_painter(egui::LayerId::background());
             paint_symbol(
                 &painter,
-                definition.default_unit(),
+                definition.default_unit().graphics(),
                 pos2(250.0, 250.0),
                 step,
                 turns,
@@ -101,7 +101,7 @@ fn integrated_pin_text_obeys_the_schematic_detail_threshold() {
         ctx.begin_pass(egui::RawInput::default());
         paint_symbol(
             &ctx.layer_painter(egui::LayerId::background()),
-            definition.default_unit(),
+            definition.default_unit().graphics(),
             pos2(100., 100.),
             step,
             0,
