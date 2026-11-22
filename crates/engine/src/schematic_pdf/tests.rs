@@ -379,3 +379,65 @@ fn unicode_runs_cross_font_dictionaries_without_losing_text() {
     assert!(objects[2].contains("/F1 "));
     assert_eq!(extract(&objects).trim_end(), text);
 }
+
+/// Selecting an alternate pin function replaces the primary pin label in exported schematic PDFs.
+#[test]
+fn selected_alternate_pin_function_appears_in_exported_pdf() {
+    use crate::{
+        authoring::{Action, Item, Kind, Primitive},
+        library,
+        schematic::{AlternatePinFunction, ElectricalType},
+    };
+
+    let item = Item::new(Kind::Symbol).unwrap();
+    let mut pin = item.objects[&1].clone();
+    let Primitive::Pin { name, electrical_type, alternates, .. } = &mut pin else { panic!("expected starter pin") };
+    *name = Some("GPIO".into());
+    *electrical_type = ElectricalType::Bidirectional;
+    *alternates = vec![AlternatePinFunction { name: "ADC_IN".into(), electrical_type: ElectricalType::Input }];
+    let mut editor = crate::authoring::Session::new(item, false).unwrap();
+    editor.execute(0, Action::Replace { object: 1, primitive: pin }).unwrap();
+    let manifest = crate::authoring::publishing::new_library("synthetic", "Synthetic", "MIT OR Apache-2.0").unwrap();
+    let published = crate::authoring::publishing::prepare_copy(editor.snapshot(), &manifest).unwrap();
+    let published_item = published.item();
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let target = session.project().unwrap().sheet_target();
+    apply(&mut session, crate::sheets::page::SET_PAGE, json!({"sheet":target.id(),"paper":"a4","orientation":"landscape","at":{"x_nm":0,"y_nm":0}}));
+    let mut documents = published.documents().clone();
+    documents.insert("library.json".into(), manifest);
+    session.execute("library.load_source", &json!({"source":"mcu","documents":documents})).unwrap();
+    let definition = session.libraries.symbol(&published_item.library, &published_item.id, published_item.revision).unwrap();
+    let digest = library::sources::symbol_digest(&definition).unwrap();
+    apply(
+        &mut session,
+        crate::PLACE_SYMBOL,
+        json!({
+            "library": published_item.library,
+            "definition": published_item.id,
+            "definition_revision": published_item.revision,
+            "definition_digest": digest,
+            "x_nm": 20 * GRID_NM,
+            "y_nm": 20 * GRID_NM,
+        }),
+    );
+
+    let before_bytes = export(session.project().unwrap(), target).unwrap();
+    let before_text = extract(&objects(&before_bytes));
+    assert!(before_text.contains("GPIO"), "missing primary pin label before override: {before_text}");
+    assert!(!before_text.contains("ADC_IN"), "unexpected alternate pin label before override: {before_text}");
+
+    let part = session.project().unwrap().symbols()[0].component_id();
+    session
+        .execute(
+            crate::pin_functions::SET,
+            &json!({"target":{"part":part,"terminal":"1"},"function":"ADC_IN","expected_revision":session.revision()}),
+        )
+        .unwrap();
+
+    let after_bytes = export(session.project().unwrap(), target).unwrap();
+    let after_text = extract(&objects(&after_bytes));
+    assert!(after_text.contains("ADC_IN"), "missing selected alternate pin label in PDF: {after_text}");
+    assert!(!after_text.contains("GPIO"), "overridden primary pin label remained in PDF: {after_text}");
+}

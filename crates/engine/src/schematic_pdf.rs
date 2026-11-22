@@ -149,7 +149,7 @@ fn draw_wires(sheet: &Project, page: &mut Drawing) {
 /// Draw the selected unit of a placed symbol in its authored pose, then its instance fields.
 fn draw_symbol(sheet: &Project, page: &mut Drawing, symbol: &SymbolPlacement) -> Result<(), PdfError> {
     let mut bounds = [symbol.position.y_nm; 2];
-    for shape in symbol.unit_definition().graphics() {
+    for shape in sheet.symbol_graphics(symbol) {
         draw_shape(page, symbol, &shape, &mut bounds)?;
     }
     let Some(part) = sheet.component(symbol) else { return Ok(()) };
