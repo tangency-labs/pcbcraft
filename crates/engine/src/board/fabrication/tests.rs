@@ -76,6 +76,20 @@ fn aperture_fixture_with_radii_and_pitch(
     plated_from: Option<usize>,
     mapping: Option<serde_json::Value>,
 ) -> Session {
+    footprint_fixture(pads, (rotation, bottom), (offset, pitch), position, plated_from, mapping, &[])
+}
+
+/// Build a physical package with an explicit corner radius per pad and optional non-plated
+/// holes through normal editor transactions.
+fn footprint_fixture(
+    pads: &[(PadShape, i64, i64, u16, i64)],
+    (rotation, bottom): (u16, bool),
+    (offset, pitch): (Point, Point),
+    position: Point,
+    plated_from: Option<usize>,
+    mapping: Option<serde_json::Value>,
+    holes: &[crate::board::definition::CircularNpth],
+) -> Session {
     use crate::authoring::{Action, Item, Kind, Primitive};
     let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
     editor.execute(editor.revision(), Action::Delete { objects: vec![2, 3] }).unwrap();
@@ -96,6 +110,9 @@ fn aperture_fixture_with_radii_and_pitch(
         let primitive = Primitive::Pad { pad };
         let action = if index == 0 { Action::Replace { object: 1, primitive } } else { Action::Insert { primitive } };
         editor.execute(editor.revision(), action).unwrap();
+    }
+    for &hole in holes {
+        editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
     }
     let definition = editor.snapshot().footprint().unwrap();
     let document = editor.snapshot().export_native().unwrap().to_string();
@@ -2185,6 +2202,86 @@ fn a_routed_board_produces_gerber_and_drill_files() {
     assert!(drill.starts_with("M48\n") && drill.ends_with("M30\n"));
     assert!(drill.contains("T1C0.300\n"), "{drill}");
     assert!(drill.contains("X7.000Y-20.000\n"), "{drill}");
+}
+
+/// Exercise one bottom-side, quarter-turned footprint with plated lands and a board via.
+fn drill_fixture(holes: &[crate::board::definition::CircularNpth]) -> Session {
+    let mut s = footprint_fixture(
+        &[(PadShape::Circle, 2_000_000, 2_000_000, 0, 0); 2],
+        (90, true),
+        (Point { x_nm: 0, y_nm: 0 }, Point { x_nm: 2_000_000, y_nm: 0 }),
+        Point { x_nm: 30_000_000, y_nm: -25_000_000 },
+        Some(0),
+        None,
+        holes,
+    );
+    s.apply(
+        crate::ADD_VIA,
+        &json!({"at":{"x_nm":12_000_000,"y_nm":20_000_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"origin":{"kind":"point","x_nm":1_000_000,"y_nm":-2_000_000},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    s
+}
+
+/// Separate round hits, preserve the plated output bytes, and include the new file in the manifest.
+#[test]
+fn mechanical_holes_use_their_own_drill_file() {
+    use crate::board::definition::CircularNpth;
+    let holes = [
+        CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 },
+        CircularNpth { center: Point { x_nm: -4_000_000, y_nm: 6_000_000 }, diameter_nm: 3_200_000 },
+    ];
+    let mut with = drill_fixture(&holes);
+    let without = drill_fixture(&[]);
+    let params = json!({});
+    let legacy = without.export_fabrication(&params).unwrap();
+    let mixed = with.export_fabrication(&params).unwrap();
+    assert_eq!(&mixed[..mixed.len() - 1], legacy.as_slice(), "no NPTH hits in plated, copper, mask or paste files");
+    // The legacy serializer emits via tools first here, then the two pads in board coordinate order.
+    assert_eq!(
+        file(&legacy, "-PTH.drl"),
+        "M48\n; PCBcraft plated drill file\n; TYPE=PLATED\nFMAT,2\nMETRIC\nT1C0.300\nT2C1.000\n%\nG90\nG05\nT1\nX11.000Y-22.000\nT2\nX29.000Y23.000\nX29.000Y21.000\nM30\n"
+    );
+    assert!(!legacy.iter().any(|out| out.name.ends_with("-NPTH.drl")));
+    // Mirror local X, rotate 90°, add board placement, subtract origin, then negate Y.
+    let npth = mixed.last().unwrap();
+    assert!(npth.name.ends_with("-NPTH.drl"));
+    assert_eq!(
+        npth.contents,
+        "M48\n; PCBcraft non-plated drill file\n; TYPE=NON_PLATED\nFMAT,2\nMETRIC\nT1C3.200\n%\nG90\nG05\nT1\nX34.000Y20.000\nX35.000Y27.000\nM30\n"
+    );
+    let capture = with.export_fabrication_archive(&params).unwrap();
+    assert_eq!(capture, with.export_fabrication_archive(&params).unwrap());
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(capture.bytes())).unwrap();
+    let mut drill = String::new();
+    zip.by_name(&npth.name).unwrap().read_to_string(&mut drill).unwrap();
+    assert_eq!(drill, npth.contents);
+    let manifest = embedded_manifest(&capture);
+    assert_eq!(with.execute(EXPORT_FABRICATION, &params).unwrap()["fabrication"]["manifest"], manifest);
+    assert_eq!(
+        manifest["files"].as_array().unwrap().last().unwrap(),
+        &json!({"name":npth.name,"size_bytes":npth.contents.len(),"sha256":format!("{:x}", Sha256::digest(npth.contents.as_bytes()))})
+    );
+}
+
+/// A half-unit diameter rounds up to a nonzero tool; a smaller diameter cannot produce any archive.
+#[test]
+fn non_plated_drill_rejects_a_diameter_that_rounds_to_zero() {
+    use crate::board::definition::CircularNpth;
+    let at = Point { x_nm: 3_000_000, y_nm: 5_000_000 };
+    let minimum = drill_fixture(&[CircularNpth { center: at, diameter_nm: 500 }]);
+    let params = json!({});
+    let outputs = minimum.export_fabrication(&params).unwrap();
+    assert!(file(&outputs, "-NPTH.drl").contains("T1C0.001\n"));
+    let too_small = drill_fixture(&[CircularNpth { center: at, diameter_nm: 499 }]);
+    assert!(matches!(too_small.export_fabrication_archive(&params), Err(CommandError::Unavailable(message))
+        if message.contains("499 nm") && message.contains("rounds to zero")));
 }
 
 /// Read the JSON actually stored in a captured ZIP.

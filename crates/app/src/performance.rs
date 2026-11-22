@@ -6,6 +6,7 @@ mod bga;
 #[cfg(target_arch = "wasm32")]
 mod browser_capture;
 pub mod checker;
+mod envelope;
 mod fixture;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod pointer;
@@ -46,6 +47,11 @@ use uuid::Uuid;
 
 type Result<T> = std::result::Result<T, String>;
 type Finding = (Option<usize>, usize, bool, bool, bool);
+/// Above this object count, `ClearanceQuery::exhaustive_pairs` retains O(n^2) decisions
+/// (over a billion on `envelope-v1`) and risks OOM. Smaller fixtures keep the full all-pairs
+/// oracle; larger boards verify a deterministic strided sample against all other objects.
+const EXHAUSTIVE_PAIR_ORACLE_MAX_OBJECTS: usize = 8_192;
+const BOUNDED_PAIR_ORACLE_SAMPLES: usize = 128;
 
 /// A harness envelope, not a native project format. Embedded bytes are an ordinary `.pc`
 /// archive produced by the production encoder; the board and trace are explicitly addressed.
@@ -113,6 +119,36 @@ fn findings(results: &Results) -> Vec<Finding> {
         .filter(|d| d.touches || d.clearance_violation)
         .map(|d| (d.first, d.second, d.touches, d.clearance_violation, d.conflicting_nets))
         .collect()
+}
+
+/// Verify `ClearanceQuery::pairs` against the full exhaustive oracle on smaller fixtures,
+/// or against bounded per-object exhaustive findings on large envelope boards.
+fn verify_pairs(query: &ClearanceQuery, pairs: &Results) -> Result<()> {
+    if query.objects().len() <= EXHAUSTIVE_PAIR_ORACLE_MAX_OBJECTS {
+        if findings(pairs) != findings(&query.exhaustive_pairs()) {
+            return Err("clearance candidate findings differ from exhaustive reference".into());
+        }
+        return Ok(());
+    }
+    verify_pairs_bounded(query, pairs)
+}
+
+/// Verify every finding touching a deterministic strided sample of objects against all other
+/// objects without materializing O(n^2) non-violating decisions.
+fn verify_pairs_bounded(query: &ClearanceQuery, pairs: &Results) -> Result<()> {
+    let total = query.objects().len();
+    let step = (total / BOUNDED_PAIR_ORACLE_SAMPLES).max(1);
+    let sampled: Vec<usize> = (0..total).step_by(step).take(BOUNDED_PAIR_ORACLE_SAMPLES).collect();
+    let selected: BTreeSet<usize> = sampled.iter().copied().collect();
+    let actual: Vec<Finding> = findings(pairs)
+        .into_iter()
+        .filter(|(first, second, _, _, _)| first.is_some_and(|i| selected.contains(&i)) || selected.contains(second))
+        .collect();
+    let expected = findings(&query.exhaustive_findings_for(&sampled));
+    if actual != expected {
+        return Err("clearance candidate findings differ from bounded exhaustive reference".into());
+    }
+    Ok(())
 }
 
 /// Independently evaluate an initially unknown probe against every shared-layer object.
@@ -200,15 +236,16 @@ fn load_artifact(artifact_json: &str) -> Result<Artifact> {
         return Err("unsupported fixture schema, corrupt project or invalid trace length".into());
     }
     let expected = match artifact.trace_id.as_str() {
-        replay::STANDARD_TRACE_ID => Some(replay::Step::standard()),
-        replay::COMMIT_TRACE_ID => Some(replay::Step::commit()),
-        replay::SHOVE_TRACE_ID => Some(replay::Step::shove()),
+        replay::STANDARD_TRACE_ID => Some(("standard", replay::Step::standard())),
+        replay::ENVELOPE_TRACE_ID => Some(("envelope", replay::Step::envelope())),
+        replay::COMMIT_TRACE_ID => Some(("commit", replay::Step::commit())),
+        replay::SHOVE_TRACE_ID => Some(("shove", replay::Step::shove())),
         _ => None,
     };
-    if let Some(expected) = expected
+    if let Some((kind, expected)) = expected
         && serde_json::to_value(&artifact.trace).map_err(|e| e.to_string())? != serde_json::to_value(expected).map_err(|e| e.to_string())?
     {
-        return Err("standard trace ID does not match its versioned steps".into());
+        return Err(format!("{kind} trace ID does not match its versioned steps"));
     }
     Ok(artifact)
 }
@@ -246,8 +283,8 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         let query =
             timed(&mut samples, "clearance.prepare", || session.clearance_query(artifact.board, DEFAULT_CLEARANCE_NM)).map_err(|e| e.to_string())?;
         let pairs = timed(&mut samples, "clearance.pairs", || black_box(query.pairs()));
-        if iteration == 0 && findings(&pairs) != findings(&query.exhaustive_pairs()) {
-            return Err("clearance candidate findings differ from exhaustive reference".into());
+        if iteration == 0 {
+            verify_pairs(&query, &pairs)?;
         }
         drop(pairs);
         if let Some(context) = query.authority().class_rules()
@@ -591,6 +628,93 @@ mod tests {
         ] {
             assert!(ids.contains(id), "{id} missing from {ids:?}");
         }
+    }
+
+    /// The envelope recipe builds a board at the documented track, via and 1,024-pad footprint
+    /// limits through shared commands, stays within every native storage bound, and reopens with
+    /// all counts and the front/back layer split intact. Seeded geometry and counts are
+    /// deterministic while document UUIDs are random, so the SHA-256 checks verify round-trip
+    /// byte stability across save, reopen and re-encode.
+    #[test]
+    fn envelope_recipe_generates_saves_reopens_and_keeps_stable_bytes() {
+        use pcbcraft_engine::{
+            board::{
+                setup::{LayerPurpose, Side},
+                track::{MAX_TRACKS, MAX_VIAS},
+            },
+            persistence::{MAX_ARCHIVE_BYTES, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS_BYTES, decode_documents, encode_documents, encode_packed},
+        };
+
+        let artifact_json = generate("envelope-v1", "test").unwrap();
+        let artifact = load_artifact(&artifact_json).unwrap();
+        assert_eq!(artifact.recipe, "envelope-v1");
+        assert_eq!(artifact.trace_id, replay::ENVELOPE_TRACE_ID);
+        assert_eq!(artifact.seed, 237_240);
+        assert_eq!(artifact.project_sha256, digest(&artifact.project));
+        assert!(artifact.project.len() <= MAX_ARCHIVE_BYTES, "{} bytes", artifact.project.len());
+
+        let reopened = decode_packed(&artifact.project).unwrap().project;
+        let board = reopened.board_view(artifact.board).unwrap();
+        assert_eq!(reopened.sheets().len(), 1);
+        assert_eq!(reopened.components().count(), envelope::FOOTPRINTS);
+        assert_eq!(reopened.all_symbols().count(), envelope::DISCRETE_PARTS as usize + envelope::BGA_UNITS);
+        assert_eq!(board.footprints().count(), envelope::FOOTPRINTS);
+        assert_eq!(board.tracks().len(), MAX_TRACKS);
+        assert_eq!(board.vias().len(), MAX_VIAS);
+        assert_eq!(board.footprints().map(|footprint| footprint.pads.len()).max(), Some(envelope::BGA_PADS));
+        assert_eq!(
+            board.footprints().map(|footprint| footprint.pads.len()).sum::<usize>(),
+            envelope::DISCRETE_PARTS as usize * 2 + envelope::BGA_PADS
+        );
+
+        let setup = board.setup().unwrap();
+        let front = setup.layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(Side::Front)).unwrap().id;
+        let back = setup.layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(Side::Back)).unwrap().id;
+        assert_eq!(board.tracks().iter().filter(|track| track.layer == front).count(), MAX_TRACKS / 2);
+        assert_eq!(board.tracks().iter().filter(|track| track.layer == back).count(), MAX_TRACKS / 2);
+
+        let reencoded_packed = encode_packed(reopened.clone()).unwrap();
+        assert_eq!(digest(&reencoded_packed), artifact.project_sha256);
+        assert_eq!(reencoded_packed, artifact.project);
+
+        let documents = encode_documents(reopened).unwrap();
+        let total_bytes: usize = documents.values().map(Vec::len).sum();
+        assert!(total_bytes <= MAX_DOCUMENTS_BYTES, "{total_bytes} bytes");
+        for (path, bytes) in &documents {
+            assert!(bytes.len() <= MAX_DOCUMENT_BYTES, "{path}: {} bytes", bytes.len());
+        }
+        let expected_digests: BTreeMap<_, _> = documents.iter().map(|(path, bytes)| (path.clone(), digest(bytes))).collect();
+        let reopened_documents = decode_documents(&documents).unwrap();
+        let reencoded_documents = encode_documents(reopened_documents).unwrap();
+        let actual_digests: BTreeMap<_, _> = reencoded_documents.iter().map(|(path, bytes)| (path.clone(), digest(bytes))).collect();
+        assert_eq!(actual_digests, expected_digests);
+    }
+
+    /// Tampering with the envelope trace under its versioned ID must be rejected by `load_artifact`.
+    #[test]
+    fn envelope_trace_identity_rejects_unrelated_steps() {
+        let mut artifact: serde_json::Value = serde_json::from_str(&generate("reference-v1", "test").unwrap()).unwrap();
+        artifact["trace_id"] = json!(replay::ENVELOPE_TRACE_ID);
+        let err = load_artifact(&artifact.to_string()).err().unwrap();
+        assert!(err.contains("envelope trace ID"), "{err}");
+    }
+
+    /// The bounded pair oracle must match valid candidate pairs and reject omitted or altered findings.
+    #[test]
+    fn bounded_pair_oracle_accepts_valid_pairs_and_rejects_corrupted_findings() {
+        let artifact = load_artifact(&generate("reference-v1", "test").unwrap()).unwrap();
+        let mut session = Session::default();
+        session.open_snapshot(decode_packed(&artifact.project).unwrap().project);
+        let query = session.clearance_query(artifact.board, DEFAULT_CLEARANCE_NM).unwrap();
+        let pairs = query.pairs();
+        assert!(verify_pairs_bounded(&query, &pairs).is_ok());
+        let index = pairs.decisions.iter().position(|d| d.touches || d.clearance_violation).unwrap();
+        let mut omitted = pairs.clone();
+        omitted.decisions.remove(index);
+        assert!(verify_pairs_bounded(&query, &omitted).is_err());
+        let mut flipped = pairs;
+        flipped.decisions[index].clearance_violation = !flipped.decisions[index].clearance_violation;
+        assert!(verify_pairs_bounded(&query, &flipped).is_err());
     }
 
     /// Corrupt archives, unsupported recipes and invalid sample/environment metadata must
