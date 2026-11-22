@@ -591,6 +591,15 @@ pub(super) fn edge_gap(edges: &[OutlineEdge], contour: &Contour) -> (f64, bool) 
 }
 
 impl Outline {
+    /// Closed outlines constrain copper placement and enforce the effective edge clearance.
+    pub(super) fn allows_copper(&self, contour: &Contour, clearance_nm: i64) -> bool {
+        if self.polygons.is_empty() {
+            return true;
+        }
+        let (gap, crosses) = edge_gap(&self.edges, contour);
+        !crosses && gap >= clearance_nm as f64 && self.contains(contour)
+    }
+
     /// Whether every core anchor of the copper lies on the board. With disjoint contours that is
     /// inside an odd number of closed polygons, so copper inside a cut-out is not contained;
     /// otherwise it is inside any closed polygon.
