@@ -420,6 +420,40 @@ fn closing_without_waiting_for_a_save_keeps_recovery() {
     h.state_mut().files.end_stand_in(Some("ended with the process"));
 }
 
+/// Closing without waiting must still keep recovery if the pending save fails and is polled on
+/// the closing frame before `on_exit` runs, when `files.busy()` has already turned false.
+#[test]
+fn close_without_waiting_keeps_recovery_when_pending_save_fails_before_exit() {
+    use crate::unsaved::{Then, Waiting};
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("project");
+    let dir = work.path().join("recovery");
+    let mut source = Session::default();
+    source.apply("project.new", &json!({"name":"Close fail"})).unwrap();
+    pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
+    let mut h = harness();
+    h.state_mut().autosave.dir = Some(dir.clone());
+    h.state_mut().preferences.autosave_minutes = 5;
+    let rev = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&root.join("project.json"), rev);
+    run_at(&mut h, 1.0);
+    place(&mut h, 0);
+    let expected = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let (_, entry) = h.state().recovery_entry().unwrap();
+    h.state_mut().files.use_stand_in();
+    let ctx = h.ctx.clone();
+    h.state_mut().save_project_file(None, &ctx);
+    assert!(h.state().files.stand_in_waiting());
+    h.state_mut().waiting = Some(Waiting::ForSave(Then::Close));
+    h.state_mut().close_without_waiting(&ctx);
+    h.state_mut().files.end_stand_in(Some("Disk full"));
+    run_at(&mut h, 2.0);
+    assert!(h.state().close_allowed);
+    assert!(!h.state().files.busy(), "the closing frame already polled the failed save");
+    eframe::App::on_exit(h.state_mut());
+    assert_eq!(pcbcraft_storage::recovery::recover(&dir, &entry).unwrap().documents, expected);
+}
+
 /// Interrupting Preferences with a dirty-project close cannot activate a staged timed Save.
 #[test]
 fn interrupted_preferences_do_not_enable_timed_save() {

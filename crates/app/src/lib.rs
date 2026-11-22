@@ -348,6 +348,10 @@ pub struct PcbApp {
     properties_open: bool,
     /// Set once closing the window has been answered for, so the next close request passes.
     close_allowed: bool,
+    /// Set when closing chose not to wait for a pending file job, so exit keeps recovery even if
+    /// that job finishes or fails before `on_exit` runs.
+    #[cfg(not(target_arch = "wasm32"))]
+    close_keeps_recovery: bool,
     /// Close, New Project or Open held back until the running file operation finishes.
     waiting: Option<unsaved::Waiting>,
     /// The snapped point under the pointer on a schematic canvas in the last frame, for the
@@ -3001,7 +3005,7 @@ impl eframe::App for PcbApp {
     /// the only copy of the unsaved edits.
     #[cfg(not(target_arch = "wasm32"))]
     fn on_exit(&mut self) {
-        let approved = self.close_allowed && !self.files.busy();
+        let approved = self.close_allowed && !self.close_keeps_recovery && !self.files.busy();
         self.autosave.finish(&mut self.session, approved);
     }
 }

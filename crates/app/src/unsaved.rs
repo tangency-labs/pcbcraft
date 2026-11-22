@@ -141,6 +141,10 @@ impl PcbApp {
     pub(crate) fn close_without_waiting(&mut self, ctx: &egui::Context) {
         self.waiting = None;
         self.file_notice = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.close_keeps_recovery = true;
+        }
         self.carry_on(Then::Close, ctx);
     }
 
