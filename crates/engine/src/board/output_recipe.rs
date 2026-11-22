@@ -2,7 +2,7 @@
 
 use super::{assembly_profile::Adoption, origin::Anchor};
 use crate::{
-    CommandError, ParamKind, Project, Session,
+    CommandError, Project, Session,
     persistence::layout::{RESERVED_PORTABLE_SEGMENTS, portable_segment},
 };
 use serde::{Deserialize, Serialize, de};
@@ -159,7 +159,7 @@ pub(crate) fn validate_recipes(recipes: &[Recipe], board: Option<Uuid>) -> Resul
 
 /// Describe a complete recipe replacement, or null to remove it.
 pub(crate) fn schema() -> Value {
-    let id = ParamKind::OutputRecipeId.schema();
+    let id = crate::non_nil_uuid_schema();
     let origin = super::origin::schema();
     json!({"oneOf":[{"type":"null"},{"type":"object","additionalProperties":false,
         "required":["name","board","units","file_stem","gerber_layers","drill"],
@@ -205,6 +205,9 @@ impl Session {
         self.check_revision(params)?;
         let project = self.open_project()?;
         let id: Uuid = serde_json::from_value(params["recipe"].clone()).map_err(|error| CommandError::InvalidParams(error.to_string()))?;
+        if id.is_nil() {
+            return Err(CommandError::InvalidParams("Output recipe ID must be a non-nil UUID.".into()));
+        }
         let content = parse(&params["content"]).map_err(CommandError::InvalidParams)?;
         let mut candidate = project.clone();
         let recipes = Arc::make_mut(&mut candidate.output_recipes);

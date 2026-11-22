@@ -384,3 +384,67 @@ fn recipe_command_schema_matches_runtime_validation() {
     }
     assert_eq!(session.project().unwrap().output_recipes()[0].content.file_stem, "lpt10");
 }
+
+/// Every recipe ID field in the published command schema rejects the nil UUID and agrees with
+/// runtime validation, while ordinary non-nil UUIDs are accepted in every field.
+#[test]
+fn recipe_command_schema_and_runtime_reject_nil_uuids() {
+    let described = crate::catalog().iter().find(|command| command.id == SET_OUTPUT_RECIPE).unwrap().to_json();
+    let mut recipe_schema = described["params"]["properties"]["recipe"].clone();
+    recipe_schema.as_object_mut().unwrap().remove("description");
+    let properties = &described["params"]["properties"]["content"]["oneOf"][1]["properties"];
+    let expected = crate::non_nil_uuid_schema();
+    assert_eq!(expected["type"], "string");
+    assert_eq!(expected["format"], "uuid");
+    assert_eq!(expected["not"]["const"], Uuid::nil().to_string());
+
+    for (field, field_schema) in [
+        ("recipe", &recipe_schema),
+        ("board", &properties["board"]),
+        ("gerber_layers.items", &properties["gerber_layers"]["items"]),
+        ("assembly_profile.profile", &properties["assembly_profile"]["properties"]["profile"]),
+    ] {
+        assert_eq!(field_schema, &expected, "{field} schema should require a non-nil UUID");
+        let schema_accepts = |id: Uuid| {
+            let text = id.to_string();
+            Uuid::parse_str(&text).is_ok() && field_schema["not"]["const"].as_str() != Some(text.as_str())
+        };
+        assert!(!schema_accepts(Uuid::nil()), "{field} schema should reject nil UUID");
+        assert!(schema_accepts(ID), "{field} schema should accept ordinary UUID");
+    }
+
+    let (mut session, content) = fixture();
+    let revision = session.revision();
+    let initial = session.snapshot().unwrap();
+
+    // Nil recipe ID is rejected for both create/replace and null removal.
+    assert!(matches!(set(&mut session, Uuid::nil(), &content), Err(CommandError::InvalidParams(_))));
+    assert!(matches!(set(&mut session, Uuid::nil(), &Value::Null), Err(CommandError::InvalidParams(_))));
+
+    // Nil board ID is rejected.
+    let mut nil_board = content.clone();
+    nil_board["board"] = json!(Uuid::nil());
+    assert!(matches!(set(&mut session, ID, &nil_board), Err(CommandError::InvalidParams(_))));
+
+    // Nil Gerber layer ID is rejected alone or alongside a valid layer ID.
+    let mut nil_layer = content.clone();
+    nil_layer["gerber_layers"] = json!([Uuid::nil()]);
+    assert!(matches!(set(&mut session, ID, &nil_layer), Err(CommandError::InvalidParams(_))));
+    let valid_layer = content["gerber_layers"][0].clone();
+    let mut mixed_layers = content.clone();
+    mixed_layers["gerber_layers"] = json!([valid_layer, Uuid::nil()]);
+    assert!(matches!(set(&mut session, ID, &mixed_layers), Err(CommandError::InvalidParams(_))));
+
+    // Nil assembly profile ID is rejected.
+    let mut nil_profile = content.clone();
+    nil_profile["assembly_profile"]["profile"] = json!(Uuid::nil());
+    assert!(matches!(set(&mut session, ID, &nil_profile), Err(CommandError::InvalidParams(_))));
+
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&initial, &session.snapshot().unwrap()));
+
+    // Ordinary non-nil UUIDs in every field are accepted.
+    set(&mut session, ID, &content).unwrap();
+    assert_eq!(session.project().unwrap().output_recipes().len(), 1);
+    assert_eq!(session.project().unwrap().output_recipes()[0].id, ID);
+}

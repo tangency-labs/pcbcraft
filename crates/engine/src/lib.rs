@@ -321,7 +321,8 @@ impl ParamKind {
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
             Self::PlacementOrigin => board::origin::schema(),
-            Self::AssemblyProfileId | Self::OutputRecipeId => json!({"type":"string","format":"uuid"}),
+            Self::AssemblyProfileId => json!({"type":"string","format":"uuid"}),
+            Self::OutputRecipeId => non_nil_uuid_schema(),
             Self::OutputRecipeContent => board::output_recipe::schema(),
             Self::AssemblyProfile => board::assembly_profile::schema(),
             Self::AssemblyProfileRevision => json!({"type":["integer","null"],"minimum":1,"maximum":u32::MAX}),
@@ -869,6 +870,11 @@ impl ParamKind {
             Self::Terminal => Err("must identify a symbol and one of its terminal numbers"),
         }
     }
+}
+
+/// Canonical RFC 4122 UUID schema that rejects the all-zero nil UUID.
+pub(crate) fn non_nil_uuid_schema() -> Value {
+    json!({"type":"string","format":"uuid","not":{"const":uuid::Uuid::nil()}})
 }
 
 /// Publish the strict bounded point representation used by free wire endpoints and bends.
