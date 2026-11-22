@@ -47,6 +47,11 @@ the finished opening on rotated and back-side placements and checks its full
 annular ring. Fabrication export refuses slot-bearing boards until plated-slot
 machining is supported; non-plated slots are not supported.
 
+The engine's [object-query parser](object-queries.md) provides bounded boolean
+syntax, text selectors and exact numeric property comparisons with byte-offset
+diagnostics. It is a Rust API only; query evaluation, object selection, paging,
+area predicates and search UI are not implemented by this parser.
+
 Setup edits can be reviewed through `pcb.preview_board_setup` before the shared
 Apply command: layer removals/renumbering, affected objects and consent/refusal
 are returned with a disposable session-local token. Preview does not dirty the

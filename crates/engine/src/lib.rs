@@ -34,6 +34,7 @@ pub mod part_groups;
 pub mod part_instances;
 pub mod persistence;
 pub mod pin_functions;
+pub mod query;
 pub mod schematic;
 pub mod selection;
 mod session_scope;
