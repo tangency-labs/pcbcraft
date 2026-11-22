@@ -75,11 +75,16 @@ fn last_unit_delete_refuses_locked_legacy_placement_atomically() {
     };
     let before_history = history(&session);
     assert!(before_history.iter().all(|entries| entries.iter().any(Option::is_some)));
-    let error = session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol.id(),"expected_revision":revision})).unwrap_err();
-    assert!(matches!(&error, crate::CommandError::InvalidParams(message) if message.contains(&locked_name)), "{error}");
-    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
-    assert!(session.project().unwrap().board.footprint_for_part_instance(symbol.component).unwrap().locked);
-    assert_eq!((session.revision(), session.history_root_revision(), history(&session)), (revision, root, before_history));
+    let direct = json!({"symbol":symbol.id(),"expected_revision":revision});
+    let selection = json!({"items":{"symbols":[symbol.id()],"wires":[]},"expected_revision":revision});
+    for (command, params) in [(crate::DELETE_SYMBOL, &direct), (crate::DELETE_ITEMS, &selection), (crate::clipboard::CUT, &selection)] {
+        let error = session.apply(command, params).unwrap_err();
+        assert!(matches!(&error, crate::CommandError::InvalidParams(message) if message.contains(&locked_name)), "{command}: {error}");
+        assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()), "{command}");
+        assert!(session.project().unwrap().board.footprint_for_part_instance(symbol.component).unwrap().locked);
+        assert_eq!((session.revision(), session.history_root_revision()), (revision, root), "{command}");
+        assert_eq!(history(&session), before_history, "{command}");
+    }
 
     session.open_snapshot(original.clone());
     session.apply(crate::DELETE_SYMBOL, &json!({"symbol":symbol.id(),"expected_revision":session.revision()})).unwrap();
