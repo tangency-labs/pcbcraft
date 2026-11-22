@@ -89,6 +89,9 @@ fn query(s: &Session) -> ClearanceQuery {
 
 fn request(s: &Session, head: Point, target: Point) -> Request {
     Request {
+        mode: Default::default(),
+        merge_same_net: false,
+        fixed: Vec::new(),
         head,
         target,
         layer: copper_layers(s)[0],
@@ -538,10 +541,12 @@ fn obstacle_search_exhaustion_returns_head_only_incomplete() {
     let mut s = Session::default();
     s.apply("project.new", &json!({"create_board":true})).unwrap();
     add(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
-    for i in 1..=30 {
-        add(&mut s, ADD_VIA, json!({"at":p(i*10_000_000, 0),"via_diameter_nm":600000+i*200000,"via_drill_nm":300000}));
+    // The diameters grow from either end so both bounded search directions must
+    // encounter more hulls than one walk permits.
+    for i in 1..=60 {
+        add(&mut s, ADD_VIA, json!({"at":p(i*10_000_000, 0),"via_diameter_nm":600000+i.min(61-i)*200000,"via_drill_nm":300000}));
     }
-    let r = request(&s, p(0, 0), p(315_000_000, 0));
+    let r = request(&s, p(0, 0), p(615_000_000, 0));
     let planned = s.plan_route(&query(&s), &r, MAX_BUDGET, &|| false).unwrap();
     assert_eq!(planned.outcome, Outcome::Incomplete, "{planned:?}");
     assert_eq!(planned.points, vec![r.head]);
@@ -638,4 +643,300 @@ fn previous_route_goes_around_new_unconnected_copper() {
         assert!(gap_to(&s, &replanned, &obstacle) >= 200000.);
         commit_and_agree(&mut s, &replanned, r.layer, r.width_nm);
     }
+}
+
+/// A command-created 0805 pair and connected rails matching the pad-gap walkaround report.
+fn pad_gap_board() -> Session {
+    pad_gap_board_with_pickup(false)
+}
+
+/// Include an optional isolated starting pad before accepting the board/package baseline.
+fn pad_gap_board_with_pickup(extra_pickup: bool) -> Session {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({"create_board":true})).unwrap();
+    let mut symbols = Vec::new();
+    for x in [0, 20_000_000] {
+        add(&mut s, crate::PLACE_SYMBOL, json!({"definition":"resistor","x_nm":x,"y_nm":0}));
+        let symbol = s.project().unwrap().symbols().last().unwrap().id();
+        add(&mut s, crate::PLACE_FOOTPRINT, json!({"symbol":symbol,"definition":"resistor-0805","mapping":{"1":"1","2":"2"},"x_nm":x,"y_nm":0}));
+        symbols.push(symbol);
+    }
+    add(&mut s, crate::CONNECT_PINS, json!({"from":{"symbol":symbols[0],"terminal":"1"},"to":{"symbol":symbols[1],"terminal":"1"}}));
+    if extra_pickup {
+        add(&mut s, crate::PLACE_SYMBOL, json!({"definition":"resistor","x_nm":30_000_000,"y_nm":0}));
+        let symbol = s.project().unwrap().symbols().last().unwrap().id();
+        add(
+            &mut s,
+            crate::PLACE_FOOTPRINT,
+            json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":2_811_000,"y_nm":6_350_000}),
+        );
+    }
+    add(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true}));
+    add(&mut s, crate::board::update::INITIALIZE_BASELINE, json!({}));
+    let layer = copper_layers(&s)[0];
+    for (points, width) in [
+        (vec![p(-975_000, 0), p(-975_000, 5_000_000), p(19_025_000, 5_000_000), p(19_025_000, 0)], 500_000),
+        (vec![p(0, 5_800_000), p(20_000_000, 5_800_000)], 250_000),
+        (vec![p(17_000_000, 5_000_000), p(17_000_000, 8_000_000)], 250_000),
+    ] {
+        add(&mut s, ADD_TRACKS, json!({"layer":layer,"points":points,"width_nm":width}));
+    }
+    s
+}
+
+/// A legal cursor in the gap must be reached on both axes, without adopting either pad's net.
+#[test]
+fn walkaround_reaches_legal_cursor_positions_in_a_concave_pad_gap() {
+    let s = pad_gap_board();
+    let head = p(2_286_000, 6_350_000);
+    for x in [-127_000, 0, 127_000] {
+        for y in [-508_000, -254_000, 0, 254_000, 508_000] {
+            let target = p(x, y);
+            let req = request(&s, head, target);
+            let mut witness = Session::default();
+            witness.open_snapshot(s.snapshot().unwrap());
+            witness.apply(ADD_TRACKS,&json!({"board":view(&witness).target.board,"layer":req.layer,"width_nm":WIDTH,"points":[head,p(-1_800_000,head.y_nm),p(-1_800_000,-1_200_000),p(x,-1_200_000),target],"replacements":[],"expected_revision":witness.revision()})).unwrap();
+            let result = plan(&s, &req);
+            assert_eq!(result.outcome, Outcome::Reached, "legal target {target:?}: {result:?}");
+            assert_eq!(result.points.last(), Some(&target));
+            let mut candidate = Session::default();
+            candidate.open_snapshot(s.snapshot().unwrap());
+            commit_and_agree(&mut candidate, &result, req.layer, WIDTH);
+        }
+    }
+}
+
+/// A target-side retry keeps the original unconnected pad as its contact authority;
+/// it cannot adopt the nearby named copper or lose the starting pad's own-island exemption.
+#[test]
+fn walkaround_retry_keeps_the_original_unconnected_pickup() {
+    let mut s = pad_gap_board_with_pickup(true);
+    let head = p(2_286_000, 6_350_000);
+    let captured = query(&s);
+    assert!(captured.objects().iter().any(|o| o.at == head && o.intended_nets.is_empty()));
+    let req = request(&s, head, p(0, -254_000));
+    let result = plan(&s, &req);
+    assert_eq!(result.outcome, Outcome::Reached, "{result:?}");
+    assert_eq!(result.points.first(), Some(&head));
+    assert_eq!(result.points.last(), Some(&req.target));
+    commit_and_agree(&mut s, &result, req.layer, WIDTH);
+    for x in [-254_000, 254_000] {
+        let mut candidate = Session::default();
+        candidate.open_snapshot(pad_gap_board().snapshot().unwrap());
+        let blocked = plan(&candidate, &request(&candidate, p(2_286_000, 6_350_000), p(x, -254_000)));
+        assert!(!matches!(blocked.outcome, Outcome::Reached), "a blocked pad-clearance target was reached");
+    }
+}
+
+/// A blocked cursor beside a trace should approach its nearby clearance boundary instead
+/// of leaving the preview at an obstacle encountered much earlier along the route.
+#[test]
+fn blocked_cursor_approach_tracks_the_clearance_boundary() {
+    let s = pad_gap_board();
+    let head = p(6_096_000, 6_858_000);
+    for y in [1_016_000, 2_032_000, 3_048_000, 4_064_000] {
+        let target = p(-1_524_000, y);
+        let req = request(&s, head, target);
+        let boundary = p(-1_550_002, y);
+        let mut witness = Session::default();
+        witness.open_snapshot(s.snapshot().unwrap());
+        witness
+            .apply(
+                ADD_TRACKS,
+                &json!({"board":view(&witness).target.board,"layer":req.layer,"width_nm":WIDTH,
+            "points":[head,p(-1_600_000,head.y_nm),p(-1_600_000,y),boundary],"replacements":[],"expected_revision":witness.revision()}),
+            )
+            .unwrap();
+        let polls = std::cell::Cell::new(0);
+        let planned = s
+            .plan_route(&query(&s), &req, DEFAULT_BUDGET, &|| {
+                polls.set(polls.get() + 1);
+                false
+            })
+            .unwrap();
+        let Outcome::Blocked { last_legal } = planned.outcome else { panic!("{planned:?}") };
+        assert_eq!(planned.adjusted_target, Some(last_legal));
+        assert_eq!(planned.points.last(), Some(&last_legal));
+        assert!(
+            (last_legal.x_nm - target.x_nm).abs() <= 50_000 && (last_legal.y_nm - y).abs() <= 2,
+            "blocked cursor{target:?} should remain close to clearance, got{planned:?}"
+        );
+        let mut candidate = Session::default();
+        candidate.open_snapshot(s.snapshot().unwrap());
+        commit_and_agree(&mut candidate, &planned, req.layer, WIDTH);
+        if y == 4_064_000 {
+            let before = encode_documents(s.snapshot().unwrap()).unwrap();
+            let mut command_session = Session::default();
+            command_session.open_snapshot(s.snapshot().unwrap());
+            let response = command_session
+                .execute(PLAN_ROUTE, &json!({"board":view(&s).target.board,"from":head,"to":target,"layer":req.layer,"width_nm":WIDTH}))
+                .unwrap();
+            assert_eq!(response["route_plan"]["adjusted_target"], json!(last_legal));
+            assert_eq!(response["route_plan"]["outcome"]["kind"], "blocked");
+            let context = s.route_planning(view(&s).target).unwrap();
+            let mut job = s.prepare_route_plan(&context, req.clone(), DEFAULT_BUDGET).unwrap();
+            let mut done = false;
+            for _ in 0..100_000 {
+                let probes = job.progress().completed;
+                if job.step(1) {
+                    done = true;
+                    break;
+                }
+                assert!(job.progress().completed <= probes + 1);
+            }
+            assert!(done);
+            assert_eq!(job.take_result().unwrap().unwrap(), planned);
+            let count = std::cell::Cell::new(0);
+            let canceled = s
+                .plan_route(&query(&s), &req, DEFAULT_BUDGET, &|| {
+                    count.set(count.get() + 1);
+                    count.get() >= polls.get() - 1
+                })
+                .unwrap();
+            assert_eq!(canceled.outcome, Outcome::Canceled);
+            assert_eq!(canceled.points, vec![head]);
+            assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+        }
+    }
+}
+
+/// A single round obstacle isolates optional cursor refinement from the primary walk.
+#[test]
+fn refinement_exhaustion_keeps_a_certified_prefix() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    add(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    add(&mut session, ADD_VIA, json!({"at":p(5_000_000,0),"via_diameter_nm":1_000_000,"via_drill_nm":300_000}));
+    let request = request(&session, p(0, 0), p(5_000_000, 200_000));
+    let query = query(&session);
+    let refined = session.plan_route(&query, &request, DEFAULT_BUDGET, &|| false).unwrap();
+    let prefix = session.plan_route(&query, &request, 45, &|| false).unwrap();
+    let Outcome::Blocked { last_legal } = prefix.outcome else { panic!("{prefix:?}") };
+    assert_eq!(prefix.probes, 45);
+    assert_eq!(prefix.points, [request.head, last_legal]);
+    assert_ne!(last_legal, request.head);
+    assert_eq!(prefix.adjusted_target, Some(last_legal));
+    assert_ne!(prefix.adjusted_target, refined.adjusted_target);
+    let no_prefix = session.plan_route(&query, &request, 1, &|| false).unwrap();
+    assert_eq!(no_prefix.outcome, Outcome::Incomplete);
+    assert_eq!(no_prefix.points, [request.head]);
+    assert!(no_prefix.adjusted_target.is_none());
+    commit_and_agree(&mut session, &prefix, request.layer, WIDTH);
+}
+
+/// Both pointer-only movement and continuation from a fixed top bend reach legal pad-gap
+/// targets and certify the visible clearance endpoint at an obstructed inside corner.
+#[test]
+fn pad_bend_continuations_keep_a_placeable_clearance_endpoint() {
+    let s = pad_gap_board();
+    let origin = p(-1_016_000, 6_096_000);
+    let above = plan(&s, &request(&s, origin, p(-660_000, -900_000)));
+    assert_eq!(above.adjusted_target, Some(p(-660_000, -1_050_002)));
+    for fixed in [false, true] {
+        let head = if fixed { *above.points.last().unwrap() } else { origin };
+        let mut previous = if fixed { Vec::new() } else { above.points.clone() };
+        for (target, expected) in [
+            (p(-254_000, 1_016_000), None),
+            (p(-508_000, 5_334_000), Some(p(-399_998, 4_424_998))),
+            (p(-254_000, 4_572_000), Some(p(-254_000, 4_424_998))),
+            (p(-300_000, 4_300_000), None),
+        ] {
+            let mut req = request(&s, head, target);
+            req.origin = Some((origin, req.layer));
+            req.previous = previous;
+            let mut result = plan(&s, &req);
+            assert_eq!(result.adjusted_target, expected, "fixed{fixed} cursor{target:?}: {result:?}");
+            assert_eq!(result.outcome, expected.map_or(Outcome::Reached, |last_legal| Outcome::Blocked { last_legal }));
+            assert_eq!(result.points.last(), Some(&expected.unwrap_or(target)));
+            previous = result.points.clone();
+            if fixed {
+                let mut complete = above.points.clone();
+                complete.extend(result.points.into_iter().skip(1));
+                result.points = complete;
+            }
+            let mut candidate = Session::default();
+            candidate.open_snapshot(s.snapshot().unwrap());
+            let original = encode_documents(candidate.snapshot().unwrap()).unwrap();
+            candidate
+                .apply(
+                    ADD_TRACKS,
+                    &json!({"board":view(&s).target.board,"layer":req.layer,"width_nm":WIDTH,
+                "points":result.points,"replacements":[],"expected_revision":candidate.revision()}),
+                )
+                .unwrap();
+            candidate.apply("edit.undo", &json!({})).unwrap();
+            assert_eq!(original, encode_documents(candidate.snapshot().unwrap()).unwrap());
+            commit_and_agree(&mut candidate, &result, req.layer, WIDTH);
+        }
+    }
+}
+
+/// Sub-grid cursor movement beside a pad/trace junction must not collapse a route.
+/// Independent strict-command witnesses establish that each tested legal target is reachable,
+/// including a target exactly at the trace's clearance boundary.
+#[test]
+fn pad_pocket_subgrid_targets_agree_with_legal_command_witnesses() {
+    let s = pad_gap_board();
+    let q = query(&s);
+    for head in [p(-1_016_000, 6_096_000), p(-1_070_000, 6_125_000), p(-1_143_000, 6_223_000)] {
+        for x in [-400_000, -300_000, -254_000, -200_000, 0] {
+            for y in [762_000, 1_016_000, 1_100_000, 1_270_000] {
+                let target = p(x, y);
+                let req = request(&s, head, target);
+                let probe = q.probe_membership(&Contour::capsule(target, target, WIDTH as f64 / 2.), &[req.layer], &[], None).unwrap();
+                let legal = probe.decisions.iter().all(|d| !d.conflicting_nets && d.gap_nm >= d.clearance_nm as f64);
+                let result = plan(&s, &req);
+                assert!(result.probes <= DEFAULT_BUDGET);
+                if !legal {
+                    assert_ne!(result.outcome, Outcome::Reached, "{result:?}");
+                    continue;
+                }
+                let mut witness = Session::default();
+                witness.open_snapshot(s.snapshot().unwrap());
+                let mut points = vec![head, p(-2_000_000, head.y_nm), p(-2_000_000, -2_000_000), p(0, -2_000_000), p(0, y), target];
+                points.dedup();
+                witness
+                    .apply(
+                        ADD_TRACKS,
+                        &json!({"board":view(&s).target.board,"layer":req.layer,"width_nm":WIDTH,
+                    "points":points,"replacements":[],"expected_revision":witness.revision()}),
+                    )
+                    .unwrap();
+                assert_eq!(result.outcome, Outcome::Reached, "head{head:?} target{target:?}: {result:?}");
+                assert_eq!(result.points.last(), Some(&target));
+                let mut candidate = Session::default();
+                candidate.open_snapshot(s.snapshot().unwrap());
+                candidate
+                    .apply(
+                        ADD_TRACKS,
+                        &json!({"board":view(&s).target.board,"layer":req.layer,"width_nm":WIDTH,
+                    "points":result.points,"replacements":[],"expected_revision":candidate.revision()}),
+                    )
+                    .unwrap();
+                candidate.apply("edit.undo", &json!({})).unwrap();
+                commit_and_agree(&mut candidate, &result, req.layer, WIDTH);
+            }
+        }
+    }
+}
+
+/// Fixed vias can precede a segment in the MCP payload without moving the
+/// original pickup from front copper to the new route layer.
+#[test]
+fn shove_pickup_uses_first_fixed_segment_after_a_via() {
+    let mut s = board();
+    let [front, back, ..] = copper_layers(&s)[..] else { panic!("two copper layers") };
+    let start = p(1_000_000, 0);
+    let head = p(5_000_000, 0);
+    let target = p(8_000_000, 0);
+    add(&mut s, ADD_TRACKS, json!({"layer":front,"width_nm":WIDTH,"points":[p(0,0),start]}));
+    let track = view(&s).tracks()[0].id;
+    let board = view(&s).target.board;
+    add(&mut s, SET_COPPER_LOCKED, json!({"board":board,"tracks":[track],"locked":true}));
+    let segment = FixedCopper::Segment { start, end: head, layer: front, width_nm: WIDTH };
+    let via = FixedCopper::Via { at: head, diameter_nm: 600_000 };
+    let plan = |fixed| s.route_plan_query(&json!({"mode":"shove","from":head,"to":target,"layer":back,"width_nm":WIDTH,"fixed":fixed})).unwrap();
+    let result = plan([via.clone(), segment.clone()]);
+    assert_eq!(result, plan([segment, via]));
+    assert_eq!(result["route_plan"]["outcome"]["kind"], "reached");
 }

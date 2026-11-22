@@ -232,7 +232,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window stays in the editor, which asks about unsaved changes.
 Headless sessions refuse window commands with a reason.
 
-The native live connection also exposes `ui.handles`, `ui.at` and queued pointer,
+The native live connection also exposes `ui.handles`, `ui.at`, `ui.project` and queued pointer,
 keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
 for named targets, window-local coordinates, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
@@ -508,6 +508,20 @@ vertex order after the first, places a through via at `points[at]` and continues
 that copper layer; a change at the last vertex ends the route on a via. Omitted
 width, via diameter and drill use the board routing preferences, including layer
 changes; explicit drills must be smaller than their pads.
+
+`pcb.unroute_connection` takes `board`, `expected_revision`, and `from` and `to`
+addresses such as `{"footprint":"footprint-7","pad":"2"}`. Pick `from` on the
+arm to remove and `to` on the retained side. `execute` returns `revision`,
+`dry_run`, `removed` (sorted `tracks` and `vias` UUID lists), `requested` (the
+input pair), and `unrouted` (the newly displayed ratsnest edges, as pairs of pad
+addresses), even with project inspection disabled. An edge may end at a different
+pad on the retained side than the requested `to`. Without accepted connectivity,
+there are no display edges to report. Set `dry_run: true` to get the same report
+without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
+`details`; a missing copper endpoint returns `not_found`. See
+[Unroute one connection](pcb-layout-workflow.md#unroute-one-connection) for the
+behavior and other refusal cases.
+
 `pcb.check_design` checks the addressed board without editing it; `execute` returns
 `design_check` with the `rules` used, `violations` (each with a `kind`, `message`,
 representative `at` point and `items`), `counts` per kind and the `total`, listing at
@@ -561,6 +575,15 @@ It fails for a board with footprints but no accepted baseline. `dry_run: true`
 returns the filename and findings without rendering the file text. If the full
 reply exceeds the live editor's 16 MiB frame limit, save the project and use the
 headless command for the full export.
+
+`project.compare_netlist` takes a netlist file's text as `netlist` and compares
+it with what the open project exports now, the project netlist or, for a board
+file, that board's accepted netlist, without editing anything. `execute` returns
+`comparison`: `matches`, `identical`, the counts on both sides, `differences`
+such as a terminal on another net (named with its net in the design and the
+file's net it is on), and `notes` for renamed nets and other changes that leave connectivity
+alone. Terminals are matched by part and terminal, never by net name or
+position; see [comparing a file with the design](netlist-format.md#comparing-a-file-with-the-design).
 
 `pcb.set_copper_locked` requires an explicit `board` UUID, `expected_revision`,
 `locked` boolean and at least one of `tracks`/`vias` (unique UUID arrays). It locks
@@ -628,9 +651,10 @@ at `pcbcraft-cli mcp`. Pass
 `--project path/to/project.json` (or a folder or `.pc`) after `mcp` to start with a saved snapshot. The
 headless session is separate from the app window. Send `inspect: false` with
 `execute` to omit inspection and return the revision for ordinary edits.
-Commands that return their own data, such as exports and clipboard queries,
-retain that data. In particular, `schematic.set_symbol_fields` with `dry_run: true`
-still returns the full preview, including the changed native documents. Use `inspect_project` to read
+Commands that return their own data, such as exports, clipboard queries and
+[schematic annotation preview](annotation.md), retain that data. In particular,
+`schematic.set_symbol_fields` with `dry_run: true` still returns the full preview,
+including the changed native documents. Use `inspect_project` to read
 the project, or `cross_probe` to look up a linked terminal or pad. The additive
 read-only `resolve_counterparts` tool returns complete pin/pad sets and explicit
 unavailable states at a captured revision; see [pin/pad correspondence](pin-pad-correspondence.md)

@@ -468,6 +468,7 @@ fn supply_range_limit_matches_draft_writer_reader_and_schema() {
                         number: index.to_string(),
                         name: Some(format!("VIN{index}")),
                         electrical_type: ElectricalType::PowerIn,
+                        alternates: Vec::new(),
                         at: crate::schematic::Point { x_nm: (grid % 16 - 8) * 1_270_000, y_nm: (grid / 16 - 4) * 1_270_000 },
                         appearance: None,
                     },

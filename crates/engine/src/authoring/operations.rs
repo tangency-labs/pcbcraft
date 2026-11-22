@@ -28,10 +28,11 @@ impl Primitive {
     /// Pin rotation changes its lead direction; the wire attachment point remains its anchor.
     pub fn transformed(&self, t: Transform) -> Result<Self, String> {
         Ok(match self {
-            Self::Pin { number, name, electrical_type, at, appearance } => Self::Pin {
+            Self::Pin { number, name, electrical_type, alternates, at, appearance } => Self::Pin {
                 number: number.clone(),
                 name: name.clone(),
                 electrical_type: *electrical_type,
+                alternates: alternates.clone(),
                 at: t.point(*at)?,
                 appearance: appearance.as_ref().map(|a| crate::schematic::PinAppearance { orientation: a.orientation.transformed(t), ..a.clone() }),
             },

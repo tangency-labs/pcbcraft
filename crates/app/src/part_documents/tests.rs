@@ -269,6 +269,7 @@ fn terminal_rating_limit_publishes_reopens_and_keeps_typed_bounds_on_overflow() 
                         number: index.to_string(),
                         name: Some(format!("VIN{index}")),
                         electrical_type: ElectricalType::PowerIn,
+                        alternates: Vec::new(),
                         at: Point { x_nm: (grid % 16 - 8) * 1_270_000, y_nm: (grid / 16 - 4) * 1_270_000 },
                         appearance: None,
                     },

@@ -8,7 +8,7 @@
 //! browser builds offer the same parts without reading the file system.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, LazyLock},
 };
 
@@ -61,6 +61,8 @@ pub const SYMBOL_FORMAT_V3: &str = "pcbcraft-symbol/3";
 
 /// Native symbols with independently placeable units sharing one logical terminal table.
 pub const SYMBOL_FORMAT_V4: &str = "pcbcraft-symbol/4";
+/// Native symbols with alternate functions on logical terminals.
+pub const SYMBOL_FORMAT_V5: &str = "pcbcraft-symbol/5";
 
 /// Electrical roles survive copying and never follow from an item or library name.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -87,8 +89,9 @@ const MAX_SHAPES: usize = 256;
 const MAX_POINTS: usize = 64;
 /// How far a drawing may reach from the symbol's center on either axis, in nanometers.
 const MAX_DRAWING_NM: i64 = 100_000_000;
-/// Most terminals in one symbol.
-const MAX_TERMINALS: usize = 128;
+/// Most terminals in one symbol, and so in one part's terminal-to-pad map. A pin may sit on only
+/// 441 grid spots in one unit, so symbols this large divide their pins among units.
+pub(crate) const MAX_TERMINALS: usize = 1024;
 /// Longest text label in a drawing, in characters.
 const MAX_LABEL: usize = 16;
 
@@ -223,6 +226,26 @@ struct TerminalFile {
     #[serde(default)]
     name: Option<String>,
     electrical_type: ElectricalType,
+    #[serde(default, deserialize_with = "alternate_list")]
+    alternates: Option<Vec<crate::schematic::AlternatePinFunction>>,
+}
+
+/// Preserve omission so older symbol envelopes can reject a present list.
+fn alternate_list<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<crate::schematic::AlternatePinFunction>>, D::Error> {
+    authored_alternates(d).map(Some)
+}
+
+/// A present list must contain one to sixteen unique, bounded names.
+pub(crate) fn authored_alternates<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<crate::schematic::AlternatePinFunction>, D::Error> {
+    let items = Vec::<crate::schematic::AlternatePinFunction>::deserialize(d)?;
+    let mut names = BTreeSet::new();
+    if items.is_empty()
+        || items.len() > crate::pin_functions::MAX_ALTERNATES
+        || items.iter().any(|item| !crate::pin_functions::valid_name(&item.name) || !names.insert(&item.name))
+    {
+        return Err(serde::de::Error::custom("Expected a nonempty bounded list of uniquely named alternate pin functions."));
+    }
+    Ok(items)
 }
 
 #[derive(Deserialize)]
@@ -255,11 +278,13 @@ struct PinFile {
 
 /// Parse and check one symbol file.
 ///
-/// The file must use one of formats 1–4 with no unknown fields.
-/// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding. Terminals, 1 to 128 of them, have
-/// unique IDs of 1 to 8 letters, digits, `+`, `-` or `_`. Formats 1–3 contain one unit; format 4 supports up to 32 units
-/// sharing a complete logical terminal table, with at most one appearance per terminal per unit. Pins sit on the 1.27 mm grid, at most 12.7 mm from the
-/// center on each axis and apart from each other. Drawings have at most 256 strokes within
+/// The file must use one of formats 1–5 with no unknown fields.
+/// Version 2 validates explicit electrical roles and instance defaults; version 3 adds an explicit category binding.
+/// A symbol has up to 1,024 logical terminals, each with a unique ID of 1 to 8 letters, digits, `+`, `-` or `_`.
+/// Formats 1–3 contain one unit; formats 4–5 support up to 32 units sharing the logical terminal table.
+/// Format 5 adds alternate functions. Each unit has at most one appearance per terminal.
+/// Pins sit on the 1.27 mm grid, at most 12.7 mm from the center on each axis and apart from each other.
+/// Drawings have at most 256 strokes within
 /// 100 mm of the center. Errors name the first problem found.
 pub fn parse_symbol(text: &str) -> Result<SymbolDefinition, String> {
     let value: Value = serde_json::from_str(text).map_err(|error| format!("invalid symbol JSON: {error}"))?;
@@ -273,12 +298,14 @@ fn parse_symbol_value(value: Value) -> Result<SymbolDefinition, String> {
 }
 
 /// Draft documents may temporarily have no pins; published symbols retain the strict minimum.
+/// More than [`MAX_TERMINALS`] terminals is refused with the limit and the count.
 fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, String> {
     let format_version = match value["format"].as_str() {
         Some(SYMBOL_FORMAT) => 1,
         Some(SYMBOL_FORMAT_V2) => 2,
         Some(SYMBOL_FORMAT_V3) => 3,
         Some(SYMBOL_FORMAT_V4) => 4,
+        Some(SYMBOL_FORMAT_V5) => 5,
         _ => return Err("unsupported symbol format".into()),
     };
     if format_version == 1 && (value.get("behavior").is_some() || value.get("defaults").is_some()) {
@@ -313,7 +340,10 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
     }
     check_value(&file.default_value).map_err(|error| error.replace("`value`", "`default_value`"))?;
     if file.terminals.len() > MAX_TERMINALS || (!draft && file.terminals.is_empty()) {
-        return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals"));
+        return Err(format!("a symbol has 1 to {MAX_TERMINALS} terminals, not {}", file.terminals.len()));
+    }
+    if format_version != 5 && file.terminals.iter().any(|terminal| terminal.alternates.is_some()) {
+        return Err("Alternate pin functions require pcbcraft-symbol/5.".into());
     }
     let mut numbers = BTreeSet::new();
     for terminal in &file.terminals {
@@ -323,10 +353,13 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         }
         if let Some(name) = &terminal.name {
             check_text("terminal name", name, 32)?;
+            if terminal.alternates.as_ref().is_some_and(|list| list.iter().any(|function| &function.name == name)) {
+                return Err(format!("Terminal {} repeats its primary name as an alternate.", terminal.id));
+            }
         }
     }
     if file.units.is_empty() || file.units.len() > 32 || (format_version < 4 && file.units.len() != 1) {
-        return Err("formats 1–3 require one unit; format 4 supports 1 to 32 units".into());
+        return Err("formats 1–3 require one unit; formats 4–5 support 1 to 32 units".into());
     }
     let mut unit_ids = BTreeSet::new();
     let mut units = Vec::new();
@@ -338,14 +371,18 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         if let Some(pin) = unit.pins.iter().find(|pin| !numbers.contains(pin.terminal.as_str())) {
             return Err(format!("pin {} names no terminal", pin.terminal));
         }
+        // Each pin's terminal and whether the unit repeats it, so large units are read in one pass.
+        let mut placed: BTreeMap<&str, (&PinFile, bool)> = BTreeMap::new();
+        for pin in &unit.pins {
+            placed.entry(pin.terminal.as_str()).and_modify(|(_, repeated)| *repeated = true).or_insert((pin, false));
+        }
         let mut positions = BTreeSet::new();
         let mut pins = Vec::new();
         for terminal in &file.terminals {
-            let mut placed = unit.pins.iter().filter(|pin| pin.terminal == terminal.id);
-            let Some(pin) = placed.next() else {
+            let Some(&(pin, repeated)) = placed.get(terminal.id.as_str()) else {
                 continue;
             };
-            if placed.next().is_some() {
+            if repeated {
                 return Err(format!("terminal {} needs exactly one pin per unit", terminal.id));
             }
             let [x_nm, y_nm] = pin.at_nm;
@@ -358,6 +395,8 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
             }
             if let Some(appearance) = &pin.appearance {
                 appearance.validate(Point { x_nm, y_nm })?;
+            } else if terminal.alternates.is_some() {
+                return Err(format!("Terminal {} needs an integrated pin lead on every appearance to define alternate functions.", terminal.id));
             }
             pins.push(PinDefinition {
                 appearance: pin.appearance.clone(),
@@ -365,6 +404,7 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
                 offset: Point { x_nm, y_nm },
                 name: terminal.name.clone(),
                 electrical_type: terminal.electrical_type,
+                alternates: terminal.alternates.clone().unwrap_or_default(),
             });
         }
         if unit.drawing.len() > MAX_SHAPES {
@@ -376,15 +416,18 @@ fn parse_symbol_mode(value: Value, draft: bool) -> Result<SymbolDefinition, Stri
         }
         units.push(SymbolUnit { unit: unit.id, pins, drawing });
     }
+    // The first unit that shows a terminal supplies its pin, as units are listed.
+    let mut first: BTreeMap<&str, &PinDefinition> = BTreeMap::new();
+    for pin in units.iter().flat_map(|unit| unit.pins.iter()) {
+        first.entry(pin.number.as_str()).or_insert(pin);
+    }
     let pins = file
         .terminals
         .iter()
         .map(|terminal| {
-            units
-                .iter()
-                .flat_map(|unit| unit.pins.iter())
-                .find(|pin| pin.number == terminal.id)
-                .cloned()
+            first
+                .get(terminal.id.as_str())
+                .map(|pin| (*pin).clone())
                 .ok_or_else(|| format!("terminal {} needs exactly one pin in at least one unit", terminal.id))
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -537,7 +580,12 @@ pub(crate) fn saved_copy(definition: &SymbolDefinition) -> SavedSymbol<'_> {
         terminals: definition
             .pins
             .iter()
-            .map(|pin| SavedTerminal { id: &pin.number, name: pin.name.as_deref(), electrical_type: pin.electrical_type })
+            .map(|pin| SavedTerminal {
+                id: &pin.number,
+                name: pin.name.as_deref(),
+                electrical_type: pin.electrical_type,
+                alternates: &pin.alternates,
+            })
             .collect(),
         units: definition
             .units
@@ -593,6 +641,8 @@ struct SavedTerminal<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<&'a str>,
     electrical_type: ElectricalType,
+    #[serde(skip_serializing_if = "<[crate::schematic::AlternatePinFunction]>::is_empty")]
+    alternates: &'a [crate::schematic::AlternatePinFunction],
 }
 
 #[derive(Serialize)]
@@ -780,7 +830,7 @@ mod tests {
         assert!(error(|file| file["revision"] = json!(0)).contains("revision"));
         assert!(error(|file| file["reference_prefix"] = json!("r")).contains("capital"));
         assert!(error(|file| file["terminals"].as_array_mut().unwrap().truncate(1)).contains("pin 2 names no terminal"));
-        assert!(error(|file| file["terminals"] = json!([])).contains("1 to 128 terminals"));
+        assert!(error(|file| file["terminals"] = json!([])).contains("1 to 1024 terminals, not 0"));
         assert!(error(|file| file["terminals"][1]["id"] = json!("1")).contains("terminal 1 appears twice"));
         assert!(error(|file| file["terminals"][1]["id"] = json!("pin two")).contains("1 to 8 letters"));
         assert!(error(|file| file["terminals"][1]["electrical_type"] = json!("magic")).contains("unknown variant"));

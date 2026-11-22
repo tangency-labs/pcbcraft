@@ -18,7 +18,7 @@ use serde_json::{Value, json};
 pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifact> {
     let seed = 237_240;
     let (components, paths, vertices, via_every) = match recipe {
-        "reference-v1" => (8, 4, 16, 0),
+        "reference-v1" | "bga-v1" => (8, 4, 16, 0),
         "dense-v1" => (128, 16, 64, 8),
         "capacity-v1" => (512, 16, 256, 2),
         "board-limits-v1" => (512, 17, 256, 2),
@@ -27,7 +27,8 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
         "schematic-limits-v1" => (4096, 4, 16, 0),
         _ => {
             return Err(
-                "recipe must be reference-v1, dense-v1, capacity-v1, board-limits-v1, channels-v1, hierarchy-v1 or schematic-limits-v1".into()
+                "recipe must be reference-v1, dense-v1, capacity-v1, board-limits-v1, channels-v1, hierarchy-v1, schematic-limits-v1 or bga-v1"
+                    .into(),
             );
         }
     };
@@ -95,6 +96,10 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
             )?;
         }
     }
+    if recipe == "bga-v1" {
+        // The reference board plus one 1,024-ball array away from its parts, tracks and probes.
+        super::bga::place(&mut session, None)?;
+    }
     apply(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true}))?;
     apply(&mut session, INITIALIZE_BASELINE, json!({}))?;
     let project = session.snapshot().ok_or("missing fixture")?;
@@ -114,8 +119,8 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
     // Tracks occupy a separate region from the intended-net pads. Alternating long diagonal
     // runs and short turns create crowded channels without accidentally shorting intended nets.
     for path in 0..paths {
-        // Sixteen full 256-point paths reach 4080 tracks/2032 vias. One final
-        // 17-point path, switching at each point, reaches both current limits exactly.
+        // Sixteen full 256-point paths make 4,080 tracks and 2,032 vias; the final
+        // 17-point path reaches the former 4,096-track and 2,048-via limits.
         let final_limit_path = recipe == "board-limits-v1" && path == paths - 1;
         let vertices = if final_limit_path { 17 } else { vertices };
         let via_every = if final_limit_path { 1 } else { via_every };

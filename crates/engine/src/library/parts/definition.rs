@@ -36,7 +36,20 @@ pub struct PartDefinition {
 impl PartDefinition {
     /// Parse an actual native part file; unresolved dependencies are checked separately by the catalog.
     pub fn read(text: &str) -> Result<Self, String> {
-        let part: Self = decode(text)?;
+        Self::validate_decoded(decode(text)?)
+    }
+
+    /// Reopen a pinned project record under the same document cap as the canonical writer.
+    /// The separate external source parser still applies its stricter file limit.
+    pub(crate) fn read_saved(text: &str) -> Result<Self, String> {
+        if text.len() > crate::persistence::MAX_DOCUMENT_BYTES {
+            return Err("Pinned dependency exceeds its native document limit.".into());
+        }
+        Self::validate_decoded(serde_json::from_str(text).map_err(|error| error.to_string())?)
+    }
+
+    /// Both source and project inputs must pass the same semantic checks.
+    fn validate_decoded(part: Self) -> Result<Self, String> {
         part.validate()?;
         Ok(part)
     }
