@@ -443,6 +443,92 @@ fn supply_range_board_clipboard_keeps_rated_and_unrated_footprints_separate() {
     }
 }
 
+/// A rated device with a slotted package retains both records through schematic and board paste.
+#[test]
+fn rated_part_and_plated_slot_round_trip_through_both_clipboards() {
+    use crate::board::{
+        definition::{CopperBinding, PadShape},
+        slot::PlatedSlot,
+    };
+
+    let (mut session, mut documents, mut draft) = source(true);
+    let slot = PlatedSlot::new(400_000, 1_200_000, 90_000).unwrap();
+    let mut item = Item::new(Kind::Footprint).unwrap();
+    item.id = "slotted-regulator-package".into();
+    let mut editor = AuthoringSession::new(item, false).unwrap();
+    let Primitive::Pad { mut pad } = editor.snapshot().objects[&1].clone() else { panic!("fixture needs a pad") };
+    pad.shape = PadShape::Oval;
+    pad.width_nm = 800_000;
+    pad.height_nm = 1_700_000;
+    pad.corner_radius_nm = 0;
+    pad.copper = CopperBinding::AllCopper;
+    pad.drill_nm = None;
+    pad.plated_slot = Some(slot);
+    editor.execute(editor.revision(), Action::Replace { object: 1, primitive: Primitive::Pad { pad } }).unwrap();
+    let prepared = session.execute(sources::PREPARE_PUBLICATION, &json!({"item":editor.snapshot(),"documents":&documents})).unwrap();
+    let footprint_ref: Reference = serde_json::from_value(prepared["address"].clone()).unwrap();
+    documents.extend(serde_json::from_value::<sources::Documents>(prepared["documents"].clone()).unwrap());
+    load(&mut session, &documents);
+
+    let part = part_mut(&mut draft);
+    part.packages.get_mut("test").unwrap().footprint = footprint_ref;
+    part.set_supply_range(TERMINAL, "4.5 V", "36 V").unwrap();
+    let root = session.project().unwrap().sheet_target();
+    place(&mut session, &mut documents, &draft, root);
+    let project = session.snapshot().unwrap();
+    let items = crate::selection::Selection::one_symbol(project.symbols()[0].id());
+    let copied = session.execute(crate::clipboard::COPY, &json!({"items":items,"sheet":root.id(),"expected_revision":session.revision()})).unwrap();
+    let text = copied["clipboard"].as_str().unwrap();
+    let mut envelope: Json = serde_json::from_str(text).unwrap();
+    assert_eq!(envelope["format"], "pcbcraft-clipboard/10");
+    assert_eq!(Fragment::from_text(text).unwrap().to_text().unwrap(), text);
+    for earlier in ["pcbcraft-clipboard/7", "pcbcraft-clipboard/8"] {
+        envelope["format"] = json!(earlier);
+        assert!(Fragment::from_text(&envelope.to_string()).is_err());
+    }
+    let expected = SupplyRange::parse(TERMINAL, "4.5 V", "36 V").unwrap();
+    let mut target = Session::default();
+    target.apply("project.new", &json!({})).unwrap();
+    let sheet = target.project().unwrap().sheet_target().id();
+    apply(&mut target, crate::clipboard::PASTE, json!({"text":text,"sheet":sheet,"x_nm":0,"y_nm":0}));
+    let pasted = target.project().unwrap();
+    assert_eq!(range(pasted).cloned(), expected);
+    let part = pasted.components().next().unwrap().part.as_ref().unwrap();
+    assert_eq!(part.resolved.footprints.values().next().unwrap().pads[0].plated_slot, Some(slot));
+
+    let component = project.components().next().unwrap().id();
+    apply(&mut session, crate::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    apply(&mut session, crate::INITIALIZE_UPDATE_BASELINE, json!({}));
+    apply(&mut session, crate::PLACE_ASSIGNED_FOOTPRINT, json!({"component":component,"x_nm":0,"y_nm":0}));
+    let before = session.snapshot().unwrap();
+    let footprint = before.boards().next().unwrap().footprints().next().unwrap().id;
+    let items = BoardSelection { footprints: [footprint].into(), ..Default::default() };
+    let copied = session.execute(crate::board::clipboard::COPY, &json!({"items":items,"expected_revision":session.revision()})).unwrap();
+    let text = copied["clipboard"].as_str().unwrap();
+    let mut envelope: Json = serde_json::from_str(text).unwrap();
+    assert_eq!(envelope["format"], "pcbcraft-clipboard/11");
+    let nested: Json = serde_json::from_str(envelope["circuits"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(nested["format"], "pcbcraft-clipboard/10");
+    assert_eq!(BoardFragment::from_text(text).unwrap().to_text().unwrap(), text);
+    for earlier in ["pcbcraft-clipboard/8", "pcbcraft-clipboard/9"] {
+        envelope["format"] = json!(earlier);
+        assert!(BoardFragment::from_text(&envelope.to_string()).is_err());
+    }
+    apply(
+        &mut session,
+        crate::board::clipboard::PASTE,
+        json!({"text":text,"x_nm":0,"y_nm":10_000_000,
+            "schematic_targets":{(root.id().to_string()):{"sheet":root.id(),"at":{"x_nm":0,"y_nm":25_400_000}}}}),
+    );
+    let pasted = session.project().unwrap();
+    let copied = pasted.components().find(|part| part.ordinal > before.highest_id()).unwrap();
+    assert_eq!(copied.part.as_ref().unwrap().supply_range(TERMINAL).cloned(), expected);
+    let copied_footprint = pasted.boards().next().unwrap().footprints().find(|footprint| footprint.component == copied.id()).unwrap();
+    assert!(copied_footprint.pads.iter().any(|pad| pad.plated_slot.is_some_and(|hole| hole.width_nm() == slot.dimensions().0)));
+    session.apply("edit.undo", &Json::Null).unwrap();
+    crate::assert_same_content(&before, &session.snapshot().unwrap());
+}
+
 /// Draft editing, native encoding, native decoding and the part/4 schema all enforce the
 /// same [`MAX_TERMINAL_RATINGS`] limit: 128 publishes and reopens, 129 is rejected everywhere.
 #[test]

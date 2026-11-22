@@ -394,8 +394,15 @@ and review again after a concurrent edit.
 Inspection reports `designator_locked` even when false. Automatic annotation and
 its skipped-item report are not implemented yet; the engine's
 `PartInstance::can_annotate_designator()` predicate exposes this lock policy for
-that implementation. Unit-letter locks and package completion remain separate
-work. See the [storage contract](native-project-storage.md#designator-locks).
+that implementation. There is no separate unit-letter lock. See the
+[storage contract](native-project-storage.md#designator-locks).
+
+### Complete loose packages
+
+To group equivalent loose units, opt in through the headless or live MCP
+[`schematic.complete_packages`](mcp.md#native-part-definitions-and-quantities)
+command. Preview with `dry_run: true` before applying. Locked owners stay as
+placed; ordinary placement does not complete packages automatically.
 
 ## Inspect a board beside its schematic
 
@@ -436,7 +443,11 @@ Choose any even copper count from 2 through 64; 10- and 12-layer boards are incl
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
 construction, with a laminate total and a cross-section aligned to the table rows. **Fit unlocked dielectrics**
 fits a target thickness while retaining copper and locked gaps. Values accept mm
-or mil, and blanks remain unspecified.
+or mil, and blanks remain unspecified. Select a copper stratum to set its role.
+**Layer groups** adds named sets of copper layers in the same draft; removing a
+layer drops its membership, and one Undo restores the complete setup. Mixed role
+belongs to both plane and signal. `pcb.inspect_layer_groups` reads these groups
+and the derived outer/inner/plane/signal sets without changing the board.
 
 **Materials** offers generic family choices and custom materials. **Add material**
 starts with basic identity fields; **Technical properties** expands sourced Tg/Dk/Df
@@ -816,8 +827,11 @@ Closing a pane retains its definition and unfinished Properties fields; the
 last window still asks about unsaved work.
 
 For a footprint, change its pad dimensions and try Undo/Redo in the app bar.
-To make a plated hole, set Layers to All copper and enter a positive drill smaller
-than the land. Corner radius is zero for rectangular/circular pads.
+For a round plated hole, choose **Through hole** and enter a positive drill
+smaller than the land. For an obround cut-out, choose **Plated slot**, then set
+its finished width, overall length and independent rotation (in degrees, up to 3 decimal places).
+The entire opening must fit inside the copper. Corner radius is zero for
+rectangular and circular lands. Fabrication export does not yet machine slots.
 
 For a symbol, **Library → Remap pins…** renumbers logical terminals. To swap two
 pins, enter each other's numbers and choose **Preview current nets** before

@@ -284,6 +284,33 @@ impl ClearanceQuery {
         }
         Results { authority: self.authority.clone(), decisions, probe_rules: None }
     }
+    /// Exhaustively evaluate all shared-layer pairs involving the supplied object indices,
+    /// retaining only contact or clearance findings. Bounds memory for large boards where
+    /// `exhaustive_pairs` would materialize O(n^2) non-violating decisions.
+    pub fn exhaustive_findings_for(&self, indices: &[usize]) -> Results {
+        let mut selected = BTreeSet::new();
+        for &index in indices {
+            if index < self.geometry.items.len() {
+                selected.insert(index);
+            }
+        }
+        let mut decisions = Vec::new();
+        for &index in &selected {
+            for other in 0..self.geometry.items.len() {
+                if other == index || (other < index && selected.contains(&other)) {
+                    continue;
+                }
+                let (first, second) = if index < other { (index, other) } else { (other, index) };
+                if let Some(decision) = self.geometry.evaluate(first, second, self.pair_clearance(first, second))
+                    && (decision.touches || decision.clearance_violation)
+                {
+                    decisions.push(decision);
+                }
+            }
+        }
+        decisions.sort_by_key(|d| (d.first, d.second));
+        Results { authority: self.authority.clone(), decisions, probe_rules: None }
+    }
     /// Use independent object requirements for the narrow phase, retaining baseline behavior
     /// without constructing class metadata when the snapshot has no physical assignments.
     fn pair_clearance(&self, left: usize, right: usize) -> i64 {

@@ -172,6 +172,11 @@ fn command_adds_eight_reports_two_and_round_trips_intent() {
     wrong_version.insert(path, serde_json::to_vec(&board_json).unwrap());
     assert!(matches!(decode_documents(&wrong_version), Err(error) if error.contains("teardrops require board format 37")));
     assert_eq!(view(&session).require_linear_copper().unwrap_err(), crate::board::teardrop::UNSUPPORTED);
+    let groups = view(&session).setup().unwrap().layer_groups();
+    assert_eq!(
+        session.execute(crate::INSPECT_LAYER_GROUPS, &json!({"board":target.board})).unwrap(),
+        json!({"revision":applied_revision,"layer_groups":groups})
+    );
     session.execute("edit.undo", &serde_json::Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_docs);
     session.execute("edit.redo", &serde_json::Value::Null).unwrap();

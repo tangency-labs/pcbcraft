@@ -21,6 +21,7 @@ pub const MAX_BYTES: usize = 1 << 20;
 const FORMAT: &str = "pcbcraft-library-item/1";
 const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
 const NPTH_FORMAT: &str = "pcbcraft-library-item/3";
+const SLOT_FORMAT: &str = "pcbcraft-library-item/4";
 const PIN_FUNCTION_FORMAT: &str = "pcbcraft-library-item/5";
 const HISTORY: usize = 64;
 
@@ -442,6 +443,7 @@ impl Item {
                             copper: footprint::CopperBinding::ComponentSide,
                             corner_radius_nm: 125_000,
                             drill_nm: None,
+                            plated_slot: None,
                         },
                     },
                 );
@@ -568,9 +570,6 @@ impl Item {
     /// cannot invalidate an otherwise editable published definition at its source-text limit.
     fn read_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
         let mut item = Self::new(Kind::Footprint)?;
-        if !definition.non_plated_holes.is_empty() {
-            item.format = NPTH_FORMAT.into();
-        }
         item.objects.clear();
         item.license = definition.license.clone();
         item.reference_font = definition.reference.clone();
@@ -589,7 +588,29 @@ impl Item {
             item.objects.insert(item.objects.len() as u64 + 1, primitive);
         }
         item.allocation.object = item.objects.keys().next_back().copied().unwrap_or(0);
+        item.format = item.footprint_format().into();
         Ok(item)
+    }
+
+    /// Re-derive the editor format after a direct test mutation of footprint primitives.
+    #[cfg(test)]
+    pub(crate) fn refresh_footprint_format(&mut self) {
+        if self.kind == Kind::Footprint {
+            self.format = self.footprint_format().into();
+        }
+    }
+
+    /// Select the lowest editor format preserving all hole primitives, including mixed drafts.
+    fn footprint_format(&self) -> &'static str {
+        let mut format = FORMAT;
+        for object in self.objects.values() {
+            match object {
+                Primitive::Pad { pad } if pad.plated_slot.is_some() => return SLOT_FORMAT,
+                Primitive::NonPlatedHole { .. } => format = NPTH_FORMAT,
+                _ => {}
+            }
+        }
+        format
     }
 
     /// Reopen an exact footprint, numbering primitives deterministically and retaining pad IDs.
@@ -703,7 +724,7 @@ impl Item {
                 }
             }
             let definition = footprint::FootprintDefinition {
-                format: footprint::FootprintDefinition::format_for(!non_plated_holes.is_empty()).into(),
+                format: footprint::FootprintDefinition::format_for(!non_plated_holes.is_empty(), &pads).into(),
                 library: self.library.clone(),
                 id: self.id.clone(),
                 revision: self.revision,
@@ -727,17 +748,13 @@ impl Item {
         }
     }
 
-    /// Detect new footprint content without inferring electrical meaning from a pad number.
-    fn has_npth(&self) -> bool {
-        self.kind == Kind::Footprint && self.objects.values().any(|object| matches!(object, Primitive::NonPlatedHole { .. }))
-    }
-
     /// Bound the editor envelope as well as the derived native geometry and electrical metadata.
     pub fn validate(&self) -> Result<(), String> {
         let all_objects: Vec<_> = self.objects.iter().chain(self.other_units.values().flat_map(|objects| objects.iter())).collect();
         let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
-        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | PIN_FUNCTION_FORMAT)
-            || (self.format == NPTH_FORMAT) != self.has_npth()
+        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | SLOT_FORMAT | PIN_FUNCTION_FORMAT)
+            || (self.kind == Kind::Footprint && self.format != self.footprint_format())
+            || (self.kind == Kind::Symbol && matches!(self.format.as_str(), NPTH_FORMAT | SLOT_FORMAT))
             || (self.format != PIN_FUNCTION_FORMAT && self.has_alternate_functions())
             || (!self.other_units.is_empty() && (self.format == FORMAT || self.kind != Kind::Symbol))
             || (!self.unit_order.is_empty()
@@ -999,6 +1016,9 @@ impl Session {
                     }
                     Action::Undo | Action::Redo => return Err("History operation cannot be nested.".into()),
                 }
+                if next.kind == Kind::Footprint {
+                    next.format = next.footprint_format().into();
+                }
                 if next == *self.item {
                     return Ok(self.revision);
                 }
@@ -1026,9 +1046,6 @@ impl Session {
                 }
                 next.revision = self.next_content_revision;
                 next.allocation = Allocation { object: cursor - 1, revision: self.next_content_revision };
-                if next.kind == Kind::Footprint {
-                    next.format = if next.has_npth() { NPTH_FORMAT } else { FORMAT }.into();
-                }
                 next.validate()?;
                 let next_content_revision = self.next_content_revision.checked_add(1).ok_or("Content revision limit reached.")?;
                 let next_id = cursor;
