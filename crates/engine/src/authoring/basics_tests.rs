@@ -260,7 +260,7 @@ fn bga_26x26_ball_grid_roundtrips_maps_and_sorts_naturally() {
     let part = json!({"format":"pcbcraft-part/1","library":"bga-grid","id":"bga-676","revision":1,"name":"BGA 26x26",
         "license":"MIT OR Apache-2.0","source":{"kind":"original","reference":"Synthetic BGA fixture","locator":"bga-676"},
         "symbol":{"library":"bga-grid","id":"bga-676","revision":1},
-        "packages":{"bga":{"name":"BGA-676","footprint":{"library":"bga-grid","id":"bga-676","revision":1},"mapping":mapping}}});
+        "packages":{"bga":{"name":"BGA-676","footprint":{"library":"bga-grid","id":"bga-676","revision":definition.revision},"mapping":mapping}}});
     let documents: crate::library::sources::Documents = [
         ("library.json", r#"{"format":"pcbcraft-library/1","id":"bga-grid","name":"BGA grid","license":"MIT OR Apache-2.0"}"#.to_owned()),
         ("symbols/bga-676.json", serde_json::to_string_pretty(&symbol).unwrap()),
