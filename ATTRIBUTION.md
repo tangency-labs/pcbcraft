@@ -1816,3 +1816,44 @@ tracks the captured pointer explicitly because ordinary toolkit menu rows
 activate on a click originating inside the row. Explicit view copies and full-window
 placement reuse the existing view fork and split-tree operations. No dependency, external artwork
 or project file format was added.
+
+## Hebrew localization and RTL support
+
+The `CRAFT_FONTS_DIR` build-script probe (`crates/chrome/build.rs`), BCP 47 and
+legacy `iw` language-tag normalization / RTL detection (`crates/chrome/src/i18n.rs`),
+and desktop system Hebrew font fallback list (`crates/chrome/src/fonts.rs`) are
+adapted from:
+
+- `tangency-labs/fieldcraft` (`hrb9/fieldcraft` PR #988 at commit
+  `2d546a6b32c061b3d51d29f2d40a5d6f69d4a5f1`, MIT OR Apache-2.0).
+- `tangency-labs/solidcraft` at revision
+  `73bdb6cdd39efc3899fb54e7217289a630a89efe` (MIT OR Apache-2.0): desktop Hebrew
+  fallback candidate paths (`crates/sketch/src/fonts/fallback.rs`) and
+  `ttf-parser` glyph coverage validation (`crates/ui-egui/src/fonts.rs`).
+
+Changes for PCBCraft: adapted crate paths and tokens to `pcbcraft-chrome`,
+integrated `solidcraft-ui-text` Hebrew catalogs (`crates/chrome/assets/shared-ui/he.json`),
+added RTL arrow/label positioning in `controls::collapsing`, and wired language
+selection into `crates/app/src/preferences.rs`. No GPL, KiCad, or `pcbcraft-gpl`
+source code or binary font assets were copied or added.
+
+## Track shove
+
+The #247 direction-aware propagation, original-contact anchors, disposable routing
+projections and compound add/replace validation are original MIT OR Apache-2.0
+PCBcraft work. They compose the attributed walkaround solver above; no external
+shove implementation was read or imported. The view uses the existing chrome
+menu rows, choices and toggle, with existing copper/clearance rendering. No new
+generic control, external artwork, library data, dependency or saved format was
+added.
+
+The bounded target-side retry, hull-corner visibility fallback and clearance-boundary
+projections/intersections for concave walkaround pockets are original PCBcraft work
+under MIT OR Apache-2.0. They preserve captured pickup intent and use the existing
+planner's budget, cancellation and exact validation. No external implementation
+was read or imported for these additions.
+
+The degree-two trace-chain graph, cooperative per-query topology preparation,
+soft bend hints, source-preserving path partitioning and independent chain/contact
+validation are original PCBcraft work under MIT OR Apache-2.0. No external routing
+implementation, dependency or saved-format change was introduced.

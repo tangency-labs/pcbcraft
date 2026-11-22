@@ -439,6 +439,11 @@ impl Board {
         self.footprints.push(footprint);
         Ok(())
     }
+    /// Whether retiring this component keeps its accepted physical placement for review.
+    pub(super) fn retains_retired_component(&self, component: u64) -> bool {
+        self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component))
+    }
+
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
     /// Format 3 and later also retain the last visible typed quantity; older history
@@ -464,7 +469,7 @@ impl Board {
             historical.value = part.value().into();
             historical.primary_quantity = quantity;
         }
-        if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
+        if self.retains_retired_component(component) {
             let used = self.used_package_keys();
             self.definitions.retain(|key, _| used.contains(key));
             return;

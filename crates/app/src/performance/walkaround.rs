@@ -196,7 +196,19 @@ fn requests(view: pcbcraft_engine::board::view::BoardView<'_>) -> Result<Vec<(St
         };
         requests.push((
             id,
-            Request { head, target, layer: front, origin: None, width_nm, posture: Posture::Diagonal, flipped: false, previous: Vec::new() },
+            Request {
+                mode: Default::default(),
+                merge_same_net: false,
+                fixed: Vec::new(),
+                head,
+                target,
+                layer: front,
+                origin: None,
+                width_nm,
+                posture: Posture::Diagonal,
+                flipped: false,
+                previous: Vec::new(),
+            },
         ));
     }
     Ok(requests)
