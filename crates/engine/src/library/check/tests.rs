@@ -367,6 +367,54 @@ fn oversized_capture_is_an_error() {
     assert_eq!(error, CheckError::TooLarge { what: fixture.footprint_path.clone(), limit: MAX_FILE_BYTES });
 }
 
+/// A package's combined distinct pad count across all mapped terminals and `unconnected_pads` is
+/// bounded by `MAX_PADS`, while repeated pad numbers still reach `package.pad.repeated`.
+#[test]
+fn package_distinct_pad_limit_is_enforced_without_blocking_repeated_pads() {
+    let fixture = fixture();
+    let catalog = Catalog::bundled();
+    let base = connector_part(&fixture.footprint, &[], &[]);
+    let pads = |range: std::ops::RangeInclusive<usize>| range.map(|n| n.to_string()).collect::<Vec<_>>();
+    let half = MAX_PADS / 2;
+
+    let at_limit = with_package(&base, |package| {
+        package.mapping.insert("1".into(), pads(1..=half));
+        package.mapping.insert("2".into(), pads((half + 1)..=(MAX_PADS - 1)));
+        package.unconnected_pads = vec![MAX_PADS.to_string()];
+    });
+    assert!(Capture::from_part_record(&at_limit, &fixture.documents, &catalog).is_ok());
+
+    let over_across_terminals = with_package(&base, |package| {
+        package.mapping.insert("1".into(), pads(1..=half));
+        package.mapping.insert("2".into(), pads((half + 1)..=(MAX_PADS + 1)));
+    });
+    let error = Capture::from_part_record(&over_across_terminals, &fixture.documents, &catalog).unwrap_err();
+    assert!(matches!(error, CheckError::TooLarge { limit: MAX_PADS, .. }), "{error}");
+
+    let over_with_unconnected = with_package(&base, |package| {
+        package.mapping.insert("1".into(), pads(1..=half));
+        package.mapping.insert("2".into(), pads((half + 1)..=MAX_PADS));
+        package.unconnected_pads = vec![(MAX_PADS + 1).to_string()];
+    });
+    let error = Capture::from_part_record(&over_with_unconnected, &fixture.documents, &catalog).unwrap_err();
+    assert!(matches!(error, CheckError::TooLarge { limit: MAX_PADS, .. }), "{error}");
+
+    let repeated_count = half + 1;
+    let repeated = with_package(&base, |package| {
+        package.mapping.insert("1".into(), pads(1..=repeated_count));
+        package.mapping.insert("2".into(), pads(1..=repeated_count));
+        package.unconnected_pads = vec!["1".into()];
+    });
+    let report = check(&Capture::from_part_record(&repeated, &fixture.documents, &catalog).unwrap());
+    let repeated_findings: Vec<_> = report.findings().iter().filter(|finding| finding.rule == RuleId::PackagePadRepeated).collect();
+    assert_eq!(repeated_findings.len(), repeated_count);
+    let pad_one = repeated_findings
+        .iter()
+        .find(|finding| matches!(&finding.subject, Subject::PackagePad { number, .. } if number == "1"))
+        .expect("pad 1 should be reported as repeated");
+    assert_eq!(pad_one.measured.value, 3);
+}
+
 /// Non-plated holes are not pad occurrences, in a published document or in an editor draft.
 #[test]
 fn non_plated_holes_are_not_pad_occurrences() {

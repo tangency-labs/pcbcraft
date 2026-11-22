@@ -22,8 +22,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Report typed findings for transported documents and optional drafts without changing anything.
 pub const CHECK: &str = "library.check";
-/// Pads in one captured footprint, the native format's own limit; also the most pads per
-/// terminal or unconnected pads in one captured package.
+/// Pads in one captured footprint, the native format's own limit; also the most distinct pads,
+/// pads per terminal, or unconnected pads in one captured package.
 pub const MAX_PADS: usize = crate::board::definition::MAX_PADS;
 /// Packages in one captured part, the part draft limit.
 pub const MAX_PACKAGES: usize = 64;
@@ -417,6 +417,12 @@ fn bounded_package(part: &Reference, name: &str, package: &Package) -> Result<()
     }
     if package.unconnected_pads.len() > MAX_PADS || package.mapping.values().any(|pads| pads.len() > MAX_PADS) {
         return Err(CheckError::TooLarge { what: what(), limit: MAX_PADS });
+    }
+    let mut distinct_pads = BTreeSet::new();
+    for pad in package.mapping.values().flatten().chain(&package.unconnected_pads) {
+        if distinct_pads.insert(pad.as_str()) && distinct_pads.len() > MAX_PADS {
+            return Err(CheckError::TooLarge { what: what(), limit: MAX_PADS });
+        }
     }
     Ok(())
 }
