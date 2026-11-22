@@ -18,8 +18,8 @@ pub const DEFAULT_CLEARANCE_NM: i64 = 250_000;
 pub const DEFAULT_STROKE_NM: i64 = 50_000;
 /// Maximum allowed courtyard clearance when generating an outline (10.0 mm).
 pub const MAX_CLEARANCE_NM: i64 = 10_000_000;
-/// Thinnest courtyard outline stroke (0.001 mm), the library graphic limit.
-pub const MIN_STROKE_NM: i64 = crate::library_graphics::MIN_STROKE_NM;
+/// Thinnest courtyard outline stroke (0.001 mm = 1,000 nm).
+pub const MIN_STROKE_NM: i64 = 1_000;
 /// Widest courtyard outline stroke (2 mm), the library graphic limit.
 pub const MAX_STROKE_NM: i64 = crate::library_graphics::MAX_STROKE_NM;
 /// Minimum number of vertices in a closed courtyard outline.
@@ -551,19 +551,23 @@ mod tests {
         assert_eq!(after.height_nm, before.height_nm);
     }
 
-    /// One stroke check with one message guards generation and every polygon edit, at the same
-    /// limits as the library graphic validator.
+    /// One stroke check with one message guards generation and every polygon edit, at the
+    /// reported 0.001 mm (1,000 nm) to 2 mm limits.
     #[test]
     fn courtyard_stroke_range_is_shared_and_reported_with_the_ui_message() {
         let message = "Stroke (mm) must be between 0.001 and 2 mm.";
-        assert_eq!((MIN_STROKE_NM, MAX_STROKE_NM), (1, 2_000_000));
+        assert_eq!((MIN_STROKE_NM, MAX_STROKE_NM), (1_000, 2_000_000));
         assert!(validate_stroke(MIN_STROKE_NM).is_ok() && validate_stroke(MAX_STROKE_NM).is_ok());
         assert_eq!(validate_stroke(0).unwrap_err(), message);
+        assert_eq!(validate_stroke(MIN_STROKE_NM - 1).unwrap_err(), message);
         assert_eq!(validate_stroke(MAX_STROKE_NM + 1).unwrap_err(), message);
         let item = Item::new(Kind::Footprint).unwrap();
+        assert_eq!(generate(&item, DEFAULT_CLEARANCE_NM, CourtyardSource::PadsAndBody, MIN_STROKE_NM - 1).unwrap_err(), message);
         assert_eq!(generate(&item, DEFAULT_CLEARANCE_NM, CourtyardSource::PadsAndBody, 5_000_000).unwrap_err(), message);
         let square = vec![pt(0, 0), pt(1_000_000, 0), pt(1_000_000, 1_000_000), pt(0, 1_000_000)];
         assert_eq!(make_courtyard_polygon(square.clone(), 0).unwrap_err(), message);
+        assert_eq!(make_courtyard_polygon(square.clone(), MIN_STROKE_NM - 1).unwrap_err(), message);
+        assert!(make_courtyard_polygon(square.clone(), MIN_STROKE_NM).is_ok());
         assert!(make_courtyard_polygon(square, MAX_STROKE_NM).is_ok());
     }
 
