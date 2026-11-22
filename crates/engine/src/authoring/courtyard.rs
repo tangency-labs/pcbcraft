@@ -339,6 +339,37 @@ fn segments_meet(a: Point, b: Point, c: Point, d: Point) -> bool {
     (o1 == 0 && within(a, b, c)) || (o2 == 0 && within(a, b, d)) || (o3 == 0 && within(c, d, a)) || (o4 == 0 && within(c, d, b))
 }
 
+/// Exact endpoints and any cardinal-angle extrema (`k * 90°`) within an arc's sweep.
+fn arc_extents(center: Point, radius_nm: i64, start_degrees: i16, sweep_degrees: i16) -> Vec<Point> {
+    let start = i32::from(start_degrees);
+    let end = start + i32::from(sweep_degrees);
+    let (lo, hi) = if start <= end { (start, end) } else { (end, start) };
+    let point_at = |degrees: i32| {
+        let a = f64::from(degrees).to_radians();
+        Point {
+            x_nm: center.x_nm.saturating_add((radius_nm as f64 * a.cos()).round() as i64),
+            y_nm: center.y_nm.saturating_add((radius_nm as f64 * a.sin()).round() as i64),
+        }
+    };
+    let mut points = vec![point_at(start), point_at(end)];
+    let floor_cardinal = lo.div_euclid(90) * 90;
+    let first_cardinal = if floor_cardinal < lo { floor_cardinal + 90 } else { floor_cardinal };
+    for step in 0..4 {
+        let angle = first_cardinal + step * 90;
+        if angle > hi {
+            break;
+        }
+        let (dx, dy) = match angle.rem_euclid(360) {
+            0 => (radius_nm, 0),
+            90 => (0, radius_nm),
+            180 => (-radius_nm, 0),
+            _ => (0, -radius_nm),
+        };
+        points.push(Point { x_nm: center.x_nm.saturating_add(dx), y_nm: center.y_nm.saturating_add(dy) });
+    }
+    points
+}
+
 /// Collect boundary points of a footprint primitive for courtyard generation.
 fn primitive_extents(primitive: &Primitive) -> Vec<Point> {
     let rect_corners = |center: Point, width_nm: i64, height_nm: i64, rotation: u16| {
@@ -359,8 +390,11 @@ fn primitive_extents(primitive: &Primitive) -> Vec<Point> {
         Primitive::Pad { pad } => rect_corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation),
         Primitive::NonPlatedHole { hole } => rect_corners(hole.center, hole.diameter_nm, hole.diameter_nm, 0),
         Primitive::Outline { graphic } => rect_corners(graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation),
-        Primitive::Artwork { artwork } if matches!(artwork.graphic.geometry, Geometry::Text { .. }) => Vec::new(),
-        Primitive::Artwork { artwork } => artwork.graphic.paths().into_iter().flatten().collect(),
+        Primitive::Artwork { artwork } => match &artwork.graphic.geometry {
+            Geometry::Text { .. } => Vec::new(),
+            Geometry::Arc { center, radius_nm, start_degrees, sweep_degrees } => arc_extents(*center, *radius_nm, *start_degrees, *sweep_degrees),
+            _ => artwork.graphic.paths().into_iter().flatten().collect(),
+        },
         _ => Vec::new(),
     }
 }
@@ -443,6 +477,58 @@ mod tests {
         let m = metrics(points).unwrap();
         assert_eq!(m.width_nm, 2_100_000);
         assert_eq!(m.height_nm, 1_300_000);
+    }
+
+    /// Fabrication arc courtyard bounds include exact cardinal extrema within the sweep,
+    /// not only tessellated sample points (both positive and negative sweeps/starts).
+    #[test]
+    fn generate_from_fabrication_arc_includes_exact_cardinal_extrema() {
+        let radius = 50_000_000;
+        for (start_degrees, sweep_degrees) in [(1, 180), (181, -180)] {
+            let mut item = Item::new(Kind::Footprint).unwrap();
+            item.objects.insert(
+                92,
+                Primitive::Artwork {
+                    artwork: footprint::Artwork {
+                        purpose: GraphicPurpose::Fabrication,
+                        graphic: Graphic {
+                            geometry: Geometry::Arc { center: pt(0, 0), radius_nm: radius, start_degrees, sweep_degrees },
+                            stroke_nm: 120_000,
+                            fill: Fill::None,
+                        },
+                    },
+                },
+            );
+            for clearance in [0, DEFAULT_CLEARANCE_NM] {
+                let primitive = generate(&item, clearance, CourtyardSource::PadsAndBody, DEFAULT_STROKE_NM).unwrap();
+                let (points, _) = courtyard_polygon(&primitive).unwrap();
+                let min_x = points.iter().map(|p| p.x_nm).min().unwrap();
+                let max_y = points.iter().map(|p| p.y_nm).max().unwrap();
+                assert_eq!(min_x, -radius - clearance);
+                assert_eq!(max_y, radius + clearance);
+            }
+        }
+
+        // Negative start angle spanning -90°, 0° and 90° hits all three exact cardinal extrema.
+        let mut neg = Item::new(Kind::Footprint).unwrap();
+        neg.objects.insert(
+            93,
+            Primitive::Artwork {
+                artwork: footprint::Artwork {
+                    purpose: GraphicPurpose::Fabrication,
+                    graphic: Graphic {
+                        geometry: Geometry::Arc { center: pt(0, 0), radius_nm: radius, start_degrees: -100, sweep_degrees: 200 },
+                        stroke_nm: 120_000,
+                        fill: Fill::None,
+                    },
+                },
+            },
+        );
+        let primitive = generate(&neg, 0, CourtyardSource::PadsAndBody, DEFAULT_STROKE_NM).unwrap();
+        let (points, _) = courtyard_polygon(&primitive).unwrap();
+        assert_eq!(points.iter().map(|p| p.x_nm).max().unwrap(), radius);
+        assert_eq!(points.iter().map(|p| p.y_nm).min().unwrap(), -radius);
+        assert_eq!(points.iter().map(|p| p.y_nm).max().unwrap(), radius);
     }
 
     /// Inserting an exact edge midpoint on a default 0.25 mm outline keeps its area and bounds unchanged.
