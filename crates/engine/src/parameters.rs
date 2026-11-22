@@ -510,7 +510,12 @@ impl Project {
     /// `text` and `pending` all fit in [`MAX_RESOLVED_LEN`], so appending a reference as typed
     /// instead always keeps the result inside it. Depth and budget are checked before any lookup.
     fn resolve_into(
-        lookup: &dyn Fn(Scope, &str) -> Option<String>, text: &str, pending: usize, depth: usize, budget: &mut usize, out: &mut Resolved,
+        lookup: &dyn Fn(Scope, &str) -> Option<String>,
+        text: &str,
+        pending: usize,
+        depth: usize,
+        budget: &mut usize,
+        out: &mut Resolved,
     ) {
         for piece in pieces(text) {
             match piece {
