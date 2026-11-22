@@ -760,8 +760,8 @@ fn placement_commands_expose_integer_coordinates_to_mcp() {
     }
 }
 
-/// Discovery retains every native library command alongside pin-remap preview over MCP;
-/// source loading/removal leave the project's electrical revision and history alone.
+/// Required library commands, including pin-remap preview, remain discoverable as the catalog grows.
+/// Source search and placement share a session; source loading/removal leave project revision and history alone.
 #[test]
 fn native_source_search_and_placement_share_the_mcp_session() {
     let mut s = server();
@@ -769,31 +769,24 @@ fn native_source_search_and_placement_share_the_mcp_session() {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../examples/native-library/library.json"));
     let documents = json!({"library.json":manifest,"symbols/resistor.json":definitions});
     let commands = body(&call(&mut s, "list_commands", json!({"filter":"library."})));
-    let mut command_ids = commands
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|command| command["id"].as_str().unwrap())
-        .filter(|id| id.starts_with("library."))
-        .collect::<Vec<_>>();
-    command_ids.sort_unstable();
-    assert_eq!(
-        command_ids,
-        [
-            "library.available_revisions",
-            "library.list_sources",
-            "library.load_source",
-            "library.parse_quantity",
-            "library.prepare_part_publication",
-            "library.prepare_publication",
-            "library.preview_footprint_revision",
-            "library.preview_pin_remap",
-            "library.preview_pin_table",
-            "library.remove_source",
-            "library.resolve_part",
-            "library.search",
-        ]
-    );
+    let commands = commands.as_array().expect("library command list");
+    for id in [
+        "library.available_revisions",
+        "library.list_sources",
+        "library.load_source",
+        "library.parse_quantity",
+        "library.prepare_part_publication",
+        "library.prepare_publication",
+        "library.preview_footprint_revision",
+        "library.preview_pin_remap",
+        "library.preview_pin_table",
+        "library.remove_source",
+        "library.resolve_part",
+        "library.search",
+        "library.where_used",
+    ] {
+        assert!(commands.iter().any(|command| command["id"].as_str() == Some(id)), "missing required command {id}");
+    }
     let initial = body(&call(&mut s, "execute", json!({"command":"project.new","params":{}})));
     let loaded = call(&mut s, "execute", json!({"command":"library.load_source","params":{"source":"workshop-source","documents":documents}}));
     assert_ne!(loaded["isError"], true);
@@ -2457,4 +2450,72 @@ fn copper_lock_commands_and_protected_edits_share_mcp_inspection() {
     }
     let undone = body(&call(&mut server, "execute", json!({"command":"edit.undo","params":{}})));
     assert_eq!(undone["project"]["boards"][0]["tracks"][0]["locked"], false);
+}
+
+/// Suppressing project inspection must not discard the command's own dry-run report.
+#[test]
+fn unroute_preview_returns_its_diff_with_inspection_disabled() {
+    let mut setup = Session::default();
+    setup.apply("project.new", &json!({"create_board":true})).unwrap();
+    let edit = |setup: &mut Session, id: &str, mut params: Value| {
+        params["expected_revision"] = json!(setup.revision());
+        setup.apply(id, &params).unwrap();
+    };
+    edit(&mut setup, pcbcraft_engine::INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    for index in 0..2 {
+        let x_nm = index * 10_000_000;
+        edit(&mut setup, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":x_nm,"y_nm":0}));
+        let symbol = setup.project().unwrap().symbols().last().unwrap().id();
+        edit(
+            &mut setup,
+            pcbcraft_engine::PLACE_FOOTPRINT,
+            json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"1","2":"2"},"x_nm":x_nm,"y_nm":0}),
+        );
+    }
+    let symbols = setup.project().unwrap().symbols();
+    let args = json!({"from":{"symbol":symbols[0].id(),"terminal":"1"},"to":{"symbol":symbols[1].id(),"terminal":"1"}});
+    edit(&mut setup, pcbcraft_engine::CONNECT_PINS, args);
+    edit(&mut setup, pcbcraft_engine::INITIALIZE_UPDATE_BASELINE, json!({}));
+    use pcbcraft_engine::board::setup::{LayerPurpose, Side};
+    let project = setup.project().unwrap();
+    let board = project.board_target().unwrap();
+    let view = project.board_view(board).unwrap();
+    let layers = view.layers();
+    let copper = |side| layers.iter().find(|layer| layer.purpose == LayerPurpose::Copper && layer.side == Some(side)).unwrap().id;
+    let (front, back) = (copper(Side::Front), copper(Side::Back));
+    let line = view.ratsnest().unwrap().lines.remove(0);
+    let (a, b) = (line.from.position, line.to.position);
+    setup
+        .apply(
+            pcbcraft_engine::ADD_TRACKS,
+            &json!({"board":board.board,"layer":front,"width_nm":250_000,
+        "points":[a,{"x_nm":a.x_nm,"y_nm":2_000_000},{"x_nm":b.x_nm,"y_nm":2_000_000},b],
+        "layer_changes":[{"at":1,"layer":back},{"at":2,"layer":front}],"expected_revision":setup.revision()}),
+        )
+        .unwrap();
+    let project = setup.snapshot().unwrap();
+    let view = project.board_view(board).unwrap();
+    let ids: Vec<_> = view.tracks().iter().map(|t| t.id).collect();
+    let vias: Vec<_> = view.vias().iter().map(|v| v.id).collect();
+    assert_eq!((ids.len(), vias.len()), (3, 2));
+    let mut server = Server::new(Box::new(Headless::with_project(project)));
+    let before = body(&call(&mut server, "inspect_project", json!({})));
+    let preview = json!({"command":pcbcraft_engine::UNROUTE_CONNECTION,"inspect":false,"params":{
+        "board":board.board,"expected_revision":before["revision"],"dry_run":true,
+        "from":{"footprint":line.from.footprint,"pad":"1"},"to":{"footprint":line.to.footprint,"pad":"1"}}});
+    let reply = body(&call(&mut server, "execute", preview.clone()));
+    assert_eq!(reply["removed"], json!({"tracks":ids,"vias":vias}));
+    let requested = json!({"from":preview["params"]["from"],"to":preview["params"]["to"]});
+    assert_eq!(reply["requested"], requested);
+    assert_eq!(reply["unrouted"], json!([requested]));
+    assert_eq!(reply["revision"], before["revision"]);
+    let mut missing = preview;
+    missing["params"]["from"]["pad"] = json!("999");
+    let error = call(&mut server, "execute", missing.clone());
+    assert_eq!(error["structuredContent"]["error"]["code"], "not_found");
+    missing["params"]["expected_revision"] = json!(before["revision"].as_u64().unwrap() + 1);
+    let error = call(&mut server, "execute", missing);
+    assert_eq!(error["structuredContent"]["error"]["code"], "stale_revision");
+    assert_eq!(error["structuredContent"]["error"]["details"], json!({"current_revision":before["revision"]}));
+    assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }

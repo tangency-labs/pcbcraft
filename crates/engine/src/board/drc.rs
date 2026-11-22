@@ -531,6 +531,17 @@ impl OutlineEdge {
     }
 }
 
+impl Outline {
+    /// Closed outlines constrain copper placement and enforce the effective edge clearance.
+    pub(super) fn allows_copper(&self, contour: &Contour, clearance_nm: i64) -> bool {
+        if self.polygons.is_empty() {
+            return true;
+        }
+        let (gap, crosses) = edge_gap(&self.edges, contour);
+        !crosses && gap >= clearance_nm as f64 && contains(&self.polygons, contour)
+    }
+}
+
 /// Whether every core anchor of the copper lies inside some closed outline polygon.
 pub(super) fn contains(polygons: &[Vec<Point>], contour: &Contour) -> bool {
     contour.core.iter().all(|point| polygons.iter().any(|polygon| in_polygon(*point, polygon)))
