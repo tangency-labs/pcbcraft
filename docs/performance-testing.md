@@ -194,6 +194,12 @@ edit and an inactive tool at completion. Missed canvas input fails the run inste
 of producing misleading fast samples. Shared edits exercise session revision
 invalidation, not concurrent transport or worker completion ordering.
 
+`route-reverse-capacity-cancel-edit-v1` replays the same steps for `envelope-v1`
+only, where the board is already at the track and via capacity limits. Instead of
+requiring a layer change, PgDn must be refused with the track/via capacity
+message and the active layer must stay unchanged, while the cancellation,
+shared-edit invalidation and inactive final-tool checks remain in force.
+
 ## Record native evidence
 
 Create environment metadata using observed facts. For example:
@@ -299,12 +305,13 @@ available native and browser targets. Preserve the saved artifacts for the PR.
 Run the same suite afterward and explain both improvements and regressions.
 Correctness assertions are mandatory even when timing gets better: compare query
 findings with the exhaustive reference, reject stale authority and retain the
-feature's own cancellation/rollback tests. The harness checks current query
-contact/violation completeness against all pairs outside the timed boundary on
-the first iteration. Every disposable probe also compares contact, clearance and
-conflicting-membership findings against an exhaustive shared-layer contour and
-membership reference outside its timed boundary. These guards do not replace a
-feature's exhaustive correctness suite.
+feature's own cancellation/rollback tests. The harness checks current query contact/violation completeness against all pairs
+outside the timed boundary on the first iteration for boards up to 8,192 objects;
+above 8,192 objects, it compares the findings touching a deterministic 128-object
+strided sample against an exhaustive per-object reference. Every disposable probe
+also compares contact, clearance and conflicting-membership findings against an
+exhaustive shared-layer contour and membership reference outside its timed
+boundary. These guards do not replace a feature's exhaustive correctness suite.
 
 The proposed #237 targets are routing-input p95 < 4 ms, input-to-valid-visible-preview
 p95 < 16.7 ms / p99 < 33 ms, cancellation by the next rendered frame and commit
@@ -453,7 +460,7 @@ The following original command-generated recipes extend the existing artifacts:
 | `hierarchy-v1` | The current 64-sheet limit, 63 explicit child links, shared global labels and one symbol per sheet |
 | `schematic-limits-v1` | The current 4,096-symbol / 64-sheet limits; eight physical footprints and explicit board exclusions for the other schematic parts |
 | `bga-v1` | The `reference-v1` board plus one 32 x 32 ball grid array at the 1,024-pad, 256-artwork and 1,024-terminal limits, loaded as a native library and placed with all eight symbol units and the full terminal map. After all fixed-artifact samples, a separate pass times library load, part, unit and footprint placement, baseline capture, packed encode and decode, and the design check of a fresh project holding only the array (`bga.*` metrics). The fresh BGA-only subcase has no routing; the retained reference-plus-BGA artifact has the reference tracks and standard replay |
-| `envelope-v1` | Board at the current 65,536-track, 16,384-via and 1,024-pad BGA limits built through shared commands: 65,536 tracks, 16,384 vias, 512 footprints (chosen to match `board-limits-v1`, not a limit: 511 discrete resistors plus one 32 x 32 ball grid array at the 1,024-pad, 256-artwork and 1,024-terminal limits) and a closed board outline, staying within the 16 MiB document and 64 MiB packed archive limits; seeded geometry and counts, generated on demand rather than checked in |
+| `envelope-v1` | Board at the current 65,536-track, 16,384-via and 1,024-pad BGA limits built through shared commands: 65,536 tracks, 16,384 vias, 512 footprints (chosen to match `board-limits-v1`, not a limit: 511 discrete resistors plus one 32 x 32 ball grid array at the 1,024-pad, 256-artwork and 1,024-terminal limits) and a closed board outline, staying within the 16 MiB document and 64 MiB packed archive limits; uses `route-reverse-capacity-cancel-edit-v1`, seeded geometry and counts, generated on demand rather than checked in |
 
 Generate with `board_perf generate RECIPE REVISION ARTIFACT`, retain the exact
 artifact, then reuse it across runs. The `bga.*` diagnostics are generated from

@@ -164,6 +164,11 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
     }
     let project = session.snapshot().ok_or("missing fixture")?;
     let bytes = encode_packed(project)?;
+    let (trace_id, trace) = if recipe == "envelope-v1" {
+        (super::replay::ENVELOPE_TRACE_ID.into(), Step::envelope())
+    } else {
+        (super::replay::STANDARD_TRACE_ID.into(), Step::standard())
+    };
     Ok(Artifact {
         schema: "pcbcraft-performance-fixture/1".into(),
         recipe: recipe.into(),
@@ -172,8 +177,8 @@ pub(super) fn generate(recipe: &str, generator_revision: &str) -> Result<Artifac
         board,
         project_sha256: digest(&bytes),
         project: bytes,
-        trace_id: super::replay::STANDARD_TRACE_ID.into(),
-        trace: Step::standard(),
+        trace_id,
+        trace,
     })
 }
 
