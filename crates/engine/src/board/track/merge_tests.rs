@@ -327,10 +327,37 @@ fn overlapping_bridge_joins_earlier_span_when_free_and_stays_separate_when_block
     let tracks = all_tracks(&s);
     assert_eq!(tracks.len(), 3);
     let lowest = tracks[0];
+    let outer_pair: Vec<_> = tests::view(&s)
+        .tracks()
+        .iter()
+        .filter(|track| ends(track.start, track.end) != ends(at(5 * MM, y), at(15 * MM, y)))
+        .map(|track| track.id)
+        .collect();
+    assert_eq!(outer_pair.len(), 2);
+
+    // Selecting only [0, 10] and [10, 20] on the same board joins them into [0, 20];
+    // selecting all three ([0, 10], [5, 15], [10, 20]) joins [0, 10]+[10, 20] and absorbs [5, 15].
+    let pair_preview = merge(&mut s, &outer_pair, true);
+    assert_eq!(pair_preview["changed"], true, "{pair_preview}");
+    assert_eq!(pair_preview["removed"].as_array().unwrap().len(), 1, "{pair_preview}");
+    assert_eq!(pair_preview["after"].as_array().unwrap().len(), 1, "{pair_preview}");
+    assert_eq!(pair_preview["after"][0]["start"], json!(at(0, y)));
+    assert_eq!(pair_preview["after"][0]["end"], json!(at(20 * MM, y)));
+
+    let all_preview = merge(&mut s, &tracks, true);
+    assert_eq!(all_preview["changed"], true, "{all_preview}");
+    assert_eq!(all_preview["removed"].as_array().unwrap().len(), 2, "{all_preview}");
+    assert_eq!(all_preview["after"].as_array().unwrap().len(), 1, "{all_preview}");
+    assert_eq!(all_preview["after"][0]["id"], json!(lowest));
+    assert_eq!(all_preview["after"][0]["start"], json!(at(0, y)));
+    assert_eq!(all_preview["after"][0]["end"], json!(at(20 * MM, y)));
 
     let report = merge(&mut s, &tracks, false);
     assert_eq!(report["changed"], true, "{report}");
     assert_eq!(report["removed"].as_array().unwrap().len(), 2, "{report}");
+    for key in ["before", "after", "removed", "reshaped", "locked", "changed"] {
+        assert_eq!(all_preview[key], report[key], "{key}");
+    }
     let merged = tests::view(&s).tracks().to_vec();
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].id, lowest, "the lowest UUID survives");
