@@ -1,5 +1,6 @@
-//! Read-only vector export of one addressed schematic sheet.
+//! Read-only vector export of an addressed sheet or a project hierarchy.
 
+mod occurrences;
 mod pdf;
 #[cfg(test)]
 mod tests;
@@ -19,10 +20,11 @@ const LABEL_NM: i64 = GRID_NM;
 /// Vertical clearance between a turned body's centre line and its automatic Reference or Value.
 const FIELD_GAP_NM: i64 = GRID_NM / 10;
 
-/// An addressed sheet could not be encoded as a one-page PDF.
+/// A complete schematic PDF could not be produced.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PdfError {
     UnknownSheet,
+    InvalidHierarchy,
     MissingPaper,
     FontUnavailable,
     DocumentTooLarge,
@@ -33,6 +35,7 @@ impl std::fmt::Display for PdfError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::UnknownSheet => "The sheet address does not belong to this project.",
+            Self::InvalidHierarchy => "The schematic occurrences do not form a valid hierarchy.",
             Self::MissingPaper => "The sheet has no paper; open it with paper adoption before exporting.",
             Self::FontUnavailable => "The bundled regular stroke face could not be loaded.",
             Self::DocumentTooLarge => "The document exceeds the PDF cross-reference offset range.",
@@ -48,6 +51,32 @@ impl std::error::Error for PdfError {}
 /// This function never writes files, changes project state, or traverses pages for export.
 pub fn export(project: &Project, target: SheetTarget) -> Result<Vec<u8>, PdfError> {
     let sheet = project.for_sheet(target).ok_or(PdfError::UnknownSheet)?;
+    draw_page(&sheet)?.finish()
+}
+
+/// Export every project sheet occurrence, with a bookmark per page and nested child bookmarks.
+/// Visit roots in project sheet order, then children by ascending parent sheet-symbol ID,
+/// depth first. Separate occurrences of a definition always get separate pages.
+/// The active editor sheet has no effect. If any page cannot be drawn, return no document.
+pub fn export_project(project: &Project) -> Result<Vec<u8>, PdfError> {
+    export_occurrences(project, &project.occurrence_instances().sheet_occurrences)
+}
+
+/// Draw pages from the occurrence projection rather than from a set of unique definitions.
+fn export_occurrences(project: &Project, records: &[crate::instances::SheetOccurrence]) -> Result<Vec<u8>, PdfError> {
+    let ordered = occurrences::ordered(project, records)?;
+    let mut document = pdf::Document::new();
+    let mut bookmarks = Vec::with_capacity(ordered.len());
+    for (info, parent) in ordered {
+        let sheet = project.for_sheet(info.target).ok_or(PdfError::UnknownSheet)?;
+        document.add_page(draw_page(&sheet)?);
+        bookmarks.push(pdf::Bookmark { title: info.name, parent });
+    }
+    document.finish(&bookmarks)
+}
+
+/// Render the saved paper, frame and geometry through the same path for both export modes.
+fn draw_page(sheet: &Project) -> Result<pdf::Page, PdfError> {
     let paper = sheet.page().ok_or(PdfError::MissingPaper)?;
     let frame = sheet.frame().ok_or(PdfError::MissingPaper)?;
     let mut page = Drawing::new(paper);
@@ -62,12 +91,12 @@ pub fn export(project: &Project, target: SheetTarget) -> Result<Vec<u8>, PdfErro
         };
         page.text(text.at, text.size_nm, 0, align, &text.text)?;
     }
-    draw_wires(&sheet, &mut page);
+    draw_wires(sheet, &mut page);
     for symbol in sheet.symbols() {
-        draw_symbol(&sheet, &mut page, symbol)?;
+        draw_symbol(sheet, &mut page, symbol)?;
     }
-    draw_labels(&sheet, &mut page)?;
-    page.pdf.finish()
+    draw_labels(sheet, &mut page)?;
+    Ok(page.pdf)
 }
 
 struct Drawing {
