@@ -18,6 +18,7 @@ pub mod rendered;
 mod replay;
 mod report;
 pub mod routing;
+pub mod shove;
 pub mod walkaround;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watchdog;
@@ -238,6 +239,7 @@ fn load_artifact(artifact_json: &str) -> Result<Artifact> {
         replay::STANDARD_TRACE_ID => Some(("standard", replay::Step::standard())),
         replay::ENVELOPE_TRACE_ID => Some(("envelope", replay::Step::envelope())),
         replay::COMMIT_TRACE_ID => Some(("commit", replay::Step::commit())),
+        replay::SHOVE_TRACE_ID => Some(("shove", replay::Step::shove())),
         _ => None,
     };
     if let Some((kind, expected)) = expected
