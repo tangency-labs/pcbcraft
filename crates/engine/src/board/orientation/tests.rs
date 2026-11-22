@@ -242,6 +242,44 @@ fn duplicate_and_collinear_strokes_still_warn_while_asymmetric_marks_pass() {
     assert_eq!(ids, vec!["artwork-equiv", "duplicate-silk", "overlap-silk", "split-silk"], "{found:#?}");
 }
 
+/// A centerline silkscreen stroke uses the board's effective silkscreen stroke width when compared
+/// with an explicit silkscreen artwork stroke under a half turn, both at the board's default
+/// 0.15 mm width and after changing the board's silkscreen settings.
+#[test]
+fn centerline_silkscreen_uses_effective_board_stroke_width() {
+    let make_pair = |id: &str, artwork_stroke_nm: i64| {
+        let mut diode = package("resistor-0402", id, Some(json!({"polarized":true})));
+        diode["silkscreen"] = json!([{
+            "points": [{"x_nm": -400_000, "y_nm": -800_000}, {"x_nm": 400_000, "y_nm": -800_000}],
+            "closed": false,
+        }]);
+        diode["artwork"] = json!([{
+            "purpose": "silkscreen",
+            "graphic": {
+                "geometry": {"type": "line", "from": {"x_nm": -400_000, "y_nm": 800_000}, "to": {"x_nm": 400_000, "y_nm": 800_000}},
+                "stroke_nm": artwork_stroke_nm,
+                "fill": "none",
+            }
+        }]);
+        diode
+    };
+
+    let mut s = fixture(&[make_pair("match-default-width", 150_000), make_pair("match-custom-width", 200_000)]);
+    let initial: Vec<_> = findings(&mut s).into_iter().map(|f| f["package"]["id"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(initial, vec!["match-default-width"]);
+
+    s.apply(
+        crate::SET_SILKSCREEN,
+        &json!({
+            "settings": {"text_height_nm": 1_000_000, "stroke_width_nm": 200_000, "pad_clearance_nm": 250_000},
+            "expected_revision": s.revision(),
+        }),
+    )
+    .unwrap();
+    let updated: Vec<_> = findings(&mut s).into_iter().map(|f| f["package"]["id"].as_str().unwrap().to_owned()).collect();
+    assert_eq!(updated, vec!["match-custom-width"]);
+}
+
 /// A stated zero orientation, a silkscreen polarity mark or no polarity at all clears it.
 #[test]
 fn stated_zero_marks_and_unpolarized_packages_raise_nothing() {

@@ -10,6 +10,7 @@
 use super::{
     Footprint,
     definition::{CopperBinding, FootprintDefinition, GraphicPurpose, Key, PadShape},
+    silkscreen::Settings as SilkscreenSettings,
     view::BoardView,
 };
 use crate::{
@@ -153,9 +154,10 @@ fn path(points: &[Doubled], closed: bool, marks: &mut Vec<Mark>) {
 }
 
 /// Layer, stroke width and fill of a piece of drawing. The layer is 0 for silkscreen and 1 for
-/// fabrication, so a mark on one is never matched by the other. Silkscreen paths and technical
-/// rectangles have no stroke of their own, since the layer's setting draws them all alike, so
-/// they use zero.
+/// fabrication, so a mark on one is never matched by the other. Centerline silkscreen paths
+/// carry the board's effective silkscreen stroke width so they compare equal to silkscreen
+/// artwork drawn at the same width; legacy technical rectangles have no stroke of their own
+/// and use zero.
 type Ink = (u8, i64, u8);
 
 /// The layer number of a drawing that can mark a part, or none for the courtyard, which bounds
@@ -237,14 +239,14 @@ fn normalize_marks(inked: Vec<(Ink, Mark)>) -> Vec<(Ink, Mark)> {
 /// Collect the silkscreen and fabrication drawing of a definition turned by `q` quarter turns,
 /// each piece with its ink. The assembly drawing comes from the fabrication layer, so a mark
 /// there counts as much as one in the silkscreen. Courtyards mark nothing.
-fn marks(definition: &FootprintDefinition, frame: &Frame, q: u8) -> Vec<(Ink, Mark)> {
+fn marks(definition: &FootprintDefinition, frame: &Frame, silkscreen: SilkscreenSettings, q: u8) -> Vec<(Ink, Mark)> {
     let at = |x: i64, y: i64| turn(frame.point(x, y), q);
     let mut marks = Vec::new();
     for silk in &definition.silkscreen {
         let points: Vec<_> = silk.points.iter().map(|p| at(p.x_nm, p.y_nm)).collect();
         path(&points, silk.closed, &mut marks);
     }
-    let mut inked: Vec<_> = marks.into_iter().map(|mark| ((0, 0, 0), mark)).collect();
+    let mut inked: Vec<_> = marks.into_iter().map(|mark| ((0, silkscreen.stroke_width_nm, 0), mark)).collect();
     for rect in &definition.graphics {
         let Some(layer) = marking_layer(rect.purpose) else { continue };
         let mut marks = Vec::new();
@@ -314,18 +316,23 @@ fn marks(definition: &FootprintDefinition, frame: &Frame, q: u8) -> Vec<(Ink, Ma
 ///
 /// A definition without pads shows nothing and is not marked.
 pub fn orientation_marked(definition: &FootprintDefinition) -> bool {
+    orientation_marked_with(definition, SilkscreenSettings::default())
+}
+
+/// Like [`orientation_marked`], evaluated with a specific board's effective silkscreen settings.
+fn orientation_marked_with(definition: &FootprintDefinition, silkscreen: SilkscreenSettings) -> bool {
     if definition.pads.is_empty() {
         return false;
     }
     let Some(frame) = Frame::new(definition) else { return true };
     let base = pad_forms(definition, &frame, 0);
-    let printed = marks(definition, &frame, 0);
+    let printed = marks(definition, &frame, silkscreen, 0);
     (1..4).all(|q| {
         let turned = pad_forms(definition, &frame, q);
         if turned.iter().map(|(form, _)| form).ne(base.iter().map(|(form, _)| form)) || turned == base {
             return true;
         }
-        marks(definition, &frame, q) != printed
+        marks(definition, &frame, silkscreen, q) != printed
     })
 }
 
@@ -342,6 +349,7 @@ impl BoardView<'_> {
     /// not polarized, is not reported.
     pub fn orientation_findings(self) -> Vec<Value> {
         let project = self.project();
+        let silkscreen = self.silkscreen();
         let mut packages: BTreeMap<Key, (&FootprintDefinition, Vec<&Footprint>)> = BTreeMap::new();
         for placement in project.board.footprints() {
             if let (Some(key), Some(definition)) = (placement.key(), project.board.definition_for(placement)) {
@@ -351,7 +359,7 @@ impl BoardView<'_> {
         let mut findings = Vec::new();
         for ((library, id, revision), (definition, placements)) in packages {
             let Some(orientation) = definition.orientation.as_ref() else { continue };
-            if !orientation.polarized || orientation.zero.is_some() || orientation_marked(definition) {
+            if !orientation.polarized || orientation.zero.is_some() || orientation_marked_with(definition, silkscreen) {
                 continue;
             }
             // Only a reference is needed; do not resolve pad nets or render placement graphics.
