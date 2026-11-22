@@ -125,6 +125,7 @@ mod tests {
                     island: i,
                     net: None,
                     mechanical: false,
+                    intrinsic: None,
                 }
             })
             .collect();

@@ -764,3 +764,32 @@ fn a_drag_off_its_net_source_loses_the_same_net_exemption() {
     let kept = json!({"layer":front,"tracks":[{"track":stub,"start":at,"end":p(10 * MM, 21 * MM)}]});
     commit_and_agree(&mut s, &kept);
 }
+
+/// Copper that does not move can still lose the net it inherited through a dragged track.
+/// Track U joins an N-assigned via only through the dragged track D; another N-assigned via
+/// sits 0.1 mm from U, allowed under the 0.2 mm rule only while U is on net N. Dragging D clear
+/// of all copper takes N from U, so the gap becomes a violation and the drag is not reached.
+/// Moving D while it still joins U to its via keeps U on N: that drag is reached and commits.
+#[test]
+fn unmoved_copper_that_loses_its_net_is_rechecked() {
+    let mut s = board();
+    let registry = s.project().unwrap().inspect_net_registry().unwrap();
+    let target = json!({"kind":"derived","anchor":registry["nets"][0]["anchor"]});
+    let o = p(5 * MM, 20 * MM);
+    let at = |dx: i64, dy: i64| p(o.x_nm + dx, o.y_nm + dy);
+    for v in [at(5 * MM, 0), at(-525_000, 0)] {
+        s.apply(ADD_VIA, &json!({"at":v,"target":target,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":s.revision()})).unwrap();
+    }
+    track(&mut s, &[o, at(2 * MM, 0)]);
+    let [d] = track(&mut s, &[at(2 * MM, 0), at(5 * MM, 0)])[..] else { panic!() };
+    let front = layer(&s);
+    let clear = json!({"layer":front,"tracks":[{"track":d,"start":at(2 * MM, 3 * MM),"end":at(5 * MM, 3 * MM)}]});
+    let planned = plan(&mut s, &clear);
+    assert_ne!(kind(&planned), "reached", "{planned}");
+    let clearance = count(&s, Kind::Clearance);
+    s.apply(crate::board::track::RESHAPE_TRACKS, &json!({"tracks":clear["tracks"],"expected_revision":s.revision()})).unwrap();
+    assert!(count(&s, Kind::Clearance) > clearance, "DRC sees the gap once U has lost its net");
+    s.apply("edit.undo", &json!({})).unwrap();
+    let kept = json!({"layer":front,"tracks":[{"track":d,"start":at(2 * MM, 0),"end":at(5 * MM, 200_000)}]});
+    commit_and_agree(&mut s, &kept);
+}

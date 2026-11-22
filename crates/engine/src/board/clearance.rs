@@ -99,6 +99,9 @@ pub struct Object {
     pub(crate) net: Option<String>,
     /// An opening is an obstacle but never a conductor or a member of any island.
     pub mechanical: bool,
+    /// The net this object itself brings to its island (a pad's or an assigned via's), as
+    /// opposed to `intended_nets`, which it takes from the island it joins.
+    pub(crate) intrinsic: Option<usize>,
 }
 
 /// Exact represented-contour decision after candidate enumeration. Contact is independent of
@@ -425,6 +428,7 @@ impl BoardGeometry {
                 intended_nets: intrinsic[index].map(|net| vec![net]).unwrap_or_else(|| node_nets[index].clone()),
                 net: land.net.clone().or_else(|| names[island].clone()),
                 mechanical: false,
+                intrinsic: intrinsic[index],
                 at,
             });
         }
@@ -438,6 +442,7 @@ impl BoardGeometry {
                 intended_nets: node_nets[lands.len() + index].clone(),
                 net: names[island].clone(),
                 mechanical: false,
+                intrinsic: intrinsic[lands.len() + index],
                 at: Point { x_nm: track.start.x_nm / 2 + track.end.x_nm / 2, y_nm: track.start.y_nm / 2 + track.end.y_nm / 2 },
             });
         }
@@ -453,6 +458,7 @@ impl BoardGeometry {
                 net: names[island].clone(),
                 at: via.at,
                 mechanical: false,
+                intrinsic: intrinsic[lands.len() + view.tracks().len() + index],
             });
         }
         // Preserve copper-node indexing for the shorts and rules consumers. Only boards with
@@ -470,6 +476,7 @@ impl BoardGeometry {
                         net: None,
                         at: hole.center,
                         mechanical: true,
+                        intrinsic: None,
                     });
                 }
             }

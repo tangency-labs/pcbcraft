@@ -128,8 +128,20 @@ impl Overlay<'_> {
         self.room(false)?;
         self.advance()?;
         let at = contour.core[0];
-        self.added
-            .insert(id, Object { name: id.to_string(), contour, layers, intended_nets: nets, at, island: usize::MAX, net: None, mechanical: false });
+        self.added.insert(
+            id,
+            Object {
+                name: id.to_string(),
+                contour,
+                layers,
+                intended_nets: nets,
+                at,
+                island: usize::MAX,
+                net: None,
+                mechanical: false,
+                intrinsic: None,
+            },
+        );
         Ok(())
     }
 

@@ -660,6 +660,132 @@ impl<'a> Solver<'a> {
                 }
             }
         }
+        self.recheck_memberships(attempt).await
+    }
+
+    /// Recheck copper whose net membership the shove changes, moved or not. A drag can take
+    /// away the net that copper inherited through the dragged track, and a route can give
+    /// unassigned copper its net. Membership comes, as in the query, from the nets copper brings
+    /// to its island (pads and assigned vias), here over the islands as they stand in the
+    /// attempt: those of the dragged tracks and of everything they or the route touch. Each
+    /// copper object whose resulting membership differs from the captured one is probed with it;
+    /// a short, a mechanical violation, a width under its classes' minimum, or a gap under the
+    /// clearance to copper that is neither joined to it nor of its one net blocks the shove.
+    /// The walk suspends every [`WALK_UNIT`] objects and each probe is charged.
+    async fn recheck_memberships(&mut self, attempt: &Attempt<'a>) -> Result<(), Halt> {
+        let objects = self.query.objects();
+        let mut seeds: Vec<ObstacleId> = attempt.route_ids.iter().map(|u| ObstacleId::Added(*u)).collect();
+        seeds.extend(self.dragged.iter().map(|(i, _, _)| ObstacleId::Source(*i)));
+        if seeds.is_empty() {
+            return Ok(());
+        }
+        let mut islands: BTreeSet<usize> = BTreeSet::new();
+        for seed in &seeds {
+            islands.insert(self.island(attempt, *seed));
+            let Some(object) = attempt.overlay.object(*seed) else { continue };
+            for id in attempt.overlay.candidates(&object.contour, &object.layers)? {
+                if let Some(other) = attempt.overlay.object(id).filter(|o| !o.mechanical && o.contour.gap(&object.contour) <= 0.) {
+                    islands.insert(match id {
+                        ObstacleId::Source(_) => other.island,
+                        ObstacleId::Added(_) => self.island(attempt, id),
+                    });
+                }
+            }
+        }
+        islands.remove(&ROUTE_ISLAND);
+        let mut nodes: Vec<ObstacleId> = (0..objects.len())
+            .filter(|i| !objects[*i].mechanical && islands.contains(&objects[*i].island))
+            .map(ObstacleId::Source)
+            .filter(|id| attempt.overlay.object(*id).is_some())
+            .collect();
+        nodes.extend(attempt.route_ids.iter().map(|u| ObstacleId::Added(*u)));
+        nodes.extend(attempt.owners.iter().filter(|(_, c)| islands.contains(&self.shapes[**c].island)).map(|(u, _)| ObstacleId::Added(*u)));
+        let index: BTreeMap<ObstacleId, usize> = nodes.iter().enumerate().map(|(k, id)| (*id, k)).collect();
+        let mut parent: Vec<usize> = (0..nodes.len()).collect();
+        fn root(parent: &mut [usize], mut k: usize) -> usize {
+            while parent[k] != k {
+                parent[k] = parent[parent[k]];
+                k = parent[k];
+            }
+            k
+        }
+        for (k, id) in nodes.iter().enumerate() {
+            if k % WALK_UNIT == 0 {
+                super::search::yield_unit().await;
+            }
+            let Some(object) = attempt.overlay.object(*id) else { continue };
+            for other in attempt.overlay.candidates(&object.contour, &object.layers)? {
+                let Some(&j) = index.get(&other) else { continue };
+                if attempt.overlay.object(other).is_some_and(|o| o.contour.gap(&object.contour) <= 0.) {
+                    let (a, b) = (root(&mut parent, k), root(&mut parent, j));
+                    parent[a] = b;
+                }
+            }
+        }
+        let intrinsic = |id: &ObstacleId| match id {
+            ObstacleId::Source(i) => objects[*i].intrinsic,
+            ObstacleId::Added(_) => None,
+        };
+        let mut nets: BTreeMap<usize, BTreeSet<usize>> = BTreeMap::new();
+        for (k, id) in nodes.iter().enumerate() {
+            let group = root(&mut parent, k);
+            let entry = nets.entry(group).or_default();
+            entry.extend(intrinsic(id));
+        }
+        let groups: Vec<usize> = (0..nodes.len()).map(|k| root(&mut parent, k)).collect();
+        let membership = |k: usize| -> Vec<usize> { nets.get(&groups[k]).map(|n| n.iter().copied().collect()).unwrap_or_default() };
+        for (k, id) in nodes.iter().enumerate() {
+            if matches!(id, ObstacleId::Added(u) if attempt.route_ids.contains(u)) {
+                continue;
+            }
+            let Some(object) = attempt.overlay.object(*id) else { continue };
+            let now = membership(k);
+            if now == object.intended_nets {
+                continue;
+            }
+            if now.len() > 1 {
+                return Err(Halt::Blocked(self.name(attempt, *id)));
+            }
+            super::search::yield_unit().await;
+            if self.probes >= self.budget {
+                return Err(Halt::Budget);
+            }
+            self.probes += 1;
+            self.progress.store(self.probes, Ordering::Relaxed);
+            let results = attempt.overlay.probe_membership(&object.contour, &object.layers, &now, Some(*id))?;
+            for decision in &results.decisions {
+                let Some(other) = attempt.overlay.object(decision.obstacle) else { continue };
+                if other.mechanical {
+                    if decision.clearance_violation {
+                        return Err(Halt::Blocked(self.name(attempt, decision.obstacle)));
+                    }
+                    continue;
+                }
+                let joined = index.get(&decision.obstacle).is_some_and(|j| groups[*j] == groups[k]);
+                if joined {
+                    continue;
+                }
+                let theirs = index.get(&decision.obstacle).map_or_else(|| other.intended_nets.clone(), |j| membership(*j));
+                let same_net = now.len() == 1 && theirs == now;
+                if decision.conflicting_nets || (!same_net && decision.gap_nm < decision.clearance_nm as f64) {
+                    return Err(Halt::Blocked(self.name(attempt, decision.obstacle)));
+                }
+            }
+            let width = match id {
+                ObstacleId::Source(i) if (self.lands..self.lands + self.tracks.len()).contains(i) => Some(self.tracks[i - self.lands].width_nm),
+                ObstacleId::Added(u) => attempt.owners.get(u).map(|c| self.shapes[*c].width_nm),
+                ObstacleId::Source(_) => None,
+            };
+            if let Some(width) = width
+                && results
+                    .probe_rules
+                    .as_ref()
+                    .filter(|policy| policy.has_dimensions())
+                    .is_some_and(|policy| policy.track_width(Some(width)).is_err())
+            {
+                return Err(Halt::Blocked(self.name(attempt, *id)));
+            }
+        }
         Ok(())
     }
 
