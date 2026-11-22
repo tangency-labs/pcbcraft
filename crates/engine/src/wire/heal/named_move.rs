@@ -149,6 +149,9 @@ impl Project {
     /// or wire limits reject the entire candidate; rotation alone never rewrites contacts.
     pub fn dragged_net_label(&self, id: u64, to: Point, rotation: u16, revision: u64, auto_heal: bool) -> Result<Self, CommandError> {
         let preview = self.preview_net_label(id, to, rotation)?;
+        if self.net_labels().iter().any(|label| label.id == id && !label.style.contact()) {
+            return Ok(preview);
+        }
         let end = WireEndpoint::NetLabel(id);
         let from = self.endpoint_position(end).ok_or_else(|| CommandError::NotFound("unknown net label on this sheet".into()))?;
         if from == to {

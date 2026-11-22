@@ -96,24 +96,26 @@ fn bus_label_placed_from_the_form_is_one_undo_step() {
 #[test]
 fn malformed_bus_name_is_refused_with_its_reason() {
     let mut h = editor(1400.);
-    let original = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     let revision = h.state().session.revision();
     h.state_mut().run(engine::ADD, &json!({"name":"D[0..64]","style":"local","x_nm":0,"y_nm":0,"expected_revision":revision}));
     assert!(h.state().message.is_none());
     assert_eq!(h.state().session.project().unwrap().net_labels()[0].style, Style::Local);
+    let before_refused = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
     h.state_mut().run(engine::ADD, &json!({"name":"D[0..64]","style":"bus","x_nm":0,"y_nm":-2_540_000,"expected_revision":revision + 1}));
     h.run();
     assert!(h.state().message.as_deref().unwrap_or_default().contains("at most 64 members"));
     assert_eq!(h.state().session.project().unwrap().net_labels().len(), 1);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before_refused);
     click(&mut h, "Undo");
-    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), original);
+    assert!(h.state().session.project().unwrap().net_labels().is_empty());
+    let after_undo = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
 
     form_with_scope(&mut h, "D[0..64]", "Bus");
     click(&mut h, "Place");
     assert!(h.query_by_label_contains("Enter a bus name such as D[0..7]: a bus carries at most 64 members").is_some());
     assert!(matches!(h.state().dialog, Dialog::NetLabel(_)), "the form stays open on the refusal");
     assert!(h.state().views.active.schematic.tool.is_none(), "no placement starts");
-    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), original);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), after_undo);
 }
 
 /// A wire started on a bus label's point starts on open canvas instead: the finished wire

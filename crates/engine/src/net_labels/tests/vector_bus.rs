@@ -246,3 +246,19 @@ fn label_dry_runs_preview_without_editing() {
     assert_eq!(after, std::str::from_utf8(&saved[&path]).unwrap());
     assert!(String::from_utf8(saved[&path].clone()).unwrap().contains("pcbcraft-sheet/9"), "removing the last bus returns to format 9");
 }
+
+/// Dragging a bus label previews its moved and rotated pose without failing on missing wire
+/// contact or carrying wires that pass through its anchor.
+#[test]
+fn dragging_a_bus_label_previews_its_pose_without_carrying_wires() {
+    let (mut s, main, _) = bus_fixture();
+    apply(&mut s, DRAW_WIRE, json!({"sheet":main.id(),"from":{"x_nm":-10*G,"y_nm":-20*G},"to":{"x_nm":10*G,"y_nm":-20*G},"bends":[]}));
+    let before = s.project().unwrap().for_sheet(main).unwrap();
+    let bus_id = before.net_labels().iter().find(|label| label.style == Style::Bus).unwrap().id;
+    let to = Point { x_nm: 4 * G, y_nm: -24 * G };
+    let preview = before.dragged_net_label(bus_id, to, 90, s.revision(), true).unwrap();
+    let moved = preview.net_labels().iter().find(|label| label.id == bus_id).unwrap();
+    assert_eq!((moved.at, moved.rotation), (to, 90));
+    assert_eq!(preview.wires(), before.wires(), "a bus label carries no wires");
+    assert!(before.dragged_net_label(bus_id, to, 45, s.revision(), true).is_err());
+}
