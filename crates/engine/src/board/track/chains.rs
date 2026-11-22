@@ -543,7 +543,7 @@ pub(crate) async fn legal_stroke(points: &[Point], return_spacing: f64) -> bool 
 }
 
 /// Two nonzero legs overlap when they leave their common vertex on the same ray.
-fn backtracks(a: Point, joint: Point, b: Point) -> bool {
+pub(super) fn backtracks(a: Point, joint: Point, b: Point) -> bool {
     let (ax, ay) = (i128::from(joint.x_nm) - i128::from(a.x_nm), i128::from(joint.y_nm) - i128::from(a.y_nm));
     let (bx, by) = (i128::from(b.x_nm) - i128::from(joint.x_nm), i128::from(b.y_nm) - i128::from(joint.y_nm));
     ax * by - ay * bx == 0 && ax * bx + ay * by < 0
@@ -551,7 +551,7 @@ fn backtracks(a: Point, joint: Point, b: Point) -> bool {
 
 /// Exact integer containment for protected stations, independent of floating
 /// distance projection and of which collinear vertices survived simplification.
-fn on_leg(p: Point, a: Point, b: Point) -> bool {
+pub(super) fn on_leg(p: Point, a: Point, b: Point) -> bool {
     (b.x_nm as i128 - a.x_nm as i128) * (p.y_nm as i128 - a.y_nm as i128) == (b.y_nm as i128 - a.y_nm as i128) * (p.x_nm as i128 - a.x_nm as i128)
         && (a.x_nm.min(b.x_nm)..=a.x_nm.max(b.x_nm)).contains(&p.x_nm)
         && (a.y_nm.min(b.y_nm)..=a.y_nm.max(b.y_nm)).contains(&p.y_nm)

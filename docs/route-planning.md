@@ -226,8 +226,8 @@ can authorize placement.
 
 **Merge same-net copper** defaults off. Displaced source tracks that were
 originally separated must retain clearance, even if they already belong to one
-net or are joined through another branch. Existing direct contacts remain
-exempt so their junctions stay connected. Enabling the option also permits new
+net or are joined through another branch. Existing direct contacts retain a
+local exemption around their junctions. Enabling the option also permits new
 contact within the original resolved net or physical island. With merging off,
 a displaced track entering a neighbor’s clearance queues that neighbor immediately,
 even on the same net; the incoming route need not reach it first. It never permits
@@ -239,7 +239,8 @@ vertex; it does not rewrite a saved board preference.
 `fixed` segment/via geometry for an existing gesture prefix. The result includes
 source-addressed `replacements` and `shove` work counters. Submit the returned
 paths with the incoming route through `pcb.add_tracks`, retaining the same
-`merge_same_net` choice and captured revision. Each replacement retains its
+`merge_same_net` choice and captured revision. The fixed prefix and continuation
+share the 256-point placement limit. Each replacement retains its
 original width, layer and first segment UUID; additional segments receive new
 UUIDs. The compound command independently checks original membership, contact
 preservation, clearance, widths and board edges before publishing one Undo/Redo

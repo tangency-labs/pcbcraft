@@ -227,11 +227,17 @@ impl Validation {
     }
 
     /// Within a source run, the complete stroke validator checks bends and
-    /// returns. Across runs, exempt only contact inside both original copper
-    /// neighborhoods. This allows departure from the junction while rejecting
-    /// a fragment that starts following another run beyond that contact.
+    /// returns. Across runs, allow a bend to depart from retained source contact
+    /// or the incoming pickup, while preserving spacing beyond the junction.
     fn preserves_local_contact(&self, source: &ClearanceQuery, final_query: &ClearanceQuery, a: usize, b: usize, clearance: f64) -> bool {
-        let (Some(chains), Some(old_a), Some(old_b)) = (&self.chains, self.final_origins[a], self.final_origins[b]) else { return false };
+        let (shape_a, shape_b) = (&final_query.objects()[a].contour, &final_query.objects()[b].contour);
+        let (old_a, old_b) = match (self.final_origins[a], self.final_origins[b]) {
+            (Some(old_a), Some(old_b)) => (old_a, old_b),
+            (Some(original), None) => return self.preserves_pickup(source, original, shape_a, shape_b, clearance),
+            (None, Some(original)) => return self.preserves_pickup(source, original, shape_b, shape_a, clearance),
+            (None, None) => return false,
+        };
+        let Some(chains) = &self.chains else { return false };
         if chains.same_run(old_a, old_b) {
             return true;
         }
@@ -242,18 +248,31 @@ impl Validation {
         if !original_a.touches(original_b) {
             return false;
         }
-        let within_original = |changed: usize, neighbor: usize, original: usize| {
-            let shape = &final_query.objects()[changed].contour;
-            let other = &final_query.objects()[neighbor].contour;
-            let original = &source.objects()[original].contour;
-            let Some(leg) = shape.track_centerline() else { return true };
-            let Some((start, end)) = other.track_proximity(leg, shape.radius + clearance) else { return true };
-            // Allow the local departure of a 45-degree bend. The required
-            // normal spacing is reached after this much travel from the joint.
-            let reach = (shape.radius + other.radius + clearance) * std::f64::consts::SQRT_2;
-            original.track_proximity(leg, reach - original.radius).is_some_and(|(lo, hi)| lo <= start + 1e-12 && end <= hi + 1e-12)
+        (within_source(shape_a, original_a) && within_source(shape_b, original_b))
+            || (within_contact(shape_a, shape_b, original_a, original_b, clearance)
+                && within_contact(shape_b, shape_a, original_b, original_a, clearance))
+    }
+
+    /// A manually submitted replacement may meet the first route leg at its
+    /// original endpoint. Neither leg may double back or follow the other outside
+    /// that pickup's clearance neighborhood.
+    fn preserves_pickup(&self, source: &ClearanceQuery, original: usize, moved: &PadContour, incoming: &PadContour, clearance: f64) -> bool {
+        let (pickup, layer, _) = self.origin;
+        let source = &source.objects()[original];
+        let Some([a, b]) = source.contour.track_centerline() else { return false };
+        if !source.layers.contains(&layer) || (a != pickup && b != pickup) {
+            return false;
+        }
+        let opposite = |contour: &PadContour| match contour.track_centerline()? {
+            [a, b] if a == pickup => Some(b),
+            [a, b] if b == pickup => Some(a),
+            _ => None,
         };
-        within_original(a, b, old_a) && within_original(b, a, old_b)
+        let (Some(a), Some(b)) = (opposite(moved), opposite(incoming)) else { return false };
+        let joint = PadContour::capsule(pickup, pickup, 0.);
+        !super::chains::backtracks(a, pickup, b)
+            && local_departure(moved, incoming, &joint, clearance)
+            && local_departure(incoming, moved, &joint, clearance)
     }
 
     /// Final contours retain their original island/membership; only genuinely new route
@@ -284,6 +303,33 @@ impl Validation {
         }
         source.with_objects(items)
     }
+}
+
+/// An unmodified fragment or subset preserves the clearance of the original pair.
+fn within_source(shape: &PadContour, original: &PadContour) -> bool {
+    match (shape.track_centerline(), original.track_centerline()) {
+        (Some(leg), Some([a, b])) => leg.into_iter().all(|point| super::chains::on_leg(point, a, b)),
+        _ => shape.core == original.core && shape.radius == original.radius,
+    }
+}
+
+/// Keep only the part of the original centerline that touches the other original
+/// contour. This excludes long nearby spans after a shared endpoint.
+fn within_contact(shape: &PadContour, other: &PadContour, original: &PadContour, old_other: &PadContour, clearance: f64) -> bool {
+    let Some([a, b]) = original.track_centerline() else { return within_source(shape, original) };
+    let Some((start, end)) = old_other.track_proximity([a, b], original.radius) else { return false };
+    let at =
+        |t: f64| Point { x_nm: a.x_nm + ((b.x_nm - a.x_nm) as f64 * t).round() as i64, y_nm: a.y_nm + ((b.y_nm - a.y_nm) as f64 * t).round() as i64 };
+    local_departure(shape, other, &PadContour::capsule(at(start), at(end), 0.), clearance)
+}
+
+/// The clearance interval on a leg must fit inside the contact region, with
+/// room for the normal departure of a 45-degree turn.
+fn local_departure(shape: &PadContour, other: &PadContour, contact: &PadContour, clearance: f64) -> bool {
+    let Some(leg) = shape.track_centerline() else { return false };
+    let Some((start, end)) = other.track_proximity(leg, shape.radius + clearance) else { return true };
+    let reach = (shape.radius + other.radius + clearance) * std::f64::consts::SQRT_2;
+    contact.track_proximity(leg, reach).is_some_and(|(lo, hi)| lo <= start + 1e-12 && end <= hi + 1e-12)
 }
 
 /// Bounded additive command schema; an empty list requests strict compound-route validation.

@@ -327,11 +327,13 @@ fn same_net_clearance_alone_propagates_the_next_shove() {
                 ..request(&s)
             };
             let original = query(&s);
-            let incoming = Contour::segment(request.target, request.target, request.width_nm).unwrap();
             let upper = original.objects().iter().find(|o| o.name == a.to_string()).unwrap();
-            assert!(incoming.gap(&upper.contour) >= 200_000., "incoming route itself must not hit the upper rail");
             let plan = s.plan_route(&original, &request, DEFAULT_BUDGET, &|| false).unwrap();
             assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+            for leg in plan.points.windows(2) {
+                let incoming = Contour::segment(leg[0], leg[1], request.width_nm).unwrap();
+                assert!(incoming.gap(&upper.contour) >= 200_000., "incoming leg {leg:?} directly hits the upper rail");
+            }
             assert!(plan.replacements.iter().any(|r| r.track == b));
             if !merging {
                 assert!(plan.replacements.iter().any(|r| r.track == a), "same-net clearance did not propagate: {plan:?}");
@@ -870,6 +872,50 @@ fn shove_checks_fixed_segments_and_vias_against_the_outline() {
         assert_eq!(plan.outcome == Outcome::Reached, valid, "{piece:?}: {plan:?}");
         assert!(plan.replacements.is_empty());
     }
+}
+
+/// A fixed prefix and the proposed leg share the normal placement vertex limit.
+#[test]
+fn shove_uses_the_combined_prefix_and_continuation_point_limit() {
+    let mut s = board();
+    let layer = copper_layers(&s)[0];
+    let points: Vec<_> = (0..crate::board::track::MAX_PATH_POINTS).map(|i| p(i as i64, 0)).collect();
+    let make_request = |s: &Session, count| Request {
+        head: points[count - 1],
+        target: p(300, 0),
+        origin: Some((points[0], layer)),
+        fixed: points[..count].windows(2).map(|p| FixedCopper::Segment { start: p[0], end: p[1], layer, width_nm: 250_000 }).collect(),
+        ..request(s)
+    };
+    let cap = points.len();
+    let overflow = make_request(&s, cap);
+    let plan = s.plan_route(&query(&s), &overflow, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Incomplete, "{plan:?}");
+    let fits = make_request(&s, cap - 1);
+    let plan = s.plan_route(&query(&s), &fits, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(plan.outcome, Outcome::Reached, "{plan:?}");
+    commit(&mut s, &fits, &plan);
+}
+
+/// A wider continuation does not capture contacts the narrower pickup never touched.
+#[test]
+fn shove_captures_pickup_contacts_at_the_fixed_width() {
+    let mut s = board();
+    let at = |x_nm, y_nm| Point { x_nm, y_nm };
+    add(&mut s, vec![at(-3_000_000, 450_000), at(3_000_000, 450_000)], 250_000);
+    let layer = copper_layers(&s)[0];
+    let origin = p(0, 0);
+    let head = p(0, -20);
+    let request = Request {
+        head,
+        origin: Some((origin, layer)),
+        width_nm: 800_000,
+        fixed: vec![FixedCopper::Segment { start: origin, end: head, layer, width_nm: 150_000 }],
+        ..request(&s)
+    };
+    let query = query(&s);
+    assert!(pickup(&query, &request).unwrap().islands.is_empty());
+    assert_eq!(pickup(&query, &Request { fixed: Vec::new(), ..request }).unwrap().islands.len(), 1);
 }
 
 #[test]

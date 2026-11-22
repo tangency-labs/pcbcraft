@@ -219,10 +219,15 @@ pub(super) fn closest_station([a, b]: [Point; 2], [c, d]: [Point; 2]) -> f64 {
             return t;
         }
     }
-    let project = |p| (dot(delta(a, p), u) / dot(u, u)).clamp(0., 1.);
+    let length2 = dot(u, u);
+    if length2 == 0. {
+        return 0.;
+    }
+    let project = |p| (dot(delta(a, p), u) / length2).clamp(0., 1.);
+    let tip = project(d);
     [(point_distance(d, a, b), project(d)), (point_distance(c, a, b), project(c)), (point_distance(a, c, d), 0.), (point_distance(b, c, d), 1.)]
         .into_iter()
-        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .min_by(|a, b| a.0.total_cmp(&b.0).then_with(|| (a.1 - tip).abs().total_cmp(&(b.1 - tip).abs())))
         .map_or(0., |(_, station)| station)
 }
 
@@ -266,4 +271,13 @@ fn cross(a: (f64, f64), b: (f64, f64)) -> f64 {
 }
 fn dot(a: (f64, f64), b: (f64, f64)) -> f64 {
     a.0 * b.0 + a.1 * b.1
+}
+
+#[cfg(test)]
+#[test]
+fn closest_parallel_station_follows_the_tip() {
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let source = [p(0, 0), p(10, 0)];
+    assert_eq!(closest_station(source, [p(4, 1), p(20, 1)]), 1.);
+    assert_eq!(closest_station(source, [p(20, 1), p(4, 1)]), 0.4);
 }

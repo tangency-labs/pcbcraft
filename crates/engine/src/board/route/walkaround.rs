@@ -126,10 +126,18 @@ impl<'a> Walker<'a> {
         let at_head = Contour::capsule(request.head, request.head, half);
         let objects = query;
         let head_candidates = query.candidates(&at_head, &layers)?;
-        let (origin, origin_layer) = request.origin.unwrap_or((request.head, request.layer));
-        let at_origin = Contour::capsule(origin, origin, half);
-        let candidates =
-            if (origin, origin_layer) == (request.head, request.layer) { head_candidates } else { query.candidates(&at_origin, &[origin_layer])? };
+        let (origin, origin_layer, origin_width) = if request.mode == super::Mode::Shove {
+            super::shove::pickup_geometry(request)
+        } else {
+            let (origin, layer) = request.origin.unwrap_or((request.head, request.layer));
+            (origin, layer, request.width_nm)
+        };
+        let at_origin = Contour::capsule(origin, origin, origin_width as f64 / 2.);
+        let candidates = if (origin, origin_layer, origin_width) == (request.head, request.layer, request.width_nm) {
+            head_candidates
+        } else {
+            query.candidates(&at_origin, &[origin_layer])?
+        };
         let contacts: Vec<usize> = candidates.into_iter().filter(|i| !objects[*i].mechanical && objects[*i].contour.gap(&at_origin) <= 0.).collect();
         let route_nets: Vec<usize> =
             contacts.iter().flat_map(|i| objects[*i].intended_nets.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();

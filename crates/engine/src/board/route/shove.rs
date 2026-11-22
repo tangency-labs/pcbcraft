@@ -151,10 +151,24 @@ struct Pickup {
     islands: BTreeSet<usize>,
 }
 
+/// The fixed segment at the original pickup supplies its width when the active leg differs.
+pub(super) fn pickup_geometry(request: &Request) -> (Point, Uuid, i64) {
+    let (point, layer) = request.origin.unwrap_or((request.head, request.layer));
+    let width = request
+        .fixed
+        .iter()
+        .find_map(|piece| match piece {
+            FixedCopper::Segment { start, layer: fixed_layer, width_nm, .. } if *start == point && *fixed_layer == layer => Some(*width_nm),
+            _ => None,
+        })
+        .unwrap_or(request.width_nm);
+    (point, layer, width)
+}
+
 /// Resolve source intent only at the gesture's original pickup, before any speculative contact.
 fn pickup(query: &ClearanceQuery, request: &Request) -> Result<Pickup, CommandError> {
-    let (point, layer) = request.origin.unwrap_or((request.head, request.layer));
-    let contour = Contour::segment(point, point, request.width_nm)?;
+    let (point, layer, width) = pickup_geometry(request);
+    let contour = Contour::segment(point, point, width)?;
     let contacts: Vec<_> = query.candidates(&contour, &[layer])?.into_iter().filter(|i| query.objects()[*i].contour.touches(&contour)).collect();
     let nets = contacts.iter().flat_map(|i| query.objects()[*i].intended_nets.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();
     let islands = contacts.iter().map(|i| query.objects()[*i].island).collect();
@@ -329,15 +343,7 @@ fn split_chain(chains: &Chains, source: usize, path: &[Point]) -> Option<Vec<Rep
 pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
     // A free pickup inside existing clearance is invalid even when that copper
     // could later move. Validate the original contact before removing any bodies.
-    let (point, layer) = request.origin.unwrap_or((request.head, request.layer));
-    let width = request
-        .fixed
-        .iter()
-        .find_map(|piece| match piece {
-            FixedCopper::Segment { start, layer: fixed_layer, width_nm, .. } if *start == point && *fixed_layer == layer => Some(*width_nm),
-            _ => None,
-        })
-        .unwrap_or(request.width_nm);
+    let (point, layer, width) = pickup_geometry(request);
     let start = Request {
         head: point,
         target: point,
@@ -518,6 +524,7 @@ impl<'a> Search<'a> {
             .chain(std::iter::once_with(|| continuations(request)).flatten());
         let reuse_previous = request.previous.last() != Some(&request.target) || self.legal_incoming(request, &request.previous).await;
         let incoming = RouteObstacles::new(&self.geometry, &self.incoming);
+        let fixed_segments = request.fixed.iter().filter(|piece| matches!(piece, FixedCopper::Segment { .. })).count();
         let mut tested = Vec::new();
         let mut edge_approaches = Vec::new();
         let mut stats = self.stats.clone();
@@ -592,6 +599,10 @@ impl<'a> Search<'a> {
                 continue;
             }
             tested.push(proposed.points.clone());
+            if fixed_segments + proposed.points.len() > crate::board::track::MAX_PATH_POINTS {
+                incomplete = true;
+                continue;
+            }
             if !self.legal_incoming(&route, &proposed.points).await {
                 continue;
             }

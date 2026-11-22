@@ -364,6 +364,34 @@ fn compound_edits_reject_new_overlap_along_existing_branch() {
     s.apply(ADD_TRACKS, &valid).expect("an edit departing from the retained junction is legal");
 }
 
+/// A preserved endpoint allows the new route to depart from displaced copper, but not to retrace it.
+#[test]
+fn compound_route_accepts_only_local_pickup_contact_with_a_replacement() {
+    let mut s = board();
+    let track = add(&mut s, vec![p(0, 0), p(10, 0)], 250_000)[0];
+    let mut command = params(&s, json!([{"track":track,"points":[p(0,0),p(2,2),p(8,2),p(10,0)]}]));
+    command["points"] = json!([p(0, 0), p(3, 3)]);
+    let revision = s.revision();
+    assert!(s.apply(ADD_TRACKS, &command).is_err());
+    assert_eq!(s.revision(), revision);
+    command["points"] = json!([p(0, 0), p(-5, 0)]);
+    s.apply(ADD_TRACKS, &command).expect("a shared pickup may depart from a replaced track");
+}
+
+/// Touching at a protected junction does not exempt new sub-clearance spacing farther along the original run.
+#[test]
+fn compound_route_refuses_new_insufficient_spacing_farther_from_a_contact() {
+    let mut s = board();
+    let at = |x_nm, y_nm| Point { x_nm, y_nm };
+    let track = add(&mut s, vec![p(0, 0), p(12, 0)], 250_000)[0];
+    add(&mut s, vec![p(0, 0), at(12_000_000, 800_000)], 300_000);
+    let edit = |s: &Session, offset| params(s, json!([{"track":track,"points":[p(0,0),p(7,0),at(8_000_000,offset),at(10_000_000,offset),p(12,0)]}]));
+    let revision = s.revision();
+    assert!(s.apply(ADD_TRACKS, &edit(&s, 200_000)).is_err());
+    assert_eq!(s.revision(), revision);
+    s.apply(ADD_TRACKS, &edit(&s, -200_000)).expect("the corner may move away from the other track");
+}
+
 /// Through via dimensions obey the via rules even when the track minimum is larger.
 #[test]
 fn compound_edits_apply_track_width_only_to_tracks() {

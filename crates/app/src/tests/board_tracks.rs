@@ -3123,7 +3123,7 @@ fn shove_from_an_unconnected_pad_pushes_both_rails_forward() {
     for rail in &rails {
         assert_ne!(laid.iter().find(|track| track.id == rail.id).unwrap(), rail);
     }
-    let displaced = assert_published_replacements(&laid, &replacements);
+    let displaced = assert_published_replacements(&originals, &laid, &replacements);
     let mut frontier = vec![start];
     let mut reached = BTreeSet::from([(start.x_nm, start.y_nm)]);
     while let Some(point) = frontier.pop() {
@@ -3156,11 +3156,16 @@ fn shove_from_an_unconnected_pad_pushes_both_rails_forward() {
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
 }
 
-/// Compare every authored rail leg with the exact replacement used for placement.
-fn assert_published_replacements(laid: &[Track], replacements: &[pcbcraft_engine::board::track::replacements::Replacement]) -> BTreeSet<Uuid> {
+/// Compare every published leg with the placement path and the source track's dimensions.
+fn assert_published_replacements(
+    originals: &[Track],
+    laid: &[Track],
+    replacements: &[pcbcraft_engine::board::track::replacements::Replacement],
+) -> BTreeSet<Uuid> {
     let mut matched = BTreeSet::new();
     for replacement in replacements {
-        let rail = laid.iter().find(|track| track.id == replacement.track).expect("published source identity");
+        let rail = originals.iter().find(|track| track.id == replacement.track).expect("original source identity");
+        assert!(laid.iter().any(|track| track.id == rail.id), "missing published source identity {}", rail.id);
         for pair in replacement.points.windows(2) {
             let segment = laid
                 .iter()
@@ -3224,6 +3229,8 @@ fn shove_preview_stays_displaced_at_the_top_of_the_channel() {
     h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
     h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let original_vias = vias(&h);
+    assert_eq!(original_vias.len(), 1);
     let rev = h.state().session.revision();
     let start = p(8_128_000, 9_398_000);
     h.key_press(Key::X);
@@ -3274,6 +3281,7 @@ fn shove_preview_stays_displaced_at_the_top_of_the_channel() {
     let kept = tracks(&h).into_iter().find(|t| t.id == locked.id).unwrap();
     assert_eq!((kept.start, kept.end), (locked.start, locked.end));
     assert!(kept.locked);
+    assert_eq!(vias(&h), original_vias);
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
@@ -3288,6 +3296,7 @@ fn lateral_shove_preview_preserves_the_branch_return_corridor() {
     h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
     h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let originals = tracks(&h);
     let revision = h.state().session.revision();
     let start = p(2_159_000, 6_604_000);
     h.key_press(Key::X);
@@ -3314,7 +3323,7 @@ fn lateral_shove_preview_preserves_the_branch_return_corridor() {
     h.run_steps(200);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
-    assert_published_replacements(&tracks(&h), &expected);
+    assert_published_replacements(&originals, &tracks(&h), &expected);
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
@@ -3326,7 +3335,8 @@ fn lateral_shove_preview_preserves_the_branch_return_corridor() {
 fn shove_return_preview_does_not_form_a_long_hairpin() {
     let (mut h, _) = parallel_rail_board();
     let p = |x, y| Point { x_nm: x, y_nm: y };
-    let lower = tracks(&h).iter().find(|t| t.start == p(0, 5_800_000) && t.end == p(20_000_000, 5_800_000)).unwrap().id;
+    let originals = tracks(&h);
+    let lower = originals.iter().find(|t| t.start == p(0, 5_800_000) && t.end == p(20_000_000, 5_800_000)).unwrap().id;
     h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
     h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
@@ -3360,7 +3370,7 @@ fn shove_return_preview_does_not_form_a_long_hairpin() {
     h.run_steps(200);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
-    assert_published_replacements(&tracks(&h), &expected);
+    assert_published_replacements(&originals, &tracks(&h), &expected);
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
@@ -3643,6 +3653,7 @@ fn shove_backspace_and_finish_revalidate_the_retained_prefix() {
     h.state_mut().views.active.camera.center_on(p(8_128_000, 3_619_500));
     h.run();
     let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let originals = tracks(&h);
     let revision = h.state().session.revision();
     let start = p(2_159_000, 6_604_000);
     h.key_press(Key::X);
@@ -3655,6 +3666,8 @@ fn shove_backspace_and_finish_revalidate_the_retained_prefix() {
     click_route_with_modifiers(&mut h, retained, Modifiers::NONE);
     h.run_steps(300);
     let prefix = h.state().views.active.board.tracks.fixed_route_points().unwrap().to_vec();
+    let expected = h.state().views.active.board.tracks.replacements().to_vec();
+    assert_eq!(expected.len(), 2, "the retained prefix must displace both rails");
     let next = p(13_970_000, -1_778_000);
     click_route_with_modifiers(&mut h, next, Modifiers::NONE);
     h.run_steps(300);
@@ -3666,8 +3679,10 @@ fn shove_backspace_and_finish_revalidate_the_retained_prefix() {
     h.run_steps(300);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1);
-    assert!(tracks(&h).iter().any(|track| track.end == retained));
-    assert!(!tracks(&h).iter().any(|track| track.end == next));
+    let laid = tracks(&h);
+    assert!(laid.iter().any(|track| track.end == retained));
+    assert!(!laid.iter().any(|track| track.end == next));
+    assert_published_replacements(&originals, &laid, &expected);
     h.state_mut().run("edit.undo", &json!({}));
     h.run();
     assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
