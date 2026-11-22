@@ -385,7 +385,10 @@ fn compound_route_refuses_new_insufficient_spacing_farther_from_a_contact() {
     let at = |x_nm, y_nm| Point { x_nm, y_nm };
     let track = add(&mut s, vec![p(0, 0), p(12, 0)], 250_000)[0];
     add(&mut s, vec![p(0, 0), at(12_000_000, 800_000)], 300_000);
-    let edit = |s: &Session, offset| params(s, json!([{"track":track,"points":[p(0,0),p(7,0),at(8_000_000,offset),at(10_000_000,offset),p(12,0)]}]));
+    // Start the departure after the original runs have reached clearance.
+    let departure = at(7_500_000, 0);
+    let edit =
+        |s: &Session, offset| params(s, json!([{"track":track,"points":[p(0,0),departure,at(8_000_000,offset),at(10_000_000,offset),p(12,0)]}]));
     let revision = s.revision();
     assert!(s.apply(ADD_TRACKS, &edit(&s, 200_000)).is_err());
     assert_eq!(s.revision(), revision);
