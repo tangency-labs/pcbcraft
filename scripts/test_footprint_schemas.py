@@ -114,11 +114,12 @@ for (const item of cases) {
                 self.assertFalse(validator.is_valid(value))
 
     def test_orientation_statement_selects_format_7(self):
-        """Format 7 is format 4 plus a required, closed orientation object; holes stay optional."""
+        """Format 7 requires a closed orientation object and can carry round holes or slots."""
         npth = json.loads((ROOT / "docs/schemas/footprint-v4.schema.json").read_text())
+        slots = json.loads((ROOT / "docs/schemas/footprint-v5.schema.json").read_text())
         schema = json.loads((ROOT / "docs/schemas/footprint-v7.schema.json").read_text())
         registry = Registry().with_resources(
-            (item["$id"], Resource.from_contents(item)) for item in (self.schema, npth)
+            (item["$id"], Resource.from_contents(item)) for item in (self.schema, npth, slots)
         )
         validator = Draft202012Validator(schema, registry=registry)
         value = copy.deepcopy(self.definition)
@@ -129,6 +130,10 @@ for (const item of cases) {
         hole = {"center": {"x_nm": 0, "y_nm": 2000000}, "diameter_nm": 500000}
         validator.validate(dict(value, non_plated_holes=[hole]))
         validator.validate(dict(value, pads=[], non_plated_holes=[hole]))
+        slot = {"width_nm": 125000, "length_nm": 400000, "rotation_mdeg": 30000}
+        slotted_pad = dict(value["pads"][0], copper="all_copper", plated_slot=slot)
+        validator.validate(dict(value, pads=[slotted_pad, value["pads"][1]], non_plated_holes=[hole]))
+        self.assertFalse(validator.is_valid(dict(value, pads=[dict(slotted_pad, drill_nm=125000)])))
         self.assertFalse(validator.is_valid(dict(value, pads=[])), "a package needs a pad or a hole")
         self.assertFalse(validator.is_valid(dict(value, non_plated_holes=[])))
         self.assertFalse(Draft202012Validator(npth, registry=registry).is_valid(dict(value, format="pcbcraft-footprint/4", non_plated_holes=[hole])))

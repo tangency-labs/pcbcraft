@@ -7,27 +7,27 @@ placement overrides. The schemas describe canonical saved JSON. Implementations
 must also perform the semantic checks below when accepting definitions and
 transactions.
 
-In board formats 34 and 35, the placed footprint owns `locked`, an optional
+In board formats 34, 35, and 37, the placed footprint owns `locked`, an optional
 boolean that defaults to false and is omitted by fresh canonical encoding when
-false. An active footprint lock requires format 34, or 35 when arcs are also
-present; the flag does not change
-the pinned library definition or mapping. This is
-[storage and inspection only](pcb-layout-workflow.md#footprint-lock-metadata-storage-only),
-not a lock command or edit-protection contract. The historical format-15
+false. Boards with active footprint locks use format 34, format 35 with arcs,
+or format 37 with straight-via teardrops. The flag leaves the pinned library
+definition and mapping unchanged. See
+[the placement edit policy](pcb-layout-workflow.md#placed-footprint-locks) for the
+commands that respect this flag. The historical format-15
 placement schema below remains frozen and does not accept this newer field.
 
 Board format 15 adds local reference position and print overrides. Earlier board
 formats retain their existing encodings when these fields are absent. Footprint
-library definitions are independently versioned: definitions without non-plated
-holes or an [assembly orientation](#assembly-orientation) statement still write
-format 1; definitions with holes write format 4; and a definition with an
-orientation statement writes format 7, with or without holes.
+library definitions are independently versioned. An [assembly orientation](#assembly-orientation)
+statement selects format 7. Without a statement, plated slots select format 5,
+circular non-plated holes select format 4, and other footprints use format 1.
 
 | Document | Format | Machine-readable schema |
 | --- | --- | --- |
-| Published footprint without non-plated holes | `pcbcraft-footprint/1` | [Footprint schema](schemas/footprint-v1.schema.json) |
-| Published footprint with circular non-plated through holes | `pcbcraft-footprint/4` | [Footprint schema with holes](schemas/footprint-v4.schema.json) |
-| Published footprint with an orientation statement | `pcbcraft-footprint/7` | [Footprint schema with orientation](schemas/footprint-v7.schema.json) |
+| Published footprint with surface or circular-plated lands only | `pcbcraft-footprint/1` | [Format 1 schema](schemas/footprint-v1.schema.json) |
+| Published footprint with circular non-plated through holes and no slots | `pcbcraft-footprint/4` | [Format 4 schema](schemas/footprint-v4.schema.json) |
+| Published footprint with plated slots | `pcbcraft-footprint/5` | [Format 5 schema](schemas/footprint-v5.schema.json) |
+| Published footprint with an assembly orientation statement | `pcbcraft-footprint/7` | [Format 7 schema](schemas/footprint-v7.schema.json) |
 | Physical placement inside a board | Enclosing `pcbcraft-board/15` | [Placement schema](schemas/footprint-placement-v15.schema.json) |
 
 The schemas use [JSON Schema Draft 2020-12](https://json-schema.org/draft/2020-12/json-schema-core).
@@ -45,7 +45,7 @@ Additional arguments accept standalone native definitions. By default,
 `--placement` checks one historical format-15 physical placement record. Use
 `--placement-version 17` for the historical format-17 mapping described in the
 [part schema guide](part-schema.md). Use the native board reader to validate
-formats 34 and 35.
+formats 34, 35, and 37.
 
 ```sh
 python3 scripts/check-footprint-schemas.py
@@ -87,19 +87,19 @@ also accept `null` for some optional Rust fields as a compatibility input.
 
 | Field | Type and constraint | Meaning |
 | --- | --- | --- |
-| `format` | `pcbcraft-footprint/1`, `pcbcraft-footprint/4`, or `pcbcraft-footprint/7` exactly when `orientation` is present | Native footprint field contract |
+| `format` | Exact native format string for the features used | See [Compatibility and versioning](#compatibility-and-versioning) |
 | `library`, `id` | 1–64 lowercase ASCII letters, digits and internal hyphens | Stable library and item identity |
 | `revision` | Integer 1…4,294,967,295 | Immutable content revision |
 | `name`, `license` | Nonempty trimmed strings, at most 200 UTF-8 bytes each | Display name and license declaration |
 | `source` | Required `kind`, `reference`, `locator` strings | Provenance, preserved when pinned |
-| `pads` | 1…1,024 distinct numbered pads in format 1; 0…1,024 in formats 4 and 7, with at least one pad or hole | Physical lands and optional plated drills |
-| `non_plated_holes` | Required 1…128 entries in format 4; optional 1…128 in format 7; forbidden in format 1 | Circular mechanical holes, each with a local `center` and a positive finished `diameter_nm` |
+| `pads` | 1…1,024 distinct numbered pads in formats 1 and 5; 0…1,024 in formats 4 and 7, with at least one pad or hole | Physical lands with optional plated circular or obround holes |
+| `non_plated_holes` | 1…128 entries when present; required in format 4, optional in formats 5 and 7, forbidden in format 1 | Circular mechanical holes with a local `center` and positive finished `diameter_nm` |
 | `graphics` | 0…64 rectangles | Fabrication, silkscreen or courtyard geometry |
 | `artwork` | Optional 1…256 parameterized objects | Lines, rectangles, circles, arcs, polylines or stroke text |
 | `silkscreen` | Optional 1…64 centerline paths | Physical paths clipped against pad clearance |
 | `reference` | Optional `pcbcraft-stroke-1` or `pcbcraft-technical-1` | Enable generated reference text using this font |
 | `reference_offset` | Optional nonzero local point | Displace the generated reference from its automatic anchor |
-| `orientation` | Required in format 7; forbidden in formats 1 and 4 | Polarity, pin 1 pad and stated zero orientation for assembly |
+| `orientation` | Required in format 7 and forbidden in the earlier formats | Polarity, pin 1 pad and stated zero orientation for assembly |
 
 Source strings are nonempty, trimmed and free of control characters. Their UTF-8
 byte limits are 64 for `kind`, 2,048 for `reference` and 1,024 for `locator`.
@@ -109,6 +109,15 @@ Pad numbers and mapping identifiers retain their spelling, including `01`.
 They contain 1…8 ASCII letters, digits, `+`, `-` or `_`. The
 [footprint guide](footprint-library.md#definition-and-placement-contract)
 defines the existing land shapes, copper bindings and drill relationships.
+A format-5 or format-7 pad may use `plated_slot` instead of `drill_nm`, only with
+`copper: "all_copper"`. Its anchor is the pad centre. `width_nm` is the finished
+opening width and `length_nm` is the full end-to-end length, including both
+round caps. Both use the existing footprint dimension bounds and length must be
+at least width. `rotation_mdeg` is an independent counterclockwise angle in
+0…359999, not a rotation relative to the copper land. Bottom placement mirrors
+the entire hole before applying placement rotation. Equal dimensions produce a
+round outline; the record remains a slot. Null slot records are not accepted.
+
 Parameterized artwork uses the existing shared drawing geometry, with physical
 stroke width and `fill` equal to `none`.
 
@@ -116,7 +125,8 @@ A `non_plated_holes` entry has exactly `center` and `diameter_nm` (1…100,000,0
 The array implies a non-plated through hole with no copper land. It has no pad
 number and does not participate in terminal mappings or connectivity. Footprint
 rotation and side changes transform its center, not its diameter. An empty array
-is not a format-4 definition; removing the last hole restores the format-1 writer.
+is invalid. Removing the last hole restores format 1 when the footprint has
+neither a plated slot nor an orientation statement.
 
 ## Coordinates and generated reference
 
@@ -312,7 +322,7 @@ Symbols and parts carry no orientation data.
 Whether a part shows its orientation on the board is derived from geometry, not
 saved. The copper shows it unless a quarter, half or three-quarter turn about the
 centroid of the pad centres lands every pad on an identical land (same centre, shape,
-size, corner radius, copper binding and drill) and moves at least one pad onto a
+size, corner radius, copper binding and plated opening) and moves at least one pad onto a
 differently numbered one. For each such turn the silkscreen or fabrication drawing
 must differ from itself turned the same way. The check uses fixed silkscreen paths
 and rectangles and artwork on both layers, not courtyards or generated reference
@@ -337,7 +347,9 @@ other fields or project state.
 
 - Pad numbers are distinct. A rounded corner is at most half the shorter land
   dimension, a circular land has equal dimensions, and a plated drill is smaller
-  than both land dimensions.
+  than both land dimensions. A plated slot must have copper around its entire
+  outline, including both ends; the board annular-ring rule checks the minimum
+  remaining margin.
 - Drawing extents after tessellation stay within definition bounds. Lines have
   distinct endpoints, rectangles have ordered corners, and polyline segments
   have distinct consecutive points. Text is nonblank and control-free.
@@ -353,8 +365,9 @@ other fields or project state.
   no-op save bytes retain their existing compatibility behavior.
 
 Editable authoring documents retain `pcbcraft-library-item/1` when there are no
-non-plated holes and use `pcbcraft-library-item/3` when a hole is present. Both
-keep stable primitive IDs, draft state and revision allocation. Drafts may have
+non-plated holes or plated slots. A draft with only round holes uses
+`pcbcraft-library-item/3`; any slot moves it to `pcbcraft-library-item/4`.
+Each format keeps stable primitive IDs, draft state and revision allocation. Drafts may have
 no pads; a footprint with at least one non-plated hole can also be exported with
 zero pads. Export validates the published definition against the footprint contract.
 Native board placement still uses an assigned schematic component and a pad mapping.
@@ -370,11 +383,17 @@ definitions carrying this extension. Definitions with no new data keep their
 existing bytes on no-op save. The format-15 board extension provides an explicit
 version for placed overrides.
 
-The format-1 field set defined here is fixed. Future authored fields or changed
-meanings require a new footprint format and an explicit compatibility design.
-Format 7 adds only `orientation` to format 4, and the writer uses it only for a
-definition that carries the statement. Readers of formats 1 and 4 refuse format 7
-cleanly instead of dropping the statement.
+The format-1 field set defined here is fixed. An orientation statement selects
+`pcbcraft-footprint/7`, which can also carry plated slots and circular non-plated
+holes. Without an orientation statement, footprints with slots use
+`pcbcraft-footprint/5` and those with only circular non-plated holes use format 4.
+Ordinary surface and circular-plated definitions retain format 1. Older readers
+refuse unknown footprint versions.
+
+Slot-bearing drafts without orientation statements use `pcbcraft-library-item/4`.
+Schematic and board clipboard envelopes carrying slots use `pcbcraft-clipboard/7`
+and `/8` respectively. Replicating a fragment with both slots and device supply
+ranges uses `/10` and `/11` respectively.
 The board-local appearance fields above extend the first format-15 implementation
 before its release. Later changes to the released board contract require their
 own version and compatibility review.

@@ -470,6 +470,30 @@ fn oriented_footprint_with_npth_round_trip() {
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
 }
 
+#[test]
+fn oriented_footprint_preserves_plated_slots_and_fabrication_guard() {
+    let mut slotted = package("resistor-0402", "slotted-orientation", Some(json!({"polarized":true,"pin_1":"1"})));
+    for pad in slotted["pads"].as_array_mut().unwrap() {
+        pad["copper"] = json!("all_copper");
+        pad["plated_slot"] = json!({"width_nm":125_000,"length_nm":400_000,"rotation_mdeg":30_000});
+    }
+    let symmetric = read_saved(slotted.to_string().as_bytes()).unwrap();
+    assert!(symmetric.has_plated_slots());
+    assert!(!orientation_marked(&symmetric));
+    let mut asymmetric = slotted.clone();
+    asymmetric["pads"][1]["plated_slot"]["rotation_mdeg"] = json!(60_000);
+    assert!(orientation_marked(&read_saved(asymmetric.to_string().as_bytes()).unwrap()));
+
+    let mut s = fixture(&[slotted]);
+    assert_eq!(findings(&mut s).len(), 1);
+    let documents = encode_documents(s.snapshot().unwrap()).unwrap();
+    let reopened = decode_documents(&documents).unwrap();
+    assert_eq!(encode_documents(reopened.clone()).unwrap(), documents);
+    let board = reopened.boards().next().unwrap();
+    assert!(board.footprints().next().unwrap().pads.iter().all(|pad| pad.plated_slot.is_some()));
+    refused(board.fabrication(), "cannot yet machine plated slots");
+}
+
 /// A project pins the format 7 copy and saves it again byte for byte; the editor declines to
 /// open it rather than drop the statement.
 #[test]

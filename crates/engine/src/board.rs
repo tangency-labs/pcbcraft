@@ -24,6 +24,12 @@ pub mod identity;
 mod library_migration;
 #[cfg(test)]
 mod lock_storage_tests;
+
+#[cfg(test)]
+std::thread_local! {
+    static PLACEMENT_LOOKUP_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static PLACEMENT_GEOMETRY_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 pub mod materials;
 pub mod movement;
 pub mod orientation;
@@ -38,6 +44,7 @@ pub mod setup;
 #[cfg(test)]
 mod side_tests;
 pub mod silkscreen;
+pub mod slot;
 pub mod teardrop;
 pub mod track;
 pub(crate) mod transform;
@@ -106,7 +113,7 @@ pub(crate) struct Footprint {
     /// and technical graphics use the back layers. Omitted for top-side placements.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) bottom: bool,
-    /// Board-local lock intent; omitted while false. Manipulation protection is a separate policy.
+    /// Board-local lock for direct placement transforms and footprint removal; omitted while false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) locked: bool,
     /// Additional reference displacement from the library default in footprint-local coordinates.
@@ -275,7 +282,7 @@ impl Footprint {
     }
 
     /// Publish immutable identity, mapping and resolved centers for GUI and MCP clients.
-    /// Always include the storage-only `locked` boolean, including when false.
+    /// Always include the `locked` boolean, including when false.
     pub(crate) fn inspect(&self, project: &crate::Project) -> Value {
         let definition = project.board.definition_for(self);
         let pins = self.terminals_by_pad();
@@ -293,6 +300,13 @@ impl Footprint {
                 }
                 if let Some(physical) = physical {
                     record["copper_layers"]=json!(view::CopperLayers::resolve(project.board.setup.as_ref(),physical.copper,self.bottom));
+                    if let Some(slot) = physical.plated_slot
+                        && let Some(resolved) = slot.resolve(point, self.rotation, self.bottom)
+                    {
+                        let (_, length_nm, _) = slot.dimensions();
+                        record["plated_slot"] = json!({"width_nm":resolved.width_nm(),"length_nm":length_nm,
+                            "rotation_mdeg":slot.placement_angle(self.rotation,self.bottom),"cap_centres":resolved.cap_centres()});
+                    }
                 }
                 record
             }).collect::<Vec<_>>()});
@@ -380,6 +394,18 @@ impl Board {
     pub(crate) fn footprints(&self) -> &[Footprint] {
         &self.footprints
     }
+    /// Find an authored placement by its stable ID without resolving pads or connectivity.
+    fn placement(&self, id: u64) -> Option<&Footprint> {
+        let index = self
+            .footprints
+            .binary_search_by_key(&id, |footprint| {
+                #[cfg(test)]
+                PLACEMENT_LOOKUP_PROBES.set(PLACEMENT_LOOKUP_PROBES.get() + 1);
+                footprint.id
+            })
+            .ok()?;
+        self.footprints.get(index)
+    }
     /// Resolve only the exact pinned definition; missing revisions never use the current catalog.
     pub(crate) fn definition_for(&self, footprint: &Footprint) -> Option<&definition::FootprintDefinition> {
         self.definitions.get(&footprint.key()?).map(Arc::as_ref)
@@ -422,12 +448,32 @@ impl Board {
         self.footprints.push(footprint);
         Ok(())
     }
+    /// Whether retiring this component keeps its accepted physical placement for review.
+    pub(super) fn retains_retired_component(&self, component: u64) -> bool {
+        self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component))
+    }
+
     /// Drop obsolete unaccepted state. An enabled baseline retains accepted placements
     /// and their historical assets until a reviewed update; Undo restores either case.
-    /// Format 3 and later also retain the last visible typed quantity; older history
-    /// stays text-only until a real board update accepts the newer vocabulary.
     pub(crate) fn remove_component(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let assigned = self.assignments.remove(&component).is_some();
+        self.retain_component_display(component, display);
+        if self.retains_retired_component(component) {
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
+            return;
+        }
+        if self.by_component.remove(&component).is_some() || assigned {
+            self.footprints.retain(|f| f.component != component);
+            self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
+            let used = self.used_package_keys();
+            self.definitions.retain(|key, _| used.contains(key));
+        }
+    }
+
+    /// Preserve the last visible fields for pending removal without accepting other changes.
+    /// Format 3 and later retain the typed quantity; older history stays text-only.
+    pub(crate) fn retain_component_display(&mut self, component: u64, display: Option<&crate::PartInstance>) {
         let changed_display = display.and_then(|part| {
             let baseline = self.baseline.as_ref()?;
             let historical = baseline.components.get(&component)?;
@@ -446,17 +492,6 @@ impl Board {
             historical.reference = part.reference().into();
             historical.value = part.value().into();
             historical.primary_quantity = quantity;
-        }
-        if self.baseline.as_ref().is_some_and(|baseline| baseline.components.contains_key(&component)) {
-            let used = self.used_package_keys();
-            self.definitions.retain(|key, _| used.contains(key));
-            return;
-        }
-        if self.by_component.remove(&component).is_some() || assigned {
-            self.footprints.retain(|f| f.component != component);
-            self.by_component = self.footprints.iter().enumerate().map(|(i, f)| (f.component, i)).collect();
-            let used = self.used_package_keys();
-            self.definitions.retain(|key, _| used.contains(key));
         }
     }
 

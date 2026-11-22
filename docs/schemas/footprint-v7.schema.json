@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:pcbcraft:schema:footprint:7",
   "title": "PCBcraft footprint with an assembly orientation statement",
-  "description": "Format 4 plus a required orientation object; circular non-plated through holes stay optional. Geometry relationships, UTF-8 byte limits and project identity checks are defined in ../footprint-schema.md and enforced by the engine.",
+  "description": "A required orientation object with optional plated slots and circular non-plated holes. Geometry relationships, UTF-8 byte limits and project identity checks are defined in ../footprint-schema.md and enforced by the engine.",
   "type": "object",
   "additionalProperties": false,
   "required": ["format", "library", "id", "revision", "name", "license", "source", "pads", "graphics", "orientation"],
@@ -14,7 +14,11 @@
     "name": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/name" },
     "license": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/license" },
     "source": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/source" },
-    "pads": { "$ref": "urn:pcbcraft:schema:footprint:4#/properties/pads" },
+    "pads": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": { "$ref": "urn:pcbcraft:schema:footprint:5#/properties/pads/items" }
+    },
     "non_plated_holes": { "$ref": "urn:pcbcraft:schema:footprint:4#/properties/non_plated_holes" },
     "graphics": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/graphics" },
     "artwork": { "$ref": "urn:pcbcraft:schema:footprint:1#/properties/artwork" },

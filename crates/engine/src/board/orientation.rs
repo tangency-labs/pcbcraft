@@ -74,8 +74,11 @@ fn rectangle_form(width: i64, height: i64, rotation: u32) -> (i64, i64, u32) {
     (width, height, rotation % if width == height { 90 } else { 180 })
 }
 
-/// One land, in a form that is equal exactly when two lands cover the same copper.
-type PadForm = (Doubled, u8, u8, Option<i64>, i64, (i64, i64, u32));
+/// A plated opening's finished width, length and axis in millidegrees modulo a half turn.
+type OpeningForm = (i64, i64, u32);
+
+/// One land, including the shape and orientation of its copper and any plated opening.
+type PadForm = (Doubled, u8, u8, Option<OpeningForm>, i64, (i64, i64, u32));
 
 /// Return every land of the definition turned by `q` quarter turns about the frame's pivot,
 /// sorted by form, with its pad number. Circles and equal-dimension ovals share a contour
@@ -98,11 +101,19 @@ fn pad_forms<'d>(definition: &'d FootprintDefinition, frame: &Frame, q: u8) -> V
                 CopperBinding::AllCopper => 1,
             };
             let rotation = if shape == CIRCULAR { 0 } else { u32::from(pad.rotation) + 90 * u32::from(q) };
+            let opening = pad.plated_slot.map_or_else(
+                || pad.drill_nm.map(|diameter| (diameter, diameter, 0)),
+                |slot| {
+                    let (width, length, angle) = slot.dimensions();
+                    let axis = if width == length { 0 } else { (angle + 90_000 * u32::from(q)) % 180_000 };
+                    Some((width, length, axis))
+                },
+            );
             let form = (
                 turn(frame.point(pad.center.x_nm, pad.center.y_nm), q),
                 shape,
                 copper,
-                pad.drill_nm,
+                opening,
                 pad.corner_radius_nm,
                 rectangle_form(pad.width_nm, pad.height_nm, rotation),
             );
