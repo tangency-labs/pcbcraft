@@ -24,6 +24,8 @@ const HIERARCHY_FORMAT: &str = "pcbcraft-clipboard/2";
 const DESIGNATOR_LOCK_FORMAT: &str = "pcbcraft-clipboard/3";
 const NPTH_FORMAT: &str = "pcbcraft-clipboard/6";
 const SLOT_FORMAT: &str = "pcbcraft-clipboard/7";
+const RATED_PART_FORMAT: &str = "pcbcraft-clipboard/8";
+const RATED_SLOT_FORMAT: &str = "pcbcraft-clipboard/10";
 
 /// Capability of the copied footprint definitions, ordered by the envelope they require.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -178,6 +180,7 @@ impl Fragment {
         fragment.net_registry = Arc::default();
         fragment.part_groups = Arc::default();
         fragment.part_group_memberships = Arc::default();
+        fragment.pin_functions = Arc::default();
         fragment.sheets = Arc::new(sheets);
         fragment.sheet_index = 0;
         Arc::make_mut(&mut fragment.components).retain(|id, _| components.contains(id));
@@ -196,6 +199,13 @@ impl Fragment {
                     return Err(invalid("Resolve missing no-connect terminals or copy all placed units of this part."));
                 }
                 part.no_connects.retain(|token, _| terminals.contains(&(id, token.clone())));
+            }
+            if let Some(choices) = project.pin_functions.owner(id) {
+                let mut choices = choices.clone();
+                if !complete {
+                    choices.retain(|token, _| terminals.contains(&(id, token.clone())));
+                }
+                Arc::make_mut(&mut fragment.pin_functions).replace(id, choices).map_err(invalid)?;
             }
         }
         fragment.board = Arc::new(crate::board::Board::for_new_project(false)?);
@@ -225,17 +235,19 @@ impl Fragment {
 
     /// Decode bounded native text: version 1 is flat; version 2 contains a closed hierarchy tree
     /// or root interfaces. Version 3 requires locked parts; version 6 requires pinned non-plated
-    /// holes and version 7 plated slots; both can also carry locks. Versions 3, 6 and 7 use flat
-    /// scope when `root_sheet` is omitted or null, otherwise an explicit non-nil hierarchy root.
-    /// All versions reject board owners, orphan scope and invalid records before destination
-    /// edits or identity allocation.
+    /// holes, version 7 plated slots, version 8 device supply ranges, and version 10 both supply
+    /// ranges and slots. These feature envelopes permit locks and use flat scope when
+    /// `root_sheet` is omitted or null. All versions reject board owners, orphan scope and
+    /// invalid records before destination edits or identity allocation.
     pub fn from_text(text: &str) -> Result<Self, CommandError> {
         if text.len() > MAX_BYTES {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         let envelope: Envelope =
             serde_json::from_str(text).map_err(|_| invalid("Clipboard does not contain a supported PCBcraft design fragment."))?;
-        if !matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT | DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT | SLOT_FORMAT)
+        let lock_capable =
+            matches!(envelope.format.as_str(), DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT | SLOT_FORMAT | RATED_PART_FORMAT | RATED_SLOT_FORMAT);
+        if !(lock_capable || matches!(envelope.format.as_str(), FORMAT | HIERARCHY_FORMAT))
             || envelope.kind != "schematic"
             || !crate::wire::valid_point(&envelope.anchor)
         {
@@ -244,11 +256,12 @@ impl Fragment {
         let documents = envelope.documents.into_iter().map(|(path, text)| (path, text.into_bytes())).collect();
         let project = crate::persistence::decode_documents(&documents).map_err(invalid)?;
         let has_locks = project.components.values().any(|part| part.designator_locked);
-        if !matches!(envelope.format.as_str(), NPTH_FORMAT | SLOT_FORMAT) && (envelope.format == DESIGNATOR_LOCK_FORMAT) != has_locks {
-            return Err(invalid("Designator locks require clipboard format 3 and at least one locked part instance."));
+        if (envelope.format == DESIGNATOR_LOCK_FORMAT && !has_locks) || (has_locks && !lock_capable) {
+            return Err(invalid(
+                "Designator locks require clipboard format 3, 6, 7, 8 or 10, and format 3 requires at least one locked part instance.",
+            ));
         }
-        let hierarchical = envelope.format == HIERARCHY_FORMAT
-            || (matches!(envelope.format.as_str(), DESIGNATOR_LOCK_FORMAT | NPTH_FORMAT | SLOT_FORMAT) && envelope.root_sheet.is_some());
+        let hierarchical = envelope.format == HIERARCHY_FORMAT || (lock_capable && envelope.root_sheet.is_some());
         let project = if hierarchical {
             let root =
                 envelope.root_sheet.filter(|id| !id.is_nil()).ok_or_else(|| invalid("hierarchy clipboard needs an explicit root sheet UUID"))?;
@@ -265,7 +278,7 @@ impl Fragment {
         };
         let fragment = Self { project, anchor: envelope.anchor, cut_sheets: envelope.cut_sheets };
         if envelope.format != fragment.native_format(hierarchical) {
-            return Err(invalid("clipboard format does not match its pinned footprint holes"));
+            return Err(invalid("clipboard format does not match its pinned footprint holes or device supply ranges"));
         }
         fragment.validate_scope(hierarchical)?;
         Ok(fragment)
@@ -288,20 +301,21 @@ impl Fragment {
         content
     }
 
-    /// Use the lowest schematic envelope able to express hierarchy, locks and all copied holes.
+    /// Use the schematic envelope for the copied ratings, holes, locks and hierarchy.
     fn native_format(&self, hierarchical: bool) -> &'static str {
-        match self.hole_content() {
-            HoleContent::Slot => SLOT_FORMAT,
-            HoleContent::Npth => NPTH_FORMAT,
-            HoleContent::Legacy if self.project.components.values().any(|part| part.designator_locked) => DESIGNATOR_LOCK_FORMAT,
-            HoleContent::Legacy if hierarchical => HIERARCHY_FORMAT,
-            HoleContent::Legacy => FORMAT,
+        match (self.has_rated_parts(), self.hole_content()) {
+            (true, HoleContent::Slot) => RATED_SLOT_FORMAT,
+            (true, _) => RATED_PART_FORMAT,
+            (false, HoleContent::Slot) => SLOT_FORMAT,
+            (false, HoleContent::Npth) => NPTH_FORMAT,
+            (false, HoleContent::Legacy) if self.project.components.values().any(|part| part.designator_locked) => DESIGNATOR_LOCK_FORMAT,
+            (false, HoleContent::Legacy) if hierarchical => HIERARCHY_FORMAT,
+            (false, HoleContent::Legacy) => FORMAT,
         }
     }
 
     /// Serialize just the fragment; no paths, credentials, unused definitions or source files travel.
-    /// Plated slots select format 7 and pinned non-plated holes format 6, even with locks.
-    /// Otherwise locks select format 3; ordinary flat/hierarchical fragments retain formats 1/2.
+    /// Feature envelopes preserve ratings and hole definitions, including their combination.
     pub fn to_text(&self) -> Result<String, CommandError> {
         let documents = crate::persistence::encode_documents(self.project.clone())
             .map_err(invalid)?
@@ -321,6 +335,14 @@ impl Fragment {
             return Err(invalid("clipboard exceeds the 8 MiB limit"));
         }
         Ok(text)
+    }
+
+    /// Only a rating in the copied dependency closure requires the newer envelopes.
+    pub(crate) fn has_rated_parts(&self) -> bool {
+        self.project
+            .components
+            .values()
+            .any(|component| component.part.as_ref().is_some_and(|part| !part.resolved.definition.terminal_ratings.is_empty()))
     }
 
     /// Original anchor for Paste at Original Position, independent of the target camera.
@@ -435,6 +457,9 @@ impl Fragment {
             }
             introduced_lock |= copy.designator_locked;
             Arc::make_mut(&mut next.components).insert(id, copy);
+            if let Some(choices) = self.project.pin_functions.owner(component.ordinal) {
+                Arc::make_mut(&mut next.pin_functions).replace(id, choices.clone()).map_err(invalid)?;
+            }
         }
         for assignment in self.project.schematic_packages.assignments.values() {
             if retained_parts.contains(&assignment.component) {
@@ -590,7 +615,7 @@ impl Session {
         Arc::make_mut(&mut next.units).retain(|_, s| !removed_symbols.contains(s));
         for component in project.symbols().iter().filter(|s| removed_symbols.contains(&s.ordinal)).map(|s| s.component) {
             if !next.all_symbols().any(|symbol| symbol.component == component) {
-                next.retire_component(component);
+                next.retire_component(component)?;
             }
         }
         next.prune_junctions();

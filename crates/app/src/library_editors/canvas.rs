@@ -55,6 +55,12 @@ pub(super) enum Tool {
         revision: u64,
     },
 }
+/// Which cancellable preview an input batch's last preview chord resolved to.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Preview {
+    Paste,
+    Duplicate,
+}
 /// Use the existing drawing-tool glyphs in Browser rows, without deriving identity from labels.
 pub(super) fn browser_icon(primitive: &Primitive) -> pcbcraft_chrome::workspace::ToolIcon {
     use pcbcraft_chrome::workspace::ToolIcon;
@@ -741,17 +747,29 @@ impl Document {
                 self.tool = Tool::Select;
             }
             if over {
-                if command && ui.input(|i| i.key_pressed(egui::Key::A)) {
+                if ui.input(|i| {
+                    i.focused
+                        && i.events
+                            .iter()
+                            .any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, pressed: true, modifiers, .. } if modifiers.command))
+                }) {
                     let _ = self.select_many(item.objects.keys().copied().collect());
                 }
                 // Command-only C/X/V arrive as normalized clipboard events on desktop; a raw
                 // key press only appears when another modifier bypasses that translation.
                 // egui-winit emits Paste("") when the OS clipboard read is empty and
                 // PasteImage when it holds only an image — both mean "paste intent" here.
-                // Paste resolves in event order and only while focused: a later Escape
-                // in the same batch cancels the chord, and a focus-loss batch must not
-                // arm a preview the reset at the top of this canvas just cleared.
-                let copied = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::Copy)));
+                // Paste and duplicate arm the same preview and resolve in event order, only
+                // while focused: a later Escape in the same batch cancels the chord, and a
+                // focus-loss batch must not arm a preview the reset just cleared.
+                let copied = ui.input(|i| {
+                    i.focused
+                        && i.events.iter().any(|event| match event {
+                            egui::Event::Copy => true,
+                            egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } => modifiers.command,
+                            _ => false,
+                        })
+                });
                 let cut = ui.input(|i| {
                     i.focused
                         && i.events.iter().any(|event| match event {
@@ -760,26 +778,28 @@ impl Document {
                             _ => false,
                         })
                 });
-                let pasted = ui.input(|i| {
-                    i.focused
-                        && i.events.iter().fold(false, |armed, event| match event {
-                            egui::Event::Paste(_) | egui::Event::PasteImage(_) => true,
-                            egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => false,
-                            egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command => true,
-                            _ => armed,
-                        })
+                let preview = ui.input(|i| {
+                    if !i.focused {
+                        return None;
+                    }
+                    i.events.iter().fold(None, |preview, event| match event {
+                        egui::Event::Paste(_) | egui::Event::PasteImage(_) => Some(Preview::Paste),
+                        egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => None,
+                        egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Paste),
+                        egui::Event::Key { key: egui::Key::D, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Duplicate),
+                        _ => preview,
+                    })
                 });
-                if copied || (command && ui.input(|i| i.key_pressed(egui::Key::C))) {
+                if copied {
                     self.copy(ui.ctx());
                 }
                 if cut {
                     self.cut(ui.ctx());
                 }
-                if pasted {
-                    self.paste(ui.ctx());
-                }
-                if command && ui.input(|i| i.key_pressed(egui::Key::D)) {
-                    self.duplicate();
+                match preview {
+                    Some(Preview::Paste) => self.paste(ui.ctx()),
+                    Some(Preview::Duplicate) => self.duplicate(),
+                    None => {}
                 }
                 if !command && ui.input(|i| i.key_pressed(egui::Key::P)) {
                     self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad });
@@ -868,7 +888,14 @@ fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primi
     let min = Point { x_nm: start.x_nm.min(end.x_nm), y_nm: start.y_nm.min(end.y_nm) };
     let max = Point { x_nm: start.x_nm.max(end.x_nm), y_nm: start.y_nm.max(end.y_nm) };
     Ok(match kind {
-        Place::Pin => Primitive::Pin { number, name: None, electrical_type: ElectricalType::Passive, at: end, appearance: Some(Default::default()) },
+        Place::Pin => Primitive::Pin {
+            number,
+            name: None,
+            electrical_type: ElectricalType::Passive,
+            alternates: Vec::new(),
+            at: end,
+            appearance: Some(Default::default()),
+        },
         Place::Pad => Primitive::Pad {
             pad: foot::RectPad {
                 number,

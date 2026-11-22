@@ -41,6 +41,12 @@ impl Draft {
         }
         let pad = self.value["type"] == "pad";
         let mut hidden = Vec::new();
+        if self.value["type"] == "pin" {
+            hidden.push("alternates");
+            if self.value.get("appearance").is_some() {
+                alternate_fields(ui, &mut self.value);
+            }
+        }
         // Preserve category references in metadata edits without exposing raw identity fields
         // as a substitute for a category-selection workflow.
         if self.kind == Kind::Symbol {
@@ -131,6 +137,41 @@ impl Draft {
         }
     }
 }
+/// Edit exact names and types in the existing one-transaction primitive draft.
+/// Omit an empty list so legacy pin primitives retain their representation.
+fn alternate_fields(ui: &mut Ui, value: &mut Value) {
+    pcbcraft_chrome::controls::collapsing(ui, "pin_alternates", "Alternate pin functions", false, None, |ui| {
+        let mut rows = value.get("alternates").and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut remove = None;
+        for (index, row) in rows.iter_mut().enumerate() {
+            ui.push_id(index, |ui| {
+                let mut name = row["name"].as_str().unwrap_or_default().to_owned();
+                let mut electrical_type = row["electrical_type"].as_str().unwrap_or_default().to_owned();
+                properties::text(ui, "Function name", &mut name);
+                let types: Vec<_> = choices(".electrical_type").iter().map(|&key| (key, display(key))).collect();
+                properties::choice(ui, "Electrical type", egui::Id::unique("alternate_electrical_type"), &mut electrical_type, &types);
+                *row = json!({"name":name,"electrical_type":electrical_type});
+                if pcbcraft_chrome::controls::button(ui, "Remove alternate").clicked() {
+                    remove = Some(index);
+                }
+            });
+        }
+        if let Some(index) = remove {
+            rows.remove(index);
+        }
+        if pcbcraft_chrome::controls::enabled_button(ui, rows.len() < pcbcraft_engine::pin_functions::MAX_ALTERNATES, "Add alternate").clicked() {
+            rows.push(json!({"name":"","electrical_type":"passive"}));
+        }
+        if rows.is_empty() {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("alternates");
+            }
+        } else {
+            value["alternates"] = Value::Array(rows);
+        }
+    });
+}
+
 /// Field groups describe the selected object rather than its ordinal in a native array.
 pub(super) fn title(draft: &Draft) -> String {
     match draft.value["type"].as_str() {

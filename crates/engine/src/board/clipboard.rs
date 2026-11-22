@@ -25,14 +25,20 @@ mod connectivity;
 
 const NPTH_FORMAT: &str = "pcbcraft-clipboard/7";
 const SLOT_FORMAT: &str = "pcbcraft-clipboard/8";
+const RATED_CIRCUIT_FORMAT: &str = "pcbcraft-clipboard/9";
+const RATED_SLOT_FORMAT: &str = "pcbcraft-clipboard/11";
 
-/// New hole envelopes retain all earlier board clipboard features.
-fn hole_format(circuits: &[Circuit]) -> Option<&'static str> {
+/// Select the board format for the ratings and hole definitions carried by its circuits.
+fn circuit_format(circuits: &[Circuit]) -> Option<&'static str> {
     use crate::clipboard::HoleContent;
-    match circuits.iter().map(|c| c.fragment.hole_content()).max()? {
-        HoleContent::Legacy => None,
-        HoleContent::Npth => Some(NPTH_FORMAT),
-        HoleContent::Slot => Some(SLOT_FORMAT),
+    let rated = circuits.iter().any(|circuit| circuit.fragment.has_rated_parts());
+    let holes = circuits.iter().map(|circuit| circuit.fragment.hole_content()).max().unwrap_or(HoleContent::Legacy);
+    match (rated, holes) {
+        (true, HoleContent::Slot) => Some(RATED_SLOT_FORMAT),
+        (true, _) => Some(RATED_CIRCUIT_FORMAT),
+        (false, HoleContent::Slot) => Some(SLOT_FORMAT),
+        (false, HoleContent::Npth) => Some(NPTH_FORMAT),
+        (false, HoleContent::Legacy) => None,
     }
 }
 
@@ -452,7 +458,7 @@ impl BoardFragment {
         let assigned = envelope.vias.iter().any(|v| v.net_assignment.is_some());
         let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
         let legacy = legacy_format(assigned, locked, envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()));
-        if (!matches!(envelope.format.as_str(), NPTH_FORMAT | SLOT_FORMAT) && envelope.format != legacy)
+        if (!matches!(envelope.format.as_str(), NPTH_FORMAT | SLOT_FORMAT | RATED_CIRCUIT_FORMAT | RATED_SLOT_FORMAT) && envelope.format != legacy)
             || envelope.kind != "board"
             || envelope.source_project.is_nil()
             || envelope.source_board.is_nil()
@@ -495,8 +501,8 @@ impl BoardFragment {
             }
             circuits.push(Circuit { source_sheet: circuit.sheet, name: circuit.name, fragment });
         }
-        if envelope.format != hole_format(&circuits).unwrap_or(legacy) {
-            return Err(invalid("board clipboard format does not match its pinned footprint holes"));
+        if envelope.format != circuit_format(&circuits).unwrap_or(legacy) {
+            return Err(invalid("board clipboard format does not match its pinned footprint holes or device supply ranges"));
         }
         let mut owners = BTreeSet::new();
         for footprint in &envelope.footprints {
@@ -609,7 +615,7 @@ impl BoardFragment {
             .map(|c| Ok(CircuitEnvelope { sheet: c.source_sheet, name: c.name.clone(), text: c.fragment.to_text()? }))
             .collect::<Result<_, CommandError>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: hole_format(&self.circuits)
+            format: circuit_format(&self.circuits)
                 .unwrap_or_else(|| {
                     legacy_format(
                         self.vias.iter().any(|via| via.net_assignment.is_some()),

@@ -299,9 +299,7 @@ impl<'a> BoardView<'a> {
         if id != format!("footprint-{ordinal}") {
             return None;
         }
-        let placements = self.project.board.footprints();
-        let index = placements.binary_search_by_key(&ordinal, |footprint| footprint.id).ok()?;
-        placements.get(index)
+        self.project.board.placement(ordinal)
     }
 
     /// Resolve only supplied placements against one immutable accepted-net index. Empty or
@@ -313,6 +311,8 @@ impl<'a> BoardView<'a> {
         let mut placements = placements.peekable();
         let accepted = placements.peek().and(self.project.board.baseline.as_ref()).map(|baseline| (baseline, baseline.terminal_net_index()));
         placements.filter_map(move |footprint| {
+            #[cfg(test)]
+            super::PLACEMENT_GEOMETRY_VISITS.set(super::PLACEMENT_GEOMETRY_VISITS.get() + 1);
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
@@ -460,21 +460,28 @@ impl<'a> BoardView<'a> {
             .collect()
     }
 
-    /// Resolve this board's selected placements to schematic units through their shared component.
-    /// The result is a highlight suggestion, not authorization to edit those schematic units.
+    /// Resolve selected placements through their shared components and the part/unit index.
+    /// Unrelated board placements and schematic symbols are not visited. The result is a
+    /// highlight suggestion, not authorization to edit those schematic units.
     pub fn selection_for_footprints(self, footprints: &BTreeSet<String>) -> Selection {
-        let components: BTreeSet<_> = self
-            .project
-            .board
-            .footprints()
+        let placements = self.project.board.footprints();
+        let components: BTreeSet<_> = footprints
             .iter()
-            .filter(|footprint| footprints.contains(&format!("footprint-{}", footprint.id)))
-            .map(|footprint| footprint.component)
+            .filter_map(|id| crate::schematic::wiring::parse_id(id, "footprint-"))
+            .filter_map(|id| placements.binary_search_by_key(&id, |footprint| footprint.id).ok())
+            .map(|index| placements[index].component)
             .collect();
-        Selection {
-            symbols: self.project.all_symbols().filter(|symbol| components.contains(&symbol.component)).map(|symbol| symbol.id()).collect(),
-            ..Selection::default()
-        }
+        let symbols = components
+            .into_iter()
+            .flat_map(|component| {
+                self.project
+                    .units
+                    .range((component, String::new())..)
+                    .take_while(move |((owner, _), _)| *owner == component)
+                    .map(|(_, &id)| crate::schematic::symbol_id(id))
+            })
+            .collect();
+        Selection { symbols, ..Selection::default() }
     }
 }
 

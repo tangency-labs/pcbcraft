@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:part:4",
+  "title": "PCBcraft reusable part definition with device supply ranges, format 4",
+  "description": "A reusable device with an exact schematic symbol and at least one authored terminal supply bound. The engine checks terminal membership, electrical type and exact bound ordering.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "library",
+    "id",
+    "revision",
+    "name",
+    "license",
+    "source",
+    "symbol",
+    "packages",
+    "terminal_ratings"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-part/4"
+    },
+    "library": { "$ref": "urn:pcbcraft:schema:part:2#/properties/library" },
+    "id": { "$ref": "urn:pcbcraft:schema:part:2#/properties/id" },
+    "revision": { "$ref": "urn:pcbcraft:schema:part:2#/properties/revision" },
+    "name": { "$ref": "urn:pcbcraft:schema:part:2#/properties/name" },
+    "license": { "$ref": "urn:pcbcraft:schema:part:2#/properties/license" },
+    "source": { "$ref": "urn:pcbcraft:schema:part:2#/properties/source" },
+    "symbol": { "$ref": "urn:pcbcraft:schema:part:2#/properties/symbol" },
+    "category": { "$ref": "urn:pcbcraft:schema:part:2#/properties/category" },
+    "fixed_parameters": { "$ref": "urn:pcbcraft:schema:part:2#/properties/fixed_parameters" },
+    "packages": {
+      "$ref": "urn:pcbcraft:schema:part:2#/properties/packages",
+      "additionalProperties": {
+        "properties": { "mapping": { "minProperties": 1 } }
+      }
+    },
+    "terminal_ratings": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 128,
+      "propertyNames": { "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "anyOf": [{ "required": ["supply_min"] }, { "required": ["supply_max"] }],
+        "properties": {
+          "supply_min": { "$ref": "#/$defs/voltage" },
+          "supply_max": { "$ref": "#/$defs/voltage" }
+        }
+      }
+    }
+  },
+  "dependentRequired": {
+    "fixed_parameters": ["category"]
+  },
+  "$defs": {
+    "voltage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value", "unit"],
+      "properties": {
+        "type": { "const": "quantity" },
+        "value": { "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/decimal" },
+        "unit": { "const": "V" }
+      }
+    }
+  }
+}

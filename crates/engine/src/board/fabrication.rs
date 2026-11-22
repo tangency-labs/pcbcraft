@@ -6,17 +6,19 @@
 //! Plated holes (vias and through-hole pads) go in one Excellon file. Every coordinate is written
 //! in the board's output frame: measured from its placement origin with Y up, seen from the top.
 //! Openings use the pad exporter without process expansion: mask includes pads on the outer
-//! copper layer, while paste excludes through-hole pads. Obround strokes and chorded corners
-//! retain their existing approximations. Vias receive no automatic mask opening; authored mask
-//! artwork can still open them. Mounting-side pads follow the placement side; silkscreen follows
-//! the top or bottom legend. X2 aperture functions describe the emitted features without changing
-//! their geometry. Copper object attributes describe intended nets and component pins.
-//! Arcs and zones are not produced yet.
+//! copper layer, while paste excludes through-hole pads. Rounded pad macros use circular
+//! primitives; exceptional snapped contours and obround strokes retain their existing fallbacks.
+//! Vias receive no automatic mask opening; authored mask artwork can still open them.
+//! Mounting-side pads follow the placement side; silkscreen follows the top or bottom legend.
+//! X2 aperture functions describe the emitted features without changing their geometry.
+//! Copper object attributes describe intended nets and component pins.
+//! Track and Board Outline strokes remain linear; zones are not plotted.
 mod object_attributes;
 
 use self::object_attributes::{Object, RoutedNets};
 use super::{
     definition::{GraphicPurpose, PadShape},
+    geometry::Contour,
     origin::{Frame, Resolved},
     setup::{LayerPurpose, Side, Stratum},
     view::{BoardView, CopperLayers, PadView},
@@ -39,8 +41,14 @@ pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
 const DEFAULT_SILK_NM: i64 = 120_000;
 /// The outline is drawn with a thin 0.1 mm line, the conventional profile width.
 const OUTLINE_NM: i64 = 100_000;
-/// Segments used to approximate each rounded pad corner.
+/// Segments per corner for rounded pads that cannot use a macro.
 const CORNER_SEGMENTS: usize = 6;
+/// Allow 1 nm of radius error when comparing the emitted and authored diameters.
+const ROUNDED_DIAMETER_TOLERANCE_NM: u64 = 2;
+/// Two coordinates can move toward each other by 1 µm under Gerber §4.14.2.
+const OUTLINE_CLEARANCE_NM: i64 = 1_000;
+/// A single dimension can vary by ±0.5 µm under Gerber §4.14.2.
+const SIZE_TOLERANCE_NM: i64 = OUTLINE_CLEARANCE_NM / 2;
 
 /// One generated file: a portable name and its text.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -113,12 +121,13 @@ pub fn archive_name(project: &str) -> String {
     format!("{}-fabrication.zip", file_part(project))
 }
 
-/// Shape and dimensions of a standard aperture, independent of its use.
+/// Shape and geometry of an aperture, independent of its use.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Aperture {
     Circle(i64),
     Rectangle(i64, i64),
     Obround(i64, i64),
+    Rounded { diameter: i64, core: RoundedCore, fill: RoundedFill },
 }
 
 /// Aperture functions supported by the board writers (Ucamco Gerber 2026.05 §5.6.10).
@@ -153,7 +162,44 @@ impl ApertureFunction {
     }
 }
 
-/// Accumulates Gerber drawing operations and the standard apertures they use.
+/// Corner centers in Gerber axes, relative to the flash position, in nanometers.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RoundedCore {
+    Dot(MacroPoint),
+    Line([MacroPoint; 2]),
+    Quad([MacroPoint; 4]),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RoundedFill {
+    StripsOnly,
+    Outline,
+}
+
+type MacroPoint = (i64, i64);
+
+impl RoundedCore {
+    /// Reuse the projected land core. A strict convex quad can be filled by a Gerber outline;
+    /// collinear cores use just their extremes. Leave other snapped cores to the region path.
+    fn from_board(core: [Point; 4], center: Point) -> Option<Self> {
+        let points = core.map(|point| (point.x_nm - center.x_nm, center.y_nm - point.y_nm));
+        let cross = |a: MacroPoint, b: MacroPoint, c: MacroPoint| {
+            i128::from(b.0 - a.0) * i128::from(c.1 - a.1) - i128::from(b.1 - a.1) * i128::from(c.0 - a.0)
+        };
+        let low = points.into_iter().min()?;
+        let high = points.into_iter().max()?;
+        if low == high {
+            return Some(Self::Dot(low));
+        }
+        if points.iter().all(|&p| cross(low, high, p) == 0) {
+            return Some(Self::Line([low, high]));
+        }
+        let turns = std::array::from_fn::<_, 4, _>(|i| cross(points[i], points[(i + 1) % 4], points[(i + 2) % 4]));
+        (turns.iter().all(|&turn| turn > 0) || turns.iter().all(|&turn| turn < 0)).then_some(Self::Quad(points))
+    }
+}
+
+/// Accumulates Gerber drawing operations and the apertures they use.
 struct Gerber {
     apertures: BTreeMap<(Aperture, Option<ApertureFunction>), usize>,
     body: String,
@@ -179,10 +225,12 @@ impl Gerber {
 
     /// Scope X2 object attributes across all primitives for one feature, including region
     /// contours, without changing the selected aperture (Ucamco Gerber 2026.05 §§5.4–5.5).
-    fn object(&mut self, attributes: Object<'_>, draw: impl FnOnce(&mut Self)) {
+    /// Returns what `draw` returns, so a refused pad still stops the export.
+    fn object<T>(&mut self, attributes: Object<'_>, draw: impl FnOnce(&mut Self) -> T) -> T {
         attributes.set(&mut self.body);
-        draw(self);
+        let drawn = draw(self);
         attributes.clear(&mut self.body);
+        drawn
     }
 
     /// Stroke a polyline with an optionally tagged round aperture; a single point is flashed.
@@ -219,9 +267,34 @@ impl Gerber {
     /// the engine's land contour. Other R lands remain regions, even if tiny corners collapse.
     /// Other O lands retain the approximate round-ended stroke (a circle for equal sides).
     /// A drawn copper obround is deliberately not identified as a fabrication pad (§§5.6.10, 6.4).
-    /// Rounded rectangles use regions with chorded corners only when the resolved radius is positive.
-    fn pad(&mut self, pad: &PadView, cardinal: bool, function: ApertureFunction) {
-        let Some(corners) = pad.copper else { return };
+    /// Rounded rectangles flash their rounded land core when the macro can represent it and
+    /// its emitted radius is within 1 nm of the authored radius; otherwise keep the resolved region.
+    fn pad(&mut self, pad: &PadView, cardinal: bool, function: ApertureFunction) -> Result<(), String> {
+        let Some(corners) = pad.copper else { return Ok(()) };
+        if pad.shape == PadShape::RoundedRectangle {
+            let contour = Contour::pad(pad.center, corners, pad.shape, pad.corner_radius_nm, pad.size_nm);
+            // Snapping rotated corners can shorten a side and clamp a maximum radius. Compare
+            // the emitted grid diameter, not the unrounded projection, to the authored diameter.
+            let diameter = (2. * contour.radius).round() as i64;
+            if pad.corner_radius_nm > 0
+                && diameter > 0
+                && diameter.abs_diff(2 * pad.corner_radius_nm) <= ROUNDED_DIAMETER_TOLERANCE_NM
+                && let Some(core) = RoundedCore::from_board(contour.core, pad.center)
+            {
+                let fill = match core {
+                    RoundedCore::Quad(points) => rounded_quad_fill(&points, diameter).ok_or_else(|| {
+                        format!(
+                            "Cannot export rounded pad at ({}, {}) mm in board coordinates: its core has no supported exact Gerber fill and its outline can self-intersect.",
+                            mm(pad.center.x_nm, 6),
+                            mm(pad.center.y_nm, 6),
+                        )
+                    })?,
+                    RoundedCore::Dot(_) | RoundedCore::Line(_) => RoundedFill::StripsOnly,
+                };
+                self.flash(pad.center, Aperture::Rounded { diameter, core, fill }, function);
+                return Ok(());
+            }
+        }
         if cardinal && let Some((width, height)) = axis_aligned_size(&corners) {
             let aperture = match pad.shape {
                 PadShape::Rectangle
@@ -233,9 +306,8 @@ impl Gerber {
                 _ => None,
             };
             if let Some(aperture) = aperture {
-                self.aperture(aperture, Some(function));
-                let _ = writeln!(self.body, "{}D03*", xy(self.frame, pad.center));
-                return;
+                self.flash(pad.center, aperture, function);
+                return Ok(());
             }
         }
         let side = |a: Point, b: Point| (((b.x_nm - a.x_nm) as f64).hypot((b.y_nm - a.y_nm) as f64)).round() as i64;
@@ -263,6 +335,13 @@ impl Gerber {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Select the pad's tagged aperture and flash at an absolute board point.
+    fn flash(&mut self, point: Point, aperture: Aperture, function: ApertureFunction) {
+        self.aperture(aperture, Some(function));
+        let _ = writeln!(self.body, "{}D03*", xy(self.frame, point));
     }
 
     /// Finish a layer in the existing bare-board export, which writes all layers in one frame.
@@ -284,6 +363,10 @@ impl Gerber {
         let _ = writeln!(text, "%TF.FilePolarity,{polarity}*%");
         text.push_str("%FSLAX46Y46*%\n%MOMM*%\n%LPD*%\nG01*\n");
         for ((aperture, aperture_function), code) in &self.apertures {
+            // Define a macro template first, so the function attribute directly precedes its AD.
+            if let Aperture::Rounded { diameter, core, fill } = *aperture {
+                write_rounded_macro(&mut text, *code, diameter, core, fill);
+            }
             if let Some(function) = aperture_function {
                 function.set(&mut text);
             }
@@ -295,6 +378,9 @@ impl Gerber {
                     let kind = if matches!(aperture, Aperture::Rectangle(..)) { 'R' } else { 'O' };
                     let _ = writeln!(text, "%ADD{code}{kind},{}X{}*%", mm(width, 6), mm(height, 6));
                 }
+                Aperture::Rounded { .. } => {
+                    let _ = writeln!(text, "%ADD{code}RoundRect{code}*%");
+                }
             }
             if aperture_function.is_some() {
                 text.push_str(DELETE_APERTURE_FUNCTION);
@@ -304,6 +390,94 @@ impl Gerber {
         text.push_str("M02*\n");
         text
     }
+}
+
+/// Add a strip along each edge and a circle at each vertex, and fill the inner polygon unless
+/// the strips already cover it safely.
+/// Their union is the core expanded by half the emitted diameter, without chord approximations.
+/// Ucamco Gerber 2026.05 §§4.5.1.3, 4.5.1.4 and 4.5.1.6 define these primitives. Their
+/// rotation is about the macro origin, not each primitive's center: use zero because
+/// the core already includes pad rotation, placement mirroring/rotation and the Y flip.
+fn write_rounded_macro(text: &mut String, code: usize, diameter: i64, core: RoundedCore, fill: RoundedFill) {
+    let _ = writeln!(text, "%AMRoundRect{code}*");
+    let diameter_mm = mm(diameter, 6);
+    let pair = |(x, y)| format!("{},{}", mm(x, 6), mm(y, 6));
+    let edge = |text: &mut String, a, b| {
+        let _ = writeln!(text, "20,1,{diameter_mm},{},{},0*", pair(a), pair(b));
+    };
+    let vertices = match &core {
+        RoundedCore::Dot(point) => std::slice::from_ref(point),
+        RoundedCore::Line(points) => {
+            edge(text, points[0], points[1]);
+            points.as_slice()
+        }
+        RoundedCore::Quad(points) => {
+            for (a, b) in points.iter().copied().zip(points.iter().copied().cycle().skip(1)) {
+                edge(text, a, b);
+            }
+            if fill == RoundedFill::Outline {
+                text.push_str("4,1,4");
+                for &point in points.iter().chain(&points[..1]) {
+                    let _ = write!(text, ",{}", pair(point));
+                }
+                text.push_str(",0*\n");
+            }
+            points.as_slice()
+        }
+    };
+    for &point in vertices {
+        let _ = writeln!(text, "1,1,{diameter_mm},{},0*", pair(point));
+    }
+    text.push_str("%\n");
+}
+
+/// Choose a fill before emitting any pad artwork, keeping every primitive overlap and
+/// outline separation safe under Gerber §4.14.2 coordinate and size perturbations.
+/// Every accepted macro anchors each corner circle on the exact vertex shared with its
+/// adjacent edge strips (and outline when present), so coincident coordinates move together.
+/// Center-line rectangles cannot guarantee corner-circle connectivity in the remaining narrow
+/// band (min core span <= 1 µm and diameter <= min core span + 1.5 µm <= 2.5 µm) under §4.14.2,
+/// so those narrow cores are refused.
+fn rounded_quad_fill(points: &[MacroPoint; 4], diameter: i64) -> Option<RoundedFill> {
+    if strips_cover_core(points, diameter) {
+        return Some(RoundedFill::StripsOnly);
+    }
+    let [a, b, c, d] = *points;
+    (perturbed_edges_separate(a, b, c, d) && perturbed_edges_separate(b, c, d, a)).then_some(RoundedFill::Outline)
+}
+
+/// Endpoints can move within ±0.5 µm boxes (§4.14.2). The swept segment is the segment
+/// plus that box; separating axes are X, Y, and the normals to the two original segments.
+/// Require a gap larger than the combined projection of both boxes on one of these axes.
+fn perturbed_edges_separate(a: MacroPoint, b: MacroPoint, c: MacroPoint, d: MacroPoint) -> bool {
+    [(1, 0), (0, 1), (a.1 - b.1, b.0 - a.0), (c.1 - d.1, d.0 - c.0)].into_iter().any(|(nx, ny)| {
+        let project = |(x, y)| i128::from(nx) * i128::from(x) + i128::from(ny) * i128::from(y);
+        let (a, b, c, d) = (project(a), project(b), project(c), project(d));
+        let gap = (a.min(b) - c.max(d)).max(c.min(d) - a.max(b));
+        gap > i128::from(OUTLINE_CLEARANCE_NM) * (i128::from(nx.abs()) + i128::from(ny.abs()))
+    })
+}
+
+/// Whether the diameter-wide strips along a strictly convex core's edges still cover all of it
+/// under Gerber §4.14.2 coordinate (±0.5 µm per coordinate) and size (±0.5 µm diameter) tolerances.
+/// They do when every vertex stays strictly within the reduced diameter of some edge's line even
+/// after opposite edges move apart by the full perturbation box projection: each interior point is
+/// then still within half a reduced diameter of its nearest edge, with no gap between opposite strips.
+fn strips_cover_core(points: &[MacroPoint; 4], diameter: i64) -> bool {
+    let Some(effective_diameter) = diameter.checked_sub(SIZE_TOLERANCE_NM) else {
+        return false;
+    };
+    effective_diameter > OUTLINE_CLEARANCE_NM
+        && (0..4).any(|i| {
+            let (a, b) = (points[i], points[(i + 1) % 4]);
+            let (dx, dy) = (i128::from(b.0 - a.0), i128::from(b.1 - a.1));
+            let margin = i128::from(OUTLINE_CLEARANCE_NM) * (dx.abs() + dy.abs());
+            let limit = i128::from(effective_diameter).pow(2) * (dx * dx + dy * dy);
+            points.iter().all(|&p| {
+                let cross = (dx * i128::from(p.1 - a.1) - dy * i128::from(p.0 - a.0)).abs();
+                (cross + margin).pow(2) < limit
+            })
+        })
 }
 
 /// Resolve global X/Y sizes of a nondegenerate ordered axis-aligned rectangle. Opposite corners
@@ -506,9 +680,7 @@ impl BoardView<'_> {
                 // mask opening does not shrink the mounting-side copper land (CuDef).
                 let function = if pad.through_hole { ApertureFunction::ThroughHolePad } else { ApertureFunction::SmdPad };
                 let pin = outer.then_some(if *has_pin { pad.number.as_str() } else { "" });
-                gerber.object(Object { net: Some(net), component: Some((reference, pin)) }, |gerber| {
-                    gerber.pad(pad, *cardinal, function);
-                });
+                gerber.object(Object { net: Some(net), component: Some((reference, pin)) }, |gerber| gerber.pad(pad, *cardinal, function))?;
             }
             let mut tracks: Vec<_> = self.tracks().iter().filter(|track| track.layer == layer.id).collect();
             tracks.sort_by_key(|track| (track.width_nm, track.id));
@@ -537,7 +709,7 @@ impl BoardView<'_> {
         for (side, label, layer) in [("Top", "Mask_Top", front), ("Bot", "Mask_Bottom", back)] {
             let mut gerber = Gerber::new(frame);
             for (pad, cardinal, ..) in pads.iter().filter(|(pad, ..)| layer.is_some_and(|layer| on(pad, layer))) {
-                gerber.pad(pad, *cardinal, ApertureFunction::Material);
+                gerber.pad(pad, *cardinal, ApertureFunction::Material)?;
             }
             board_graphics(&mut gerber, self, LayerPurpose::Mask, Some(if side == "Top" { Side::Front } else { Side::Back }));
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Soldermask,{side}"), "Negative") });
@@ -545,7 +717,7 @@ impl BoardView<'_> {
         for (side, label, layer) in [("Top", "Paste_Top", front), ("Bot", "Paste_Bottom", back)] {
             let mut gerber = Gerber::new(frame);
             for (pad, cardinal, ..) in pads.iter().filter(|(pad, ..)| !pad.through_hole && layer.is_some_and(|layer| on(pad, layer))) {
-                gerber.pad(pad, *cardinal, ApertureFunction::Material);
+                gerber.pad(pad, *cardinal, ApertureFunction::Material)?;
             }
             board_graphics(&mut gerber, self, LayerPurpose::Paste, Some(if side == "Top" { Side::Front } else { Side::Back }));
             files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Paste,{side}"), "Positive") });

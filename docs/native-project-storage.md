@@ -15,7 +15,8 @@ Project/17 adds the [sparse net registry](net-registry-storage.md) in those same
 instance homes, without changing the working-folder or `.pc` container layout.
 Project/20 adds the optional-at-project-level [net-class catalog](net-classes.md)
 in the entry point; only projects with authored classes select that version.
-Active [designator locks](#designator-locks) select project/51, retaining the
+Active [designator locks](#designator-locks) select project/51, or project/56
+together with [alternate pin functions](#alternate-pin-function-records), retaining the
 optional records and membership representations of the earlier envelopes.
 Project/22 adds [project parameters](#parameter-records); project/23 adds generated
 net numbers and can also store project parameters.
@@ -157,8 +158,9 @@ these headers rather than discard identity, lineage or unresolved decisions.
 When no other content requires a later project format, a nonempty class catalog
 selects project/20; saved [net-class bindings](net-class-assignments.md) select
 project/21. Parameters and generated numbers select project/22 and /23 unless
-other records require a later format. In precedence order, active designator
-locks select project/51, differential pairs /45, an assembly profile catalog /36,
+other records require a later format. In precedence order, alternate pin
+functions with active designator locks select project/56, alternate pin functions
+/48, active designator locks /51, differential pairs /45, an assembly profile catalog /36,
 and part groups /39 with compact memberships or /24 otherwise. Board-owned
 bindings use instances/3, instances/4 with generated numbers, instances/5 or /7
 with expanded or compact memberships, or instances/8 with pairs. Bindings
@@ -219,6 +221,11 @@ package footprint is pinned, including unselected variants. Missing or
 conflicting dependencies reject opening before adoption. Native part selections
 also travel with schematic clipboard fragments; diagnostic single-document
 export refuses to discard them.
+[Device supply ranges](part-schema.md#device-supply-range) live in the same
+pinned generic part closure, using `pcbcraft-part/4` only for records with a
+nonempty terminal rating map. Folders and packed projects carry the same bytes.
+Older readers refuse that unknown pinned record rather than dropping its data;
+no project, sheet, symbol, board, or accepted-baseline format changes.
 
 Board format `pcbcraft-board/17` extends the physical vocabulary through board/16
 with multi-pad terminal maps and explicitly `unconnected_pads`. Accepted input
@@ -328,10 +335,10 @@ definition reference. Geometry and connectivity use the same resolution paths
 as for unlocked placements. Host Open and Save still apply the existing
 migrations described above.
 
-This is storage and inspection only: no footprint lock command, GUI toggle or
-movement/deletion protection is provided yet. Diagnostic single-file encoding
-and the board clipboard explicitly refuse active footprint locks rather than
-silently losing them. See [the layout guide](pcb-layout-workflow.md#footprint-lock-metadata-storage-only).
+See [the layout guide](pcb-layout-workflow.md#placed-footprint-locks) for the
+placement commands that respect this flag. There is no footprint lock command or
+GUI toggle yet. Diagnostic single-file encoding and the board clipboard explicitly
+refuse active footprint locks rather than silently losing them.
 
 ### Assembly profiles and stack fields
 
@@ -368,8 +375,8 @@ identities without invalidating adoptions; cleanup discards only unused
 superseded or retired payloads in that transaction. Watermarks prevent reuse of
 cleaned revisions. Undo/Redo preserve the greatest issued revision in this project
 history without retaining undone payloads or changing restored board adoptions.
-A retained catalog, even with only watermarks, uses project/51 with an active
-designator lock, otherwise project/45 with differential pairs, otherwise
+A retained catalog, even with only watermarks, uses project/56, /48 or /51 when
+alternate pin functions or an active designator lock select it, otherwise project/45 with differential pairs, otherwise
 project/36. The catalog takes precedence over the project/39 header for compact
 memberships but does not change their representation. All three formats apply
 the same validation rules and retain folder and occurrence metadata, even after
@@ -548,6 +555,31 @@ older readers reject sheet/7 rather than silently dropping the provenance. The
 diagnostic legacy single-file encoding refuses live generated legs because its
 wire vocabulary has no provenance field.
 
+### Alternate pin function records
+
+`pcbcraft-project/48` extends the modern folder or packed project entry point.
+A part instance with explicit selections stores a nonempty `pin_functions` list
+in `project.json`, ordered by terminal number. Each `{ "terminal": "1", "function": "ADC_IN" }`
+selects an exact name from that terminal's pinned [symbol definition](symbol-schema.md#alternate-pin-functions).
+All appearances of the same part terminal share the selection. Omission uses the
+primary function. Empty, null, duplicate or unresolved records are refused; at
+most 4,096 selections may be stored per project.
+
+Projects that pin version-5 symbols use project format 48, with or without an
+explicit selection. This format composes with part-group memberships and assembly
+profiles without changing board, sheet, or instance document headers. Placing a
+version-5 symbol and changing pin functions require current storage; neither edit
+migrates projects. Pin function Preview and Apply both reject a changed selection
+that would exceed the native document size limits. A rejected edit does not
+advance the revision or add an undo step. Single-document diagnostic export
+refuses choices rather than omitting them.
+
+`pcbcraft-project/56` stores the same records when a project also has an active
+[designator lock](#designator-locks): it accepts both `pin_functions` and
+`designator_locked: true` under the rules of project/48 and project/51. The encoder
+selects /56 only when both are present, /48 for pin functions alone and /51 for
+locks alone. Readers accept /48, /51 and /56 and every earlier format.
+
 ### Intentional no-connect records
 
 Project/19 extends the existing occurrence and optional net-registry homes with
@@ -619,7 +651,8 @@ changes nothing. Inspection reports each sheet's `page` in the same shape.
 Project/51 stores optional `designator_locked: true` on each locked part-instance
 record in the existing `components` array. The missing field means false;
 explicit false, null, other types and unknown fields are refused. Project/51
-requires at least one true flag, and earlier headers reject lock fields. Older
+requires at least one true flag, and earlier headers reject lock fields;
+project/56 applies the same rule alongside alternate pin functions. Older
 readers reject project/51 rather than silently dropping intent. The diagnostic
 single-file codec refuses locks; folder and `.pc` codecs retain them.
 
@@ -724,8 +757,8 @@ are rejected. `N` is the part instance's number, as in `components` and
 `component-N`; see [part groups](part-groups.md).
 
 Compact memberships replace that list with `compact_part_group_memberships`.
-With compact memberships, the encoder selects project/51 if a designator lock
-is active, otherwise project/45 if pairs are present, otherwise project/36 if an
+With compact memberships, the encoder selects project/56, /48 or /51 when
+alternate pin functions or an active designator lock select it, otherwise project/45 if pairs are present, otherwise project/36 if an
 assembly profile catalog is retained, otherwise project/39. Board-owned compact
 memberships use instances/8 with pairs and instances/7 without pairs.
 Schematic-only memberships remain embedded in the entry point. The compact
@@ -976,7 +1009,8 @@ requires at least one authored lock. It is a superset of format 17, including
 multi-pad mappings, physical graphics, accepted baselines and pending intent.
 Absent copper lock flags mean false; canonical saves omit false. Removing the
 last active copper lock leaves the format required by the remaining data; for
-example, an active footprint lock still requires format 34 or, with arcs, 35. Headers below 18
+example, a board with an active footprint lock uses format 34, 35 with arcs,
+or 37 with straight-via teardrops. Headers below 18
 refuse active copper locks, and older readers refuse format 18.
 Flags survive folder/archive reopen and undo/redo without changing object IDs,
 geometry or connectivity. The shared lock command and protection policy are in
