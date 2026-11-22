@@ -423,7 +423,9 @@ fn kids(objects: &[&str]) -> Vec<usize> {
     assert_eq!(words.len() % 3, 0);
     assert!(node.contains(&format!("/Count {} /Kids", words.len() / 3)));
     words
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|r| {
             assert_eq!(r[1..], ["0", "R"]);
             let id: usize = r[0].parse().unwrap();
@@ -449,7 +451,8 @@ fn check_outline(objects: &[&str], parent: usize, pages: &[usize], cursor: &mut 
         let item = objects[id - 1];
         let hex = item.split_once("/Title <FEFF").unwrap().1.split_once('>').unwrap().0;
         assert_eq!(hex.len() % 4, 0);
-        let utf16: Vec<_> = hex.as_bytes().chunks_exact(4).map(|hex| u16::from_str_radix(std::str::from_utf8(hex).unwrap(), 16).unwrap()).collect();
+        let utf16: Vec<_> =
+            hex.as_bytes().as_chunks::<4>().0.iter().map(|hex| u16::from_str_radix(std::str::from_utf8(hex).unwrap(), 16).unwrap()).collect();
         assert_eq!(String::from_utf16(&utf16).unwrap(), *title);
         assert_eq!(reference(item, "/Parent "), Some(parent));
         assert_eq!(reference(item, "/Prev "), prev);
