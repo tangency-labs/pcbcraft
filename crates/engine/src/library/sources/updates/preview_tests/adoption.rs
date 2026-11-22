@@ -427,6 +427,87 @@ fn footprint_revision_of_native_part_refuses_unrelated_package_changes() {
     );
 }
 
+/// A native part revision that adds or changes terminal supply ratings requires a broader review.
+#[test]
+fn footprint_revision_of_native_part_refuses_terminal_rating_changes() {
+    let manifest = new_library("preview-test", "Preview test", "MIT OR Apache-2.0").unwrap();
+    let mut symbol_draft = Draft::new(DraftKind::Symbol).unwrap();
+    let Some(Primitive::Pin { electrical_type, .. }) = symbol_draft.objects.get_mut(&1) else { panic!("expected authored pin 1") };
+    *electrical_type = crate::schematic::ElectricalType::PowerIn;
+    let symbol = prepare(Arc::new(symbol_draft), &manifest, 0, None, false).unwrap();
+    let first = prepare(Arc::new(Draft::new(DraftKind::Footprint).unwrap()), &manifest, 0, None, false).unwrap();
+    let mut second_draft = first.item().as_ref().clone();
+    let Primitive::Pad { pad } = second_draft.objects.get_mut(&2).unwrap() else { panic!("expected authored pad 2") };
+    pad.center.x_nm += 100_000;
+    let second = prepare(Arc::new(second_draft), &manifest, 1, Some(1), false).unwrap();
+    let mut documents = symbol.documents().clone();
+    documents.extend(first.documents().clone());
+    documents.extend(second.documents().clone());
+    documents.insert("library.json".into(), manifest);
+    let symbol = symbol.item().symbol().unwrap();
+    let footprint = first.item().footprint().unwrap();
+    let mut part = PartDefinition::read(
+        &json!({
+            "format": "pcbcraft-part/1",
+            "library": "preview-test",
+            "id": "rated-part",
+            "revision": 1,
+            "name": "Rated part",
+            "license": "MIT OR Apache-2.0",
+            "source": {"kind": "original", "reference": "Preview test", "locator": "synthetic"},
+            "symbol": {"library": symbol.library, "id": symbol.id, "revision": 1},
+            "packages": {
+                "same-package": {
+                    "name": "Original package",
+                    "footprint": {"library": footprint.library, "id": footprint.id, "revision": 1},
+                    "mapping": {"1": ["1"], "2": ["2"]}
+                }
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    documents.insert("parts/part-r1.json".into(), part.encode().unwrap());
+    part.revision = 2;
+    part.packages.get_mut("same-package").unwrap().footprint.revision = 2;
+    part.set_supply_range("1", "3.0 V", "5.5 V").unwrap();
+    documents.insert("parts/part-r2.json".into(), part.encode().unwrap());
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board": true})).unwrap();
+    edit(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers": 2}));
+    load(&mut session, &documents);
+    let original = Reference { library: part.library, id: part.id, revision: 1 };
+    let digest = part_digest(session.libraries().resolve_part(&original).unwrap());
+    edit(
+        &mut session,
+        PLACE_PART,
+        json!({
+            "library": original.library,
+            "definition": original.id,
+            "definition_revision": 1,
+            "definition_digest": digest,
+            "package": "same-package",
+            "x_nm": 0,
+            "y_nm": 0
+        }),
+    );
+    let instance = session.project().unwrap().components().next().unwrap().id();
+    let board = session.project().unwrap().board_target().unwrap().board;
+    edit(&mut session, PLACE_ASSIGNED_FOOTPRINT, json!({"component": instance, "x_nm": 0, "y_nm": 0}));
+    let target = json!({"board": board, "part_instance": instance});
+    let report = session.execute(PREVIEW_FOOTPRINT_REVISION, &target).unwrap();
+    let mut params = target;
+    params["acceptance"] = report["acceptance"].clone();
+    params["expected_revision"] = report["revision"].clone();
+    params["mapping"] = json!({"1": "1", "2": "2"});
+    assert_apply_refused_without_edit(
+        &mut session,
+        &params,
+        "This native part revision needs a broader review of its dependencies or manufacturer selection.",
+    );
+}
+
 /// Board replacement guards reject mismatched keys, conflicting pinned content and invalid footprints.
 #[test]
 fn replace_reviewed_footprint_refuses_key_content_and_bounds_errors() {

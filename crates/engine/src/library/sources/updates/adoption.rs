@@ -227,7 +227,7 @@ fn invalid(message: impl Into<String>) -> CommandError {
     CommandError::InvalidParams(message.into())
 }
 
-/// A physical review cannot authorize a symbol, category, value, MPN or unrelated package change.
+/// A physical review cannot authorize a symbol, category, value, terminal rating, MPN or unrelated package change.
 fn native_selection(update: &FootprintUpdate<'_>, assignment: &Assignment) -> Result<Option<Selection>, CommandError> {
     let Some((part, package_id)) = update.native else { return Ok(None) };
     let old = update.instance.part.as_ref().ok_or_else(|| invalid("The reviewed part instance has no resolved native package."))?;
@@ -240,6 +240,7 @@ fn native_selection(update: &FootprintUpdate<'_>, assignment: &Assignment) -> Re
         && before.category == after.category
         && old.resolved.category == part.category
         && before.fixed_parameters == after.fixed_parameters
+        && before.terminal_ratings == after.terminal_ratings
         && before.packages.iter().filter(|(id, _)| id.as_str() != package_id).eq(after.packages.iter().filter(|(id, _)| id.as_str() != package_id))
         && old
             .resolved
