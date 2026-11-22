@@ -12,15 +12,21 @@ mod reference;
 mod requirement;
 pub use manufacturer::{MANUFACTURER_PART_FORMAT, ManufacturerPart};
 pub use requirement::{Requirement, requirements_schema};
+mod supply_range;
 mod value;
 pub use category::{Category, CategoryBinding, Field, FieldType, field_id};
 pub use definition::PartDefinition;
 pub use package::Package;
 pub use quantity::{Quantity, decimal, display_quantity};
 pub use reference::Reference;
+pub use supply_range::SupplyRange;
 pub use value::Value;
 /// Published reusable part record format.
 pub const PART_FORMAT: &str = "pcbcraft-part/2";
+/// Native part envelope reserved for records with an authored terminal supply range.
+pub const RATED_PART_FORMAT: &str = "pcbcraft-part/4";
+/// Maximum authored supply ranges per part, shared by draft editing, native decoding and the part/4 schema.
+pub const MAX_TERMINAL_RATINGS: usize = 128;
 /// Retained electrical-only records preserve their original encoding.
 pub const LEGACY_PART_FORMAT: &str = "pcbcraft-part/1";
 /// Published typed category record format.

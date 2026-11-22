@@ -19,7 +19,6 @@ use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-#[cfg(test)]
 use uuid::Uuid;
 
 /// Check the addressed board against explicit rules; returns a report and edits nothing.
@@ -260,7 +259,12 @@ impl BoardView<'_> {
                 kind: Kind::UnsupportedGeometry,
                 message,
                 at: Point { x_nm: 0, y_nm: 0 },
-                items: self.arc_tracks().iter().map(|a| a.id.to_string()).collect(),
+                items: self
+                    .arc_tracks()
+                    .iter()
+                    .map(|arc| arc.id.to_string())
+                    .chain(self.teardrops().iter().map(|record| record.id.to_string()))
+                    .collect(),
                 nets: Vec::new(),
             });
             return found.finish(rules, effective.sources);
@@ -269,6 +273,7 @@ impl BoardView<'_> {
         let class_rules = capture_class_rules(self, &geometry, &effective, &mut found);
         let items = &geometry.items;
         self.check_dimensions(rules, class_rules.as_ref(), &mut found);
+        self.check_slot_rings(&geometry.lands, rules, class_rules.as_ref(), &mut found);
 
         self.check_shorts(&geometry.lands, &geometry.members, items, &mut found);
 
@@ -346,6 +351,25 @@ impl BoardView<'_> {
                     message: format!("Via annular ring is {}, below the {} minimum", mm(ring as f64), mm(rules.min_annular_ring_nm as f64)),
                     at: via.at,
                     items: vec![via.id.to_string()],
+                    nets: Vec::new(),
+                });
+            }
+        }
+    }
+
+    /// Report slot ring minima on the same resolved geometry used for copper preparation.
+    fn check_slot_rings(self, lands: &[Land], rules: Rules, context: Option<&super::class_rules::Context>, found: &mut Findings) {
+        for land in lands {
+            let Some(slot) = land.plated_slot else { continue };
+            let key = format!("{}:{}", land.key.0, land.key.1);
+            let minimum = context.map_or(rules, |context| context.limits_for(&key, rules)).min_annular_ring_nm;
+            let ring = slot.annular_ring_nm(&land.contour());
+            if ring < minimum as f64 {
+                found.push(Violation {
+                    kind: Kind::AnnularRing,
+                    message: format!("Plated slot annular ring is {}, below the {} minimum", mm(ring), mm(minimum as f64)),
+                    at: land.center,
+                    items: vec![key],
                     nets: Vec::new(),
                 });
             }
@@ -508,7 +532,34 @@ pub(super) struct Outline {
     /// Whether any outline drawing exists, even one that is not closed.
     pub(super) drawn: bool,
     pub(super) polygons: Vec<Vec<Point>>,
-    pub(super) edges: Vec<(Point, Point)>,
+    pub(super) edges: Vec<OutlineEdge>,
+}
+
+pub(super) struct OutlineEdge {
+    drawing: Uuid,
+    closed: bool,
+    start: Point,
+    end: Point,
+}
+
+impl OutlineEdge {
+    /// Measure the shared gap and distinguish interior penetration from boundary contact.
+    fn measure(&self, contour: &Contour) -> (f64, bool) {
+        let gap = contour.gap(&Contour::capsule(self.start, self.end, 0.));
+        let crosses = gap < 0. || (gap == 0. && contour.penetrates_segment(self.start, self.end));
+        (gap, crosses)
+    }
+}
+
+impl Outline {
+    /// Closed outlines constrain copper placement and enforce the effective edge clearance.
+    pub(super) fn allows_copper(&self, contour: &Contour, clearance_nm: i64) -> bool {
+        if self.polygons.is_empty() {
+            return true;
+        }
+        let (gap, crosses) = edge_gap(&self.edges, contour);
+        !crosses && gap >= clearance_nm as f64 && contains(&self.polygons, contour)
+    }
 }
 
 /// Whether every core anchor of the copper lies inside some closed outline polygon.
@@ -518,12 +569,30 @@ pub(super) fn contains(polygons: &[Vec<Point>], contour: &Contour) -> bool {
 
 /// The copper's smallest distance to any outline edge, and whether an edge enters its interior.
 /// A contained edge can have gap zero even though it enters a pad's copper.
-pub(super) fn edge_gap(edges: &[(Point, Point)], contour: &Contour) -> (f64, bool) {
-    edges.iter().fold((f64::INFINITY, false), |(best, crosses), (a, b)| {
-        let distance = contour.gap(&Contour::capsule(*a, *b, 0.));
-        let penetrates = distance < 0. || (distance == 0. && contour.penetrates_segment(*a, *b));
-        (best.min(distance), crosses || penetrates)
+pub(super) fn edge_gap(edges: &[OutlineEdge], contour: &Contour) -> (f64, bool) {
+    edges.iter().fold((f64::INFINITY, false), |(best, crosses), edge| {
+        let (gap, penetrates) = edge.measure(contour);
+        (best.min(gap), crosses || penetrates)
     })
+}
+
+impl Outline {
+    /// Address the blocking drawing and the gap measured to its edge. For outside copper use
+    /// the nearest closed path (open paths cannot enclose copper). Otherwise prefer crossing
+    /// edges over merely near or touching ones. Break distance ties by drawing UUID.
+    pub(super) fn blocking_edge(&self, contour: &Contour, outside: bool) -> Option<(Uuid, f64, bool)> {
+        self.edges
+            .iter()
+            .filter(|edge| !outside || edge.closed)
+            .map(|edge| {
+                let (gap, crosses) = edge.measure(contour);
+                (edge.drawing, gap, crosses)
+            })
+            .min_by(|a, b| {
+                let crossing_priority = if outside { std::cmp::Ordering::Equal } else { b.2.cmp(&a.2) };
+                crossing_priority.then_with(|| a.1.total_cmp(&b.1)).then_with(|| a.0.cmp(&b.0))
+            })
+    }
 }
 
 impl BoardView<'_> {
@@ -542,7 +611,12 @@ impl BoardView<'_> {
             .flat_map(|drawing| {
                 let points = &drawing.points;
                 let count = if drawing.closed { points.len() } else { points.len().saturating_sub(1) };
-                (0..count).map(move |i| (points[i], points[(i + 1) % points.len()]))
+                (0..count).map(move |i| OutlineEdge {
+                    drawing: drawing.id,
+                    closed: drawing.closed,
+                    start: points[i],
+                    end: points[(i + 1) % points.len()],
+                })
             })
             .collect();
         Outline { drawn: !outline.is_empty(), polygons, edges }

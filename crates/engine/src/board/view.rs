@@ -89,6 +89,8 @@ pub struct PadView {
     pub shape: super::definition::PadShape,
     pub corner_radius_nm: i64,
     pub drill_nm: Option<i64>,
+    /// Finished plated slot resolved after placement mirroring and rotation.
+    pub plated_slot: Option<super::slot::ResolvedPlatedSlot>,
     pub through_hole: bool,
     /// Snapshot-local connectivity label, matching Net Inspector; not a persisted net identity.
     pub net: Option<String>,
@@ -297,9 +299,7 @@ impl<'a> BoardView<'a> {
         if id != format!("footprint-{ordinal}") {
             return None;
         }
-        let placements = self.project.board.footprints();
-        let index = placements.binary_search_by_key(&ordinal, |footprint| footprint.id).ok()?;
-        placements.get(index)
+        self.project.board.placement(ordinal)
     }
 
     /// Resolve only supplied placements against one immutable accepted-net index. Empty or
@@ -311,10 +311,15 @@ impl<'a> BoardView<'a> {
         let mut placements = placements.peekable();
         let accepted = placements.peek().and(self.project.board.baseline.as_ref()).map(|baseline| (baseline, baseline.terminal_net_index()));
         placements.filter_map(move |footprint| {
+            #[cfg(test)]
+            super::PLACEMENT_GEOMETRY_VISITS.set(super::PLACEMENT_GEOMETRY_VISITS.get() + 1);
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
             let value = component.map(|component| component.display_value()).or_else(|| historical.map(|part| part.display_value()))?;
+            let definition = self.project.board.definition_for(footprint);
+            let pins = footprint.terminals_by_pad();
+            let live = accepted.is_none().then(|| self.project.first_component_terminals(footprint.component));
             Some(FootprintView {
                 board: self.target,
                 id: format!("footprint-{}", footprint.id),
@@ -324,52 +329,41 @@ impl<'a> BoardView<'a> {
                 definition: &footprint.definition,
                 position: Point { x_nm: footprint.x_nm, y_nm: footprint.y_nm },
                 rotation: footprint.rotation,
-                pads: self
-                    .project
-                    .board
-                    .pad_numbers(footprint)
-                    .into_iter()
-                    .filter_map(|pad| {
-                        let center = footprint.pad_position(pad, &self.project.board)?;
-                        let definition = self.project.board.definition_for(footprint).and_then(|d| d.pads.iter().find(|p| p.number == pad.as_str()));
-                        let copper = definition.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
-                        let terminal = footprint.component_pin(pad).and_then(|(component, pin)| self.project.component_terminal(component, pin));
-                        let net = if let Some((baseline, index)) = &accepted {
-                            footprint
-                                .component_pin(pad)
-                                .and_then(|(component, pin)| index.get(&(component, pin)).and_then(|index| baseline.net_name(*index)))
-                        } else {
-                            terminal.and_then(|terminal| net_label(self.project, terminal))
-                        };
-                        Some(PadView {
+                pads: footprint
+                    .projected_pads(definition)
+                    .map(|(pad, center, physical)| {
+                        let copper = physical.map(|p| rectangle_points(footprint, p.center, p.width_nm, p.height_nm, p.rotation));
+                        let net = pins.get(pad.as_str()).and_then(|&pin| {
+                            if let Some((baseline, index)) = &accepted {
+                                index.get(&(footprint.component, pin)).and_then(|index| baseline.net_name(*index))
+                            } else {
+                                live.as_ref()?.get(pin).and_then(|&terminal| net_label(self.project, terminal))
+                            }
+                        });
+                        PadView {
                             number: pad.as_str().to_owned(),
                             center,
                             copper,
-                            size_nm: definition.map_or((0, 0), |p| (p.width_nm, p.height_nm)),
-                            copper_layers: definition.map(|pad| CopperLayers::resolve(self.setup(), pad.copper, footprint.bottom)),
-                            shape: definition.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
-                            corner_radius_nm: definition.map_or(0, |p| p.corner_radius_nm),
-                            drill_nm: definition.and_then(|p| p.drill_nm),
-                            through_hole: definition.is_some_and(|p| p.copper == super::definition::CopperBinding::AllCopper),
+                            size_nm: physical.map_or((0, 0), |p| (p.width_nm, p.height_nm)),
+                            copper_layers: physical.map(|pad| CopperLayers::resolve(self.setup(), pad.copper, footprint.bottom)),
+                            shape: physical.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
+                            corner_radius_nm: physical.map_or(0, |p| p.corner_radius_nm),
+                            drill_nm: physical.and_then(|p| p.drill_nm),
+                            plated_slot: physical
+                                .and_then(|p| p.plated_slot)
+                                .and_then(|slot| slot.resolve(center, footprint.rotation, footprint.bottom)),
+                            through_hole: physical.is_some_and(|p| p.copper == super::definition::CopperBinding::AllCopper),
                             net,
-                        })
+                        }
                     })
                     .collect(),
                 non_plated_holes: self.project.board.definition_for(footprint).into_iter().flat_map(|d| footprint.non_plated_holes(d)).collect(),
                 graphics: graphics(self.project, footprint, reference),
-                physical_reference: self
-                    .project
-                    .board
-                    .definition_for(footprint)
+                physical_reference: definition
                     .is_some_and(|d| d.reference.is_some() || footprint.reference_text.as_ref().is_some_and(|text| text.visible == Some(true))),
                 reference_offset: footprint.reference_offset.unwrap_or(super::DEFAULT_REFERENCE_OFFSET),
                 reference_text: footprint.reference_text.clone(),
-                reference_appearance: super::reference::Resolved::new(
-                    self.project.board.definition_for(footprint),
-                    reference,
-                    self.silkscreen(),
-                    footprint.reference_text.as_ref(),
-                ),
+                reference_appearance: super::reference::Resolved::new(definition, reference, self.silkscreen(), footprint.reference_text.as_ref()),
                 pending_removal: !self.project.component_is_board_eligible(footprint.component),
                 bottom: footprint.bottom,
                 locked: footprint.locked,
@@ -466,21 +460,28 @@ impl<'a> BoardView<'a> {
             .collect()
     }
 
-    /// Resolve this board's selected placements to schematic units through their shared component.
-    /// The result is a highlight suggestion, not authorization to edit those schematic units.
+    /// Resolve selected placements through their shared components and the part/unit index.
+    /// Unrelated board placements and schematic symbols are not visited. The result is a
+    /// highlight suggestion, not authorization to edit those schematic units.
     pub fn selection_for_footprints(self, footprints: &BTreeSet<String>) -> Selection {
-        let components: BTreeSet<_> = self
-            .project
-            .board
-            .footprints()
+        let placements = self.project.board.footprints();
+        let components: BTreeSet<_> = footprints
             .iter()
-            .filter(|footprint| footprints.contains(&format!("footprint-{}", footprint.id)))
-            .map(|footprint| footprint.component)
+            .filter_map(|id| crate::schematic::wiring::parse_id(id, "footprint-"))
+            .filter_map(|id| placements.binary_search_by_key(&id, |footprint| footprint.id).ok())
+            .map(|index| placements[index].component)
             .collect();
-        Selection {
-            symbols: self.project.all_symbols().filter(|symbol| components.contains(&symbol.component)).map(|symbol| symbol.id()).collect(),
-            ..Selection::default()
-        }
+        let symbols = components
+            .into_iter()
+            .flat_map(|component| {
+                self.project
+                    .units
+                    .range((component, String::new())..)
+                    .take_while(move |((owner, _), _)| *owner == component)
+                    .map(|(_, &id)| crate::schematic::symbol_id(id))
+            })
+            .collect();
+        Selection { symbols, ..Selection::default() }
     }
 }
 

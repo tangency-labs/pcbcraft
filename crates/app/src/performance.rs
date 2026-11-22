@@ -2,6 +2,7 @@
 //! Rendered GPU/canvas readback is distinct from compositor presentation or physical
 //! input-to-visible latency. Ordinary application builds exclude the harness.
 
+mod bga;
 #[cfg(target_arch = "wasm32")]
 mod browser_capture;
 pub mod checker;
@@ -16,6 +17,7 @@ pub mod rendered;
 mod replay;
 mod report;
 pub mod routing;
+pub mod shove;
 pub mod walkaround;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod watchdog;
@@ -200,6 +202,7 @@ fn load_artifact(artifact_json: &str) -> Result<Artifact> {
     let expected = match artifact.trace_id.as_str() {
         replay::STANDARD_TRACE_ID => Some(replay::Step::standard()),
         replay::COMMIT_TRACE_ID => Some(replay::Step::commit()),
+        replay::SHOVE_TRACE_ID => Some(replay::Step::shove()),
         _ => None,
     };
     if let Some(expected) = expected
@@ -326,6 +329,12 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         drop(session);
         drop(project);
         replay::run(&artifact, &mut samples)?;
+    }
+    // Keep checkout-specific diagnostics from perturbing the fixed-artifact samples.
+    if artifact.recipe == "bga-v1" {
+        for _ in 0..iterations {
+            bga::measure(&mut samples)?;
+        }
     }
     Ok(Report {
         schema: "pcbcraft-performance-report/1".into(),
@@ -555,6 +564,33 @@ mod tests {
         assert_eq!(project.all_symbols().count(), 64);
         assert_eq!(project.sheets().filter(|sheet| project.parent_sheet(sheet.target).is_some()).count(), 63);
         assert!(!project.electrical_connectivity().nets.is_empty());
+    }
+
+    /// The BGA recipe places one array at the pad, terminal and artwork limits next to the
+    /// reference board, and a run reports every timed BGA operation.
+    #[test]
+    fn bga_recipe_places_the_full_array_and_times_each_operation() {
+        let artifact_json = generate("bga-v1", "test").unwrap();
+        let artifact: Artifact = serde_json::from_str(&artifact_json).unwrap();
+        let project = decode_packed(&artifact.project).unwrap().project;
+        let board = project.board_view(artifact.board).unwrap();
+        assert_eq!(board.footprints().count(), 9);
+        assert_eq!(board.tracks().len(), 60);
+        assert_eq!(project.all_symbols().map(|symbol| symbol.pins().len()).sum::<usize>(), 16 + 1024);
+        let report = serde_json::to_value(run(&artifact_json, environment(), 1).unwrap()).unwrap();
+        let ids: BTreeSet<_> = report["metrics"].as_array().unwrap().iter().filter_map(|metric| metric["id"].as_str()).collect();
+        for id in [
+            "bga.library_load",
+            "bga.place_part",
+            "bga.place_units",
+            "bga.place_footprint",
+            "bga.baseline",
+            "bga.encode_packed",
+            "bga.decode_packed",
+            "bga.check_design",
+        ] {
+            assert!(ids.contains(id), "{id} missing from {ids:?}");
+        }
     }
 
     /// Corrupt archives, unsupported recipes and invalid sample/environment metadata must

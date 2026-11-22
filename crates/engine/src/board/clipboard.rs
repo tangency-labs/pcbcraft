@@ -24,6 +24,23 @@ use uuid::Uuid;
 mod connectivity;
 
 const NPTH_FORMAT: &str = "pcbcraft-clipboard/7";
+const SLOT_FORMAT: &str = "pcbcraft-clipboard/8";
+const RATED_CIRCUIT_FORMAT: &str = "pcbcraft-clipboard/9";
+const RATED_SLOT_FORMAT: &str = "pcbcraft-clipboard/11";
+
+/// Select the board format for the ratings and hole definitions carried by its circuits.
+fn circuit_format(circuits: &[Circuit]) -> Option<&'static str> {
+    use crate::clipboard::HoleContent;
+    let rated = circuits.iter().any(|circuit| circuit.fragment.has_rated_parts());
+    let holes = circuits.iter().map(|circuit| circuit.fragment.hole_content()).max().unwrap_or(HoleContent::Legacy);
+    match (rated, holes) {
+        (true, HoleContent::Slot) => Some(RATED_SLOT_FORMAT),
+        (true, _) => Some(RATED_CIRCUIT_FORMAT),
+        (false, HoleContent::Slot) => Some(SLOT_FORMAT),
+        (false, HoleContent::Npth) => Some(NPTH_FORMAT),
+        (false, HoleContent::Legacy) => None,
+    }
+}
 
 /// Keep the released format ladder when no newer embedded dependency is present.
 fn legacy_format(assigned: bool, locked: bool, stroked: bool) -> &'static str {
@@ -351,17 +368,14 @@ fn circuit_selection(project: &Project, components: &BTreeSet<u64>) -> Selection
 impl BoardFragment {
     /// Capture selected physical objects plus their exact placed packages and closed logical
     /// component scope. Circuit fragments retain source sheet identities; no flattening is implicit.
-    /// Selections containing zones and boards containing circular copper are refused in full
-    /// until their clipboard formats and geometry are supported.
+    /// Selections containing zones and boards with unsupported copper are refused in full.
     pub fn capture(project: &Project, selection: &BoardSelection, cut: bool) -> Result<Self, CommandError> {
-        if !project.board.arcs.is_empty() {
-            return Err(CommandError::Unavailable(super::arc::UNSUPPORTED.into()));
-        }
         if !selection.zones.is_empty() {
             return Err(invalid("Zone clipboard copying is not supported yet. Deselect zones before copying or cutting."));
         }
         let target = project.resolve_board(None)?;
         let view = project.board_view(target).ok_or_else(|| invalid("board unavailable"))?;
+        view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let footprints: Vec<_> =
             project.board.footprints().iter().filter(|f| selection.footprints.contains(&format!("footprint-{}", f.id))).cloned().collect();
         let drawings: Vec<_> = view.drawings().into_iter().filter(|d| selection.drawings.contains(&d.id)).collect();
@@ -443,8 +457,8 @@ impl BoardFragment {
         }
         let assigned = envelope.vias.iter().any(|v| v.net_assignment.is_some());
         let locked = envelope.tracks.iter().any(|track| track.locked) || envelope.vias.iter().any(|via| via.locked);
-        let npth_format = envelope.format == NPTH_FORMAT;
-        if (!npth_format && envelope.format != legacy_format(assigned, locked, envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some())))
+        let legacy = legacy_format(assigned, locked, envelope.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()));
+        if (!matches!(envelope.format.as_str(), NPTH_FORMAT | SLOT_FORMAT | RATED_CIRCUIT_FORMAT | RATED_SLOT_FORMAT) && envelope.format != legacy)
             || envelope.kind != "board"
             || envelope.source_project.is_nil()
             || envelope.source_board.is_nil()
@@ -487,8 +501,8 @@ impl BoardFragment {
             }
             circuits.push(Circuit { source_sheet: circuit.sheet, name: circuit.name, fragment });
         }
-        if npth_format != circuits.iter().any(|c| c.fragment.has_npth()) {
-            return Err(invalid("board clipboard format does not match its pinned non-plated holes"));
+        if envelope.format != circuit_format(&circuits).unwrap_or(legacy) {
+            return Err(invalid("board clipboard format does not match its pinned footprint holes or device supply ranges"));
         }
         let mut owners = BTreeSet::new();
         for footprint in &envelope.footprints {
@@ -601,16 +615,15 @@ impl BoardFragment {
             .map(|c| Ok(CircuitEnvelope { sheet: c.source_sheet, name: c.name.clone(), text: c.fragment.to_text()? }))
             .collect::<Result<_, CommandError>>()?;
         let text = serde_json::to_string(&Envelope {
-            format: if self.circuits.iter().any(|c| c.fragment.has_npth()) {
-                NPTH_FORMAT
-            } else {
-                legacy_format(
-                    self.vias.iter().any(|via| via.net_assignment.is_some()),
-                    self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked),
-                    self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()),
-                )
-            }
-            .into(),
+            format: circuit_format(&self.circuits)
+                .unwrap_or_else(|| {
+                    legacy_format(
+                        self.vias.iter().any(|via| via.net_assignment.is_some()),
+                        self.tracks.iter().any(|track| track.locked) || self.vias.iter().any(|via| via.locked),
+                        self.drawings.iter().any(|drawing| drawing.stroke_nm.is_some()),
+                    )
+                })
+                .into(),
             kind: "board".into(),
             source_project: self.source_project,
             source_board: self.source_board,
@@ -713,9 +726,7 @@ impl BoardFragment {
         check_copper: bool,
     ) -> Result<(Project, BoardSelection), CommandError> {
         let target = destination.resolve_board(None)?;
-        if !destination.board.arcs.is_empty() {
-            return Err(CommandError::Unavailable(super::arc::UNSUPPORTED.into()));
-        }
+        destination.board_view(target).ok_or_else(|| invalid("board unavailable"))?.require_linear_copper().map_err(CommandError::Unavailable)?;
         let mapping = self.layer_mapping(destination, &options.layers)?;
         let mut next = destination.clone();
         let mut components = BTreeMap::new();

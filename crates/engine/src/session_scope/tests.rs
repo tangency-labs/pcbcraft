@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    ADD_DRAWING, ADD_TRACKS, INITIALIZE_BOARD_SETUP, MOVE_SYMBOL, PLACE_RESISTOR, SET_ASSEMBLY_PROFILE, authoring, catalog,
+    ADD_DRAWING, ADD_TRACKS, INITIALIZE_BOARD_SETUP, MOVE_SYMBOL, PLACE_RESISTOR, Project, SET_ASSEMBLY_PROFILE, authoring, catalog,
     error_codes::ErrorCode,
     library::parts::{Package, Reference},
     part_authoring::Record,
@@ -118,6 +118,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
     let symbol = &project.symbols()[0];
     let setup = project.board_setup().unwrap();
     let layer = setup.layers().iter().find(|layer| layer.purpose == board::setup::LayerPurpose::Copper).unwrap().id;
+    let where_used = symbol_where_used(&project);
     let netlist_text = control.execute(netlist::EXPORT_NETLIST, &json!({})).unwrap()["netlist"]["files"][0]["contents"].clone();
 
     for command in catalog() {
@@ -171,6 +172,7 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             sources::RESOLVE_PART => json!({"library":"parts-demo","definition":"resistor","definition_revision":1}),
             sources::PARSE_QUANTITY => json!({"quantity":"resistance","value":"100 mΩ"}),
             sources::PREVIEW_PIN_REMAP => json!({"item":remap_item,"pins":[{"unit":"main","object":"1","number":"7"}]}),
+            sources::WHERE_USED => where_used.clone(),
             sources::PREVIEW_FOOTPRINT_REVISION => {
                 // A read: this fixture has no library placement, so both hosts must give the same
                 // lookup failure, never a scope refusal. The successful read-only preview is in
@@ -220,6 +222,9 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
             assert_eq!(actual["saved"], false);
             assert_eq!(actual["placed_instances_changed"], false);
         }
+        if id == sources::WHERE_USED {
+            assert_eq!(actual["instances"].as_array().map(Vec::len), Some(1));
+        }
         // Assembly profile preview returns its data only via execute, including in MCP.
         if id != PREVIEW_ASSEMBLY_PROFILE {
             assert_eq!(reader.apply(id, &params).unwrap_or_else(|error| panic!("apply {id}: {error}")), revision, "{id}");
@@ -230,6 +235,38 @@ fn catalog_reads_succeed_and_authoring_commands_are_refused() {
     assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
     assert_eq!(encode_documents(reader.snapshot().unwrap()).unwrap(), documents);
     assert_eq!(reader.execute("not.a.command", &Value::Null).unwrap_err().code(), ErrorCode::UnknownCommand);
+}
+
+/// Address the placed resistor's exact symbol revision.
+fn symbol_where_used(project: &Project) -> Value {
+    let symbol = &project.components().next().unwrap().definition;
+    json!({"library":symbol.library,"kind":"symbol","definition":symbol.id,"definition_revision":symbol.revision()})
+}
+
+/// Where-used is a reviewed read. A read-only session reports the placed instance through
+/// both dispatch paths without changing the shared snapshot, revision, history or documents.
+#[test]
+fn read_only_where_used_reports_uses_without_changing_project_or_history() {
+    let project = fixture().snapshot().unwrap();
+    let component = project.components().next().unwrap();
+    let params = symbol_where_used(&project);
+    let mut reader = Session::with_scope(SessionScope::ReadOnly);
+    reader.open_snapshot(project.clone());
+    let before = reader.inspect();
+    let documents = encode_documents(project.clone()).unwrap();
+    let (revision, root) = (reader.revision(), reader.history_root_revision());
+
+    let report = reader.execute(sources::WHERE_USED, &params).unwrap();
+    assert_eq!(report["instances"].as_array().map(Vec::len), Some(1));
+    assert_eq!(report["instances"][0]["part_instance"], component.id());
+    assert_eq!(report["instances"][0]["reference"], component.reference());
+    assert_eq!(report["revision"], revision);
+    assert_eq!(reader.apply(sources::WHERE_USED, &params).unwrap(), revision);
+
+    assert_eq!(reader.inspect(), before);
+    assert_eq!((reader.revision(), reader.history_root_revision()), (revision, root));
+    assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
+    assert_eq!(encode_documents(reader.snapshot().unwrap()).unwrap(), documents);
 }
 
 /// A read-only reviewer can compare an exported netlist with the open design. The comparison

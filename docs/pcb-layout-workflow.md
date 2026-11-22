@@ -43,7 +43,7 @@ Each edit is one undo step.
 | Route | Tracks with an explicit width and clearance-aware 45° walkaround. Stable snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
 | Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
-| Output | Gerber X2 copper, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
+| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
 Copper connectivity is derived from overlap on shared layers. Track edits and
@@ -55,6 +55,26 @@ not the identity used to compare memberships. DRC checks the board without editi
 it. A `pcb.check_design` request can override the fixed defaults for that run. Short
 findings include sorted copper references and the involved component-terminal keys,
 grouped by snapshot-local net index. Those indices must not be used as saved bindings.
+
+### Unroute one connection
+
+`pcb.unroute_connection` takes two pads on the same intended net. Choose `from`
+on the arm to remove and `to` on the side to keep. For a T-shaped route, this
+removes the chosen arm and leaves the trunk serving the other pads, including
+when the arm meets the interior of a track. Floating tracks and automatic vias
+severed by the cut are removed together, unless a locked or explicitly assigned
+via anchors the group. An explicitly assigned via on the arm itself is kept
+with the copper beyond it; the cut stops before it. Already isolated copper is
+unchanged.
+
+Use `dry_run` to preview the same removal and newly displayed ratsnest edges
+without making an edit. Applying it
+is one Undo step and changes no storage format. If a locked object would have
+to be removed, or there is no exclusive arm that safely separates the pads,
+the command refuses the whole request. It also refuses when the pad to detach
+overlaps another pad, or when overlapping pads elsewhere would keep the two
+sides joined. This is a shared command available in
+headless and live MCP, not a canvas tool or a net-wide removal.
 
 ## Gaps, in recommended order
 
@@ -250,17 +270,18 @@ ribbon's planned entries and the editor guide have a stated destination.
 - **Differential pairs and length tuning** (Layout › Route › Pair, Layout › Route › Tune) need
   net-registry pairs and length rules from slice 2. Pairs reference two net IDs,
   never name suffixes.
-- **Arcs and teardrops** need a curved track segment in the board format. DRC,
-  the clearance query and Gerber output (arcs are native in the specification)
-  must support it in the same slice.
+- **Circular tracks and teardrops:** native [circular track records](circular-copper-records.md)
+  and [straight via teardrop intents](teardrop-records.md) are available through
+  shared commands. Rendering and manufacturing support, DRC and automatic
+  teardrop regeneration remain separate work.
 - **Blind, buried and micro vias** need layer spans checked against the stackup
   and drill pairs in the Excellon output.
 - **Board text** on copper and silkscreen needs independently
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for tracks and vias is implemented under #249 through per-object
-  flags and the shared snapshot publication guard. Footprint lock commands/protection, zone locks and an
-  optional locked-object selection filter remain broader #81 work; footprint
-  lock metadata has the storage-only contract below.
+  flags and the shared snapshot publication guard. Existing footprint locks protect
+  direct placement edits as described below. Footprint lock authoring, zone locks
+  and a locked-object selection filter are not available yet.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
@@ -269,20 +290,32 @@ ribbon's planned entries and the editor guide have a stated destination.
 
 Copy and paste of board objects is in progress separately in #197 through #202.
 
-## Footprint lock metadata (storage only)
+## Placed-footprint locks
 
 Placed footprints retain an optional `locked` flag in native board format 34,
-or 35 when the board also contains arcs. Inspection and typed board views report
-a boolean, defaulting to false for older files. Fresh canonical encoding omits
+35 when the board also contains arcs, or 37 when it contains straight-via
+teardrops. Inspection and typed board views report a boolean, defaulting to
+false for older files. Fresh canonical encoding omits
 false and preserves true; Native Save can reuse an unchanged board document
 verbatim, including explicit false. Without active locks the encoder chooses
-the format required by the remaining board data. Reports are optional under
-formats 34 and 35. This slice
-does **not** expose a lock/unlock command or GUI action, nor does the flag yet
-protect footprint movement, rotation, flipping, alignment or deletion. It is not
-a fixed-obstacle promise. Those shared-command and enforcement workflows remain
-under #81. Clipboard Copy, Cut, Duplicate and Paste refuse active footprint
-locks; that is a clipboard restriction, not Delete protection. Diagnostic
+the format required by the remaining board data. Reports are optional in all
+three formats.
+
+A locked footprint remains selectable and inspectable. The shared move, rotate,
+flip, align/distribute and delete commands protect existing locks. A selection
+containing a locked footprint is refused as a whole, naming each locked placement,
+even if it would serve as a stationary alignment anchor. A single-footprint
+transform that explicitly leaves the pose unchanged remains a no-op. Applying a
+reviewed schematic-to-board update that would remove a locked footprint also
+refuses the whole update and names the locked placement. Removing a component’s
+last schematic unit, including through group Delete, Cut, or sheet deletion,
+is refused if it would immediately remove a locked footprint. An accepted
+placement stays on the board pending review. Refusals make no board
+or Undo/Redo changes. These locks do not govern package changes that retain the
+placement, reference-text edits or routing obstacles. There is no lock/unlock
+command or GUI toggle for footprints yet.
+
+Clipboard Copy, Cut, Duplicate and Paste still refuse active footprint locks. Diagnostic
 single-file storage also refuses the flag when true. Canonical clipboard
 fragments without active footprint locks keep their previous encoding. See
 [clipboard](clipboard.md#pcb-canvas) and

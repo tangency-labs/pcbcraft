@@ -51,6 +51,7 @@ fn crowded(tracks: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>, [Uuid; 2]) {
                 corners: [at(x, y), at(x + 800_000, y), at(x + 800_000, y + 800_000), at(x, y + 800_000)],
                 layers: if k % 3 == 0 { layers.to_vec() } else { vec![layers[k % 2]] },
                 net: None,
+                plated_slot: None,
                 center: at(x + 400_000, y + 400_000),
                 shape: if k % 4 == 0 { PadShape::Circle } else { PadShape::Rectangle },
                 corner_radius_nm: 0,
@@ -122,6 +123,7 @@ fn crossing(items: usize) -> (Vec<Land>, Vec<Track>, Vec<Via>) {
             corners: [at(x, y), at(x + 800_000, y), at(x + 800_000, y + 800_000), at(x, y + 800_000)],
             layers: vec![layers[0]],
             net: None,
+            plated_slot: None,
             center: at(x + 400_000, y + 400_000),
             shape: PadShape::Rectangle,
             corner_radius_nm: 0,
@@ -549,6 +551,94 @@ fn board_document_budget_refuses_addition_locking_and_via_assignment_atomically(
         ],
     );
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
+}
+
+/// A valid, reopened board with only a few bytes left must reject the same teardrop draft
+/// and edit, without replacing the snapshot, revising history or notifying observers.
+#[test]
+fn teardrop_preview_and_apply_share_the_native_board_budget() {
+    use super::super::{
+        setup::LayerPurpose,
+        teardrop::{EDIT_TEARDROPS, Length, Parameters, Record},
+    };
+
+    let (mut project, _, source, [front, _]) = classified_capacity_board(MAX_TRACKS - 1);
+    let track = Uuid::from_u128((MAX_TRACKS + MAX_VIAS + 1) as u128);
+    let board = Arc::make_mut(&mut project.board);
+    let via = board.vias.iter().find(|via| via.at == source).unwrap().id;
+    board.tracks.push(Track { id: track, locked: false, layer: front, width_nm: 200_000, start: source, end: at(source.x_nm + 2 * MM, source.y_nm) });
+    board.tracks.sort_by_key(|track| track.id);
+    let mut session = Session::default();
+    session.open_snapshot(Arc::new(project));
+    let layer = view(&session).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let points = [at(-40 * MM, -40 * MM), at(30 * MM, -40 * MM), at(30 * MM, 40 * MM), at(-40 * MM, 40 * MM)];
+    session.apply(ADD_DRAWING, &json!({"layer":layer,"points":points,"closed":true,"expected_revision":session.revision()})).unwrap();
+    let mut project = session.project().unwrap().clone();
+    let path = project.board_document_path().unwrap();
+    let bytes = encode_documents(Arc::new(project.clone())).unwrap()[&path].len();
+    let sample = &project.board.tracks[0];
+    let locked = Track { locked: true, ..sample.clone() };
+    let growth = serde_json::to_vec(&locked).unwrap().len() - serde_json::to_vec(sample).unwrap().len();
+    let locks = (MAX_DOCUMENT_BYTES - bytes - 32) / growth;
+    assert!(locks < MAX_TRACKS - 1);
+    for filler in &mut Arc::make_mut(&mut project.board).tracks[..locks] {
+        filler.locked = true;
+    }
+    let mut fits = project.clone();
+    let slack_tracks = 512;
+    assert!(slack_tracks <= locks);
+    for filler in &mut Arc::make_mut(&mut fits.board).tracks[..slack_tracks] {
+        filler.locked = false;
+    }
+    let fits = encode_documents(Arc::new(fits)).unwrap();
+    let saved = encode_documents(Arc::new(project)).unwrap();
+    assert!((32..32 + growth).contains(&(MAX_DOCUMENT_BYTES - saved[&path].len())));
+    assert_eq!(saved[&path].len() - fits[&path].len(), slack_tracks * growth);
+    session.open_snapshot(decode_documents(&saved).unwrap());
+    let target = view(&session).target;
+    let snapshot = session.snapshot().unwrap();
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    let log = Arc::new(EditLog::default());
+    session.observe_edits(Some(log.clone()));
+    let intent = Record {
+        id: Uuid::from_u128(u128::MAX),
+        via,
+        track,
+        parameters: Parameters { length: Length::Percent(20), max_length_nm: None, width_pct: 90, max_width_nm: None },
+    };
+    let params =
+        |revision, dry_run| json!({"board":target.board,"expected_revision":revision,"dry_run":dry_run,"edits":{"add":[intent],"remove":[]}});
+    let preview = session.execute(EDIT_TEARDROPS, &params(revision, true));
+    let applied = session.execute(EDIT_TEARDROPS, &params(revision, false));
+    assert!(
+        matches!(&preview, Err(crate::CommandError::InvalidParams(reason)) if reason.contains("board document exceeds the 16 MiB limit")),
+        "{preview:?}"
+    );
+    assert_eq!(preview.unwrap_err(), applied.unwrap_err());
+    assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    assert_eq!(session.revision(), revision);
+    assert_eq!((session.undo.len(), session.redo.len()), history);
+    assert!(log.0.lock().unwrap().is_empty());
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+
+    // The geometry is the same; only saving enough bytes for the record changes the result.
+    session.open_snapshot(decode_documents(&fits).unwrap());
+    let revision = session.revision();
+    let undo = session.undo.len();
+    let mut preview = session.execute(EDIT_TEARDROPS, &params(revision, true)).unwrap()["teardrops"].clone();
+    assert_eq!(preview["added"], json!([intent]));
+    assert_eq!(session.revision(), revision);
+    assert_eq!(session.undo.len(), undo);
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), fits);
+    let applied = session.execute(EDIT_TEARDROPS, &params(revision, false)).unwrap();
+    preview["dry_run"] = json!(false);
+    assert_eq!(applied["teardrops"], preview);
+    assert_eq!(session.undo.len(), undo + 1);
+    let edited = encode_documents(session.snapshot().unwrap()).unwrap();
+    assert!(fits[&path].len() < edited[&path].len() && edited[&path].len() <= MAX_DOCUMENT_BYTES);
+    session.execute("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), fits);
 }
 
 /// Track `k` of `n` parallel minimum-width diagonals 20 um apart along both axes, so 14 um apart
