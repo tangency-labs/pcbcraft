@@ -71,6 +71,11 @@ fn extract(objects: &[&str]) -> String {
 
 /// Decode each PDF text object with the translation of its text matrix, in points.
 fn runs(objects: &[&str]) -> Vec<(String, [f64; 2])> {
+    text_runs(objects).into_iter().map(|(text, matrix)| (text, [matrix[4], matrix[5]])).collect()
+}
+
+/// Decode each PDF text object with its full 6-number text matrix (`a b c d e f Tm`).
+fn text_runs(objects: &[&str]) -> Vec<(String, [f64; 6])> {
     let resources = objects[2].split_once("/Font << ").unwrap().1.split_once(">>").unwrap().0;
     let resources: Vec<_> = resources.split_whitespace().collect();
     let mut encodings = BTreeMap::new();
@@ -98,13 +103,13 @@ fn runs(objects: &[&str]) -> Vec<(String, [f64; 2])> {
     }
     let mut runs = Vec::new();
     let mut text = String::new();
-    let mut at = [f64::NAN; 2];
+    let mut matrix = [f64::NAN; 6];
     for line in objects[3].lines() {
         if line == "ET" {
-            runs.push((std::mem::take(&mut text), at));
-        } else if let Some(matrix) = line.strip_suffix(" Tm") {
-            let matrix: Vec<f64> = matrix.split_whitespace().map(|n| n.parse().unwrap()).collect();
-            at = [matrix[4], matrix[5]];
+            runs.push((std::mem::take(&mut text), matrix));
+        } else if let Some(tm) = line.strip_suffix(" Tm") {
+            let parsed: Vec<f64> = tm.split_whitespace().map(|n| n.parse().unwrap()).collect();
+            matrix = parsed.try_into().unwrap();
         } else if let Some((font, run)) = line.split_once(" Tf <") {
             let font = font.split_whitespace().next().unwrap();
             let run = run.strip_suffix("> Tj").unwrap();
@@ -440,4 +445,33 @@ fn selected_alternate_pin_function_appears_in_exported_pdf() {
     let after_text = extract(&objects(&after_bytes));
     assert!(after_text.contains("ADC_IN"), "missing selected alternate pin label in PDF: {after_text}");
     assert!(!after_text.contains("GPIO"), "overridden primary pin label remained in PDF: {after_text}");
+}
+
+/// A local net label with a saved 180-degree Start-aligned text appearance preserves that exact
+/// rotation and anchor in the PDF content stream instead of flipping upright to 0 degrees and End.
+#[test]
+fn saved_net_label_text_keeps_180_rotation_and_start_alignment() {
+    let (mut session, target) = fixture();
+    let (x, y) = (80 * GRID_NM, 40 * GRID_NM);
+    let offset = Point { x_nm: 2 * GRID_NM, y_nm: -GRID_NM };
+    let text = Layout { offset: Some(offset), rotation: 180, align: TextAlign::Start, ..Layout::default() };
+    apply(
+        &mut session,
+        crate::net_labels::ADD,
+        json!({"sheet":target.id(),"name":"INVERTED_NET","style":"local","x_nm":x,"y_nm":y,"rotation":0,"text":text}),
+    );
+    let bytes = export(session.project().unwrap(), target).unwrap();
+    let runs = text_runs(&objects(&bytes));
+    let (_, [a, b, c, d, tx, ty]) = *runs.iter().find(|(name, _)| name == "INVERTED_NET").unwrap();
+    assert!(
+        (a + 1.).abs() < 1e-5 && b.abs() < 1e-5 && c.abs() < 1e-5 && (d + 1.).abs() < 1e-5,
+        "expected 180-degree text matrix (-1 0 0 -1), got [{a}, {b}, {c}, {d}]"
+    );
+    let anchor_x = (x + offset.x_nm) as f64 * PT_PER_NM;
+    let anchor_y = (210_000_000 - (y + offset.y_nm)) as f64 * PT_PER_NM;
+    let expected_ty = anchor_y + text.height_nm as f64 * PT_PER_NM / 2.;
+    assert!(
+        (tx - anchor_x).abs() < 1e-4 && (ty - expected_ty).abs() < 1e-4,
+        "expected Start-aligned anchor ({anchor_x}, {expected_ty}), got ({tx}, {ty})"
+    );
 }
