@@ -456,7 +456,7 @@ impl Capture {
             transported.parts.iter().map(|(path, part)| (CaptureSource::Document { path: path.clone() }, part)).collect();
         match record {
             Some(Record::Part(part)) => {
-                if part.format != PART_FORMAT && part.format != LEGACY_PART_FORMAT {
+                if (part.format != PART_FORMAT && part.format != LEGACY_PART_FORMAT) || (part.format == LEGACY_PART_FORMAT && part.symbol.is_none()) {
                     return Err(CheckError::UnsupportedFormat { file: "record".into(), format: part.format.clone() });
                 }
                 parts.push((CaptureSource::Draft, part));

@@ -391,6 +391,14 @@ fn unsupported_part_draft_format_is_an_error() {
     let refused = fixture.session.execute(CHECK, &json!({"documents":{},"record":draft})).unwrap_err();
     assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
 
+    let mut legacy_without_symbol = Record::new_part(None).unwrap();
+    let Record::Part(part) = &mut legacy_without_symbol else { panic!("part expected") };
+    part.format = LEGACY_PART_FORMAT.into();
+    let error = Capture::from_part_record(&legacy_without_symbol, &Documents::new(), &Catalog::default()).unwrap_err();
+    assert_eq!(error, CheckError::UnsupportedFormat { file: "record".into(), format: LEGACY_PART_FORMAT.into() });
+    let refused = fixture.session.execute(CHECK, &json!({"documents":{},"record":legacy_without_symbol})).unwrap_err();
+    assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
+
     let mut legacy = fixture.part_editor.record().clone();
     let Record::Part(part) = &mut legacy else { panic!("part expected") };
     part.format = LEGACY_PART_FORMAT.into();
