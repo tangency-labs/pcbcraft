@@ -10,8 +10,13 @@ use std::sync::Arc;
 
 /// Build the target through the native authoring encoder and assertions through their own codec.
 fn source() -> (Documents, Assertion, Assertion) {
+    source_for(Arc::new(Item::new(DraftKind::Symbol).unwrap()))
+}
+
+/// Publish one authored symbol draft and two assertions about it.
+fn source_for(item: Arc<Item>) -> (Documents, Assertion, Assertion) {
     let manifest = publishing::new_library("lifecycle-demo", "Lifecycle demo", "MIT OR Apache-2.0").unwrap();
-    let native = publishing::prepare(Arc::new(Item::new(DraftKind::Symbol).unwrap()), &manifest, 0, None, false).unwrap();
+    let native = publishing::prepare(item, &manifest, 0, None, false).unwrap();
     let symbol = native.item().symbol().unwrap();
     let draft = Assertion {
         format: FORMAT.into(),
@@ -448,6 +453,64 @@ fn designator_lock_and_assessment_share_project_52_and_read_historical_51() {
         // Undoing the adoption reverts cleanly to project/51 with exact prior bytes.
         session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), locked);
+    }
+}
+
+/// A starter symbol whose only pin offers one alternate function (a version-5 definition).
+fn alternate_symbol() -> Arc<Item> {
+    use crate::authoring::{Action, Primitive};
+    use crate::schematic::{AlternatePinFunction, ElectricalType};
+    let item = Item::new(DraftKind::Symbol).unwrap();
+    let mut pin = item.objects[&1].clone();
+    let Primitive::Pin { name, electrical_type, alternates, .. } = &mut pin else { panic!("expected starter pin") };
+    *name = Some("GPIO".into());
+    *electrical_type = ElectricalType::Bidirectional;
+    *alternates = vec![AlternatePinFunction { name: "ADC_IN".into(), electrical_type: ElectricalType::Input }];
+    let mut editor = crate::authoring::Session::new(item, false).unwrap();
+    editor.execute(0, Action::Replace { object: 1, primitive: pin }).unwrap();
+    editor.snapshot()
+}
+
+/// An adopted assessment and a chosen alternate pin function together select project/58;
+/// both reopen intact and re-save byte-identically, and project/52 refuses pin functions.
+#[test]
+fn assessment_with_pin_function_selects_project_58() {
+    use crate::persistence::ENTRY_POINT;
+    for board in [false, true] {
+        let (documents, draft, _) = source_for(alternate_symbol());
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"create_board":board})).unwrap();
+        session.execute(LOAD, &json!({"source":"fixture","documents":documents})).unwrap();
+        let key = &draft.target;
+        let symbol = session.libraries().item(key).unwrap().symbol().unwrap();
+        let place = json!({"library":key.library,"definition":key.id,"definition_revision":key.revision,
+            "definition_digest":symbol_digest(&symbol).unwrap(),"expected_revision":session.revision(),"x_nm":0,"y_nm":0});
+        session.apply(PLACE_SYMBOL, &place).unwrap();
+        let target = json!({"part":session.project().unwrap().symbols()[0].component_id(),"terminal":"1"});
+        let choice = json!({"target":target,"function":"ADC_IN","expected_revision":session.revision()});
+        session.apply(crate::pin_functions::SET, &choice).unwrap();
+        let chosen = encode_documents(session.snapshot().unwrap()).unwrap();
+        assert_eq!(serde_json::from_slice::<Value>(&chosen[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/48");
+        session.apply(ADOPT, &params(&session, &draft)).unwrap();
+        let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+        let entry: Value = serde_json::from_slice(&saved[ENTRY_POINT]).unwrap();
+        assert_eq!(entry["format"], "pcbcraft-project/58");
+        assert_eq!(entry["components"][0]["pin_functions"], json!([{"terminal":"1","function":"ADC_IN"}]));
+        assert_eq!(entry.get("board_instances"), board.then_some(&Value::Bool(true)));
+        assert!(saved.contains_key("library/lifecycle.json"));
+        let reopened = decode_documents(&saved).unwrap();
+        assert_eq!(reopened.lifecycle(), session.snapshot().unwrap().lifecycle());
+        assert_eq!(reopened.lifecycle().disposition(&draft.target), Some(Disposition::Draft));
+        assert_eq!(reopened.pin_function(reopened.components().next().unwrap(), "1"), Some("ADC_IN"));
+        assert_eq!(encode_documents(reopened.clone()).unwrap(), saved);
+        let packed = crate::persistence::encode_packed(reopened).unwrap();
+        assert_eq!(crate::persistence::decode_packed(&packed).unwrap().documents, saved);
+        let as_52 = edit_project_header(&saved, |header| header["format"] = json!("pcbcraft-project/52"));
+        let error = decode_documents(&as_52).unwrap_err();
+        assert!(error.contains("require project format 48, 56 or 58"), "{error}");
+        // Undoing the adoption returns to the exact pin-function-only bytes.
+        session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), chosen);
     }
 }
 

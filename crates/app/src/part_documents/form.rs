@@ -17,6 +17,7 @@ impl PcbApp {
         let mut edit_orderable = None;
         let mut browse = None;
         let mut clear_field = None;
+        let mut applied_supply = Vec::new();
         pcbcraft_chrome::part_form::document(ui, |ui, footer| {
             if footer {
                 let valid = record.validate(catalog);
@@ -67,11 +68,13 @@ impl PcbApp {
                             pcbcraft_chrome::part_form::ReferenceAction::Clear => clear_field = Some(ReferenceField::Symbol),
                             _ => {}
                         }
-                        if let Some(symbol) = part.symbol.as_ref().and_then(|r| catalog.symbol(&r.library, &r.id, r.revision)) {
+                        let symbol = part.symbol.as_ref().and_then(|r| catalog.symbol(&r.library, &r.id, r.revision));
+                        if let Some(symbol) = &symbol {
                             properties::field(ui, "Units", |ui| {
                                 ui.label(symbol.units().iter().map(|unit| unit.unit_id()).collect::<Vec<_>>().join(", "));
                             });
                         }
+                        supply_ranges(ui, part, symbol.as_deref(), &mut doc.pending, &mut applied_supply, &mut doc.error);
                         match pcbcraft_chrome::part_form::reference(
                             ui,
                             "Category",
@@ -152,8 +155,17 @@ impl PcbApp {
                 }
             });
         });
-        if record != *doc.session.record() {
-            doc.error = doc.session.replace(doc.session.revision(), record).err();
+        // Applied supply text is cleared only once the draft accepts the edit, so a refused
+        // replacement (for example at the size limit) keeps what the user typed.
+        let accepted = record == *doc.session.record() || {
+            let result = doc.session.replace(doc.session.revision(), record);
+            doc.error = result.as_ref().err().cloned();
+            result.is_ok()
+        };
+        if accepted {
+            for key in applied_supply {
+                doc.pending.remove(&key);
+            }
         }
         self.library_editors.parts.insert(id, doc);
         if let Some(field) = browse {
@@ -207,6 +219,111 @@ impl PcbApp {
         }
     }
 }
+/// Edit both bounds of one power input in one Apply/undo. Pending text is session UI,
+/// never a native value; errors leave the previous authored range untouched. Applied keys
+/// go to `applied` so the caller clears them only after the draft accepts the edit.
+/// Unavailable inputs expose a text-only discard even when the exact symbol no longer resolves.
+fn supply_ranges(
+    ui: &mut egui::Ui,
+    part: &mut PartDefinition,
+    symbol: Option<&pcbcraft_engine::schematic::SymbolDefinition>,
+    pending: &mut BTreeMap<String, String>,
+    applied: &mut Vec<String>,
+    error: &mut Option<String>,
+) {
+    use pcbcraft_engine::schematic::ElectricalType::PowerIn;
+    let power_input =
+        |id: &str| symbol.is_some_and(|symbol| symbol.pin_index(id).is_some_and(|index| symbol.pins()[index].electrical_type == PowerIn));
+    let mut unavailable = Vec::new();
+    for (key, text) in pending.iter() {
+        if let Some((terminal, bound)) = key.strip_prefix("supply/").and_then(|rest| rest.rsplit_once('/'))
+            && !power_input(terminal)
+        {
+            if unavailable.is_empty() {
+                properties::section(ui, "Unapplied supply ranges");
+            }
+            let label = if bound == "min" { "minimum" } else { "maximum" };
+            ui.label(format!("Terminal {terminal} {label}: {text:?}"));
+            unavailable.push(key.clone());
+        }
+    }
+    if !unavailable.is_empty() {
+        ui.label("The exact power input is unavailable. Restore it to apply these edits, or discard the unapplied text.");
+        if controls::button(ui, "Discard unavailable supply edits").clicked() {
+            for key in unavailable {
+                pending.remove(&key);
+            }
+        }
+    }
+    let pins = symbol.map_or(&[][..], |symbol| symbol.pins());
+    if part.terminal_ratings.is_empty() && !pins.iter().any(|pin| pin.electrical_type == PowerIn) {
+        return;
+    }
+    controls::collapsing(ui, "supply_ranges", "Device supply ranges", false, None, |ui| {
+        ui.label("Enter volts or SI-prefixed voltages. Leave either bound blank when unknown.");
+        for pin in pins.iter().filter(|pin| pin.electrical_type == PowerIn) {
+            let id = &pin.number;
+            ui.push_id(id, |ui| {
+                let name = pin.name.as_ref().map_or_else(|| id.clone(), |name| format!("{name} ({id})"));
+                ui.strong(name);
+                let range = part.supply_range(id);
+                let min = supply_input(ui, pending, id, "min", "Minimum (V)", range.and_then(|range| range.supply_min.as_ref()));
+                let max = supply_input(ui, pending, id, "max", "Maximum (V)", range.and_then(|range| range.supply_max.as_ref()));
+                if pending.contains_key(&min.0) || pending.contains_key(&max.0) {
+                    ui.horizontal(|ui| {
+                        if controls::button(ui, "Apply range").clicked() {
+                            match part.set_supply_range(id, &min.1, &max.1) {
+                                Ok(()) => {
+                                    applied.extend([min.0.clone(), max.0.clone()]);
+                                    *error = None;
+                                }
+                                Err(reason) => *error = Some(reason),
+                            }
+                        }
+                        if controls::button(ui, "Reset range").clicked() {
+                            pending.remove(&min.0);
+                            pending.remove(&max.0);
+                            *error = None;
+                        }
+                    });
+                }
+            });
+        }
+        // Authored ranges are independent of pending text and never removed on source loss.
+        let unavailable: Vec<_> = part.terminal_ratings.keys().filter(|id| !power_input(id)).cloned().collect();
+        for id in unavailable {
+            ui.push_id(&id, |ui| {
+                ui.label(format!("Exact power input {id} unavailable."));
+                if controls::button(ui, "Remove authored range").clicked() {
+                    *error = part.set_supply_range(&id, "", "").err();
+                }
+            });
+        }
+    });
+}
+
+/// Keep uncommitted bound text distinct from category field IDs and from a stored zero.
+fn supply_input(
+    ui: &mut egui::Ui,
+    pending: &mut BTreeMap<String, String>,
+    id: &str,
+    bound: &str,
+    label: &str,
+    current: Option<&TypedValue>,
+) -> (String, String) {
+    let key = format!("supply/{id}/{bound}");
+    let current = current.map(TypedValue::display).unwrap_or_default();
+    let mut text = pending.get(&key).cloned().unwrap_or_else(|| current.clone());
+    if properties::text(ui, label, &mut text).changed() {
+        if text == current {
+            pending.remove(&key);
+        } else {
+            pending.insert(key.clone(), text.clone());
+        }
+    }
+    (key, text)
+}
+
 /// The primary quantity is chosen only among the exact selected category's bounded fields.
 fn primary_value_form(ui: &mut egui::Ui, part: &mut PartDefinition, catalog: &Catalog) {
     if let Some(binding) = &mut part.category
