@@ -1,4 +1,6 @@
 //! Multi-unit regression cases use original native data, not another EDA implementation.
+mod package_completion;
+
 use super::*;
 use crate::{
     authoring::{Action, Item},

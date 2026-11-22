@@ -888,7 +888,14 @@ fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primi
     let min = Point { x_nm: start.x_nm.min(end.x_nm), y_nm: start.y_nm.min(end.y_nm) };
     let max = Point { x_nm: start.x_nm.max(end.x_nm), y_nm: start.y_nm.max(end.y_nm) };
     Ok(match kind {
-        Place::Pin => Primitive::Pin { number, name: None, electrical_type: ElectricalType::Passive, at: end, appearance: Some(Default::default()) },
+        Place::Pin => Primitive::Pin {
+            number,
+            name: None,
+            electrical_type: ElectricalType::Passive,
+            alternates: Vec::new(),
+            at: end,
+            appearance: Some(Default::default()),
+        },
         Place::Pad => Primitive::Pad {
             pad: foot::RectPad {
                 number,
@@ -900,6 +907,7 @@ fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primi
                 copper: CopperBinding::ComponentSide,
                 corner_radius_nm: 0,
                 drill_nm: None,
+                plated_slot: None,
             },
         },
         Place::Arc | Place::Polyline | Place::NonPlatedHole => return Err("Choose drawing geometry through its parameterized tool.".into()),
@@ -989,7 +997,11 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
                 color: Some(if pad.copper == CopperBinding::AllCopper { Tokens::get().board_through } else { board::copper_color(Some(true)) }),
                 number: pad.number.clone(),
                 center: at(pad.center),
-                copper: Some(corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation)),
+                copper: Some(if pad.plated_slot.is_some() {
+                    pad.local_corners().map(at)
+                } else {
+                    corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation)
+                }),
                 contour: match pad.shape {
                     PadShape::Rectangle => board::PadContour::Rectangle,
                     PadShape::Circle => board::PadContour::Circle,
@@ -997,6 +1009,10 @@ fn paint(painter: &egui::Painter, primitive: &Primitive, camera: &crate::canvas_
                     PadShape::RoundedRectangle => board::PadContour::RoundedRectangle { radius: pad.corner_radius_nm as f32 * scale },
                 },
                 drill_radius: pad.drill_nm.map(|r| r as f32 * scale / 2.0),
+                plated_slot: pad
+                    .plated_slot
+                    .and_then(|slot| slot.resolve(pad.center, 0, false))
+                    .map(|slot| (slot.cap_centres().map(at), slot.width_nm() as f32 * scale / 2.0)),
                 through_hole: pad.copper == CopperBinding::AllCopper,
                 net: None,
             }],
