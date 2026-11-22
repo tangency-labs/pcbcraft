@@ -125,8 +125,9 @@ fn assert_lock_released(path: &Path) {
     lock.unlock().unwrap();
 }
 
-/// Supply the picker result to the real editor frame, then Quit without starting a Save.
-fn desktop_open_and_close(path: &Path) -> Result<(), String> {
+/// Supply the picker result to the real editor frame, probe any expected folder lock while the
+/// project is open, then Quit without starting a Save.
+fn desktop_open_and_close(path: &Path, lock: Option<&Path>) -> Result<(), String> {
     let loaded = load(path)?;
     let opened = Arc::clone(loaded.opened.as_ref().unwrap_or(&loaded.snapshot));
     let mut app = PcbApp::default();
@@ -140,6 +141,9 @@ fn desktop_open_and_close(path: &Path) -> Result<(), String> {
     assert!(app.session.project().is_some_and(|current| current.same_document(&opened)), "editor did not adopt {}", path.display());
     assert!(!app.files.dirty(&app.session), "opening {} made it dirty", path.display());
     assert!(!app.close_allowed);
+    if let Some(lock) = lock {
+        assert_lock_released(lock);
+    }
     super::super::window_tests::request_close(&mut app, &ctx);
     assert!(app.close_allowed, "Quit must proceed without Save for {}", path.display());
     assert!(matches!(app.dialog, Dialog::None));
@@ -156,7 +160,7 @@ fn frozen_archive_open_and_close_preserve_saved_bytes() -> Result<(), String> {
         stage(&path, bytes);
         stamp(directory_handle(root.path()), 0);
         let before = saved_tree(root.path(), None);
-        desktop_open_and_close(&path).map_err(|error| format!("desktop open {file}: {error}"))?;
+        desktop_open_and_close(&path, None).map_err(|error| format!("desktop open {file}: {error}"))?;
         assert_eq!(saved_tree(root.path(), None), before, "desktop Open or Quit changed {file} or left a sidecar");
         drop(pcbcraft_storage::open(&path).map_err(|error| format!("headless open {file}: {error}"))?);
         assert_eq!(saved_tree(root.path(), None), before, "headless Open changed {file} or left a sidecar");
@@ -165,7 +169,8 @@ fn frozen_archive_open_and_close_preserve_saved_bytes() -> Result<(), String> {
 }
 
 /// Preserve the entire settled folder and its parent entries, except for the documented
-/// sibling lock file. Verify that each native loader releases the advisory lock.
+/// sibling lock file. Verify that each native loader releases the advisory lock immediately
+/// after Open, while the opened session or snapshot is still alive.
 #[test]
 fn previous_folder_open_and_close_preserve_saved_documents() {
     let temp = tempfile::tempdir().unwrap();
@@ -176,13 +181,13 @@ fn previous_folder_open_and_close_preserve_saved_documents() {
     assert!(!lock.exists());
     let before = saved_tree(temp.path(), Some(&lock));
 
-    desktop_open_and_close(&entry).unwrap();
+    desktop_open_and_close(&entry, Some(&lock)).unwrap();
     assert_eq!(saved_tree(temp.path(), Some(&lock)), before, "desktop Open or Quit changed the saved folder or left another sidecar");
-    assert_lock_released(&lock);
 
-    drop(pcbcraft_storage::open(&entry).unwrap());
-    assert_eq!(saved_tree(temp.path(), Some(&lock)), before, "headless Open changed the saved folder or left another sidecar");
+    let opened = pcbcraft_storage::open(&entry).unwrap();
     assert_lock_released(&lock);
+    drop(opened);
+    assert_eq!(saved_tree(temp.path(), Some(&lock)), before, "headless Open changed the saved folder or left another sidecar");
 }
 
 /// A touch changes the oracle for both the project root and a nested directory even when
