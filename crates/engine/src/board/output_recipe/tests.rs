@@ -492,9 +492,11 @@ fn assert_recipe_edits_and_geometry_refusal(session: &mut Session, content: &Val
 /// while copper geometry commands stay refused.
 #[test]
 fn recipe_edits_succeed_on_board_with_arcs() {
-    let (mut session, content) = fixture();
-    let board = session.project().unwrap().board_target().unwrap().board;
-    let layer = crate::board::track::tests::copper_layers(&session)[0];
+    use crate::board::track::tests::{copper_layers, routed_fixture, view};
+
+    let mut session = routed_fixture();
+    let board = view(&session).target.board;
+    let layer = copper_layers(&session)[0];
     let arc = json!({
         "id": Uuid::from_u128(0xa11c),
         "layer": layer,
@@ -507,6 +509,16 @@ fn recipe_edits_succeed_on_board_with_arcs() {
     session.apply(crate::board::arc::SET_ARCS, &json!({"board": board, "expected_revision": session.revision(), "arcs": [arc]})).unwrap();
     assert!(!session.project().unwrap().board.arcs.is_empty());
 
+    let content = json!({
+        "name": "Prototype",
+        "board": board,
+        "units": "mm",
+        "file_stem": "prototype",
+        "gerber_layers": [layer],
+        "drill": true,
+        "origin": {"kind": "point", "x_nm": 100, "y_nm": -200},
+        "assembly_profile": {"profile": Uuid::from_u128(12), "revision": 2},
+    });
     assert_recipe_edits_and_geometry_refusal(&mut session, &content, board, layer, crate::board::arc::UNSUPPORTED);
 }
 
