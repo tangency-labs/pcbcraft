@@ -137,7 +137,7 @@ impl PcbApp {
         let source = self.views.active.input(&self.session)?;
         let id = self.views.active.schematic.selection.single_symbol()?;
         let project = self.views.active.snapshot(&self.session)?;
-        let symbol = project.symbols().iter().find(|symbol| symbol.id() == id)?;
+        let symbol = project.symbol(id)?;
         let component = project.component(symbol)?;
         let reference = component.reference().to_owned();
         let value = component.display_value().into_owned();
@@ -403,9 +403,11 @@ impl PcbApp {
         let mut apply = false;
         let mut choose = false;
         let mut library_action = None;
+        let mut pin_function = None;
         let can_choose = !edit.changed();
         let title = format!("{} · Symbol properties", edit.original.0);
         let footprint = self.package_label(&edit.component);
+        let project = self.views.active.snapshot(&self.session);
         let action = pcbcraft_chrome::catalog::property_form(ctx, "edit_fields", &title, 760.0, "OK", |ui| {
             ui.label(shell::dim(&edit.definition.name));
             chrome::tabs(ui, &mut edit.tab, &[(Tab::General, "General"), (Tab::Terminals, "Pin functions"), (Tab::Library, "Library")]);
@@ -435,18 +437,14 @@ impl PcbApp {
                     apply |= position_apply;
                 }
                 Tab::Terminals => {
-                    egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
-                        ui.strong("Terminal");
-                        ui.strong("Name");
-                        ui.strong("Electrical type");
-                        ui.end_row();
-                        for pin in edit.definition.unit(&edit.unit).into_iter().flat_map(|unit| unit.pins()) {
-                            ui.label(&pin.number);
-                            ui.label(pin.name.as_deref().unwrap_or("—"));
-                            ui.label(format!("{:?}", pin.electrical_type));
-                            ui.end_row();
-                        }
-                    });
+                    if !can_choose {
+                        ui.label(shell::dim("Apply or cancel pending placement and field changes before selecting a pin function."));
+                    }
+                    if let Some(project) = project.as_deref()
+                        && let Some(part) = pin_function_owner(project, &edit.symbol)
+                    {
+                        pin_function = terminal_functions(ui, &edit, project, part, can_choose);
+                    }
                 }
                 Tab::Library => {
                     chrome::group(ui, "Pinned symbol", |ui| {
@@ -481,7 +479,26 @@ impl PcbApp {
             }
         });
         apply |= action.primary;
-        if apply {
+        if let Some((terminal, function)) = pin_function {
+            if !self.views.active.accepts(edit.source, &self.session) {
+                edit.error = Some("View or project changed; reopen symbol properties to continue.".into());
+                self.dialog = Dialog::EditFields(Box::new(edit));
+                return;
+            }
+            self.run(
+                pcbcraft_engine::pin_functions::SET,
+                &json!({
+                    "target":{"part":edit.component,"terminal":terminal},"function":function,"expected_revision":edit.source.revision
+                }),
+            );
+            if let Some(error) = self.message.take() {
+                edit.error = Some(error);
+                self.dialog = Dialog::EditFields(Box::new(edit));
+            } else if let Some(mut refreshed) = self.read_property_edit() {
+                refreshed.tab = Tab::Terminals;
+                self.dialog = Dialog::EditFields(Box::new(refreshed));
+            }
+        } else if apply {
             if !self.views.active.accepts(edit.source, &self.session) {
                 self.message = Some("View or project changed; reopen the symbol fields to continue editing.".into());
                 return;
@@ -518,10 +535,72 @@ impl PcbApp {
     }
 }
 
+/// Resolve a modal's addressed placement and logical part using the sheet and part indexes.
+fn pin_function_owner<'a>(project: &'a pcbcraft_engine::Project, symbol: &str) -> Option<&'a pcbcraft_engine::schematic::PartInstance> {
+    #[cfg(test)]
+    PIN_MODAL_LOOKUPS.set(PIN_MODAL_LOOKUPS.get() + 1);
+    project.component(project.symbol(symbol)?)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Count actual modal owner queries without mixing independent test frames.
+    static PIN_MODAL_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Render effective pin functions in the placed unit's pin list. A selection is a separate
+/// immediate edit rather than an uncommitted field on the placement draft.
+fn terminal_functions(
+    ui: &mut Ui,
+    edit: &Edit,
+    project: &pcbcraft_engine::Project,
+    part: &pcbcraft_engine::schematic::PartInstance,
+    enabled: bool,
+) -> Option<(String, Option<String>)> {
+    let mut selected = None;
+    egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+        egui::Grid::new("property_terminals").num_columns(3).show(ui, |ui| {
+            ui.strong("Terminal");
+            ui.strong("Name");
+            ui.strong("Electrical type");
+            ui.end_row();
+            for pin in edit.definition.unit(&edit.unit).into_iter().flat_map(|unit| unit.pins()) {
+                ui.label(&pin.number);
+                let (name, kind) = project.effective_pin(part, pin);
+                if pin.alternates.is_empty() {
+                    ui.label(name.unwrap_or("—"));
+                } else {
+                    let mut current = project.pin_function(part, &pin.number).unwrap_or_default().to_owned();
+                    let mut options = vec![("", format!("{} (Primary)", pin.name.as_deref().unwrap_or("—")))];
+                    options.extend(pin.alternates.iter().map(|alternate| (alternate.name.as_str(), alternate.name.clone())));
+                    let prior = current.clone();
+                    ui.add_enabled_ui(enabled, |ui| {
+                        let response = chrome::choice(ui, "", egui::IdSalt::new(("pin_function", &pin.number)), &mut current, &options);
+                        response.widget_info(|| {
+                            let mut info =
+                                egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), format!("Pin function for terminal {}", pin.number));
+                            info.current_text_value = options.iter().find(|(value, _)| *value == current.as_str()).map(|(_, label)| label.clone());
+                            info
+                        });
+                    });
+                    if current != prior {
+                        selected = Some((pin.number.clone(), (!current.is_empty()).then_some(current)));
+                    }
+                }
+                ui.label(kind.as_str().replace('_', " "));
+                ui.end_row();
+            }
+        });
+    });
+    selected
+}
+
 #[cfg(test)]
 mod coordinate_tests;
 #[cfg(test)]
 mod field_tests;
+#[cfg(test)]
+mod pin_function_projection_tests;
 
 #[cfg(test)]
 mod tests {

@@ -219,6 +219,12 @@ do not yet provide comparison or connections.
 Desktop New library, New symbol/footprint, Edit and Edit copy use the existing
 authoring workspaces; Publish writes immutable native revisions into writable
 registered folders. Browser publishing remains unavailable.
+The symbol editor can declare [alternate pin functions](symbol-schema.md#alternate-pin-functions)
+with an electrical type. A placed part's **Pin functions** tab and
+`part_instances.set_pin_function` select one per terminal. Inspection, drawn names,
+the netlist's terminal metadata and the focused no-connect check use that choice;
+wire endpoints and net membership do not change.
+
 Symbol **Library → Remap pins…** and live `app.library_pin_remap` preview explicit
 pin renumbering with separate draft names and pinned-before-number names/nets/native
 package-pad evidence before an effective

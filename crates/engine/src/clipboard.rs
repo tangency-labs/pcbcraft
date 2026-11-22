@@ -169,6 +169,7 @@ impl Fragment {
         fragment.net_registry = Arc::default();
         fragment.part_groups = Arc::default();
         fragment.part_group_memberships = Arc::default();
+        fragment.pin_functions = Arc::default();
         fragment.sheets = Arc::new(sheets);
         fragment.sheet_index = 0;
         Arc::make_mut(&mut fragment.components).retain(|id, _| components.contains(id));
@@ -187,6 +188,13 @@ impl Fragment {
                     return Err(invalid("Resolve missing no-connect terminals or copy all placed units of this part."));
                 }
                 part.no_connects.retain(|token, _| terminals.contains(&(id, token.clone())));
+            }
+            if let Some(choices) = project.pin_functions.owner(id) {
+                let mut choices = choices.clone();
+                if !complete {
+                    choices.retain(|token, _| terminals.contains(&(id, token.clone())));
+                }
+                Arc::make_mut(&mut fragment.pin_functions).replace(id, choices).map_err(invalid)?;
             }
         }
         fragment.board = Arc::new(crate::board::Board::for_new_project(false)?);
@@ -418,6 +426,9 @@ impl Fragment {
             }
             introduced_lock |= copy.designator_locked;
             Arc::make_mut(&mut next.components).insert(id, copy);
+            if let Some(choices) = self.project.pin_functions.owner(component.ordinal) {
+                Arc::make_mut(&mut next.pin_functions).replace(id, choices.clone()).map_err(invalid)?;
+            }
         }
         for assignment in self.project.schematic_packages.assignments.values() {
             if retained_parts.contains(&assignment.component) {

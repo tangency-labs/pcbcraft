@@ -888,7 +888,14 @@ fn primitive(item: &Item, kind: Place, start: Point, end: Point) -> Result<Primi
     let min = Point { x_nm: start.x_nm.min(end.x_nm), y_nm: start.y_nm.min(end.y_nm) };
     let max = Point { x_nm: start.x_nm.max(end.x_nm), y_nm: start.y_nm.max(end.y_nm) };
     Ok(match kind {
-        Place::Pin => Primitive::Pin { number, name: None, electrical_type: ElectricalType::Passive, at: end, appearance: Some(Default::default()) },
+        Place::Pin => Primitive::Pin {
+            number,
+            name: None,
+            electrical_type: ElectricalType::Passive,
+            alternates: Vec::new(),
+            at: end,
+            appearance: Some(Default::default()),
+        },
         Place::Pad => Primitive::Pad {
             pad: foot::RectPad {
                 number,

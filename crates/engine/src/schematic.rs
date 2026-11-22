@@ -106,8 +106,15 @@ pub enum TextAlign {
     End,
 }
 
-/// One pin of a symbol: its number, where it sits before rotation, its optional name and its
-/// electrical type.
+/// An alternate logical function uses the existing pin electrical-type vocabulary.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AlternatePinFunction {
+    pub name: String,
+    pub electrical_type: ElectricalType,
+}
+
+/// One pin of a symbol: its number, geometry, primary function and declared alternatives.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PinDefinition {
     /// The terminal ID from the library, such as `"1"` or `"A3"`. Wires and footprints use it.
@@ -115,8 +122,17 @@ pub struct PinDefinition {
     pub offset: Point,
     pub name: Option<String>,
     pub electrical_type: ElectricalType,
+    /// Declared alternatives, shared across every appearance of this terminal.
+    pub alternates: Vec<AlternatePinFunction>,
     /// None preserves legacy definitions whose pin leads are separate drawing strokes.
     pub appearance: Option<PinAppearance>,
+}
+
+impl PinDefinition {
+    /// Look up an alternate by its exact name, never by its presentation order.
+    pub fn alternate(&self, name: &str) -> Option<&AlternatePinFunction> {
+        self.alternates.iter().find(|function| function.name == name)
+    }
 }
 
 /// A schematic symbol definition loaded from a symbol library (see [`crate::library`]). It
@@ -171,16 +187,16 @@ impl SymbolUnit {
     }
     /// Resolve strokes and integrated pin ink for this unit only.
     pub fn graphics(&self) -> Vec<Shape> {
+        self.graphics_with(|pin| pin.name.as_deref())
+    }
+
+    /// Draw labels using the owning instance when it overrides one or more names.
+    fn graphics_with<'a>(&'a self, name: impl Fn(&'a PinDefinition) -> Option<&'a str>) -> Vec<Shape> {
         self.drawing
             .iter()
             .cloned()
             .chain(self.pins.iter().flat_map(|pin| {
-                pin.appearance
-                    .as_ref()
-                    .map(|a| a.graphics(pin.offset, &pin.number, pin.name.as_deref()))
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(Shape::Graphic)
+                pin.appearance.as_ref().map(|a| a.graphics(pin.offset, &pin.number, name(pin))).unwrap_or_default().into_iter().map(Shape::Graphic)
             }))
             .collect()
     }
@@ -208,6 +224,7 @@ impl SymbolDefinition {
     /// Native schema retained when pinning or exporting an unchanged definition.
     pub fn format(&self) -> &'static str {
         match self.format_version {
+            5 => crate::library::SYMBOL_FORMAT_V5,
             4 => crate::library::SYMBOL_FORMAT_V4,
             3 => crate::library::SYMBOL_FORMAT_V3,
             2 => crate::library::SYMBOL_FORMAT_V2,
@@ -476,6 +493,12 @@ impl SymbolPlacement {
         &self.definition.units[self.unit_index]
     }
 
+    /// Draw this unit with the owning part's effective names; previews have no selections.
+    pub(crate) fn graphics(&self, choices: Option<&std::collections::BTreeMap<String, String>>) -> Vec<Shape> {
+        let unit = self.unit_definition();
+        if choices.is_some() { unit.graphics_with(|pin| crate::pin_functions::effective(choices, pin).0) } else { unit.graphics() }
+    }
+
     /// Quarter turns counterclockwise, 0 to 3, applied after the optional horizontal mirror.
     pub fn turns(&self) -> u8 {
         self.rotation
@@ -519,20 +542,25 @@ impl SymbolPlacement {
 
     /// Report the component and symbol IDs, the reference and value shown, the rotation, and the
     /// numbered pin coordinates with their electrical types and any names, such as an LED's polarity.
-    pub(crate) fn inspect(&self, reference: &str, value: &str) -> Value {
+    pub(crate) fn inspect(&self, reference: &str, value: &str, choices: Option<&std::collections::BTreeMap<String, String>>) -> Value {
         let pins = self
             .pins()
             .into_iter()
             .zip(self.unit_definition().pins())
             .map(|(position, definition)| {
+                let (name, electrical_type) = crate::pin_functions::effective(choices, definition);
                 let mut pin = json!({
                     "number": definition.number,
-                    "electrical_type": definition.electrical_type.as_str(),
+                    "electrical_type": electrical_type.as_str(),
                     "x_nm": position.x_nm,
                     "y_nm": position.y_nm,
                 });
-                if let Some(name) = &definition.name {
+                if let Some(name) = name {
                     pin["name"] = json!(name);
+                }
+                if !definition.alternates.is_empty() {
+                    pin["alternates"] = json!(definition.alternates);
+                    pin["function"] = json!(choices.and_then(|choices| choices.get(&definition.number)));
                 }
                 pin
             })

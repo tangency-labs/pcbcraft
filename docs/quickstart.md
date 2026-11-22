@@ -349,8 +349,11 @@ expanded form. **E** opens the same form. **OK** applies the supported propertie
 as one undo step, with attached wires following a position change. Coordinates
 accept explicit units such as `100 mil` or `2.54 mm`; a bare number uses the
 display unit. **Reset changes** discards the compact draft, and **Cancel** discards the
-expanded draft without changing the project. The Pin functions and
-Library tabs show the exact definition retained by the project. The **Footprint**
+expanded draft without changing the project. On **Pin functions**, choose a
+function for a terminal that offers alternates, or select **Primary** to clear
+it. Each choice applies immediately as one undo step and changes the shown name
+and electrical type without moving wires. The **Library** tab shows the exact
+pinned definition. The **Footprint**
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
