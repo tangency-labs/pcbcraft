@@ -9,6 +9,7 @@ use crate::{
     board::{
         definition::{CopperBinding, PadShape, RectPad},
         setup::{BoardSetup, LayerPurpose, Side},
+        slot::PlatedSlot,
         track::Track,
     },
     library::sources::{Documents, LOAD, NativeSource, PREVIEW_FOOTPRINT_REVISION, REMOVE, part_digest, symbol_digest},
@@ -29,10 +30,12 @@ fn fixture_with_original(original: impl FnOnce(&mut RectPad), edit_pad: impl FnO
     let mut first_draft = Draft::new(DraftKind::Footprint).unwrap();
     let Primitive::Pad { pad } = first_draft.objects.get_mut(&2).unwrap() else { panic!("expected authored pad 2") };
     original(pad);
+    first_draft.refresh_footprint_format();
     let first = prepare(Arc::new(first_draft), &manifest, 0, None, false).unwrap();
     let mut draft = first.item().as_ref().clone();
     let Primitive::Pad { pad } = draft.objects.get_mut(&2).unwrap() else { panic!("expected authored pad 2") };
     edit_pad(pad);
+    draft.refresh_footprint_format();
     let second = prepare(Arc::new(draft), &manifest, 1, Some(1), false).unwrap();
     let mut documents = symbol.documents().clone();
     documents.extend(first.documents().clone());
@@ -313,6 +316,30 @@ fn footprint_preview_keeps_circular_openings_when_authored_rotation_changes() {
     let pad = &report["delta"]["pads"][0];
     assert_eq!(pad["number"], "2");
     assert_eq!(pad["changes"], json!(["rotated"]));
+    assert_eq!(pad["loose_ends"], json!([]));
+}
+
+/// A revision changing only a plated slot reports a drill change without triggering loose ends.
+#[test]
+fn footprint_preview_reports_plated_slot_only_changes() {
+    let (mut session, _, params) = fixture_with_original(
+        |pad| {
+            pad.width_nm = 800_000;
+            pad.height_nm = 500_000;
+            pad.shape = PadShape::Oval;
+            pad.corner_radius_nm = 0;
+            pad.copper = CopperBinding::AllCopper;
+            pad.drill_nm = None;
+            pad.plated_slot = Some(PlatedSlot::new(200_000, 400_000, 0).unwrap());
+        },
+        |pad| pad.plated_slot = Some(PlatedSlot::new(200_000, 500_000, 0).unwrap()),
+        false,
+    );
+    let report = session.execute(PREVIEW_FOOTPRINT_REVISION, &params).unwrap();
+    let pad = &report["delta"]["pads"][0];
+    assert_eq!(pad["number"], "2");
+    assert_eq!(pad["changes"], json!(["drill"]));
+    assert_eq!(pad["after"]["geometry"]["plated_slot"]["length_nm"], 500_000);
     assert_eq!(pad["loose_ends"], json!([]));
 }
 
