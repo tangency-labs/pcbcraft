@@ -73,12 +73,19 @@ fn global_label_net_lists_the_sheets_it_reaches() {
         label(&mut s, *sheet, pin, "CAN_H", if index == 1 { "local" } else { "global" });
     }
     let report = overview(&mut s, json!({}));
-    assert_eq!(names(&report), ["CAN_H"]);
-    assert_eq!(pages(&report, "CAN_H"), [1, 3, 4]);
+    assert_eq!(report["nets"].as_array().unwrap().len(), 1);
     let net = &report["nets"][0];
-    assert_eq!(net["names"], json!(["CAN_H"]));
-    assert!(net["id"].is_null());
     let project = s.project().unwrap();
+    let electrical = project.borrowed_electrical_connectivity();
+    let global_pin = project.for_sheet(pages_in_order[0]).unwrap().symbols()[0].terminals()[0];
+    let global_row = electrical.net_index_for(global_pin).unwrap();
+    let expected_name = electrical.net_name(global_row);
+    assert!(expected_name.ends_with("::CAN_H"), "colliding local CAN_H qualifies display name: {expected_name}");
+    assert_eq!(names(&report), [expected_name.as_str()]);
+    assert_eq!(pages(&report, &expected_name), [1, 3, 4]);
+    assert_eq!(net["names"], json!(["CAN_H"]));
+    let expected_id = project.persistent_net_ids().unwrap()[global_row].expect("cross-sheet net has persistent id");
+    assert_eq!(net["id"], json!(expected_id));
     for (reach, page) in net["sheets"].as_array().unwrap().iter().zip([0, 2, 3]) {
         let target = pages_in_order[page];
         assert_eq!(reach["sheet"], json!(target.id()));
