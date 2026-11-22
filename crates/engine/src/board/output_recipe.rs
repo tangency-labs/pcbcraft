@@ -225,6 +225,9 @@ impl Session {
             if !candidate.has_sheet_occurrences() {
                 candidate = candidate.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
             }
+            // Recipes grow the project entry point, which the board-size preflight does not
+            // cover. Use the native writer's exact limits so a saved recipe always reopens.
+            crate::persistence::encode_documents(Arc::new(candidate.clone())).map_err(CommandError::InvalidParams)?;
         }
         self.change(candidate)
     }

@@ -235,6 +235,56 @@ fn recipe_and_designator_lock_save_as_project_57_and_fall_back() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), recipes_only);
 }
 
+/// A recipe that would push the native project entry point past its size limit is refused
+/// before publication through both command entry points. Nothing changes: the snapshot,
+/// revision, history and saved bytes stay exactly as they were.
+#[test]
+fn recipe_refuses_native_project_overflow_without_publishing() {
+    use crate::{persistence::MAX_DOCUMENT_BYTES, schematic::fields::Field};
+
+    let (mut session, content) = fixture();
+    for index in 0..140 {
+        let position = json!({"definition":"resistor","x_nm":(index % 16) * 10 * crate::schematic::GRID_NM,
+            "y_nm":(index / 16) * 10 * crate::schematic::GRID_NM,"expected_revision":session.revision()});
+        session.apply(crate::PLACE_SYMBOL, &position).unwrap();
+    }
+    let mut project = Project::clone(session.project().unwrap());
+    for part in Arc::make_mut(&mut project.components).values_mut() {
+        for index in 1..=64 {
+            part.metadata.fields.insert(Uuid::from_u128(index).to_string(), Field { name: format!("Padding {index}"), value: String::new() });
+        }
+    }
+    session.change(project).unwrap();
+    let mut project = Project::clone(session.project().unwrap());
+    let baseline = encode_documents(Arc::new(project.clone())).unwrap()[ENTRY_POINT].len();
+    let mut remaining = MAX_DOCUMENT_BYTES - 1 - baseline;
+    // ASCII padding grows the canonical entry point by precisely one byte per character.
+    for part in Arc::make_mut(&mut project.components).values_mut() {
+        for field in part.metadata.fields.values_mut() {
+            let count = remaining.min(2048);
+            field.value = "x".repeat(count);
+            remaining -= count;
+        }
+    }
+    assert_eq!(remaining, 0);
+    let saved = encode_documents(Arc::new(project)).unwrap();
+    assert_eq!(saved[ENTRY_POINT].len(), MAX_DOCUMENT_BYTES - 1);
+    session.open_snapshot(decode_documents(&saved).unwrap());
+    let before = session.snapshot().unwrap();
+    let revision = session.revision();
+    let history = (session.undo.len(), session.redo.len());
+    let request = json!({"recipe":ID,"expected_revision":revision,"content":content});
+    for execute in [true, false] {
+        let error =
+            if execute { session.execute(SET_OUTPUT_RECIPE, &request).unwrap_err() } else { session.apply(SET_OUTPUT_RECIPE, &request).unwrap_err() };
+        assert!(matches!(&error, CommandError::InvalidParams(reason) if reason.contains("encoded document exceeds its size limit")), "{error:?}");
+        assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+        assert_eq!(session.revision(), revision);
+        assert_eq!((session.undo.len(), session.redo.len()), history);
+        assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
+    }
+}
+
 /// The published schema shape and runtime agree on reserved file stems and trimmed name rules,
 /// while both accept an ordinary valid recipe.
 #[test]
