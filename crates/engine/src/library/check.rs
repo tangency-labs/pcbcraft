@@ -324,6 +324,10 @@ impl Transported {
                 if part.library != library {
                     return Err(malformed("Part library does not match library.json"));
                 }
+                let reference = part.reference();
+                if transported.parts.iter().any(|(_, existing)| existing.reference() == reference) {
+                    return Err(malformed("Another document defines the same part revision"));
+                }
                 transported.parts.push((path.clone(), part));
             }
         }

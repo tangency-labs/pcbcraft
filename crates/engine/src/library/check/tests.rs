@@ -432,3 +432,27 @@ fn repeated_keys_in_manifest_and_symbol_are_rejected_as_invalid_params() {
         assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
     }
 }
+
+/// Two transported part documents with the same library, ID and revision are a malformed
+/// capture; distinct revisions of the same part remain accepted.
+#[test]
+fn repeated_part_revision_is_malformed_but_distinct_revisions_are_accepted() {
+    let fixture = fixture();
+    let Record::Part(mut part) = fixture.part_editor.record().clone() else { panic!("part expected") };
+    part.library = LIBRARY.into();
+    let rev1 = serde_json::to_string(&part).unwrap();
+
+    let mut duplicate = fixture.documents.clone();
+    duplicate.insert("parts/a.json".into(), rev1.clone());
+    duplicate.insert("parts/b.json".into(), rev1.clone());
+    let error = Capture::from_documents(&duplicate, &Catalog::default()).unwrap_err();
+    assert_eq!(error, CheckError::Malformed { file: "parts/b.json".into(), reason: "Another document defines the same part revision".into() });
+
+    part.revision += 1;
+    let rev2 = serde_json::to_string(&part).unwrap();
+    let mut distinct = fixture.documents.clone();
+    distinct.insert("parts/a.json".into(), rev1);
+    distinct.insert("parts/b.json".into(), rev2);
+    let capture = Capture::from_documents(&distinct, &Catalog::default()).unwrap();
+    assert_eq!(capture.packages().len(), 2);
+}
