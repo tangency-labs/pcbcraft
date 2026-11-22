@@ -448,3 +448,128 @@ fn recipe_command_schema_and_runtime_reject_nil_uuids() {
     assert_eq!(session.project().unwrap().output_recipes().len(), 1);
     assert_eq!(session.project().unwrap().output_recipes()[0].id, ID);
 }
+
+/// Verify set, replace and remove each succeed and round-trip through native persistence while a
+/// board geometry command remains refused with the expected unsupported-feature error.
+fn assert_recipe_edits_and_geometry_refusal(session: &mut Session, content: &Value, board: Uuid, layer: Uuid, expected_error: &str) {
+    set(session, ID, content).unwrap();
+    let created = session.snapshot().unwrap();
+    let reopened = decode_documents(&encode_documents(created.clone()).unwrap()).unwrap();
+    assert_eq!(reopened.output_recipes(), created.output_recipes());
+    assert_eq!(reopened.output_recipes().len(), 1);
+
+    let mut replaced = content.clone();
+    replaced["units"] = json!("in");
+    replaced["file_stem"] = json!("prototype_rev2");
+    set(session, ID, &replaced).unwrap();
+    let updated = session.snapshot().unwrap();
+    let reopened = decode_documents(&encode_documents(updated.clone()).unwrap()).unwrap();
+    assert_eq!(reopened.output_recipes(), updated.output_recipes());
+    assert_eq!(reopened.output_recipes()[0].content.units, Units::In);
+    assert_eq!(reopened.output_recipes()[0].content.file_stem, "prototype_rev2");
+
+    set(session, ID, &Value::Null).unwrap();
+    let removed = session.snapshot().unwrap();
+    let reopened = decode_documents(&encode_documents(removed).unwrap()).unwrap();
+    assert!(reopened.output_recipes().is_empty());
+
+    let err = session
+        .apply(
+            crate::ADD_TRACKS,
+            &json!({
+                "board": board,
+                "layer": layer,
+                "width_nm": 250_000,
+                "points": [{"x_nm": 0, "y_nm": 0}, {"x_nm": 1_000_000, "y_nm": 0}],
+                "expected_revision": session.revision(),
+            }),
+        )
+        .unwrap_err();
+    assert_eq!(err, CommandError::Unavailable(expected_error.into()));
+}
+
+/// Output recipes store project-owned selections and remain editable on boards containing arcs,
+/// while copper geometry commands stay refused.
+#[test]
+fn recipe_edits_succeed_on_board_with_arcs() {
+    let (mut session, content) = fixture();
+    let board = session.project().unwrap().board_target().unwrap().board;
+    let layer = crate::board::track::tests::copper_layers(&session)[0];
+    let arc = json!({
+        "id": Uuid::from_u128(0xa11c),
+        "layer": layer,
+        "width_nm": 250_000,
+        "center": {"x_nm": 0, "y_nm": 0},
+        "start": {"x_nm": 5_000_000, "y_nm": 0},
+        "end": {"x_nm": 0, "y_nm": 5_000_000},
+        "direction": "clockwise",
+    });
+    session.apply(crate::board::arc::SET_ARCS, &json!({"board": board, "expected_revision": session.revision(), "arcs": [arc]})).unwrap();
+    assert!(!session.project().unwrap().board.arcs.is_empty());
+
+    assert_recipe_edits_and_geometry_refusal(&mut session, &content, board, layer, crate::board::arc::UNSUPPORTED);
+}
+
+/// Output recipes remain editable on boards containing teardrops, while copper geometry commands
+/// stay refused.
+#[test]
+fn recipe_edits_succeed_on_board_with_teardrops() {
+    use crate::{
+        ADD_DRAWING, ADD_TRACKS, ADD_VIA,
+        board::{
+            setup::LayerPurpose,
+            teardrop::{EDIT_TEARDROPS, Length, Parameters, Record},
+            track::tests::{copper_layers, routed_fixture, view},
+        },
+        schematic::Point,
+    };
+
+    let mut session = routed_fixture();
+    let layer = copper_layers(&session)[0];
+    let center = Point { x_nm: 0, y_nm: 20_000_000 };
+    let end = Point { x_nm: 600_000, y_nm: 20_000_000 };
+    session
+        .apply(ADD_VIA, &json!({"at": center, "via_diameter_nm": 500_000, "via_drill_nm": 300_000, "expected_revision": session.revision()}))
+        .unwrap();
+    session
+        .apply(ADD_TRACKS, &json!({"layer": layer, "width_nm": 100_000, "points": [center, end], "expected_revision": session.revision()}))
+        .unwrap();
+    let target = view(&session).target;
+    let outline = view(&session).layers().into_iter().find(|l| l.purpose == LayerPurpose::Outline).unwrap().id;
+    let corners = [(-5_000_000, -5_000_000), (25_000_000, -5_000_000), (25_000_000, 45_000_000), (-5_000_000, 45_000_000)]
+        .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    session
+        .apply(
+            ADD_DRAWING,
+            &json!({"board": target.board, "layer": outline, "points": corners, "closed": true, "expected_revision": session.revision()}),
+        )
+        .unwrap();
+    let board_view = view(&session);
+    let via = board_view.vias().iter().find(|via| via.at == center).unwrap().id;
+    let track = board_view.tracks().iter().find(|track| track.start == center).unwrap().id;
+    let record = Record {
+        id: Uuid::from_u128(0x7ea1),
+        via,
+        track,
+        parameters: Parameters { length: Length::Percent(20), max_length_nm: None, width_pct: 80, max_width_nm: None },
+    };
+    session
+        .execute(
+            EDIT_TEARDROPS,
+            &json!({"board": target.board, "expected_revision": session.revision(), "edits": {"add": [record], "remove": []}, "dry_run": false}),
+        )
+        .unwrap();
+    assert!(!session.project().unwrap().board.teardrops.is_empty());
+
+    let content = json!({
+        "name": "Prototype",
+        "board": target.board,
+        "units": "mm",
+        "file_stem": "prototype",
+        "gerber_layers": [layer],
+        "drill": true,
+        "origin": {"kind": "point", "x_nm": 100, "y_nm": -200},
+        "assembly_profile": {"profile": Uuid::from_u128(12), "revision": 2},
+    });
+    assert_recipe_edits_and_geometry_refusal(&mut session, &content, target.board, layer, crate::board::teardrop::UNSUPPORTED);
+}

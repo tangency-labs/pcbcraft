@@ -3819,14 +3819,14 @@ impl Session {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
         if id.starts_with("pcb.")
-            && id != board::arc::SET_ARCS
+            && !matches!(id, board::arc::SET_ARCS | SET_OUTPUT_RECIPE)
             && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())
         {
             project.resolve_board(params.get("board").and_then(Value::as_str))?;
             return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
         }
         if id.starts_with("pcb.")
-            && id != board::teardrop::EDIT_TEARDROPS
+            && !matches!(id, board::teardrop::EDIT_TEARDROPS | SET_OUTPUT_RECIPE)
             && let Some(project) = self.project().filter(|p| !p.board.teardrops.is_empty())
         {
             project.resolve_board(params.get("board").and_then(Value::as_str))?;
