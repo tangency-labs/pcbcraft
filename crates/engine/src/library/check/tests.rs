@@ -340,6 +340,26 @@ fn format_one_part_without_symbol_is_an_error_while_format_two_is_accepted() {
     assert!(check(&capture).is_clean());
 }
 
+/// A generic part draft with an unsupported format is rejected even without a symbol or
+/// packages, while a supported draft with an incomplete package map is still checked.
+#[test]
+fn unsupported_part_draft_format_is_an_error() {
+    let mut fixture = fixture();
+    let mut draft = Record::new_part(None).unwrap();
+    let Record::Part(part) = &mut draft else { panic!("part expected") };
+    part.format = "pcbcraft-part/99".into();
+    let error = Capture::from_part_record(&draft, &Documents::new(), &Catalog::default()).unwrap_err();
+    assert_eq!(error, CheckError::UnsupportedFormat { file: "record".into(), format: "pcbcraft-part/99".into() });
+    let refused = fixture.session.execute(CHECK, &json!({"documents":{},"record":draft})).unwrap_err();
+    assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
+
+    let mut legacy = fixture.part_editor.record().clone();
+    let Record::Part(part) = &mut legacy else { panic!("part expected") };
+    part.format = LEGACY_PART_FORMAT.into();
+    let report = check(&Capture::from_part_record(&legacy, &fixture.documents, fixture.session.libraries()).unwrap());
+    assert_eq!(rules(&report), [RuleId::PackageTerminalUnmapped]);
+}
+
 /// An exact footprint or symbol found neither in the documents nor in the catalog is an error.
 #[test]
 fn unresolved_reference_is_an_error() {

@@ -454,7 +454,12 @@ impl Capture {
         let mut parts: Vec<(CaptureSource, &PartDefinition)> =
             transported.parts.iter().map(|(path, part)| (CaptureSource::Document { path: path.clone() }, part)).collect();
         match record {
-            Some(Record::Part(part)) => parts.push((CaptureSource::Draft, part)),
+            Some(Record::Part(part)) => {
+                if part.format != PART_FORMAT && part.format != LEGACY_PART_FORMAT {
+                    return Err(CheckError::UnsupportedFormat { file: "record".into(), format: part.format.clone() });
+                }
+                parts.push((CaptureSource::Draft, part));
+            }
             Some(Record::Orderable(_)) => {
                 return Err(CheckError::Malformed { file: "record".into(), reason: "Only generic part drafts own package maps".into() });
             }
