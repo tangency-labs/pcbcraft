@@ -71,6 +71,7 @@ pub fn preview(settings: Settings) -> Result<Preview, String> {
             copper: CopperBinding::ComponentSide,
             corner_radius_nm: 0,
             drill_nm: None,
+            plated_slot: None,
         })
         .collect::<Vec<_>>();
     let mut paths = lettering("R1", -2_000_000, settings);

@@ -25,6 +25,8 @@ const MAX_FOOTPRINT_OBJECTS: usize = footprint::MAX_PADS + footprint::MAX_ARTWOR
 const FORMAT: &str = "pcbcraft-library-item/1";
 const MULTI_UNIT_FORMAT: &str = "pcbcraft-library-item/2";
 const NPTH_FORMAT: &str = "pcbcraft-library-item/3";
+const SLOT_FORMAT: &str = "pcbcraft-library-item/4";
+const PIN_FUNCTION_FORMAT: &str = "pcbcraft-library-item/5";
 const HISTORY: usize = 64;
 
 /// A definition editor is distinct from schematic-sheet and board-placement editors.
@@ -67,6 +69,8 @@ pub enum Primitive {
         number: String,
         name: Option<String>,
         electrical_type: ElectricalType,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "library::authored_alternates")]
+        alternates: Vec<crate::schematic::AlternatePinFunction>,
         at: Point,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         appearance: Option<crate::schematic::PinAppearance>,
@@ -163,10 +167,11 @@ impl Primitive {
                     purpose: artwork.purpose,
                 },
             },
-            Self::Pin { number, name, electrical_type, at: p, appearance } => Self::Pin {
+            Self::Pin { number, name, electrical_type, alternates, at: p, appearance } => Self::Pin {
                 number: number.clone(),
                 name: name.clone(),
                 electrical_type: *electrical_type,
+                alternates: alternates.clone(),
                 at: at(*p)?,
                 appearance: appearance.clone(),
             },
@@ -448,6 +453,7 @@ impl Item {
                     number: "1".into(),
                     name: Some("IN".into()),
                     electrical_type: ElectricalType::Passive,
+                    alternates: Vec::new(),
                     at: point(-5_080_000, 0),
                     appearance: Some(crate::schematic::PinAppearance::default()),
                 },
@@ -459,6 +465,7 @@ impl Item {
                     number: "2".into(),
                     name: Some("OUT".into()),
                     electrical_type: ElectricalType::Passive,
+                    alternates: Vec::new(),
                     at: point(5_080_000, 0),
                     appearance: Some(crate::schematic::PinAppearance { orientation: crate::schematic::PinOrientation::Left, ..Default::default() }),
                 },
@@ -478,6 +485,7 @@ impl Item {
                             copper: footprint::CopperBinding::ComponentSide,
                             corner_radius_nm: 125_000,
                             drill_nm: None,
+                            plated_slot: None,
                         },
                     },
                 );
@@ -548,6 +556,7 @@ impl Item {
                         number: pin.number.clone(),
                         name: pin.name.clone(),
                         electrical_type: pin.electrical_type,
+                        alternates: pin.alternates.clone(),
                         at: pin.offset,
                         appearance: pin.appearance.clone().or_else(|| fork.then(|| operations::legacy_pin(unit, pin, &mut consumed)).flatten()),
                     },
@@ -573,6 +582,9 @@ impl Item {
         item.objects = item.other_units.remove(&item.unit).ok_or("Missing default symbol unit.")?;
         if !item.other_units.is_empty() {
             item.format = MULTI_UNIT_FORMAT.into();
+        }
+        if definition.format() == library::SYMBOL_FORMAT_V5 {
+            item.format = PIN_FUNCTION_FORMAT.into();
         }
         if !fork {
             item.library = definition.library.clone();
@@ -600,9 +612,6 @@ impl Item {
     /// cannot invalidate an otherwise editable published definition at its source-text limit.
     fn read_footprint(definition: &footprint::FootprintDefinition) -> Result<Self, String> {
         let mut item = Self::new(Kind::Footprint)?;
-        if !definition.non_plated_holes.is_empty() {
-            item.format = NPTH_FORMAT.into();
-        }
         item.objects.clear();
         item.license = definition.license.clone();
         item.reference_font = definition.reference.clone();
@@ -621,7 +630,29 @@ impl Item {
             item.objects.insert(item.objects.len() as u64 + 1, primitive);
         }
         item.allocation.object = item.objects.keys().next_back().copied().unwrap_or(0);
+        item.format = item.footprint_format().into();
         Ok(item)
+    }
+
+    /// Re-derive the editor format after a direct test mutation of footprint primitives.
+    #[cfg(test)]
+    pub(crate) fn refresh_footprint_format(&mut self) {
+        if self.kind == Kind::Footprint {
+            self.format = self.footprint_format().into();
+        }
+    }
+
+    /// Select the lowest editor format preserving all hole primitives, including mixed drafts.
+    fn footprint_format(&self) -> &'static str {
+        let mut format = FORMAT;
+        for object in self.objects.values() {
+            match object {
+                Primitive::Pad { pad } if pad.plated_slot.is_some() => return SLOT_FORMAT,
+                Primitive::NonPlatedHole { .. } => format = NPTH_FORMAT,
+                _ => {}
+            }
+        }
+        format
     }
 
     /// Reopen an exact footprint, numbering primitives deterministically and retaining pad IDs.
@@ -642,6 +673,14 @@ impl Item {
     pub fn native(&self) -> Result<Value, String> {
         self.native_mode(false)
     }
+    /// Include inactive drawings when choosing the lazy editor and symbol formats.
+    fn has_alternate_functions(&self) -> bool {
+        self.objects
+            .values()
+            .chain(self.other_units.values().flat_map(BTreeMap::values))
+            .any(|p| matches!(p, Primitive::Pin { alternates, .. } if !alternates.is_empty()))
+    }
+
     /// Derive draft/native data through one validator path, preserving unsupported-kind rejection.
     fn native_mode(&self, draft: bool) -> Result<Value, String> {
         let at = |point: Point| json!([point.x_nm, point.y_nm]);
@@ -660,8 +699,11 @@ impl Item {
                 let mut drawing = Vec::new();
                 for object in objects.values() {
                     drawing.extend(match object {
-                        Primitive::Pin { number, name, electrical_type, at: point, appearance } => {
-                            let terminal = json!({"id":number,"name":name,"electrical_type":electrical_type});
+                        Primitive::Pin { number, name, electrical_type, alternates, at: point, appearance } => {
+                            let mut terminal = json!({"id":number,"name":name,"electrical_type":electrical_type});
+                            if !alternates.is_empty() {
+                                terminal["alternates"] = json!(alternates);
+                            }
                             if let Some(previous) = terminal_map.insert(number.clone(), terminal.clone()) {
                                 if previous != terminal {
                                     return Err("Shared terminal metadata must agree across units.".into());
@@ -690,7 +732,7 @@ impl Item {
                 units.push(json!({"id":id,"drawing":drawing,"pins":pins}));
             }
             let terminals: Vec<_> = terminal_order.iter().map(|id| &terminal_map[id]).collect();
-            let mut value = json!({"format":if !self.other_units.is_empty() { library::SYMBOL_FORMAT_V4 } else if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+            let mut value = json!({"format":if self.format == PIN_FUNCTION_FORMAT { library::SYMBOL_FORMAT_V5 } else if !self.other_units.is_empty() { library::SYMBOL_FORMAT_V4 } else if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":units});
             if let Some(behavior) = &self.behavior {
                 value["behavior"] = json!(behavior);
@@ -724,7 +766,7 @@ impl Item {
                 }
             }
             let definition = footprint::FootprintDefinition {
-                format: footprint::FootprintDefinition::format_for(!non_plated_holes.is_empty()).into(),
+                format: footprint::FootprintDefinition::format_for(!non_plated_holes.is_empty(), &pads).into(),
                 library: self.library.clone(),
                 id: self.id.clone(),
                 revision: self.revision,
@@ -755,19 +797,15 @@ impl Item {
             Kind::Footprint => MAX_FOOTPRINT_OBJECTS,
         }
     }
-
-    /// Detect new footprint content without inferring electrical meaning from a pad number.
-    fn has_npth(&self) -> bool {
-        self.kind == Kind::Footprint && self.objects.values().any(|object| matches!(object, Primitive::NonPlatedHole { .. }))
-    }
-
     /// Bound the editor envelope as well as the derived native geometry and electrical metadata.
     pub fn validate(&self) -> Result<(), String> {
         let all_objects: Vec<_> = self.objects.iter().chain(self.other_units.values().flat_map(|objects| objects.iter())).collect();
         let unique: std::collections::BTreeSet<_> = all_objects.iter().map(|(id, _)| *id).collect();
-        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT)
-            || (self.format == NPTH_FORMAT) != self.has_npth()
-            || (!self.other_units.is_empty() && (self.format != MULTI_UNIT_FORMAT || self.kind != Kind::Symbol))
+        if !matches!(self.format.as_str(), FORMAT | MULTI_UNIT_FORMAT | NPTH_FORMAT | SLOT_FORMAT | PIN_FUNCTION_FORMAT)
+            || (self.kind == Kind::Footprint && self.format != self.footprint_format())
+            || (self.kind == Kind::Symbol && matches!(self.format.as_str(), NPTH_FORMAT | SLOT_FORMAT))
+            || (self.format != PIN_FUNCTION_FORMAT && self.has_alternate_functions())
+            || (!self.other_units.is_empty() && (self.format == FORMAT || self.kind != Kind::Symbol))
             || (!self.unit_order.is_empty()
                 && (self.unit_order.len() != self.other_units.len() + 1
                     || self.unit_order.iter().collect::<std::collections::BTreeSet<_>>()
@@ -994,7 +1032,9 @@ impl Session {
                         if next.kind != Kind::Symbol || !footprint::valid_id(&unit) || unit == next.unit || next.other_units.contains_key(&unit) {
                             return Err("A new symbol unit needs an unused portable identity.".into());
                         }
-                        next.format = MULTI_UNIT_FORMAT.into();
+                        if next.format != PIN_FUNCTION_FORMAT {
+                            next.format = MULTI_UNIT_FORMAT.into();
+                        }
                         if next.unit_order.is_empty() {
                             next.unit_order.push(next.unit.clone());
                         }
@@ -1104,6 +1144,9 @@ impl Session {
                     }
                     Action::Undo | Action::Redo => return Err("History operation cannot be nested.".into()),
                 }
+                if next.kind == Kind::Footprint {
+                    next.format = next.footprint_format().into();
+                }
                 if next == *self.item {
                     let record = ChangeRecord {
                         operation,
@@ -1123,23 +1166,26 @@ impl Session {
                     .objects
                     .values()
                     .filter_map(|object| match object {
-                        Primitive::Pin { number, name, electrical_type, .. } => Some((number.clone(), (name.clone(), *electrical_type))),
+                        Primitive::Pin { number, name, electrical_type, alternates, .. } => {
+                            Some((number.clone(), (name.clone(), *electrical_type, alternates.clone())))
+                        }
                         _ => None,
                     })
                     .collect();
                 for object in next.other_units.values_mut().flat_map(|objects| objects.values_mut()) {
-                    if let Primitive::Pin { number, name, electrical_type, .. } = object
-                        && let Some((shared_name, shared_type)) = metadata.get(number)
+                    if let Primitive::Pin { number, name, electrical_type, alternates, .. } = object
+                        && let Some((shared_name, shared_type, shared_alternates)) = metadata.get(number)
                     {
                         *name = shared_name.clone();
                         *electrical_type = *shared_type;
+                        alternates.clone_from(shared_alternates);
                     }
+                }
+                if next.format != PIN_FUNCTION_FORMAT && next.has_alternate_functions() {
+                    next.format = PIN_FUNCTION_FORMAT.into();
                 }
                 next.revision = self.next_content_revision;
                 next.allocation = Allocation { object: cursor - 1, revision: self.next_content_revision };
-                if next.kind == Kind::Footprint {
-                    next.format = if next.has_npth() { NPTH_FORMAT } else { FORMAT }.into();
-                }
                 next.validate()?;
                 let next_content_revision = self.next_content_revision.checked_add(1).ok_or("Content revision limit reached.")?;
                 let record = summarize_change(&self.item, &next, operation, dry_run, self.revision, revision, ball_grid_spec);
@@ -1323,7 +1369,14 @@ mod tests {
                 0,
                 Action::Replace {
                     object: 1,
-                    primitive: Primitive::Pin { number, name, electrical_type, at: Point { x_nm: 1, y_nm: 0 }, appearance: None }
+                    primitive: Primitive::Pin {
+                        number,
+                        name,
+                        electrical_type,
+                        alternates: Vec::new(),
+                        at: Point { x_nm: 1, y_nm: 0 },
+                        appearance: None
+                    }
                 }
             )
             .is_err()
