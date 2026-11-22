@@ -499,9 +499,9 @@ mod native {
                 "expected_revision": revision,
             });
             let mut job = session.prepare_copper_edit(pcbcraft_engine::ALIGN_FOOTPRINTS, &params).unwrap();
-            // Advance into the attached-track pass (past footprint indexing, mid-track scan)
-            // so the job is guaranteed to be inside the resumable attached-track pass when handed
-            // to the native worker and canceled.
+            // Advance one bounded step into the attached-track pass (still indexing moved
+            // footprints), so the job is inside the resumable pass when handed to the native
+            // worker and canceled.
             assert!(!job.step(1));
             assert_eq!(job.progress().stage, "Carrying attached tracks");
             assert!(job.progress().completed > 0);
