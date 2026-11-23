@@ -4,6 +4,7 @@ use crate::{
     board::track::tests::{copper_layers, route, routed_fixture, view},
 };
 use serde_json::json;
+use std::collections::BTreeSet;
 
 /// Close a Board Outline rectangle around every fixture footprint, with room to spare.
 pub(crate) fn outline(s: &mut Session) {
@@ -143,13 +144,14 @@ fn check_design_command_reports_without_editing() {
 }
 
 /// Add a closed square Board Outline drawing with its lower corner at (`x`, `y`) mm and return
-/// its UUID.
+/// the new UUID, even when an existing drawing has the same points.
 pub(crate) fn outline_square(s: &mut Session, x_mm: i64, y_mm: i64, side_mm: i64) -> Uuid {
     let layer = view(s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
     let (x, y, side) = (x_mm * 1_000_000, y_mm * 1_000_000, side_mm * 1_000_000);
     let points = [(x, y), (x + side, y), (x + side, y + side), (x, y + side)].map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    let existing: BTreeSet<_> = view(s).drawings().into_iter().map(|drawing| drawing.id).collect();
     s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points,"closed":true,"expected_revision":s.revision()})).unwrap();
-    view(s).drawings().iter().find(|drawing| drawing.points == points).unwrap().id
+    view(s).drawings().into_iter().find(|drawing| !existing.contains(&drawing.id)).unwrap().id
 }
 
 /// The routed fixture inside a 40 mm square board with a closed 10 mm square cut-out from
