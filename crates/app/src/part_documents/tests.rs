@@ -1054,3 +1054,188 @@ fn link_rows_add_remove_clear_and_compact() {
     assert!(part.links.is_empty());
     assert!(doc.pending.is_empty(), "{:?}", doc.pending);
 }
+
+/// A valid link typed in a later row while earlier rows are blank keeps its row identity:
+/// completing the earlier row inserts its own link ahead of the staged one instead of
+/// overwriting it, and both links commit in row order.
+#[test]
+fn link_rows_stage_later_rows_and_commit_in_row_order() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _temp, id) = fixture();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    doc.pending.insert("metadata/link/0/label".into(), String::new());
+    doc.pending.insert("metadata/link/0/url".into(), String::new());
+    doc.pending.insert("metadata/link/1/label".into(), String::new());
+    doc.pending.insert("metadata/link/1/url".into(), String::new());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Search metadata").click();
+    h.run();
+
+    h.get_by_label("Link label 2").click();
+    h.run();
+    h.get_by_label("Link label 2").type_text("Datasheet");
+    h.run();
+    h.get_by_label("Link URL 2").click();
+    h.run();
+    h.get_by_label("Link URL 2").type_text("https://example.com/ds");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending.get("metadata/link/1/ready").map(String::as_str), Some("1"), "{:?}", doc.pending);
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert!(part.links.is_empty(), "a later row must not be appended ahead of a blank row");
+
+    h.get_by_label("Link label 1").click();
+    h.run();
+    h.get_by_label("Link label 1").type_text("Application note");
+    h.run();
+    h.get_by_label("Link URL 1").click();
+    h.run();
+    h.get_by_label("Link URL 1").type_text("https://example.com/app");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.links.len(), 2, "{:?}", part.links);
+    assert_eq!(part.links[0].label, "Application note");
+    assert_eq!(part.links[1].label, "Datasheet");
+}
+
+/// Removing a blank pending row must not delete the accepted link that follows it, even when
+/// the link sits at a lower index in the authored list while the blank row is still visible.
+#[test]
+fn removing_blank_link_row_keeps_the_accepted_link() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::library::parts::PartLink;
+    let (mut app, _temp, id) = fixture();
+    let revision = app.library_editors.parts[&id].session.revision();
+    let mut record = app.library_editors.parts[&id].session.record().clone();
+    let Record::Part(part) = &mut record else { panic!() };
+    part.links.push(PartLink { label: "Datasheet".into(), url: "https://example.com/ds".into() });
+    app.replace_part_document(id, revision, record).unwrap();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    doc.pending.insert("metadata/link/0/label".into(), String::new());
+    doc.pending.insert("metadata/link/0/url".into(), String::new());
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Search metadata").click();
+    h.run();
+    h.get_by_label("Remove link 1").click();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.links.len(), 1, "{:?}", part.links);
+    assert_eq!(part.links[0].label, "Datasheet");
+}
+
+/// Trailing spaces remain in the active description buffer across frames while the field is
+/// focused. The trimmed value is already committed, so publishing stays available; leaving the
+/// field clears the buffer without undoing the commit.
+#[test]
+fn description_keeps_raw_buffer_while_editing_and_clears_it_on_focus_loss() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (app, _temp, id) = fixture();
+    let raw = "Low ESR ceramic   ";
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Search metadata").click();
+    h.run();
+    h.get_by_label("Description").click();
+    h.run();
+    h.get_by_label("Description").type_text(raw);
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending.get("metadata/description").map(String::as_str), Some(raw), "{:?}", doc.pending);
+    assert!(!doc.has_unapplied());
+    assert!(!h.get_by_label("Publish…").accesskit_node().is_disabled());
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.description.as_deref(), Some("Low ESR ceramic"));
+
+    h.get_by_label("Keywords").click();
+    h.run();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert!(!doc.pending.contains_key("metadata/description"), "{:?}", doc.pending);
+    assert!(!doc.has_unapplied());
+    assert!(!h.get_by_label("Publish…").accesskit_node().is_disabled());
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.description.as_deref(), Some("Low ESR ceramic"));
+}
+
+/// A locally valid link stays pending when the bounded draft refuses the replacement, so a
+/// size-limit rejection does not discard the typed label and URL. Retrying after the draft fits
+/// applies the retained text in one revision.
+#[test]
+fn rejected_link_edit_keeps_label_and_url_until_the_draft_accepts_it() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::library::{parts::PartLink, sources::MAX_FILE_BYTES};
+
+    let (mut app, _temp, id) = fixture();
+    let revision = app.library_editors.parts[&id].session.revision();
+    let base = app.library_editors.parts[&id].session.record().clone();
+    let link = PartLink { label: "Datasheet".into(), url: "https://example.com/ds".into() };
+    let mut with_link = base.clone();
+    let Record::Part(part) = &mut with_link else { panic!() };
+    part.links.push(link.clone());
+    let growth = serde_json::to_vec(&with_link).unwrap().len() - serde_json::to_vec(&base).unwrap().len();
+    assert!(growth > 8, "a link must add more bytes than the slack below");
+    // Leave less slack than the link adds, so the draft fits now but refuses the typed link.
+    let slack = growth / 2;
+    let mut padded = base.clone();
+    let Record::Part(part) = &mut padded else { panic!() };
+    part.license.push_str(&"x".repeat(MAX_FILE_BYTES - slack - serde_json::to_vec(&base).unwrap().len()));
+    assert!(serde_json::to_vec(&padded).unwrap().len() <= MAX_FILE_BYTES);
+    app.replace_part_document(id, revision, padded.clone()).unwrap();
+    let revision = app.library_editors.parts[&id].session.revision();
+
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Search metadata").click();
+    h.run();
+    h.get_by_label("Add link").click();
+    h.run();
+    h.get_by_label("Link label 1").click();
+    h.run();
+    h.get_by_label("Link label 1").type_text("Datasheet");
+    h.run();
+    h.get_by_label("Link URL 1").click();
+    h.run();
+    h.get_by_label("Link URL 1").type_text("https://example.com/ds");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending.get("metadata/link/0/label").map(String::as_str), Some("Datasheet"), "{:?}", doc.pending);
+    assert_eq!(doc.pending.get("metadata/link/0/url").map(String::as_str), Some("https://example.com/ds"));
+    assert!(doc.has_unapplied());
+    assert_eq!(doc.session.record(), &padded);
+    assert_eq!(doc.session.revision(), revision);
+    assert!(doc.error.as_deref().is_some_and(|error| error.contains("1 MiB")), "{:?}", doc.error);
+
+    let doc = h.state_mut().library_editors.parts.get_mut(&id).unwrap();
+    doc.session.replace(revision, base).unwrap();
+    h.run();
+    h.get_by_label("Link URL 1").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("Link URL 1").type_text("https://example.com/ds/v2");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+    assert_eq!(doc.error, None);
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.links.len(), 1);
+    assert_eq!(part.links[0].label, "Datasheet");
+    assert_eq!(part.links[0].url, "https://example.com/ds/v2");
+}

@@ -179,7 +179,7 @@ impl PcbApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn replace_part_document(&mut self, id: u64, revision: u64, record: Record) -> Result<(), String> {
         let doc = self.library_editors.parts.get_mut(&id).ok_or("Unknown part document.")?;
-        if !doc.pending.is_empty() {
+        if doc.has_unapplied() {
             return Err("Apply or reset typed fields before replacing the part draft.".into());
         }
         doc.session.replace(revision, record)
@@ -234,7 +234,7 @@ impl PcbApp {
             }
             "app.part_history" => {
                 let doc = self.library_editors.parts.get_mut(&document()?).ok_or("Unknown part document.")?;
-                if !doc.pending.is_empty() {
+                if doc.has_unapplied() {
                     return Err("Apply or reset typed fields before changing history.".into());
                 }
                 doc.session.history(revision()?, params["redo"] == true)?;
