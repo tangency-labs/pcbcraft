@@ -447,3 +447,25 @@ fn routed_membership_includes_conflicts_reached_through_direct_pad_contact() {
     assert_eq!(q.objects().iter().find(|item| item.name.parse::<Uuid>().is_ok()).unwrap().intended_nets.len(), 2);
     compare(&s, 0);
 }
+
+/// Bounded per-object exhaustive findings must match the full exhaustive pair set filtered to
+/// those objects, deduplicating pairs where both endpoints are sampled and ignoring out-of-range
+/// indices.
+#[test]
+fn exhaustive_findings_for_matches_filtered_exhaustive_pairs() {
+    let s = coincident_named_pads(2, "global", false);
+    for rule in [0, 200_000] {
+        let q = query(&s, rule);
+        let total = q.objects().len();
+        assert!(total >= 3);
+        let subset = [0, 2, 0, total, total + 10];
+        let selected: BTreeSet<usize> = subset.into_iter().filter(|&index| index < total).collect();
+        let expected: Vec<_> = q
+            .exhaustive_pairs()
+            .decisions
+            .into_iter()
+            .filter(|d| (d.touches || d.clearance_violation) && (d.first.is_some_and(|i| selected.contains(&i)) || selected.contains(&d.second)))
+            .collect();
+        assert_eq!(q.exhaustive_findings_for(&subset).decisions, expected);
+    }
+}

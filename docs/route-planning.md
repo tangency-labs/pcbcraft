@@ -21,7 +21,8 @@ whole nanometres and every leg stays in the posture.
 
 Every kept leg is confirmed with the captured [snapshot copper query](copper-clearance-query.md):
 the exact `probe` decisions with per-pair, class-aware clearances, and the Board
-Outline containment and edge-clearance predicates that DRC uses. Hulls only
+Outline containment and edge-clearance predicates that DRC uses, so a route cannot
+start inside a board cut-out, and a cut-out edge stops it like the outer edge. Hulls only
 guide the search. In the default walkaround mode, existing pads, tracks and vias
 are fixed obstacles, locked or not.
 

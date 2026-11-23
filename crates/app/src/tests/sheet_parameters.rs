@@ -64,3 +64,63 @@ fn a_new_name_adds_a_parameter() {
     let project = h.state().session.project().unwrap();
     assert_eq!(project.sheet_parameters(project.sheet_target()).unwrap().get("Gain").map(String::as_str), Some(""));
 }
+
+/// Open a sheet Properties selector by its label, then pick one of its rows.
+fn choose(h: &mut Harness<'_, PcbApp>, selector: &str, row: &str) {
+    h.get_by_role_and_label(Role::ComboBox, selector).click();
+    h.run();
+    h.get_by_label(row).click();
+    h.run();
+}
+
+/// Properties shows the sheet's paper size, orientation and frame. Each pick runs the same
+/// `sheet.set_page` or `sheet.set_template` edit as the Browser menu, one undo step each, and
+/// picking the current value changes nothing.
+#[test]
+fn sheet_paper_and_frame_are_shown_and_edited_in_properties() {
+    use pcbcraft_engine::sheets::page::{Orientation, Paper};
+    let mut h = fixture();
+    let before = h.state().session.snapshot().unwrap();
+    let page = |h: &Harness<'_, PcbApp>| {
+        let page = h.state().session.project().unwrap().page().unwrap();
+        (page.paper(), page.orientation(), page.template().map(|frame| frame.title().to_owned()))
+    };
+    let initial = page(&h);
+    assert_eq!((initial.0, initial.1), (Paper::A4, Orientation::Landscape));
+    let frame = initial.2.clone().expect("new sheets start with the default frame");
+    for (selector, value) in [("Size", "A4"), ("Orientation", "Landscape"), ("Frame", frame.as_str())] {
+        let shown = h.get_by_role_and_label(Role::ComboBox, selector).accesskit_node().value();
+        assert_eq!(shown.as_deref(), Some(value), "{selector} shows the current choice");
+    }
+
+    let revision = h.state().session.revision();
+    choose(&mut h, "Size", "A4");
+    assert_eq!(h.state().session.revision(), revision, "picking the current size is not an edit");
+
+    choose(&mut h, "Size", "A3");
+    assert_eq!(page(&h), (Paper::A3, Orientation::Landscape, Some(frame.clone())));
+    assert_eq!(h.state().session.revision(), revision + 1);
+    choose(&mut h, "Orientation", "Portrait");
+    assert_eq!(page(&h), (Paper::A3, Orientation::Portrait, Some(frame.clone())));
+    choose(&mut h, "Frame", "None");
+    assert_eq!(page(&h), (Paper::A3, Orientation::Portrait, None));
+    assert_eq!(h.state().session.project().unwrap().symbols(), before.symbols(), "drawing stays in place");
+
+    // The Browser's Paper menu reflects the choice made in Properties.
+    let row = h.get_by_role_and_label(Role::Button, "Main").rect().center();
+    h.hover_at(row);
+    h.run();
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: row, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+        h.run();
+    }
+    click(&mut h, "Paper");
+    assert_eq!(h.get_by_role_and_label(Role::RadioButton, "A3").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    h.key_press(Key::Escape);
+    h.run();
+
+    for _ in 0..3 {
+        h.state_mut().run("edit.undo", &Value::Null);
+    }
+    assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()), "three picks undo in three steps");
+}

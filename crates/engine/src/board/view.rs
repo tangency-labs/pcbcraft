@@ -265,6 +265,12 @@ impl<'a> BoardView<'a> {
         self.project.board.footprints().iter().map(|footprint| format!("footprint-{}", footprint.id))
     }
 
+    /// Read the stored lock of a canonical placement without resolving geometry or net membership.
+    /// Unknown IDs and noncanonical aliases return `None`.
+    pub fn footprint_locked(self, id: &str) -> Option<bool> {
+        self.placement(id).map(|footprint| footprint.locked)
+    }
+
     /// Resolve one canonical placement ID, generating geometry only for that placement.
     /// Unknown IDs, other object kinds and noncanonical numeric aliases return `None`.
     pub fn footprint(self, id: &str) -> Option<FootprintView<'a>> {
