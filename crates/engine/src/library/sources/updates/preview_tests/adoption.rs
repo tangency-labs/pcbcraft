@@ -63,6 +63,12 @@ fn footprint_revision_adding_pad_nine_requires_mapping_and_preserves_copper() {
         assert_history_unchanged(&session, &before, before_history);
     }
     params["mapping"] = json!({"1":"1","2":["2","9"]});
+    let mut both = params.clone();
+    both["unconnected_pads"] = json!(["9"]);
+    let error = session.execute(APPLY_FOOTPRINT_REVISION, &both).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::InvalidParams);
+    assert!(error.to_string().contains("cannot be both mapped and unconnected"), "{error}");
+    assert_history_unchanged(&session, &before, before_history);
     let mut bad = params.clone();
     bad["acceptance"] = json!("0".repeat(64));
     assert_eq!(session.apply(APPLY_FOOTPRINT_REVISION, &bad).unwrap_err().code(), ErrorCode::InvalidParams);
