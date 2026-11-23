@@ -34,11 +34,12 @@ impl PcbApp {
         self.run(pcbcraft_engine::ALIGN_FOOTPRINTS, &params);
     }
 
-    /// The focused view's selected track segments, without vias, in board order.
-    fn selected_track_ids(&self) -> Vec<uuid::Uuid> {
-        let Some(board) = self.views.active.board.target.and_then(|target| self.session.project()?.board_view(target)) else { return Vec::new() };
-        let tracks = board.tracks();
-        self.views.active.board.tracks.selected.iter().filter(|id| tracks.binary_search_by_key(*id, |t| t.id).is_ok()).copied().collect()
+    /// The focused view's selected track segments, without vias or stale ids, in board order.
+    /// Lazy, so the ribbon's enable check can stop at the second match.
+    fn selected_track_ids(&self) -> impl Iterator<Item = uuid::Uuid> + '_ {
+        let board = self.views.active.board.target.and_then(|target| self.session.project()?.board_view(target));
+        let tracks = board.map_or(&[][..], |board| board.tracks());
+        self.views.active.board.tracks.selected.iter().filter(move |id| tracks.binary_search_by_key(*id, |t| t.id).is_ok()).copied()
     }
 
     /// Merge the focused view's selected track segments through the shared `pcb.merge_tracks`
@@ -47,7 +48,7 @@ impl PcbApp {
     pub(super) fn merge_selected_tracks(&mut self) {
         let Some(source) = self.views.active.input(&self.session) else { return };
         let Some(target) = self.views.active.board.target else { return };
-        let tracks = self.selected_track_ids();
+        let tracks: Vec<_> = self.selected_track_ids().collect();
         if tracks.is_empty() {
             return;
         }
@@ -234,7 +235,7 @@ impl PcbApp {
             label: "Merge Tracks",
             description: "Merge selected straight track segments",
             shortcut: "",
-            enabled: idle && !editing && !self.views.active.board.tracks.committing() && self.selected_track_ids().len() >= 2,
+            enabled: idle && !editing && !self.views.active.board.tracks.committing() && self.selected_track_ids().nth(1).is_some(),
             active: false,
             menu_check: None,
         };

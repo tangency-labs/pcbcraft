@@ -2326,6 +2326,41 @@ fn modify_menu_merges_selected_straight_run_in_one_undo_step() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
+/// Merge Tracks is enabled only by two selected track segments: a selected via or a stale id
+/// never counts as the second one.
+#[test]
+fn merge_tracks_needs_two_selected_segments_not_vias_or_stale_ids() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let p = |x: i64| Point { x_nm: x, y_nm: 2_540_000 };
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,"points":[p(1_270_000), p(3_810_000), p(6_350_000)],"expected_revision":revision}),
+    );
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":4_000_000,"y_nm":-5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    h.run();
+    assert_eq!(h.state().message, None);
+    let segments = tracks(&h);
+    assert_eq!(segments.len(), 2);
+    let via = vias(&h)[0].id;
+    let stale = Uuid::from_u128(u128::MAX);
+    for (selected, enabled) in
+        [(BTreeSet::from([segments[0].id, via, stale]), false), (BTreeSet::from([segments[0].id, segments[1].id, via, stale]), true)]
+    {
+        h.state_mut().views.active.board.tracks.selected = selected;
+        h.run();
+        click(&mut h, "Modify menu");
+        assert_eq!(!h.get_by_label("Merge Tracks").accesskit_node().is_disabled(), enabled);
+        h.key_press(Key::Escape);
+        h.run();
+    }
+}
+
 /// D drags the segment under the pointer while its neighbors stretch to stay attached; a click
 /// commits all of them as one edit, and Esc cancels a drag without editing.
 #[test]
