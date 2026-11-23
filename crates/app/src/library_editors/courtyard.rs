@@ -2052,6 +2052,7 @@ mod tests {
     #[test]
     fn large_footprint_courtyard_preview_caches_idle_frames_and_reports_timing() {
         use pcbcraft_engine::{
+            authoring::Primitive,
             board::definition::{Artwork, CopperBinding, GraphicPurpose, PadShape, RectPad},
             library_graphics::{Fill, Geometry, Graphic},
         };
@@ -2075,6 +2076,7 @@ mod tests {
                             copper: CopperBinding::ComponentSide,
                             corner_radius_nm: 0,
                             drill_nm: None,
+                            plated_slot: None,
                         },
                     },
                 );

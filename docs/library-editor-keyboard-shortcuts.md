@@ -117,13 +117,15 @@ a chord runs copy, cut or paste once. Copy and paste are gated to a selection
 of the same document kind: pasting a symbol's objects into a footprint
 document reports "Paste into a definition of the same kind."
 
-For **Ctrl+A**, **Ctrl+D**, and raw clipboard key events, the canvas reads the
-modifiers from the pressed `Event::Key`. A chord still fires if the modifier is
-released later in the batch. Pressing the modifier after the letter is too
-late. Plain desktop clipboard shortcuts use the normalized events described
-above. All of these shortcuts require window focus. **Ctrl+D** arms the same
-preview as paste. A later **Escape** in the same input batch cancels the
-preview, and a duplicate chord after **Escape** can still arm it.
+For **Ctrl+A**, **Ctrl+D**, raw clipboard key events, and the tool letters
+**P**/**L**/**T**, the canvas reads the modifiers from the pressed `Event::Key`.
+A chord still fires if the modifier is released later in the batch. Pressing the
+modifier after the letter is too late. Plain desktop clipboard shortcuts use the
+normalized events described above. All of these shortcuts require window focus.
+**Ctrl+D** arms the same preview as paste. A later **Escape** in the same input
+batch cancels the preview, and a duplicate chord after **Escape** can still arm
+it. **R**'s rotation direction likewise follows the shift held at the press,
+not the batch's ending modifiers.
 
 ## Pending fields gate
 
@@ -144,9 +146,9 @@ so canvas keys do not fire while a field is focused.
 | Ctrl+Q | `library_frame` → `begin_project_close` | `native_library_close_preserves_unsaved_authoring` (close path) |
 | Ctrl+Shift+A | `library_frame` → `assistant_shortcuts` → `toggle_assistant` | `assistant.rs` toggle tests |
 | Esc | `canvas` → `Tool::Select` | `canvas_selection_move_and_cancel_use_library_history` (draw-tool cancel), `unfocused_host_does_not_cancel_another_windows_definition_tool` (focus scoping) |
-| P / L / T | `canvas` → `start_tool(Place::Pin\|Pad\|Line\|Text)` | — (ribbon clicks exercise `start_tool`) |
+| P / L / T | `canvas` → `start_tool(Place::Pin\|Pad\|Line\|Text)` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss), ribbon clicks exercise `start_tool` |
 | M | `canvas` → `begin_move` | `canvas_selection_move_and_cancel_use_library_history` (move + cancel), `library_group_selection_and_stale_array_do_not_overwrite_edits` (group path) |
-| R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | — |
+| R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (direction follows the press event) |
 | E | `canvas` → `details_requested` (single selection) | — |
 | Delete | `canvas` → `delete` → `Action::Delete` | — |
 | Backspace | `canvas` → `with_removed_vertex` + `Action::Replace` when a courtyard vertex is selected, else `delete` → `Action::Delete` (unmodified, focused) | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions`, `courtyard_backspace_with_selected_vertex_and_pending_edits_keeps_outline`, `courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers`, `symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes` |

@@ -323,9 +323,7 @@ impl Session {
         let used: BTreeSet<_> = next.all_symbols().map(|s| s.component).collect();
         let removed: BTreeSet<_> =
             project.symbols().iter().filter(|s| deleted.contains(&s.ordinal) && !used.contains(&s.component)).map(|s| s.component).collect();
-        for id in removed {
-            next.retire_component(id);
-        }
+        next.retire_components(removed)?;
         next.prune_junctions();
         next.sheet_mut().connectivity = Arc::default();
         self.change(next)?;
