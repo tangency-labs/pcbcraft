@@ -22,16 +22,20 @@ fn members(references: Vec<TerminalRef>) -> Result<Vec<Terminal>, String> {
     Ok(members)
 }
 
-/// Open the exact archive used by the independent Python reader, then compare the actual
-/// export command's parts, terminals and membership to the same committed projection.
-#[test]
-fn native_netlist_matches_the_independent_reader_oracle() -> Result<(), String> {
+/// Open the same synthetic archive used by the independent reader and obtain the shared command's export.
+fn fixture_netlist() -> Result<Netlist, String> {
     let file = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/native-open/dual-led-editing-demo-v3.pc");
     let mut session = Session::default();
     session.open_snapshot(pcbcraft_storage::open(&file)?);
     let reply = session.execute(EXPORT_NETLIST, &json!({})).map_err(|error| error.to_string())?;
     let text = reply["netlist"]["files"][0]["contents"].as_str().ok_or("expected netlist export text")?;
-    let netlist = Netlist::parse(text)?;
+    Netlist::parse(text)
+}
+
+/// Compare the export's parts, terminals and membership to the committed projection.
+#[test]
+fn native_netlist_matches_the_independent_reader_oracle() -> Result<(), String> {
+    let netlist = fixture_netlist()?;
     let mut parts = netlist
         .components
         .into_iter()
@@ -47,6 +51,21 @@ fn native_netlist_matches_the_independent_reader_oracle() -> Result<(), String> 
     let actual = json!({"parts": parts, "nets": nets, "unconnected": members(netlist.unconnected)?});
     let expected: serde_json::Value = serde_json::from_str(include_str!("fixtures/native-open/dual-led-editing-demo-connectivity.json"))
         .map_err(|error| format!("invalid connectivity oracle: {error}"))?;
+    assert_eq!(actual, expected);
+    Ok(())
+}
+
+/// The shared export and standalone reader must both match the fixture's independently recorded totals.
+#[test]
+fn native_netlist_counts_match_the_source_count_oracle() -> Result<(), String> {
+    let netlist = fixture_netlist()?;
+    let actual = json!({
+        "parts": netlist.components.len(),
+        "pins": netlist.components.iter().map(|part| part.terminals.len()).sum::<usize>(),
+        "nets": netlist.nets.len(),
+    });
+    let expected: serde_json::Value = serde_json::from_str(include_str!("fixtures/native-open/dual-led-editing-demo-source-counts.json"))
+        .map_err(|error| format!("invalid source count oracle: {error}"))?;
     assert_eq!(actual, expected);
     Ok(())
 }
