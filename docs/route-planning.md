@@ -309,8 +309,9 @@ leaving the routing tool armed.
 ### Through vias and connected segment drags
 
 Choose **Shove tracks and vias** in the Route context menu to let an incoming
-route move an unlocked through via. The solver tries the nearest position that
-clears the incoming copper in one of the eight routing directions. A segment
+route move an unlocked through via. The solver tries the nearest exits from
+the incoming copper’s clearance hull along eight routing directions and checks
+each candidate against exact copper geometry. A segment
 ending at the via center follows it, keeping its other end, width, layer and
 identity. The solver checks the via and its followers on every layer they occupy.
 A locked follower on an inner layer pins the via. Pads, mid-segment via contacts
