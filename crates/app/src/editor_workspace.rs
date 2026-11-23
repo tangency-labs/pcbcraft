@@ -1080,13 +1080,20 @@ impl PcbApp {
     /// Resolve a new pointer press before consuming keyboard input. A held drag crossing the
     /// divider keeps its original owner; popups and modals do not transfer editor focus.
     /// A middle press alone only navigates, so it pans or zooms a project pane without focusing it.
+    /// When right-drag pans, a right press waits for its click: the click focuses the pane and
+    /// opens its menu, while a drag pans it without taking focus.
     pub(super) fn editor_pointer_focus(&mut self, ctx: &egui::Context) {
         if self.parts.is_modal() || !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
             return;
         }
-        let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
+        let right_pans = self.preferences.navigation.right_drag_pan;
+        let pressed = ctx.input(|input| {
+            let right_click = right_pans && input.pointer.button_clicked(egui::PointerButton::Secondary);
+            (input.pointer.any_pressed() || right_click).then(|| input.pointer.interact_pos()).flatten()
+        });
         let navigating = ctx.input(|input| {
-            input.pointer.button_pressed(egui::PointerButton::Middle) && !input.pointer.primary_pressed() && !input.pointer.secondary_pressed()
+            let right = input.pointer.secondary_pressed();
+            (input.pointer.button_pressed(egui::PointerButton::Middle) || right) && !input.pointer.primary_pressed() && (right_pans || !right)
         });
         if let Some(pointer) = pressed
             && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))

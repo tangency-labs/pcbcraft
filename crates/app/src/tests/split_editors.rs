@@ -984,16 +984,21 @@ fn wheel_lines(lines: f32) -> egui::Event {
     }
 }
 
-/// Press, move and release the middle button, the default drag-to-pan gesture.
-fn middle_drag(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2) {
+/// Press, move and release one pointer button.
+fn button_drag(h: &mut Harness<'_, PcbApp>, button: egui::PointerButton, from: egui::Pos2, to: egui::Pos2) {
     h.hover_at(from);
     h.run();
-    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Middle, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: from, button, pressed: true, modifiers: Modifiers::NONE });
     h.run();
     h.event(egui::Event::PointerMoved(to));
     h.run();
-    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Middle, pressed: false, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: to, button, pressed: false, modifiers: Modifiers::NONE });
     h.run();
+}
+
+/// Press, move and release the middle button, the default drag-to-pan gesture.
+fn middle_drag(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2) {
+    button_drag(h, egui::PointerButton::Middle, from, to);
 }
 
 /// A pointer inside the pane that no floating card covers, so its canvas owns the wheel.
@@ -1160,4 +1165,53 @@ fn a_single_pane_still_navigates_under_the_pointer() {
     assert_ne!(h.state().views.active.camera.screen(origin, rect), before);
     assert_eq!(h.state().views.active.id(), id);
     assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+}
+
+/// With right-drag panning on, a right drag over the inactive pane pans only that pane; focus,
+/// both selections, the other camera and the project stay as they were, and no menu opens.
+#[test]
+fn right_drag_pan_over_the_inactive_pane_keeps_focus() {
+    let mut h = split_harness();
+    h.state_mut().preferences.navigation.right_drag_pan = true;
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    click_point(&mut h, 0, origin);
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+    let snapshot = h.state().session.snapshot().unwrap();
+    let first = (view(&h, 0).camera.zoom(), view(&h, 0).camera.screen(origin, canvas(&h, 0)));
+    let before = view(&h, 1).camera.screen(origin, canvas(&h, 1));
+    let pointer = uncovered_point(&h, ViewId(1), canvas(&h, 1));
+    button_drag(&mut h, egui::PointerButton::Secondary, pointer, pointer + egui::vec2(23.0, 17.0));
+    assert_ne!(view(&h, 1).camera.screen(origin, canvas(&h, 1)), before, "a right drag pans the hovered pane");
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+    assert_eq!((view(&h, 0).camera.zoom(), view(&h, 0).camera.screen(origin, canvas(&h, 0))), first);
+    assert_eq!(view(&h, 0).schematic.selection.single_symbol(), Some("symbol-2"));
+    assert!(view(&h, 1).schematic.selection.is_empty());
+    assert!(h.query_by_label("Disconnect and Move").is_none());
+    assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+}
+
+/// A right click on the inactive pane still focuses it and opens that pane's symbol menu. With
+/// right-drag panning on, focus waits for the click to finish; with it off, the press focuses
+/// the pane as before.
+#[test]
+fn right_click_on_the_inactive_pane_focuses_it_and_opens_its_menu() {
+    for right_pans in [true, false] {
+        let mut h = split_harness();
+        h.state_mut().preferences.navigation.right_drag_pan = right_pans;
+        let origin = Point { x_nm: 0, y_nm: 0 };
+        click_point(&mut h, 0, origin);
+        assert_eq!(h.state().views.active.id(), ViewId(0));
+        let at = view(&h, 1).camera.screen(origin, canvas(&h, 1));
+        h.hover_at(at);
+        h.run();
+        assert!(h.query_by_label("Disconnect and Move").is_none());
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+        h.run();
+        let pressed = if right_pans { ViewId(0) } else { ViewId(1) };
+        assert_eq!(h.state().views.active.id(), pressed, "right drag pans: {right_pans}");
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+        h.run();
+        assert_eq!(h.state().views.active.id(), ViewId(1), "right drag pans: {right_pans}");
+        assert!(h.query_by_label("Disconnect and Move").is_some(), "right drag pans: {right_pans}");
+    }
 }
