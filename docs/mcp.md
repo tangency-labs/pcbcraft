@@ -223,7 +223,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
 | `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
-| `pcb.align_footprints` | Align two or more `footprints` by their physical bounds (`mode` `left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute three or more with equal gaps to nanometer precision (`distribute_x`, `distribute_y`), in one undo step; distribution keeps physical outermost footprints and the span fixed, refusing overlapping selections that cannot retain those anchors. Track ends follow moving pads, as for a transform |
+| `pcb.align_footprints` | Align by bounds (`left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute along X or Y (`distribute_x`, `distribute_y`). Omit `pitch_nm` for equal gaps by bounds; supply it for exact origin spacing. See [set-pitch distribution](pcb-layout-workflow.md#set-pitch-distribution). Track ends follow moving pads in the same undo step |
 | `pcb.set_footprint_transform` | Set a footprint center, whole-degree orientation and optional `side` (`front` or `back`) through the same atomic command used by the PCB canvas; inspection reports each footprint's `side`. Track ends follow the pads that move on their layer. Edits that join two nets are refused |
 | `pcb.set_footprint_reference_offset` | Move the reference of a placed footprint. `offset` is a local `{x_nm, y_nm}` displacement from the library default. A zero offset restores that default |
 | `pcb.set_footprint_reference_text` | Set sparse placement-local `appearance` fields for printed text, font, paired size/stroke, local rotation, alignment and visibility, with an optional `offset`. Null appearance resets inheritance. The component's reference and schematic use the separate shared reference edit |
@@ -358,7 +358,9 @@ still work.
 
 The MCP bridge and raw live clients that need a guarantee across editor versions
 use `engine.execute_versioned` with a required non-null `params.version` beside
-`params.command`. For example:
+`params.command`. Use the `command_api_version` reported by the serving
+editor's command discovery (`list_commands` over MCP, `engine.commands` on the
+raw live endpoint). For example, if the editor reports version 1:
 
 ```json
 {"method":"engine.execute_versioned","params":{"command":"edit.undo","version":1}}

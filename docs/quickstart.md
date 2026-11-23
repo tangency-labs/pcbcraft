@@ -249,6 +249,7 @@ PCB routing is under **Layout → Route**, and **Draw → Line / Rectangle** use
 the active layer. Copper shapes are conductive linework; technical-layer graphics
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
+For exact spacing between footprint origins, use [set-pitch distribution through MCP](pcb-layout-workflow.md#set-pitch-distribution).
 The route preview walks around fixed copper, keeping its starting net through
 vertices and vias. An unconnected pad cannot acquire a named net by crossing it;
 blocked or incomplete searches keep the last legal preview and refuse that target.
