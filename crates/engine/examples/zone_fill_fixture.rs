@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
         symbols.push(symbol);
     }
-    let ground: Vec<_> = symbols.iter().step_by(if count == 3 { 1 } else { 4 }).collect();
+    let ground: Vec<_> = symbols.iter().step_by(if count <= 4 { 1 } else { 4 }).collect();
     for pair in ground.windows(2) {
         edit(&mut session, CONNECT_PINS, json!({"from":{"symbol":pair[0],"terminal":"1"},"to":{"symbol":pair[1],"terminal":"1"}}))?;
     }
@@ -65,7 +65,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let layers = view.layers();
     let front = layers.iter().find(|l| l.purpose == LayerPurpose::Copper && l.side == Some(Side::Front)).ok_or("missing front layer")?.id;
     let outline = layers.iter().find(|l| l.purpose == LayerPurpose::Outline).ok_or("missing outline layer")?.id;
-    let endpoint = &view.ratsnest()?.lines[0].from;
+    let ratsnest = view.ratsnest()?;
+    let endpoint = &ratsnest.lines.first().ok_or("missing connection in the fixture's plane net")?.from;
     let address = endpoint.pad.inspect();
     let target = view
         .net_class_target_for_copper(&format!("{}:{}", endpoint.footprint, address["pad"].as_str().ok_or("missing pad")?))?
