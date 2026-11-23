@@ -34,11 +34,13 @@ fn main() {
     });
 }
 
-/// Pure worker entry point; native document decoding and calculation stay in the engine.
+/// Forward completed-zone counts while calculation stays in the isolated worker.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen::prelude::wasm_bindgen]
-pub fn pcbcraft_fill_worker(request: &str) -> String {
-    pcbcraft_engine::board::fill::worker::execute(request)
+pub fn pcbcraft_fill_worker(request: &str, progress: &js_sys::Function) -> String {
+    pcbcraft_engine::board::fill::worker::execute_reporting(request, &mut |completed| {
+        let _ = progress.call1(&wasm_bindgen::JsValue::NULL, &wasm_bindgen::JsValue::from(completed as u32));
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]

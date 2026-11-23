@@ -301,12 +301,12 @@ fn zone_fill(
 /// Compute from one immutable snapshot. The scheduled job calls this outside the UI thread;
 /// any geometric failure leaves the entire result unavailable and all authored data unchanged.
 pub fn compute(view: BoardView<'_>) -> Result<Arc<Fill>, String> {
-    compute_cancellable(view, None)
+    compute_cancellable(view, None, &mut |_| {})
 }
 
 /// Worker calculation samples cancellation before preparation and between indivisible kernel
 /// operations. Aborted calculations return no partial physical connectivity or display mesh.
-fn compute_cancellable(view: BoardView<'_>, canceled: Option<&AtomicBool>) -> Result<Arc<Fill>, String> {
+fn compute_cancellable(view: BoardView<'_>, canceled: Option<&AtomicBool>, report: &mut dyn FnMut(usize)) -> Result<Arc<Fill>, String> {
     check_cancel(canceled)?;
     view.require_linear_copper()?;
     let lands = super::track::lands(view);
@@ -322,7 +322,7 @@ fn compute_cancellable(view: BoardView<'_>, canceled: Option<&AtomicBool>) -> Re
     let memo = view.project().zone_geometry_memo();
     let mut zones: Vec<_> = view.zones().iter().collect();
     zones.sort_by_key(|z| (std::cmp::Reverse(z.options.priority), z.id));
-    for zone in zones {
+    for (index, zone) in zones.into_iter().enumerate() {
         check_cancel(canceled)?;
         if view.project().zone_net_state(zone.net) != "active" {
             fill.problems.push(Problem {
@@ -332,10 +332,11 @@ fn compute_cancellable(view: BoardView<'_>, canceled: Option<&AtomicBool>) -> Re
                 at: zone.points[0],
                 items: Vec::new(),
             });
-            continue;
+        } else {
+            let result = zone_fill(view, zone, &board, &objects, &mut fill, &memo, canceled)?;
+            fill.zones.push(result);
         }
-        let result = zone_fill(view, zone, &board, &objects, &mut fill, &memo, canceled)?;
-        fill.zones.push(result);
+        report(index + 1);
     }
     join_contacts(&geometry, &mut fill, canceled)?;
     Ok(Arc::new(fill))

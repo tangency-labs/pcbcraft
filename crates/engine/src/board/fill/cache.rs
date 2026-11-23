@@ -83,6 +83,11 @@ impl BoardView<'_> {
     /// Drain the same calculation synchronously for explicit headless checking/refill. UI
     /// owners schedule FillJob instead of calling this from layout or paint.
     pub(crate) fn fill_for_check(self) -> Result<Arc<Fill>, String> {
+        self.fill_reporting(&mut |_| {})
+    }
+
+    /// Use the same fill slot in a headless consumer that reports zone completion.
+    pub(super) fn fill_reporting(self, report: &mut dyn FnMut(usize)) -> Result<Arc<Fill>, String> {
         if !self.zone_fill_enabled() {
             return Err("Copper pours are removed. Use Pour copper to fill zones.".into());
         }
@@ -90,7 +95,7 @@ impl BoardView<'_> {
         if let Some(result) = slot.get() {
             return result.clone();
         }
-        let result = compute(self);
+        let result = compute_cancellable(self, None, report);
         let _ = slot.set(result.clone());
         result
     }
@@ -105,6 +110,7 @@ pub struct FillJob {
     output: Option<Result<Arc<Fill>, String>>,
     complete: bool,
     canceled: Arc<AtomicBool>,
+    progress: super::super::work::Progress,
 }
 impl Session {
     /// Remove current derived pours and revoke in-flight fill/check/edit authority without
@@ -175,6 +181,7 @@ impl Session {
             return Err(CommandError::Unavailable("Copper pours are removed. Use Pour copper to fill zones.".into()));
         }
         let effective = view.effective_rules();
+        let progress = super::super::work::Progress { stage: "Filling copper zones", completed: 0, total: view.zones().len() };
         let slot = snapshot.fill_slot(refresh);
         Ok(FillJob {
             worker_hash: None,
@@ -191,6 +198,7 @@ impl Session {
             output: None,
             complete: false,
             canceled: Arc::new(AtomicBool::new(false)),
+            progress,
         })
     }
 }
@@ -210,11 +218,16 @@ impl FillJob {
     }
     /// Current stage, without implying a wall-clock bound on a kernel operation.
     pub fn progress(&self) -> super::super::work::Progress {
-        super::super::work::Progress { stage: "Filling copper zones", completed: usize::from(self.complete), total: 1 }
+        self.progress
     }
     /// Execute on the host's worker. No result is set on cancellation, and stale work can only
     /// finish into its own old slot. Browser hosts must isolate this work from foreground UI.
     pub fn step(&mut self, budget: usize) -> bool {
+        self.step_reporting(budget, &mut |_| {})
+    }
+
+    /// Deliver completed-zone counts during kernel work while retaining one terminal output.
+    pub fn step_reporting(&mut self, budget: usize, report: &mut dyn FnMut(super::super::work::Progress)) -> bool {
         if self.complete || budget == 0 {
             return self.complete;
         }
@@ -223,16 +236,18 @@ impl FillJob {
             return true;
         }
         if let Some(result) = self.slot.get() {
+            self.progress.completed = self.progress.total;
+            report(self.progress);
             self.output = Some(result.clone());
             self.complete = true;
             return true;
         }
-        let result = self
-            .source
-            .snapshot
-            .board_view(self.source.target)
-            .ok_or_else(|| "Fill board is unavailable.".to_owned())
-            .and_then(|view| super::compute_cancellable(view, Some(&self.canceled)));
+        let result = self.source.snapshot.board_view(self.source.target).ok_or_else(|| "Fill board is unavailable.".to_owned()).and_then(|view| {
+            super::compute_cancellable(view, Some(&self.canceled), &mut |completed| {
+                self.progress.completed = completed;
+                report(self.progress);
+            })
+        });
         if !self.canceled.load(Ordering::Acquire) && self.source.fill_current() {
             let _ = self.slot.set(result.clone());
             self.output = Some(result);

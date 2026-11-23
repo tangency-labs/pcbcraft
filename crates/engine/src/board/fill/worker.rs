@@ -128,7 +128,12 @@ impl FillJob {
 /// Run entirely inside an isolated worker/module. Malformed requests return a response error;
 /// a WASM abort/trap is caught by the JavaScript host, which retires that worker instance.
 pub fn execute(request: &str) -> String {
-    let run = || -> Result<Response, String> {
+    execute_reporting(request, &mut |_| {})
+}
+
+/// Execute a worker request, notifying its host after each complete zone evaluation.
+pub fn execute_reporting(request: &str, report: &mut dyn FnMut(usize)) -> String {
+    let mut run = || -> Result<Response, String> {
         if request.len() > 128 * 1024 * 1024 {
             return Err("Fill worker request exceeds its bound.".into());
         }
@@ -140,7 +145,7 @@ pub fn execute(request: &str) -> String {
         let mut diagnostics = None;
         let result = decode_documents(&documents).and_then(|project| {
             let view = project.board_view(request.target).ok_or("Unknown fill worker board.")?;
-            let filled = view.fill_for_check()?;
+            let filled = view.fill_reporting(report)?;
             if let Some(rules) = request.diagnostics {
                 diagnostics = Some(super::diagnostics(view, &BoardGeometry::new(view), rules));
             }

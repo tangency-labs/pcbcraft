@@ -7,6 +7,12 @@ pub(crate) trait Work: Send + 'static {
     fn source(&self) -> &CheckSource;
     fn progress(&self) -> CheckProgress;
     fn step(&mut self, budget: usize) -> bool;
+    /// Report after a batch by default. Indivisible batches may also report within the step.
+    fn step_reporting(&mut self, budget: usize, report: &mut dyn FnMut(CheckProgress)) -> bool {
+        let done = self.step(budget);
+        report(self.progress());
+        done
+    }
     fn take_output(&mut self) -> Result<Option<Self::Output>, String>;
     /// Jobs with indivisible kernel work may sample the same host cancellation between calls.
     fn cancellation(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
@@ -21,6 +27,11 @@ pub(crate) trait Work: Send + 'static {
     #[cfg(target_arch = "wasm32")]
     fn browser_prepares(&self) -> bool {
         false
+    }
+    /// Translate intermediate worker counts for jobs that expose that worker's progress.
+    #[cfg(target_arch = "wasm32")]
+    fn browser_progress(&self, _completed: usize) -> CheckProgress {
+        self.progress()
     }
     /// Decode a completed isolated result into the same engine output as native work.
     #[cfg(target_arch = "wasm32")]
@@ -39,6 +50,9 @@ impl Work for pcbcraft_engine::board::fill::FillJob {
     fn step(&mut self, budget: usize) -> bool {
         self.step(budget)
     }
+    fn step_reporting(&mut self, budget: usize, report: &mut dyn FnMut(CheckProgress)) -> bool {
+        self.step_reporting(budget, report)
+    }
     fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
         self.take_result()
     }
@@ -52,6 +66,11 @@ impl Work for pcbcraft_engine::board::fill::FillJob {
     #[cfg(target_arch = "wasm32")]
     fn browser_response(&mut self, response: &str) -> Result<Option<Self::Output>, String> {
         self.accept_worker_response(response)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_progress(&self, completed: usize) -> CheckProgress {
+        let progress = self.progress();
+        CheckProgress { completed: completed.min(progress.total), ..progress }
     }
 }
 impl Work for CheckJob {
@@ -195,6 +214,13 @@ impl<J: Work> Queue<J> {
     pub fn progress(&self) -> Option<CheckProgress> {
         self.active.as_ref().and_then(Running::progress)
     }
+    /// Do not display a canceled predecessor's progress while its replacement waits.
+    pub fn progress_for(&self, id: u64) -> Option<CheckProgress> {
+        if let Some(pending) = &self.pending {
+            return (pending.id == id).then(|| pending.job.progress());
+        }
+        self.active.as_ref().filter(|running| running.id() == Some(id)).and_then(Running::progress)
+    }
     /// Reject edits/reopen independently of which view currently has focus.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn authority_current(&self, session: &pcbcraft_engine::Session) -> bool {
@@ -262,6 +288,10 @@ mod incremental {
         pub fn source(&self) -> Option<&CheckSource> {
             self.request.as_ref().map(|r| r.job.source())
         }
+        /// Identify the request whose progress can still be copied.
+        pub fn id(&self) -> Option<u64> {
+            self.request.as_ref().map(|request| request.id)
+        }
         /// Signal cooperative cancellation without waiting for the current batch.
         pub fn cancel(&mut self) {
             self.canceled = true;
@@ -275,7 +305,12 @@ mod incremental {
         }
         /// Copy the latest progress when available; never block the caller.
         pub fn progress(&self) -> Option<CheckProgress> {
-            self.request.as_ref().map(|r| r.job.progress())
+            let request = self.request.as_ref()?;
+            #[cfg(target_arch = "wasm32")]
+            if let Some(id) = self.worker {
+                return Some(request.job.browser_progress(super::browser_worker::progress(id)));
+            }
+            Some(request.job.progress())
         }
         /// Advance one engine batch, publishing only a complete report or cancellation.
         fn poll_batch(&mut self) -> Option<Completion<J::Output>> {
@@ -299,7 +334,7 @@ mod incremental {
                 }
             }
             let request = self.request.as_mut()?;
-            if !self.canceled && !request.job.step(256) {
+            if !self.canceled && !request.job.step_reporting(256, &mut |_| {}) {
                 return None;
             }
             let mut request = self.request.take()?;
@@ -405,10 +440,11 @@ mod native {
                         if stop.load(Ordering::Relaxed) {
                             break Ok(None);
                         }
-                        let done = request.job.step(256);
-                        if let Ok(mut p) = update.lock() {
-                            *p = request.job.progress();
-                        }
+                        let done = request.job.step_reporting(256, &mut |progress| {
+                            if let Ok(mut p) = update.lock() {
+                                *p = progress;
+                            }
+                        });
                         if done {
                             break request.job.take_output();
                         }
@@ -425,6 +461,10 @@ mod native {
         /// Captured source, absent after an incremental request has been consumed.
         pub fn source(&self) -> Option<&CheckSource> {
             Some(&self.source)
+        }
+        /// Identify the request whose progress this worker owns.
+        pub fn id(&self) -> Option<u64> {
+            Some(self.id)
         }
         /// Signal cooperative cancellation without waiting for the current batch.
         pub fn cancel(&mut self) {
@@ -666,10 +706,13 @@ mod tests {
         let s = session();
         let mut q = Queue::default();
         q.submit(request(&s, 1));
+        assert!(q.progress_for(1).is_some());
         for id in 2..100 {
             q.submit(request(&s, id));
             assert!(q.active.is_some());
             assert!(q.pending.is_some());
+            assert!(q.progress_for(id - 1).is_none());
+            assert!(q.progress_for(id).is_some());
         }
         assert_eq!(q.replaced, 97);
         let old = q.poll().unwrap();
@@ -700,6 +743,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let s = session();
         let mut running = native::Running::start(request(&s, 1));
+        assert_eq!(running.id(), Some(1));
         assert!(running.source().unwrap().is_current(&s));
         let _ = running.progress();
         let deadline = Instant::now() + Duration::from_secs(5);

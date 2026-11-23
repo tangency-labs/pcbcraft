@@ -28,7 +28,9 @@ fn browser_worker_uses_the_native_source_codec_and_rejects_foreign_results() {
     let s = fixture(Connection::Solid, 0);
     let mut job = s.prepare_zone_fill(view(&s).target, false).unwrap();
     let request = job.worker_request().unwrap();
-    let response = super::worker::execute(&request);
+    let mut completed = Vec::new();
+    let response = super::worker::execute_reporting(&request, &mut |count| completed.push(count));
+    assert_eq!(completed, vec![1]);
     let filled = job.accept_worker_response(&response).unwrap().unwrap();
     assert!(view(&s).ratsnest_with_copper(&filled.copper).unwrap().lines.len() < 3);
     let mut wrong: serde_json::Value = serde_json::from_str(&response).unwrap();
@@ -37,6 +39,39 @@ fn browser_worker_uses_the_native_source_codec_and_rejects_foreign_results() {
     let _ = job.worker_request().unwrap();
     assert!(job.accept_worker_response(&wrong.to_string()).is_err());
     assert!(view(&s).filled_zones().is_none());
+}
+
+/// Native progress advances during the evaluation. Canceling from a progress callback
+/// leaves the runtime slot empty and keeps authored bytes untouched.
+#[test]
+fn fill_job_reports_completed_zones_before_publishing() {
+    let mut s = fixture(Connection::Solid, 0);
+    let (target, points) = {
+        let view = view(&s);
+        let geometry = BoardGeometry::new(view);
+        let pad = obstacles(view, &geometry).unwrap().into_iter().find(|o| o.pad && o.net == Some(view.zones()[0].net)).unwrap();
+        (view.net_class_target_for_copper(&pad.object.name).unwrap().unwrap(), view.zones()[0].points.clone())
+    };
+    let layer = copper_layers(&s)[1];
+    s.apply(ADD_ZONE, &json!({"target":target,"layer":layer,"points":points,"expected_revision":s.revision()})).unwrap();
+    let board = view(&s).target;
+    let mut job = s.prepare_zone_fill(board, false).unwrap();
+    assert_eq!((job.progress().completed, job.progress().total), (0, 2));
+    let cancel = job.cancellation();
+    let mut progress = Vec::new();
+    assert!(job.step_reporting(1, &mut |p| {
+        progress.push((p.completed, p.total));
+        cancel.store(true, std::sync::atomic::Ordering::Release);
+    }));
+    assert_eq!(progress, vec![(1, 2)]);
+    assert!(job.take_result().unwrap().is_none());
+    assert!(view(&s).filled_zones().is_none());
+
+    let mut retry = s.prepare_zone_fill(board, false).unwrap();
+    progress.clear();
+    assert!(retry.step_reporting(1, &mut |p| progress.push((p.completed, p.total))));
+    assert_eq!(progress, vec![(1, 2), (2, 2)]);
+    assert_eq!(retry.take_result().unwrap().unwrap().zones.len(), 2);
 }
 
 #[test]

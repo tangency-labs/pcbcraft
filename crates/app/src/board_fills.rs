@@ -23,6 +23,9 @@ pub(super) struct PourDialog {
     view: ViewId,
     target: BoardTarget,
     generation: u64,
+    started_at: Option<f64>,
+    completed: usize,
+    total: usize,
 }
 
 /// One owner per board schedules work; all views read the shared source-keyed engine slot.
@@ -148,8 +151,9 @@ impl crate::PcbApp {
             .find(|v| v.board.target == Some(target))
             .ok_or_else(|| CommandError::Unavailable("Open the addressed board before refilling its zones.".into()))?;
         let job = self.session.prepare_zone_refill(params)?;
+        let total = job.progress().total;
         view.board.fills.submit_job(job);
-        Ok(PourDialog { view: view.id(), target, generation: view.board.fills.generation })
+        Ok(PourDialog { view: view.id(), target, generation: view.board.fills.generation, started_at: None, completed: 0, total })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -175,22 +179,24 @@ impl crate::PcbApp {
         self.views.owner(pour.view)
     }
 
-    pub(super) fn copper_pour_dialog(&mut self, ctx: &egui::Context, pour: PourDialog) {
-        let running = self.views.view(pour.view).is_some_and(|view| {
-            let state = &view.board.fills;
+    /// Show only this request's progress and keep elapsed time advancing during kernel work.
+    pub(super) fn copper_pour_dialog(&mut self, ctx: &egui::Context, mut pour: PourDialog) {
+        let running = self.views.view(pour.view).map(|view| &view.board.fills).filter(|state| {
             state.generation == pour.generation
                 && state.queue.busy()
                 && state.requested.as_ref().is_some_and(|source| source.target() == pour.target && source.is_current(&self.session))
         });
-        if !running {
-            return;
+        let Some(running) = running else { return };
+        if let Some(progress) = running.queue.progress_for(pour.generation) {
+            pour.completed = progress.completed;
         }
+        let now = ctx.input(|input| input.time);
+        let elapsed = (now - *pour.started_at.get_or_insert(now)).max(0.0) as u64;
+        let fraction = pour.completed as f32 / pour.total.max(1) as f32;
         let mut cancel = false;
         let dismissed = pcbcraft_chrome::shell::dialog(ctx, "copper_pour", "Pouring copper", |ui| {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Calculating copper zones…");
-            });
+            ui.label(format!("{} of {} zones · {}:{:02} elapsed", pour.completed, pour.total, elapsed / 60, elapsed % 60));
+            pcbcraft_chrome::controls::progress(ui, "copper_pour", fraction);
             cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
         });
         if cancel || dismissed {
@@ -198,6 +204,7 @@ impl crate::PcbApp {
             self.repaint_editors(ctx);
         } else {
             self.dialog = Dialog::CopperPour(pour);
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
         }
     }
 

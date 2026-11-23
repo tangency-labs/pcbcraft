@@ -60,8 +60,9 @@ the actual derived copper while retaining zone outlines, so affected airwires
 return. It stays unfilled across edits and DRC until **Pour copper** is used again.
 B pours; Ctrl+B (Command+B on macOS) removes pours. These actions apply to all
 zones on the addressed board, each on its own assigned copper layer.
-An explicit pour opens a progress dialog while work is pending. **Cancel** or
-Escape retires the job and leaves zone outlines available for editing. Automatic
+An explicit pour shows the completed-zone count and elapsed time. Zones can
+take different amounts of time to fill. **Cancel** or Escape retires the job
+and leaves zone outlines available for editing. Automatic
 refills run in the background and offer **Cancel pour** in the board status bar.
 After cancellation, use **Pour copper** to resume pouring.
 Multiple closed outlines use the board checker's existing union interpretation.
@@ -94,9 +95,10 @@ teardrops report fill as unavailable until those shapes have clearance support.
 
 Fill uses the layer's copper envelopes to select nearby clearance shapes. It
 checks each thermal spoke against the local cutouts it can reach. After clipping
-the zone boundary, internally separated clearance loops can be assembled into a
-single analytic face. Complex or touching contours keep the SolidCore Boolean
-path. A fill that exceeds the applicable geometry budget reports unavailable
+the zone boundary, enclosed clearance groups can be assembled as analytic holes
+and retained copper islands. Nested clearance shapes use a local SolidCore
+Boolean inside their group's envelope, and boundary cuts use the full zone
+geometry. A fill that exceeds the applicable geometry budget reports unavailable
 material. The pad count alone does not determine that budget.
 
 Native calculation uses the bounded snapshot worker pool. Browser fill and

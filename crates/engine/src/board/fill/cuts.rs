@@ -87,50 +87,25 @@ pub(super) fn components(tree: &Tree, bounds: &[[f64; 4]], candidates: &[usize],
 /// track does not send all independent footprints through the same large Boolean.
 /// Prove enclosure again against the resulting stock before assembling its holes.
 fn subtract_groups(mut stock: Regions, groups: Vec<Regions>, canceled: Option<&AtomicBool>) -> Result<Regions, String> {
-    let mut pending = Vec::new();
-    let mut exact = Vec::new();
-    for group in groups {
-        check_cancel(canceled)?;
-        if let Some(bounds) = group.simple_cut_bounds_nm() {
-            pending.push((group, bounds));
-        } else {
-            exact.push(group);
-        }
-    }
-
-    // A union can have a concave boundary or split into pieces whose boxes overlap.
-    // Route those few pieces through an exact Boolean, even if their original
-    // source cutters were independently grouped.
-    let (boxes, owners): (Vec<_>, Vec<_>) =
-        pending.iter().enumerate().flat_map(|(group, (_, bounds))| bounds.iter().copied().map(move |b| (b, group))).unzip();
-    let index = Tree::new(boxes.clone());
-    let mut overlapping = vec![false; pending.len()];
-    for (i, bounds) in boxes.into_iter().enumerate() {
-        check_cancel(canceled)?;
-        if index.candidates(bounds, BOUND_RESERVE_NM).iter().any(|&j| i != j) {
-            overlapping[owners[i]] = true;
-        }
-    }
+    // The covers-box proof applies to mutually separated cutter envelopes. Envelopes
+    // may meet even when the individual inputs of two prior unions were disjoint.
+    let cuts = Cuts::new(groups);
+    let candidates: Vec<_> = (0..cuts.shapes.len()).collect();
     let mut enclosed = Vec::new();
-    for (i, (group, bounds)) in pending.into_iter().enumerate() {
-        if overlapping[i] {
-            exact.push(group);
-        } else {
-            enclosed.push((group, bounds));
+    for group in components(&cuts.tree, &cuts.bounds, &candidates, canceled)? {
+        check_cancel(canceled)?;
+        let shapes: Vec<_> = group.into_iter().map(|i| cuts.shapes[i].clone()).collect();
+        let shape = union(&shapes)?;
+        if let Some(bounds) = shape.bounds_nm() {
+            enclosed.push((shape, bounds));
         }
     }
     loop {
         let mut remaining = Vec::new();
+        let mut exact = Vec::new();
         for (group, bounds) in enclosed {
             check_cancel(canceled)?;
-            let mut interior = true;
-            for &envelope in &bounds {
-                if !stock.covers_box(envelope).map_err(|e| e.to_string())? {
-                    interior = false;
-                    break;
-                }
-            }
-            if interior {
+            if stock.covers_box(bounds).map_err(|e| e.to_string())? {
                 remaining.push((group, bounds));
             } else {
                 exact.push(group);
@@ -144,7 +119,6 @@ fn subtract_groups(mut stock: Regions, groups: Vec<Regions>, canceled: Option<&A
         if remaining.is_empty() || stock.is_empty() {
             return Ok(stock);
         }
-        exact.clear();
         enclosed = remaining;
     }
     let interior: Vec<_> = enclosed.into_iter().map(|(group, _)| group).collect();

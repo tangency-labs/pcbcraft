@@ -15,7 +15,8 @@ export function zone_worker_start(payload) {
     const code = `import init, {pcbcraft_fill_worker} from ${JSON.stringify(moduleUrl)};
         self.onmessage = async event => {
             try { await init({module_or_path: ${JSON.stringify(wasm.href)}});
-                self.postMessage({ok:true, value:pcbcraft_fill_worker(event.data)});
+                const report = completed => self.postMessage({completed});
+                self.postMessage({ok:true, value:pcbcraft_fill_worker(event.data, report)});
             } catch (error) { self.postMessage({ok:false, value:String(error)}); }
         };`;
     const url = URL.createObjectURL(new Blob([code], {type:'text/javascript'}));
@@ -23,14 +24,20 @@ export function zone_worker_start(payload) {
     try { worker = new Worker(url, {type:'module'}); }
     catch(error) { URL.revokeObjectURL(url); throw String(error); }
     const id = ++serial;
-    const state = {worker,url,result:null,timer:null};
+    const state = {worker,url,result:null,timer:null,completed:0};
     workers.set(id,state);
     const finish = (ok,value) => {
         if (!workers.has(id) || state.result !== null) return;
         clearTimeout(state.timer);worker.terminate();URL.revokeObjectURL(url);
         state.result = (ok?'O':'E') + value;
     };
-    worker.onmessage = event => finish(event.data.ok, event.data.value);
+    worker.onmessage = ({data}) => {
+        if (Number.isSafeInteger(data.completed)) {
+            if (state.result === null) state.completed = Math.max(state.completed, data.completed);
+        } else {
+            finish(data.ok,data.value);
+        }
+    };
     worker.onerror = event => { event.preventDefault();finish(false,event.message || 'Zone fill worker failed'); };
     state.timer=setTimeout(()=>finish(false,'Zone fill worker timed out after 30 seconds'),30000);
     try { worker.postMessage(payload); } catch(error) { finish(false,String(error)); }
@@ -42,6 +49,9 @@ export function zone_worker_poll(id) {
     if (state.result === null) return null;
     workers.delete(id);return state.result;
 }
+export function zone_worker_progress(id) {
+    return workers.get(id)?.completed ?? 0;
+}
 export function zone_worker_cancel(id) {
     const state=workers.get(id);if(!state)return;
     clearTimeout(state.timer);state.worker.terminate();URL.revokeObjectURL(state.url);workers.delete(id);
@@ -51,6 +61,7 @@ extern "C" {
     #[wasm_bindgen(catch)]
     fn zone_worker_start(payload: &str) -> Result<u32, JsValue>;
     fn zone_worker_poll(id: u32) -> Option<String>;
+    fn zone_worker_progress(id: u32) -> usize;
     fn zone_worker_cancel(id: u32);
 }
 
@@ -64,6 +75,10 @@ pub(super) fn poll(id: u32) -> Option<Result<String, String>> {
         Some(result) => Ok(result.to_owned()),
         None => Err(response.strip_prefix('E').unwrap_or(&response).to_owned()),
     })
+}
+/// Read the last complete zone count without draining the terminal result.
+pub(super) fn progress(id: u32) -> usize {
+    zone_worker_progress(id)
 }
 /// Immediate host cancellation needs no acknowledgement or join from an executing kernel.
 pub(super) fn cancel(id: u32) {

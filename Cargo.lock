@@ -3041,6 +3041,7 @@ name = "pcbcraft-web"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "js-sys",
  "log",
  "pcbcraft-app",
  "pcbcraft-engine",

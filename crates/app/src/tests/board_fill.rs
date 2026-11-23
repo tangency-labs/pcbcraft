@@ -87,6 +87,10 @@ fn cancel_pour_dialog_retires_pending_material_and_allows_retry() {
         h.key_press(Key::B);
         h.run_steps(2);
         assert!(matches!(h.state().dialog, crate::Dialog::CopperPour(_)));
+        let _ = h.get_by_label("0 of 1 zones · 0:00 elapsed");
+        h.input_mut().time = Some(h.ctx.input(|input| input.time) + 3.1);
+        h.run();
+        let _ = h.get_by_label("0 of 1 zones · 0:03 elapsed");
         if escape {
             h.key_press(Key::Escape);
             h.run();

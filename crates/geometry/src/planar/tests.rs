@@ -329,3 +329,24 @@ fn independently_enclosed_cuts_preserve_the_exact_material() {
     let edge = Regions::circle([0, 6_000_000], 1_000_000).unwrap();
     assert!(stock.subtract_enclosed(&[edge]).unwrap().is_none());
 }
+
+/// Local subtraction preserves a copper island inside a closed clearance and the separate
+/// foreign feature within that island. The assembled face is also usable by the kernel.
+#[test]
+fn enclosed_nested_cuts_keep_the_copper_between_them() {
+    let stock = rectangle(0, 0, 30 * MM, 30 * MM);
+    let outer = rectangle(4 * MM, 4 * MM, 12 * MM, 12 * MM);
+    let inner = rectangle(6 * MM, 6 * MM, 8 * MM, 8 * MM);
+    let ring = outer.boolean(&inner, Operation::Difference).unwrap();
+    let dot = Regions::circle([10 * MM, 10 * MM], 2 * MM).unwrap();
+    let cut = Regions::union_all(&[ring, dot]).unwrap();
+    let expected = stock.boolean(&cut, Operation::Difference).unwrap();
+    let actual = stock.subtract_enclosed(&[cut]).unwrap().unwrap();
+    assert_eq!(actual.region_count(), 2);
+    assert!((actual.area().unwrap().value_nm2 - expected.area().unwrap().value_nm2).abs() < 1_000.);
+    for (x, expected) in [(2, true), (5, false), (8, true), (10, false)] {
+        assert_eq!(actual.contains([x * MM, 10 * MM]).unwrap(), Some(expected));
+    }
+    let probe = rectangle(7 * MM, 8 * MM, MM, MM);
+    area_is(&actual.boolean(&probe, Operation::Intersection).unwrap(), 1.);
+}

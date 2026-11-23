@@ -209,12 +209,6 @@ impl Regions {
         })
     }
 
-    /// Bounds of cutter loops that can become holes when independently enclosed.
-    /// Cutters with their own holes need a Boolean to retain the enclosed copper.
-    pub fn simple_cut_bounds_nm(&self) -> Option<Vec<[f64; 4]>> {
-        self.regions.iter().zip(self.profile_bounds()).map(|(region, bounds)| region.holes.is_empty().then(|| envelope_nm(bounds[0]))).collect()
-    }
-
     /// Place a local line/arc profile on the board without recomputing its curves.
     /// Bounds and closure are checked in the new frame. Unsupported curves or a
     /// translation outside the model range can use the caller's absolute construction.
@@ -262,20 +256,32 @@ impl Regions {
         })
     }
 
-    /// Subtract independently enclosed, disjoint cutter loops from their owning faces. None means
-    /// that the conservative proof could not establish this case and a Boolean is needed.
+    /// Subtract independently enclosed cutters from their owning faces. A cutter with nested
+    /// or overlapping region envelopes gets a Boolean in its own local rectangle. The result
+    /// retains its copper islands without passing unrelated holes through that Boolean.
+    /// None means that the enclosure proof could not establish this case.
     pub fn subtract_enclosed(&self, cutters: &[Self]) -> Result<Option<Self>> {
         guard("planar enclosed holes", || {
             const RESERVE: f64 = 0.000_050;
             let mut assembled = self.regions.clone();
+            let mut retained = Vec::new();
             let mut envelopes = Vec::new();
             for cutter in cutters {
-                for (region, loop_bounds) in cutter.regions.iter().zip(cutter.profile_bounds()) {
-                    let envelope = loop_bounds[0];
-                    let Some(owner) = self.covering_region(envelope) else { return Ok(None) };
-                    if !region.holes.is_empty() || envelopes.iter().any(|previous| bounds::near(*previous, envelope, RESERVE)) {
-                        return Ok(None);
-                    }
+                let Some(envelope_nm) = cutter.bounds_nm() else { continue };
+                let envelope = envelope_nm.map(|coord| coord / 1e6);
+                let Some(owner) = self.covering_region(envelope) else { return Ok(None) };
+                if envelopes.iter().any(|previous| bounds::near(*previous, envelope, RESERVE)) {
+                    return Ok(None);
+                }
+                envelopes.push(envelope);
+                let parts = cutter.profile_bounds();
+                if parts.iter().enumerate().any(|(i, part)| parts[..i].iter().any(|other| bounds::near(part[0], other[0], RESERVE))) {
+                    let Some((holes, islands)) = cutter.local_complement(envelope_nm) else { return Ok(None) };
+                    assembled[owner].holes.extend(holes);
+                    retained.extend(islands);
+                    continue;
+                }
+                for region in &cutter.regions {
                     // A cutter's outer loop normally winds counter-clockwise. Once
                     // stored as a hole it must subtract from analytic area, independently
                     // of the B-rep's own winding normalization.
@@ -285,10 +291,19 @@ impl Regions {
                         Some(false) => region.outer.clone(),
                         None => return Ok(None),
                     };
-                    envelopes.push(envelope);
                     assembled[owner].holes.push(hole);
+                    for inner in &region.holes {
+                        let lp = solidcore_convert::loop2(inner);
+                        let outer = match lp.signed_area().map_err(kernel_error)?.sign() {
+                            Some(true) => inner.clone(),
+                            Some(false) => solidcore_convert::record_loop2(&lp.reversed()),
+                            None => return Ok(None),
+                        };
+                        retained.push(Region2 { outer, holes: Vec::new() });
+                    }
                 }
             }
+            assembled.extend(retained);
             let mut value = checked_assembled(assembled)?;
             match kernel::prepare_enclosed(&value.regions) {
                 Ok(operand) => {
@@ -299,6 +314,24 @@ impl Regions {
                 Err(_) => Ok(None),
             }
         })
+    }
+
+    /// Extract the inside boundary of a local complement. The cutter is strictly inside
+    /// the rectangle, so exactly one result face owns the rectangle's perimeter. Only its
+    /// holes and the other, enclosed faces affect the original stock.
+    fn local_complement(&self, envelope_nm: [f64; 4]) -> Option<(Vec<Loop2>, Vec<Region2>)> {
+        const MARGIN_NM: i64 = 1_000;
+        let [x0, y0, x1, y1] = envelope_nm;
+        let (x0, y0) = (x0.floor() as i64 - MARGIN_NM, y0.floor() as i64 - MARGIN_NM);
+        let (x1, y1) = (x1.ceil() as i64 + MARGIN_NM, y1.ceil() as i64 + MARGIN_NM);
+        let rectangle = Self::polygon(&[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).ok()?;
+        let mut complement = rectangle.boolean(self, Operation::Difference).ok()?;
+        let index = complement
+            .profile_bounds()
+            .iter()
+            .position(|bounds| bounds[0].iter().zip(rectangle.profile_bounds()[0][0]).all(|(a, b)| (a - b).abs() < 0.000_050))?;
+        let shell = complement.regions.remove(index);
+        Some((shell.holes, complement.regions))
     }
 
     /// Clip two immutable operands, preserving curved boundaries. Kernel profile/resource
