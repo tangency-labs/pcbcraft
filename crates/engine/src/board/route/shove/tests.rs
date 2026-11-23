@@ -1236,7 +1236,7 @@ fn a_locked_inner_layer_endpoint_pins_its_via() {
     assert!(s.apply(ADD_TRACKS, &incomplete).is_err());
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
     let original = params(&s);
-    s.apply(SET_COPPER_LOCKED, &json!({"tracks":[follower],"locked":true,"expected_revision":s.revision()})).unwrap();
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[follower],"locked":true,"expected_revision":s.revision()})).unwrap();
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
     let revision = s.revision();
     assert!(s.apply(ADD_TRACKS, &original).is_err());
@@ -1253,7 +1253,7 @@ fn a_drag_cannot_pull_off_its_locked_neighbor() {
     let mut s = board();
     let moved = add(&mut s, vec![p(0, 0), p(40, 0)], 250000)[0];
     let locked = add(&mut s, vec![p(40, 0), p(80, 0)], 250000)[0];
-    s.apply(SET_COPPER_LOCKED, &json!({"tracks":[locked],"locked":true,"expected_revision":s.revision()})).unwrap();
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[locked],"locked":true,"expected_revision":s.revision()})).unwrap();
     let before = encode_documents(s.snapshot().unwrap()).unwrap();
     let revision = s.revision();
     let params = json!({"tracks":[{"track":moved,"start":p(0,10),"end":p(40,10)}],"mode":"shove","expected_revision":revision});
@@ -1287,7 +1287,7 @@ fn a_rejected_incoming_path_discards_its_via_move() {
     let at = p(40, 0);
     s.apply(crate::ADD_VIA, &json!({"at":at,"expected_revision":s.revision()})).unwrap();
     let locked = add(&mut s, vec![p(58, -10), p(58, 10)], 250_000)[0];
-    s.apply(SET_COPPER_LOCKED, &json!({"tracks":[locked],"locked":true,"expected_revision":s.revision()})).unwrap();
+    s.apply(SET_COPPER_LOCKED, &json!({"board":view(&s).target.board,"tracks":[locked],"locked":true,"expected_revision":s.revision()})).unwrap();
     let request = Request { head: p(0, 3), target: p(90, 3), mode: Mode::ShoveVias, ..request(&s) };
     let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
     assert!(plan.via_moves.is_empty(), "{plan:?}");
