@@ -215,6 +215,12 @@ pub fn validate_stroke(stroke_nm: i64) -> Result<(), String> {
     if (MIN_STROKE_NM..=MAX_STROKE_NM).contains(&stroke_nm) { Ok(()) } else { Err("Stroke (mm) must be between 0.001 and 2 mm.".into()) }
 }
 
+/// Return whether every point in `points` lies within the footprint definition coordinate bounds.
+fn points_within_bounds(points: &[Point]) -> bool {
+    let limit = footprint::MAX_OFFSET_NM;
+    points.iter().all(|p| (-limit..=limit).contains(&p.x_nm) && (-limit..=limit).contains(&p.y_nm))
+}
+
 /// Validate that `points` forms a bounded, non-degenerate, non-self-intersecting closed polygon.
 pub fn validate_polygon(points: &[Point]) -> Result<(), String> {
     if points.len() < MIN_VERTICES {
@@ -223,8 +229,7 @@ pub fn validate_polygon(points: &[Point]) -> Result<(), String> {
     if points.len() > MAX_VERTICES {
         return Err(format!("A courtyard outline can have at most {MAX_VERTICES} vertices."));
     }
-    let limit = footprint::MAX_OFFSET_NM;
-    if points.iter().any(|p| !(-limit..=limit).contains(&p.x_nm) || !(-limit..=limit).contains(&p.y_nm)) {
+    if !points_within_bounds(points) {
         return Err("Drawing extends outside the definition bounds.".into());
     }
     let n = points.len();
@@ -252,7 +257,7 @@ pub fn validate_polygon(points: &[Point]) -> Result<(), String> {
 /// and whose adjacent edges do not fold back onto each other.
 pub fn is_simple_polygon(points: &[Point]) -> bool {
     let n = points.len();
-    if n < MIN_VERTICES || doubled_signed_area(points) == 0 {
+    if n < MIN_VERTICES || !points_within_bounds(points) || doubled_signed_area(points) == 0 {
         return false;
     }
     for i in 0..n {
@@ -283,6 +288,9 @@ pub fn is_simple_polygon(points: &[Point]) -> bool {
 /// Compute axis-aligned bounds, dimensions, area and simplicity for a closed courtyard polygon.
 pub fn metrics(points: &[Point]) -> Option<CourtyardMetrics> {
     let &first = points.first()?;
+    if !points_within_bounds(points) {
+        return None;
+    }
     let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.x_nm, first.y_nm, first.x_nm, first.y_nm);
     for &p in points.iter().skip(1) {
         min_x = min_x.min(p.x_nm);
@@ -683,6 +691,35 @@ mod tests {
         let at_limit = vec![pt(-limit, -limit), pt(limit, -limit), pt(limit, limit), pt(-limit, limit)];
         assert!(validate_polygon(&at_limit).is_ok());
         assert!(make_courtyard_polygon(at_limit, DEFAULT_STROKE_NM).is_ok());
+    }
+
+    /// Public polygon queries reject out-of-bounds coordinates (including extreme
+    /// `i64::MIN..=i64::MAX` corners) before arithmetic, while keeping valid bounded results.
+    #[test]
+    fn metrics_and_is_simple_polygon_guard_coordinate_bounds_before_arithmetic() {
+        let extreme = [pt(i64::MIN, i64::MIN), pt(i64::MAX, i64::MIN), pt(i64::MAX, i64::MAX), pt(i64::MIN, i64::MAX)];
+        assert!(!is_simple_polygon(&extreme));
+        assert_eq!(metrics(&extreme), None);
+
+        let limit = footprint::MAX_OFFSET_NM;
+        let just_outside = [pt(0, 0), pt(limit + 1, 0), pt(limit + 1, 1_000_000), pt(0, 1_000_000)];
+        assert!(!is_simple_polygon(&just_outside));
+        assert_eq!(metrics(&just_outside), None);
+
+        let negative_outside = [pt(-limit - 1, 0), pt(0, 0), pt(0, 1_000_000)];
+        assert!(!is_simple_polygon(&negative_outside));
+        assert_eq!(metrics(&negative_outside), None);
+
+        let at_limit = [pt(-limit, -limit), pt(limit, -limit), pt(limit, limit), pt(-limit, limit)];
+        assert!(is_simple_polygon(&at_limit));
+        let bounded = metrics(&at_limit).unwrap();
+        assert_eq!(bounded.min, pt(-limit, -limit));
+        assert_eq!(bounded.max, pt(limit, limit));
+        assert_eq!(bounded.width_nm, 2 * limit);
+        assert_eq!(bounded.height_nm, 2 * limit);
+        assert_eq!(bounded.area_nm2, i128::from(2 * limit) * i128::from(2 * limit));
+        assert_eq!(bounded.vertex_count, 4);
+        assert!(bounded.is_simple);
     }
 
     /// Out-of-range clearance and empty footprints are rejected cleanly.
