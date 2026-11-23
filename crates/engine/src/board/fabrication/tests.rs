@@ -2304,6 +2304,21 @@ struct ReadXnc {
     hits: BTreeMap<u32, usize>,
 }
 
+/// Parse a plain ASCII decimal number (rejecting exponents, `inf`, and `NaN`).
+fn parse_xnc_decimal(text: &str, allow_sign: bool) -> Option<f64> {
+    let unsigned = if allow_sign { text.strip_prefix(['+', '-']).unwrap_or(text) } else { text };
+    let (whole, frac) = match unsigned.split_once('.') {
+        Some((whole, frac)) => (whole, Some(frac)),
+        None => (unsigned, None),
+    };
+    let digits = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+    let has_digit = !whole.is_empty() || frac.is_some_and(|part| !part.is_empty());
+    if !has_digit || !digits(whole) || !frac.is_none_or(digits) {
+        return None;
+    }
+    text.parse::<f64>().ok().filter(|value| value.is_finite())
+}
+
 /// Read one drill file with the XNC 2021.11 grammar (§2.10, §3): M48 first, one METRIC unit
 /// in the header before the tool table, `%` ends the header, G05 drill mode, tool selections
 /// and hits, and M30 last. `FMAT,2`, `G90` and one-digit tool numbers in declarations are the
@@ -2343,7 +2358,7 @@ fn read_xnc(text: &str) -> Result<ReadXnc, String> {
                     let (number, diameter) =
                         line.strip_prefix('T').and_then(|rest| rest.split_once('C')).ok_or_else(|| format!("not a header command: {line}"))?;
                     let number: u32 = number.parse().map_err(|_| format!("tool number: {line}"))?;
-                    let size: f64 = diameter.parse().map_err(|_| format!("tool diameter: {line}"))?;
+                    let size = parse_xnc_decimal(diameter, false).ok_or_else(|| format!("tool diameter: {line}"))?;
                     if !unit || !(1..=99).contains(&number) || size <= 0. || read.tools.insert(number, diameter.to_owned()).is_some() {
                         return Err(format!("invalid tool declaration: {line}"));
                     }
@@ -2364,7 +2379,9 @@ fn read_xnc(text: &str) -> Result<ReadXnc, String> {
             }
             _ => {
                 let (x, y) = line.strip_prefix('X').and_then(|rest| rest.split_once('Y')).ok_or_else(|| format!("not a body command: {line}"))?;
-                x.parse::<f64>().and(y.parse::<f64>()).map_err(|_| format!("coordinate: {line}"))?;
+                if parse_xnc_decimal(x, true).is_none() || parse_xnc_decimal(y, true).is_none() {
+                    return Err(format!("coordinate: {line}"));
+                }
                 let selected = tool.filter(|_| drilling).ok_or_else(|| format!("hit without drill mode and tool: {line}"))?;
                 *read.hits.entry(selected).or_default() += 1;
             }
@@ -2409,9 +2426,17 @@ fn plated_drill_file_parses_as_xnc_with_plated_pth_attributes() {
             .filter(|output| output.name.ends_with(".gbr"))
             .all(|output| output.contents.contains(&format!("%TF.SameCoordinates,{frame_id}*%")))
     );
-    // A file the reader must refuse: hits before drill mode, and data after M30.
+    // A file the reader must refuse: hits before drill mode, data after M30, and non-decimal
+    // or non-positive numeric forms that Rust's `f64::parse` would otherwise accept.
     assert_eq!(read_xnc("M48\nMETRIC\nT1C0.300\n%\nT1\nX0Y0\nM30\n").unwrap_err(), "hit without drill mode and tool: X0Y0");
     assert_eq!(read_xnc("M48\nMETRIC\nT1C0.300\n%\nG05\nT1\nX0Y0\nM30\nX1Y1\n").unwrap_err(), "data after M30: X1Y1");
+    for hit in ["XINFY0", "X0Y-INF", "XNANY0", "X1E2Y0", "X0Y1.5E-1"] {
+        assert_eq!(read_xnc(&format!("M48\nMETRIC\nT1C0.300\n%\nG05\nT1\n{hit}\nM30\n")).unwrap_err(), format!("coordinate: {hit}"));
+    }
+    for decl in ["T1CINF", "T1CNAN", "T1C1E-1", "T1C-0.300"] {
+        assert_eq!(read_xnc(&format!("M48\nMETRIC\n{decl}\n%\nG05\nT1\nX0Y0\nM30\n")).unwrap_err(), format!("tool diameter: {decl}"));
+    }
+    assert_eq!(read_xnc("M48\nMETRIC\nT1C0.000\n%\nG05\nT1\nX0Y0\nM30\n").unwrap_err(), "invalid tool declaration: T1C0.000");
 }
 
 /// Gerber, PTH and NPTH files of one fabrication export share one deterministic `.SameCoordinates`
