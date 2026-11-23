@@ -1038,6 +1038,38 @@ fn a_press_focuses_the_pane_it_lands_in_within_the_frame() {
     }
 }
 
+/// When a middle press in one pane and a focusing press in the other (primary, or right while
+/// right-drag does not pan) arrive in the same frame, the focusing press decides focus; the
+/// middle press only navigates.
+#[test]
+fn a_focusing_press_decides_focus_over_an_earlier_middle_press() {
+    for (middle, primary, focusing) in
+        [(0, 1, egui::PointerButton::Primary), (1, 0, egui::PointerButton::Primary), (0, 1, egui::PointerButton::Secondary)]
+    {
+        let mut h = split_harness();
+        h.state_mut().preferences.navigation.right_drag_pan = false;
+        let ctx = h.ctx.clone();
+        h.state_mut().activate_editor(&ctx, ViewId(middle));
+        h.run();
+        assert_eq!(h.state().views.active.id(), ViewId(middle));
+        let at_middle = uncovered_point(&h, ViewId(middle), canvas(&h, middle));
+        let at_primary = uncovered_point(&h, ViewId(primary), canvas(&h, primary));
+        let snapshot = h.state().session.snapshot().unwrap();
+        let button = |pos, button, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE };
+        h.hover_at(at_middle);
+        h.run();
+        h.event(button(at_middle, egui::PointerButton::Middle, true));
+        h.event(egui::Event::PointerMoved(at_primary));
+        h.event(button(at_primary, focusing, true));
+        h.run();
+        h.event(button(at_primary, egui::PointerButton::Middle, false));
+        h.event(button(at_primary, focusing, false));
+        h.run();
+        assert_eq!(h.state().views.active.id(), ViewId(primary), "the {focusing:?} press's pane takes focus");
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    }
+}
+
 /// Wheel, pinch, scroll-pan and middle-drag follow the pointer into the inactive pane without
 /// focusing it. Only that camera moves; focus, both selections and the project stay as they were.
 #[test]

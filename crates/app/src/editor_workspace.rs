@@ -1091,10 +1091,17 @@ impl PcbApp {
         // already lie in another pane.
         let pressed = ctx.input(|input| {
             let right_click = right_pans && input.pointer.button_clicked(egui::PointerButton::Secondary);
-            let press = input.events.iter().find_map(|event| match event {
-                egui::Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
-                _ => None,
-            });
+            // A press that can focus (primary, or right when right-drag does not pan) decides
+            // focus even when a navigation-only press came first in the same frame.
+            let navigates =
+                |button: egui::PointerButton| button == egui::PointerButton::Middle || (right_pans && button == egui::PointerButton::Secondary);
+            let press_of = |focusing: bool| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::PointerButton { pos, button, pressed: true, .. } if !focusing || !navigates(*button) => Some(*pos),
+                    _ => None,
+                })
+            };
+            let press = press_of(true).or_else(|| press_of(false));
             let click = input.events.iter().rev().find_map(|event| match event {
                 egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, .. } => Some(*pos),
                 _ => None,
