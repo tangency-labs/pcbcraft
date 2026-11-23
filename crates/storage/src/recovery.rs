@@ -673,11 +673,11 @@ impl EditJournal {
     /// base, for example when an undo could not be encoded. Returns whether it wrote.
     pub fn snapshot(&mut self, documents: Documents) -> Result<bool, String> {
         self.ensure_lock_owned()?;
-        if let Some(journal_file) = self.file.as_ref()
+        if self.file.is_some()
             && self.base_sha256 == self.sha256
             && documents_sha256(&documents) == self.base_sha256
             && self.snapshot_matches_publication()?
-            && self.journal_matches_publication(journal_file)?
+            && self.journal_matches_publication()?
         {
             return Ok(false);
         }
@@ -688,30 +688,22 @@ impl EditJournal {
     /// published (same open file, expected byte length, and matching header generation and base
     /// hash). Missing, non-regular, replaced, truncated, or corrupted journals return `Ok(false)`
     /// so [`Self::snapshot`] rebuilds the pair under the held entry lock; other metadata,
-    /// identity, or open errors propagate as faults.
-    fn journal_matches_publication(&self, journal_file: &File) -> Result<bool, String> {
+    /// identity, or read errors propagate as faults.
+    fn journal_matches_publication(&mut self) -> Result<bool, String> {
+        let Some(journal_file) = self.file.as_mut() else {
+            return Ok(false);
+        };
         let path = entry_file(&self.dir, &self.id, "journal");
         if !same_open_file(&path, journal_file)? {
             return Ok(false);
         }
-        let file = match File::open(&path) {
-            Ok(file) => file,
-            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
-            Err(error) => return Err(error.to_string()),
-        };
-        let file_meta = file.metadata().map_err(|e| e.to_string())?;
-        if !file_meta.file_type().is_file() || file_meta.len() != self.journal_bytes {
+        let open_meta = journal_file.metadata().map_err(|e| e.to_string())?;
+        if !open_meta.file_type().is_file() || open_meta.len() != self.journal_bytes {
             return Ok(false);
         }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let open_meta = journal_file.metadata().map_err(|e| e.to_string())?;
-            if (file_meta.dev(), file_meta.ino()) != (open_meta.dev(), open_meta.ino()) {
-                return Ok(false);
-            }
-        }
-        let Ok(header) = read_recovery_header_from(file) else {
+        let mut buf = [0u8; SNAPSHOT_OVERHEAD_BYTES];
+        let read = read_header_prefix(journal_file, &mut buf).map_err(|e| e.to_string())?;
+        let Ok(header) = read_recovery_header_from(&buf[..read]) else {
             return Ok(false);
         };
         Ok(header.generation == self.generation && header.base_sha256 == self.base_sha256)
@@ -796,6 +788,45 @@ impl EditJournal {
             return self.rebase(self.documents.clone()).map_err(|e| format!("The recovery snapshot could not be renewed: {e}"));
         }
         Ok(())
+    }
+}
+
+/// Read up to `buf.len()` bytes from the start of `file` without disturbing its write cursor.
+fn read_header_prefix(file: &mut File, buf: &mut [u8]) -> std::io::Result<usize> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt;
+        let mut offset = 0;
+        while offset < buf.len() {
+            match file.read_at(&mut buf[offset..], offset as u64) {
+                Ok(0) => break,
+                Ok(n) => offset += n,
+                Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(offset)
+    }
+    #[cfg(not(unix))]
+    {
+        use std::io::{Seek, SeekFrom};
+        let saved = file.stream_position()?;
+        let result = file.seek(SeekFrom::Start(0)).and_then(|_| {
+            let mut offset = 0;
+            while offset < buf.len() {
+                match file.read(&mut buf[offset..]) {
+                    Ok(0) => break,
+                    Ok(n) => offset += n,
+                    Err(error) if error.kind() == ErrorKind::Interrupted => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            Ok(offset)
+        });
+        let restored = file.seek(SeekFrom::Start(saved));
+        let offset = result?;
+        restored?;
+        Ok(offset)
     }
 }
 
