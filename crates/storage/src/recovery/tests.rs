@@ -894,14 +894,40 @@ fn pruning_reads_complete_entry_times_under_scan_cap() {
     }
 }
 
-/// Retention's header probe rejects a declared header length above the snapshot-overhead limit
-/// before allocating the payload buffer.
+/// Retention's header probe rejects a declared header length above `MAX_HEADER_BYTES` before
+/// attempting to read or allocate the payload, distinct from rejecting a truncated frame.
 #[test]
 fn retention_header_probe_rejects_oversized_declared_length() {
+    struct HeaderOnlyReader {
+        prefix: Vec<u8>,
+        pos: usize,
+    }
+
+    impl std::io::Read for HeaderOnlyReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            assert!(self.pos < self.prefix.len(), "header probe attempted to read payload past oversized declared length");
+            let available = &self.prefix[self.pos..];
+            let count = available.len().min(buf.len());
+            buf[..count].copy_from_slice(&available[..count]);
+            self.pos += count;
+            Ok(count)
+        }
+    }
+
+    for declared in [u32::try_from(MAX_HEADER_BYTES + 1).unwrap(), u32::MAX] {
+        let mut prefix = MAGIC.to_vec();
+        prefix.extend_from_slice(&declared.to_le_bytes());
+        let err = read_recovery_header_from(HeaderOnlyReader { prefix, pos: 0 }).err().expect("oversized header must fail");
+        assert_eq!(err, "record exceeds its size limit");
+    }
+
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("oversized.pc");
+    let payload = vec![b' '; MAX_HEADER_BYTES + 1];
     let mut bytes = MAGIC.to_vec();
-    bytes.extend_from_slice(&u32::try_from(MAX_HEADER_BYTES + 1).unwrap().to_le_bytes());
+    bytes.extend_from_slice(&u32::try_from(payload.len()).unwrap().to_le_bytes());
+    bytes.extend_from_slice(&payload);
+    bytes.extend_from_slice(&Sha256::digest(&payload));
     fs::write(&path, bytes).unwrap();
     assert!(read_recovery_header(&path).is_err());
 
@@ -1428,8 +1454,10 @@ fn replaced_journal_file_is_detected_by_append_and_republished_by_snapshot() {
 }
 
 /// Retention acquires each candidate's entry lock before inspecting headers or timestamps and
-/// holds those locks through ranking and deletion: an entry held by an open recorder is skipped
-/// even when aged past `max_age`, while genuinely old or excess unlocked entries are still pruned.
+/// releases it before moving on, then re-acquires the lock and re-verifies the recovery header
+/// and per-file modification times before deleting any selected entry: an entry held by an open
+/// recorder is skipped even when aged past `max_age`, while genuinely old or excess unlocked
+/// entries are still pruned.
 #[test]
 fn pruning_skips_open_recorder_under_entry_lock_and_prunes_old_unlocked_entries() {
     let dir = tempfile::tempdir().unwrap();
@@ -1474,34 +1502,45 @@ fn pruning_skips_unwritable_directory_and_symlink_lock_paths_without_blocking_re
     let mut session = Session::default();
     session.apply("project.new", &json!({"name": "Retention"})).unwrap();
     let docs = encode_documents(session.snapshot().unwrap()).unwrap();
-    #[cfg(unix)]
-    let (dangling_docs, linked_docs) = (docs.clone(), docs.clone());
 
-    drop(EditJournal::create(dir.path(), "expired", docs).unwrap());
+    drop(EditJournal::create(dir.path(), "expired", docs.clone()).unwrap());
     age_entry(dir.path(), "expired", DAY * 30);
 
+    drop(EditJournal::create(dir.path(), "dir-lock", docs.clone()).unwrap());
+    fs::remove_file(entry_file(dir.path(), "dir-lock", "lock")).unwrap();
+    age_entry(dir.path(), "dir-lock", DAY * 30);
     let dir_lock = entry_file(dir.path(), "dir-lock", "lock");
     fs::create_dir(&dir_lock).unwrap();
 
     #[cfg(unix)]
     let readonly_lock = {
         use std::os::unix::fs::PermissionsExt;
+        drop(EditJournal::create(dir.path(), "readonly", docs.clone()).unwrap());
+        age_entry(dir.path(), "readonly", DAY * 30);
         let path = entry_file(dir.path(), "readonly", "lock");
-        fs::write(&path, b"unrelated").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let enforced = if open_entry_lock(&path, false).is_err() {
+            Some(path)
+        } else {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+            for ext in ["pc", "journal", "lock"] {
+                fs::remove_file(entry_file(dir.path(), "readonly", ext)).unwrap();
+            }
+            None
+        };
 
-        drop(EditJournal::create(dir.path(), "dangling", dangling_docs).unwrap());
+        drop(EditJournal::create(dir.path(), "dangling", docs.clone()).unwrap());
         fs::remove_file(entry_file(dir.path(), "dangling", "lock")).unwrap();
         age_entry(dir.path(), "dangling", DAY * 30);
         std::os::unix::fs::symlink("missing-target", entry_file(dir.path(), "dangling", "lock")).unwrap();
 
-        drop(EditJournal::create(dir.path(), "linked", linked_docs).unwrap());
+        drop(EditJournal::create(dir.path(), "linked", docs.clone()).unwrap());
         fs::remove_file(entry_file(dir.path(), "linked", "lock")).unwrap();
         age_entry(dir.path(), "linked", DAY * 30);
         let target = dir.path().join("target.txt");
         fs::write(&target, b"keep").unwrap();
         std::os::unix::fs::symlink(&target, entry_file(dir.path(), "linked", "lock")).unwrap();
-        path
+        enforced
     };
 
     let retention = Retention { max_age: DAY * 14, max_entries: 16 };
@@ -1510,16 +1549,36 @@ fn pruning_skips_unwritable_directory_and_symlink_lock_paths_without_blocking_re
         assert!(!entry_file(dir.path(), "expired", ext).exists(), "expired.{ext} should be pruned");
     }
     assert!(dir_lock.is_dir());
+    assert!(entry_file(dir.path(), "dir-lock", "pc").exists());
+    assert!(entry_file(dir.path(), "dir-lock", "journal").exists());
+    assert_eq!(recover(dir.path(), "dir-lock").unwrap().documents, docs);
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert!(readonly_lock.exists());
+        if let Some(readonly_lock) = readonly_lock {
+            assert!(readonly_lock.exists());
+            assert!(entry_file(dir.path(), "readonly", "pc").exists());
+            assert!(entry_file(dir.path(), "readonly", "journal").exists());
+            assert_eq!(recover(dir.path(), "readonly").unwrap().documents, docs);
+            fs::set_permissions(&readonly_lock, fs::Permissions::from_mode(0o644)).unwrap();
+        }
         assert!(entry_file(dir.path(), "dangling", "pc").exists());
         assert!(entry_file(dir.path(), "linked", "pc").exists());
         assert_eq!(fs::read(dir.path().join("target.txt")).unwrap(), b"keep");
-        fs::set_permissions(&readonly_lock, fs::Permissions::from_mode(0o644)).unwrap();
     }
+
+    // Deterministic permission-denied coverage for all platforms and elevated test runs:
+    // fail opening `readonly.lock` during Pass 1 while `expired` is still pruned.
+    let perm_dir = tempfile::tempdir().unwrap();
+    for id in ["expired", "readonly"] {
+        drop(EditJournal::create(perm_dir.path(), id, docs.clone()).unwrap());
+        age_entry(perm_dir.path(), id, DAY * 30);
+    }
+    faults::arm(perm_dir.path(), Fault::LockPermission, 2);
+    assert_eq!(prune(perm_dir.path(), retention), Ok(1));
+    assert_eq!(entry_ids(perm_dir.path()), std::collections::BTreeSet::from(["readonly".to_owned()]));
+    assert_eq!(recover(perm_dir.path(), "readonly").unwrap().documents, docs);
 }
 
 /// Retention drops each candidate's `.lock` handle before moving on to the next candidate, so
@@ -1600,4 +1659,142 @@ fn pruning_keeps_entry_touched_between_scan_and_delete() {
     assert_eq!(removed, Ok(1));
     assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["touched".to_owned()]));
     assert_eq!(recover(dir.path(), "touched").unwrap().documents, docs);
+}
+
+/// A future `.lock` modification time must not mask a `.journal` update between the scan and
+/// delete passes when an entry is selected by `max_entries`, while an unchanged excess entry is
+/// still pruned.
+#[test]
+fn pruning_detects_journal_update_masked_by_future_lock_mtime() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Masked"})).unwrap();
+    let docs = encode_documents(session.snapshot().unwrap()).unwrap();
+
+    let now = std::time::SystemTime::now();
+    for (id, lock_future) in [("keep-newest", DAY * 20), ("masked-update", DAY * 10), ("unchanged-excess", DAY * 5)] {
+        drop(EditJournal::create(dir.path(), id, docs.clone()).unwrap());
+        age_entry(dir.path(), id, DAY * 2);
+        File::options().write(true).open(entry_file(dir.path(), id, "lock")).unwrap().set_modified(now + lock_future).unwrap();
+    }
+
+    let retention = Retention { max_age: DAY * 14, max_entries: 1 };
+    let mut touched_in_hook = false;
+    let removed = prune_with_hooks(
+        dir.path(),
+        retention,
+        SCAN_LIMIT,
+        |dir| Ok(fs::read_dir(dir).unwrap().map(|entry| entry.ok().map(|entry| entry.file_name()))),
+        |_| {},
+        |id| {
+            if id == "masked-update" {
+                touched_in_hook = true;
+                File::options().write(true).open(entry_file(dir.path(), "masked-update", "journal")).unwrap().set_modified(now).unwrap();
+            }
+        },
+    );
+    assert!(touched_in_hook);
+    assert_eq!(removed, Ok(1));
+    assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["keep-newest", "masked-update"].map(str::to_owned)));
+    assert_eq!(recover(dir.path(), "masked-update").unwrap().documents, docs);
+}
+
+/// When an entry has a valid lock and recovery header but its modification-time lookup fails
+/// during retention, pruning leaves the entry untouched; without the failure the same aged entry
+/// is removed.
+#[test]
+fn pruning_keeps_entry_when_metadata_lookup_fails_after_lock_and_header() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "MetadataFailure"})).unwrap();
+    let docs = encode_documents(session.snapshot().unwrap()).unwrap();
+
+    drop(EditJournal::create(dir.path(), "aged", docs.clone()).unwrap());
+    age_entry(dir.path(), "aged", DAY * 30);
+
+    let retention = Retention { max_age: DAY * 14, max_entries: 16 };
+    faults::arm(dir.path(), Fault::EntryMetadata, 1);
+    assert_eq!(prune(dir.path(), retention), Ok(0));
+    assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["aged".to_owned()]));
+    assert_eq!(recover(dir.path(), "aged").unwrap().documents, docs);
+
+    // Control case: the exact same fixture without the metadata failure is pruned.
+    assert_eq!(prune(dir.path(), retention), Ok(1));
+    assert!(entry_ids(dir.path()).is_empty());
+}
+
+/// `snapshot` must verify the published `.pc` file before taking its no-op fast path: replacing
+/// `.pc` with an older valid recovery snapshot or another regular file forces a republish under
+/// the held lock, while an unwritable replacement reports a fault.
+#[test]
+fn snapshot_republishes_when_pc_is_replaced_with_older_snapshot_or_other_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Older"})).unwrap();
+    let state_old = encode_documents(session.snapshot().unwrap()).unwrap();
+    session.apply("project.rename", &json!({"name": "Current"})).unwrap();
+    let state_current = encode_documents(session.snapshot().unwrap()).unwrap();
+
+    drop(EditJournal::create(dir.path(), "older", state_old).unwrap());
+    let older_pc_bytes = fs::read(entry_file(dir.path(), "older", "pc")).unwrap();
+
+    let mut journal = EditJournal::create(dir.path(), "active", state_current.clone()).unwrap();
+    assert_eq!(journal.snapshot(state_current.clone()), Ok(false));
+
+    // Replace only `.pc` with an older valid recovery snapshot while `.lock` and `.journal` stay intact.
+    let active_pc = entry_file(dir.path(), "active", "pc");
+    fs::write(&active_pc, &older_pc_bytes).unwrap();
+    assert_eq!(journal.snapshot(state_current.clone()), Ok(true));
+    assert_eq!(recover(dir.path(), "active").unwrap().documents, state_current);
+    assert_eq!(journal.snapshot(state_current.clone()), Ok(false));
+
+    // Replace `.pc` with a different regular file at the same path.
+    let replacement = dir.path().join("replacement.tmp");
+    fs::write(&replacement, b"not a recovery snapshot").unwrap();
+    fs::rename(&replacement, &active_pc).unwrap();
+    assert_eq!(journal.snapshot(state_current.clone()), Ok(true));
+    assert_eq!(recover(dir.path(), "active").unwrap().documents, state_current);
+
+    // If `.pc` was replaced by a directory that cannot be overwritten, snapshot reports a fault.
+    fs::remove_file(&active_pc).unwrap();
+    fs::create_dir(&active_pc).unwrap();
+    assert!(journal.snapshot(state_current).is_err());
+}
+
+/// If `same_open_file` returns a transient error after `append` has already flushed a record,
+/// `append` closes the journal handle so the next edit rebases instead of appending a record from
+/// the stale prior hash that replay would reject.
+#[test]
+fn append_closes_journal_when_post_write_identity_check_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "IdentityError"})).unwrap();
+    let state_0 = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut journal = EditJournal::create(dir.path(), "entry", state_0).unwrap();
+
+    let mut make_edit = |x_grid: i64| {
+        let revision = session
+            .apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": x_grid * GRID_NM, "y_nm": 0, "expected_revision": session.revision()}))
+            .unwrap();
+        let project = session.snapshot().unwrap();
+        let documents = encode_documents(project.clone()).unwrap();
+        let edit = CommittedEdit { command: PLACE_SYMBOL.to_owned(), params: json!({}), revision, project };
+        (edit, documents)
+    };
+
+    let (edit_1, state_1) = make_edit(0);
+    faults::arm(dir.path(), Fault::Identity, 1);
+    assert!(journal.append(&edit_1, state_1).is_err());
+    assert!(!journal.removed);
+
+    let (edit_2, state_2) = make_edit(10);
+    assert_eq!(journal.append(&edit_2, state_2), Ok(()));
+
+    let (edit_3, state_3) = make_edit(20);
+    assert_eq!(journal.append(&edit_3, state_3.clone()), Ok(()));
+    drop(journal);
+
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.documents, state_3);
 }

@@ -418,6 +418,12 @@ mod faults {
         Flush,
         /// A record write, after half its frame.
         Tear,
+        /// A post-write journal identity check.
+        Identity,
+        /// Opening a candidate entry's `.lock` file during retention.
+        LockPermission,
+        /// Reading a candidate entry's modification times during retention.
+        EntryMetadata,
     }
 
     /// Armed switches: the folder, the fault, and how many such calls still pass before one fails.
@@ -513,6 +519,13 @@ pub struct EditJournal {
     sha256: String,
     /// Fingerprint of the snapshot documents.
     base_sha256: String,
+    /// Publication token written into the current snapshot and journal headers.
+    generation: String,
+    /// Byte length of the published `.pc` snapshot file.
+    snapshot_bytes: u64,
+    /// Unix `(dev, ino)` of the published `.pc` snapshot file.
+    #[cfg(unix)]
+    snapshot_file_id: Option<(u64, u64)>,
     /// Bytes in the journal file, header included.
     journal_bytes: u64,
     /// Journal size above which the next recorded edit starts a new snapshot.
@@ -560,6 +573,10 @@ impl EditJournal {
             documents: Documents::new(),
             sha256: String::new(),
             base_sha256: String::new(),
+            generation: String::new(),
+            snapshot_bytes: 0,
+            #[cfg(unix)]
+            snapshot_file_id: None,
             journal_bytes: 0,
             rebase_after: REBASE_FLOOR_BYTES,
             floor: REBASE_FLOOR_BYTES,
@@ -627,7 +644,20 @@ impl EditJournal {
         self.documents = base;
         self.sha256 = header.base_sha256.clone();
         self.base_sha256.clone_from(&self.sha256);
-        drop(published?);
+        self.generation.clone_from(&header.generation);
+        self.snapshot_bytes = snapshot_bytes;
+        #[cfg(unix)]
+        {
+            self.snapshot_file_id = None;
+        }
+        let published_file = published?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let meta = published_file.metadata().map_err(|e| e.to_string())?;
+            self.snapshot_file_id = Some((meta.dev(), meta.ino()));
+        }
+        drop(published_file);
         let (file, journal_bytes) = publish_journal(&self.dir, &self.id, &header)?;
         self.file = Some(file);
         self.journal_bytes = journal_bytes;
@@ -637,15 +667,16 @@ impl EditJournal {
 
     /// Take a recovery snapshot of `documents`: [`Self::rebase`] onto them, unless the journal
     /// is open, both its recorded result and its base already equal the requested state, the
-    /// current `.pc` snapshot file still exists, and the `.journal` path still names the open
-    /// journal file. Checking the recorded result matters if a notification failed to return the
-    /// journal to its base, for example when an undo could not be encoded. Returns whether it wrote.
+    /// current `.pc` snapshot file still matches this recorder's publication, and the `.journal`
+    /// path still names the open journal file. Checking the recorded result matters if a
+    /// notification failed to return the journal to its base, for example when an undo could not
+    /// be encoded. Returns whether it wrote.
     pub fn snapshot(&mut self, documents: Documents) -> Result<bool, String> {
         self.ensure_lock_owned()?;
         if let Some(journal_file) = self.file.as_ref()
             && self.base_sha256 == self.sha256
             && documents_sha256(&documents) == self.base_sha256
-            && regular_file_exists(&entry_file(&self.dir, &self.id, "pc"))?
+            && self.snapshot_matches_publication()?
             && same_open_file(&entry_file(&self.dir, &self.id, "journal"), journal_file)?
         {
             return Ok(false);
@@ -653,13 +684,46 @@ impl EditJournal {
         self.rebase(documents).map(|()| true)
     }
 
+    /// Return whether `<id>.pc` still names the regular recovery snapshot publication this
+    /// recorder wrote (same file identity on Unix, same byte length, and matching header
+    /// generation and base hash). Missing, non-regular, or replaced files return `Ok(false)` so
+    /// [`Self::snapshot`] repairs the pair under the held entry lock; other metadata or open
+    /// errors propagate as faults.
+    fn snapshot_matches_publication(&self) -> Result<bool, String> {
+        let path = entry_file(&self.dir, &self.id, "pc");
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.to_string()),
+        };
+        if !metadata.file_type().is_file() || metadata.len() != self.snapshot_bytes {
+            return Ok(false);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            if self.snapshot_file_id != Some((metadata.dev(), metadata.ino())) {
+                return Ok(false);
+            }
+        }
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.to_string()),
+        };
+        let Ok(header) = read_recovery_header_from(file) else {
+            return Ok(false);
+        };
+        Ok(header.generation == self.generation && header.base_sha256 == self.base_sha256)
+    }
+
     /// Record that `edit` produced `documents`, and flush the record to disk before returning.
-    /// After a failed append the journal may end in a torn record, so the next call starts a new
-    /// snapshot rather than appending past it. Detected removal disables the entry, since its
-    /// lock path may have been removed too. An edit that changed no document is not recorded.
-    /// Once the journal passes its size limit, the recorded state becomes a new snapshot. If
-    /// rebasing fails after a successful append, that edit remains in either the old journal or
-    /// the new snapshot, depending on the publication stage, and the error is returned.
+    /// After a failed append or post-write verification error, the journal is closed so the next
+    /// call starts a new snapshot rather than appending past it. Detected removal disables the
+    /// entry, since its lock path may have been removed too. An edit that changed no document is
+    /// not recorded. Once the journal passes its size limit, the recorded state becomes a new
+    /// snapshot. If rebasing fails after a successful append, that edit remains in either the old
+    /// journal or the new snapshot, depending on the publication stage, and the error is returned.
     pub fn append(&mut self, edit: &CommittedEdit, documents: Documents) -> Result<(), String> {
         let Some(file) = self.file.as_mut() else {
             return self.rebase(documents);
@@ -677,10 +741,20 @@ impl EditJournal {
         // Writes to a journal whose file or folder was removed or replaced still succeed on Unix,
         // into an unlinked file recovery can no longer find; report that instead of a record that
         // cannot be recovered.
-        if !same_open_file(&entry_file(&self.dir, &self.id, "journal"), file)? {
-            self.file = None;
-            self.removed = true;
-            return Err(REMOVED_ENTRY.to_owned());
+        match same_open_file(&entry_file(&self.dir, &self.id, "journal"), file) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.file = None;
+                self.removed = true;
+                return Err(REMOVED_ENTRY.to_owned());
+            }
+            Err(error) => {
+                // The record was already flushed while `self.sha256` still names the prior state;
+                // close the journal so the next edit or snapshot rebases instead of appending from
+                // the stale hash.
+                self.file = None;
+                return Err(error);
+            }
         }
         self.journal_bytes = self.journal_bytes.saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
         self.documents = documents;
@@ -692,18 +766,12 @@ impl EditJournal {
     }
 }
 
-/// Return whether `path` currently names an existing regular file (not missing or replaced by a
-/// symlink/directory). Other metadata errors propagate so callers do not treat them as intact.
-fn regular_file_exists(path: &Path) -> Result<bool, String> {
-    match fs::symlink_metadata(path) {
-        Ok(meta) => Ok(meta.file_type().is_file()),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
 /// Return whether `path` currently names the same regular file as the open handle `open`.
 fn same_open_file(path: &Path, open: &File) -> Result<bool, String> {
+    #[cfg(test)]
+    if path.parent().is_some_and(|dir| faults::fails(dir, faults::Fault::Identity)) {
+        return Err("The recovery journal could not be verified.".to_owned());
+    }
     let path_meta = match fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_file() => meta,
         Ok(_) => return Ok(false),
@@ -1003,6 +1071,19 @@ pub fn prune(dir: &Path, retention: Retention) -> Result<usize, String> {
     })
 }
 
+/// Read and verify the versioned recovery header from `reader` within the bounded snapshot
+/// header budget (`SNAPSHOT_OVERHEAD_BYTES` / `MAX_HEADER_BYTES`).
+fn read_recovery_header_from(reader: impl Read) -> Result<Header, String> {
+    let mut reader = reader.take(SNAPSHOT_OVERHEAD_BYTES as u64);
+    let mut magic = [0; MAGIC.len()];
+    reader.read_exact(&mut magic).map_err(|e| e.to_string())?;
+    if magic != MAGIC {
+        return Err("not a recovery file".to_owned());
+    }
+    let payload = read_frame_bounded(&mut reader, MAX_HEADER_BYTES)?.ok_or_else(|| "header is missing".to_owned())?;
+    serde_json::from_slice(&payload).map_err(|e| e.to_string())
+}
+
 /// Read and verify the versioned recovery header from a regular `.pc` or `.journal` file.
 /// Returns `Ok(None)` when the path does not exist, `Ok(Some(header))` when the file is a regular
 /// recovery envelope with a valid framed [`Header`], and `Err(())` for ordinary project archives,
@@ -1017,15 +1098,7 @@ fn read_recovery_header(path: &Path) -> Result<Option<Header>, ()> {
         return Err(());
     }
     let file = File::open(path).map_err(|_| ())?;
-    let mut reader = file.take(SNAPSHOT_OVERHEAD_BYTES as u64);
-    let mut magic = [0; MAGIC.len()];
-    reader.read_exact(&mut magic).map_err(|_| ())?;
-    if magic != MAGIC {
-        return Err(());
-    }
-    let payload = read_frame_bounded(&mut reader, MAX_HEADER_BYTES).map_err(|_| ())?.ok_or(())?;
-    let header: Header = serde_json::from_slice(&payload).map_err(|_| ())?;
-    Ok(Some(header))
+    read_recovery_header_from(file).map(Some).map_err(|_| ())
 }
 
 /// Whether `id` in `dir` is provably a recovery entry created by this format.
@@ -1041,23 +1114,53 @@ fn is_recovery_entry(dir: &Path, id: &str) -> bool {
     pc.is_some() || journal.is_some()
 }
 
-/// Newest modification time across all three known files of recovery entry `id`.
+/// Observed modification times of a recovery entry's three known files (`.pc`, `.journal`,
+/// `.lock`), together with their maximum for ranking and age checks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EntryTimes {
+    pc: Option<SystemTime>,
+    journal: Option<SystemTime>,
+    lock: Option<SystemTime>,
+    newest: SystemTime,
+}
+
+/// Modification times of all three known files of recovery entry `id`, plus their maximum.
 /// Returns `None` if a metadata error prevents determining any existing file's time, or if none
 /// of the files exist, so retention leaves the entry in place rather than treating it as expired.
-fn entry_modified(dir: &Path, id: &str) -> Option<SystemTime> {
+fn entry_times(dir: &Path, id: &str) -> Option<EntryTimes> {
+    #[cfg(test)]
+    if faults::fails(dir, faults::Fault::EntryMetadata) {
+        return None;
+    }
+    let mut times = [None; 3];
     let mut newest: Option<SystemTime> = None;
-    for ext in ["pc", "journal", "lock"] {
+    for (slot, ext) in times.iter_mut().zip(["pc", "journal", "lock"]) {
         let path = entry_file(dir, id, ext);
         match fs::metadata(&path) {
             Ok(metadata) => {
                 let modified = metadata.modified().ok()?;
+                *slot = Some(modified);
                 newest = Some(newest.map_or(modified, |prev| prev.max(modified)));
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {}
             Err(_) => return None,
         }
     }
-    newest
+    Some(EntryTimes { pc: times[0], journal: times[1], lock: times[2], newest: newest? })
+}
+
+#[cfg(test)]
+fn entry_modified(dir: &Path, id: &str) -> Option<SystemTime> {
+    entry_times(dir, id).map(|times| times.newest)
+}
+
+#[cfg_attr(not(test), allow(unused_variables))]
+fn open_candidate_lock(dir: &Path, path: &Path) -> std::io::Result<File> {
+    #[cfg(test)]
+    if faults::fails(dir, faults::Fault::LockPermission) {
+        return Err(std::io::Error::new(ErrorKind::PermissionDenied, "permission denied"));
+    }
+    open_entry_lock(path, false)
 }
 
 /// Try to acquire candidate `id`'s `.lock` file without following symlinks.
@@ -1067,7 +1170,7 @@ fn try_lock_candidate(dir: &Path, id: &str) -> Option<Option<File>> {
     let lock_path = entry_file(dir, id, "lock");
     match fs::symlink_metadata(&lock_path) {
         Err(error) if error.kind() == ErrorKind::NotFound => Some(None),
-        Ok(metadata) if metadata.file_type().is_file() => match open_entry_lock(&lock_path, false) {
+        Ok(metadata) if metadata.file_type().is_file() => match open_candidate_lock(dir, &lock_path) {
             Ok(lock) if lock.try_lock().is_ok() => Some(Some(lock)),
             Ok(_) => None,
             Err(error) if error.kind() == ErrorKind::NotFound => Some(None),
@@ -1123,7 +1226,7 @@ where
     }
     // Pass 1 (scan): acquire each candidate's entry lock before reading its headers or timestamps,
     // then drop the lock immediately so retention holds at most one entry lock handle at a time.
-    let mut entries: Vec<(SystemTime, String)> = Vec::new();
+    let mut entries: Vec<(EntryTimes, String)> = Vec::new();
     for id in ids {
         let Some(lock) = try_lock_candidate(dir, &id) else {
             continue;
@@ -1132,20 +1235,20 @@ where
         if !is_recovery_entry(dir, &id) {
             continue;
         }
-        let Some(modified) = entry_modified(dir, &id) else {
+        let Some(times) = entry_times(dir, &id) else {
             continue;
         };
         drop(lock);
-        entries.push((modified, id));
+        entries.push((times, id));
     }
-    // Pass 2 (rank): newest first, tie-broken deterministically by id.
-    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    // Pass 2 (rank): newest first by maximum modification time, tie-broken deterministically by id.
+    entries.sort_by(|a, b| b.0.newest.cmp(&a.0.newest).then_with(|| b.1.cmp(&a.1)));
     let now = SystemTime::now();
     let (mut kept, mut removed) = (0, 0);
     // Pass 3 (delete): re-acquire each selected entry's lock under the folder gate, re-verify
-    // its recovery header and modification time, and skip it if it became busy or changed.
-    for (recorded_modified, id) in entries {
-        let old = now.duration_since(recorded_modified).unwrap_or_default() > retention.max_age;
+    // its recovery header and each file's modification time, and skip it if it became busy or changed.
+    for (recorded_times, id) in entries {
+        let old = now.duration_since(recorded_times.newest).unwrap_or_default() > retention.max_age;
         if !old && kept < retention.max_entries {
             kept += 1;
             continue;
@@ -1157,10 +1260,10 @@ where
         if !is_recovery_entry(dir, &id) {
             continue;
         }
-        let Some(current_modified) = entry_modified(dir, &id) else {
+        let Some(current_times) = entry_times(dir, &id) else {
             continue;
         };
-        if current_modified != recorded_modified {
+        if current_times != recorded_times {
             continue;
         }
         remove_unlocked(dir, &id, lock)?;
