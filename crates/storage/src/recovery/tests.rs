@@ -1417,3 +1417,41 @@ fn replaced_journal_file_is_detected_by_append_and_republished_by_snapshot() {
     assert_eq!(recover(snapshot_dir.path(), "entry").unwrap().documents, states[0]);
     assert!(!snapshot_journal.snapshot(states[0].clone()).unwrap(), "intact republished pair skips again");
 }
+
+/// Retention acquires each candidate's entry lock before inspecting headers or timestamps and
+/// holds those locks through ranking and deletion: an entry held by an open recorder is skipped
+/// even when aged past `max_age`, while genuinely old or excess unlocked entries are still pruned.
+#[test]
+fn pruning_skips_open_recorder_under_entry_lock_and_prunes_old_unlocked_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Active"})).unwrap();
+    let initial = session.snapshot().unwrap();
+    let initial_docs = encode_documents(initial.clone()).unwrap();
+
+    let recorder = JournalRecorder::start_with(dir.path().to_path_buf(), "active".into(), RecorderOptions::default(), || {}).unwrap();
+    recorder.snapshot(initial);
+    recorder.sync().unwrap();
+    age_entry(dir.path(), "active", DAY * 30);
+
+    for (id, age) in [("expired", DAY * 30), ("overflow", DAY * 2), ("recent", DAY)] {
+        drop(EditJournal::create(dir.path(), id, initial_docs.clone()).unwrap());
+        age_entry(dir.path(), id, age);
+    }
+
+    let retention = Retention { max_age: DAY * 14, max_entries: 1 };
+    assert_eq!(prune(dir.path(), retention), Ok(2));
+    assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["active", "recent"].map(str::to_owned)));
+
+    // The open recorder still owns its entry, records a fresh snapshot, and stays recoverable.
+    session.apply("project.rename", &json!({"name": "Updated"})).unwrap();
+    let updated = session.snapshot().unwrap();
+    let updated_docs = encode_documents(updated.clone()).unwrap();
+    recorder.snapshot(updated);
+    recorder.finish().unwrap();
+
+    assert_eq!(recover(dir.path(), "active").unwrap().documents, updated_docs);
+    // Once released, the freshly updated entry outranks the older unlocked entry under max_entries.
+    assert_eq!(prune(dir.path(), retention), Ok(1));
+    assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["active"].map(str::to_owned)));
+}

@@ -1075,14 +1075,12 @@ fn prune_with_scan_limit(dir: &Path, retention: Retention, scan_limit: usize) ->
         }
         ids.insert(id.to_owned());
     }
-    let mut entries: Vec<(SystemTime, String)> =
-        ids.into_iter().filter(|id| is_recovery_entry(dir, id)).filter_map(|id| entry_modified(dir, &id).map(|modified| (modified, id))).collect();
-    entries.sort_by(|a, b| b.cmp(a));
-    let now = SystemTime::now();
-    let (mut kept, mut removed) = (0, 0);
-    for (modified, id) in entries {
+    let mut entries: Vec<(SystemTime, String, Option<File>)> = Vec::new();
+    for id in ids {
         let lock_path = entry_file(dir, &id, "lock");
-        // Locks are created under the gate, so one missing now stays missing until we finish.
+        // Acquire each candidate's entry lock before reading its headers or timestamps so an
+        // active recorder cannot update and release the entry between inspection and deletion.
+        // Locks are created under the folder gate, so one missing now stays missing until we finish.
         let lock = if lock_path.exists() {
             match open_entry_lock(&lock_path, false) {
                 Ok(lock) if lock.try_lock().is_ok() => Some(lock),
@@ -1092,6 +1090,18 @@ fn prune_with_scan_limit(dir: &Path, retention: Retention, scan_limit: usize) ->
         } else {
             None
         };
+        if !is_recovery_entry(dir, &id) {
+            continue;
+        }
+        let Some(modified) = entry_modified(dir, &id) else {
+            continue;
+        };
+        entries.push((modified, id, lock));
+    }
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
+    let now = SystemTime::now();
+    let (mut kept, mut removed) = (0, 0);
+    for (modified, id, lock) in entries {
         let old = now.duration_since(modified).unwrap_or_default() > retention.max_age;
         if old || kept >= retention.max_entries {
             remove_unlocked(dir, &id, lock)?;
