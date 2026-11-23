@@ -567,7 +567,10 @@ fn stricter_diagnostics_detect_foreign_zone_island_clearance() {
     let minimum = diagnostics(v, &BoardGeometry::new(v), v.effective_rules().values);
     assert!(!minimum.iter().any(|p| p.message.contains("another zone's clearance")));
     let stricter = diagnostics(v, &BoardGeometry::new(v), super::super::rules::Values { clearance_nm: 500_000, ..v.effective_rules().values });
-    let pair = stricter.iter().find(|p| p.message.contains("another zone's clearance")).expect("foreign material gap must be checked");
+    let pair = stricter
+        .iter()
+        .find(|p| p.message.contains("another zone's clearance"))
+        .unwrap_or_else(|| panic!("foreign material gap must be checked: {stricter:?}"));
     assert!(matches!(pair.kind, ProblemKind::Clearance));
     assert!(v.zones().iter().any(|z| z.id == pair.zone));
     assert!(v.zones().iter().any(|z| pair.items.contains(&z.id.to_string())));
@@ -711,4 +714,50 @@ fn explicit_pour_changes_revoke_route_and_edit_sources_at_the_same_revision() {
     assert_eq!(s.revision(), revision);
     assert!(!query.authority().is_current(&s));
     assert!(job.source().is_current(&s));
+}
+
+/// Local thermal clipping keeps a spoke only if it can reach the original body. A foreign
+/// keepout that blocks one direction and a neighboring pad's gap exercise both subtractions.
+#[test]
+fn local_thermal_calculation_matches_the_whole_plane_boolean() {
+    let rect = |x0, y0, x1, y1| Regions::polygon(&[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).unwrap();
+    let stock = rect(0, 0, 10_000_000, 10_000_000);
+    let foreign = vec![rect(5_800_000, 3_000_000, 6_000_000, 7_000_000)];
+    let gaps = vec![rect(4_000_000, 4_000_000, 5_900_000, 6_000_000), rect(2_000_000, 4_000_000, 3_200_000, 6_000_000)];
+    let spokes = [
+        rect(3_500_000, 4_900_000, 5_000_000, 5_100_000),
+        rect(4_900_000, 4_900_000, 5_700_000, 5_100_000),
+        rect(4_900_000, 4_900_000, 5_100_000, 6_300_000),
+        rect(2_500_000, 4_900_000, 4_500_000, 5_100_000),
+    ];
+    let base = clip(&stock, &Regions::union_all(&foreign).unwrap(), Operation::Difference).unwrap();
+    let body = clip(&base, &Regions::union_all(&gaps).unwrap(), Operation::Difference).unwrap();
+    let accepted: Vec<_> = spokes
+        .iter()
+        .map(|s| clip(s, &base, Operation::Intersection).unwrap())
+        .filter(|s| !clip(s, &body, Operation::Intersection).unwrap().is_empty())
+        .collect();
+    let expected = clip(&body, &Regions::union_all(&accepted).unwrap(), Operation::Union).unwrap();
+    let found = cuts::thermal_cuts(&stock, foreign, gaps, spokes.into_iter().map(Ok), None).unwrap().subtract(stock, None).unwrap();
+    for (a, b) in [(&expected, &found), (&found, &expected)] {
+        assert!(clip(a, b, Operation::Difference).unwrap().is_empty());
+    }
+}
+
+/// A track reaching through a zone edge must leave the interior hole batch intact.
+#[test]
+fn boundary_cut_preserves_the_separate_interior_holes() {
+    let rect = |x0, y0, x1, y1| Regions::polygon(&[[x0, y0], [x1, y0], [x1, y1], [x0, y1]]).unwrap();
+    let stock = rect(0, 0, 25_000_000, 8_000_000);
+    let centers: Vec<_> = (1..=20).map(|i| [i * 1_000_000, 2_000_000]).collect();
+    let mut holes: Vec<_> = centers.iter().map(|center| Regions::circle(*center, 500_000).unwrap()).collect();
+    holes.push(rect(22_000_000, -1_000_000, 24_000_000, 3_000_000));
+    let expected = clip(&stock, &Regions::union_all(&holes).unwrap(), Operation::Difference).unwrap();
+    let found = Cuts::new(holes).subtract(stock, None).unwrap();
+    assert!((found.area().unwrap().value_nm2 - expected.area().unwrap().value_nm2).abs() < 100.);
+    assert_eq!(found.contains([23_000_000, 2_000_000]).unwrap(), Some(false));
+    assert_eq!(found.contains([23_000_000, 4_000_000]).unwrap(), Some(true));
+    for center in centers {
+        assert_eq!(found.contains(center).unwrap(), Some(false));
+    }
 }

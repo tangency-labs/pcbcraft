@@ -12,12 +12,16 @@ use std::sync::{Arc, OnceLock};
 
 use crate::{ErrorCode, GeometryError, Result, guard::guard};
 
+mod bounds;
 mod kernel;
 
 /// Kernel loop/offset tolerance in nanometres. This is not a clearance allowance: consumers
 /// must account for approximation and rounding at their own output/contact boundary.
 pub const TOLERANCE_NM: f64 = 0.1;
 const TOLERANCE_MM: f64 = TOLERANCE_NM / NM_PER_MM as f64;
+/// Assembled faces retain many independently checked loops without sending that
+/// total edge count through an offset/Boolean operand's profile validator.
+const MAX_ASSEMBLED_SEGMENTS: usize = 4 * profile::MAX_SEGMENTS;
 
 /// The planar Boolean operation applied to two sets of material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +58,7 @@ pub struct DisplayMesh {
 pub struct Regions {
     regions: Vec<Region2>,
     prepared: Arc<OnceLock<Result<Option<kernel::Prepared>>>>,
+    loop_bounds: Arc<OnceLock<Vec<Vec<bounds::Bounds>>>>,
 }
 
 impl std::fmt::Debug for Regions {
@@ -87,7 +92,7 @@ impl Regions {
         if version != 1 || pin != "73bdb6cdd39efc3899fb54e7217289a630a89efe" {
             return Err(invalid("incompatible planar worker payload"));
         }
-        guard("planar worker transport", || checked(regions))
+        guard("planar worker transport", || checked_assembled(regions))
     }
     /// Expand an existing physical copper core by its exact represented radius, including
     /// half-nanometre values. Repeated capsule/point vertices are collapsed before choosing
@@ -197,6 +202,70 @@ impl Regions {
         )
     }
 
+    /// Conservative aggregate envelope in board nanometres, with outward rounding.
+    pub fn bounds_nm(&self) -> Option<[f64; 4]> {
+        (!self.is_empty()).then(|| {
+            let b = self.profile_bounds().iter().map(|region| region[0]).fold(bounds::empty(), bounds::join);
+            [(b[0] * 1e6).floor(), (b[1] * 1e6).floor(), (b[2] * 1e6).ceil(), (b[3] * 1e6).ceil()]
+        })
+    }
+
+    /// Reuse immutable loop envelopes during repeated point queries and candidate pruning.
+    fn profile_bounds(&self) -> &[Vec<bounds::Bounds>] {
+        self.loop_bounds.get_or_init(|| self.regions.iter().map(|region| region.loops().map(bounds::loop_bounds).collect()).collect())
+    }
+
+    /// Prove that an entire box is in material. An inconclusive bound returns false, so
+    /// callers can fall back to an exact Boolean. A box cannot cross a contour that it
+    /// does not meet, and its corner must also be strictly inside the outer loop.
+    pub fn covers_box(&self, envelope_nm: [f64; 4]) -> Result<bool> {
+        guard("planar box containment", || Ok(self.covers_box_mm(envelope_nm.map(|value| value / 1e6))))
+    }
+
+    /// Work in kernel units and protect the proof from near-coincident boundary cases.
+    fn covers_box_mm(&self, envelope: bounds::Bounds) -> bool {
+        const RESERVE: f64 = 0.000_050;
+        let point = solidcore_convert::vec2(Vec2::new(envelope[0], envelope[1]));
+        self.regions.iter().zip(self.profile_bounds()).any(|(region, region_bounds)| {
+            bounds::near(region_bounds[0], envelope, RESERVE)
+                && !region_bounds[1..].iter().any(|hole| bounds::near(*hole, envelope, RESERVE))
+                && !region.outer.segs.iter().any(|seg| bounds::near(bounds::segment(seg), envelope, RESERVE))
+                && solidcore_convert::loop2(&region.outer).holds(point) == Some(true)
+        })
+    }
+
+    /// Subtract independently enclosed, disjoint cutter loops in one face. None means
+    /// that the conservative proof could not establish this case and a Boolean is needed.
+    pub fn subtract_enclosed(&self, cutters: &[Self]) -> Result<Option<Self>> {
+        guard("planar enclosed holes", || {
+            const RESERVE: f64 = 0.000_050;
+            let [stock] = self.regions.as_slice() else { return Ok(None) };
+            let mut holes = stock.holes.clone();
+            let mut envelopes = Vec::new();
+            for cutter in cutters {
+                for (region, loop_bounds) in cutter.regions.iter().zip(cutter.profile_bounds()) {
+                    let envelope = loop_bounds[0];
+                    if !region.holes.is_empty()
+                        || !self.covers_box_mm(envelope)
+                        || envelopes.iter().any(|previous| bounds::near(*previous, envelope, RESERVE))
+                    {
+                        return Ok(None);
+                    }
+                    envelopes.push(envelope);
+                    holes.push(region.outer.clone());
+                }
+            }
+            let value = checked_assembled(vec![Region2 { outer: stock.outer.clone(), holes }])?;
+            match kernel::prepare_enclosed(&value.regions[0]) {
+                Ok(operand) => {
+                    let _ = value.prepared.set(Ok(Some(operand)));
+                    Ok(Some(value))
+                }
+                Err(_) => Ok(None),
+            }
+        })
+    }
+
     /// Clip two immutable operands, preserving curved boundaries. Kernel profile/resource
     /// refusals or failed operations return an error, never a partial set of material.
     pub fn boolean(&self, other: &Self, operation: Operation) -> Result<Self> {
@@ -288,7 +357,11 @@ impl Regions {
         let point = point_mm(point_nm)?;
         guard("planar containment", || {
             let mut boundary = false;
-            for region in &self.regions {
+            let query = [point.x, point.y, point.x, point.y];
+            for (region, region_bounds) in self.regions.iter().zip(self.profile_bounds()) {
+                if !bounds::near(query, region_bounds[0], TOLERANCE_MM) {
+                    continue;
+                }
                 match solidcore_convert::loop2(&region.outer).holds(solidcore_convert::vec2(point)) {
                     Some(false) => continue,
                     None => {
@@ -299,7 +372,10 @@ impl Regions {
                 }
                 let mut in_hole = false;
                 let mut hole_boundary = false;
-                for hole in &region.holes {
+                for (hole, envelope) in region.holes.iter().zip(&region_bounds[1..]) {
+                    if !bounds::near(query, *envelope, TOLERANCE_MM) {
+                        continue;
+                    }
                     match solidcore_convert::loop2(hole).holds(solidcore_convert::vec2(point)) {
                         Some(true) => in_hole = true,
                         None => hole_boundary = true,
@@ -322,6 +398,30 @@ fn checked(regions: Vec<Region2>) -> Result<Regions> {
     let profiles: Vec<_> = regions.iter().map(solidcore_convert::region2).collect();
     profile::check_regions(profiles.iter(), TOLERANCE_MM)
         .map_err(|e| GeometryError::new(ErrorCode::OperationFailed, format!("planar result: {e:?}")))?;
+    checked_coordinates(regions)
+}
+
+/// Validate a face assembled from disjoint, independently enclosed loops. The
+/// total face has its own resource bound, while each constituent loop still
+/// goes through the kernel's ordinary segment and closure validation.
+fn checked_assembled(regions: Vec<Region2>) -> Result<Regions> {
+    let count = regions.iter().flat_map(Region2::loops).map(|lp| lp.segs.len()).sum::<usize>();
+    if count <= profile::MAX_SEGMENTS {
+        return checked(regions);
+    }
+    if count > MAX_ASSEMBLED_SEGMENTS {
+        return Err(GeometryError::new(ErrorCode::OperationFailed, "assembled planar result exceeds its segment budget"));
+    }
+    for lp in regions.iter().flat_map(Region2::loops) {
+        let profile = profile::Region2 { outer: solidcore_convert::loop2(lp), holes: Vec::new() };
+        profile::check_regions(std::iter::once(&profile), TOLERANCE_MM)
+            .map_err(|e| GeometryError::new(ErrorCode::OperationFailed, format!("planar result: {e:?}")))?;
+    }
+    checked_coordinates(regions)
+}
+
+/// Point, arc and control-hull coordinates remain bounded for every result and transport.
+fn checked_coordinates(regions: Vec<Region2>) -> Result<Regions> {
     if regions.iter().flat_map(Region2::loops).flat_map(|lp| &lp.segs).any(|s| !bounded_segment(s)) {
         return Err(GeometryError::new(ErrorCode::OperationFailed, "planar result exceeds the supported coordinate range"));
     }

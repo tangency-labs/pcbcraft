@@ -280,3 +280,37 @@ fn intersection_within_kernel_zone_tolerance_of_an_arc_end_reads_back_closed() {
     let again = Regions::union_all(&[reread, rectangle(75 * MM, 95 * MM, MM, MM)]).unwrap();
     assert_eq!(again.region_count(), 2);
 }
+
+/// Individually proven curved holes use one oriented face and retain the same material,
+/// winding, and visible voids as the general Boolean operation.
+#[test]
+fn independently_enclosed_cuts_preserve_the_exact_material() {
+    let stock = Regions::polygon(&[[0, 0], [10_000_000, 0], [10_000_000, 10_000_000], [0, 10_000_000]]).unwrap();
+    let centers = [[2_000_000, 3_000_000], [5_000_000, 5_000_000], [8_000_000, 7_000_000]];
+    let cuts = centers.map(|center| Regions::circle(center, 1_000_000).unwrap());
+    let expected = stock.boolean(&Regions::union_all(&cuts).unwrap(), Operation::Difference).unwrap();
+    let fast = stock.subtract_enclosed(&cuts).unwrap().unwrap();
+    let measured = fast.area().unwrap().value_nm2;
+    assert!((expected.area().unwrap().value_nm2 - measured).abs() < 100.);
+    for center in centers {
+        assert_eq!(fast.contains(center).unwrap(), Some(false));
+        assert_eq!(fast.contains([center[0] + 499_990, center[1]]).unwrap(), Some(false));
+        assert_eq!(fast.contains([center[0] + 500_010, center[1]]).unwrap(), Some(true));
+    }
+
+    // Force the kernel to consume the prepared face, not just the analytic profile.
+    let mesh = fast.display_mesh(5_000).unwrap();
+    assert!(!mesh.triangles.is_empty());
+    let area: f64 = mesh
+        .triangles
+        .iter()
+        .map(|indices| {
+            let [a, b, c] = indices.map(|i| mesh.vertices_nm[i as usize]);
+            ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])).abs() / 2.
+        })
+        .sum();
+    assert!((measured - area).abs() < 100_000_000_000., "{measured} vs {area}");
+    assert!(stock.subtract_enclosed(&[cuts[0].clone(), cuts[0].clone()]).unwrap().is_none());
+    let edge = Regions::circle([0, 6_000_000], 1_000_000).unwrap();
+    assert!(stock.subtract_enclosed(&[edge]).unwrap().is_none());
+}

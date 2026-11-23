@@ -228,6 +228,66 @@ fn unite(kernel: &mut Kernel, mut sheets: Vec<Brep>) -> Result<Option<Brep>> {
     Ok(sheets.pop())
 }
 
+/// Build a face from explicitly oriented loops after the adapter has proved that all
+/// holes are inside the outer contour and separated. The kernel receives the grouping
+/// directly and need not union the holes or rediscover containment.
+pub(super) fn prepare_enclosed(region: &Region2) -> Result<Prepared> {
+    use solidcore::{
+        error::EntityRef,
+        geom::{tol::USE_DEFAULT, vector3d::Vec3},
+        nurbs::b_spline_surface_n_lib::p2::OrientType,
+        surface::{plane::Plane as KernelPlane, surface::Surface},
+        topology::{
+            brep::{
+                p2::ArenaNotifyState,
+                p3::new_brep,
+                p7::{FaceCurvesInput, make_face_with_curves},
+            },
+            loopuse::notify_ref,
+        },
+    };
+
+    let mut kernel = context();
+    let profile = solidcore_convert::region2(region);
+    let loops = sheet::region_loops(&profile, TOLERANCE_MM)?;
+    if loops.material.len() != 1 || loops.holes.len() != region.holes.len() {
+        return Err(refused("enclosed loops must be simple"));
+    }
+    let loops = loops.material.into_iter().chain(loops.holes.into_iter().map(|hole| hole.reversed()));
+    let frame = solidcore_convert::plane(&Plane::XY);
+    let mut input = FaceCurvesInput::default();
+    let mut curves = Vec::new();
+    for lp in loops {
+        input.loops.push(lp.segs.len());
+        for segment in &lp.segs {
+            curves.push(Some(profile::curve_on_frame(&kernel, &frame, 0., segment)?));
+        }
+    }
+    input.orientations = vec![OrientType::Same; curves.len()];
+    input.curves_3d = Some(curves);
+    let mut body = new_brep(&mut kernel, USE_DEFAULT, USE_DEFAULT)?;
+    let surface = Surface::from(KernelPlane::from_normal(Vec3::ZERO, Vec3::Z));
+    let domain = surface.natural_uv_domain_with_nurb(&kernel)?;
+    let mut notify = ArenaNotifyState::new(&body);
+    let region = body.infinite_region();
+    let made = make_face_with_curves(
+        &mut kernel,
+        &mut body,
+        region,
+        input,
+        surface,
+        &domain,
+        OrientType::Same,
+        None,
+        &|face| notify_ref(EntityRef::Face(face)),
+        &mut notify.env(None),
+    )?;
+    if made.face.is_none() {
+        return Err(refused("enclosed loops did not make a planar face"));
+    }
+    Ok(Prepared { body: Mutex::new(body) })
+}
+
 /// Build one sheet per simple loop using the kernel's profile conversion and face constructor.
 fn faces(kernel: &mut Kernel, loops: &[profile::Loop2]) -> Result<Vec<Brep>> {
     let frame = solidcore_convert::plane(&Plane::XY);

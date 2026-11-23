@@ -4,7 +4,7 @@ use pcbcraft_engine::{
     board::{
         setup::{LayerPurpose, Side},
         update::INITIALIZE_BASELINE,
-        zones::{ADD_ZONE, Options},
+        zones::{ADD_ZONE, Connection, Options},
     },
     persistence::{encode_documents, encode_packed},
     schematic::Point,
@@ -22,22 +22,39 @@ fn edit(session: &mut Session, command: &str, mut params: Value) -> Result<(), B
 /// Write a new demo folder, packed project and ephemeral browser-worker request; refuse to
 /// overwrite an existing destination so generated evidence remains reproducible.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let destination = std::env::args_os().nth(1).map(PathBuf::from).ok_or("usage: zone_fill_fixture NEW_OUTPUT_DIRECTORY")?;
+    let mut args = std::env::args().skip(1);
+    let destination = args.next().map(PathBuf::from).ok_or("usage: zone_fill_fixture NEW_OUTPUT_DIRECTORY [FOOTPRINTS [solid|thermal]]")?;
+    let count: i64 = args.next().as_deref().unwrap_or("3").parse()?;
+    if !(3..=1024).contains(&count) {
+        return Err("the fixture requires 3–1024 footprints".into());
+    }
+    let connection = match args.next().as_deref() {
+        Some("solid") => Connection::Solid,
+        Some("thermal") | None => Connection::Thermal,
+        _ => return Err("expected solid or thermal".into()),
+    };
+    if args.next().is_some() {
+        return Err("unexpected fixture argument".into());
+    }
     fs::create_dir(&destination)?;
     let mut session = Session::default();
     session.apply("project.new", &json!({"name":"Zone fill demo", "create_board":true}))?;
     let mut symbols = Vec::new();
-    for index in 0..3 {
-        edit(&mut session, PLACE_SYMBOL, json!({"definition":"resistor", "x_nm":index*10_000_000,"y_nm":0}))?;
+    let columns = count.min(32);
+    let pitch = if count == 3 { 8_000_000 } else { 3_000_000 };
+    for index in 0..count {
+        let (column, row) = (index % columns, index / columns);
+        edit(&mut session, PLACE_SYMBOL, json!({"definition":"resistor", "x_nm":column*10_000_000,"y_nm":row*12_000_000}))?;
         let symbol = session.project().ok_or("missing project")?.symbols().last().ok_or("missing symbol")?.id();
         edit(
             &mut session,
             PLACE_FOOTPRINT,
-            json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"2","2":"1"},"x_nm":index*8_000_000,"y_nm":2_000_000}),
+            json!({"symbol":symbol,"definition":"resistor-0402","mapping":{"1":"2","2":"1"},"x_nm":column*pitch,"y_nm":row*pitch+2_000_000}),
         )?;
         symbols.push(symbol);
     }
-    for pair in symbols.windows(2) {
+    let ground: Vec<_> = symbols.iter().step_by(if count == 3 { 1 } else { 4 }).collect();
+    for pair in ground.windows(2) {
         edit(&mut session, CONNECT_PINS, json!({"from":{"symbol":pair[0],"terminal":"1"},"to":{"symbol":pair[1],"terminal":"1"}}))?;
     }
     edit(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2,"resolve_existing_footprints":true}))?;
@@ -53,12 +70,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = view
         .net_class_target_for_copper(&format!("{}:{}", endpoint.footprint, address["pad"].as_str().ok_or("missing pad")?))?
         .ok_or("missing net target")?;
-    let boundary = [[-4_000_000, -4_000_000], [24_000_000, -4_000_000], [24_000_000, 8_000_000], [-4_000_000, 8_000_000]]
-        .map(|[x_nm, y_nm]| Point { x_nm, y_nm });
-    edit(&mut session, ADD_DRAWING, json!({"layer":outline,"points":boundary,"closed":true}))?;
-    let polygon = [[-3_000_000, -3_000_000], [23_000_000, -3_000_000], [23_000_000, 7_000_000], [-3_000_000, 7_000_000]]
-        .map(|[x_nm, y_nm]| Point { x_nm, y_nm });
-    edit(&mut session, ADD_ZONE, json!({"target":target,"layer":front,"points":polygon,"options":Options::default()}))?;
+    let east = (columns - 1) * pitch + 8_000_000;
+    let south = ((count - 1) / columns) * pitch + 8_000_000;
+    let rectangle = |inset| {
+        let first = -4_000_000 + inset;
+        let (last_x, last_y) = (east - inset, south - inset);
+        [[first, first], [last_x, first], [last_x, last_y], [first, last_y]].map(|[x_nm, y_nm]| Point { x_nm, y_nm })
+    };
+    edit(&mut session, ADD_DRAWING, json!({"layer":outline,"points":rectangle(0),"closed":true}))?;
+    edit(
+        &mut session,
+        ADD_ZONE,
+        json!({"target":target,"layer":front,"points":rectangle(1_000_000),"options":Options{connection,..Options::default()}}),
+    )?;
     let snapshot = session.snapshot().ok_or("missing final snapshot")?;
     for (path, bytes) in encode_documents(snapshot.clone())? {
         let path = destination.join("project").join(path);

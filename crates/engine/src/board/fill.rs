@@ -17,9 +17,11 @@ use std::{
 use uuid::Uuid;
 
 mod cache;
+mod cuts;
 pub mod worker;
 pub(crate) use cache::Cache;
 pub use cache::FillJob;
+use cuts::{Cuts, near};
 
 /// Numerical reserve outside requested copper/edge clearances. The offset kernel's 0.1 nm
 /// loop tolerance and derived floating coordinates never authorize rounding into an obstacle.
@@ -181,7 +183,7 @@ fn board_region(view: BoardView<'_>) -> Result<Regions, String> {
 
 /// A cross has four independent spokes, so a blocked direction cannot count as reaching
 /// material merely because the opposite direction reaches it.
-fn spokes(object: &Object, width: i64, gap: i64) -> Result<Vec<Regions>, String> {
+fn spokes(object: &Object, width: i64, gap: i64) -> [Result<Regions, String>; 4] {
     let b = object.contour.bounds();
     let length = (b[2] - b[0]).max(b[3] - b[1]).ceil() as i64 + gap + width;
     let (x, y) = (object.at.x_nm, object.at.y_nm);
@@ -193,7 +195,7 @@ fn spokes(object: &Object, width: i64, gap: i64) -> Result<Vec<Regions>, String>
         [[x - lo, y - lo], [x + hi, y - lo], [x + hi, y + length], [x - lo, y + length]],
         [[x - lo, y - length], [x + hi, y - length], [x + hi, y + hi], [x - lo, y + hi]],
     ];
-    rectangles.iter().map(|p| Regions::polygon(p).map_err(|e| e.to_string())).collect()
+    rectangles.map(|points| Regions::polygon(&points).map_err(|e| e.to_string()))
 }
 
 /// Generate one zone against an immutable board and already completed higher-priority fills.
@@ -211,11 +213,15 @@ fn zone_fill(
     let clearance = zone.options.clearance_nm.unwrap_or(rules.clearance_nm).max(rules.clearance_nm) + CLEARANCE_RESERVE_NM;
     let outline = Regions::polygon(&zone.points.iter().map(|p| [p.x_nm, p.y_nm]).collect::<Vec<_>>()).map_err(|e| e.to_string())?;
     let inset = board.offset(-(rules.edge_clearance_nm + CLEARANCE_RESERVE_NM)).map_err(|e| e.to_string())?;
-    let mut base = clip(&outline, &inset, Operation::Intersection)?;
+    let base = clip(&outline, &inset, Operation::Intersection)?;
+    let bounds = base.bounds_nm();
     let mut cuts = Vec::new();
     for other in objects.iter().filter(|o| o.object.layers.contains(&zone.layer) && o.net != Some(zone.net)) {
         check_cancel(canceled)?;
-        cuts.push(region(&other.object.contour, clearance.max(other.clearance_nm + CLEARANCE_RESERVE_NM))?);
+        let margin = clearance.max(other.clearance_nm + CLEARANCE_RESERVE_NM);
+        if bounds.is_some_and(|b| near(b, other.object.contour.bounds(), margin as f64 + cuts::BOUND_RESERVE_NM)) {
+            cuts.push(region(&other.object.contour, margin)?);
+        }
     }
     for other in previous.iter().filter(|other| other.layer == zone.layer && other.net != zone.net) {
         for island in &other.islands {
@@ -237,43 +243,51 @@ fn zone_fill(
         cuts.push(polygon.offset(pair_clearance).map_err(|e| e.to_string())?);
     }
     check_cancel(canceled)?;
-    let cut = Regions::union_all(&cuts).map_err(|e| e.to_string())?;
-    base = clip(&base, &cut, Operation::Difference)?;
-    let pads: Vec<_> = objects.iter().filter(|o| o.net == Some(zone.net) && o.object.layers.contains(&zone.layer) && o.pad).collect();
-    let mut material = base.clone();
-    if zone.options.connection != Connection::Solid {
-        let mut gaps = Vec::new();
+    let cuts = if zone.options.connection == Connection::Solid {
+        Cuts::new(cuts)
+    } else {
+        let gap =
+            zone.options.thermal_gap_nm.max(if zone.options.connection == Connection::None { rules.clearance_nm } else { 0 }) + CLEARANCE_RESERVE_NM;
+        let pads: Vec<_> = objects
+            .iter()
+            .filter(|o| o.net == Some(zone.net) && o.object.layers.contains(&zone.layer) && o.pad)
+            .filter(|o| {
+                let b = o.object.contour.bounds();
+                let reach = (b[2] - b[0]).max(b[3] - b[1]).ceil() + (gap + zone.options.spoke_width_nm) as f64;
+                bounds.is_some_and(|stock| near(stock, b, reach))
+            })
+            .collect();
+        let mut gaps = Vec::with_capacity(pads.len());
         for pad in &pads {
             check_cancel(canceled)?;
-            let gap = zone.options.thermal_gap_nm.max(if zone.options.connection == Connection::None { rules.clearance_nm } else { 0 })
-                + CLEARANCE_RESERVE_NM;
             gaps.push(region(&pad.object.contour, gap)?);
         }
-        material = clip(&material, &Regions::union_all(&gaps).map_err(|e| e.to_string())?, Operation::Difference)?;
         if zone.options.connection == Connection::Thermal {
-            let mut connected = Vec::new();
-            let body = material.clone();
-            for pad in &pads {
-                for spoke in spokes(&pad.object, zone.options.spoke_width_nm, zone.options.thermal_gap_nm)? {
-                    check_cancel(canceled)?;
-                    let clipped = clip(&spoke, &base, Operation::Intersection)?;
-                    if !clip(&clipped, &body, Operation::Intersection)?.is_empty() {
-                        connected.push(clipped);
-                    }
-                }
-            }
-            // Add the spokes to the material's existing kernel body. Uniting it in a batch would
-            // rebuild a many-island pour from its profiles, which the pinned kernel can refuse.
-            material = clip(&material, &Regions::union_all(&connected).map_err(|e| e.to_string())?, Operation::Union)?;
+            let candidates = pads.into_iter().flat_map(|pad| spokes(&pad.object, zone.options.spoke_width_nm, zone.options.thermal_gap_nm));
+            cuts::thermal_cuts(&base, cuts, gaps, candidates, canceled)?
+        } else {
+            cuts.extend(gaps);
+            Cuts::new(cuts)
         }
-    }
+    };
+    let material = cuts.subtract(base, canceled)?;
     let mut result = ZoneFill { id: zone.id, net: zone.net, layer: zone.layer, islands: Vec::new(), dropped: 0, clearance_nm: clearance };
     for island in material.islands() {
         check_cancel(canceled)?;
         let mut contacts = Vec::new();
-        for (index, object) in objects.iter().enumerate().filter(|(_, o)| !o.object.mechanical && o.object.layers.contains(&zone.layer)) {
+        let bounds = island.bounds_nm().ok_or("Retained island has no bounds.")?;
+        // Foreign and unknown copper were removed with positive clearance before the
+        // thermal step. Every accepted spoke is clipped to that same safe material.
+        for (index, object) in objects.iter().enumerate().filter(|(_, o)| {
+            o.net == Some(zone.net) && o.object.layers.contains(&zone.layer) && near(bounds, o.object.contour.bounds(), cuts::BOUND_RESERVE_NM)
+        }) {
             check_cancel(canceled)?;
-            if !clip(&island, &region(&object.object.contour, 0)?, Operation::Intersection)?.is_empty() {
+            let center = [object.object.at.x_nm, object.object.at.y_nm];
+            // The resolved center is interior to each physical pad, via or track contour.
+            // For boundary/partial contacts keep the exact positive-area intersection test.
+            if island.contains(center).map_err(|e| e.to_string())? == Some(true)
+                || !clip(&island, &region(&object.object.contour, 0)?, Operation::Intersection)?.is_empty()
+            {
                 contacts.push(index);
             }
         }
@@ -308,10 +322,10 @@ pub fn compute(view: BoardView<'_>) -> Result<Arc<Fill>, String> {
 fn compute_cancellable(view: BoardView<'_>, canceled: Option<&AtomicBool>) -> Result<Arc<Fill>, String> {
     check_cancel(canceled)?;
     view.require_linear_copper()?;
-    let geometry = BoardGeometry::new(view);
-    let objects = obstacles(view, &geometry)?;
     let lands = super::track::lands(view);
     let (copper, members) = super::track::islands(&lands, view.tracks(), view.vias());
+    let geometry = BoardGeometry::from_islands(view, lands, copper.clone(), members.clone());
+    let objects = obstacles(view, &geometry)?;
     let mut fill = Fill { board: view.target, zones: Vec::new(), problems: Vec::new(), copper, members };
     if view.zones().is_empty() {
         join_contacts(&geometry, &mut fill, canceled)?;
@@ -416,6 +430,23 @@ pub(super) fn diagnostics(view: BoardView<'_>, geometry: &BoardGeometry, rules: 
     diagnostics_with_fill(view, geometry, rules).1
 }
 
+/// Either dilation direction establishes the same pair clearance. Fall back
+/// to offsetting the other member when a concave clipped loop cannot be offset.
+fn tighter_zone_violation(a: &Regions, b: &Regions, clearance_nm: i64) -> Result<bool, String> {
+    if let (Some(x), Some(y)) = (a.bounds_nm(), b.bounds_nm())
+        && !near(x, y, clearance_nm as f64 + cuts::BOUND_RESERVE_NM)
+    {
+        return Ok(false);
+    }
+    let intersects = |within: &Regions, offsetting: &Regions| {
+        let grown = offsetting.offset(clearance_nm).map_err(|e| format!("Could not expand a plane for clearance checking: {e}"))?;
+        clip(within, &grown, Operation::Intersection)
+            .map(|overlap| !overlap.is_empty())
+            .map_err(|e| format!("Could not compare the expanded planes: {e}"))
+    };
+    intersects(b, a).or_else(|first| intersects(a, b).map_err(|second| format!("{first} / {second}")))
+}
+
 /// Keep analytic findings and the corresponding physical connectivity in one captured result.
 /// A failed fill yields an unavailable-zone finding and no conductive fallback material.
 pub(super) fn diagnostics_with_fill(view: BoardView<'_>, geometry: &BoardGeometry, rules: super::rules::Values) -> (Option<Arc<Fill>>, Vec<Problem>) {
@@ -427,13 +458,20 @@ pub(super) fn diagnostics_with_fill(view: BoardView<'_>, geometry: &BoardGeometr
         let filled = view.fill_for_check()?;
         *captured = Some(filled.clone());
         let mut problems = filled.problems.clone();
-        let objects = obstacles(view, geometry)?;
-        let board = board_region(view)?;
-        let inset = board.offset(-rules.edge_clearance_nm).map_err(|e| e.to_string())?;
-        for zone in &filled.zones {
+        // A successful, source-matched pour has already applied the authoring clearance
+        // and edge inset, including the numerical reserve. Repeat the geometric checks only
+        // where a request asks for more than the corresponding cuts guaranteed.
+        let authored_rules = view.effective_rules().values;
+        let objects = if rules.clearance_nm > authored_rules.clearance_nm { obstacles(view, geometry)? } else { Vec::new() };
+        let inset = (rules.edge_clearance_nm > authored_rules.edge_clearance_nm)
+            .then(|| board_region(view)?.offset(-rules.edge_clearance_nm).map_err(|e| e.to_string()))
+            .transpose()?;
+        for (index, zone) in filled.zones.iter().enumerate() {
             let authored = view.zones().iter().find(|z| z.id == zone.id).ok_or("Missing authored fill zone")?;
             for island in &zone.islands {
-                if !clip(&island.region, &inset, Operation::Difference)?.is_empty() {
+                if let Some(inset) = &inset
+                    && !clip(&island.region, inset, Operation::Difference)?.is_empty()
+                {
                     problems.push(Problem {
                         kind: ProblemKind::BoardEdge,
                         zone: zone.id,
@@ -442,10 +480,16 @@ pub(super) fn diagnostics_with_fill(view: BoardView<'_>, geometry: &BoardGeometr
                         items: Vec::new(),
                     });
                 }
-                for other in filled.zones.iter().filter(|other| other.id > zone.id && other.net != zone.net && other.layer == zone.layer) {
-                    let clearance = rules.clearance_nm.max(zone.clearance_nm - CLEARANCE_RESERVE_NM).max(other.clearance_nm - CLEARANCE_RESERVE_NM);
+                // Check in the same deterministic priority order used to build the cuts.
+                // Expanding the earlier plane also avoids offsetting a more complex low-priority
+                // island that was already carved around that plane.
+                for other in filled.zones.iter().skip(index + 1).filter(|other| other.net != zone.net && other.layer == zone.layer) {
+                    let guaranteed = zone.clearance_nm.max(other.clearance_nm);
+                    if rules.clearance_nm <= guaranteed - CLEARANCE_RESERVE_NM {
+                        continue;
+                    }
                     for foreign in &other.islands {
-                        if !clip(&island.region, &foreign.region.offset(clearance).map_err(|e| e.to_string())?, Operation::Intersection)?.is_empty() {
+                        if tighter_zone_violation(&island.region, &foreign.region, rules.clearance_nm)? {
                             problems.push(Problem {
                                 kind: ProblemKind::Clearance,
                                 zone: zone.id,
@@ -456,9 +500,15 @@ pub(super) fn diagnostics_with_fill(view: BoardView<'_>, geometry: &BoardGeometr
                         }
                     }
                 }
+                let bounds = island.region.bounds_nm().ok_or("Retained island has no bounds.")?;
                 for other in objects.iter().filter(|o| o.net != Some(zone.net) && o.object.layers.contains(&zone.layer)) {
-                    let clearance = rules.clearance_nm.max(other.clearance_nm).max(zone.clearance_nm - CLEARANCE_RESERVE_NM);
-                    if !clip(&island.region, &region(&other.object.contour, clearance)?, Operation::Intersection)?.is_empty() {
+                    let guaranteed = other.clearance_nm.max(zone.clearance_nm - CLEARANCE_RESERVE_NM);
+                    if rules.clearance_nm > guaranteed
+                        && near(bounds, other.object.contour.bounds(), rules.clearance_nm as f64 + cuts::BOUND_RESERVE_NM)
+                        && !clip(&island.region, &region(&other.object.contour, rules.clearance_nm)?, Operation::Intersection)
+                            .map_err(|e| format!("Could not check clearance to {}: {e}", other.object.name))?
+                            .is_empty()
+                    {
                         problems.push(Problem {
                             kind: ProblemKind::Clearance,
                             zone: zone.id,

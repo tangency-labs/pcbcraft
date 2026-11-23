@@ -344,8 +344,10 @@ and point containment. An on-boundary/uncertain point remains `None`, rather tha
 becoming a positive connectivity claim. Polygon callers supply simple outlines;
 zone authoring already validates crossings. The constructor normalizes winding
 and rejects repeated, degenerate, oversized or out-of-range input. Derived output
-also obeys the kernel's 8,192-segment budget and PCBcraft's coordinate limit;
-arc/control-hull bounds are deliberately conservative near that limit.
+also obeys the kernel's 8,192-segment Boolean profile budget and PCBcraft's
+coordinate limit. Independently enclosed and separated loops can be assembled
+into one face with up to 32,768 segments in total. The kernel still validates each
+loop, and worker transport and display meshing retain their own bounds.
 
 Boolean call recipes adapt `solidcore-ops/src/prism.rs` at the pin, using the
 kernel's own profile conversion, planar-face construction, Boolean and region

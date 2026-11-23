@@ -84,6 +84,13 @@ During the preview, the existing pour still describes the board before the edit.
 A non-plated hole gets clearance on every copper layer. Boards containing arcs or
 teardrops report fill as unavailable until those shapes have clearance support.
 
+Fill uses the layer's copper envelopes to select nearby clearance shapes. It
+checks each thermal spoke against the local cutouts it can reach. After clipping
+the zone boundary, internally separated clearance loops can be assembled into a
+single analytic face. Complex or touching contours keep the SolidCore Boolean
+path. A fill that exceeds the applicable geometry budget reports unavailable
+material. The pad count alone does not determine that budget.
+
 Native calculation uses the bounded snapshot worker pool. Browser fill and
 analytic zone checking use disposable same-build Web Workers, with cancellation,
 a 30-second timeout and no foreground geometry fallback. Worker failure leaves
