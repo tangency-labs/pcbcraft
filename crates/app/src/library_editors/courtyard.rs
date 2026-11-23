@@ -16,12 +16,22 @@ pub(super) const MIDPOINT_HANDLE_RADIUS: f32 = 3.0;
 /// Pointer pick radius for clicking an edge midpoint handle.
 pub(super) const MIDPOINT_PICK_RADIUS: f32 = 7.0;
 
-/// IPC-7351 Density Level C / B / A courtyard clearance presets (Table 3-13).
+/// Quick courtyard clearance distance presets (mm).
 const CLEARANCE_PRESETS: [(&str, &str, &str); 3] = [
-    ("0.10", "0.10 mm", "Least density (IPC-7351 Level C: 0.10 mm)"),
-    ("0.25", "0.25 mm", "Nominal density (IPC-7351 Level B: 0.25 mm)"),
-    ("0.50", "0.50 mm", "Most density (IPC-7351 Level A: 0.50 mm)"),
+    ("0.10", "0.10 mm", "Set clearance to 0.10 mm"),
+    ("0.25", "0.25 mm", "Set clearance to 0.25 mm"),
+    ("0.50", "0.50 mm", "Set clearance to 0.50 mm"),
 ];
+
+/// Input key for the cached Generate Courtyard live size preview so idle frames do not re-scan
+/// the footprint when neither the document revision nor the form fields changed.
+#[derive(Debug, PartialEq, Eq)]
+struct PreviewCacheKey {
+    doc_revision: u64,
+    source: String,
+    clearance: String,
+    stroke: String,
+}
 
 /// Revision-bound draft for the Generate Courtyard modal dialog.
 #[derive(Debug)]
@@ -35,6 +45,7 @@ pub(crate) struct CourtyardDraft {
     replace_existing: bool,
     has_existing: bool,
     error: Option<String>,
+    preview_cache: Option<(PreviewCacheKey, Result<String, String>)>,
 }
 
 impl CourtyardDraft {
@@ -53,6 +64,7 @@ impl CourtyardDraft {
             replace_existing: true,
             has_existing,
             error: None,
+            preview_cache: None,
         }
     }
 
@@ -82,6 +94,25 @@ impl CourtyardDraft {
         let (points, _) = courtyard::courtyard_polygon(&primitive).ok_or("Generated courtyard is unavailable.")?;
         let m = courtyard::metrics(points).ok_or("Generated courtyard has no extents.")?;
         Ok(format!("Result: {} × {} mm · {} vertices", format_mm(m.width_nm), format_mm(m.height_nm), m.vertex_count))
+    }
+
+    /// Return the cached live size summary when the document revision and form inputs are
+    /// unchanged, recomputing only when an input or the document revision changes.
+    fn cached_preview(&mut self, doc: &Document) -> Result<String, String> {
+        let key = PreviewCacheKey {
+            doc_revision: doc.session.revision(),
+            source: self.source.clone(),
+            clearance: self.clearance.clone(),
+            stroke: self.stroke.clone(),
+        };
+        if let Some((cached, result)) = &self.preview_cache
+            && *cached == key
+        {
+            return result.clone();
+        }
+        let result = self.preview_summary(&doc.session.snapshot());
+        self.preview_cache = Some((key, result.clone()));
+        result
     }
 }
 
@@ -469,7 +500,7 @@ impl PcbApp {
                     draft.error = None;
                 }
             }
-            let preview = self.library_editors.documents.get(&draft.document).map(|doc| draft.preview_summary(&doc.session.snapshot()));
+            let preview = self.library_editors.documents.get(&draft.document).map(|doc| draft.cached_preview(doc));
             match (&draft.error, &preview) {
                 (Some(error), _) => {
                     ui.label(shell::error(error));
@@ -2012,5 +2043,88 @@ mod tests {
         assert_eq!(pts, original.as_slice());
         assert_eq!(doc.selected_vertex, Some(2));
         assert_eq!(doc.error, None);
+    }
+
+    /// On a maximum-pad footprint (1,024 pads in a 32×32 grid plus a 64-vertex fabrication body
+    /// outline), `CourtyardDraft::cached_preview` caches idle frames by document revision and form
+    /// inputs, invalidates when an input changes, and prints uncached vs cached preview timing for
+    /// profiling.
+    #[test]
+    fn large_footprint_courtyard_preview_caches_idle_frames_and_reports_timing() {
+        use pcbcraft_engine::{
+            board::definition::{Artwork, CopperBinding, GraphicPurpose, PadShape, RectPad},
+            library_graphics::{Fill, Geometry, Graphic},
+        };
+        use std::time::Instant;
+
+        let mut item = Item::new(Kind::Footprint).unwrap();
+        item.objects.clear();
+        let mut next_id = 1u64;
+        for row in 0..32i64 {
+            for col in 0..32i64 {
+                item.objects.insert(
+                    next_id,
+                    Primitive::Pad {
+                        pad: RectPad {
+                            number: format!("P{next_id}"),
+                            center: Point { x_nm: (col - 16) * 1_000_000, y_nm: (row - 16) * 1_000_000 },
+                            width_nm: 400_000,
+                            height_nm: 400_000,
+                            rotation: 0,
+                            shape: PadShape::Circle,
+                            copper: CopperBinding::ComponentSide,
+                            corner_radius_nm: 0,
+                            drill_nm: None,
+                        },
+                    },
+                );
+                next_id += 1;
+            }
+        }
+        let body_points: Vec<Point> = (0..64)
+            .map(|i| {
+                let angle = (i as f64) * std::f64::consts::TAU / 64.0;
+                Point { x_nm: (17_000_000.0 * angle.cos()).round() as i64, y_nm: (17_000_000.0 * angle.sin()).round() as i64 }
+            })
+            .collect();
+        item.objects.insert(
+            next_id,
+            Primitive::Artwork {
+                artwork: Artwork {
+                    purpose: GraphicPurpose::Fabrication,
+                    graphic: Graphic { geometry: Geometry::Polyline { points: body_points, closed: true }, stroke_nm: 150_000, fill: Fill::None },
+                },
+            },
+        );
+        let decoded = Item::decode(&item.encode().unwrap()).unwrap();
+        assert_eq!(decoded.objects.len(), 1025);
+
+        let mut app = PcbApp::default();
+        let doc_id = app.library_editors.open(decoded, false).unwrap();
+        let view = app.views.active.id();
+        let doc = &app.library_editors.documents[&doc_id];
+        let mut draft = CourtyardDraft::new(doc_id, view, doc);
+
+        let uncached_start = Instant::now();
+        let first = draft.cached_preview(doc).unwrap();
+        let uncached_elapsed = uncached_start.elapsed();
+        assert!(first.contains("4 vertices"), "{first}");
+        assert!(draft.preview_cache.is_some());
+
+        let cached_start = Instant::now();
+        for _ in 0..60 {
+            assert_eq!(draft.cached_preview(doc).unwrap(), first);
+        }
+        let cached_60_elapsed = cached_start.elapsed();
+
+        draft.clearance = "0.50".into();
+        let updated = draft.cached_preview(doc).unwrap();
+        assert_ne!(updated, first, "changing clearance must invalidate the preview cache");
+
+        eprintln!(
+            "courtyard preview timing (1024 pads, 64-vertex fab body): uncached={:.3} ms, 60 cached frames={:.3} ms",
+            uncached_elapsed.as_secs_f64() * 1_000.0,
+            cached_60_elapsed.as_secs_f64() * 1_000.0,
+        );
     }
 }
