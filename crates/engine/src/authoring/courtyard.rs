@@ -823,25 +823,19 @@ mod tests {
     /// `MIN_STROKE_NM` is still refused.
     #[test]
     fn thin_saved_courtyard_survives_move_and_vertex_edit_while_explicit_stroke_change_is_refused() {
-        let mut saved = Item::new(Kind::Footprint).unwrap();
+        let mut setup = Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let initial =
+            make_courtyard_polygon(vec![pt(0, 0), pt(2_000_000, 0), pt(2_000_000, 2_000_000), pt(0, 2_000_000)], DEFAULT_STROKE_NM).unwrap();
+        setup.execute(0, Action::Insert { primitive: initial }).unwrap();
+        let mut saved = (*setup.snapshot()).clone();
+        let id = *saved.objects.iter().find(|(_, p)| is_courtyard_primitive(p)).unwrap().0;
         let thin_stroke = 500;
-        let thin = Primitive::Artwork {
-            artwork: footprint::Artwork {
-                purpose: GraphicPurpose::Courtyard,
-                graphic: Graphic {
-                    geometry: Geometry::Polyline {
-                        points: vec![pt(0, 0), pt(2_000_000, 0), pt(2_000_000, 2_000_000), pt(0, 2_000_000)],
-                        closed: true,
-                    },
-                    stroke_nm: thin_stroke,
-                    fill: Fill::None,
-                },
-            },
-        };
-        saved.objects.insert(99, thin);
+        if let Some(Primitive::Artwork { artwork }) = saved.objects.get_mut(&id) {
+            artwork.graphic.stroke_nm = thin_stroke;
+        }
         let bytes = saved.encode().unwrap();
         let loaded = Item::decode(&bytes).unwrap();
-        let id = *loaded.objects.iter().find(|(_, p)| is_courtyard_primitive(p)).unwrap().0;
+        assert_eq!(courtyard_polygon(&loaded.objects[&id]).unwrap().1, thin_stroke);
 
         let mut session = Session::new(loaded, false).unwrap();
         let rev = session
