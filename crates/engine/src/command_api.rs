@@ -207,7 +207,9 @@ const LOWER_BOUNDS: &[&str] = &["minimum", "exclusiveMinimum", "minLength", "min
 const UPPER_BOUNDS: &[&str] = &["maximum", "exclusiveMaximum", "maxLength", "maxItems", "maxProperties"];
 /// Keywords compared only as a whole: any change under one is breaking, because whether it accepts
 /// more or less depends on the schema around it (`not` inverts, `dependentRequired` and the other
-/// dependency maps tie parameters together, `$ref` points elsewhere).
+/// dependency maps tie parameters together, `$ref` points elsewhere). The sole exception is an
+/// added `if`/`then` pair (no `else`) guarded on a newly added enum variant (see
+/// `is_new_variant_if_then` and [`compare`]).
 const WHOLE: &[&str] = &["not", "allOf", "$ref", "if", "then", "else", "patternProperties", "dependentRequired", "dependentSchemas", "dependencies"];
 /// Restrictions: dropping one accepts more; adding or changing one may refuse a valid call.
 const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
@@ -251,8 +253,12 @@ const RESTRICTIONS: &[&str] = &["pattern", "format", "const", "multipleOf"];
 ///   match two, and `oneOf` refuses it; common alternatives are still compared for the path.
 /// - `prefixItems`: compared item by item; a changed length is breaking.
 /// - `examples`: an annotation, so compatible.
-/// - `not`, `allOf`, `$ref`, `if`/`then`/`else`, `patternProperties`, `dependentRequired`,
-///   `dependentSchemas`, `dependencies`: compared as a whole; any change is breaking.
+/// - `if`/`then`/`else`: adding `if` and `then` together with no `else` is compatible when the
+///   old schema is `type: "object"`, requires a property constrained by `enum`, and `if` restricts
+///   that property via `const` or `enum` exclusively to values absent from the old `enum`; any
+///   other change to `if`, `then`, or `else` is compared as a whole and is breaking.
+/// - `not`, `allOf`, `$ref`, `patternProperties`, `dependentRequired`, `dependentSchemas`,
+///   `dependencies`: compared as a whole; any change is breaking.
 /// - any other keyword: any change is breaking, because the classifier cannot tell.
 ///
 /// Outside the parameter schema (for example `scope`), any change is breaking. A command only in
