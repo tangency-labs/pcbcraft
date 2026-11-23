@@ -857,6 +857,12 @@ fn same_open_file(path: &Path, open: &File) -> Result<bool, String> {
 
 enum Message {
     Opened(Arc<Project>),
+    /// A compacted pending burst replacing the queued tail with its newest state while keeping
+    /// a bounded list of earlier pending states (oldest-to-newest) until encoding succeeds.
+    Compacted {
+        project: Arc<Project>,
+        fallbacks: Vec<Message>,
+    },
     Committed(CommittedEdit),
     Snapshot(Arc<Project>),
     Sync(mpsc::SyncSender<Result<(), String>>),
@@ -867,12 +873,17 @@ enum Message {
 /// retain every queued edit so individual command records are not dropped.
 const PENDING_LIMIT: usize = 32;
 
+/// Bound compacted fallbacks to `PENDING_LIMIT`, keeping the oldest and newest entries.
+fn bound_fallbacks(fallbacks: &mut Vec<Message>) {
+    if fallbacks.len() > PENDING_LIMIT {
+        let excess = fallbacks.len() - PENDING_LIMIT;
+        fallbacks.drain(1..=excess);
+    }
+}
+
 #[derive(Default)]
 struct Pending {
     queue: std::collections::VecDeque<Message>,
-    /// Bounded fallback states saved when `push` compacts a tail (`tail >= PENDING_LIMIT`),
-    /// paired by `Arc::ptr_eq` with each compacted `Message::Opened` pushed onto `queue`.
-    compacted_fallbacks: std::collections::VecDeque<(Arc<Project>, Vec<Message>)>,
     /// `Some(None)` drains and preserves; `Some(Some(..))` may also discard before the deadline.
     stop: Option<Option<Instant>>,
     exited: bool,
@@ -908,7 +919,6 @@ impl<F: Fn()> WorkerExit<F> {
         let mut state = self.mailbox.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.exited = true;
         state.queue.clear();
-        state.compacted_fallbacks.clear();
         if std::thread::panicking() {
             state.fault = Some(RecordingFault { message: "The recovery worker stopped unexpectedly.".into(), removed: true });
         }
@@ -967,15 +977,13 @@ impl Mailbox {
             let mut fallbacks = Vec::new();
             for item in drained {
                 match item {
+                    Message::Compacted { project, fallbacks: saved } => {
+                        fallbacks.extend(saved);
+                        fallbacks.push(Message::Opened(project));
+                    }
                     Message::Opened(project) => {
-                        if let Some(index) = state.compacted_fallbacks.iter().rposition(|(key, _)| Arc::ptr_eq(key, &project))
-                            && let Some((_, saved)) = state.compacted_fallbacks.remove(index)
-                        {
-                            fallbacks.extend(saved);
-                        } else {
-                            // Never fall back across an explicit project open.
-                            fallbacks.clear();
-                        }
+                        // Never fall back across an explicit project open.
+                        fallbacks.clear();
                         fallbacks.push(Message::Opened(project));
                     }
                     Message::Committed(_) | Message::Snapshot(_) => fallbacks.push(item),
@@ -988,24 +996,17 @@ impl Mailbox {
                     state.queue.push_back(Message::Opened(project));
                 }
                 Message::Snapshot(project) => {
-                    if fallbacks.len() > PENDING_LIMIT {
-                        let excess = fallbacks.len() - PENDING_LIMIT;
-                        fallbacks.drain(1..=excess);
-                    }
-                    if !fallbacks.is_empty() {
-                        state.compacted_fallbacks.push_back((Arc::clone(&project), fallbacks));
-                    }
-                    state.queue.push_back(Message::Opened(project));
+                    bound_fallbacks(&mut fallbacks);
+                    state.queue.push_back(Message::Compacted { project, fallbacks });
                 }
                 Message::Committed(edit) => {
-                    if fallbacks.len() > PENDING_LIMIT {
-                        let excess = fallbacks.len() - PENDING_LIMIT;
-                        fallbacks.drain(1..=excess);
-                    }
-                    if !fallbacks.is_empty() {
-                        state.compacted_fallbacks.push_back((Arc::clone(&edit.project), fallbacks));
-                    }
-                    state.queue.push_back(Message::Opened(edit.project));
+                    bound_fallbacks(&mut fallbacks);
+                    state.queue.push_back(Message::Compacted { project: edit.project, fallbacks });
+                }
+                Message::Compacted { project, fallbacks: mut extra } => {
+                    fallbacks.append(&mut extra);
+                    bound_fallbacks(&mut fallbacks);
+                    state.queue.push_back(Message::Compacted { project, fallbacks });
                 }
                 Message::Sync(reply) => state.queue.push_back(Message::Sync(reply)),
             }
@@ -1018,25 +1019,17 @@ impl Mailbox {
     /// Drain queued notifications first and then return the shutdown decision.
     #[cfg(test)]
     fn next(&self) -> Result<Message, Option<Instant>> {
-        self.next_with_fallbacks().map(|(message, _, _)| message)
+        self.next_with_fallbacks().map(|(message, _)| message)
     }
 
-    /// Drain the next notification along with any pending states it coalesced or compacted,
-    /// ordered oldest-to-newest, plus whether an `Opened` notification came from compaction.
-    fn next_with_fallbacks(&self) -> Result<(Message, Vec<Message>, bool), Option<Instant>> {
+    /// Drain the next notification along with any consecutive committed edits it coalesced,
+    /// ordered oldest-to-newest.
+    fn next_with_fallbacks(&self) -> Result<(Message, Vec<Message>), Option<Instant>> {
         let state = self.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut state =
             self.ready.wait_while(state, |state| state.queue.is_empty() && state.stop.is_none()).unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut message = state.queue.pop_front();
         let mut fallbacks = Vec::new();
-        let mut compacted = false;
-        if let Some(Message::Opened(project)) = &message
-            && state.compacted_fallbacks.front().is_some_and(|(key, _)| Arc::ptr_eq(key, project))
-            && let Some((_, saved)) = state.compacted_fallbacks.pop_front()
-        {
-            fallbacks = saved;
-            compacted = true;
-        }
         // Each record holds the documents it produces, so the newest of a run of edits replays
         // to the same state as the whole run, and only that state is encoded unless it fails.
         while self.coalesce && matches!(message, Some(Message::Committed(_))) && matches!(state.queue.front(), Some(Message::Committed(_))) {
@@ -1046,7 +1039,7 @@ impl Mailbox {
                 fallbacks.push(previous);
             }
         }
-        message.map(|message| (message, fallbacks, compacted)).ok_or(state.stop.flatten())
+        message.map(|message| (message, fallbacks)).ok_or(state.stop.flatten())
     }
 
     /// Stop accepting notifications after the owner releases its last handle.
@@ -1558,39 +1551,51 @@ impl EditObserver for JournalRecorder {
 fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: Option<String>) -> Result<(), String> {
     let mut journal: Option<EditJournal> = None;
     let discard_before = loop {
-        let (message, fallbacks, compacted) = match mailbox.next_with_fallbacks() {
+        let (message, fallbacks) = match mailbox.next_with_fallbacks() {
             Ok(item) => item,
             Err(stop) => break stop,
         };
-        let full = matches!(&message, Message::Opened(_) | Message::Snapshot(_));
+        let full = matches!(&message, Message::Opened(_) | Message::Snapshot(_) | Message::Compacted { .. });
         let result = match message {
             Message::Sync(reply) => {
                 let _ = reply.send(error.take().map_or(Ok(()), Err));
                 continue;
             }
             Message::Opened(project) => {
-                let result = match encode_documents(project) {
-                    Ok(documents) => write(&mut journal, dir, id, None, documents),
-                    Err(encode_error) => {
-                        let _ = record_fallback(&mut journal, dir, id, fallbacks);
-                        Err(encode_error)
-                    }
-                };
+                let result = encode_documents(project).and_then(|documents| write(&mut journal, dir, id, None, documents));
                 // A root that could not be snapshotted must not be journaled as an edit.
-                if !compacted
-                    && result.is_err()
+                if result.is_err()
                     && let Some(journal) = &mut journal
                 {
                     journal.file = None;
                 }
                 result
             }
+            Message::Compacted { project, fallbacks } => match encode_documents(project) {
+                Ok(documents) => {
+                    let result = write(&mut journal, dir, id, None, documents);
+                    if result.is_err()
+                        && let Some(journal) = &mut journal
+                    {
+                        journal.file = None;
+                    }
+                    result
+                }
+                Err(encode_error) => {
+                    if !record_fallback(&mut journal, dir, id, fallbacks, true)
+                        && let Some(journal) = &mut journal
+                    {
+                        journal.file = None;
+                    }
+                    Err(encode_error)
+                }
+            },
             // An edit that cannot be encoded is folded into the next record, which starts from
             // the last state written; the journal closes itself after a failed write.
             Message::Committed(edit) => match encode_documents(edit.project.clone()) {
                 Ok(documents) => write(&mut journal, dir, id, Some(&edit), documents),
                 Err(encode_error) => {
-                    let _ = record_fallback(&mut journal, dir, id, fallbacks);
+                    let _ = record_fallback(&mut journal, dir, id, fallbacks, false);
                     Err(encode_error)
                 }
             },
@@ -1623,22 +1628,24 @@ fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: 
 
 /// After the newest coalesced or compacted state fails to encode, record the newest earlier
 /// pending state that still encodes, leaving the caller to report the newest state's error.
-fn record_fallback(journal: &mut Option<EditJournal>, dir: &Path, id: &str, fallbacks: Vec<Message>) -> bool {
+/// Compacted bursts always write a snapshot (`as_snapshot == true`) so an edit after a
+/// compacted `Opened` is never appended to a pre-open journal.
+fn record_fallback(journal: &mut Option<EditJournal>, dir: &Path, id: &str, fallbacks: Vec<Message>, as_snapshot: bool) -> bool {
     for fallback in fallbacks.into_iter().rev() {
         let result = match fallback {
             Message::Sync(_) => continue,
-            Message::Opened(project) => match encode_documents(project) {
+            Message::Opened(project) | Message::Compacted { project, .. } => match encode_documents(project) {
                 Ok(documents) => write(journal, dir, id, None, documents),
                 Err(_) => continue,
             },
             Message::Committed(edit) => match encode_documents(edit.project.clone()) {
-                Ok(documents) => write(journal, dir, id, Some(&edit), documents),
+                Ok(documents) => write(journal, dir, id, (!as_snapshot).then_some(&edit), documents),
                 Err(_) => continue,
             },
             Message::Snapshot(project) => match encode_documents(project) {
                 Ok(documents) => match journal.as_mut() {
-                    Some(journal) => journal.snapshot(documents).map(drop),
-                    None => write(journal, dir, id, None, documents),
+                    Some(journal) if !as_snapshot => journal.snapshot(documents).map(drop),
+                    _ => write(journal, dir, id, None, documents),
                 },
                 Err(_) => continue,
             },

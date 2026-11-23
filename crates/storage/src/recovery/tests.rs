@@ -699,7 +699,10 @@ fn the_mailbox_coalesces_a_burst_behind_a_barrier() {
     let pending = mailbox.state.lock().unwrap();
     assert!(pending.queue.len() <= PENDING_LIMIT + 2);
     assert!(matches!(pending.queue.get(1), Some(Message::Sync(_))));
-    assert!(matches!(pending.queue.back(), Some(Message::Snapshot(project) | Message::Opened(project)) if project.name == "Latest"));
+    assert!(matches!(
+        pending.queue.back(),
+        Some(Message::Snapshot(project) | Message::Opened(project) | Message::Compacted { project, .. }) if project.name == "Latest"
+    ));
 }
 
 /// With coalescing, a run of queued edits reaches the worker as its newest edit only; a barrier
@@ -732,7 +735,7 @@ fn coalescing_hands_the_worker_only_the_newest_queued_edit() {
             handed.push(match message {
                 Message::Committed(edit) => Some(edit.revision),
                 Message::Sync(_) => None,
-                Message::Opened(_) | Message::Snapshot(_) => panic!("only edits and a barrier were queued"),
+                Message::Opened(_) | Message::Snapshot(_) | Message::Compacted { .. } => panic!("only edits and a barrier were queued"),
             });
         }
         let expected = if coalesce {
@@ -779,7 +782,7 @@ fn non_coalescing_recorder_keeps_all_edits_above_pending_limit() {
     }
     let pending = coalescing.state.lock().unwrap();
     assert!(pending.queue.len() <= PENDING_LIMIT);
-    assert!(matches!(pending.queue.front(), Some(Message::Opened(_))));
+    assert!(matches!(pending.queue.front(), Some(Message::Opened(_) | Message::Compacted { .. })));
 }
 
 /// A coalescing recorder recovers exactly the session's documents.
@@ -2041,4 +2044,204 @@ fn compaction_keeps_newest_encodable_state_when_latest_fails_to_encode() {
     assert_eq!(recovered.stop, None);
     assert_eq!(recovered.project.name, format!("Edit {PENDING_LIMIT}"));
     assert_eq!(recovered.documents, last_good_docs);
+}
+
+/// An explicit `Message::Opened` reusing the exact same `Arc<Project>` pointer as a compacted
+/// state never steals the compacted entry's fallbacks and never lets compaction cross its boundary.
+#[test]
+fn explicit_opened_reusing_same_arc_never_steals_compacted_fallbacks() {
+    let dir = tempfile::tempdir().unwrap();
+    let mailbox = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Base"})).unwrap();
+    let base = session.snapshot().unwrap();
+
+    let mut bad = Project::clone(&base);
+    bad.name = "x".repeat(pcbcraft_engine::persistence::MAX_DOCUMENT_BYTES + 1);
+    let shared_bad = Arc::new(bad);
+
+    // Explicit `Opened(shared_bad)` before a barrier, followed by a burst that compacts to the
+    // exact same `Arc` pointer `shared_bad`.
+    mailbox.push(Message::Opened(Arc::clone(&shared_bad)));
+    let (tx1, rx1) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(tx1));
+
+    let mut last_good = base;
+    for index in 1..=PENDING_LIMIT {
+        let name = format!("Burst {index}");
+        let revision = session.apply("project.rename", &json!({"name": name})).unwrap();
+        let project = session.snapshot().unwrap();
+        last_good = project.clone();
+        mailbox.push(Message::Committed(CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision, project }));
+    }
+    let last_good_docs = encode_documents(last_good).unwrap();
+    mailbox.push(Message::Committed(CommittedEdit {
+        command: "project.rename".to_owned(),
+        params: json!({}),
+        revision: session.revision() + 1,
+        project: Arc::clone(&shared_bad),
+    }));
+    let (tx2, rx2) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(tx2));
+    mailbox.close(None);
+
+    record(dir.path(), "entry", &mailbox, &|| {}, None).unwrap();
+    assert!(rx1.recv().unwrap().unwrap_err().contains("size limit"));
+    assert!(rx2.recv().unwrap().unwrap_err().contains("size limit"));
+
+    // The compacted entry kept its own fallbacks and recorded `Burst 32`, rather than having them
+    // stolen by the earlier explicit `Opened(shared_bad)`.
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.project.name, format!("Burst {PENDING_LIMIT}"));
+    assert_eq!(recovered.documents, last_good_docs);
+
+    // An explicit `Opened(shared_bad)` inside a later compacted tail never pulls fallbacks from
+    // an earlier pre-barrier compacted entry with the same `Arc` pointer and never crosses itself.
+    let boundary = Mailbox { coalesce: true, ..Mailbox::default() };
+    for index in 1..=PENDING_LIMIT {
+        boundary.push(Message::Committed(CommittedEdit {
+            command: "project.rename".to_owned(),
+            params: json!({}),
+            revision: index as u64,
+            project: session.snapshot().unwrap(),
+        }));
+    }
+    boundary.push(Message::Committed(CommittedEdit {
+        command: "project.rename".to_owned(),
+        params: json!({}),
+        revision: (PENDING_LIMIT + 1) as u64,
+        project: Arc::clone(&shared_bad),
+    }));
+    let (sync_tx, _sync_rx) = mpsc::sync_channel(1);
+    boundary.push(Message::Sync(sync_tx));
+    for index in 0..(PENDING_LIMIT - 1) {
+        boundary.push(Message::Committed(CommittedEdit {
+            command: "project.rename".to_owned(),
+            params: json!({}),
+            revision: (PENDING_LIMIT + 2 + index) as u64,
+            project: session.snapshot().unwrap(),
+        }));
+    }
+    boundary.push(Message::Opened(Arc::clone(&shared_bad)));
+    boundary.push(Message::Committed(CommittedEdit {
+        command: "project.rename".to_owned(),
+        params: json!({}),
+        revision: (2 * PENDING_LIMIT + 2) as u64,
+        project: Arc::clone(&shared_bad),
+    }));
+    let pending = boundary.state.lock().unwrap();
+    assert!(matches!(pending.queue.front(), Some(Message::Compacted { fallbacks, .. }) if fallbacks.len() == PENDING_LIMIT));
+    assert!(matches!(
+        pending.queue.back(),
+        Some(Message::Compacted { fallbacks, .. })
+            if fallbacks.len() == 1 && matches!(fallbacks.first(), Some(Message::Opened(p)) if Arc::ptr_eq(p, &shared_bad))
+    ));
+}
+
+/// When an explicit `Message::Opened` sits inside a compacted tail, any fallback recorded for that
+/// compacted burst is written as a fresh snapshot (never appended as an edit onto the pre-open
+/// journal), and if no fallback can be recorded the open journal is closed so a later edit rebases.
+#[test]
+fn compaction_across_opened_writes_fallback_as_snapshot_and_closes_on_total_failure() {
+    // Sub-case 1: fallback edit after an explicit `Opened` in a compacted tail rebases as a snapshot.
+    let dir = tempfile::tempdir().unwrap();
+    let mailbox = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut old_session = Session::default();
+    old_session.apply("project.new", &json!({"name": "Project Old"})).unwrap();
+    mailbox.push(Message::Opened(old_session.snapshot().unwrap()));
+    let (old_tx, old_rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(old_tx));
+
+    for index in 1..=(PENDING_LIMIT - 2) {
+        let revision = old_session.apply("project.rename", &json!({"name": format!("Old {index}")})).unwrap();
+        mailbox.push(Message::Committed(CommittedEdit {
+            command: "project.rename".to_owned(),
+            params: json!({}),
+            revision,
+            project: old_session.snapshot().unwrap(),
+        }));
+    }
+
+    let mut new_session = Session::default();
+    new_session.apply("project.new", &json!({"name": "Project New"})).unwrap();
+    mailbox.push(Message::Opened(new_session.snapshot().unwrap()));
+    let new_rev = new_session.apply("project.rename", &json!({"name": "New Edit 1"})).unwrap();
+    let new_good = new_session.snapshot().unwrap();
+    let new_good_docs = encode_documents(new_good.clone()).unwrap();
+    mailbox.push(Message::Committed(CommittedEdit {
+        command: "project.rename".to_owned(),
+        params: json!({}),
+        revision: new_rev,
+        project: new_good.clone(),
+    }));
+    let mut bad_new = Project::clone(&new_good);
+    bad_new.name = "x".repeat(pcbcraft_engine::persistence::MAX_DOCUMENT_BYTES + 1);
+    let bad_new = Arc::new(bad_new);
+    mailbox.push(Message::Committed(CommittedEdit {
+        command: "project.rename".to_owned(),
+        params: json!({}),
+        revision: new_rev + 1,
+        project: Arc::clone(&bad_new),
+    }));
+    let (tx, rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(tx));
+    mailbox.close(None);
+
+    record(dir.path(), "entry", &mailbox, &|| {}, None).unwrap();
+    old_rx.recv().unwrap().unwrap();
+    assert!(rx.recv().unwrap().unwrap_err().contains("size limit"));
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.project.name, "New Edit 1");
+    assert!(recovered.commands.is_empty(), "compacted fallback must be written as a snapshot, not appended");
+    assert_eq!(recovered.documents, new_good_docs);
+
+    // Sub-case 2: when a compacted burst containing an `Opened` has no encodable fallback,
+    // the pre-open journal handle is closed so the next encodable edit starts a fresh snapshot.
+    let dir2 = tempfile::tempdir().unwrap();
+    let mailbox2 = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut old2 = Session::default();
+    old2.apply("project.new", &json!({"name": "Project Old"})).unwrap();
+    mailbox2.push(Message::Opened(old2.snapshot().unwrap()));
+    let (init_tx, init_rx) = mpsc::sync_channel(1);
+    mailbox2.push(Message::Sync(init_tx));
+
+    for index in 1..=(PENDING_LIMIT - 1) {
+        let revision = old2.apply("project.rename", &json!({"name": format!("Old {index}")})).unwrap();
+        mailbox2.push(Message::Committed(CommittedEdit {
+            command: "project.rename".to_owned(),
+            params: json!({}),
+            revision,
+            project: old2.snapshot().unwrap(),
+        }));
+    }
+    mailbox2.push(Message::Opened(Arc::clone(&bad_new)));
+    mailbox2.push(Message::Committed(CommittedEdit {
+        command: "project.rename".to_owned(),
+        params: json!({}),
+        revision: 1,
+        project: Arc::clone(&bad_new),
+    }));
+    let (fail_tx, fail_rx) = mpsc::sync_channel(1);
+    mailbox2.push(Message::Sync(fail_tx));
+
+    let mut after = Session::default();
+    after.apply("project.new", &json!({"name": "After Total Failure"})).unwrap();
+    let after_project = after.snapshot().unwrap();
+    let after_docs = encode_documents(after_project.clone()).unwrap();
+    mailbox2.push(Message::Committed(CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision: 2, project: after_project }));
+    let (after_tx, after_rx) = mpsc::sync_channel(1);
+    mailbox2.push(Message::Sync(after_tx));
+    mailbox2.close(None);
+
+    record(dir2.path(), "entry", &mailbox2, &|| {}, None).unwrap();
+    init_rx.recv().unwrap().unwrap();
+    assert!(fail_rx.recv().unwrap().unwrap_err().contains("size limit"));
+    after_rx.recv().unwrap().unwrap();
+    let recovered2 = recover(dir2.path(), "entry").unwrap();
+    assert_eq!(recovered2.stop, None);
+    assert_eq!(recovered2.project.name, "After Total Failure");
+    assert!(recovered2.commands.is_empty(), "journal must be closed on total compacted failure so the next edit rebases");
+    assert_eq!(recovered2.documents, after_docs);
 }
