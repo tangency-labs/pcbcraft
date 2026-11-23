@@ -1497,6 +1497,56 @@ fn a_right_press_on_a_floating_window_keeps_the_board_move() {
     }
 }
 
+/// A right press is judged where it lands, even when the pointer moves on within the same frame:
+/// a press on the board that moves off it still ends the ruler, and a press in the other pane
+/// that moves onto the board keeps it.
+#[test]
+fn a_right_press_counts_where_it_lands_within_the_frame() {
+    for on_board in [true, false] {
+        let mut h = board_harness();
+        h.state_mut().preferences.navigation.right_drag_pan = true;
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Open PCB Layout beside current view");
+        let board_id = ViewId(2);
+        h.state_mut().views.view_mut(board_id).unwrap().camera.center_on(Point { x_nm: 0, y_nm: 0 });
+        h.run();
+        let rect = h.get_by_label("PCB canvas 3").rect();
+        let origin = h.state().views.view(board_id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+        click_canvas_at(&mut h, origin);
+        h.hover_at(origin);
+        h.run();
+        h.state_mut().start_measure();
+        h.run();
+        assert_eq!(h.state().views.active.id(), board_id);
+        assert!(h.state().views.active.board.measure.tool);
+        let schematic = h.get_by_label("Schematic canvas 1").rect();
+        let cards = h.state().views.view(ViewId(0)).unwrap().canvas_cards.clone();
+        let elsewhere = [0.5, 0.35, 0.65, 0.2, 0.8]
+            .into_iter()
+            .flat_map(|x| [0.5, 0.3, 0.7].map(|y| schematic.lerp_inside(egui::vec2(x, y))))
+            .find(|point| !cards.iter().any(|card| card.contains(*point)))
+            .unwrap();
+        let (from, to) = if on_board { (origin, elsewhere) } else { (elsewhere, origin) };
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let secondary =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        h.hover_at(from);
+        h.run();
+        h.event(secondary(from, true));
+        h.event(egui::Event::PointerMoved(to));
+        h.run();
+        h.event(secondary(to, false));
+        h.run();
+        assert_eq!(h.state().views.active.id(), board_id);
+        assert_eq!(
+            h.state().views.view(board_id).unwrap().board.measure.tool,
+            !on_board,
+            "a press that lands on the board ends the ruler, one that lands elsewhere keeps it (pressed on board: {on_board})"
+        );
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// A successful folder/archive Open from PCB layout binds the incoming project's board before
 /// constructing its fallback arrangement, including cached views of the outgoing project.
 #[cfg(not(target_arch = "wasm32"))]

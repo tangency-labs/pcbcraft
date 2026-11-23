@@ -1147,10 +1147,20 @@ fn reference_bounds(
 
 /// A secondary press on this canvas cancels its gesture. A press over another pane, such as a
 /// right-drag pan there, or on a floating card or window above the canvas leaves this canvas's
-/// tools and gestures running.
+/// tools and gestures running. Each press is judged where it happened, not where the pointer
+/// moved to later in the same frame.
 pub(super) fn secondary_pressed_here(response: &Response) -> bool {
-    let pressed = response.ctx.input(|input| input.pointer.button_pressed(PointerButton::Secondary).then(|| input.pointer.interact_pos()).flatten());
-    pressed.is_some_and(|pos| {
+    let presses: Vec<Pos2> = response.ctx.input(|input| {
+        input
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                egui::Event::PointerButton { pos, button: PointerButton::Secondary, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+            .collect()
+    });
+    presses.into_iter().any(|pos| {
         response.rect.contains(pos)
             && response.ctx.layer_id_at(pos).is_none_or(|layer| layer == response.layer_id || layer.order == egui::Order::Background)
     })
