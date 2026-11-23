@@ -555,3 +555,93 @@ fn pcb_selection_filters_card_shows_locked_objects_cleared() {
     assert!(!h.state().views.active.filters.include_locked);
     assert_eq!(h.get_by_label("Select locked objects").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
 }
+
+/// Float the filter card so its header covers `point`, then confirm that point lies on a
+/// foreground layer above the canvas.
+fn float_filters_over(h: &mut Harness<'_, PcbApp>, point: egui::Pos2) {
+    use crate::workspace_panels::FILTERS;
+    use pcbcraft_chrome::workspace::panels::Position;
+    let label = if h.state().views.active.workspace == Workspace::Board { "PCB canvas" } else { "Schematic canvas" };
+    let canvas = h.get_by_label(label).rect();
+    h.state_mut().views.active.panels[FILTERS].set_position(Position::Floating, Some([point.x - canvas.left() - 20., point.y - canvas.top() - 12.]));
+    h.run();
+    h.get_by_label("Move Selection filters");
+    assert!(h.ctx.layer_id_at(point).is_some_and(|layer| layer.order != egui::Order::Background));
+}
+
+/// The screen corners of a model-space box: bottom-left to start a window, top-right to end it.
+fn window_corners(h: &Harness<'_, PcbApp>, min: (i64, i64), max: (i64, i64)) -> (egui::Pos2, egui::Pos2) {
+    let (a, b) = (at(h, min.0, min.1), at(h, max.0, max.1));
+    (egui::pos2(a.x.min(b.x), a.y.max(b.y)), egui::pos2(a.x.max(b.x), a.y.min(b.y)))
+}
+
+/// Drag a primary box from the canvas and release it at `to`, optionally pressing Escape first.
+fn box_onto(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, escape: bool) {
+    use egui::PointerButton::Primary;
+    h.event(egui::Event::PointerMoved(from));
+    h.event(egui::Event::PointerButton { pos: from, button: Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.event(egui::Event::PointerMoved(from + (to - from) * 0.5));
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    if escape {
+        h.key_press(Key::Escape);
+        h.run();
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+}
+
+/// A schematic box that starts on the canvas keeps its hits when released over the floating
+/// filter card. Escape still cancels it, and plain clicks still select or clear.
+#[test]
+fn schematic_box_released_over_the_filter_card_selects_enclosed_items() {
+    let mut h = fixture();
+    let before = document(&h);
+    let (from, to) = window_corners(&h, (-15, -5), (15, 15));
+    let origin = at(&h, 0, 0);
+    click_canvas_at(&mut h, origin);
+    assert_eq!(h.state().views.active.schematic.selection.symbols.len(), 1);
+    click_canvas_at(&mut h, from);
+    assert!(h.state().views.active.schematic.selection.is_empty());
+    float_filters_over(&mut h, to);
+    for escape in [true, false] {
+        box_onto(&mut h, from, to, escape);
+        assert!(h.state().views.active.schematic.tool.is_none());
+        let selection = &h.state().views.active.schematic.selection;
+        assert_eq!((selection.symbols.len(), selection.wires.len()), if escape { (0, 0) } else { (1, 1) }, "escape={escape}");
+    }
+    assert_eq!(document(&h), before);
+}
+
+/// A PCB box that starts on the canvas keeps its hits when released over the floating filter
+/// card. Escape still cancels it, and plain clicks still select or clear.
+#[test]
+fn board_box_released_over_the_filter_card_selects_enclosed_items() {
+    let mut h = fixture();
+    let revision = h.state().session.revision();
+    h.state_mut().run("pcb.create_board", &json!({"expected_revision":revision}));
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::PLACE_FOOTPRINT,
+        &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":revision}),
+    );
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "PCB Layout");
+    let before = document(&h);
+    let (from, to) = window_corners(&h, (-8, -8), (8, 8));
+    let origin = at(&h, 0, 0);
+    click_canvas_at(&mut h, origin);
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    click_canvas_at(&mut h, from);
+    assert!(h.state().views.active.board.selection.is_empty());
+    float_filters_over(&mut h, to);
+    for escape in [true, false] {
+        box_onto(&mut h, from, to, escape);
+        assert!(h.state().views.active.board.box_drag.is_none());
+        assert_eq!(h.state().views.active.board.selection.len(), usize::from(!escape), "escape={escape}");
+    }
+    assert_eq!(document(&h), before);
+}
