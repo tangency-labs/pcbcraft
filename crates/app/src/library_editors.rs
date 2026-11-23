@@ -420,8 +420,16 @@ impl Document {
         if let Some(id) = self.selected
             && let Some((points, _)) = next.objects.get(&id).and_then(pcbcraft_engine::authoring::courtyard::courtyard_polygon)
         {
-            if self.selected_vertex.is_some_and(|idx| idx >= points.len()) {
-                self.selected_vertex = Some(points.len().saturating_sub(1));
+            if let Some(idx) = self.selected_vertex {
+                let old_points = old.objects.get(&id).and_then(pcbcraft_engine::authoring::courtyard::courtyard_polygon).map(|(pts, _)| pts);
+                self.selected_vertex = match old_points {
+                    Some(old_pts) if old_pts.len() == points.len() => (idx < points.len()).then_some(idx),
+                    Some(old_pts) => old_pts.get(idx).and_then(|&point| {
+                        let mut matches = points.iter().enumerate().filter_map(|(i, &p)| (p == point).then_some(i));
+                        matches.next().filter(|_| matches.next().is_none())
+                    }),
+                    None => None,
+                };
             }
         } else {
             self.selected_vertex = None;

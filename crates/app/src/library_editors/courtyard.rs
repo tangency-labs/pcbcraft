@@ -2142,9 +2142,10 @@ mod tests {
         let (points, _) = courtyard::courtyard_polygon(original).unwrap();
         assert!(points.len() > 2);
 
-        // Positive control: an edit of the same outline keeps the chosen vertex.
+        // Positive control: a coordinate-only edit of the same outline keeps the chosen vertex.
         doc.selected_vertex = Some(2);
-        let candidate = courtyard::with_inserted_vertex(original, 0, courtyard::edge_midpoint(points, 0).unwrap()).unwrap();
+        let moved = Point { x_nm: points[2].x_nm + 100_000, y_nm: points[2].y_nm };
+        let candidate = courtyard::with_moved_vertex(original, 2, moved).unwrap();
         let revision = doc.session.revision();
         doc.execute(revision, Action::Replace { object: cy_id, primitive: candidate }).unwrap();
         assert_eq!(doc.selected, Some(cy_id));
@@ -2157,6 +2158,63 @@ mod tests {
         assert_ne!(pasted, cy_id);
         assert!(courtyard::courtyard_polygon(&doc.session.snapshot().objects[&pasted]).is_some());
         assert_eq!(doc.selected_vertex, None);
+    }
+
+    /// Structural replacements remap a selected vertex to its new index when its identity is
+    /// preserved and clear the selection when it is removed, while coordinate-only edits retain
+    /// the selected index.
+    #[test]
+    fn courtyard_vertex_selection_remaps_or_clears_on_structural_replace() {
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        app.library_editors
+            .edit(
+                id,
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let doc = app.library_editors.documents.get_mut(&id).unwrap();
+        let cy_id = doc.selected.unwrap();
+        let snapshot = doc.session.snapshot();
+        let original = &snapshot.objects[&cy_id];
+        let (points, _) = courtyard::courtyard_polygon(original).unwrap();
+        let chosen_point = points[2];
+
+        // Structural insert before vertex 2 shifts that corner to index 3; selection follows it.
+        doc.selected_vertex = Some(2);
+        let inserted = courtyard::with_inserted_vertex(original, 0, courtyard::edge_midpoint(points, 0).unwrap()).unwrap();
+        let revision = doc.session.revision();
+        doc.execute(revision, Action::Replace { object: cy_id, primitive: inserted }).unwrap();
+        assert_eq!(doc.selected, Some(cy_id));
+        assert_eq!(doc.selected_vertex, Some(3));
+        let after_insert = doc.session.snapshot();
+        let (inserted_pts, _) = courtyard::courtyard_polygon(&after_insert.objects[&cy_id]).unwrap();
+        assert_eq!(inserted_pts[3], chosen_point);
+
+        // Structural removal of the selected corner clears the selection instead of keeping a stale index.
+        let removed = courtyard::with_removed_vertex(&after_insert.objects[&cy_id], 3).unwrap();
+        let revision = doc.session.revision();
+        doc.execute(revision, Action::Replace { object: cy_id, primitive: removed }).unwrap();
+        assert_eq!(doc.selected, Some(cy_id));
+        assert_eq!(doc.selected_vertex, None);
+
+        // Coordinate-only edit keeps the selected index.
+        let after_remove = doc.session.snapshot();
+        let (remove_pts, _) = courtyard::courtyard_polygon(&after_remove.objects[&cy_id]).unwrap();
+        doc.selected_vertex = Some(1);
+        let moved = Point { x_nm: remove_pts[1].x_nm + 100_000, y_nm: remove_pts[1].y_nm };
+        let edited = courtyard::with_moved_vertex(&after_remove.objects[&cy_id], 1, moved).unwrap();
+        let revision = doc.session.revision();
+        doc.execute(revision, Action::Replace { object: cy_id, primitive: edited }).unwrap();
+        assert_eq!(doc.selected, Some(cy_id));
+        assert_eq!(doc.selected_vertex, Some(1));
     }
 
     /// A Backspace that arrives in the same frame as a midpoint click removes the vertex that
