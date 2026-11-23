@@ -251,10 +251,10 @@ impl RouteReversalTracker {
                             self.reversed = true;
                         }
                         self.prev_delta = Some((dx, dy));
+                        self.ui_samples.push(ui_ms);
                     }
                 }
                 self.prev_point = Some(*at);
-                self.ui_samples.push(ui_ms);
             }
             _ => self.flush(samples),
         }
@@ -725,5 +725,35 @@ mod tests {
         reference.trace_id = ENVELOPE_TRACE_ID.into();
         reference.trace = Step::envelope();
         assert!(run(&reference, &mut BTreeMap::new()).is_err());
+    }
+
+    /// Repeating a pointer position during an active route must not record a route-reversal
+    /// sample, even when the segment later reverses.
+    #[test]
+    fn route_reversal_tracker_excludes_stationary_pointer_frames() {
+        let mut tracker = RouteReversalTracker::default();
+        let mut samples = BTreeMap::new();
+        let point = |x_nm| Point { x_nm, y_nm: -5_080_000 };
+        let move_to = |x_nm| Action::Pointer { at: point(x_nm), pressed: None };
+
+        // Start route, repeat start position, move forward, repeat mid-segment, move forward,
+        // reverse, repeat after reversal, then cancel.
+        tracker.observe(false, true, &Action::Pointer { at: point(0), pressed: Some(false) }, 1.0, &mut samples);
+        tracker.observe(true, true, &move_to(0), 2.0, &mut samples);
+        tracker.observe(true, true, &move_to(2_540_000), 3.0, &mut samples);
+        tracker.observe(true, true, &move_to(2_540_000), 4.0, &mut samples);
+        tracker.observe(true, true, &move_to(5_080_000), 5.0, &mut samples);
+        tracker.observe(true, true, &move_to(2_540_000), 6.0, &mut samples);
+        tracker.observe(true, true, &move_to(2_540_000), 7.0, &mut samples);
+        tracker.observe(true, false, &Action::Key { key: ReplayKey::Cancel, pressed: true }, 8.0, &mut samples);
+
+        assert_eq!(samples.get(ROUTE_REVERSAL_METRIC).map(Vec::as_slice), Some([3.0, 5.0, 6.0].as_slice()));
+
+        // A route with only stationary pointer frames never records any routing sample.
+        tracker.observe(false, true, &Action::Pointer { at: point(0), pressed: Some(false) }, 9.0, &mut samples);
+        tracker.observe(true, true, &move_to(0), 10.0, &mut samples);
+        tracker.observe(true, false, &Action::Key { key: ReplayKey::Cancel, pressed: true }, 11.0, &mut samples);
+
+        assert_eq!(samples.get(ROUTE_REVERSAL_METRIC).map(Vec::as_slice), Some([3.0, 5.0, 6.0].as_slice()));
     }
 }
