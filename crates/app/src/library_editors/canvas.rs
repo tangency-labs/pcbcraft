@@ -696,6 +696,10 @@ impl Document {
                 };
             }
         }
+        let keyboard_active = active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input();
+        if keyboard_active && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.tool = Tool::Select;
+        }
         let mut preview = Vec::new();
         let mut drag_invalid: Option<Point> = None;
         if let Some(point) = pointer.filter(|_| over) {
@@ -895,180 +899,175 @@ impl Document {
         } else if response.drag_stopped() {
             self.tool = Tool::Select;
         }
-        if active && ui.is_enabled() && !ui.ctx().egui_wants_keyboard_input() {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                self.tool = Tool::Select;
+        if keyboard_active && over {
+            if ui.input(|i| {
+                i.focused
+                    && i.events
+                        .iter()
+                        .any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, pressed: true, modifiers, .. } if modifiers.command))
+            }) {
+                let _ = self.select_many(item.objects.iter().filter(|(_, p)| visible(p)).map(|(id, _)| *id).collect());
             }
-            if over {
-                if ui.input(|i| {
+            // Command-only C/X/V arrive as normalized clipboard events on desktop; a raw
+            // key press only appears when another modifier bypasses that translation.
+            // egui-winit emits Paste("") when the OS clipboard read is empty and
+            // PasteImage when it holds only an image — both mean "paste intent" here.
+            // Paste and duplicate arm the same preview and resolve in event order, only
+            // while focused: a later Escape in the same batch cancels the chord, and a
+            // focus-loss batch must not arm a preview the reset just cleared.
+            let copied = ui.input(|i| {
+                i.focused
+                    && i.events.iter().any(|event| match event {
+                        egui::Event::Copy => true,
+                        egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } => modifiers.command,
+                        _ => false,
+                    })
+            });
+            let cut = ui.input(|i| {
+                i.focused
+                    && i.events.iter().any(|event| match event {
+                        egui::Event::Cut => true,
+                        egui::Event::Key { key: egui::Key::X, pressed: true, modifiers, .. } => modifiers.command,
+                        _ => false,
+                    })
+            });
+            let preview = ui.input(|i| {
+                if !i.focused {
+                    return None;
+                }
+                i.events.iter().fold(None, |preview, event| match event {
+                    egui::Event::Paste(_) | egui::Event::PasteImage(_) => Some(Preview::Paste),
+                    egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => None,
+                    egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Paste),
+                    egui::Event::Key { key: egui::Key::D, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Duplicate),
+                    _ => preview,
+                })
+            });
+            if copied {
+                self.copy(ui.ctx());
+            }
+            if cut {
+                self.cut(ui.ctx());
+            }
+            match preview {
+                Some(Preview::Paste) => self.paste(ui.ctx()),
+                Some(Preview::Duplicate) => self.duplicate(),
+                None => {}
+            }
+            // Tool letters and R's direction read the pressed event's own modifiers,
+            // like the command chords above: a command released before batch end
+            // cannot leak a chord into a tool start, and a shift released early
+            // cannot flip the rotation direction.
+            let tool_key = |key: egui::Key| {
+                ui.input(|i| {
+                    i.focused
+                        && i.events.iter().any(|event| {
+                            matches!(
+                                event,
+                                egui::Event::Key { key: letter, pressed: true, modifiers, .. }
+                                    if *letter == key && !modifiers.command
+                            )
+                        })
+                })
+            };
+            if tool_key(egui::Key::P) {
+                self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad });
+            }
+            if tool_key(egui::Key::L) {
+                self.start_tool(Place::Line);
+            }
+            if tool_key(egui::Key::T) {
+                self.start_tool(Place::Text);
+            }
+            if item.kind == Kind::Footprint
+                && ui.input(|i| {
                     i.focused
                         && i.events
                             .iter()
-                            .any(|event| matches!(event, egui::Event::Key { key: egui::Key::A, pressed: true, modifiers, .. } if modifiers.command))
-                }) {
-                    let _ = self.select_many(item.objects.iter().filter(|(_, p)| visible(p)).map(|(id, _)| *id).collect());
+                            .any(|event| matches!(event, egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } if modifiers.is_none()))
+                })
+            {
+                self.start_tool(Place::Courtyard);
+                if matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. }) {
+                    self.set_show_courtyard(true);
                 }
-                // Command-only C/X/V arrive as normalized clipboard events on desktop; a raw
-                // key press only appears when another modifier bypasses that translation.
-                // egui-winit emits Paste("") when the OS clipboard read is empty and
-                // PasteImage when it holds only an image — both mean "paste intent" here.
-                // Paste and duplicate arm the same preview and resolve in event order, only
-                // while focused: a later Escape in the same batch cancels the chord, and a
-                // focus-loss batch must not arm a preview the reset just cleared.
-                let copied = ui.input(|i| {
-                    i.focused
-                        && i.events.iter().any(|event| match event {
-                            egui::Event::Copy => true,
-                            egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } => modifiers.command,
-                            _ => false,
-                        })
-                });
-                let cut = ui.input(|i| {
-                    i.focused
-                        && i.events.iter().any(|event| match event {
-                            egui::Event::Cut => true,
-                            egui::Event::Key { key: egui::Key::X, pressed: true, modifiers, .. } => modifiers.command,
-                            _ => false,
-                        })
-                });
-                let preview = ui.input(|i| {
-                    if !i.focused {
-                        return None;
-                    }
-                    i.events.iter().fold(None, |preview, event| match event {
-                        egui::Event::Paste(_) | egui::Event::PasteImage(_) => Some(Preview::Paste),
-                        egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => None,
-                        egui::Event::Key { key: egui::Key::V, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Paste),
-                        egui::Event::Key { key: egui::Key::D, pressed: true, modifiers, .. } if modifiers.command => Some(Preview::Duplicate),
-                        _ => preview,
-                    })
-                });
-                if copied {
-                    self.copy(ui.ctx());
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::M)) {
+                self.begin_move();
+            }
+            if let Some(shifted) = ui.input(|i| {
+                if !i.focused {
+                    return None;
                 }
-                if cut {
-                    self.cut(ui.ctx());
-                }
-                match preview {
-                    Some(Preview::Paste) => self.paste(ui.ctx()),
-                    Some(Preview::Duplicate) => self.duplicate(),
-                    None => {}
-                }
-                // Tool letters and R's direction read the pressed event's own modifiers,
-                // like the command chords above: a command released before batch end
-                // cannot leak a chord into a tool start, and a shift released early
-                // cannot flip the rotation direction.
-                let tool_key = |key: egui::Key| {
-                    ui.input(|i| {
-                        i.focused
-                            && i.events.iter().any(|event| {
-                                matches!(
-                                    event,
-                                    egui::Event::Key { key: letter, pressed: true, modifiers, .. }
-                                        if *letter == key && !modifiers.command
-                                )
-                            })
-                    })
-                };
-                if tool_key(egui::Key::P) {
-                    self.start_tool(if item.kind == Kind::Symbol { Place::Pin } else { Place::Pad });
-                }
-                if tool_key(egui::Key::L) {
-                    self.start_tool(Place::Line);
-                }
-                if tool_key(egui::Key::T) {
-                    self.start_tool(Place::Text);
-                }
-                if item.kind == Kind::Footprint
-                    && ui.input(|i| {
-                        i.focused
-                            && i.events.iter().any(
-                                |event| matches!(event, egui::Event::Key { key: egui::Key::C, pressed: true, modifiers, .. } if modifiers.is_none()),
-                            )
-                    })
+                i.events.iter().find_map(|event| match event {
+                    egui::Event::Key { key: egui::Key::R, pressed: true, modifiers, .. } => Some(modifiers.shift),
+                    _ => None,
+                })
+            }) {
+                self.rotate_by(if shifted { 1 } else { -1 });
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
+                self.details_requested = true;
+            }
+            if ui.input(|i| {
+                i.focused
+                    && i.events.iter().any(
+                        |event| matches!(event, egui::Event::Key { key: egui::Key::Backspace, pressed: true, modifiers, .. } if modifiers.is_none()),
+                    )
+            }) {
+                // With a courtyard vertex selected, Backspace only ever targets that vertex:
+                // pending property edits refuse it instead of falling through to deleting
+                // the whole outline. Without a selected vertex it deletes the selection.
+                // Read the outline after this frame's edits: a midpoint click earlier in the
+                // same frame has already inserted the vertex that is now selected.
+                let current = self.session.snapshot();
+                if self.show_courtyard
+                    && let Some((object, pts, _)) = self.selected_courtyard(&current)
+                    && let Some(vertex) = self.selected_vertex
+                    && let Some(primitive) = current.objects.get(&object)
                 {
-                    self.start_tool(Place::Courtyard);
-                    if matches!(self.tool, Tool::Draw { kind: Place::Courtyard, .. }) {
-                        self.set_show_courtyard(true);
-                    }
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::M)) {
-                    self.begin_move();
-                }
-                if let Some(shifted) = ui.input(|i| {
-                    if !i.focused {
-                        return None;
-                    }
-                    i.events.iter().find_map(|event| match event {
-                        egui::Event::Key { key: egui::Key::R, pressed: true, modifiers, .. } => Some(modifiers.shift),
-                        _ => None,
-                    })
-                }) {
-                    self.rotate_by(if shifted { 1 } else { -1 });
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::E)) && self.selection.len() == 1 {
-                    self.details_requested = true;
-                }
-                if ui.input(|i| {
-                    i.focused
-                        && i.events.iter().any(|event| {
-                            matches!(event, egui::Event::Key { key: egui::Key::Backspace, pressed: true, modifiers, .. } if modifiers.is_none())
-                        })
-                }) {
-                    // With a courtyard vertex selected, Backspace only ever targets that vertex:
-                    // pending property edits refuse it instead of falling through to deleting
-                    // the whole outline. Without a selected vertex it deletes the selection.
-                    // Read the outline after this frame's edits: a midpoint click earlier in the
-                    // same frame has already inserted the vertex that is now selected.
-                    let current = self.session.snapshot();
-                    if self.show_courtyard
-                        && let Some((object, pts, _)) = self.selected_courtyard(&current)
-                        && let Some(vertex) = self.selected_vertex
-                        && let Some(primitive) = current.objects.get(&object)
-                    {
-                        if self.pending() {
-                            self.error = Some("Apply or reset the property fields before removing a vertex.".into());
-                        } else {
-                            match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
-                                .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }))
-                            {
-                                Ok(()) => {
-                                    let next_len = pts.len().saturating_sub(1);
-                                    self.selected_vertex = (next_len > 0).then(|| vertex.min(next_len - 1));
-                                }
-                                Err(error) => self.error = Some(error),
+                    if self.pending() {
+                        self.error = Some("Apply or reset the property fields before removing a vertex.".into());
+                    } else {
+                        match pcbcraft_engine::authoring::courtyard::with_removed_vertex(primitive, vertex)
+                            .and_then(|candidate| self.execute(self.session.revision(), Action::Replace { object, primitive: candidate }))
+                        {
+                            Ok(()) => {
+                                let next_len = pts.len().saturating_sub(1);
+                                self.selected_vertex = (next_len > 0).then(|| vertex.min(next_len - 1));
                             }
+                            Err(error) => self.error = Some(error),
                         }
-                    } else if matches!(self.tool, Tool::Select) {
-                        self.delete();
                     }
-                }
-                if matches!(self.tool, Tool::Select) && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+                } else if matches!(self.tool, Tool::Select) {
                     self.delete();
                 }
-                if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    match self.tool.clone() {
-                        Tool::Polyline { points, revision } => {
-                            if let Err(error) = self.execute(
-                                revision,
-                                Action::Insert { primitive: graphic_object(points, false, self.drawing_purpose, self.drawing_stroke_nm) },
-                            ) {
-                                self.error = Some(error);
-                            }
+            }
+            if matches!(self.tool, Tool::Select) && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+                self.delete();
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                match self.tool.clone() {
+                    Tool::Polyline { points, revision } => {
+                        if let Err(error) = self.execute(
+                            revision,
+                            Action::Insert { primitive: graphic_object(points, false, self.drawing_purpose, self.drawing_stroke_nm) },
+                        ) {
+                            self.error = Some(error);
                         }
-                        Tool::Courtyard { points, revision } => {
-                            match pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(points, self.drawing_stroke_nm)
-                                .and_then(|primitive| self.execute(revision, Action::Insert { primitive }))
-                            {
-                                Ok(()) => {
-                                    self.show_courtyard = true;
-                                    self.tool = Tool::Select;
-                                }
-                                Err(error) => self.error = Some(error),
-                            }
-                        }
-                        _ => {}
                     }
+                    Tool::Courtyard { points, revision } => {
+                        match pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(points, self.drawing_stroke_nm)
+                            .and_then(|primitive| self.execute(revision, Action::Insert { primitive }))
+                        {
+                            Ok(()) => {
+                                self.show_courtyard = true;
+                                self.tool = Tool::Select;
+                            }
+                            Err(error) => self.error = Some(error),
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1797,5 +1796,98 @@ mod tests {
             assert!(matches!(doc.tool, Tool::Select));
             assert_eq!(doc.session.revision(), rev_stale);
         }
+    }
+
+    /// Escape and pointer release in the same frame cancel a courtyard vertex drag without
+    /// committing Action::Replace, while a release without Escape still commits the move.
+    #[test]
+    fn courtyard_vertex_drag_same_frame_escape_and_release_does_not_commit() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = crate::PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        {
+            let doc = app.library_editors.documents.get_mut(&id).unwrap();
+            doc.camera.set_zoom(20.0);
+            doc.camera.set_snap_nm(250_000);
+            doc.execute(
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: pcbcraft_engine::authoring::courtyard::DEFAULT_CLEARANCE_NM,
+                    source: pcbcraft_engine::authoring::courtyard::CourtyardSource::PadsAndBody,
+                    stroke_nm: pcbcraft_engine::authoring::courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        }
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut crate::PcbApp| app.frame(ui), app);
+        h.run();
+        let area = h.get_by_label("Library canvas").rect();
+        let (cy_id, original_v0, v0_screen, target_screen, snapped_target) = {
+            let doc = &h.state().library_editors.documents[&id];
+            let item = doc.session.snapshot();
+            let (cy_id, pts, _) = doc.selected_courtyard(&item).unwrap();
+            let v0 = pts[0];
+            let v0_screen = doc.camera.screen(v0, area);
+            let target_screen = doc.camera.screen(Point { x_nm: v0.x_nm - 500_000, y_nm: v0.y_nm - 500_000 }, area);
+            let snapped = doc.camera.snap(target_screen, area);
+            assert!(area.contains(v0_screen) && area.contains(target_screen));
+            assert_ne!(snapped, v0);
+            assert!(pcbcraft_engine::authoring::courtyard::with_moved_vertex(&item.objects[&cy_id], 0, snapped).is_ok());
+            (cy_id, v0, v0_screen, target_screen, snapped)
+        };
+        let rev = h.state().library_editors.documents[&id].session.revision();
+
+        // Start dragging vertex 0 toward the target.
+        h.hover_at(v0_screen);
+        h.run();
+        h.event(egui::Event::PointerButton { pos: v0_screen, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run();
+        h.hover_at(target_screen);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, Tool::DragCourtyardVertex { vertex: 0, .. }));
+
+        // Escape and pointer release in the same frame must cancel without committing.
+        h.key_press(egui::Key::Escape);
+        h.event(egui::Event::PointerButton {
+            pos: target_screen,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+        {
+            let doc = &h.state().library_editors.documents[&id];
+            assert!(matches!(doc.tool, Tool::Select));
+            assert_eq!(doc.selection.iter().copied().collect::<Vec<_>>(), vec![cy_id]);
+            assert_eq!(doc.session.revision(), rev);
+            let item = doc.session.snapshot();
+            let (pts, _) = pcbcraft_engine::authoring::courtyard::courtyard_polygon(&item.objects[&cy_id]).unwrap();
+            assert_eq!(pts[0], original_v0);
+        }
+
+        // Positive control: dragging vertex 0 without Escape commits the move in one edit.
+        h.run_steps(30);
+        h.hover_at(v0_screen);
+        h.run();
+        h.event(egui::Event::PointerButton { pos: v0_screen, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run();
+        h.hover_at(target_screen);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, Tool::DragCourtyardVertex { vertex: 0, .. }));
+        h.event(egui::Event::PointerButton {
+            pos: target_screen,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run();
+        let doc = &h.state().library_editors.documents[&id];
+        assert!(matches!(doc.tool, Tool::Select));
+        assert_eq!(doc.session.revision(), rev + 1);
+        let item = doc.session.snapshot();
+        let (pts, _) = pcbcraft_engine::authoring::courtyard::courtyard_polygon(&item.objects[&cy_id]).unwrap();
+        assert_eq!(pts[0], snapped_target);
     }
 }
