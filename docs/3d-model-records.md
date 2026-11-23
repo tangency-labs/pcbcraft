@@ -277,12 +277,16 @@ the open. The storage slice adds asset support in a new container format,
   its entry out while the bindings stay.
 - **Model assets are optional.** A listed asset whose file is missing gives its
   components `geometry_unavailable`. One whose size or SHA-256 differs from the
-  manifest or the record gives `hash_mismatch`, and its bytes are not used. The
+  manifest or the record gives `hash_mismatch`, and that record does not use the
+  bytes. The
   project opens and stays editable, and the open notice names each failed asset.
-- **Saving.** Bytes that failed are never written back. The record and the
-  binding stay, the asset and its manifest entry are left out, and the save
-  notice names them, so the model stays `geometry_unavailable` until it is
-  embedded again.
+  A mismatch is judged per record: an asset that matches its manifest entry is
+  kept while any record verifies against it. Only a record that disagrees
+  reports `hash_mismatch`, and the other records keep the geometry.
+- **Saving.** Bytes that no record verifies against are never written back. The
+  record and the binding stay, the asset and its manifest entry are left out,
+  and the save notice names them, so the model stays `geometry_unavailable`
+  until it is embedded again.
 
 How embedded assets count against the packed-project size limits is settled by
 the storage slice.
