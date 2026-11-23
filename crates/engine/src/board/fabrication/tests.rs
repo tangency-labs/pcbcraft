@@ -871,6 +871,10 @@ fn mixed_pad_shapes_use_standard_flashes_with_resolved_sizes() {
         false,
     );
     let outputs = view(&s).fabrication_outputs().unwrap();
+    let archive = Archive::new(&outputs).unwrap();
+    let plotted = review::Package::read(archive.bytes()).unwrap();
+    let top = plotted.layers.iter().find(|layer| layer.role == review::LayerRole::TopCopper).unwrap();
+    assert_eq!(top.marks.len(), 13);
     let read = read_gerber(&outputs, TOP_COPPER);
     assert!(read.strokes.is_empty() && read.regions.is_empty());
     assert_eq!(read.apertures.len(), 4);

@@ -574,10 +574,23 @@ fn workspace_names_order_and_consistent_tile_widths() {
         let mut h = fixture(width);
         let ctx = h.ctx.clone();
         let mut expected: Option<egui::Vec2> = None;
-        for key in ["schematic", "board", "library", "symbol_editor", "footprint_editor"] {
+        for key in ["schematic", "board", "library", "symbol_editor", "footprint_editor", "manufacturing"] {
             h.state_mut().enter_workspace(&ctx, key, Placement::Here).unwrap();
             h.run();
-            let size = h.get_by_label("Choose workspace").rect().size();
+            let tile = h.get_by_label("Choose workspace").rect();
+            let size = tile.size();
+            if key == "manufacturing" {
+                let title = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == "Manufacturing" && tile.contains(text.pos) => Some(text),
+                        _ => None,
+                    })
+                    .expect("the workspace tile paints its Manufacturing label");
+                assert_eq!(title.galley.rows.len(), 1, "width={width}");
+            }
             if let Some(expected) = expected {
                 assert_eq!(size.x, expected.x, "{key}, width={width}");
                 if width < 600. {

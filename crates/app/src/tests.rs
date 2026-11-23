@@ -36,6 +36,8 @@ mod grab;
 mod grid_spacing;
 mod hierarchy;
 mod inspection_selection;
+#[cfg(not(target_arch = "wasm32"))]
+mod manufacturing;
 mod mirror;
 mod multiple_sheets;
 mod multiunit;

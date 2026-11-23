@@ -36,6 +36,14 @@ impl Target {
         &self.path
     }
 
+    /// Resolve the project folder for external file dialogs without probing the filesystem.
+    pub(super) fn project_directory(&self) -> Option<&Path> {
+        match self.encoding {
+            Encoding::Json => Some(self.path()),
+            Encoding::Zip => self.path().parent(),
+        }
+    }
+
     /// Explain the next save when an archive needs migration or a verified manifest.
     pub(super) fn open_notice(&self) -> String {
         if self.needs_manifest { "Project opened · Save will upgrade the project package".to_owned() } else { "Project opened".to_owned() }

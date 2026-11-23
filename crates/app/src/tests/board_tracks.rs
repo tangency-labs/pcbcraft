@@ -1568,7 +1568,7 @@ fn outputs_export_one_archive_of_fabrication_files() {
     assert!(outputs.iter().any(|o| o.name.ends_with("-Top.gbr")) && outputs.iter().any(|o| o.name.ends_with("-PTH.drl")));
     assert_eq!(archive.bytes(), pcbcraft_engine::board::fabrication::zip(&outputs).unwrap(), "the saved archive is the engine's deterministic one");
     assert!(h.state().fabrication_exports.busy());
-    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved)).unwrap();
+    h.state_mut().fabrication_exports.complete_captured(Ok(crate::board_outputs::Outcome::Saved(name.into()))).unwrap();
     h.run();
     assert!(!h.state().fabrication_exports.busy());
     let writes_notice = "Saved fabrication ZIP";

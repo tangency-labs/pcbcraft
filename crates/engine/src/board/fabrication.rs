@@ -26,7 +26,7 @@ use super::{
     view::{BoardView, CopperLayers, PadView},
 };
 use crate::{CommandError, Session, schematic::Point};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -36,6 +36,7 @@ use std::{
 };
 
 mod part_layers;
+pub mod review;
 
 /// Generate the board's fabrication files; returns them without editing anything.
 pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
@@ -69,7 +70,7 @@ pub struct Fabrication {
 }
 
 /// Integrity of the exact bytes of one generated artifact, not a design-state identity.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Artifact {
     pub name: String,
     pub size_bytes: u64,
@@ -84,7 +85,7 @@ impl Artifact {
 }
 
 /// Integrity records for the generated files, not the ZIP itself or the design state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Manifest {
     pub generator_version: String,
     pub files: Vec<Artifact>,

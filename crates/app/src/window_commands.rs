@@ -98,7 +98,11 @@ impl PcbApp {
     /// Unknown views are ignored; the project and other views are unchanged.
     pub(super) fn fit_view(&mut self, id: crate::ViewId) {
         if let Some(view) = self.views.view_mut(id) {
-            view.camera.request_fit();
+            if let Some(state) = &mut view.manufacturing {
+                state.fit();
+            } else {
+                view.camera.request_fit();
+            }
         }
     }
 }
@@ -174,6 +178,8 @@ mod live {
         Footprints,
         /// Persistent document/object UUID, resolved against the addressed view before acting.
         Object,
+        /// A flat filename of up to 65,535 bytes, as allowed in a ZIP directory entry.
+        ZipMember,
         /// An absolute file system path of at most 4096 characters, the unit schema `maxLength` uses.
         Path,
     }
@@ -207,6 +213,7 @@ mod live {
                     json!({"type": "integer", "minimum": 0})
                 }
                 Self::Object => json!({"type":"string","format":"uuid"}),
+                Self::ZipMember => json!({"type":"string","minLength":1,"maxLength":65_535}),
                 Self::Path => json!({"type":"string","minLength":1,"maxLength":4096}),
                 Self::Query => json!({"type":"string","maxLength":512}),
                 Self::Name => json!({"type": "string", "minLength": 1, "maxLength": 80}),
@@ -267,6 +274,7 @@ mod live {
                 Self::Integer { min, max, step } => value.as_i64().is_some_and(|n| (min..=max).contains(&n) && n % step == 0),
                 Self::Point => point(value).is_some(),
                 Self::Object => value.as_str().is_some_and(|id| !id.is_empty() && id.len() <= 64),
+                Self::ZipMember => value.as_str().is_some_and(|name| !name.is_empty() && name.len() <= 65_535),
                 Self::Path => value.as_str().is_some_and(|path| path.chars().count() <= 4096 && std::path::Path::new(path).is_absolute()),
                 Self::Inspection => crate::inspection_selection::parse(value).is_ok(),
                 Self::Selection => Selection::parse(value).is_some(),
@@ -291,6 +299,7 @@ mod live {
                 Self::Window => "must be a window ID from inspect_editor".to_owned(),
                 Self::Arrangement => "must be an arrangement ID from inspect_editor".to_owned(),
                 Self::Object => "must be an object UUID from project inspection".to_owned(),
+                Self::ZipMember => "must be the exact ZIP member name".to_owned(),
                 Self::Path => "must be an absolute path of at most 4096 characters".to_owned(),
                 Self::Query => "must be library search text of at most 512 bytes".into(),
                 Self::Name => "must be a name".to_owned(),
@@ -433,6 +442,22 @@ mod live {
             params: &[VIEW],
         },
         WindowCommand {
+            id: "app.open_fabrication_package",
+            title: "Open Fabrication Package",
+            summary: "Start reading a PCBcraft fabrication ZIP in the addressed Manufacturing pane. Inspect the pane for the verified package or a read error.",
+            params: &[VIEW, Param { name: "path", summary: "Absolute path of the fabrication ZIP", required: true, kind: Kind::Path }],
+        },
+        WindowCommand {
+            id: "app.set_fabrication_layer",
+            title: "Show Fabrication Layer",
+            summary: "Set the visibility of one verified fabrication ZIP member in the addressed Manufacturing pane.",
+            params: &[
+                VIEW,
+                Param { name: "filename", summary: "Exact ZIP member name from inspect_editor", required: true, kind: Kind::ZipMember },
+                Param { name: "visible", summary: "Whether to plot this layer", required: true, kind: Kind::Bool },
+            ],
+        },
+        WindowCommand {
             id: "app.set_workspace",
             title: "Choose Workspace",
             summary: "Choose a workspace in an addressed pane (default: focused main pane), here, beside it or in a native window. Definition sessions and project history remain independent.",
@@ -441,7 +466,7 @@ mod live {
                     name: "workspace",
                     summary: "Workspace to enter",
                     required: true,
-                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor", "library"]),
+                    kind: Kind::Choice(&["schematic", "board", "symbol_editor", "footprint_editor", "library", "manufacturing"]),
                 },
                 Param { name: "view", summary: "Source pane; defaults to focused main pane", required: false, kind: Kind::View },
                 Param { name: "placement", summary: "Where to open it", required: false, kind: Kind::Choice(PLACEMENTS) },
@@ -1427,9 +1452,10 @@ mod live {
                     "window": window.0,
                     "focused": focused,
                     "primary": id == app.views.primary(),
-                    "workspace": if view.library.is_some() {"library"} else {view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"})},
+                    "workspace": if view.manufacturing.is_some() {"manufacturing"} else if view.library.is_some() {"library"} else {view.definition.and_then(|id|app.library_kind(id)).map(|kind|if kind==pcbcraft_engine::authoring::Kind::Symbol {"symbol_editor"} else {"footprint_editor"}).unwrap_or(match view.workspace {Workspace::Schematic=>"schematic",Workspace::Board=>"board"})},
                     "definition":view.definition,
                     "library_view":app.inspect_library_view(id),
+                    "manufacturing":view.manufacturing.as_ref().map(|state| state.inspect(&app.manufacturing_files, id)),
                     "library_workspace":view.library.as_ref().map(|state|app.inspect_library_workspace(state)),
                     "sheet": view.sheet_path(&app.session),
                     "sheet_id": match view.target() {Some(crate::editor_view::DocumentTarget::Sheet(sheet))=>Some(sheet.id()),_=>None},
@@ -1474,6 +1500,7 @@ mod live {
             "unsaved": app.files.dirty(&app.session),
             "file_operation": app.files.busy(),
             "file": app.files.inspect(&app.session),
+            "last_fabrication_export": app.fabrication_exports.latest(&app.session).map(|path| path.display().to_string()),
             "dialog_open": dialog_open,
             "text_editing": app.views.editing_text(),
             "home": app.home,
@@ -1565,6 +1592,21 @@ mod live {
         pub(crate) fn run_window_command(&mut self, ctx: &Context, id: &str, params: &Value) -> Result<(), String> {
             let command = CATALOG.iter().find(|command| command.id == id).ok_or_else(|| format!("unknown command `{id}`"))?;
             command.check(params)?;
+            if id == "app.open_fabrication_package" || id == "app.set_fabrication_layer" {
+                let id_view = ViewId(params["view"].as_u64().ok_or("Choose a Manufacturing pane.")?);
+                self.view_window(id_view)?;
+                if id == "app.open_fabrication_package" {
+                    let path = std::path::PathBuf::from(params["path"].as_str().ok_or("Choose a ZIP path.")?);
+                    return self.open_fabrication_package(ctx, id_view, Some(path));
+                }
+                let state = self.views.view_mut(id_view).and_then(|view| view.manufacturing.as_mut()).ok_or("Choose a Manufacturing pane.")?;
+                state.set_layer(
+                    params["filename"].as_str().ok_or("Choose a fabrication layer.")?,
+                    params["visible"].as_bool().ok_or("Choose whether to show this layer.")?,
+                )?;
+                self.repaint_editors(ctx);
+                return Ok(());
+            }
             if id == "app.set_workspace" {
                 let source = ViewId(params["view"].as_u64().unwrap_or_else(|| self.views.hosts[&self.views.main].focused.0));
                 let host = self.views.owner(source).ok_or("Unknown source view ID.")?;
