@@ -146,6 +146,41 @@ fn native_window_input_uses_real_controls() {
     result.lock().unwrap().take().expect("native window closed without a result").unwrap();
 }
 
+/// Open `view` in a detached editor window, wait until that window is measured, close it
+/// natively, then expect `ui.window` and `ui.resize` to refuse the same window ID.
+fn closed_window(remote: &mut Remote, ctx: &egui::Context, view: u64) -> Result<(), String> {
+    let mut call =
+        |id: &str, params: Value| remote.call("engine.execute", json!({"command":id,"params":params})).map_err(|failure| failure.to_string());
+    let ready =
+        |status: Value| status["ready_windows"].as_array().map(|ids| ids.iter().filter_map(Value::as_u64).collect::<Vec<_>>()).unwrap_or_default();
+    let before = ready(call("ui.inspect", json!({}))?);
+    call("view.open_window", json!({"view":view}))?;
+    let deadline = Instant::now() + Duration::from_secs(8);
+    let opened = loop {
+        if let Some(id) = ready(call("ui.inspect", json!({}))?).into_iter().find(|id| !before.contains(id)) {
+            break id;
+        }
+        if Instant::now() > deadline {
+            return Err("No detached window was opened and measured".into());
+        }
+        std::thread::sleep(Duration::from_millis(16));
+    };
+    call("ui.window", json!({"window":opened}))?;
+    ctx.send_viewport_cmd_to(crate::editor_windows::viewport(HostId(opened)), egui::ViewportCommand::Close);
+    ctx.request_repaint();
+    let refused = |result: Result<Value, String>| result.is_err_and(|error| error.contains("Unknown editor window"));
+    while !refused(call("ui.window", json!({"window":opened}))) {
+        if Instant::now() > deadline {
+            return Err(format!("Detached window {opened} did not close"));
+        }
+        std::thread::sleep(Duration::from_millis(16));
+    }
+    if !refused(call("ui.resize", json!({"window":opened,"width":1280.0,"height":800.0}))) {
+        return Err(format!("Closed window {opened} accepted a resize"));
+    }
+    Ok(())
+}
+
 /// Request one size, then poll `ui.window` until the window reports it applied or constrained.
 fn resize(remote: &mut Remote, width: f64, height: f64) -> Result<Value, String> {
     let call = |remote: &mut Remote, id: &str, params: Value| {
@@ -222,7 +257,7 @@ fn native_window_resizes_to_recording_sizes() {
             let control = crate::live_control::LiveControl::start(&cc.egui_ctx)?;
             let (port, token) = (control.port(), control.secret().to_owned());
             app.live_control = Some(control);
-            let ctx = cc.egui_ctx.clone();
+            let (ctx, view) = (cc.egui_ctx.clone(), app.views.active.id().0);
             std::thread::spawn(move || {
                 let run = || -> Result<(), String> {
                     let mut remote = Remote::new(port, &token)?;
@@ -249,23 +284,19 @@ fn native_window_resizes_to_recording_sizes() {
                         }
                         capture(&format!("{width}x{height}"))?;
                     }
-                    // The window manager, not the app, caps the window below the next request.
-                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::MaxInnerSize(egui::vec2(1100.0, 700.0)));
+                    // The window manager, not the app, keeps the window one point short of the request.
+                    ctx.send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::MaxInnerSize(egui::vec2(1279.0, 800.0)));
                     ctx.request_repaint();
                     let window = resize(&mut remote, 1280.0, 800.0)?;
                     let (width, height) = (window["client"]["width"].as_f64(), window["client"]["height"].as_f64());
                     if window["resize"]["state"] != "constrained"
                         || window["resize"]["requested"] != json!({"width":1280.0,"height":800.0})
-                        || !width.is_some_and(|w| w <= 1100.5)
-                        || !height.is_some_and(|h| h <= 700.5)
+                        || !width.is_some_and(|w| w <= 1279.5)
+                        || !height.is_some_and(|h| h <= 800.5)
                     {
                         return Err(format!("A window-manager constraint was not reported with the measured size: {window}"));
                     }
-                    let closed = remote.call("engine.execute", json!({"command":"ui.resize","params":{"window":9,"width":1280,"height":800}}));
-                    if closed.is_ok() {
-                        return Err("A closed window accepted a resize".into());
-                    }
-                    Ok(())
+                    closed_window(&mut remote, &ctx, view)
                 };
                 let _ = send.send(run());
             });
