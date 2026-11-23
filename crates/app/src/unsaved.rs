@@ -153,6 +153,10 @@ impl PcbApp {
         match then {
             Then::Close => {
                 self.close_allowed = true;
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    self.close_approved_revision = Some(self.session.revision());
+                }
                 ctx.send_viewport_cmd_to(ViewportId::ROOT, ViewportCommand::Close);
             }
             Then::New => self.start_new_project(),

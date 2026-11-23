@@ -492,6 +492,36 @@ fn close_without_waiting_keeps_recovery_when_pending_open_adopts_before_exit() {
     assert_eq!(pcbcraft_storage::recovery::recover(&dir, &entry).unwrap().documents, expected);
 }
 
+/// An edit committed after Close approval is not covered by the close decision, so `on_exit` must
+/// keep the recovery entry rather than discarding it silently.
+#[test]
+fn edit_committed_after_close_approval_keeps_recovery() {
+    use crate::unsaved::{Then, Waiting};
+    let work = tempfile::tempdir().unwrap();
+    let root = work.path().join("project");
+    let dir = work.path().join("recovery");
+    let mut source = Session::default();
+    source.apply("project.new", &json!({"name":"Close edit"})).unwrap();
+    pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
+    let mut h = harness();
+    h.state_mut().autosave.dir = Some(dir.clone());
+    h.state_mut().preferences.autosave_minutes = 5;
+    let rev = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&root.join("project.json"), rev);
+    run_at(&mut h, 1.0);
+    place(&mut h, 0);
+    let (_, entry) = h.state().recovery_entry().unwrap();
+    let ctx = h.ctx.clone();
+    h.state_mut().save_project_file(None, &ctx);
+    h.state_mut().waiting = Some(Waiting::ForSave(Then::Close));
+    finish_file_job(&mut h);
+    assert!(h.state().close_allowed);
+    place(&mut h, 1);
+    let expected = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    eframe::App::on_exit(h.state_mut());
+    assert_eq!(pcbcraft_storage::recovery::recover(&dir, &entry).unwrap().documents, expected);
+}
+
 /// Interrupting Preferences with a dirty-project close cannot activate a staged timed Save.
 #[test]
 fn interrupted_preferences_do_not_enable_timed_save() {

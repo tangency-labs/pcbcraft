@@ -354,6 +354,10 @@ pub struct PcbApp {
     /// that job finishes or fails before `on_exit` runs.
     #[cfg(not(target_arch = "wasm32"))]
     close_keeps_recovery: bool,
+    /// Session revision covered by Close approval; if any edit commits afterwards, exit keeps
+    /// recovery rather than discarding an unapproved change.
+    #[cfg(not(target_arch = "wasm32"))]
+    close_approved_revision: Option<u64>,
     /// Close, New Project or Open held back until the running file operation finishes.
     waiting: Option<unsaved::Waiting>,
     /// The snapped point under the pointer on a schematic canvas in the last frame, for the
@@ -3004,11 +3008,12 @@ impl eframe::App for PcbApp {
 
     /// Always stop recording. An error or framework exit that bypasses the project's close
     /// decision must leave the current recovery entry behind, and so must a close that didn't
-    /// wait for a running save or open: that job ends with the process, so recovery may hold
-    /// the only copy of the unsaved edits.
+    /// wait for a running save or open or saw a later edit: that job ends with the process, or
+    /// the later edit was never covered by Close approval, so recovery may hold the only copy.
     #[cfg(not(target_arch = "wasm32"))]
     fn on_exit(&mut self) {
-        let approved = self.close_allowed && !self.close_keeps_recovery && !self.files.busy();
+        let approved =
+            self.close_allowed && !self.close_keeps_recovery && !self.files.busy() && self.close_approved_revision == Some(self.session.revision());
         self.autosave.finish(&mut self.session, approved);
     }
 }
