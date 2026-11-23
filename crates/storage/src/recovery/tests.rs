@@ -1884,3 +1884,50 @@ fn worker_exit_publishes_outcome_and_wakes_host_on_normal_exit_and_panic() {
         assert_eq!(polled, Some(expected));
     }
 }
+
+/// `snapshot` must verify the journal's expected byte length and publication header before
+/// skipping as a no-op: in-place truncation or same-length header corruption keeps the same
+/// open file identity, yet must trigger a rebuild under the held lock so later edits replay.
+#[test]
+fn snapshot_republishes_when_journal_is_truncated_or_header_corrupted_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "JournalCheck"})).unwrap();
+    let state_0 = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut journal = EditJournal::create(dir.path(), "entry", state_0.clone()).unwrap();
+    let journal_path = entry_file(dir.path(), "entry", "journal");
+
+    // An intact pair preserves the no-op fast path.
+    assert_eq!(journal.snapshot(state_0.clone()), Ok(false));
+
+    // Truncate `.journal` in place so its file identity stays unchanged.
+    fs::OpenOptions::new().write(true).truncate(true).open(&journal_path).unwrap();
+    assert_eq!(journal.snapshot(state_0.clone()), Ok(true));
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.documents, state_0);
+    assert_eq!(journal.snapshot(state_0.clone()), Ok(false));
+
+    // Corrupt `.journal` in place without changing its byte length or file identity.
+    let expected_len = fs::metadata(&journal_path).unwrap().len() as usize;
+    {
+        let mut handle = fs::OpenOptions::new().write(true).open(&journal_path).unwrap();
+        handle.write_all(&vec![b'X'; expected_len]).unwrap();
+        handle.sync_all().unwrap();
+    }
+    assert_eq!(journal.snapshot(state_0.clone()), Ok(true));
+    assert_eq!(journal.snapshot(state_0), Ok(false));
+
+    // Subsequent edits append to the rebuilt journal and replay cleanly.
+    let revision =
+        session.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": session.revision()})).unwrap();
+    let project = session.snapshot().unwrap();
+    let state_1 = encode_documents(project.clone()).unwrap();
+    let edit_1 = CommittedEdit { command: PLACE_SYMBOL.to_owned(), params: json!({}), revision, project };
+    assert_eq!(journal.append(&edit_1, state_1.clone()), Ok(()));
+    drop(journal);
+
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.documents, state_1);
+}

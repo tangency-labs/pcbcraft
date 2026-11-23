@@ -668,20 +668,53 @@ impl EditJournal {
     /// Take a recovery snapshot of `documents`: [`Self::rebase`] onto them, unless the journal
     /// is open, both its recorded result and its base already equal the requested state, the
     /// current `.pc` snapshot file still matches this recorder's publication, and the `.journal`
-    /// path still names the open journal file. Checking the recorded result matters if a
-    /// notification failed to return the journal to its base, for example when an undo could not
-    /// be encoded. Returns whether it wrote.
+    /// file still names the open journal with its expected byte length and publication header.
+    /// Checking the recorded result matters if a notification failed to return the journal to its
+    /// base, for example when an undo could not be encoded. Returns whether it wrote.
     pub fn snapshot(&mut self, documents: Documents) -> Result<bool, String> {
         self.ensure_lock_owned()?;
         if let Some(journal_file) = self.file.as_ref()
             && self.base_sha256 == self.sha256
             && documents_sha256(&documents) == self.base_sha256
             && self.snapshot_matches_publication()?
-            && same_open_file(&entry_file(&self.dir, &self.id, "journal"), journal_file)?
+            && self.journal_matches_publication(journal_file)?
         {
             return Ok(false);
         }
         self.rebase(documents).map(|()| true)
+    }
+
+    /// Return whether `<id>.journal` still names the open regular journal file this recorder
+    /// published (same open file, expected byte length, and matching header generation and base
+    /// hash). Missing, non-regular, replaced, truncated, or corrupted journals return `Ok(false)`
+    /// so [`Self::snapshot`] rebuilds the pair under the held entry lock; other metadata,
+    /// identity, or open errors propagate as faults.
+    fn journal_matches_publication(&self, journal_file: &File) -> Result<bool, String> {
+        let path = entry_file(&self.dir, &self.id, "journal");
+        if !same_open_file(&path, journal_file)? {
+            return Ok(false);
+        }
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.to_string()),
+        };
+        let file_meta = file.metadata().map_err(|e| e.to_string())?;
+        if !file_meta.file_type().is_file() || file_meta.len() != self.journal_bytes {
+            return Ok(false);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let open_meta = journal_file.metadata().map_err(|e| e.to_string())?;
+            if (file_meta.dev(), file_meta.ino()) != (open_meta.dev(), open_meta.ino()) {
+                return Ok(false);
+            }
+        }
+        let Ok(header) = read_recovery_header_from(file) else {
+            return Ok(false);
+        };
+        Ok(header.generation == self.generation && header.base_sha256 == self.base_sha256)
     }
 
     /// Return whether `<id>.pc` still names the regular recovery snapshot publication this
