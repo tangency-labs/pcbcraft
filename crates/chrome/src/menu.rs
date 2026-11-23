@@ -252,3 +252,57 @@ impl<'a> MenuItem<'a> {
         response
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Hovering an app-bar action paints one tooltip, including when the action is disabled.
+    #[test]
+    fn quick_action_paints_one_shortcut_tooltip() {
+        for (enabled, parent_enabled) in [(true, true), (false, true), (true, false)] {
+            let ctx = egui::Context::default();
+            crate::install(&ctx);
+            ctx.global_style_mut(|style| {
+                style.interaction.tooltip_delay = 0.0;
+                style.interaction.show_tooltips_only_when_still = false;
+            });
+            let mut pointer = None;
+            let mut render = |frame| {
+                let input = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 300.0))),
+                    time: Some(f64::from(frame) * 0.1),
+                    events: pointer.map(egui::Event::PointerMoved).into_iter().collect(),
+                    focused: true,
+                    ..Default::default()
+                };
+                let mut output = ctx.run_ui(input, |ui| {
+                    crate::automation::begin(ui.ctx(), true);
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.add_enabled_ui(parent_enabled, |ui| {
+                            let response = quick_action(ui, MenuIcon::Save, "Save Project", "Ctrl+S", enabled);
+                            pointer = Some(response.rect.center());
+                        });
+                    });
+                });
+                output.textures_delta.clear();
+                output
+            };
+            // Lay out the action before moving the pointer, then let the tooltip settle.
+            render(0);
+            render(1);
+            let output = render(2);
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(glyphs) => Some(glyphs.galley.job.text.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(text, ["Save Project (Ctrl+S)"], "enabled={enabled}, parent_enabled={parent_enabled}");
+            let target = crate::automation::targets(&ctx).into_iter().find(|target| target.name == "button:Save Project");
+            assert_eq!(target.map(|target| target.enabled), Some(enabled && parent_enabled));
+        }
+    }
+}
