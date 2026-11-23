@@ -236,7 +236,10 @@ fn gerber_x3_places_one_main_flash_per_part_on_its_own_side() {
     );
     assert_eq!(object_body(bottom), format!("%TO.C,R1*%\n%TO.CVal,R*%\n%TO.CFtp,{bottom_name}*%\nX23000001Y31000004D03*\n%TD*%\nM02*\n"));
     assert_eq!(layers, view(&s).gerber_part_layers().unwrap());
-    assert!(bare_board.iter().filter(|file| file.name.ends_with(".gbr")).all(|file| file.contents.contains("%TF.SameCoordinates,Original*%")));
+    let frame_id = same_coordinates_id(view(&s).placement_origin().unwrap());
+    assert!(
+        bare_board.iter().filter(|file| file.name.ends_with(".gbr")).all(|file| file.contents.contains(&format!("%TF.SameCoordinates,{frame_id}*%")))
+    );
     assert_eq!(bare_board, view(&s).fabrication_outputs().unwrap());
     assert_eq!(revision, s.revision());
     assert!(std::sync::Arc::ptr_eq(&snapshot, &s.snapshot().unwrap()));
@@ -502,10 +505,15 @@ fn try_read_gerber(text: &str, expected_function: &str, expected_polarity: &str)
     }
     let mut lines = text.lines();
     let software = format!("%TF.GenerationSoftware,PCBcraft,PCBcraft,{}*%", env!("CARGO_PKG_VERSION"));
-    for expected in ["G04 PCBcraft fabrication output*", software.as_str(), "%TF.SameCoordinates,Original*%"] {
+    for expected in ["G04 PCBcraft fabrication output*", software.as_str()] {
         if lines.next() != Some(expected) {
             return Err("invalid header");
         }
+    }
+    let same_coordinates =
+        lines.next().and_then(|line| line.strip_prefix("%TF.SameCoordinates,")).and_then(|line| line.strip_suffix("*%")).ok_or("invalid header")?;
+    if uuid::Uuid::parse_str(same_coordinates).is_err() {
+        return Err("invalid header");
     }
     let function = lines
         .next()
@@ -1035,8 +1043,9 @@ fn gerber_subset_reader_rejects_header_syntax_and_order_mutations() {
     let set = "%TA.AperFunction,SMDPad,CuDef*%\n";
     let clear = "%TD.AperFunction*%\n";
     let definition_block = format!("{set}{first_definition}\n{clear}");
+    let same_coordinates_line = text.lines().find(|line| line.starts_with("%TF.SameCoordinates,")).unwrap();
     for (mutant, reason) in [
-        (text.replace("%TF.SameCoordinates,Original*%\n", ""), "invalid header"),
+        (text.replace(&format!("{same_coordinates_line}\n"), ""), "invalid header"),
         (text.replace("%TF.FileFunction,Copper,L1,Top*%", "%TF.FileFunction,Unknown*%"), "invalid file function"),
         (text.replace("%TF.FileFunction,Copper,L1,Top*%", "%TF.FileFunction,Legend,Top*%"), "wrong file function"),
         (text.replace("Copper,L1,Top", "Copper,L1,Bot"), "wrong file side"),
@@ -2244,7 +2253,8 @@ fn mechanical_holes_use_their_own_drill_file() {
     let mixed = with.export_fabrication(&params).unwrap();
     assert_eq!(&mixed[..mixed.len() - 1], legacy.as_slice(), "no NPTH hits in plated, copper, mask or paste files");
     // The legacy serializer emits via tools first here, then the two pads in board coordinate order.
-    let software = format!("; #@! TF.GenerationSoftware,PCBcraft,PCBcraft,{}\n; #@! TF.SameCoordinates,Original\n", env!("CARGO_PKG_VERSION"));
+    let frame_id = same_coordinates_id(view(&with).placement_origin().unwrap());
+    let software = format!("; #@! TF.GenerationSoftware,PCBcraft,PCBcraft,{}\n; #@! TF.SameCoordinates,{frame_id}\n", env!("CARGO_PKG_VERSION"));
     assert_eq!(
         file(&legacy, "-PTH.drl"),
         format!(
@@ -2370,6 +2380,7 @@ fn plated_drill_file_parses_as_xnc_with_plated_pth_attributes() {
     let attribute = |read: &ReadXnc, name: &str| -> Vec<Vec<String>> {
         read.attributes.iter().filter(|(key, _)| key == name).map(|(_, fields)| fields.clone()).collect()
     };
+    let frame_id = same_coordinates_id(view(&s).placement_origin().unwrap());
     let software = vec![vec!["PCBcraft".to_owned(), "PCBcraft".to_owned(), env!("CARGO_PKG_VERSION").to_owned()]];
     for (suffix, function, tools, hits) in
         [("-PTH.drl", ["Plated", "1", "4", "PTH"], vec!["0.300", "1.000"], 3), ("-NPTH.drl", ["NonPlated", "1", "4", "NPTH"], vec!["3.200"], 1)]
@@ -2377,15 +2388,81 @@ fn plated_drill_file_parses_as_xnc_with_plated_pth_attributes() {
         let read = read_xnc(file(&outputs, suffix)).unwrap_or_else(|error| panic!("{suffix}: {error}"));
         assert_eq!(attribute(&read, "FileFunction"), vec![function.map(str::to_owned).to_vec()], "{suffix}");
         assert_eq!(attribute(&read, "GenerationSoftware"), software, "{suffix}");
-        assert_eq!(attribute(&read, "SameCoordinates"), vec![vec!["Original".to_owned()]], "{suffix}");
+        assert_eq!(attribute(&read, "SameCoordinates"), vec![vec![frame_id.clone()]], "{suffix}");
         assert_eq!(read.tools.values().map(String::as_str).collect::<Vec<_>>(), tools, "{suffix}: tools sorted by diameter");
         assert_eq!(read.hits.values().sum::<usize>(), hits, "{suffix}");
     }
     // The drill files share the identity every Gerber layer of this export declares.
-    assert!(outputs.iter().filter(|output| output.name.ends_with(".gbr")).all(|output| output.contents.contains("%TF.SameCoordinates,Original*%")));
+    assert!(
+        outputs
+            .iter()
+            .filter(|output| output.name.ends_with(".gbr"))
+            .all(|output| output.contents.contains(&format!("%TF.SameCoordinates,{frame_id}*%")))
+    );
     // A file the reader must refuse: hits before drill mode, and data after M30.
     assert_eq!(read_xnc("M48\nMETRIC\nT1C0.300\n%\nT1\nX0Y0\nM30\n").unwrap_err(), "hit without drill mode and tool: X0Y0");
     assert_eq!(read_xnc("M48\nMETRIC\nT1C0.300\n%\nG05\nT1\nX0Y0\nM30\nX1Y1\n").unwrap_err(), "data after M30: X1Y1");
+}
+
+/// Gerber, PTH and NPTH files of one fabrication export share one deterministic `.SameCoordinates`
+/// GUID for the resolved export frame; repeating the export keeps the same identifier, while
+/// moving the placement origin produces a distinct identifier.
+#[test]
+fn fabrication_same_coordinates_tracks_resolved_export_frame() {
+    use crate::board::definition::CircularNpth;
+    let holes = [CircularNpth { center: Point { x_nm: 3_000_000, y_nm: 5_000_000 }, diameter_nm: 3_200_000 }];
+    let mut s = drill_fixture(&holes);
+    let extract_ids = |outputs: &[Output]| -> Vec<(String, String)> {
+        outputs
+            .iter()
+            .map(|output| {
+                let id = if output.name.ends_with(".gbr") {
+                    output
+                        .contents
+                        .lines()
+                        .find_map(|line| line.strip_prefix("%TF.SameCoordinates,")?.strip_suffix("*%"))
+                        .unwrap_or_else(|| panic!("{}: missing TF.SameCoordinates", output.name))
+                        .to_owned()
+                } else if output.name.ends_with(".drl") {
+                    let read = read_xnc(&output.contents).unwrap_or_else(|error| panic!("{}: {error}", output.name));
+                    let mut values: Vec<_> =
+                        read.attributes.iter().filter(|(key, _)| key == "SameCoordinates").map(|(_, fields)| fields.clone()).collect();
+                    assert_eq!(values.len(), 1, "{}: expected one SameCoordinates attribute", output.name);
+                    let fields = values.pop().unwrap();
+                    assert_eq!(fields.len(), 1, "{}: expected one SameCoordinates field", output.name);
+                    fields.into_iter().next().unwrap()
+                } else {
+                    panic!("unexpected fabrication output {}", output.name);
+                };
+                assert!(uuid::Uuid::parse_str(&id).is_ok(), "{}: invalid GUID {id:?}", output.name);
+                (output.name.clone(), id)
+            })
+            .collect()
+    };
+
+    let first = s.export_fabrication(&json!({})).unwrap();
+    let repeat = s.export_fabrication(&json!({})).unwrap();
+    let first_ids = extract_ids(&first);
+    assert!(first_ids.iter().any(|(name, _)| name.ends_with(".gbr")));
+    assert!(first_ids.iter().any(|(name, _)| name.ends_with("-PTH.drl")));
+    assert!(first_ids.iter().any(|(name, _)| name.ends_with("-NPTH.drl")));
+    let first_id = &first_ids[0].1;
+    assert!(first_ids.iter().all(|(_, id)| id == first_id), "all files in one export share one frame id: {first_ids:?}");
+    assert_eq!(extract_ids(&repeat), first_ids, "same frame gives the same id");
+    assert!(file(&first, "-PTH.drl").contains("X11.000Y-22.000\n"));
+
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"origin":{"kind":"point","x_nm":2_000_000,"y_nm":-2_000_000},"expected_revision":s.revision()}),
+    )
+    .unwrap();
+    let moved = s.export_fabrication(&json!({})).unwrap();
+    let moved_ids = extract_ids(&moved);
+    let moved_id = &moved_ids[0].1;
+    assert!(moved_ids.iter().all(|(_, id)| id == moved_id), "all files in moved export share one frame id: {moved_ids:?}");
+    assert_ne!(first_id, moved_id, "moving the placement origin must change the SameCoordinates id");
+    assert!(file(&moved, "-PTH.drl").contains("X10.000Y-22.000\n"));
 }
 
 /// A half-unit diameter rounds up to a nonzero tool; a smaller diameter cannot produce any archive.
