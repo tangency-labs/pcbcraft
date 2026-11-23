@@ -257,7 +257,7 @@ target/release/examples/board_perf budgets /tmp/envelope-v1.json /tmp/native-env
 | `drc` | `drc.synchronous` | no target yet |
 | `connectivity` | `electrical_connectivity.first` | no target yet |
 | `move_commit` | `command.move_tracks` | below 100 ms (proposed #237 commit target; track-edit proxy) |
-| `routing_input` | validated active-route reversal `replay.route_reversal.ui` samples | below 4 ms (proposed #237 routing-input target; CPU service-cost proxy) |
+| `routing_input` | validated active-route reversal `aggregate.route_reversal.ui` samples | below 4 ms (proposed #237 routing-input target; CPU service-cost proxy) |
 
 Open, save, DRC and connectivity have no agreed target, so the suite reports their
 quantiles with the verdict **no budget**. The two budgeted rows use the proposed

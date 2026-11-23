@@ -774,11 +774,12 @@ mod tests {
     }
 
     /// Idle pointer input has no active route reversal, so `routing_input` must stay
-    /// `unmeasured` regardless of what step ID the trace assigns to it (including `reverse.0`).
+    /// `unmeasured` regardless of what step ID the trace assigns to it (including `reverse.0`
+    /// and `route_reversal`).
     #[test]
     fn budget_routing_input_stays_unmeasured_for_idle_steps_even_with_reverse_id() {
         let base = generate("reference-v1", "test").unwrap();
-        for step_id in ["idle", "reverse.0"] {
+        for step_id in ["idle", "reverse.0", "route_reversal"] {
             let mut artifact: serde_json::Value = serde_json::from_str(&base).unwrap();
             artifact["trace_id"] = json!("custom-idle-v1");
             artifact["trace"] = json!([{

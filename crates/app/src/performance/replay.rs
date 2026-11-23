@@ -22,7 +22,8 @@ pub(super) const ENVELOPE_TRACE_ID: &str = "route-reverse-capacity-cancel-edit-v
 pub(super) const SHOVE_TRACE_ID: &str = "route-shove-preview-cancel-commit-v1";
 pub(super) const COMMIT_TRACE_ID: &str = "route-contact-commit-history-v1";
 /// Pooled UI frame samples from runtime-validated active-route pointer moves that reverse direction.
-pub(super) const ROUTE_REVERSAL_METRIC: &str = "replay.route_reversal.ui";
+/// Kept outside the `replay.{id}.*` per-step namespace so no trace step ID can collide with it.
+pub(super) const ROUTE_REVERSAL_METRIC: &str = "aggregate.route_reversal.ui";
 
 /// One 60 Hz logical input frame; wall-clock measurements do not sleep to simulate pacing.
 #[derive(Serialize, Deserialize)]
