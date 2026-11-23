@@ -18,10 +18,12 @@ use uuid::Uuid;
 
 mod cache;
 mod cuts;
+mod templates;
 pub mod worker;
 pub(crate) use cache::Cache;
 pub use cache::FillJob;
 use cuts::{Cuts, near};
+use templates::{Keepout, Memo, Thermal};
 
 /// Numerical reserve outside requested copper/edge clearances. The offset kernel's 0.1 nm
 /// loop tolerance and derived floating coordinates never authorize rounding into an obstacle.
@@ -181,23 +183,6 @@ fn board_region(view: BoardView<'_>) -> Result<Regions, String> {
     Ok(result)
 }
 
-/// A cross has four independent spokes, so a blocked direction cannot count as reaching
-/// material merely because the opposite direction reaches it.
-fn spokes(object: &Object, width: i64, gap: i64) -> [Result<Regions, String>; 4] {
-    let b = object.contour.bounds();
-    let length = (b[2] - b[0]).max(b[3] - b[1]).ceil() as i64 + gap + width;
-    let (x, y) = (object.at.x_nm, object.at.y_nm);
-    let lo = width / 2;
-    let hi = width - lo;
-    let rectangles = [
-        [[x - lo, y - lo], [x + length, y - lo], [x + length, y + hi], [x - lo, y + hi]],
-        [[x - length, y - lo], [x + hi, y - lo], [x + hi, y + hi], [x - length, y + hi]],
-        [[x - lo, y - lo], [x + hi, y - lo], [x + hi, y + length], [x - lo, y + length]],
-        [[x - lo, y - length], [x + hi, y - length], [x + hi, y + hi], [x - lo, y + hi]],
-    ];
-    rectangles.map(|points| Regions::polygon(&points).map_err(|e| e.to_string()))
-}
-
 /// Generate one zone against an immutable board and already completed higher-priority fills.
 /// Equal-priority foreign outlines receive mutual clearance, avoiding a UUID-order winner.
 fn zone_fill(
@@ -205,8 +190,8 @@ fn zone_fill(
     zone: &Zone,
     board: &Regions,
     objects: &[Obstacle],
-    previous: &[ZoneFill],
-    problems: &mut Vec<Problem>,
+    fill: &mut Fill,
+    memo: &Memo,
     canceled: Option<&AtomicBool>,
 ) -> Result<ZoneFill, String> {
     let rules = view.effective_rules().values;
@@ -220,14 +205,14 @@ fn zone_fill(
         check_cancel(canceled)?;
         let margin = clearance.max(other.clearance_nm + CLEARANCE_RESERVE_NM);
         if bounds.is_some_and(|b| near(b, other.object.contour.bounds(), margin as f64 + cuts::BOUND_RESERVE_NM)) {
-            cuts.push(region(&other.object.contour, margin)?);
+            cuts.push(Keepout::physical(&other.object.contour, margin, memo)?);
         }
     }
-    for other in previous.iter().filter(|other| other.layer == zone.layer && other.net != zone.net) {
+    for other in fill.zones.iter().filter(|other| other.layer == zone.layer && other.net != zone.net) {
         for island in &other.islands {
             check_cancel(canceled)?;
             let expanded = island.region.offset(clearance.max(other.clearance_nm)).map_err(|e| e.to_string())?;
-            cuts.push(expanded);
+            cuts.push(Keepout::plane(expanded));
         }
     }
     for other in view.zones().iter().filter(|other| {
@@ -240,11 +225,11 @@ fn zone_fill(
         check_cancel(canceled)?;
         let polygon = Regions::polygon(&other.points.iter().map(|p| [p.x_nm, p.y_nm]).collect::<Vec<_>>()).map_err(|e| e.to_string())?;
         let pair_clearance = clearance.max(other.options.clearance_nm.unwrap_or(rules.clearance_nm) + CLEARANCE_RESERVE_NM);
-        cuts.push(polygon.offset(pair_clearance).map_err(|e| e.to_string())?);
+        cuts.push(Keepout::plane(polygon.offset(pair_clearance).map_err(|e| e.to_string())?));
     }
     check_cancel(canceled)?;
     let cuts = if zone.options.connection == Connection::Solid {
-        Cuts::new(cuts)
+        Cuts::new(cuts.into_iter().map(|cut| cut.region).collect())
     } else {
         let gap =
             zone.options.thermal_gap_nm.max(if zone.options.connection == Connection::None { rules.clearance_nm } else { 0 }) + CLEARANCE_RESERVE_NM;
@@ -257,17 +242,19 @@ fn zone_fill(
                 bounds.is_some_and(|stock| near(stock, b, reach))
             })
             .collect();
-        let mut gaps = Vec::with_capacity(pads.len());
-        for pad in &pads {
-            check_cancel(canceled)?;
-            gaps.push(region(&pad.object.contour, gap)?);
-        }
         if zone.options.connection == Connection::Thermal {
-            let candidates = pads.into_iter().flat_map(|pad| spokes(&pad.object, zone.options.spoke_width_nm, zone.options.thermal_gap_nm));
-            cuts::thermal_cuts(&base, cuts, gaps, candidates, canceled)?
+            let mut thermals = Vec::with_capacity(pads.len());
+            for pad in pads {
+                check_cancel(canceled)?;
+                thermals.push(Thermal::new(&pad.object, zone.options.spoke_width_nm, zone.options.thermal_gap_nm, memo)?);
+            }
+            templates::thermal_cuts(&base, cuts, thermals, memo, canceled)?
         } else {
-            cuts.extend(gaps);
-            Cuts::new(cuts)
+            for pad in pads {
+                check_cancel(canceled)?;
+                cuts.push(Keepout::physical(&pad.object.contour, gap, memo)?);
+            }
+            Cuts::new(cuts.into_iter().map(|cut| cut.region).collect())
         }
     };
     let material = cuts.subtract(base, canceled)?;
@@ -295,7 +282,7 @@ fn zone_fill(
             result.dropped += 1;
             let items: Vec<_> = contacts.iter().filter(|i| objects[**i].pad).map(|i| objects[*i].object.name.clone()).collect();
             if !items.is_empty() {
-                problems.push(Problem {
+                fill.problems.push(Problem {
                     kind: ProblemKind::RemovedIslandPads,
                     zone: zone.id,
                     message: "Minimum-area island removal disconnected pads.".into(),
@@ -332,6 +319,7 @@ fn compute_cancellable(view: BoardView<'_>, canceled: Option<&AtomicBool>) -> Re
         return Ok(Arc::new(fill));
     }
     let board = board_region(view)?;
+    let memo = view.project().zone_geometry_memo();
     let mut zones: Vec<_> = view.zones().iter().collect();
     zones.sort_by_key(|z| (std::cmp::Reverse(z.options.priority), z.id));
     for zone in zones {
@@ -346,7 +334,7 @@ fn compute_cancellable(view: BoardView<'_>, canceled: Option<&AtomicBool>) -> Re
             });
             continue;
         }
-        let result = zone_fill(view, zone, &board, &objects, &fill.zones, &mut fill.problems, canceled)?;
+        let result = zone_fill(view, zone, &board, &objects, &mut fill, &memo, canceled)?;
         fill.zones.push(result);
     }
     join_contacts(&geometry, &mut fill, canceled)?;

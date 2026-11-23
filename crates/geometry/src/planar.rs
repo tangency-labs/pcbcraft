@@ -59,6 +59,7 @@ pub struct Regions {
     regions: Vec<Region2>,
     prepared: Arc<OnceLock<Result<Option<kernel::Prepared>>>>,
     loop_bounds: Arc<OnceLock<Vec<Vec<bounds::Bounds>>>>,
+    assembled: bool,
 }
 
 impl std::fmt::Debug for Regions {
@@ -195,19 +196,46 @@ impl Regions {
 
     /// Owned individual regions, retaining holes, for island filtering and connectivity.
     pub fn islands(&self) -> impl Iterator<Item = Self> + '_ {
-        self.regions.iter().cloned().map(
-            |region| {
-                if self.regions.len() == 1 { self.clone() } else { Self { regions: vec![region], ..Self::default() } }
-            },
-        )
+        self.regions.iter().cloned().map(|region| {
+            if self.regions.len() == 1 { self.clone() } else { Self { regions: vec![region], assembled: self.assembled, ..Self::default() } }
+        })
     }
 
     /// Conservative aggregate envelope in board nanometres, with outward rounding.
     pub fn bounds_nm(&self) -> Option<[f64; 4]> {
         (!self.is_empty()).then(|| {
             let b = self.profile_bounds().iter().map(|region| region[0]).fold(bounds::empty(), bounds::join);
-            [(b[0] * 1e6).floor(), (b[1] * 1e6).floor(), (b[2] * 1e6).ceil(), (b[3] * 1e6).ceil()]
+            envelope_nm(b)
         })
+    }
+
+    /// Bounds of cutter loops that can become holes when independently enclosed.
+    /// Cutters with their own holes need a Boolean to retain the enclosed copper.
+    pub fn simple_cut_bounds_nm(&self) -> Option<Vec<[f64; 4]>> {
+        self.regions.iter().zip(self.profile_bounds()).map(|(region, bounds)| region.holes.is_empty().then(|| envelope_nm(bounds[0]))).collect()
+    }
+
+    /// Place a local line/arc profile on the board without recomputing its curves.
+    /// Bounds and closure are checked in the new frame. Unsupported curves or a
+    /// translation outside the model range can use the caller's absolute construction.
+    pub fn place_profile(&self, origin_nm: [i64; 2]) -> Option<Self> {
+        use solidcore_record::Seg2;
+
+        let shift = point_mm(origin_nm).ok()?;
+        let mut regions = self.regions.clone();
+        for lp in regions.iter_mut().flat_map(|region| std::iter::once(&mut region.outer).chain(&mut region.holes)) {
+            for segment in &mut lp.segs {
+                match segment {
+                    Seg2::Line { a, b } => {
+                        *a += shift;
+                        *b += shift;
+                    }
+                    Seg2::Arc { center, .. } => *center += shift,
+                    _ => return None,
+                }
+            }
+        }
+        checked(regions).ok()
     }
 
     /// Reuse immutable loop envelopes during repeated point queries and candidate pruning.
@@ -219,14 +247,14 @@ impl Regions {
     /// callers can fall back to an exact Boolean. A box cannot cross a contour that it
     /// does not meet, and its corner must also be strictly inside the outer loop.
     pub fn covers_box(&self, envelope_nm: [f64; 4]) -> Result<bool> {
-        guard("planar box containment", || Ok(self.covers_box_mm(envelope_nm.map(|value| value / 1e6))))
+        guard("planar box containment", || Ok(self.covering_region(envelope_nm.map(|value| value / 1e6)).is_some()))
     }
 
     /// Work in kernel units and protect the proof from near-coincident boundary cases.
-    fn covers_box_mm(&self, envelope: bounds::Bounds) -> bool {
+    fn covering_region(&self, envelope: bounds::Bounds) -> Option<usize> {
         const RESERVE: f64 = 0.000_050;
         let point = solidcore_convert::vec2(Vec2::new(envelope[0], envelope[1]));
-        self.regions.iter().zip(self.profile_bounds()).any(|(region, region_bounds)| {
+        self.regions.iter().zip(self.profile_bounds()).position(|(region, region_bounds)| {
             bounds::near(region_bounds[0], envelope, RESERVE)
                 && !region_bounds[1..].iter().any(|hole| bounds::near(*hole, envelope, RESERVE))
                 && !region.outer.segs.iter().any(|seg| bounds::near(bounds::segment(seg), envelope, RESERVE))
@@ -234,21 +262,18 @@ impl Regions {
         })
     }
 
-    /// Subtract independently enclosed, disjoint cutter loops in one face. None means
+    /// Subtract independently enclosed, disjoint cutter loops from their owning faces. None means
     /// that the conservative proof could not establish this case and a Boolean is needed.
     pub fn subtract_enclosed(&self, cutters: &[Self]) -> Result<Option<Self>> {
         guard("planar enclosed holes", || {
             const RESERVE: f64 = 0.000_050;
-            let [stock] = self.regions.as_slice() else { return Ok(None) };
-            let mut holes = stock.holes.clone();
+            let mut assembled = self.regions.clone();
             let mut envelopes = Vec::new();
             for cutter in cutters {
                 for (region, loop_bounds) in cutter.regions.iter().zip(cutter.profile_bounds()) {
                     let envelope = loop_bounds[0];
-                    if !region.holes.is_empty()
-                        || !self.covers_box_mm(envelope)
-                        || envelopes.iter().any(|previous| bounds::near(*previous, envelope, RESERVE))
-                    {
+                    let Some(owner) = self.covering_region(envelope) else { return Ok(None) };
+                    if !region.holes.is_empty() || envelopes.iter().any(|previous| bounds::near(*previous, envelope, RESERVE)) {
                         return Ok(None);
                     }
                     // A cutter's outer loop normally winds counter-clockwise. Once
@@ -261,13 +286,14 @@ impl Regions {
                         None => return Ok(None),
                     };
                     envelopes.push(envelope);
-                    holes.push(hole);
+                    assembled[owner].holes.push(hole);
                 }
             }
-            let value = checked_assembled(vec![Region2 { outer: stock.outer.clone(), holes }])?;
-            match kernel::prepare_enclosed(&value.regions[0]) {
+            let mut value = checked_assembled(assembled)?;
+            match kernel::prepare_enclosed(&value.regions) {
                 Ok(operand) => {
                     let _ = value.prepared.set(Ok(Some(operand)));
+                    value.assembled = true;
                     Ok(Some(value))
                 }
                 Err(_) => Ok(None),
@@ -399,6 +425,11 @@ impl Regions {
             Ok(if boundary { None } else { Some(false) })
         })
     }
+}
+
+/// Round envelopes outward when moving from kernel millimetres to board nanometres.
+fn envelope_nm(b: bounds::Bounds) -> [f64; 4] {
+    [(b[0] * 1e6).floor(), (b[1] * 1e6).floor(), (b[2] * 1e6).ceil(), (b[3] * 1e6).ceil()]
 }
 
 /// Check the complete kernel result before publication; no output bypasses the kernel's

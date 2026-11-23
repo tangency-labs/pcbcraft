@@ -20,6 +20,7 @@ pub(crate) struct Cache {
     nets: Weak<crate::nets::Registry>,
     classes: Weak<crate::net_classes::Catalog>,
     slot: Slot,
+    memo: Arc<Memo>,
 }
 impl Cache {
     /// Preview reads may inspect a different temporary board; they must not replace the live
@@ -51,6 +52,10 @@ impl Cache {
     }
 }
 impl Project {
+    pub(super) fn zone_geometry_memo(&self) -> Arc<Memo> {
+        self.board_fill.lock().unwrap_or_else(std::sync::PoisonError::into_inner).memo.clone()
+    }
+
     /// Derived pour/unfill changes invalidate read-only jobs independently of authored revision.
     pub(crate) fn fill_authority(&self) -> Arc<()> {
         self.board_fill.lock().unwrap_or_else(std::sync::PoisonError::into_inner).authority.clone()

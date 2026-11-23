@@ -80,6 +80,10 @@ tracked in [#304](https://github.com/tangency-labs/pcbcraft/issues/304).
 
 Walkaround and track shove check authored copper and mechanical openings. After
 a route commits, fill is recomputed for the new tracks and any displaced copper.
+Repeated pad clearance profiles and unchanged thermal neighborhoods can reuse
+their analytic cuts. A neighborhood includes every interacting pad and the
+foreign copper that can affect its spokes. The fill still checks the resulting
+plane's islands and connectivity before publishing it for the new board.
 During the preview, the existing pour still describes the board before the edit.
 A non-plated hole gets clearance on every copper layer. Boards containing arcs or
 teardrops report fill as unavailable until those shapes have clearance support.

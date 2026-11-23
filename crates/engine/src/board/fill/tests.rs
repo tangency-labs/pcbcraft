@@ -738,7 +738,10 @@ fn local_thermal_calculation_matches_the_whole_plane_boolean() {
         .filter(|s| !clip(s, &body, Operation::Intersection).unwrap().is_empty())
         .collect();
     let expected = clip(&body, &Regions::union_all(&accepted).unwrap(), Operation::Union).unwrap();
-    let found = cuts::thermal_cuts(&stock, foreign, gaps, spokes.into_iter().map(Ok), None).unwrap().subtract(stock, None).unwrap();
+    let mut keepouts = cuts::Cuts::new(foreign);
+    let remaining = cuts::thermal_gaps(Some(&stock), &keepouts, gaps, spokes.into_iter().map(Ok), None).unwrap();
+    keepouts.shapes.extend(remaining);
+    let found = Cuts::new(keepouts.shapes).subtract(stock, None).unwrap();
     for (a, b) in [(&expected, &found), (&found, &expected)] {
         assert!(clip(a, b, Operation::Difference).unwrap().is_empty());
     }
@@ -759,5 +762,38 @@ fn boundary_cut_preserves_the_separate_interior_holes() {
     assert_eq!(found.contains([23_000_000, 4_000_000]).unwrap(), Some(true));
     for center in centers {
         assert_eq!(found.contains(center).unwrap(), Some(false));
+    }
+}
+
+/// Two disjoint cutters can have overlapping envelopes after their local union.
+/// Their exact subtraction and an outline-crossing cut must leave the independent
+/// holes on the large-face path, including when the remaining plane has two islands.
+#[test]
+fn complex_clearance_does_not_send_all_the_planes_holes_through_the_boolean_budget() {
+    let stock = Regions::polygon(&[[0, 0], [20_000_000, 0], [20_000_000, 11_000_000], [0, 11_000_000]]).unwrap();
+    let pad = Regions::rounded_core(&[[0, 0], [150_000, 0], [150_000, 150_000], [0, 150_000]], 25_000.).unwrap();
+    let mut cuts: Vec<_> = (0..1050).map(|i| pad.place_profile([500_000 + (i % 50) * 300_000, 500_000 + (i / 50) * 300_000]).unwrap()).collect();
+    cuts.push(
+        Regions::polygon(&[
+            [16_000_000, 7_000_000],
+            [18_000_000, 7_000_000],
+            [18_000_000, 7_300_000],
+            [16_300_000, 7_300_000],
+            [16_300_000, 9_000_000],
+            [16_000_000, 9_000_000],
+        ])
+        .unwrap(),
+    );
+    cuts.push(Regions::polygon(&[[16_600_000, 7_600_000], [17_000_000, 7_600_000], [17_000_000, 8_000_000], [16_600_000, 8_000_000]]).unwrap());
+    cuts.push(Regions::polygon(&[[15_500_000, -1_000_000], [15_650_000, -1_000_000], [15_650_000, 12_000_000], [15_500_000, 12_000_000]]).unwrap());
+
+    let material = Cuts::new(cuts).subtract(stock, None).unwrap();
+    assert_eq!(material.region_count(), 2);
+    for point in [[550_000, 550_000], [16_150_000, 8_000_000], [16_800_000, 7_800_000], [15_600_000, 5_000_000]] {
+        assert_eq!(material.contains(point).unwrap(), Some(false));
+    }
+    assert_eq!(material.contains([17_100_000, 8_000_000]).unwrap(), Some(true));
+    for island in material.islands() {
+        assert!(!island.display_mesh(5_000).unwrap().triangles.is_empty());
     }
 }

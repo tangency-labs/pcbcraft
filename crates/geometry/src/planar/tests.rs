@@ -1,5 +1,20 @@
 use super::*;
 
+#[test]
+fn placing_a_rounded_profile_keeps_its_arc_clearance() {
+    let core = [[0, 0], [800_000, 0], [800_000, 400_000], [0, 400_000]];
+    let origin = [-71_000_000, 42_000_000];
+    let absolute = core.map(|[x, y]| [x + origin[0], y + origin[1]]);
+    let local = Regions::rounded_core(&core, 210_001.5).unwrap();
+    let placed = local.place_profile(origin).unwrap();
+    let direct = Regions::rounded_core(&absolute, 210_001.5).unwrap();
+    assert!((placed.area().unwrap().value_nm2 - direct.area().unwrap().value_nm2).abs() < 5.);
+    let [x, y] = origin;
+    assert_eq!(placed.contains([x - 210_001, y + 200_000]).unwrap(), Some(true));
+    assert_eq!(placed.contains([x - 210_002, y + 200_000]).unwrap(), Some(false));
+    assert!(local.place_profile([MAX_LENGTH_NM - 500_000, 0]).is_none());
+}
+
 const MM: i64 = 1_000_000;
 
 /// Original rectangular profiles in nanometres, independent of kernel-generated expectations.

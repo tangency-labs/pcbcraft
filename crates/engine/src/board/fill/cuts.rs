@@ -12,7 +12,7 @@ pub(super) fn near(a: [f64; 4], b: [f64; 4], grow_nm: f64) -> bool {
 }
 
 pub(super) struct Cuts {
-    shapes: Vec<Regions>,
+    pub(super) shapes: Vec<Regions>,
     bounds: Vec<[f64; 4]>,
     tree: Tree,
 }
@@ -25,10 +25,14 @@ impl Cuts {
         Self { shapes, bounds, tree }
     }
 
+    pub(super) fn candidates(&self, bounds: [f64; 4]) -> Vec<usize> {
+        self.tree.candidates(bounds, BOUND_RESERVE_NM)
+    }
+
     /// Subtraction only needs cutters that can reach this operand's envelope.
     pub(super) fn subtract(&self, stock: Regions, canceled: Option<&AtomicBool>) -> Result<Regions, String> {
         let Some(bounds) = stock.bounds_nm() else { return Ok(stock) };
-        let candidates = self.tree.candidates(bounds, BOUND_RESERVE_NM);
+        let candidates = self.candidates(bounds);
         if candidates.is_empty() {
             return Ok(stock);
         }
@@ -41,27 +45,10 @@ impl Cuts {
 
         // Only neighboring cutters need a Boolean union. A group may split into several
         // analytic components, all of which are retained in the resulting local operand.
-        let mut visited = vec![false; self.shapes.len()];
         let mut groups = Vec::new();
-        for id in candidates.iter().copied() {
+        for group in components(&self.tree, &self.bounds, &candidates, canceled)? {
             check_cancel(canceled)?;
-            if std::mem::replace(&mut visited[id], true) {
-                continue;
-            }
-            let mut queue = vec![id];
-            let mut cursor = 0;
-            while cursor < queue.len() {
-                check_cancel(canceled)?;
-                for neighbor in self.tree.candidates(self.bounds[queue[cursor]], BOUND_RESERVE_NM) {
-                    if !visited[neighbor] && near(bounds, self.bounds[neighbor], BOUND_RESERVE_NM) {
-                        visited[neighbor] = true;
-                        queue.push(neighbor);
-                    }
-                }
-                cursor += 1;
-            }
-            queue.sort_unstable();
-            let shapes: Vec<_> = queue.into_iter().map(|i| self.shapes[i].clone()).collect();
+            let shapes: Vec<_> = group.into_iter().map(|i| self.shapes[i].clone()).collect();
             groups.push(union(&shapes)?);
         }
         check_cancel(canceled)?;
@@ -69,26 +56,98 @@ impl Cuts {
     }
 }
 
-/// Apply boundary cuts first so one track crossing the outline does not send all
-/// interior footprints through a single large Boolean. Reprove enclosure against the
-/// resulting stock before adding holes.
-fn subtract_groups(stock: Regions, groups: Vec<Regions>, canceled: Option<&AtomicBool>) -> Result<Regions, String> {
-    let mut interior = Vec::new();
-    let mut boundary = Vec::new();
+/// Envelopes in separate components cannot influence each other's Boolean operands.
+/// Keep source order within each component for stable kernel input.
+pub(super) fn components(tree: &Tree, bounds: &[[f64; 4]], candidates: &[usize], canceled: Option<&AtomicBool>) -> Result<Vec<Vec<usize>>, String> {
+    let mut visited = vec![true; bounds.len()];
+    candidates.iter().for_each(|&i| visited[i] = false);
+    let mut groups = Vec::new();
+    for id in candidates.iter().copied() {
+        if std::mem::replace(&mut visited[id], true) {
+            continue;
+        }
+        let mut group = vec![id];
+        let mut next = 0;
+        while next < group.len() {
+            check_cancel(canceled)?;
+            for neighbor in tree.candidates(bounds[group[next]], BOUND_RESERVE_NM) {
+                if !std::mem::replace(&mut visited[neighbor], true) {
+                    group.push(neighbor);
+                }
+            }
+            next += 1;
+        }
+        group.sort_unstable();
+        groups.push(group);
+    }
+    Ok(groups)
+}
+
+/// Apply complex cuts first, so a boundary crossing or one intertwined thermal and
+/// track does not send all independent footprints through the same large Boolean.
+/// Prove enclosure again against the resulting stock before assembling its holes.
+fn subtract_groups(mut stock: Regions, groups: Vec<Regions>, canceled: Option<&AtomicBool>) -> Result<Regions, String> {
+    let mut pending = Vec::new();
+    let mut exact = Vec::new();
     for group in groups {
         check_cancel(canceled)?;
-        if let Some(bounds) = group.bounds_nm()
-            && stock.covers_box(bounds).map_err(|e| e.to_string())?
-        {
-            interior.push(group);
+        if let Some(bounds) = group.simple_cut_bounds_nm() {
+            pending.push((group, bounds));
         } else {
-            boundary.push(group);
+            exact.push(group);
         }
     }
-    let stock = if boundary.is_empty() { stock } else { difference(&stock, &boundary)? };
-    if interior.is_empty() || stock.is_empty() {
-        return Ok(stock);
+
+    // A union can have a concave boundary or split into pieces whose boxes overlap.
+    // Route those few pieces through an exact Boolean, even if their original
+    // source cutters were independently grouped.
+    let (boxes, owners): (Vec<_>, Vec<_>) =
+        pending.iter().enumerate().flat_map(|(group, (_, bounds))| bounds.iter().copied().map(move |b| (b, group))).unzip();
+    let index = Tree::new(boxes.clone());
+    let mut overlapping = vec![false; pending.len()];
+    for (i, bounds) in boxes.into_iter().enumerate() {
+        check_cancel(canceled)?;
+        if index.candidates(bounds, BOUND_RESERVE_NM).iter().any(|&j| i != j) {
+            overlapping[owners[i]] = true;
+        }
     }
+    let mut enclosed = Vec::new();
+    for (i, (group, bounds)) in pending.into_iter().enumerate() {
+        if overlapping[i] {
+            exact.push(group);
+        } else {
+            enclosed.push((group, bounds));
+        }
+    }
+    loop {
+        let mut remaining = Vec::new();
+        for (group, bounds) in enclosed {
+            check_cancel(canceled)?;
+            let mut interior = true;
+            for &envelope in &bounds {
+                if !stock.covers_box(envelope).map_err(|e| e.to_string())? {
+                    interior = false;
+                    break;
+                }
+            }
+            if interior {
+                remaining.push((group, bounds));
+            } else {
+                exact.push(group);
+            }
+        }
+        if exact.is_empty() {
+            enclosed = remaining;
+            break;
+        }
+        stock = difference(&stock, &exact)?;
+        if remaining.is_empty() || stock.is_empty() {
+            return Ok(stock);
+        }
+        exact.clear();
+        enclosed = remaining;
+    }
+    let interior: Vec<_> = enclosed.into_iter().map(|(group, _)| group).collect();
     check_cancel(canceled)?;
     if let Some(result) = stock.subtract_enclosed(&interior).map_err(|e| format!("Could not assemble zone clearance holes: {e}"))? {
         return Ok(result);
@@ -112,22 +171,21 @@ fn union(regions: &[Regions]) -> Result<Regions, String> {
 /// spoke's remaining material after subtracting the nearby thermal gaps. At publication
 /// subtract each gap minus the accepted spokes, the same set expression as adding
 /// those spokes back after clearing all gaps.
-pub(super) fn thermal_cuts(
-    stock: &Regions,
-    foreign: Vec<Regions>,
+pub(super) fn thermal_gaps(
+    stock: Option<&Regions>,
+    foreign: &Cuts,
     gaps: Vec<Regions>,
     candidates: impl IntoIterator<Item = Result<Regions, String>>,
     canceled: Option<&AtomicBool>,
-) -> Result<Cuts, String> {
-    let foreign = Cuts::new(foreign);
+) -> Result<Vec<Regions>, String> {
     let gaps = Cuts::new(gaps);
     let mut connected = Vec::new();
     for candidate in candidates {
         check_cancel(canceled)?;
         let spoke = candidate?;
-        let clipped = match spoke.bounds_nm() {
-            Some(bounds) if stock.covers_box(bounds).map_err(|e| e.to_string())? => spoke,
-            _ => clip(&spoke, stock, Operation::Intersection)?,
+        let clipped = match (stock, spoke.bounds_nm()) {
+            (Some(stock), Some(bounds)) if !stock.covers_box(bounds).map_err(|e| e.to_string())? => clip(&spoke, stock, Operation::Intersection)?,
+            _ => spoke,
         };
         let clipped = foreign.subtract(clipped, canceled)?;
         if !gaps.subtract(clipped.clone(), canceled)?.is_empty() {
@@ -135,10 +193,10 @@ pub(super) fn thermal_cuts(
         }
     }
     let connected = Cuts::new(connected);
-    let mut shapes = foreign.shapes;
+    let mut shapes = Vec::with_capacity(gaps.shapes.len());
     for gap in gaps.shapes {
         check_cancel(canceled)?;
         shapes.push(connected.subtract(gap, canceled)?);
     }
-    Ok(Cuts::new(shapes))
+    Ok(shapes)
 }
