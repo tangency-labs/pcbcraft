@@ -1388,9 +1388,11 @@ A crash can leave an entry for a future recovery offer; that offer is not built.
 
 **Save to project** (`save_to_project_minutes`) is Off (0) by default. Set to
 1, 5 or 10 minutes, it runs the ordinary Save on the same timer, once the
-project has unsaved changes and already has a folder or `.pc` file. An Untitled
-project is never saved on its own. A timed save waits while a dialog or another
-file operation is open, or a project action is waiting to run. Like Save, it is
+project has unsaved changes and already has a current-format folder or `.pc`
+file. An Untitled project is never saved on its own, and timed saves are held
+back for legacy archives or split folders that would be upgraded on their first
+write until an explicit Save performs the upgrade. A timed save waits while a
+dialog or another file operation is open, or a project action is waiting to run. Like Save, it is
 refused when the project changed on disk; the project stays unsaved and the
 next try comes one interval later. Recovery encoding and disk I/O run on a
 separate worker rather than making Save wait for them. A

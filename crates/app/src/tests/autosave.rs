@@ -748,3 +748,100 @@ fn turning_off_recovery_keeps_the_timed_save_deadline() {
     assert_eq!(pcbcraft_storage::load(&root).unwrap(), encode_documents(h.state().session.snapshot().unwrap()).unwrap());
     eframe::App::on_exit(h.state_mut());
 }
+
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let target = dst.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
+/// Timed Save holds back for a legacy archive that would be upgraded on its first write, leaving
+/// the source bytes and dirty state intact until an explicit Save performs the upgrade.
+#[test]
+fn timed_save_holds_back_on_legacy_archive_until_explicit_save() {
+    let work = tempfile::tempdir().unwrap();
+    let archive = work.path().join("legacy.pc");
+    let original_bytes = include_bytes!("../../tests/fixtures/split/two-resistors-no-manifest.pc");
+    std::fs::write(&archive, original_bytes).unwrap();
+
+    let mut h = harness();
+    let revision = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&archive, revision);
+    run_at(&mut h, 1.0);
+    assert!(h.state().files.needs_upgrade(&h.state().session));
+
+    h.state_mut().preferences.save_to_project_minutes = 1;
+    place(&mut h, 20);
+    run_at(&mut h, 2.0);
+    run_at(&mut h, 120.0);
+    let ctx = h.ctx.clone();
+    h.state_mut().native_project_tick(&ctx, std::time::Duration::from_secs(180));
+
+    assert!(!h.state().files.busy(), "timed Save must not run on an un-upgraded legacy archive");
+    assert!(h.state().files.dirty(&h.state().session), "dirty state must remain intact");
+    assert_eq!(std::fs::read(&archive).unwrap(), original_bytes, "source archive bytes must remain intact");
+
+    h.state_mut().save_project_file(None, &ctx);
+    finish_file_job(&mut h);
+    assert!(!h.state().files.dirty(&h.state().session));
+    assert!(!h.state().files.needs_upgrade(&h.state().session));
+    let upgraded_bytes = std::fs::read(&archive).unwrap();
+    assert_ne!(upgraded_bytes, original_bytes);
+    let reopened = pcbcraft_engine::persistence::decode_packed(&upgraded_bytes).unwrap();
+    assert!(!reopened.needs_manifest, "explicit Save must upgrade the legacy archive");
+    eframe::App::on_exit(h.state_mut());
+}
+
+/// Timed Save holds back for legacy split folders (both previous `project.pc` entry points and
+/// flat layout folders) until an explicit Save upgrades the folder in place.
+#[test]
+fn timed_save_holds_back_on_legacy_split_folder_until_explicit_save() {
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/split/two-resistors");
+    for rename_entry in [false, true] {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("legacy-folder");
+        copy_dir(&fixture, &root);
+        let entry = if rename_entry {
+            let legacy_entry = root.join("project.pc");
+            std::fs::rename(root.join("project.json"), &legacy_entry).unwrap();
+            legacy_entry
+        } else {
+            root.join("project.json")
+        };
+        let before = tree(&root);
+
+        let mut h = harness();
+        let revision = h.state().session.revision();
+        h.state_mut().files.open_path_for_test(&entry, revision);
+        run_at(&mut h, 1.0);
+        assert!(h.state().files.needs_upgrade(&h.state().session), "rename_entry={rename_entry}");
+
+        h.state_mut().preferences.save_to_project_minutes = 1;
+        place(&mut h, 20);
+        run_at(&mut h, 2.0);
+        run_at(&mut h, 120.0);
+        let ctx = h.ctx.clone();
+        h.state_mut().native_project_tick(&ctx, std::time::Duration::from_secs(180));
+
+        assert!(!h.state().files.busy(), "timed Save must not run on an un-upgraded legacy folder (rename_entry={rename_entry})");
+        assert!(h.state().files.dirty(&h.state().session), "dirty state must remain intact (rename_entry={rename_entry})");
+        assert_eq!(tree(&root), before, "source folder bytes must remain intact (rename_entry={rename_entry})");
+
+        h.state_mut().save_project_file(None, &ctx);
+        finish_file_job(&mut h);
+        assert!(!h.state().files.dirty(&h.state().session));
+        assert!(!h.state().files.needs_upgrade(&h.state().session));
+        assert!(root.join("project.json").exists());
+        assert!(!root.join("project.pc").exists());
+        let (_, migrated) = pcbcraft_storage::load_with_upgrade(&root).unwrap();
+        assert!(!migrated, "explicit Save must upgrade the legacy split folder (rename_entry={rename_entry})");
+        eframe::App::on_exit(h.state_mut());
+    }
+}

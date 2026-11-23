@@ -174,10 +174,14 @@ impl PcbApp {
         }
     }
 
-    /// Run the ordinary Save only for a located dirty project with no other project action.
-    /// Recheck once a file operation settles, including after ordinary stale-file refusal.
+    /// Run the ordinary Save only for a located dirty project that does not need a first-save
+    /// format upgrade and has no other project action. Recheck once a file operation settles,
+    /// including after ordinary stale-file refusal.
     fn timed_save(&mut self, ctx: &egui::Context, now: Duration) -> Option<Duration> {
-        let wanted = self.preferences.save_to_project_minutes > 0 && self.files.dirty(&self.session) && self.files.has_location(&self.session);
+        let wanted = self.preferences.save_to_project_minutes > 0
+            && self.files.dirty(&self.session)
+            && self.files.has_location(&self.session)
+            && !self.files.needs_upgrade(&self.session);
         let free = !self.close_allowed && !self.files.busy() && matches!(self.dialog, Dialog::None) && !self.project_action_pending();
         let saves = &mut self.autosave.saves;
         if !wanted {
