@@ -10,8 +10,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
             std::io::Write::write_all(&mut file, derived.as_bytes())?;
         }
-        [command, artifact, revision, output] if command == "shove_fixture" => {
-            let derived = pcbcraft_app::performance::shove::fixture(&std::fs::read_to_string(artifact)?, revision)?;
+        [command, artifact, revision, output] if command == "shove_fixture" || command == "shove_joint_fixture" => {
+            let generate = if command == "shove_joint_fixture" {
+                pcbcraft_app::performance::shove::joint_fixture
+            } else {
+                pcbcraft_app::performance::shove::fixture
+            };
+            let derived = generate(&std::fs::read_to_string(artifact)?, revision)?;
             let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(output)?;
             std::io::Write::write_all(&mut file, derived.as_bytes())?;
         }
@@ -69,7 +74,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         _ => {
             return Err(
-                "usage: board_perf generate RECIPE GENERATOR_REV ARTIFACT | (commit_fixture ARTIFACT OUTPUT | shove_fixture ARTIFACT GENERATOR_REV OUTPUT | shove_render_fixture ARTIFACT OUTPUT) | (run|checks|routes|walkaround|walkaround_jobs|shove|pointer_latency) ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT".into()
+                "usage: board_perf generate RECIPE GENERATOR_REV ARTIFACT | (commit_fixture ARTIFACT OUTPUT | (shove_fixture|shove_joint_fixture) ARTIFACT GENERATOR_REV OUTPUT | shove_render_fixture ARTIFACT OUTPUT) | (run|checks|routes|walkaround|walkaround_jobs|shove|pointer_latency) ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT".into()
             );
         }
     }
