@@ -1660,12 +1660,14 @@ mod tests {
         session.apply("project.new", &json!({"create_board":true})).unwrap();
         let mut symbols = Vec::new();
         for x in [0, 5_080_000, 10_160_000] {
-            session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0})).unwrap();
+            let revision = session.revision();
+            session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":0,"expected_revision":revision})).unwrap();
             let symbol = session.project().unwrap().symbols().last().unwrap().id();
+            let revision = session.revision();
             session
                 .apply(
                     pcbcraft_engine::PLACE_FOOTPRINT,
-                    &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x,"y_nm":0}),
+                    &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x,"y_nm":0,"expected_revision":revision}),
                 )
                 .unwrap();
             symbols.push(symbol);
@@ -1722,13 +1724,15 @@ mod tests {
         for i in 0..UNITS {
             let x = (i % 32) as i64 * 5_080_000;
             let y = (i / 32) as i64 * 5_080_000;
-            session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":y})).unwrap();
+            let revision = session.revision();
+            session.apply(pcbcraft_engine::PLACE_RESISTOR, &json!({"x_nm":x,"y_nm":y,"expected_revision":revision})).unwrap();
             if i < ENDPOINT_PARTS {
                 let symbol = session.project().unwrap().symbols().last().unwrap().id();
+                let revision = session.revision();
                 session
                     .apply(
                         pcbcraft_engine::PLACE_FOOTPRINT,
-                        &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x,"y_nm":y}),
+                        &json!({"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":1,"x_nm":x,"y_nm":y,"expected_revision":revision}),
                     )
                     .unwrap();
             }
