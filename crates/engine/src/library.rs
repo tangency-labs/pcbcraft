@@ -735,12 +735,29 @@ fn check_text(field: &str, text: &str, limit: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Check a bounded HTTP(S) reference: a nonempty host after `http://` or `https://`, and no
-/// whitespace anywhere. Reading a native record never fetches the URL.
+/// Extract the host from an HTTP(S) authority, ignoring userinfo and any port.
+///
+/// Userinfo ends at the last `@`. The host keeps IPv6 brackets and ends at the closing `]`, or,
+/// for other hosts, at the first `:`. An authority with no host (`:8080`, `user@`, `[]`, `""`)
+/// yields an empty string so the caller can reject it.
+fn http_authority_host(authority: &str) -> &str {
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, host)| host);
+    if let Some(after_bracket) = host_port.strip_prefix('[') {
+        return match after_bracket.split_once(']') {
+            Some((address, _)) if !address.is_empty() => &host_port[..address.len() + 2],
+            _ => "",
+        };
+    }
+    host_port.split_once(':').map_or(host_port, |(host, _)| host)
+}
+
+/// Check a bounded HTTP(S) reference: an `http://` or `https://` URL with a nonempty host in its
+/// authority, optional userinfo and port, and no whitespace anywhere. Reading a native record
+/// never fetches the URL.
 pub(crate) fn check_http_url(field: &str, url: &str, limit: usize) -> Result<(), String> {
     check_text(field, url, limit)?;
-    let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
-    if host.is_empty() || url.chars().any(char::is_whitespace) {
+    let authority = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
+    if http_authority_host(authority).is_empty() || url.chars().any(char::is_whitespace) {
         return Err(format!("{field} must be an HTTP(S) URL; loading performs no fetch."));
     }
     Ok(())
@@ -889,6 +906,36 @@ mod tests {
         let weak = Arc::downgrade(&copy);
         drop(copy);
         assert!(weak.upgrade().is_none(), "nothing keeps a copy alive once it is dropped");
+    }
+
+    /// HTTP(S) references need a nonempty host in the authority; userinfo, ports, IPv6 literals,
+    /// paths, queries and fragments are preserved, while malformed authorities are refused.
+    #[test]
+    fn http_url_validation_requires_a_nonempty_host() {
+        for url in [
+            "https://example.com:8443/a?b#c",
+            "http://user@example.com/path",
+            "http://user:pass@example.com:8443/a?b#c",
+            "https://[::1]:8443/a",
+            "https://example.com",
+        ] {
+            assert!(check_http_url("Link URL", url, 2048).is_ok(), "{url}");
+        }
+        for url in [
+            "https://:8080/x",
+            "https:///path",
+            "https://user@/x",
+            "https://[]/x",
+            "https://example.com/a b",
+            "https://exa mple.invalid",
+            "file:///tmp/x.pdf",
+            "ftp://example.invalid/x",
+            "//example.invalid/x",
+            "example.invalid/x",
+        ] {
+            let error = check_http_url("Link URL", url, 2048).unwrap_err();
+            assert!(error.contains("HTTP(S) URL"), "{url}: {error}");
+        }
     }
 
     /// Extreme coordinates report a file error without preventing later valid files from loading.
