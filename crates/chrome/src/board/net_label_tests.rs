@@ -196,6 +196,7 @@ fn circular_pad_names_stay_inside_the_land() {
         color: None,
         contour: PadContour::Circle,
         drill_radius: Some(10.),
+        plated_slot: None,
         through_hole: true,
         net: Some("R1.2".into()),
     };

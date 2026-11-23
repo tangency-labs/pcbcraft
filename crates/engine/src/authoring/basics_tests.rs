@@ -15,9 +15,9 @@ fn apply(s: &mut Session, action: Action) {
 fn symbol_arrays_keep_unique_terminals_and_integrated_leads() {
     let mut s = Session::new(Item::new(Kind::Symbol).unwrap(), false).unwrap();
     apply(&mut s, Action::Delete { objects: vec![3] });
-    let Primitive::Pin { mut appearance, number, name, electrical_type, at } = s.snapshot().objects[&1].clone() else { panic!() };
+    let Primitive::Pin { mut appearance, number, name, electrical_type, alternates, at } = s.snapshot().objects[&1].clone() else { panic!() };
     appearance.as_mut().unwrap().style = PinStyle::InvertedClock;
-    apply(&mut s, Action::Replace { object: 1, primitive: Primitive::Pin { appearance, number, name, electrical_type, at } });
+    apply(&mut s, Action::Replace { object: 1, primitive: Primitive::Pin { appearance, number, name, electrical_type, alternates, at } });
     apply(&mut s, Action::Array { objects: vec![1], columns: 1, rows: 4, column_step: p(0, 0), row_step: p(0, 2_540_000) });
     let ids: Vec<_> = s.snapshot().objects.iter().filter(|(_, v)| matches!(v, Primitive::Pin { .. })).map(|(id, _)| *id).collect();
     apply(&mut s, Action::Duplicate { objects: ids.clone(), offset: p(10_160_000, 0) });

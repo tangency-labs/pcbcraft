@@ -35,11 +35,16 @@ pub const SET_TRACK_WIDTH: &str = "pcb.set_track_width";
 pub const SET_VIA_SIZE: &str = "pcb.set_via_size";
 /// Remove addressed track segments and vias without changing footprints or other copper.
 pub const DELETE_TRACKS: &str = "pcb.delete_tracks";
+mod unroute;
+pub use unroute::UNROUTE_CONNECTION;
+pub(crate) use unroute::{pad_address, pad_address_schema};
 /// Lock or unlock explicitly addressed tracks and vias without changing geometry.
 pub const SET_COPPER_LOCKED: &str = "pcb.set_copper_locked";
 
+pub(crate) mod chains;
 mod locks;
 pub mod preparation;
+pub mod replacements;
 pub(crate) use locks::protect_locked;
 #[cfg(test)]
 mod capacity_tests;
@@ -170,25 +175,43 @@ pub(crate) fn validate(project: &Project, tracks: &mut [Track], vias: &mut [Via]
     let copper = copper_layer_ids(project);
     let mut ids = BTreeSet::new();
     for track in tracks.iter() {
-        track.validate()?;
-        if !ids.insert(track.id) {
-            return Err("duplicate track identity".into());
-        }
-        if !copper.contains(&track.layer) {
-            return Err("tracks must stay on a copper layer of the board setup".into());
-        }
+        check_track(track, &copper, &mut ids)?;
     }
-    if !vias.is_empty() && copper.len() < 2 {
-        return Err("vias need at least two copper layers in the board setup".into());
-    }
+    check_via_layers(!vias.is_empty(), &copper)?;
     for via in vias.iter() {
-        via.validate()?;
-        if !ids.insert(via.id) {
-            return Err("duplicate track or via identity".into());
-        }
+        check_via(via, &mut ids)?;
     }
     tracks.sort_by_key(|track| track.id);
     vias.sort_by_key(|via| via.id);
+    Ok(())
+}
+
+/// Check one segment of a candidate in `validate` order, recording its identity.
+fn check_track(track: &Track, copper: &BTreeSet<Uuid>, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    track.validate()?;
+    if !ids.insert(track.id) {
+        return Err("duplicate track identity".into());
+    }
+    if !copper.contains(&track.layer) {
+        return Err("tracks must stay on a copper layer of the board setup".into());
+    }
+    Ok(())
+}
+
+/// Vias pass between copper layers, so a candidate with any needs at least two.
+fn check_via_layers(any_vias: bool, copper: &BTreeSet<Uuid>) -> Result<(), String> {
+    if any_vias && copper.len() < 2 {
+        return Err("vias need at least two copper layers in the board setup".into());
+    }
+    Ok(())
+}
+
+/// Check one via of a candidate after every segment, recording its identity.
+fn check_via(via: &Via, ids: &mut BTreeSet<Uuid>) -> Result<(), String> {
+    via.validate()?;
+    if !ids.insert(via.id) {
+        return Err("duplicate track or via identity".into());
+    }
     Ok(())
 }
 
@@ -210,14 +233,16 @@ pub(super) struct Land {
     pub(super) corners: [Point; 4],
     pub(super) layers: Vec<Uuid>,
     pub(super) net: Option<String>,
-    center: Point,
+    pub(super) plated_slot: Option<super::slot::ResolvedPlatedSlot>,
+    pub(super) center: Point,
     shape: PadShape,
     corner_radius_nm: i64,
     size_nm: (i64, i64),
 }
 
 impl Land {
-    /// Derive the copper contour from resolved corners and pad shape in board nanometers.
+    /// Derive the outer copper contour, which also bounds a pad's contained plated hole.
+    /// Routing clearance treats the entire land as occupied, including the enclosed opening.
     pub(super) fn contour(&self) -> PadContour {
         PadContour::pad(self.center, self.corners, self.shape, self.corner_radius_nm, self.size_nm)
     }
@@ -326,6 +351,7 @@ pub(super) fn lands_from_footprints<'a>(footprints: impl Iterator<Item = super::
                     corners,
                     layers,
                     net: pad.net,
+                    plated_slot: pad.plated_slot,
                     center: pad.center,
                     shape: pad.shape,
                     corner_radius_nm: pad.corner_radius_nm,
@@ -478,9 +504,14 @@ impl IslandBuilder {
                 }
             }
         }
-        builder.node = 0;
-        builder.nearby = Nearby::Lookup;
+        builder.begin_pad_contacts();
         builder
+    }
+
+    /// Begin direct pad contacts on the existing roots and index after the track/via pass.
+    fn begin_pad_contacts(&mut self) {
+        self.node = 0;
+        self.nearby = Nearby::Lookup;
     }
 
     /// Evaluate at most `budget` work units of direct pad pairs, without rechecking track/via
@@ -524,17 +555,17 @@ impl IslandBuilder {
                 self.nearby = Nearby::Lookup;
                 continue;
             };
-            let layers = match (self.layers.get(i), self.layers.get(j)) {
-                (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
-                (None, Some(b)) => !b.is_empty(),
-                _ => true,
-            };
-            let (a, b) = (self.bounds[i], self.bounds[j]);
-            if layers && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && self.contours[i].touches(&self.contours[j]) {
+            if self.routed_contact(i, j) {
                 join(&mut self.parent, i, j);
             }
         }
         self.node >= end
+    }
+
+    /// Test one routed pair in node order (`i > j`), with any via first. Pad-only pairs
+    /// are checked separately by callers that need direct land overlap.
+    fn routed_contact(&self, i: usize, j: usize) -> bool {
+        routed_contact(&self.layers, &self.bounds, &self.contours, i, j)
     }
 
     /// Resolve export-only contact groups. Start a fresh builder's traversal at the first pad
@@ -569,6 +600,17 @@ impl IslandBuilder {
         }
         (copper, members)
     }
+}
+
+/// Test a routed pair in descending node order. Via nodes follow all explicitly layered nodes.
+fn routed_contact(layers: &[Vec<Uuid>], bounds: &[[f64; 4]], contours: &[PadContour], i: usize, j: usize) -> bool {
+    let shares_layer = match (layers.get(i), layers.get(j)) {
+        (Some(a), Some(b)) => a.iter().any(|layer| b.contains(layer)),
+        (None, Some(b)) => !b.is_empty(),
+        _ => true,
+    };
+    let (a, b) = (bounds[i], bounds[j]);
+    shares_layer && a[0] <= b[2] && b[0] <= a[2] && a[1] <= b[3] && b[1] <= a[3] && contours[i].touches(&contours[j])
 }
 
 /// Sweep overlapping pad bounds and visit each pair whose copper touches on a shared layer.
@@ -668,6 +710,207 @@ fn reframe(point: Point, from: &[Point; 4], to: &[Point; 4]) -> Point {
     Point { x_nm: (ox + u * ux + v * vx).round() as i64, y_nm: (oy + u * uy + v * vy).round() as i64 }
 }
 
+/// One moved pad entry indexed for fast layer-and-bounds carrier lookup.
+struct CarryPad {
+    order: usize,
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+    from: [Point; 4],
+    to: Option<[Point; 4]>,
+    contour: PadContour,
+}
+
+/// Per-layer X-sorted moved pads with prefix `max_x` for bounded carrier lookup.
+struct LayerCarryPads {
+    pads: Vec<CarryPad>,
+    prefix_max_x: Vec<f64>,
+}
+
+/// Spatial index over moved pads preserving exact first-match (`old.iter().find`) semantics.
+struct CarryIndex {
+    by_layer: BTreeMap<Uuid, LayerCarryPads>,
+}
+
+impl CarryIndex {
+    /// Group moved pad contours by copper layer and sort by `min_x` for fast overlap pruning.
+    fn new(old: Vec<(Land, PadContour)>, new: &BTreeMap<(String, String), Land>) -> Self {
+        let mut grouped: BTreeMap<Uuid, Vec<CarryPad>> = BTreeMap::new();
+        for (order, (land, contour)) in old.into_iter().enumerate() {
+            let [min_x, min_y, max_x, max_y] = contour.bounds();
+            let moved_land = new.get(&land.key);
+            for layer in &land.layers {
+                let to = moved_land.filter(|moved| moved.layers.contains(layer)).map(|moved| moved.corners);
+                grouped.entry(*layer).or_default().push(CarryPad {
+                    order,
+                    min_x,
+                    min_y,
+                    max_x,
+                    max_y,
+                    from: land.corners,
+                    to,
+                    contour: contour.clone(),
+                });
+            }
+        }
+        let by_layer = grouped
+            .into_iter()
+            .map(|(layer, mut pads)| {
+                pads.sort_by(|a, b| a.min_x.total_cmp(&b.min_x).then_with(|| a.order.cmp(&b.order)));
+                let mut prefix_max_x = Vec::with_capacity(pads.len());
+                let mut running_max = f64::NEG_INFINITY;
+                for pad in &pads {
+                    running_max = running_max.max(pad.max_x);
+                    prefix_max_x.push(running_max);
+                }
+                (layer, LayerCarryPads { pads, prefix_max_x })
+            })
+            .collect();
+        Self { by_layer }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.by_layer.is_empty()
+    }
+
+    /// Resolve a track endpoint against the first matching moved pad on its layer.
+    fn follow(&self, track: &Track, end: Point) -> Point {
+        let Some(layer_pads) = self.by_layer.get(&track.layer) else { return end };
+        let radius = track.width_nm as f64 / 2.;
+        let x = end.x_nm as f64;
+        let y = end.y_nm as f64;
+        let upper = layer_pads.pads.partition_point(|pad| pad.min_x <= x + radius + 1.);
+        let mut best: Option<(usize, &CarryPad)> = None;
+        for index in (0..upper).rev() {
+            if layer_pads.prefix_max_x[index] < x - radius - 1. {
+                break;
+            }
+            let pad = &layer_pads.pads[index];
+            if pad.max_x < x - radius - 1. || pad.max_y < y - radius - 1. || pad.min_y > y + radius + 1. {
+                continue;
+            }
+            if best.is_some_and(|(best_order, _)| pad.order >= best_order) {
+                continue;
+            }
+            if pad.contour.overlaps_segment(end, end, radius) {
+                best = Some((pad.order, pad));
+            }
+        }
+        match best {
+            Some((_, pad)) => pad.to.map_or(end, |to| reframe(end, &pad.from, &to)),
+            None => end,
+        }
+    }
+}
+
+/// Resumable attached-track pass for prepared footprint-pitch edits. Yields between bounded
+/// footprint-indexing and track-scanning batches so worker cancellation takes effect promptly.
+pub(super) struct CarryPass {
+    candidate: Project,
+    moved: BTreeSet<String>,
+    target: super::view::BoardTarget,
+    footprint_next: usize,
+    old_lands: Vec<(Land, PadContour)>,
+    new_lands: BTreeMap<(String, String), Land>,
+    index: Option<CarryIndex>,
+    track_next: usize,
+    carried: Vec<Track>,
+    added: BTreeSet<Uuid>,
+}
+
+impl CarryPass {
+    pub(super) fn new(candidate: Project, moved: BTreeSet<String>, target: super::view::BoardTarget) -> Self {
+        Self {
+            candidate,
+            moved,
+            target,
+            footprint_next: 0,
+            old_lands: Vec::new(),
+            new_lands: BTreeMap::new(),
+            index: None,
+            track_next: 0,
+            carried: Vec::new(),
+            added: BTreeSet::new(),
+        }
+    }
+
+    pub(super) fn completed(&self) -> usize {
+        self.footprint_next.saturating_add(self.track_next)
+    }
+
+    pub(super) fn total(&self, before: &Project) -> usize {
+        before.board.footprints.len().saturating_add(before.board.tracks.len()).max(1)
+    }
+
+    /// Advance at most `budget` units of pad projection or track scanning, returning `true` once
+    /// all attached tracks have been validated and collected.
+    pub(super) fn step(&mut self, before: &Project, budget: usize) -> Result<bool, CommandError> {
+        let (Some(old_view), Some(new_view)) = (before.board_view(self.target), self.candidate.board_view(self.target)) else {
+            return Ok(true);
+        };
+        if self.index.is_none() {
+            let total_footprints = before.board.footprints.len();
+            let count = budget.min(32);
+            let moved = &self.moved;
+            self.old_lands.extend(
+                lands_from_footprints(old_view.footprints_range(self.footprint_next, count))
+                    .into_iter()
+                    .filter(|land| moved.contains(&land.key.0))
+                    .map(|land| {
+                        let contour = land.contour();
+                        (land, contour)
+                    }),
+            );
+            for land in
+                lands_from_footprints(new_view.footprints_range(self.footprint_next, count)).into_iter().filter(|land| moved.contains(&land.key.0))
+            {
+                self.new_lands.insert(land.key.clone(), land);
+            }
+            self.footprint_next = self.footprint_next.saturating_add(count).min(total_footprints);
+            if self.footprint_next < total_footprints {
+                return Ok(false);
+            }
+            let index = CarryIndex::new(std::mem::take(&mut self.old_lands), &self.new_lands);
+            self.new_lands.clear();
+            if index.is_empty() {
+                return Ok(true);
+            }
+            self.index = Some(index);
+            return Ok(false);
+        }
+        let Some(index) = &self.index else {
+            return Ok(true);
+        };
+        let tracks = old_view.tracks();
+        let end_index = self.track_next.saturating_add(budget).min(tracks.len());
+        for track in &tracks[self.track_next..end_index] {
+            let (start, end) = (index.follow(track, track.start), index.follow(track, track.end));
+            if (start, end) != (track.start, track.end) {
+                let moved_track = Track { start, end, ..track.clone() };
+                moved_track.validate().map_err(|_| CommandError::InvalidParams("this move would collapse or overextend an attached track".into()))?;
+                self.added.insert(moved_track.id);
+                self.carried.push(moved_track);
+            }
+        }
+        self.track_next = end_index;
+        Ok(self.track_next >= tracks.len())
+    }
+
+    /// Install all validated carried tracks into the private placement candidate in exact order.
+    pub(super) fn finish(mut self) -> (Project, BTreeSet<String>, BTreeSet<Uuid>) {
+        if !self.carried.is_empty() {
+            let tracks = &mut std::sync::Arc::make_mut(&mut self.candidate.board).tracks;
+            for track in self.carried {
+                if let Ok(index) = tracks.binary_search_by_key(&track.id, |t| t.id) {
+                    tracks[index] = track;
+                }
+            }
+        }
+        (self.candidate, self.moved, self.added)
+    }
+}
+
 /// Tracks whose ends ride on pads of the `moved` footprints, by footprint ID, between `before`
 /// and `after` (the same board before and after those footprints moved). Each end that
 /// overlapped one of their pads on the track's layer keeps its place on that pad; the rest of
@@ -680,18 +923,12 @@ pub(super) fn carry(before: BoardView<'_>, after: BoardView<'_>, moved: &BTreeSe
     }
     let new: BTreeMap<(String, String), Land> =
         lands(after).into_iter().filter(|land| moved.contains(&land.key.0)).map(|land| (land.key.clone(), land)).collect();
-    let follow = |end: Point, track: &Track| {
-        let Some(land) = carrier(&old, track, end) else { return end };
-        match new.get(&land.key) {
-            Some(moved) if moved.layers.contains(&track.layer) => reframe(end, &land.corners, &moved.corners),
-            _ => end,
-        }
-    };
+    let index = CarryIndex::new(old, &new);
     before
         .tracks()
         .iter()
         .filter_map(|track| {
-            let (start, end) = (follow(track.start, track), follow(track.end, track));
+            let (start, end) = (index.follow(track, track.start), index.follow(track, track.end));
             ((start, end) != (track.start, track.end)).then(|| Track { start, end, ..track.clone() })
         })
         .collect()
@@ -716,8 +953,12 @@ fn carrier<'a>(old: &'a [(Land, PadContour)], track: &Track, end: Point) -> Opti
         .map(|(land, _)| land)
 }
 
-/// Capture which unselected track ends follow selected pads, outside pointer-motion frames.
+/// Capture which track ends follow selected pads, outside pointer-motion frames.
+/// No tracks or no selected footprints means no pad geometry is needed.
 pub(super) fn carried_ends(view: BoardView<'_>, moved: &BTreeSet<String>) -> BTreeMap<Uuid, (bool, bool)> {
+    if view.tracks().is_empty() || moved.is_empty() {
+        return BTreeMap::new();
+    }
     let old = carrying_lands(view, moved);
     view.tracks()
         .iter()
@@ -733,8 +974,17 @@ pub(super) fn carried_ends(view: BoardView<'_>, moved: &BTreeSet<String>) -> BTr
 /// carried track would collapse or leave the coordinate range, or when the moved pads or the
 /// carried tracks would join two nets.
 pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSet<String>) -> Result<(), CommandError> {
-    let Some(target) = before.board_target() else { return Ok(()) };
-    let (Some(old), Some(new)) = (before.board_view(target), next.board_view(target)) else { return Ok(()) };
+    let added = install_carried_tracks(before, next, moved)?;
+    if let Some((a, b)) = short_for_copper_edit(next, &added, moved) {
+        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
+    }
+    Ok(())
+}
+
+/// Update attached track ends in a private placement candidate before validating its contacts.
+fn install_carried_tracks(before: &Project, next: &mut Project, moved: &BTreeSet<String>) -> Result<BTreeSet<Uuid>, CommandError> {
+    let Some(target) = before.board_target() else { return Ok(BTreeSet::new()) };
+    let (Some(old), Some(new)) = (before.board_view(target), next.board_view(target)) else { return Ok(BTreeSet::new()) };
     let carried = carry(old, new, moved);
     for track in &carried {
         track.validate().map_err(|_| CommandError::InvalidParams("this move would collapse or overextend an attached track".into()))?;
@@ -748,10 +998,7 @@ pub(super) fn carry_copper(before: &Project, next: &mut Project, moved: &BTreeSe
             }
         }
     }
-    if let Some((a, b)) = short_for_copper_edit(next, &added, moved) {
-        return Err(CommandError::InvalidParams(format!("this move would connect nets {a} and {b}")));
-    }
-    Ok(())
+    Ok(added)
 }
 
 /// Parse a JSON value into a typed parameter, reporting serde's message as invalid input.
@@ -802,6 +1049,13 @@ impl Session {
     }
 }
 
+/// Private geometry candidate plus the exact identities the later validators must examine.
+struct CandidateEdit {
+    candidate: Option<Project>,
+    added: BTreeSet<Uuid>,
+    replacements: Option<BTreeMap<Uuid, Uuid>>,
+}
+
 /// Count-checked route input, still without sizes or allocated board item identities.
 struct RouteAddition {
     layer: Uuid,
@@ -842,7 +1096,7 @@ fn route_addition(project: &Project, params: &Value) -> Result<RouteAddition, Co
 /// Edit a private candidate without publishing. Refuse inevitable count overflow before
 /// resolving source-contact defaults (which may build connectivity) or allocating identities.
 /// Preparation validates final membership and explicit hard limits before publication.
-fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<CandidateEdit, CommandError> {
     let route = (command == ADD_TRACKS).then(|| route_addition(project, params)).transpose()?;
     let via_at = if command == ADD_VIA {
         let at: Point = param(params, "at")?;
@@ -968,12 +1222,12 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
             assigned.insert(via.id);
         }
         if assigned.is_empty() {
-            return Ok((None, assigned));
+            return Ok(CandidateEdit { candidate: None, added: assigned, replacements: None });
         }
         let mut next = next;
         std::sync::Arc::make_mut(&mut next.board).vias = vias;
         protect_locked(original, &next)?;
-        return Ok((Some(next), assigned));
+        return Ok(CandidateEdit { candidate: Some(next), added: assigned, replacements: None });
     } else if command == MOVE_TRACKS {
         let moved_tracks = ids(params, "tracks", |id| tracks.binary_search_by_key(id, |track| track.id).is_ok())?;
         let moved_vias = ids(params, "vias", |id| vias.binary_search_by_key(id, |via| via.id).is_ok())?;
@@ -1037,16 +1291,21 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<(O
         tracks.retain(|track| !gone_tracks.contains(&track.id));
         vias.retain(|via| !gone_vias.contains(&via.id));
     }
+    let replacements = if command == ADD_TRACKS {
+        params.get("replacements").map(|value| replacements::apply(&mut tracks, value, &mut added)).transpose()?
+    } else {
+        None
+    };
     validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
     if tracks == project.board.tracks && vias == project.board.vias {
-        return Ok((None, added));
+        return Ok(CandidateEdit { candidate: None, added, replacements });
     }
     let mut next = project.clone();
     let board = std::sync::Arc::make_mut(&mut next.board);
     board.tracks = tracks;
     board.vias = vias;
     protect_locked(project, &next)?;
-    Ok((Some(next), added))
+    Ok(CandidateEdit { candidate: Some(next), added, replacements })
 }
 
 /// Describe a route's layer changes for command clients.

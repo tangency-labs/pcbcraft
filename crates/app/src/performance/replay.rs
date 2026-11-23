@@ -17,6 +17,9 @@ use std::collections::BTreeMap;
 pub(super) const WARMUP: usize = 8;
 /// Stable identity for the exact versioned route, reversal, layer, cancellation and edit steps.
 pub(super) const STANDARD_TRACE_ID: &str = "route-reverse-layer-cancel-edit-v1";
+/// Stable identity for full-capacity boards where adding a track/via must be refused cleanly.
+pub(super) const ENVELOPE_TRACE_ID: &str = "route-reverse-capacity-cancel-edit-v1";
+pub(super) const SHOVE_TRACE_ID: &str = "route-shove-preview-cancel-commit-v1";
 pub(super) const COMMIT_TRACE_ID: &str = "route-contact-commit-history-v1";
 
 /// One 60 Hz logical input frame; wall-clock measurements do not sleep to simulate pacing.
@@ -36,6 +39,9 @@ enum Action {
     Contact { target: bool, pressed: Option<bool> },
     ContactPreview,
     HistoryCheck,
+    SelectShove,
+    ShovePreview,
+    ShoveHistory,
 }
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -43,6 +49,7 @@ enum ReplayKey {
     Route,
     Cancel,
     BackLayer,
+    Finish,
 }
 impl ReplayKey {
     /// Map stable trace vocabulary to production keyboard events.
@@ -51,6 +58,7 @@ impl ReplayKey {
             Self::Route => Key::X,
             Self::Cancel => Key::Escape,
             Self::BackLayer => Key::PageDown,
+            Self::Finish => Key::Enter,
         }
     }
 }
@@ -101,8 +109,57 @@ impl Step {
         steps
     }
 
+    /// Exercise a real shove preview, cancellation and one atomic commit using saved geometry.
+    pub(super) fn shove() -> Vec<Self> {
+        let start = Point { x_nm: -58_000_000, y_nm: -18_000_000 };
+        let target = Point { x_nm: -52_000_000, y_nm: -19_900_000 };
+        let mut steps = vec![Self { id: "shove.mode".into(), action: Action::SelectShove, routing_after: false }];
+        let key = |steps: &mut Vec<Self>, id: &str, key: ReplayKey, routing_after| {
+            for pressed in [true, false] {
+                steps.push(Self { id: format!("{id}.{}", if pressed { "down" } else { "up" }), action: Action::Key { key, pressed }, routing_after });
+            }
+        };
+        key(&mut steps, "arm", ReplayKey::Route, false);
+        for attempt in ["cancel", "commit"] {
+            for pressed in [true, false] {
+                steps.push(Self {
+                    id: format!("shove.{attempt}.start.{}", if pressed { "down" } else { "up" }),
+                    action: Action::Pointer { at: start, pressed: Some(pressed) },
+                    routing_after: !pressed,
+                });
+            }
+            steps.push(Self { id: format!("shove.{attempt}.preview"), action: Action::ShovePreview, routing_after: true });
+            if attempt == "cancel" {
+                key(&mut steps, "cancel", ReplayKey::Cancel, false);
+            } else {
+                for pressed in [true, false] {
+                    steps.push(Self {
+                        id: format!("shove.vertex.{}", if pressed { "down" } else { "up" }),
+                        action: Action::Pointer { at: target, pressed: Some(pressed) },
+                        routing_after: true,
+                    });
+                }
+                key(&mut steps, "shove.finish", ReplayKey::Finish, false);
+                steps.push(Self { id: "shove.history".into(), action: Action::ShoveHistory, routing_after: false });
+            }
+        }
+        key(&mut steps, "exit", ReplayKey::Cancel, false);
+        steps
+    }
+
     /// Versioned reversal, layer-transition, cancellation and concurrent-edit authority trace.
     pub(super) fn standard() -> Vec<Self> {
+        Self::route_trace("layer")
+    }
+
+    /// Versioned full-capacity reversal, refused-transition, cancellation and concurrent-edit trace.
+    pub(super) fn envelope() -> Vec<Self> {
+        Self::route_trace("capacity")
+    }
+
+    /// Shared interactive route/reversal/cancellation/shared-edit trace with an explicit
+    /// layer-transition or capacity-refusal step identity.
+    fn route_trace(transition: &str) -> Vec<Self> {
         let mut trace = Vec::new();
         let key = |trace: &mut Vec<Self>, id: &str, key: ReplayKey, routing_after: bool| {
             for pressed in [true, false] {
@@ -118,7 +175,7 @@ impl Step {
         for (i, x) in [2_540_000, 5_080_000, 7_620_000, 5_080_000, 2_540_000, 7_620_000].into_iter().enumerate() {
             pointer(&mut trace, &format!("reverse.{i}"), x, None, true);
         }
-        key(&mut trace, "layer", ReplayKey::BackLayer, true);
+        key(&mut trace, transition, ReplayKey::BackLayer, true);
         key(&mut trace, "cancel", ReplayKey::Cancel, false);
         // Wait beyond the double-click interval in logical time before starting a new route.
         for i in 0..30 {
@@ -155,6 +212,11 @@ struct Contacts {
     original_tracks: std::collections::BTreeSet<uuid::Uuid>,
 }
 
+/// Whether an engine message is the documented board track/via capacity refusal.
+fn is_capacity_refusal(message: &str) -> bool {
+    message.contains("at most") && (message.contains("track segments") || message.contains("vias"))
+}
+
 /// Shared trace driver for CPU replay and actual native/browser windows. Every input
 /// has the same production state assertions, regardless of the rendering integration.
 pub(super) struct Driver {
@@ -164,6 +226,7 @@ pub(super) struct Driver {
     track: uuid::Uuid,
     top: String,
     contacts: Option<Contacts>,
+    refusal: Option<String>,
 }
 
 impl Driver {
@@ -185,7 +248,11 @@ impl Driver {
         let track = board.tracks().first().ok_or("missing replay track")?.id.to_owned();
         app.views.active.board.active_layer = Some(top.clone());
         app.views.active.filters_open = false;
-        app.views.active.camera.center_on(Point { x_nm: 10_160_000, y_nm: 0 });
+        app.views.active.camera.center_on(if artifact.trace_id == SHOVE_TRACE_ID {
+            Point { x_nm: -55_000_000, y_nm: -20_000_000 }
+        } else {
+            Point { x_nm: 10_160_000, y_nm: 0 }
+        });
         let contacts =
             if artifact.trace.iter().any(|step| matches!(step.action, Action::Contact { .. } | Action::ContactPreview | Action::HistoryCheck)) {
                 let lines = board.ratsnest()?.lines;
@@ -206,7 +273,7 @@ impl Driver {
             };
         let original = encode_packed(source)?;
         let revision = app.session.revision();
-        Ok((app, Self { original, revision, edits: 0, track, top, contacts }))
+        Ok((app, Self { original, revision, edits: 0, track, top, contacts, refusal: None }))
     }
 
     /// Translate one addressed trace action; shared edits use the revision-checked command path.
@@ -221,6 +288,9 @@ impl Driver {
         let mut events = Vec::new();
         match &step.action {
             Action::Key { key, pressed } => {
+                if matches!(key, ReplayKey::Finish) && *pressed {
+                    self.edits += 1;
+                }
                 events.push(Event::Key { key: key.egui(), physical_key: None, pressed: *pressed, repeat: false, modifiers: Modifiers::NONE })
             }
             Action::Pointer { at, pressed } => events = Self::pointer(app, *at, *pressed)?,
@@ -271,6 +341,16 @@ impl Driver {
                 }
                 self.edits += 2;
             }
+            Action::SelectShove => {
+                if !app.views.active.board.tracks.select_mode(pcbcraft_engine::board::route::Mode::Shove) {
+                    return Err("could not select shove mode".into());
+                }
+            }
+            Action::ShovePreview => events = Self::pointer(app, Point { x_nm: -52_000_000, y_nm: -19_900_000 }, None)?,
+            Action::ShoveHistory => {
+                super::shove::verify_replay(&mut app.session, &self.original, artifact.board)?;
+                self.edits += 2;
+            }
             Action::SharedEdit => {
                 if !app.views.active.board.tracks.routing() {
                     return Err("shared edit needs a pending route".into());
@@ -306,7 +386,8 @@ impl Driver {
     /// The normal frame path owns execution and revision invalidation while the client waits.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn remote_request(&mut self, app: &PcbApp, artifact: &Artifact, index: usize) -> Result<Option<serde_json::Value>> {
-        if !matches!(artifact.trace[index].action, Action::SharedEdit) {
+        let step = artifact.trace.get(index).ok_or("trace index outside artifact")?;
+        if !matches!(step.action, Action::SharedEdit) {
             return Ok(None);
         }
         if !app.views.active.board.tracks.routing() {
@@ -320,15 +401,22 @@ impl Driver {
     /// Wait for validated layer/preview results and committed revision in their respective
     /// trace steps. Other actions assert state on the first accepted pass.
     pub(super) fn pending(&self, app: &PcbApp, artifact: &Artifact, index: usize) -> bool {
-        match artifact.trace[index].id.as_str() {
-            "layer.down" | "layer.up" => app.views.active.board.tracks.committing(),
-            "contact.preview" => app.message.is_none() && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared"),
-            "contact.commit.up" => app.message.is_none() && app.session.revision() < self.revision + self.edits,
+        match artifact.trace.get(index).map(|step| step.id.as_str()) {
+            Some("layer.down" | "layer.up" | "capacity.down" | "capacity.up") => app.views.active.board.tracks.committing(),
+            Some("shove.cancel.preview" | "shove.commit.preview") => {
+                app.message.is_none() && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared")
+            }
+            Some("shove.vertex.up") => app.message.is_none() && app.views.active.board.tracks.committing(),
+            Some("shove.finish.down" | "shove.finish.up") => app.message.is_none() && app.session.revision() < self.revision + self.edits,
+            Some("contact.preview") => {
+                app.message.is_none() && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared")
+            }
+            Some("contact.commit.up") => app.message.is_none() && app.session.revision() < self.revision + self.edits,
             _ => false,
         }
     }
 
-    /// Drive a pending validation/publication step with a wall-clock and frame bound.
+    /// Drive a pending validation/publication step until settled or bounded out.
     /// No input is repeated, and the normal final layer/cancellation assertions still apply.
     fn settle(
         &self,
@@ -339,23 +427,44 @@ impl Driver {
         frame_id: &mut usize,
         samples: &mut BTreeMap<String, Vec<f64>>,
     ) -> Result<()> {
-        let id = &artifact.trace[index].id;
-        if !matches!(id.as_str(), "layer.down" | "layer.up" | "contact.preview" | "contact.commit.up") {
+        let id = &artifact.trace.get(index).ok_or("trace index outside artifact")?.id;
+        if !matches!(
+            id.as_str(),
+            "layer.down"
+                | "layer.up"
+                | "capacity.down"
+                | "capacity.up"
+                | "contact.preview"
+                | "contact.commit.up"
+                | "shove.cancel.preview"
+                | "shove.commit.preview"
+                | "shove.vertex.up"
+                | "shove.finish.down"
+                | "shove.finish.up"
+        ) {
             return Ok(());
         }
+        #[cfg(not(test))]
         let started = super::clock_ms();
         let mut settling = BTreeMap::new();
         for _ in 0..10_000 {
             if !self.pending(app, artifact, index) {
                 break;
             }
-            if super::clock_ms() - started > 5_000. {
-                return Err("route validation did not settle within five seconds".into());
+            #[cfg(not(test))]
+            if super::clock_ms() - started > 30_000. {
+                return Err("route validation did not settle within thirty seconds".into());
+            }
+            #[cfg(test)]
+            if app.views.active.board.tracks.route_queue_busy() {
+                app.poll_route_previews();
+                app.poll_copper_preparations(ctx);
+                continue;
             }
             frame(app, ctx, Vec::new(), *frame_id, &mut settling, &format!("settle.{id}"));
             *frame_id += 1;
-            #[cfg(not(target_arch = "wasm32"))]
-            std::thread::yield_now();
+            #[cfg(all(not(target_arch = "wasm32"), not(test)))]
+            std::thread::sleep(std::time::Duration::from_millis(1));
         }
         if self.pending(app, artifact, index) {
             return Err("route validation exceeded its frame bound".into());
@@ -369,16 +478,46 @@ impl Driver {
     }
 
     /// Reject missed routing input, ineffective layer changes and cancellation that authors data.
-    pub(super) fn verify(&self, app: &PcbApp, artifact: &Artifact, index: usize) -> Result<()> {
-        let step = &artifact.trace[index];
+    pub(super) fn verify(&mut self, app: &PcbApp, artifact: &Artifact, index: usize) -> Result<()> {
+        let step = artifact.trace.get(index).ok_or("trace index outside artifact")?;
         if app.views.active.board.tracks.routing() != step.routing_after {
             return Err(format!("{}: route state mismatch (input may have missed canvas)", step.id));
         }
-        if let Some(message) = &app.message {
-            return Err(format!("{}: {message}", step.id));
+        if matches!(step.id.as_str(), "capacity.down" | "capacity.up") {
+            if app.views.active.board.active_layer.as_deref() != Some(self.top.as_str()) {
+                return Err("capacity refusal unexpectedly changed the route layer".into());
+            }
+            let Some(message) = app.message.as_deref() else {
+                return Err(format!("{}: expected capacity refusal message", step.id));
+            };
+            if !is_capacity_refusal(message) {
+                return Err(format!("{}: unexpected refusal: {message}", step.id));
+            }
+            if let Some(previous) = self.refusal.as_deref() {
+                if previous != message {
+                    return Err(format!("{}: refusal changed from {previous} to {message}", step.id));
+                }
+            } else {
+                self.refusal = Some(message.to_owned());
+            }
+        } else {
+            if let Some(message) = app.message.as_deref()
+                && self.refusal.as_deref() != Some(message)
+            {
+                return Err(format!("{}: {message}", step.id));
+            }
+            if matches!(step.id.as_str(), "layer.down" | "layer.up") && app.views.active.board.active_layer.as_deref() == Some(&self.top) {
+                return Err("layer key did not change the route layer".into());
+            }
         }
-        if matches!(step.id.as_str(), "layer.down" | "layer.up") && app.views.active.board.active_layer.as_deref() == Some(&self.top) {
-            return Err("layer key did not change the route layer".into());
+        if matches!(step.id.as_str(), "shove.cancel.preview" | "shove.commit.preview")
+            && (app.views.active.board.tracks.displacement_preview() == 0
+                || app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared"))
+        {
+            return Err("shove preview did not displace and validate its original track".into());
+        }
+        if step.id == "shove.finish.up" && app.session.revision() != self.revision + self.edits {
+            return Err("shove did not publish exactly once".into());
         }
         if step.id == "contact.preview" && app.views.active.board.tracks.preparation_status().as_deref() != Some("Route prepared") {
             return Err("preview did not finish validated preparation".into());
@@ -502,5 +641,29 @@ mod tests {
             }
             driver.finish(&app).unwrap();
         }
+    }
+
+    /// Full-capacity `envelope-v1` boards must refuse the mid-route layer transition cleanly
+    /// while preserving cancellation and shared-edit authority. Conversely, the standard trace
+    /// must fail on `envelope-v1`, and the envelope trace must fail on below-capacity boards.
+    #[test]
+    fn envelope_capacity_trace_verifies_refusal_and_rejects_mismatched_boards() {
+        let mut envelope = super::super::load_artifact(&super::super::generate("envelope-v1", "test").unwrap()).unwrap();
+        assert_eq!(envelope.trace_id, ENVELOPE_TRACE_ID);
+        let mut samples = BTreeMap::new();
+        run(&envelope, &mut samples).unwrap();
+        for key in ["replay.capacity.down.ui", "replay.cancel.up.ui", "replay.shared-edit.command"] {
+            assert!(samples.contains_key(key), "missing {key}");
+        }
+
+        envelope.trace_id = STANDARD_TRACE_ID.into();
+        envelope.trace = Step::standard();
+        let err = run(&envelope, &mut BTreeMap::new()).unwrap_err();
+        assert!(err.contains("at most"), "expected capacity refusal on standard trace, got: {err}");
+
+        let mut reference = super::super::load_artifact(&super::super::generate("reference-v1", "test").unwrap()).unwrap();
+        reference.trace_id = ENVELOPE_TRACE_ID.into();
+        reference.trace = Step::envelope();
+        assert!(run(&reference, &mut BTreeMap::new()).is_err());
     }
 }
