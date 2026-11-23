@@ -34,7 +34,9 @@ pub mod part_groups;
 pub mod part_instances;
 pub mod persistence;
 pub mod pin_functions;
+pub mod query;
 pub mod schematic;
+pub mod schematic_pdf;
 pub mod selection;
 mod session_scope;
 pub mod sheets;
@@ -177,6 +179,7 @@ enum ParamKind {
     TeardropEdits,
     TrackReplacements,
     AlignMode,
+    FootprintPitch,
     BoardSide,
     RuleLength,
     BoardRules,
@@ -316,6 +319,7 @@ impl ParamKind {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
             }
             Self::AlignMode => json!({"type":"string","enum":ALIGN_MODES}),
+            Self::FootprintPitch => json!({"type":"integer","minimum":1,"maximum":board::transform::MAX_FOOTPRINT_PITCH_NM}),
             Self::BoardSide => json!({"type":"string","enum":["front","back"]}),
             Self::BoardRules => board::rules::schema(),
             Self::PlacementOrigin => board::origin::schema(),
@@ -726,6 +730,8 @@ impl ParamKind {
             Self::TrackEnds => Err("must list tracks with a UUID and bounded start and end points"),
             Self::AlignMode if value.as_str().and_then(AlignMode::parse).is_some() => Ok(()),
             Self::AlignMode => Err("must be an alignment mode"),
+            Self::FootprintPitch if value.as_i64().is_some_and(|n| (1..=board::transform::MAX_FOOTPRINT_PITCH_NM).contains(&n)) => Ok(()),
+            Self::FootprintPitch => Err("requires pitch_nm to be a positive whole number of nanometers within the maximum placement span"),
             Self::LayerChanges => Err("must contain layer changes with a vertex index and a copper layer UUID"),
             Self::ViaDiameter => Err("must be a via pad diameter from 50001 to 10000000 nanometers"),
             Self::ViaDrill => Err("must be a via drill from 50000 to 9999999 nanometers"),
@@ -986,6 +992,7 @@ pub const DELETE_FOOTPRINTS: &str = "pcb.delete_footprints";
 pub const INITIALIZE_BOARD_SETUP: &str = "pcb.initialize_board_setup";
 /// Atomically replace a validated board setup while retaining its profile identity.
 pub const SET_BOARD_SETUP: &str = "pcb.set_board_setup";
+pub use board::setup::groups::INSPECT_LAYER_GROUPS;
 pub use board::setup::preview::{CANCEL_BOARD_SETUP_PREVIEW, PREVIEW_BOARD_SETUP};
 /// Set board-local physical silkscreen text height, stroke width and pad clearance.
 pub const SET_SILKSCREEN: &str = "pcb.set_silkscreen";
@@ -2028,6 +2035,12 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: INSPECT_LAYER_GROUPS,
+        title: "Inspect Layer Groups",
+        summary: "Read computed physical/role groups and authored named groups in physical order without changing revision or history.",
+        params: &[BOARD],
+    },
+    Command {
         id: PREVIEW_BOARD_SETUP,
         title: "Preview Board Setup",
         summary: "Review affected layers and objects, consent and Apply refusal without changing the project or history.",
@@ -2342,12 +2355,18 @@ const CATALOG: &[Command] = &[
     Command {
         id: ALIGN_FOOTPRINTS,
         title: "Align Footprints",
-        summary: "Align two or more footprints by their bounds (left, right, top, bottom, center_x, center_y) or distribute three or more with equal gaps to nanometer precision (distribute_x, distribute_y), in one undo step. Distribution keeps the physical outermost footprints and span fixed; overlapping selections that cannot retain those anchors are refused. Track ends follow moving pads. Edits that join two nets are refused. Top is the smallest Y.",
+        summary: "Align footprints by bounds, distribute by equal gaps with fixed outer bounds, or set an exact origin-to-origin pitch along X or Y. Track ends follow moving pads. Edits that join two nets are refused. One undo step.",
         params: &[
             BOARD,
             EXPECTED_REVISION,
             Param { required: true, name: "footprints", summary: "Unique placed footprint IDs from board inspection", kind: ParamKind::FootprintIds },
             Param { required: true, name: "mode", summary: "How to align or distribute them", kind: ParamKind::AlignMode },
+            Param {
+                required: false,
+                name: "pitch_nm",
+                summary: "Positive origin spacing for distribute_x or distribute_y (two or more footprints), starting at the smallest axis coordinate. Ties follow footprint request order. Omit for equal gaps by bounds (three or more).",
+                kind: ParamKind::FootprintPitch,
+            },
         ],
     },
     Command {
@@ -2557,7 +2576,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: EXPORT_FABRICATION,
         title: "Generate Fabrication Outputs",
-        summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and an Excellon drill file. Edits nothing; execute returns every file's name and text.",
+        summary: "Generate Gerber X2 copper, mask, paste, silkscreen and outline files and Excellon plated and, when present, non-plated drill files. Edits nothing; execute returns every file's name and text.",
         params: &[BOARD],
     },
     Command {
@@ -3005,22 +3024,27 @@ impl Project {
         self.components.get(&symbol.component)
     }
 
-    /// Retire one live part through the board's accepted-state policy. Last
-    /// visible shared fields become retained display metadata; package/terminal
-    /// and connection acceptance remain unchanged until a reviewed update.
-    /// Refuse retirement if it would immediately remove a locked footprint.
-    pub(crate) fn retire_component(&mut self, id: u64) -> Result<(), CommandError> {
-        if !self.board.retains_retired_component(id)
-            && let Some(footprint) = self.board.footprint_for_part_instance(id)
-        {
-            board::transform::require_unlocked_placements(self, [Some(footprint)])?;
+    /// Retire live parts through the board's accepted-state policy. Last visible
+    /// shared fields become retained display metadata; package/terminal and
+    /// connection acceptance remain unchanged until a reviewed update. Refuse
+    /// the batch before mutating when any part would immediately remove a
+    /// locked footprint.
+    pub(crate) fn retire_components(&mut self, ids: impl IntoIterator<Item = u64>) -> Result<(), CommandError> {
+        let ids: std::collections::BTreeSet<u64> = ids.into_iter().collect();
+        let immediate = ids
+            .iter()
+            .filter(|&&id| !self.board.retains_retired_component(id))
+            .filter_map(|&id| self.board.footprint_for_part_instance(id))
+            .map(Some);
+        board::transform::require_unlocked_placements(self, immediate)?;
+        for id in ids {
+            let component = Arc::make_mut(&mut self.components).remove(&id);
+            if self.pin_functions.owner(id).is_some() {
+                Arc::make_mut(&mut self.pin_functions).remove(id);
+            }
+            Arc::make_mut(&mut self.schematic_packages).remove_component(id);
+            Arc::make_mut(&mut self.board).remove_component(id, component.as_ref());
         }
-        let component = Arc::make_mut(&mut self.components).remove(&id);
-        if self.pin_functions.owner(id).is_some() {
-            Arc::make_mut(&mut self.pin_functions).remove(id);
-        }
-        Arc::make_mut(&mut self.schematic_packages).remove_component(id);
-        Arc::make_mut(&mut self.board).remove_component(id, component.as_ref());
         Ok(())
     }
 
@@ -3516,7 +3540,7 @@ impl Session {
             | board::clipboard::DELETE
             | DELETE_ITEMS => self.project.is_some(),
             INITIALIZE_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_none()),
-            SET_BOARD_SETUP | PREVIEW_BOARD_SETUP => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
+            SET_BOARD_SETUP | PREVIEW_BOARD_SETUP | INSPECT_LAYER_GROUPS => self.project.as_ref().is_some_and(|p| p.board.setup.is_some()),
             CANCEL_BOARD_SETUP_PREVIEW => self.board_setup_preview().is_some(),
             "edit.undo" => !self.undo.is_empty(),
             "edit.redo" => !self.redo.is_empty(),
@@ -3673,6 +3697,11 @@ impl Session {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"fabrication":self.fabrication_report(params)?}));
         }
+        if id == INSPECT_LAYER_GROUPS {
+            self.validate_project_command(id, params)?;
+            let setup = self.open_project()?.board_setup().ok_or_else(|| CommandError::Unavailable("initialize board setup first".into()))?;
+            return Ok(json!({"revision":self.revision,"layer_groups":setup.layer_groups()}));
+        }
         if id == netlist::EXPORT_NETLIST {
             self.validate_project_command(id, params)?;
             return Ok(json!({"revision":self.revision,"netlist":self.netlist_report(params)?}));
@@ -3768,7 +3797,7 @@ impl Session {
         }
         let before = self.revision;
         let revision = self.apply_command(id, params)?;
-        if revision != before && !board::track::preparation::is_copper_edit(id) {
+        if revision != before && !board::track::preparation::can_prepare_copper_edit(id, params) {
             self.report_committed(id, params);
         }
         Ok(revision)
@@ -3819,18 +3848,20 @@ impl Session {
     }
 
     /// Check catalog parameters, board identity and availability without generating query data
-    /// or changing the session. State-specific setup diagnostics remain with their handlers.
+    /// or changing the session. Layer-group inspection reads only stackup metadata, so it can
+    /// run regardless of copper geometry. State-specific setup diagnostics remain with handlers.
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        if id.starts_with("pcb.")
+        let check_copper_geometry = id.starts_with("pcb.") && id != INSPECT_LAYER_GROUPS;
+        if check_copper_geometry
             && id != board::arc::SET_ARCS
             && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())
         {
             project.resolve_board(params.get("board").and_then(Value::as_str))?;
             return Err(CommandError::Unavailable(board::arc::UNSUPPORTED.into()));
         }
-        if id.starts_with("pcb.")
+        if check_copper_geometry
             && id != board::teardrop::EDIT_TEARDROPS
             && let Some(project) = self.project().filter(|p| !p.board.teardrops.is_empty())
         {
@@ -3857,6 +3888,7 @@ impl Session {
                 | SET_BOARD_SETUP
                 | PREVIEW_BOARD_SETUP
                 | CANCEL_BOARD_SETUP_PREVIEW
+                | INSPECT_LAYER_GROUPS
                 | SET_RULES
                 | SET_PLACEMENT_ORIGIN
                 | PREVIEW_ASSEMBLY_PROFILE
@@ -4169,6 +4201,9 @@ impl Session {
             DELETE_FOOTPRINTS => self.delete_footprints(params)?,
             INITIALIZE_BOARD_SETUP => self.initialize_board_setup(params)?,
             SET_BOARD_SETUP => self.set_board_setup(params)?,
+            INSPECT_LAYER_GROUPS => {
+                self.execute(id, params)?;
+            }
             PREVIEW_BOARD_SETUP => self.preview_board_setup(params)?,
             CANCEL_BOARD_SETUP_PREVIEW => self.cancel_board_setup_preview(params)?,
             SET_RULES => self.set_rules(params)?,
@@ -4179,6 +4214,7 @@ impl Session {
             SET_SILKSCREEN => self.set_silkscreen(params)?,
             board::zones::ADD_ZONE | board::zones::SET_ZONE | board::zones::DELETE_ZONES => self.edit_zone(id, params)?,
             ADD_DRAWING | SET_DRAWING | DELETE_DRAWING => self.edit_board_drawing(id, params)?,
+            ALIGN_FOOTPRINTS if board::track::preparation::can_prepare_copper_edit(id, params) => self.edit_tracks(id, params)?,
             ALIGN_FOOTPRINTS => self.align_footprints(params)?,
             CHECK_DESIGN => self.validate_design_check(params)?,
             board::class_rules::ROUTE_RULES => {
@@ -4395,7 +4431,7 @@ impl Session {
         project.prune_junctions();
         Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
         if !project.all_symbols().any(|other| other.component == symbol.component) {
-            project.retire_component(symbol.component)?;
+            project.retire_components([symbol.component])?;
         }
         project.sheet_mut().connectivity = Arc::default();
         self.change(project)?;

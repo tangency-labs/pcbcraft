@@ -141,3 +141,259 @@ fn check_design_command_reports_without_editing() {
     assert!(s.execute(CHECK_DESIGN, &json!({"clearance_nm":-1})).is_err());
     assert!(s.execute(CHECK_DESIGN, &json!({"board":uuid::Uuid::from_u128(9)})).is_err());
 }
+
+/// Add a closed square Board Outline drawing with its lower corner at (`x`, `y`) mm and return
+/// its UUID.
+pub(crate) fn outline_square(s: &mut Session, x_mm: i64, y_mm: i64, side_mm: i64) -> Uuid {
+    let layer = view(s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let (x, y, side) = (x_mm * 1_000_000, y_mm * 1_000_000, side_mm * 1_000_000);
+    let points = [(x, y), (x + side, y), (x + side, y + side), (x, y + side)].map(|(x_nm, y_nm)| Point { x_nm, y_nm });
+    s.apply(ADD_DRAWING, &json!({"layer":layer,"points":points,"closed":true,"expected_revision":s.revision()})).unwrap();
+    view(s).drawings().iter().find(|drawing| drawing.points == points).unwrap().id
+}
+
+/// The routed fixture inside a 40 mm square board with a closed 10 mm square cut-out from
+/// (5, 15) mm to (15, 25) mm, clear of every footprint. Returns the cut-out drawing.
+fn cut_out_board() -> (Session, Uuid) {
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    let cut_out = outline_square(&mut s, 5, 15, 10);
+    (s, cut_out)
+}
+
+/// Add one front-copper track between two points in millimetres and return its UUID.
+fn track_mm(s: &mut Session, from: (f64, f64), to: (f64, f64)) -> String {
+    let front = copper_layers(s)[0];
+    let at = |(x, y): (f64, f64)| Point { x_nm: (x * 1e6) as i64, y_nm: (y * 1e6) as i64 };
+    route(s, front, &[at(from), at(to)]).unwrap();
+    view(s).tracks().iter().find(|track| track.start == at(from)).unwrap().id.to_string()
+}
+
+/// The outline findings about one copper item.
+fn outline_findings<'a>(report: &'a Report, item: &str) -> Vec<&'a Violation> {
+    report.violations.iter().filter(|v| matches!(v.kind, Kind::OutsideBoard | Kind::EdgeClearance) && v.items[0] == item).collect()
+}
+
+/// A closed contour inside the board outline is a cut-out: copper fully inside it is off the
+/// board and the finding names the cut-out drawing, while the same track on solid board is clean.
+#[test]
+fn copper_inside_a_cut_out_is_outside_the_board() {
+    let (mut s, cut_out) = cut_out_board();
+    let inside = track_mm(&mut s, (8., 20.), (12., 20.));
+    let report = check(&s);
+    let found = outline_findings(&report, &inside);
+    assert_eq!(found.len(), 1, "{report:#?}");
+    assert_eq!(found[0].kind, Kind::OutsideBoard);
+    assert_eq!(found[0].message, "Copper lies inside a board cut-out");
+    assert_eq!(found[0].items, vec![inside.clone(), cut_out.to_string()]);
+    assert_eq!(count(&report, Kind::OutsideBoard), 1, "{report:#?}");
+
+    let (mut s, _) = cut_out_board();
+    let solid = track_mm(&mut s, (8., 30.), (12., 30.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &solid).is_empty(), "{report:#?}");
+    assert_eq!(count(&report, Kind::OutsideBoard) + count(&report, Kind::EdgeClearance), 0, "{report:#?}");
+}
+
+/// Copper that starts on the board and ends in the cut-out is off the board, as copper leaving
+/// the outer edge is; copper with both ends on the board that crosses the cut-out still crosses
+/// the outline; copper beside the cut-out keeps the ordinary edge clearance to it.
+#[test]
+fn copper_at_a_cut_out_edge_keeps_the_edge_findings() {
+    let (mut s, cut_out) = cut_out_board();
+    let entering = track_mm(&mut s, (3., 20.), (8., 20.));
+    let across = track_mm(&mut s, (3., 24.), (17., 24.));
+    let near = track_mm(&mut s, (16., 17.), (16., 23.));
+    let report = check(&s);
+    let entering = outline_findings(&report, &entering);
+    assert_eq!(entering.len(), 1, "{report:#?}");
+    assert_eq!((entering[0].kind, entering[0].items[1].as_str()), (Kind::OutsideBoard, cut_out.to_string().as_str()));
+    let across = outline_findings(&report, &across);
+    assert_eq!(across.len(), 1, "{report:#?}");
+    assert_eq!((across[0].kind, across[0].message.as_str()), (Kind::EdgeClearance, "Copper crosses the Board Outline"));
+    assert!(outline_findings(&report, &near).is_empty(), "1 mm from the cut-out clears the 0.3 mm rule: {report:#?}");
+    let strict = view(&s).check_design(Rules { edge_clearance_nm: 1_000_000, ..Rules::default() });
+    let near = outline_findings(&strict, &near);
+    assert_eq!(near.len(), 1, "{strict:#?}");
+    assert_eq!(near[0].kind, Kind::EdgeClearance);
+}
+
+/// Copper that starts inside a cut-out and crosses both the cut-out boundary and the outer
+/// outline still names the cut-out drawing, even when the outer outline has a lower UUID.
+/// Copper outside every closed contour keeps the existing outer-outline result.
+#[test]
+fn copper_crossing_cut_out_and_outer_outline_names_cut_out_even_with_lower_outer_uuid() {
+    let mut s = routed_fixture();
+    let outer_orig = outline_square(&mut s, -5, -5, 40);
+    let cut_out_orig = outline_square(&mut s, 5, 15, 10);
+    let crossing = track_mm(&mut s, (10., 20.), (-10., 20.));
+    let outside = track_mm(&mut s, (-15., 20.), (-12., 20.));
+
+    let outer_id = Uuid::from_u128(1);
+    let cut_out_id = Uuid::from_u128(2);
+    assert!(outer_id < cut_out_id);
+    let mut project = (*s.snapshot().unwrap()).clone();
+    for drawing in &mut std::sync::Arc::make_mut(&mut project.board).drawings.as_mut().unwrap().items {
+        if drawing.id == outer_orig {
+            drawing.id = outer_id;
+        } else if drawing.id == cut_out_orig {
+            drawing.id = cut_out_id;
+        }
+    }
+    let board_view = project.board_view(project.board_target().unwrap()).unwrap();
+    let report = board_view.check_design(Rules::default());
+    let found = outline_findings(&report, &crossing);
+    assert_eq!(found.len(), 1, "{report:#?}");
+    assert_eq!(found[0].kind, Kind::OutsideBoard);
+    assert_eq!(found[0].message, "Copper lies inside a board cut-out");
+    assert_eq!(found[0].items, vec![crossing, cut_out_id.to_string()]);
+
+    let far = outline_findings(&report, &outside);
+    assert_eq!(far.len(), 1, "{report:#?}");
+    assert_eq!(far[0].kind, Kind::OutsideBoard);
+    assert_eq!(far[0].message, "Copper lies outside the Board Outline");
+    assert_eq!(far[0].items, vec![outside]);
+    let outline = board_view.outline_edges();
+    let far_contour = Contour::capsule(Point { x_nm: -15_000_000, y_nm: 20_000_000 }, Point { x_nm: -12_000_000, y_nm: 20_000_000 }, 125_000.);
+    assert_eq!(outline.blocking_edge(&far_contour, true).map(|(id, _, _)| id), Some(outer_id));
+}
+
+/// A contour nested inside the cut-out is board again. Copper on that island is legal; copper
+/// in the cut-out next to the island is still off the board and names the cut-out, not the
+/// nearer island.
+#[test]
+fn an_island_inside_a_cut_out_is_board_again() {
+    let (mut s, cut_out) = cut_out_board();
+    let island = outline_square(&mut s, 8, 18, 4);
+    let on_island = track_mm(&mut s, (9.5, 20.), (10.5, 20.));
+    let beside = track_mm(&mut s, (12.6, 19.), (12.6, 21.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &on_island).is_empty(), "{report:#?}");
+    let beside = outline_findings(&report, &beside);
+    assert_eq!(beside.len(), 1, "{report:#?}");
+    assert_eq!(beside[0].kind, Kind::OutsideBoard);
+    assert_eq!(beside[0].items[1], cut_out.to_string());
+    assert_ne!(beside[0].items[1], island.to_string());
+}
+
+/// Closed outlines that overlap are one board, not a board with a cut-out: an L-shaped board
+/// drawn as two overlapping squares keeps copper in their shared area and in each arm legal.
+#[test]
+fn overlapping_outlines_form_one_board_without_cut_outs() {
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    outline_square(&mut s, 25, -5, 20);
+    let shared = track_mm(&mut s, (28., 10.), (32., 10.));
+    let arm = track_mm(&mut s, (38., 2.), (42., 2.));
+    let outside = track_mm(&mut s, (38., 25.), (42., 25.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &shared).is_empty(), "{report:#?}");
+    assert!(outline_findings(&report, &arm).is_empty(), "{report:#?}");
+    let outside = outline_findings(&report, &outside);
+    assert_eq!(outside.len(), 1, "{report:#?}");
+    assert_eq!(outside[0].message, "Copper lies outside the Board Outline");
+    assert_eq!(outside[0].items.len(), 1);
+    assert_eq!(count(&report, Kind::OutsideBoard), 1, "{report:#?}");
+}
+
+/// A Board Outline drawn twice in the same place is still one board: copper on it stays legal,
+/// and a contour touching another is not a cut-out either.
+#[test]
+fn duplicated_or_touching_outlines_make_no_cut_out() {
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    outline_square(&mut s, -5, -5, 40);
+    let solid = track_mm(&mut s, (8., 30.), (12., 30.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &solid).is_empty(), "{report:#?}");
+    assert_eq!(count(&report, Kind::OutsideBoard), 0, "{report:#?}");
+
+    let mut s = routed_fixture();
+    outline_square(&mut s, -5, -5, 40);
+    outline_square(&mut s, -5, 15, 10);
+    let inside = track_mm(&mut s, (-1., 20.), (1., 20.));
+    let report = check(&s);
+    assert!(outline_findings(&report, &inside).is_empty(), "{report:#?}");
+    assert_eq!(count(&report, Kind::OutsideBoard), 0, "{report:#?}");
+}
+
+/// A single closed outline keeps its existing wording, and the resumable check reports exactly
+/// what the direct check reports for cut-outs and islands at every batch size.
+#[test]
+fn cut_out_findings_agree_between_direct_and_resumable_checks() {
+    let mut s = routed_fixture();
+    outline(&mut s);
+    let outside = track_mm(&mut s, (30., 0.), (32., 0.));
+    let report = check(&s);
+    assert_eq!(outline_findings(&report, &outside)[0].message, "Copper lies outside the Board Outline");
+    assert_eq!(outline_findings(&report, &outside)[0].items, vec![outside.clone()]);
+
+    let (mut s, _) = cut_out_board();
+    outline_square(&mut s, 8, 18, 4);
+    for (from, to) in [((6., 20.), (6.5, 20.)), ((9.5, 20.), (10.5, 20.)), ((3., 23.), (17., 23.)), ((30., 30.), (40., 30.))] {
+        track_mm(&mut s, from, to);
+    }
+    let expected = s.check_design(&json!({})).unwrap();
+    assert_eq!(expected["counts"]["outside_board"], 2, "{expected:#}");
+    for budget in [1, 3, 256] {
+        let mut job = s.design_check_job(&json!({})).unwrap();
+        while !job.step(budget) {}
+        assert_eq!(json!(job.take_report().unwrap()), expected, "budget={budget}");
+    }
+}
+
+/// A disjoint cut-out stays off the board even when other Board Outlines overlap each other
+/// elsewhere on the board: copper inside the cut-out still reports `outside_board` naming the
+/// cut-out drawing, while the overlapping pair is reported explicitly as `ambiguous_outline`.
+#[test]
+fn cut_out_stays_off_board_when_other_outlines_overlap() {
+    let mut s = routed_fixture();
+    let outer = outline_square(&mut s, -5, -5, 40);
+    let cut_out = outline_square(&mut s, 5, 15, 10);
+    let overlap = outline_square(&mut s, 25, -5, 20);
+    let inside = track_mm(&mut s, (8., 20.), (12., 20.));
+    let shared = track_mm(&mut s, (28., 10.), (32., 10.));
+
+    let report = check(&s);
+    let found = outline_findings(&report, &inside);
+    assert_eq!(found.len(), 1, "{report:#?}");
+    assert_eq!(found[0].kind, Kind::OutsideBoard);
+    assert_eq!(found[0].message, "Copper lies inside a board cut-out");
+    assert_eq!(found[0].items, vec![inside, cut_out.to_string()]);
+    assert!(outline_findings(&report, &shared).is_empty(), "{report:#?}");
+
+    let ambiguous: Vec<_> = report.violations.iter().filter(|v| v.kind == Kind::AmbiguousOutline).collect();
+    assert_eq!(ambiguous.len(), 1, "{report:#?}");
+    let mut expected_ambiguous = vec![outer.to_string(), overlap.to_string()];
+    expected_ambiguous.sort();
+    assert_eq!(ambiguous[0].items, expected_ambiguous);
+    assert!(!ambiguous[0].items.contains(&cut_out.to_string()));
+
+    let expected = s.check_design(&json!({})).unwrap();
+    for budget in [1, 3, 256] {
+        let mut job = s.design_check_job(&json!({})).unwrap();
+        while !job.step(budget) {}
+        assert_eq!(json!(job.take_report().unwrap()), expected, "budget={budget}");
+    }
+}
+
+/// Meeting closed Board Outlines (overlapping, duplicated or touching) report `ambiguous_outline`
+/// naming the exact drawings involved, whereas disjoint nested contours report no ambiguity.
+#[test]
+fn ambiguous_meeting_outlines_report_ambiguity_with_drawing_ids() {
+    let (mut disjoint, _) = cut_out_board();
+    outline_square(&mut disjoint, 8, 18, 4);
+    assert_eq!(count(&check(&disjoint), Kind::AmbiguousOutline), 0);
+
+    for (x, y, size) in [(25, -5, 20), (-5, -5, 40), (-5, 15, 10)] {
+        let mut s = routed_fixture();
+        let a = outline_square(&mut s, -5, -5, 40);
+        let b = outline_square(&mut s, x, y, size);
+        let report = check(&s);
+        let ambiguous: Vec<_> = report.violations.iter().filter(|v| v.kind == Kind::AmbiguousOutline).collect();
+        assert_eq!(ambiguous.len(), 1, "({x},{y},{size}): {report:#?}");
+        let mut ids = vec![a.to_string(), b.to_string()];
+        ids.sort();
+        assert_eq!(ambiguous[0].items, ids, "({x},{y},{size}): {report:#?}");
+    }
+}

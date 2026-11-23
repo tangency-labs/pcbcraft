@@ -1153,6 +1153,59 @@ fn box_selection_picks_tracks_and_vias() {
     assert!(h.state().views.active.board.selection.is_empty(), "footprints outside the box stay unselected");
 }
 
+/// Copper boxes keep unlocked objects and inspection still reports the locked track and via.
+#[test]
+fn copper_box_excludes_locked_without_hiding_inspection() {
+    let mut h = routable();
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let unlocked = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 1_270_000 }, Point { x_nm: 7_620_000, y_nm: 1_270_000 });
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":5_080_000,"y_nm":-1_270_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    let via = vias(&h)[0].id;
+    let revision = h.state().session.revision();
+    let target = h.state().views.active.board.target.unwrap().board;
+    h.state_mut()
+        .run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"tracks":[track],"vias":[via],"locked":true,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    h.run();
+    let box_copper = |h: &mut Harness<'_, PcbApp>| {
+        let from = at(h, Point { x_nm: 1_524_000, y_nm: -2_540_000 });
+        let to = at(h, Point { x_nm: 8_636_000, y_nm: 3_810_000 });
+        h.hover_at(from);
+        h.run();
+        h.drag_at(from);
+        h.run();
+        h.hover_at(to);
+        h.run();
+        h.drop_at(to);
+        h.run();
+    };
+    let inspection = h.state().session.inspect();
+    let board = &inspection["project"]["boards"][0];
+    assert!(board["tracks"].as_array().unwrap().iter().any(|item| item["id"] == json!(track) && item["locked"] == true));
+    assert!(board["vias"].as_array().unwrap().iter().any(|item| item["id"] == json!(via) && item["locked"] == true));
+    box_copper(&mut h);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track, via, unlocked]));
+    let view = h.state().views.active.id();
+    h.state_mut().set_selection_filters(view, &json!({"include_locked":false})).unwrap();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    box_copper(&mut h);
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    let locked_at = at(&h, Point { x_nm: 5_080_000, y_nm: 2_540_000 });
+    click_canvas_at(&mut h, locked_at);
+    assert!(h.state().views.active.board.tracks.selected.is_empty());
+    h.state_mut().select_all_board();
+    assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([unlocked]));
+    assert_eq!(h.state().session.inspect(), inspection);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"tracks":[unlocked],"locked":true,"expected_revision":revision}));
+    assert_eq!(h.state().message, None);
+    assert!(h.state().views.active.board.tracks.selected.is_empty(), "newly locked copper leaves the filtered view's selection");
+}
+
 /// U selects every track joined to the hovered one, and nothing else.
 #[test]
 fn u_selects_connected_copper() {
@@ -2287,6 +2340,17 @@ fn vias_filter_separately_from_tracks() {
     h.run();
     click_canvas_at(&mut h, on_via);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([via]));
+    h.hover_at(on_track);
+    h.run();
+    h.key_press(Key::U);
+    h.run();
+    assert_eq!(
+        h.state().views.active.board.tracks.selected,
+        std::collections::BTreeSet::from([via]),
+        "connected selection keeps only the enabled kind"
+    );
+    click_canvas_at(&mut h, on_track);
+    assert!(h.state().views.active.board.tracks.selected.is_empty(), "a track-only hit is ignored when tracks are disabled");
 }
 
 /// Saved filter settings from before the Vias row keep existing choices and enable vias.

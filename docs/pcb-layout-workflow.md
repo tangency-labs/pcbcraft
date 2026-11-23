@@ -43,7 +43,7 @@ Each edit is one undo step.
 | Route | Tracks with an explicit width and clearance-aware 45° walkaround. Stable snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
 | Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
-| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
+| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus separate [Excellon drill files](#fabrication-drill-files) in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
 Copper connectivity is derived from overlap on shared layers. Track edits and
@@ -75,6 +75,27 @@ the command refuses the whole request. It also refuses when the pad to detach
 overlaps another pad, or when overlapping pads elsewhere would keep the two
 sides joined. This is a shared command available in
 headless and live MCP, not a canvas tool or a net-wide removal.
+
+## Set-pitch distribution
+
+In MCP, call `pcb.align_footprints` with `distribute_x` or `distribute_y`,
+`pitch_nm` (a positive integer number of nanometers), and at least two distinct
+placed footprint IDs. For example, use `pitch_nm: 5080000` for a 5.08 mm pitch.
+Pitch is measured between footprint origins, not pad centers or physical bounds.
+The smallest X (left) or Y (top) origin stays fixed, and the other origins are
+spaced in increasing coordinate order. Request order breaks ties. The other
+coordinate, rotation and board side do not change. The original span may grow or
+shrink. A locked footprint anywhere in the selection refuses the whole request
+and is named, even if it would be the fixed anchor. An out-of-range destination,
+a new short or a move that would change locked copper also refuses the request.
+A successful move and its attached track changes are one undo step; repeating
+an accepted pitch that already matches creates no history. In a live editor the
+copper checks are prepared before the edit is applied. If the board changes
+in the meantime, retry with the current revision.
+
+Omit `pitch_nm` for the existing equal-gap distribution: it requires at least
+three footprints, uses physical bounds and preserves the outer footprints and
+span. The Modify menu continues to use equal gaps.
 
 ## Gaps, in recommended order
 
@@ -280,8 +301,12 @@ ribbon's planned entries and the editor guide have a stated destination.
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for tracks and vias is implemented under #249 through per-object
   flags and the shared snapshot publication guard. Existing footprint locks protect
-  direct placement edits as described below. Footprint lock authoring, zone locks
-  and a locked-object selection filter are not available yet.
+  direct placement edits as described below. To skip locked footprints, tracks
+  and vias when selecting, clear **Locked objects** in the view's **Selection
+  filters** card. It is checked by default. Clearing it also drops those objects
+  from the current selection, but leaves them visible and listed in project
+  inspection. Footprint lock authoring and locks for zones and board graphics
+  are not available yet.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
@@ -289,6 +314,21 @@ ribbon's planned entries and the editor guide have a stated destination.
   between the schematic and the board.
 
 Copy and paste of board objects is in progress separately in #197 through #202.
+
+## Fabrication drill files
+
+**Manufacture › Fabrication › Outputs** and `pcb.export_fabrication` keep
+plated pad drills and through vias in `-PTH.drl`. If the board contains circular
+non-plated footprint holes, `-NPTH.drl` contains just those holes and the
+fabrication archive's manifest lists both files. A board without those holes
+has no `-NPTH.drl` member. Non-plated openings do not create copper, mask or
+paste features.
+
+Both files measure from the selected placement origin, with Y reversed from
+board coordinates and lengths written in millimeters to three decimal places.
+The non-plated tool size is the finished diameter, with no plating allowance.
+A non-plated diameter that rounds to zero stops export instead of writing a
+zero-size tool. This is a file precision limit, not a fabrication rule.
 
 ## Placed-footprint locks
 
@@ -363,6 +403,7 @@ carry it for later walkaround/shove consumers. No routing solver is added here.
 | 4. Zones | board/20 or a higher compatible format | Zone outlines; fills are not stored |
 | 5. Push-and-shove | none | — |
 | Placed-footprint lock metadata | [board/34](native-project-storage.md#placed-footprint-lock-metadata) or later | At least one active footprint lock; formats 27–33 remain unsupported |
+| Named layer groups | [board/41](native-project-storage.md#named-layer-groups) | Written only when named groups exist; derived groups are not stored |
 
 These are selected layout formats, not a consecutive version list. Canonical
 saves use the highest supported format required by the authored data; compatible
