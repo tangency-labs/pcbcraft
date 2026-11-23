@@ -2045,10 +2045,10 @@ mod tests {
         assert_eq!(doc.error, None);
     }
 
-    /// On a maximum-pad footprint (1,024 pads in a 32×32 grid plus a 64-vertex fabrication body
-    /// outline), `CourtyardDraft::cached_preview` caches idle frames by document revision and form
-    /// inputs, invalidates when an input changes, and prints uncached vs cached preview timing for
-    /// profiling.
+    /// On a large footprint within the 512-object editor envelope (480 pads in a 24×20 grid plus
+    /// a 64-vertex fabrication body outline = 481 objects), `CourtyardDraft::cached_preview`
+    /// caches idle frames by document revision and form inputs, invalidates when an input changes,
+    /// and prints uncached vs cached preview timing for profiling.
     #[test]
     fn large_footprint_courtyard_preview_caches_idle_frames_and_reports_timing() {
         use pcbcraft_engine::{
@@ -2058,48 +2058,44 @@ mod tests {
         };
         use std::time::Instant;
 
-        let mut item = Item::new(Kind::Footprint).unwrap();
-        item.objects.clear();
-        let mut next_id = 1u64;
-        for row in 0..32i64 {
-            for col in 0..32i64 {
-                item.objects.insert(
-                    next_id,
-                    Primitive::Pad {
-                        pad: RectPad {
-                            number: format!("P{next_id}"),
-                            center: Point { x_nm: (col - 16) * 1_000_000, y_nm: (row - 16) * 1_000_000 },
-                            width_nm: 400_000,
-                            height_nm: 400_000,
-                            rotation: 0,
-                            shape: PadShape::Circle,
-                            copper: CopperBinding::ComponentSide,
-                            corner_radius_nm: 0,
-                            drill_nm: None,
-                            plated_slot: None,
-                        },
+        let mut session = Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        let default_ids: Vec<u64> = session.snapshot().objects.keys().copied().collect();
+        let mut primitives = Vec::with_capacity(481);
+        for row in 0..20i64 {
+            for col in 0..24i64 {
+                primitives.push(Primitive::Pad {
+                    pad: RectPad {
+                        number: "P0".into(),
+                        center: Point { x_nm: (col - 12) * 1_000_000, y_nm: (row - 10) * 1_000_000 },
+                        width_nm: 400_000,
+                        height_nm: 400_000,
+                        rotation: 0,
+                        shape: PadShape::Circle,
+                        copper: CopperBinding::ComponentSide,
+                        corner_radius_nm: 0,
+                        drill_nm: None,
+                        plated_slot: None,
                     },
-                );
-                next_id += 1;
+                });
             }
         }
         let body_points: Vec<Point> = (0..64)
             .map(|i| {
                 let angle = (i as f64) * std::f64::consts::TAU / 64.0;
-                Point { x_nm: (17_000_000.0 * angle.cos()).round() as i64, y_nm: (17_000_000.0 * angle.sin()).round() as i64 }
+                Point { x_nm: (14_000_000.0 * angle.cos()).round() as i64, y_nm: (14_000_000.0 * angle.sin()).round() as i64 }
             })
             .collect();
-        item.objects.insert(
-            next_id,
-            Primitive::Artwork {
-                artwork: Artwork {
-                    purpose: GraphicPurpose::Fabrication,
-                    graphic: Graphic { geometry: Geometry::Polyline { points: body_points, closed: true }, stroke_nm: 150_000, fill: Fill::None },
-                },
+        primitives.push(Primitive::Artwork {
+            artwork: Artwork {
+                purpose: GraphicPurpose::Fabrication,
+                graphic: Graphic { geometry: Geometry::Polyline { points: body_points, closed: true }, stroke_nm: 150_000, fill: Fill::None },
             },
-        );
-        let decoded = Item::decode(&item.encode().unwrap()).unwrap();
-        assert_eq!(decoded.objects.len(), 1025);
+        });
+        let rev = session.execute(0, Action::Paste { primitives, offset: Point { x_nm: 0, y_nm: 0 } }).unwrap();
+        session.execute(rev, Action::Delete { objects: default_ids }).unwrap();
+
+        let decoded = Item::decode(&session.snapshot().encode().unwrap()).unwrap();
+        assert_eq!(decoded.objects.len(), 481);
 
         let mut app = PcbApp::default();
         let doc_id = app.library_editors.open(decoded, false).unwrap();
@@ -2124,7 +2120,7 @@ mod tests {
         assert_ne!(updated, first, "changing clearance must invalidate the preview cache");
 
         eprintln!(
-            "courtyard preview timing (1024 pads, 64-vertex fab body): uncached={:.3} ms, 60 cached frames={:.3} ms",
+            "courtyard preview timing (480 pads, 64-vertex fab body, 481 objects): uncached={:.3} ms, 60 cached frames={:.3} ms",
             uncached_elapsed.as_secs_f64() * 1_000.0,
             cached_60_elapsed.as_secs_f64() * 1_000.0,
         );
