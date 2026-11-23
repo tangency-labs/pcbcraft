@@ -229,7 +229,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `pcb.set_footprint_reference_text` | Set sparse placement-local `appearance` fields for printed text, font, paired size/stroke, local rotation, alignment and visibility, with an optional `offset`. Null appearance resets inheritance. The component's reference and schematic use the separate shared reference edit |
 | `pcb.delete_footprints` | Delete the addressed board placements atomically; retain schematic components and pinned physical assignments for re-placement |
 | `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing, remembered separately for schematic and PCB views; click and box selection in a schematic; footprint and Browser selection in a PCB view; optional `element: "reference"` selects one placement's text and Properties |
-| `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state; selection commands refuse disabled object categories |
+| `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state. On PCB views, optional `include_locked: false` excludes locked footprints, tracks and vias from selection (default: `true`); project inspection is unchanged. Selection commands refuse disabled targets |
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | **File → Layouts**: **Activate**, **New arrangement**, **Duplicate…**, **Rename…** and **Delete…** |
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
@@ -540,7 +540,12 @@ most 1000 findings. Saved board defaults apply unless a request supplies a
 supported hard-limit override; authored minimums can only tighten upward and
 maximums downward. The report includes per-property `sources`. Kinds are `short`,
 `clearance`, `track_width`, `via_diameter`, `via_drill`, `annular_ring`, `unconnected`,
-`no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`. A
+`no_outline`, `ambiguous_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
+Closed Board Outline drawings whose boundaries cross, touch or share an edge are grouped into one
+union component and reported as `ambiguous_outline` (listing those drawings' UUIDs), while
+disjoint closed outlines still nest by even-odd parity so a cut-out away from an overlap remains
+a cut-out. An `outside_board` finding for a copper item or
+non-plated hole inside a cut-out also lists the cut-out drawing's UUID after that item. A
 `courtyard_overlap` lists both footprints and marks a point inside the overlap; touching
 courtyards pass. When unsupported courtyard geometry (circles, arcs, open paths) decided
 the finding by bounds, its message says the comparison is conservative.

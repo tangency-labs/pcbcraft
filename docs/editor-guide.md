@@ -502,6 +502,14 @@ Deleting a sheet removes its symbols, wires and associated board footprints in
 one undo step, and the project always retains at least one sheet. Each pane keeps
 its sheet target, camera and selection independently.
 
+New sheets use A4 landscape paper with the Default frame. With nothing selected,
+Properties shows the current sheet: its **Paper** group lists **Size** (A4–A0),
+**Orientation** and **Frame** (the Default title block or **None** for a plain
+border), followed by the sheet and project parameters that fill the title block.
+A sheet row's **Paper** and **Frame** submenus in the Browser make the same choices.
+Each pick is one undo step and keeps the drawing and the paper's top-left corner in
+place.
+
 Use **S** or **Sheets → Subsheet** to place a hierarchical sheet symbol,
 then choose a new child or an existing unparented sheet. Double-click inside the
 symbol to enter its child; **Alt+Backspace** returns to the parent. The sheet name
@@ -767,9 +775,18 @@ remain documentation in the native board.
 
 Select **Board Outline** when drawing the physical boundary. Its centerline
 continues to define the board edge; a closed boundary is required for fabrication.
+A closed Board Outline drawn inside another is a cut-out, a hole through the board,
+and one drawn inside a cut-out is board again: closed outlines whose boundaries cross,
+touch or share an edge (such as an L-shaped board drawn as two overlapping rectangles or
+an outline drawn twice) form one union component, while disjoint outlines remain separate
+components, and a point is on the board when it lies inside an odd number of components.
+When closed outlines meet, DRC reports an `ambiguous_outline` finding naming those
+drawings so the ambiguity is visible, while disjoint cut-outs elsewhere on the board
+remain cut-outs.
 Board Outline is also available without a copper setup. Fit and layer visibility
 include these graphics, while DRC reports a missing closed outline and copper
-outside it or too close to the edge.
+outside it, inside a cut-out or too close to an edge. Routing and teardrops treat a
+cut-out edge like the outer board edge.
 
 To route copper, select a copper layer such as **Top** and press **X** or use
 **Layout → Route → Track**. Set **Track / line width** in the persistent controls in the display units
@@ -803,8 +820,10 @@ pads on two different nets is refused with a message, leaving the board unchange
 listing up to 1,000 findings. It reports a short when one copper island joins pads from
 different intended nets, copper of different nets closer than the clearance
 (0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
-connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
-of its edge, and overlapping footprint courtyards. Courtyards on the same side are
+connection, a missing closed Board Outline, copper outside the outline or inside a
+cut-out (the finding also names the cut-out drawing, and the same applies to non-plated
+holes), copper within 0.3 mm of any
+edge, and overlapping footprint courtyards. Courtyards on the same side are
 compared by their actual rectangle and closed-polyline shapes after rotation and flip,
 so empty space between separate courtyard elements or inside a concave outline is free.
 Courtyards that only touch at an edge or corner pass; overlap and containment are
