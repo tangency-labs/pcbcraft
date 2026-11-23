@@ -1091,17 +1091,20 @@ impl PcbApp {
         // already lie in another pane.
         let pressed = ctx.input(|input| {
             let right_click = right_pans && input.pointer.button_clicked(egui::PointerButton::Secondary);
-            // A press that can focus (primary, or right when right-drag does not pan) decides
-            // focus even when a navigation-only press came first in the same frame.
+            // A primary press decides focus whenever there is one, then another press that can
+            // focus (right when right-drag does not pan), even when a navigation-only press
+            // came first in the same frame.
             let navigates =
                 |button: egui::PointerButton| button == egui::PointerButton::Middle || (right_pans && button == egui::PointerButton::Secondary);
-            let press_of = |focusing: bool| {
+            let press_of = |wanted: &dyn Fn(egui::PointerButton) -> bool| {
                 input.events.iter().find_map(|event| match event {
-                    egui::Event::PointerButton { pos, button, pressed: true, .. } if !focusing || !navigates(*button) => Some(*pos),
+                    egui::Event::PointerButton { pos, button, pressed: true, .. } if wanted(*button) => Some(*pos),
                     _ => None,
                 })
             };
-            let press = press_of(true).or_else(|| press_of(false));
+            let press = press_of(&|button| button == egui::PointerButton::Primary)
+                .or_else(|| press_of(&|button| !navigates(button)))
+                .or_else(|| press_of(&|_| true));
             let click = input.events.iter().rev().find_map(|event| match event {
                 egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, .. } => Some(*pos),
                 _ => None,
