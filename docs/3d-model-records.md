@@ -33,7 +33,7 @@ describes one geometry file and nothing about where that geometry is placed.
 | --- | --- |
 | `format`, `library`, `id`, `revision`, `name`, `license` | Common identity fields with the [existing rules](part-schema.md#exact-references) |
 | `source` | Required provenance (`kind`, `reference`, `locator`); descriptive, never fetched on load |
-| `redistribution` | `allowed`, `not_allowed` or `unknown`; **Embed used models** shows it before copying bytes into a project |
+| `redistribution` | `allowed`, `not_allowed` or `unknown`; decides which operations may copy the bytes into a new file ([Redistribution](#redistribution)) |
 | `geometry` | `kind` (`step`), `sha256` of the exact file bytes as 64 lowercase hex digits, and `size_bytes` |
 | `source_frame` | Optional correction from the file's own frame to the model frame; omitted when it is the identity |
 
@@ -76,14 +76,52 @@ There is no unit and no scale factor. A STEP file declares its own length unit,
 and the reader converts it to nanometres. A file whose declared unit is wrong is
 imported again as a new revision rather than scaled.
 
+### Redistribution
+
+An operation that copies a model's bytes into a new file copies them only when
+the record says `allowed`. This covers **Embed used models**, `board/1`
+publication for the Craft bridge and STEP export.
+
+- **`not_allowed` and `unknown`** models are left out, even when their bytes are
+  available from an installed library or the cache. The operation still
+  completes and reports each model it left out, with
+  `redistribution: not_allowed` or `redistribution: unknown` as the reason.
+- **Embed** leaves such a model linked. Its record is still pinned, so the
+  project keeps its identity and alignment.
+- **`board/1` and STEP export** list such a component with its pose and the
+  reason, and give it no body.
+- **No override.** Someone with the right to redistribute an `unknown` model
+  makes a new record revision that says `allowed`, so the decision is recorded
+  with the model's provenance.
+
+Viewing and checks read the bytes in place and are not affected.
+
 ## Binding to a package variant
 
 A model binds to a **package variant** of a part definition, not to the part as a
 whole and not to a footprint: one footprint serves many parts with different
 bodies, and one part can have several packages. The binding is an optional
 `model` field on each `packages.<variant>` record, which needs a new part format,
-`pcbcraft-part/3`. Formats 1 and 2 stay readable. The part schema and codec arrive
-with the implementation slice.
+`pcbcraft-part/5`. The part schema and codec arrive with the implementation
+slice.
+
+Format 5 extends [format 4](part-schema.md#formats-and-implementation): every
+package may carry a `model`, and `terminal_ratings` becomes optional, still
+nonempty when present. A writer selects the lowest format that holds the
+content:
+
+| Content | Format written |
+| --- | --- |
+| No binding and no supply range | 2, or 1 for a retained format-1 record |
+| Supply ranges and no binding | 4 |
+| A binding on any package, `no_body` included, with or without supply ranges | 5 |
+
+- **Removing the last binding** writes format 4 if supply ranges remain and
+  format 2 otherwise. Removing the last supply range from a part that still has
+  a binding keeps format 5.
+- **Readers.** Formats 1, 2 and 4 stay readable. Earlier readers refuse format 5
+  rather than open the part without its bindings.
+- **Format 3** is never written and stays refused.
 
 ```json
 "model": {
@@ -219,23 +257,53 @@ assets/<sha256>.step                             # Embed only
 - **Git.** An unchanged save changes no bytes. Asset files are immutable; they
   only appear or disappear.
 
-How embedded assets count against the [packed-project limits](native-project-storage.md#packed-projects-and-manifests)
-is settled by the storage slice.
+### Packed projects
+
+Today a [`.pc` manifest](native-project-storage.md#packed-projects-and-manifests)
+must have an empty `assets` list, and any missing file or digest mismatch fails
+the open. The storage slice adds asset support in a new container format,
+`pcbcraft-container/4`, and keeps the two kinds of entry apart:
+
+- **Documents stay strict.** Every `parts` entry, model records included, keeps
+  the current rules, and an unlisted file still fails the open.
+- **Model assets are optional.** A listed asset whose file is missing gives its
+  components `geometry_unavailable`. One whose size or SHA-256 differs from the
+  manifest or the record gives `hash_mismatch`, and its bytes are not used. The
+  project opens and stays editable, and the open notice names each failed asset.
+- **Saving.** Bytes that failed are never written back. The record and the
+  binding stay, the asset and its manifest entry are left out, and the save
+  notice names them, so the model stays `geometry_unavailable` until it is
+  embedded again.
+
+How embedded assets count against the packed-project size limits is settled by
+the storage slice.
 
 ## Model states
 
 A missing or unusable model never blocks opening, electrical editing, checks or
-saving. Each placed footprint reports exactly one state, through GUI and MCP:
+saving. Each placed footprint reports exactly one state, through GUI and MCP.
+The states are checked in this order and the first that applies is reported, so
+they are mutually exclusive:
 
 | State | Meaning |
 | --- | --- |
-| `bound` | The record and verified bytes are available |
 | `no_body` | The package has no body on purpose |
 | `unbound` | No binding, including symbol-only instances |
 | `record_missing` | The bound record is not pinned or cannot be read |
 | `geometry_unavailable` | The record is readable but its bytes are missing: in Link mode from every installed library and the cache, in Embed mode from the project's `assets/` |
 | `hash_mismatch` | Bytes are present but their SHA-256 or size differs |
-| `unreadable` | The bytes match but the STEP reader refused them |
+| `kernel_unavailable` | The bytes match, but this build has no geometry kernel to read them, as in the browser |
+| `unreadable` | The bytes match, but the STEP reader refused the file or at least one solid in it; the report names each refused entity |
+| `bound` | The bytes match and the reader accepted every solid: the geometry is usable |
+
+A partial read is never used: if any solid is refused, the model is
+`unreadable` and contributes no body.
+
+| Consumer | Behaviour |
+| --- | --- |
+| 3D view | Draws `bound` bodies only. Every other component is listed in the coverage report with its state and drawn without a body |
+| STEP export, `board/1` | Write `bound` bodies, subject to [redistribution](#redistribution). Every other component is listed with its pose and state and gets no body. A `hash_mismatch` refuses the whole output, as RFC #444 section 6.7 describes for `board/1`, and leaves any previous file in place |
+| Without a kernel | STEP export and `board/1` refuse the whole output with `kernel_unavailable` rather than write a file without bodies |
 
 An embedded project reopens offline with all its models. A linked project reopens
 offline with reduced 3D coverage and everything else intact. No invented box or
@@ -250,18 +318,29 @@ height stands in for a missing model in a mechanical output.
   fixed-axes reading.
 - **Source frame.** A Y-up fixture with an origin offset seats on Z = 0 at the
   footprint origin.
+- **Part formats.** A part with supply ranges and a bound model round-trips as
+  format 5. Removing its binding writes format 4, then removing its ranges
+  writes format 2. A format-4 reader refuses the format-5 file.
 - **Storage.** Link and embed round trips reopen offline; switching mode keeps
   identity and alignment; an unchanged save is byte-identical; tampered bytes
   report `hash_mismatch`.
+- **Packed projects.** A `.pc` with a listed model asset missing opens editable
+  and reports `geometry_unavailable`. One with an asset whose bytes differ opens
+  editable and reports `hash_mismatch`. In both cases the notice names the
+  asset, and the next save leaves it out.
 - **States.** Each state above is produced by a command-built fixture, and none
-  blocks electrical editing.
+  blocks electrical editing. A file with one refused solid beside a valid one
+  reports `unreadable`.
+- **Redistribution.** Embed and `board/1` copy an `allowed` model, and leave out
+  a `not_allowed` and an `unknown` model with the reason, even when their bytes
+  are cached.
 
 ## Delivery order
 
 1. This contract and the model record schema.
-2. Engine codecs for `pcbcraft-model/1` and `pcbcraft-part/3`, and native library
+2. Engine codecs for `pcbcraft-model/1` and `pcbcraft-part/5`, and native library
    loading of `models/`.
-3. Project pinning, link and embed, manifest assets and hash checks.
+3. Project pinning, link and embed, `pcbcraft-container/4` manifest assets and hash checks.
 4. Model import through a shared command and the part form slot.
 
 The 3D view, STEP export and `board/1` follow from these.
