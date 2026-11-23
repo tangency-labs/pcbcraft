@@ -38,7 +38,7 @@ pub(super) struct LiveControl {
     worker: Thread,
 }
 
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum RequestDecision {
     #[default]
     Pending,
@@ -1896,14 +1896,12 @@ mod copper_tests {
         let t_admit = Instant::now();
         app.start_remote_copper(&ctx, req, false);
         let preview_admission_ms = t_admit.elapsed().as_secs_f64() * 1_000.0;
-        let mut preview_completion_ms = 0.0_f64;
-        let preview_response = loop {
+        let (preview_response, preview_completion_ms) = loop {
             let t_poll = Instant::now();
             app.poll_remote_copper(&ctx);
             let dt = t_poll.elapsed().as_secs_f64() * 1_000.0;
             if let Ok(value) = reply.try_recv() {
-                preview_completion_ms = dt;
-                break value;
+                break (value, dt);
             }
             assert!(preview_wall_start.elapsed() < Duration::from_secs(60), "native envelope-v1 merge preview timed out");
             std::thread::sleep(Duration::from_millis(1));
@@ -1923,14 +1921,12 @@ mod copper_tests {
         let t_admit = Instant::now();
         app.start_remote_copper(&ctx, req, false);
         let apply_admission_ms = t_admit.elapsed().as_secs_f64() * 1_000.0;
-        let mut apply_completion_ms = 0.0_f64;
-        let apply_response = loop {
+        let (apply_response, apply_completion_ms) = loop {
             let t_poll = Instant::now();
             app.poll_remote_copper(&ctx);
             let dt = t_poll.elapsed().as_secs_f64() * 1_000.0;
             if let Ok(value) = reply.try_recv() {
-                apply_completion_ms = dt;
-                break value;
+                break (value, dt);
             }
             assert!(apply_wall_start.elapsed() < Duration::from_secs(60), "native envelope-v1 merge apply timed out");
             std::thread::sleep(Duration::from_millis(1));
