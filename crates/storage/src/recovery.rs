@@ -959,6 +959,44 @@ pub fn prune(dir: &Path, retention: Retention) -> Result<usize, String> {
     prune_with_scan_limit(dir, retention, SCAN_LIMIT)
 }
 
+/// Read and verify the versioned recovery header from a regular `.pc` or `.journal` file.
+/// Returns `Ok(None)` when the path does not exist, `Ok(Some(header))` when the file is a regular
+/// recovery envelope with a valid framed [`Header`], and `Err(())` for ordinary project archives,
+/// symlinks, directories, unreadable files or any other non-recovery file.
+fn read_recovery_header(path: &Path) -> Result<Option<Header>, ()> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    if !metadata.is_file() {
+        return Err(());
+    }
+    let file = File::open(path).map_err(|_| ())?;
+    let mut reader = file.take(SNAPSHOT_OVERHEAD_BYTES as u64);
+    let mut magic = [0; MAGIC.len()];
+    reader.read_exact(&mut magic).map_err(|_| ())?;
+    if magic != MAGIC {
+        return Err(());
+    }
+    let payload = read_frame(&mut reader).map_err(|_| ())?.ok_or(())?;
+    let header: Header = serde_json::from_slice(&payload).map_err(|_| ())?;
+    Ok(Some(header))
+}
+
+/// Whether `id` in `dir` is provably a recovery entry created by this format.
+/// Any present `.pc` or `.journal` file must carry a valid recovery header, and at least one of
+/// them must exist; ordinary saved `.pc` project archives and unrelated files never match.
+fn is_recovery_entry(dir: &Path, id: &str) -> bool {
+    let Ok(pc) = read_recovery_header(&entry_file(dir, id, "pc")) else {
+        return false;
+    };
+    let Ok(journal) = read_recovery_header(&entry_file(dir, id, "journal")) else {
+        return false;
+    };
+    pc.is_some() || journal.is_some()
+}
+
 /// Newest modification time across all three known files of recovery entry `id`.
 /// Returns `None` if a metadata error prevents determining any existing file's time, or if none
 /// of the files exist, so retention leaves the entry in place rather than treating it as expired.
@@ -1001,7 +1039,8 @@ fn prune_with_scan_limit(dir: &Path, retention: Retention, scan_limit: usize) ->
         }
         ids.insert(id.to_owned());
     }
-    let mut entries: Vec<(SystemTime, String)> = ids.into_iter().filter_map(|id| entry_modified(dir, &id).map(|modified| (modified, id))).collect();
+    let mut entries: Vec<(SystemTime, String)> =
+        ids.into_iter().filter(|id| is_recovery_entry(dir, id)).filter_map(|id| entry_modified(dir, &id).map(|modified| (modified, id))).collect();
     entries.sort_by(|a, b| b.cmp(a));
     let now = SystemTime::now();
     let (mut kept, mut removed) = (0, 0);

@@ -836,7 +836,9 @@ fn pruning_keeps_held_entries_and_bounds_the_rest() {
         drop(EditJournal::create(dir.path(), id, documents.clone()).unwrap());
         age_entry(dir.path(), id, DAY * days + Duration::from_secs(60));
     }
-    fs::write(entry_file(dir.path(), "orphan", "pc"), b"left without a lock").unwrap();
+    drop(EditJournal::create(dir.path(), "orphan", documents.clone()).unwrap());
+    fs::remove_file(entry_file(dir.path(), "orphan", "lock")).unwrap();
+    fs::remove_file(entry_file(dir.path(), "orphan", "journal")).unwrap();
     age_entry(dir.path(), "orphan", DAY * 30);
     let retention = Retention { max_age: DAY * 14, max_entries: 2 };
 
@@ -891,12 +893,47 @@ fn pruning_reads_complete_entry_times_under_scan_cap() {
     // If a metadata error prevents determining an entry's age, leave the entry in place.
     #[cfg(unix)]
     {
-        fs::write(entry_file(dir.path(), "unreadable", "pc"), b"stale").unwrap();
+        drop(EditJournal::create(dir.path(), "unreadable", states[1].clone()).unwrap());
+        fs::remove_file(entry_file(dir.path(), "unreadable", "journal")).unwrap();
+        fs::remove_file(entry_file(dir.path(), "unreadable", "lock")).unwrap();
         File::options().write(true).open(entry_file(dir.path(), "unreadable", "pc")).unwrap().set_modified(old_time).unwrap();
         std::os::unix::fs::symlink("unreadable.journal", entry_file(dir.path(), "unreadable", "journal")).unwrap();
         assert_eq!(prune(dir.path(), retention), Ok(0));
         assert!(entry_file(dir.path(), "unreadable", "pc").exists());
     }
+}
+
+/// Retention verifies recovery-entry headers before applying age or count limits, so an ordinary
+/// saved `.pc` project archive in the same directory is never pruned while expired recovery
+/// entries are removed.
+#[test]
+fn pruning_ignores_ordinary_project_archives() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Client Board"})).unwrap();
+    let documents = encode_documents(session.snapshot().unwrap()).unwrap();
+
+    // Place a valid ordinary `.pc` project archive aged 15 days in the past, with no journal/lock.
+    let ordinary_path = dir.path().join("client-board.pc");
+    let ordinary_bytes = pcbcraft_engine::persistence::encode_packed_documents(documents.clone()).unwrap();
+    fs::write(&ordinary_path, &ordinary_bytes).unwrap();
+    let old_time = std::time::SystemTime::now() - DAY * 15;
+    File::options().write(true).open(&ordinary_path).unwrap().set_modified(old_time).unwrap();
+
+    // Place a genuine expired recovery entry alongside it.
+    drop(EditJournal::create(dir.path(), "expired-session", documents).unwrap());
+    age_entry(dir.path(), "expired-session", DAY * 15);
+
+    let options = RecorderOptions { retention: Some(Retention { max_age: DAY * 14, max_entries: 16 }), ..RecorderOptions::default() };
+    let recorder = JournalRecorder::start_with(dir.path().to_path_buf(), "fresh".into(), options, || {}).unwrap();
+    recorder.sync().unwrap();
+
+    assert!(ordinary_path.exists(), "ordinary project archive must not be deleted");
+    assert_eq!(fs::read(&ordinary_path).unwrap(), ordinary_bytes, "ordinary project archive must remain byte-identical");
+    for ext in ["pc", "journal", "lock"] {
+        assert!(!entry_file(dir.path(), "expired-session", ext).exists(), "expired recovery .{ext} should be pruned");
+    }
+    recorder.finish().unwrap();
 }
 
 /// A recorder started with a retention prunes earlier runs' entries before its first barrier

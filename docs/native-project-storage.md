@@ -1339,11 +1339,14 @@ No timing has been measured.
 
 With `RecorderOptions::retention`, the writer first prunes entries no running
 session holds: those last written longer ago than `max_age`, then all but the
-newest `max_entries`. Held entries are never touched, at most 16,384 folder
-entries are examined, and folder-gate contention skips the prune without
-waiting. The desktop keeps 16 such entries for up to 14 days and attempts to
-delete its own entry on a clean exit (below); cleanup failures are logged.
-`JournalRecorder::start` records every edit and prunes nothing.
+newest `max_entries`. Retention verifies each candidate's recovery format header
+before applying age or count limits, so ordinary `.pc` project archives and
+other non-recovery files in the directory are never counted or deleted. Held
+entries are never touched, at most 16,384 folder entries are examined, and
+folder-gate contention skips the prune without waiting. The desktop keeps 16
+such entries for up to 14 days and attempts to delete its own entry on a clean
+exit (below); cleanup failures are logged. `JournalRecorder::start` records
+every edit and prunes nothing.
 
 ### Recovery snapshots and timed saves
 
