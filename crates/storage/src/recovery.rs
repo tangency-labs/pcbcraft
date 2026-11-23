@@ -629,12 +629,18 @@ impl EditJournal {
     }
 
     /// Take a recovery snapshot of `documents`: [`Self::rebase`] onto them, unless the journal
-    /// is open and both its recorded result and its base already equal the requested state.
-    /// Checking the recorded result matters if a notification failed to return the journal to
-    /// its base, for example when an undo could not be encoded. Returns whether it wrote.
+    /// is open, both its recorded result and its base already equal the requested state, the
+    /// current `.pc` snapshot file still exists, and the `.journal` path still names the open
+    /// journal file. Checking the recorded result matters if a notification failed to return the
+    /// journal to its base, for example when an undo could not be encoded. Returns whether it wrote.
     pub fn snapshot(&mut self, documents: Documents) -> Result<bool, String> {
         self.ensure_lock_owned()?;
-        if self.file.is_some() && self.base_sha256 == self.sha256 && documents_sha256(&documents) == self.base_sha256 {
+        if let Some(journal_file) = self.file.as_ref()
+            && self.base_sha256 == self.sha256
+            && documents_sha256(&documents) == self.base_sha256
+            && regular_file_exists(&entry_file(&self.dir, &self.id, "pc"))?
+            && same_open_file(&entry_file(&self.dir, &self.id, "journal"), journal_file)?
+        {
             return Ok(false);
         }
         self.rebase(documents).map(|()| true)
@@ -661,11 +667,10 @@ impl EditJournal {
             self.file = None;
             return Err(error.to_string());
         }
-        // Writes to a journal whose folder was removed still succeed on Unix, into a file
-        // recovery can no longer find; report that instead of a record that cannot be recovered.
-        if let Err(error) = fs::metadata(entry_file(&self.dir, &self.id, "journal"))
-            && error.kind() == ErrorKind::NotFound
-        {
+        // Writes to a journal whose file or folder was removed or replaced still succeed on Unix,
+        // into an unlinked file recovery can no longer find; report that instead of a record that
+        // cannot be recovered.
+        if !same_open_file(&entry_file(&self.dir, &self.id, "journal"), file)? {
             self.file = None;
             self.removed = true;
             return Err(REMOVED_ENTRY.to_owned());
@@ -677,6 +682,37 @@ impl EditJournal {
             return self.rebase(self.documents.clone()).map_err(|e| format!("The recovery snapshot could not be renewed: {e}"));
         }
         Ok(())
+    }
+}
+
+/// Return whether `path` currently names an existing regular file (not missing or replaced by a
+/// symlink/directory). Other metadata errors propagate so callers do not treat them as intact.
+fn regular_file_exists(path: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) => Ok(meta.file_type().is_file()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+/// Return whether `path` currently names the same regular file as the open handle `open`.
+fn same_open_file(path: &Path, open: &File) -> Result<bool, String> {
+    let path_meta = match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_file() => meta,
+        Ok(_) => return Ok(false),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.to_string()),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let held_meta = open.metadata().map_err(|e| e.to_string())?;
+        Ok((path_meta.dev(), path_meta.ino()) == (held_meta.dev(), held_meta.ino()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (path_meta, open);
+        Ok(true)
     }
 }
 

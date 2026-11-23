@@ -1359,3 +1359,61 @@ fn a_matching_generation_still_requires_the_document_hash() {
     let recovered = recover(dir.path(), "entry").unwrap();
     assert_eq!((recovered.documents, recovered.commands.len(), recovered.stop), (states[0].clone(), 0, Some(Stop::OtherSnapshot)));
 }
+
+/// Removing only the `.pc` snapshot while the lock stays owned forces `snapshot` to republish
+/// the pair instead of skipping as a no-op, and a failed repair records a worker fault.
+#[test]
+fn snapshot_republishes_when_only_snapshot_file_is_missing_and_retains_fault_on_failed_repair() {
+    let dir = tempfile::tempdir().unwrap();
+    let (mut journal, states) = journal_with(dir.path(), 0);
+    assert!(!journal.snapshot(states[0].clone()).unwrap(), "intact unchanged pair skips publication");
+    fs::remove_file(entry_file(dir.path(), "entry", "pc")).unwrap();
+    assert!(journal.snapshot(states[0].clone()).unwrap(), "missing .pc must republish the pair");
+    assert_eq!(recover(dir.path(), "entry").unwrap().documents, states[0]);
+    assert!(!journal.snapshot(states[0].clone()).unwrap(), "republished intact pair skips again");
+    drop(journal);
+
+    let recorder_dir = tempfile::tempdir().unwrap();
+    let recorder = JournalRecorder::start(recorder_dir.path().to_path_buf(), "entry".to_owned()).unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Republish"})).unwrap();
+    let expected = encode_documents(session.snapshot().unwrap()).unwrap();
+    recorder.snapshot(session.snapshot().unwrap());
+    recorder.sync().unwrap();
+    fs::remove_file(entry_file(recorder_dir.path(), "entry", "pc")).unwrap();
+    faults::arm(recorder_dir.path(), Fault::Publish, 1);
+    recorder.snapshot(session.snapshot().unwrap());
+    assert!(recorder.sync().is_err());
+    assert!(recorder.fault().is_some(), "failed repair must not clear or skip fault reporting");
+    recorder.snapshot(session.snapshot().unwrap());
+    recorder.sync().unwrap();
+    assert!(recorder.fault().is_none());
+    assert_eq!(recover(recorder_dir.path(), "entry").unwrap().documents, expected);
+    recorder.finish().unwrap();
+}
+
+/// On Unix, replacing the `.journal` file with a new inode is detected by both `append`
+/// (which faults instead of writing into an unlinked handle) and `snapshot` (which republishes
+/// an intact pair when the entry lock is still owned).
+#[cfg(unix)]
+#[test]
+fn replaced_journal_file_is_detected_by_append_and_republished_by_snapshot() {
+    let append_dir = tempfile::tempdir().unwrap();
+    let (mut session, mut journal) = limited_journal(append_dir.path(), u64::MAX / 2);
+    let journal_path = entry_file(append_dir.path(), "entry", "journal");
+    fs::remove_file(&journal_path).unwrap();
+    fs::write(&journal_path, b"replaced").unwrap();
+    let (_, result) = place_and_append(&mut session, &mut journal);
+    assert_eq!(result.unwrap_err(), REMOVED_ENTRY);
+    assert!(journal.removed);
+    assert!(journal.file.is_none());
+
+    let snapshot_dir = tempfile::tempdir().unwrap();
+    let (mut snapshot_journal, states) = journal_with(snapshot_dir.path(), 0);
+    let snapshot_journal_path = entry_file(snapshot_dir.path(), "entry", "journal");
+    fs::remove_file(&snapshot_journal_path).unwrap();
+    fs::write(&snapshot_journal_path, b"replaced").unwrap();
+    assert!(snapshot_journal.snapshot(states[0].clone()).unwrap(), "replaced .journal must republish");
+    assert_eq!(recover(snapshot_dir.path(), "entry").unwrap().documents, states[0]);
+    assert!(!snapshot_journal.snapshot(states[0].clone()).unwrap(), "intact republished pair skips again");
+}
