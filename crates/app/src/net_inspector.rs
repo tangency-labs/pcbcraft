@@ -358,7 +358,10 @@ mod tests {
     /// all cross-sheet connection types, and the part-pin count in its tooltip.
     #[test]
     fn net_inspector_long_sheet_name_tooltip_shows_full_name_via_and_pins() {
-        use pcbcraft_engine::{DRAW_WIRE, WireEndpoint, hierarchy, net_labels, schematic::Point};
+        use pcbcraft_engine::{
+            DRAW_WIRE, hierarchy, net_labels,
+            schematic::{Point, WireEndpoint},
+        };
         let mut app = PcbApp::default();
         app.session.execute("project.new", &json!({"name": "radio"})).unwrap();
         let parent = app.session.project().unwrap().sheet_target();

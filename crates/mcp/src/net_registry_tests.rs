@@ -134,7 +134,10 @@ fn sheet_overview_is_shared_by_live_and_headless_clients() {
 /// global label appears on the child.
 #[test]
 fn sheet_overview_mcp_reports_only_crossing_via_links() {
-    use pcbcraft_engine::{DRAW_WIRE, WireEndpoint, hierarchy, net_labels, schematic::Point};
+    use pcbcraft_engine::{
+        DRAW_WIRE, hierarchy, net_labels,
+        schematic::{Point, WireEndpoint},
+    };
     let mut setup = Session::default();
     apply(&mut setup, "project.new", json!({}));
     let parent = setup.project().unwrap().sheet_target();
