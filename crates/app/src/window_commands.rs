@@ -201,7 +201,7 @@ mod live {
                     json!({"type":"object","description":"A bounded native reusable or manufacturer part record; inspection returns the current draft."})
                 }
                 Self::LibraryAction => {
-                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","generate_courtyard","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; generate_courtyard clearance_nm/source/stroke_nm/replace_existing; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
+                    json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","generate_courtyard","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
                 }
                 Self::View | Self::Window | Self::Arrangement | Self::LibraryDocument | Self::LibraryRevision | Self::LibraryPrimitive => {
                     json!({"type": "integer", "minimum": 0})
@@ -359,7 +359,9 @@ mod live {
                 .iter()
                 .map(|param| {
                     let mut schema = param.kind.schema();
-                    schema["description"] = json!(param.summary);
+                    if schema.get("description").is_none() {
+                        schema["description"] = json!(param.summary);
+                    }
                     (param.name.to_owned(), schema)
                 })
                 .collect();
@@ -2029,6 +2031,24 @@ mod live {
                     changes.join("\n")
                 ),
             }
+        }
+
+        /// Discovery for `app.library_edit` preserves the detailed `Action` field description
+        /// (including required `clearance_nm` and optional `source`/`stroke_nm`/`replace_existing`
+        /// for `generate_courtyard`), while native `Action` validation still enforces `clearance_nm`.
+        #[test]
+        fn library_edit_discovery_documents_generate_courtyard_fields_and_requires_clearance() {
+            let described = window_catalog().into_iter().find(|entry| entry["id"] == "app.library_edit").expect("app.library_edit in catalog");
+            let action = &described["params"]["properties"]["action"];
+            let operations = action["properties"]["operation"]["enum"].as_array().expect("operation enum");
+            assert!(operations.contains(&json!("generate_courtyard")));
+            let description = action["description"].as_str().expect("action description");
+            assert!(
+                description.contains("generate_courtyard clearance_nm (required) and optional source/stroke_nm/replace_existing"),
+                "unexpected description: {description}"
+            );
+            assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard"})).is_err());
+            assert!(Kind::LibraryAction.validate(&json!({"operation": "generate_courtyard", "clearance_nm": 250_000})).is_ok());
         }
 
         /// With host policy permitting dispatch, window and UI catalogs refuse unknown keys
