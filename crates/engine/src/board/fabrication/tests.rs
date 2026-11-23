@@ -53,6 +53,26 @@ fn aperture_fixture_with_pitch(
     aperture_fixture_with_radii_and_pitch(&pads, rotation, bottom, (offset, pitch), position, plated_from, mapping)
 }
 
+/// Add optional authored graphics or pad labels before pinning and placing the library item.
+fn decorated_aperture_fixture(
+    pads: &[(PadShape, i64, i64, u16)],
+    (rotation, bottom): (u16, bool),
+    (offset, pitch): (Point, Point),
+    position: Point,
+    plated_from: Option<usize>,
+    mapping: Option<serde_json::Value>,
+    decorate: impl FnOnce(&mut crate::authoring::Session),
+) -> Session {
+    let pads: Vec<_> = pads
+        .iter()
+        .map(|&(shape, width, height, pad_rotation)| {
+            let radius = if shape == PadShape::RoundedRectangle { (width.min(height) / 4).max(1) } else { 0 };
+            (shape, width, height, pad_rotation, radius)
+        })
+        .collect();
+    build_footprint_fixture(&pads, (rotation, bottom), (offset, pitch), (position, plated_from), mapping, &[], decorate)
+}
+
 /// Author command-built lands with an explicit corner radius per pad.
 fn aperture_fixture_with_radii(
     pads: &[(PadShape, i64, i64, u16, i64)],
@@ -90,6 +110,20 @@ fn footprint_fixture(
     mapping: Option<serde_json::Value>,
     holes: &[crate::board::definition::CircularNpth],
 ) -> Session {
+    build_footprint_fixture(pads, (rotation, bottom), (offset, pitch), (position, plated_from), mapping, holes, |_| {})
+}
+
+/// Shared footprint-fixture builder supporting explicit pad radii, non-plated holes and
+/// optional authored graphics or pad labels before pinning and placing the library item.
+fn build_footprint_fixture(
+    pads: &[(PadShape, i64, i64, u16, i64)],
+    (rotation, bottom): (u16, bool),
+    (offset, pitch): (Point, Point),
+    (position, plated_from): (Point, Option<usize>),
+    mapping: Option<serde_json::Value>,
+    holes: &[crate::board::definition::CircularNpth],
+    decorate: impl FnOnce(&mut crate::authoring::Session),
+) -> Session {
     use crate::authoring::{Action, Item, Kind, Primitive};
     let mut editor = crate::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
     editor.execute(editor.revision(), Action::Delete { objects: vec![2, 3] }).unwrap();
@@ -111,6 +145,7 @@ fn footprint_fixture(
         let action = if index == 0 { Action::Replace { object: 1, primitive } } else { Action::Insert { primitive } };
         editor.execute(editor.revision(), action).unwrap();
     }
+    decorate(&mut editor);
     for &hole in holes {
         editor.execute(editor.revision(), Action::Insert { primitive: Primitive::NonPlatedHole { hole } }).unwrap();
     }
@@ -127,11 +162,11 @@ fn footprint_fixture(
     s.apply(crate::INITIALIZE_BOARD_SETUP, &json!({"copper_layers":copper_layers,"expected_revision":s.revision()})).unwrap();
     s.apply(crate::PLACE_RESISTOR, &json!({"x_nm":0,"y_nm":0,"expected_revision":s.revision()})).unwrap();
     let component = s.project().unwrap().components().next().unwrap().id();
-    let unconnected = if mapping.is_some() { Vec::new() } else { (3..=pads.len()).map(|number| number.to_string()).collect() };
+    let unconnected: Vec<&str> = if mapping.is_some() { Vec::new() } else { definition.pads[2..].iter().map(|pad| pad.number.as_str()).collect() };
     s.apply(
         crate::ASSIGN_FOOTPRINT,
         &json!({"component":component,"library":definition.library,"definition":definition.id,
-        "definition_revision":definition.revision,"mapping":mapping.unwrap_or_else(|| json!({"1":"1","2":"2"})),
+        "definition_revision":definition.revision,"mapping":mapping.unwrap_or_else(|| json!({"1":definition.pads[0].number,"2":definition.pads[1].number})),
         "unconnected_pads":unconnected,"expected_revision":s.revision()}),
     )
     .unwrap();
@@ -220,21 +255,31 @@ fn gerber_x3_places_one_main_flash_per_part_on_its_own_side() {
     for (file, function) in [(top, "L1,Top"), (bottom, "L4,Bot")] {
         assert!(file.contents.contains(&format!("%TF.FileFunction,Component,{function}*%\n")));
         assert!(file.contents.contains("%FSLAX46Y46*%\n%MOMM*%\n"));
-        assert!(file.contents.contains("%TA.AperFunction,ComponentMain*%\n%ADD10C,0.300000*%\n%TD.AperFunction*%\nD10*\n"));
-        assert_eq!(file.contents.lines().filter(|line| *line == "D10*").count(), 1);
+        assert!(file.contents.contains("%TA.AperFunction,ComponentMain*%\n%ADD10C,0.300000*%\n%TD.AperFunction*%\n"));
+        assert!(file.contents.contains("%TA.AperFunction,ComponentPin*%\n%ADD11P,0.360000X4X0.0*%\n%TD.AperFunction*%\n"));
+        assert_eq!(file.contents.lines().filter(|line| *line == "D10*").count(), if function == "L1,Top" { 2 } else { 1 });
         assert!(!file.contents.contains(".SameCoordinates"));
+        assert!(!file.contents.contains("%TO.CRot,"));
     }
-    let object_body = |file: &Output| file.contents.split_once("\nD10*\n").unwrap().1.to_owned();
+    let main_objects = |file: &Output| {
+        file.contents
+            .split("%TD*%\n")
+            .filter_map(|object| {
+                let start = object.find("%TO.C,")?;
+                object.ends_with("D03*\n").then_some(&object[start..])
+            })
+            .collect::<String>()
+    };
     assert_eq!(
-        object_body(top),
+        main_objects(top),
         concat!(
             "%TO.C,R2*%\n%TO.CVal,4k7\\u002C±1\\u0025\\u002A\\u005Cnominal*%\n",
-            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX-1000000Y1000001D03*\n%TD*%\n",
+            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX-1000000Y1000001D03*\n",
             "%TO.C,R3*%\n%TO.CVal,R*%\n",
-            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX4000000Y-5999999D03*\n%TD*%\nM02*\n",
+            "%TO.CFtp,Resistor 0402 (1005 metric)*%\n%TO.CMnt,SMD*%\nX4000000Y-5999999D03*\n",
         )
     );
-    assert_eq!(object_body(bottom), format!("%TO.C,R1*%\n%TO.CVal,R*%\n%TO.CFtp,{bottom_name}*%\nX23000001Y31000004D03*\n%TD*%\nM02*\n"));
+    assert_eq!(main_objects(bottom), format!("%TO.C,R1*%\n%TO.CVal,R*%\n%TO.CFtp,{bottom_name}*%\nX23000001Y31000004D03*\n"));
     assert_eq!(layers, view(&s).gerber_part_layers().unwrap());
     assert!(bare_board.iter().filter(|file| file.name.ends_with(".gbr")).all(|file| file.contents.contains("%TF.SameCoordinates,Original*%")));
     assert_eq!(bare_board, view(&s).fabrication_outputs().unwrap());
@@ -289,6 +334,82 @@ fn gerber_x3_flashes_the_adopted_centroid_in_top_view() {
     assert_eq!(flash(&s), "X29800000Y4700000D03*");
     adopt(&mut s, uuid::Uuid::from_u128(2), "Second house", 400_000);
     assert_eq!(flash(&s), "X30000000Y5000000D03*");
+}
+
+/// Ucamco Gerber rev. 2026.05 §§4.2.2, 4.7.2, 5.6.10 and 5.6.14–15: in 4.6 mm the
+/// authored outline centerline is exact to a nanometre. `.P` uses physical pad labels and the
+/// key pin uses the mandated 0.360 mm four-point diamond instead of the ordinary 0.100 mm circle.
+#[test]
+fn gerber_x3_pins_and_closed_outlines_use_the_placed_package_geometry() {
+    use crate::{
+        authoring::{Action, Primitive},
+        board::definition::Artwork,
+        library_graphics::{Fill, Geometry, Graphic},
+    };
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let mut s = decorated_aperture_fixture(
+        &[(PadShape::Circle, 800_000, 800_000, 0); 2],
+        (90, true),
+        (p(123, 457), p(2_000_000, 0)),
+        p(31_000_001, -21_000_003),
+        None,
+        None,
+        |editor| {
+            for (object, number) in [(1, "B2"), (4, "A1")] {
+                let Primitive::Pad { mut pad } = editor.snapshot().objects[&object].clone() else { panic!("pad") };
+                pad.number = number.into();
+                editor.execute(editor.revision(), Action::Replace { object, primitive: Primitive::Pad { pad } }).unwrap();
+            }
+            let rectangle = Geometry::Rectangle { min: p(-600_001, -410_003), max: p(500_007, 420_013) };
+            for (purpose, geometry) in [
+                (GraphicPurpose::Fabrication, rectangle.clone()),
+                (GraphicPurpose::Courtyard, Geometry::Circle { center: p(-10, 20), radius_nm: 900_019 }),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 360 }),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(-200, -300), radius_nm: 920_000, start_degrees: 14, sweep_degrees: -360 }),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57), p(13, 27)], closed: false }),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(13, 27), p(33, 27), p(13, 57)], closed: false }),
+                (GraphicPurpose::Courtyard, Geometry::Arc { center: p(100, 200), radius_nm: 910_000, start_degrees: 19, sweep_degrees: 359 }),
+                (GraphicPurpose::Fabrication, Geometry::Line { from: p(0, 0), to: p(4, 3) }),
+                (GraphicPurpose::Fabrication, Geometry::Polyline { points: vec![p(0, 0), p(8, 8), p(0, 8), p(7, 0)], closed: true }),
+                (GraphicPurpose::Silkscreen, rectangle),
+            ] {
+                let artwork = Artwork { purpose, graphic: Graphic { geometry, stroke_nm: 150_000, fill: Fill::None } };
+                editor.execute(editor.revision(), Action::Insert { primitive: Primitive::Artwork { artwork } }).unwrap();
+            }
+        },
+    );
+    let board = s.project().unwrap().board_target().unwrap().board;
+    s.apply(
+        crate::SET_PLACEMENT_ORIGIN,
+        &json!({"board":board,"expected_revision":s.revision(),"origin":{"kind":"point","x_nm":8_000_000,"y_nm":10_000_001}}),
+    )
+    .unwrap();
+    let output = view(&s).gerber_part_layers().unwrap();
+    let [bottom] = output.files.as_slice() else { panic!("Expected only a bottom layer") };
+    let contents = &bottom.contents;
+    assert!(contents.contains("%TF.FileFunction,Component,L2,Bot*%\n"));
+    assert!(contents.contains("%FSLAX46Y46*%\n%MOMM*%\n"));
+    assert!(contents.contains("%TA.AperFunction,ComponentPin*%\n%ADD11C,0.100000*%\n%TD.AperFunction*%\n"));
+    assert!(contents.contains("%TA.AperFunction,ComponentPin*%\n%ADD12P,0.360000X4X0.0*%\n%TD.AperFunction*%\n"));
+    assert!(contents.contains("%TA.AperFunction,ComponentOutline,Body*%\n%ADD13C,0.100000*%\n%TD.AperFunction*%\n"));
+    assert!(contents.contains("%TA.AperFunction,ComponentOutline,Courtyard*%\n%ADD14C,0.100000*%\n%TD.AperFunction*%\n"));
+    // Bottom +90° maps (x,y) to (y,-x) in this output frame. These are the independently
+    // calculated centers and contour commands, including the closing draw and arc center.
+    let (_, geometry) = contents.split_once("\nD11*\n").unwrap();
+    assert_eq!(
+        geometry,
+        concat!(
+            "%TO.P,R1,B2*%\nX23000458Y30999881D03*\n%TD*%\n",
+            "D12*\n%TO.P,R1,A1*%\nX23000458Y28999881D03*\n%TD*%\n",
+            "D13*\n%TO.C,R1*%\nX22589998Y31600005D02*\n",
+            "X22589998Y30499997D01*\nX23420014Y30499997D01*\nX23420014Y31600005D01*\nX22589998Y31600005D01*\n%TD*%\n",
+            "D14*\n%TO.C,R1*%\nX23900040Y31000014D02*\nG75*\nG03*\nX23900040Y31000014I-900019J0D01*\nG01*\n%TD*%\n",
+            "%TO.C,R1*%\nX23910201Y30999904D02*\nG75*\nG03*\nX23910201Y30999904I-910000J0D01*\nG01*\n%TD*%\n",
+            "%TO.C,R1*%\nX23919701Y31000204D02*\nG75*\nG03*\nX23919701Y31000204I-920000J0D01*\nG01*\n%TD*%\n",
+            "D13*\n%TO.C,R1*%\nX23000028Y30999991D02*\n",
+            "X23000028Y30999971D01*\nX23000058Y30999991D01*\nX23000028Y30999991D01*\n%TD*%\nM02*\n",
+        )
+    );
 }
 
 /// Empty sides stay absent, and unavailable setup or origin produces a specific refusal.

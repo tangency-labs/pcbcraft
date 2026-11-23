@@ -129,7 +129,13 @@ enum Aperture {
     Circle(i64),
     Rectangle(i64, i64),
     Obround(i64, i64),
-    Rounded { diameter: i64, core: RoundedCore, fill: RoundedFill },
+    /// A four-vertex regular polygon with a vertex on +X, used as the X3 key-pin diamond.
+    Diamond(i64),
+    Rounded {
+        diameter: i64,
+        core: RoundedCore,
+        fill: RoundedFill,
+    },
 }
 
 /// Aperture functions supported by the board writers (Ucamco Gerber 2026.05 §5.6.10).
@@ -144,6 +150,9 @@ enum ApertureFunction {
     Profile,
     /// A flash marking the placed part's reference point, independent of its pads.
     PartMain,
+    PartBody,
+    PartCourtyard,
+    PartPin,
 }
 
 const DELETE_APERTURE_FUNCTION: &str = "%TD.AperFunction*%\n";
@@ -159,6 +168,9 @@ impl ApertureFunction {
             Self::Material => "Material",
             Self::Profile => "Profile",
             Self::PartMain => "ComponentMain",
+            Self::PartBody => "ComponentOutline,Body",
+            Self::PartCourtyard => "ComponentOutline,Courtyard",
+            Self::PartPin => "ComponentPin",
         };
         let _ = writeln!(text, "%TA.AperFunction,{value}*%");
     }
@@ -375,6 +387,9 @@ impl Gerber {
             match *aperture {
                 Aperture::Circle(diameter) => {
                     let _ = writeln!(text, "%ADD{code}C,{}*%", mm(diameter, 6));
+                }
+                Aperture::Diamond(diameter) => {
+                    let _ = writeln!(text, "%ADD{code}P,{}X4X0.0*%", mm(diameter, 6));
                 }
                 Aperture::Rectangle(width, height) | Aperture::Obround(width, height) => {
                     let kind = if matches!(aperture, Aperture::Rectangle(..)) { 'R' } else { 'O' };
