@@ -2564,3 +2564,95 @@ fn unroute_preview_returns_its_diff_with_inspection_disabled() {
     assert_eq!(error["structuredContent"]["error"]["details"], json!({"current_revision":before["revision"]}));
     assert_eq!(body(&call(&mut server, "inspect_project", json!({}))), before);
 }
+
+const DIVIDER: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../kicad/tests/fixtures/divider.kicad_sch"));
+
+/// The KiCad import is headless-only: an open editor leaves it out of its catalog and refuses
+/// it before any work, so the project and its revision stay as they were.
+#[test]
+fn an_open_editor_neither_lists_nor_runs_the_kicad_import() {
+    use crate::{
+        Failure,
+        live::{Editor, call_editor},
+    };
+    use pcbcraft_engine::kicad_import::IMPORT;
+
+    // An editor that would refuse everything for a state reason, such as an open dialog: the
+    // headless-only answer comes first, since no change of state lets the import run here.
+    struct BusyEditor(Session);
+    impl Editor for BusyEditor {
+        fn session(&mut self) -> &mut Session {
+            &mut self.0
+        }
+        fn refusal(&self, _command: &str) -> Option<String> {
+            Some("Finish the current dialog".to_owned())
+        }
+        fn window_commands(&self) -> Vec<Value> {
+            Vec::new()
+        }
+        fn inspect(&self) -> Value {
+            Value::Null
+        }
+        fn run_window_command(&mut self, _id: &str, _params: &Value) -> Result<(), Failure> {
+            Err("not a window command".into())
+        }
+    }
+
+    let mut editor = BusyEditor(Session::default());
+    editor.0.apply("project.new", &json!({})).unwrap();
+    let before = editor.0.inspect();
+    let catalog = call_editor(&mut editor, &json!({"method":"engine.commands","params":{}})).unwrap();
+    let ids: Vec<&str> = catalog.as_array().unwrap().iter().filter_map(|command| command["id"].as_str()).collect();
+    assert!(ids.contains(&"project.new") && !ids.contains(&IMPORT));
+    for method in ["engine.execute", "engine.execute_versioned"] {
+        let mut request = json!({"method":method,"params":{"command":IMPORT,"params":{"text":DIVIDER},"version":pcbcraft_engine::command_api::COMMAND_API_VERSION}});
+        crate::live::normalize_request(&mut request).unwrap();
+        let error = call_editor(&mut editor, &request).unwrap_err();
+        assert_eq!(error.code(), "unavailable");
+        assert!(error.message().contains("headless"), "{error}");
+    }
+    assert_eq!(editor.0.inspect(), before);
+
+    // The same request imports in a session of its own.
+    let mut s = server();
+    let imported = body(&call(&mut s, "execute", json!({"command":IMPORT,"params":{"text":DIVIDER},"inspect":false})));
+    assert!(imported["report"].is_array(), "{imported}");
+}
+
+/// A schematic at the import's 8 MiB text limit fits headless stdio's 16 MiB request line and
+/// imports. The padding is spaces, which JSON doesn't escape; the guide says that text which
+/// escapes heavily can exceed the line.
+#[test]
+fn a_kicad_schematic_at_the_text_limit_imports_through_headless_stdio() {
+    use pcbcraft_engine::kicad_import::{IMPORT, MAX_TEXT_BYTES};
+
+    let open = DIVIDER.trim_end().strip_suffix(')').unwrap();
+    let text = format!("{open}{})", " ".repeat(MAX_TEXT_BYTES - open.len() - 1));
+    assert_eq!(text.len(), MAX_TEXT_BYTES);
+    let line = json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute","arguments":{
+        "command":IMPORT,"params":{"text":text},"inspect":false}}})
+    .to_string();
+    let mut output = Vec::new();
+    server().serve(Cursor::new(format!("{line}\n")), &mut output).unwrap();
+    let reply: Value = serde_json::from_slice(&output).unwrap();
+    assert_ne!(reply["result"]["isError"], true, "{reply}");
+    assert!(body(&reply["result"])["report"].is_array(), "{reply}");
+}
+
+/// The client in front of an open editor refuses a headless-only command itself, with the
+/// editor's answer, instead of sending a request the live transport would drop unanswered.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_live_client_refuses_the_kicad_import_without_connecting() {
+    use crate::Backend;
+
+    // Nothing listens on this port; a request that reached the network would fail to connect.
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut remote = crate::live::Remote::new(port, &"a".repeat(64)).unwrap();
+    let request = json!({"command":pcbcraft_engine::kicad_import::IMPORT,"params":{"text":DIVIDER.repeat(64)}});
+    let refused = remote.execute(request).unwrap_err();
+    assert_eq!(refused.code(), "unavailable", "{refused}");
+    assert!(refused.message().contains("headless"), "{refused}");
+}

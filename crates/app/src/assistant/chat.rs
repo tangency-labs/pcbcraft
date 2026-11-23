@@ -126,7 +126,8 @@ pub(crate) enum Verdict {
 /// Decide whether a live request from the chat runs at once or waits for the person. Reading
 /// always runs. Under Ask every command waits; under Edits project and view commands run while
 /// saving, replacing the project and closing windows wait; All runs everything. A command the
-/// person always allowed for this agent runs too. The editor's own refusals still apply after.
+/// person always allowed for this agent runs too, as does a headless-only command, which the
+/// editor refuses at once rather than after asking. The editor's own refusals still apply after.
 pub(crate) fn gate(mode: Mode, method: &str, command: Option<&str>, always: impl Fn(&str) -> bool) -> Verdict {
     let Some(command) = command.filter(|_| method == "engine.execute") else {
         return Verdict::Run;
@@ -134,7 +135,7 @@ pub(crate) fn gate(mode: Mode, method: &str, command: Option<&str>, always: impl
     if matches!(command, "ui.inspect" | "ui.handles" | "ui.at" | "ui.project" | "ui.cancel") {
         return Verdict::Run;
     }
-    if always(command) {
+    if always(command) || pcbcraft_engine::headless_only(command) {
         return Verdict::Run;
     }
     match mode {
@@ -891,6 +892,10 @@ mod tests {
         assert_eq!(gate(Mode::Ask, "engine.execute", Some("file.save"), |command| command == "file.save"), Verdict::Run);
         for command in ["ui.inspect", "ui.handles", "ui.at", "ui.project", "ui.cancel"] {
             assert_eq!(run(Mode::Ask, command), Verdict::Run);
+        }
+        // The editor refuses a headless-only command at once; asking first would be for nothing.
+        for mode in [Mode::Ask, Mode::Edits] {
+            assert_eq!(run(mode, pcbcraft_engine::kicad_import::IMPORT), Verdict::Run);
         }
     }
 

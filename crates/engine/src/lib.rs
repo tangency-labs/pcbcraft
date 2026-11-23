@@ -1379,7 +1379,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: kicad_import::IMPORT,
         title: "Import KiCad Schematic",
-        summary: "Replace the open project with one converted from a self-contained KiCad 6-9 schematic (.kicad_sch text). Refuses, with reasons, anything that would change its connections; reports what it left out. Undoable.",
+        summary: "Replace the open project with one converted from a self-contained KiCad 6-9 schematic (.kicad_sch text). Refuses, with reasons, anything that would change its connections; reports what it left out. Undoable. Headless sessions only.",
         params: &[
             NEW_NAME,
             Param { name: "text", kind: ParamKind::KicadSchematicText, required: true, summary: "The schematic file's UTF-8 text, at most 8 MiB" },
@@ -2833,9 +2833,18 @@ const CATALOG: &[Command] = &[
 ];
 
 /// Whether `id` replaces the open project with another one, as New Project and imports do.
-/// Hosts protect unsaved work and ask for approval before such commands.
+/// Hosts protect unsaved work and ask for approval before such commands. The KiCad import is
+/// also [`headless_only`], so open editors refuse it before reaching those checks.
 pub fn replaces_project(id: &str) -> bool {
     matches!(id, "project.new" | kicad_import::IMPORT)
+}
+
+/// Whether `id` runs only in a session of its own (headless MCP, the command line), never in an
+/// open editor. Such a command can run for seconds and replaces the project, so in an editor it
+/// would block the window and could still replace the project after its request expired. Live
+/// hosts leave it out of their catalogs and refuse it before any work.
+pub fn headless_only(id: &str) -> bool {
+    id == kicad_import::IMPORT
 }
 
 /// Every command there is.

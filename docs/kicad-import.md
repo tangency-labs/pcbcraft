@@ -12,17 +12,26 @@ out and listed.
 
 ## Running it
 
-- **MCP and agents:** `project.import_kicad_schematic` with `text` (the file's
-  UTF-8 contents, at most 8 MiB) and an optional `name`. It replaces the open
-  project in one undoable step and returns the revision and a `report` of what
-  was left out, each entry with a description and a count. The `[{what, count}]`
-  shape is stable; the descriptions are for people and may be reworded, so don't
-  match on them. Read-only sessions can't run it.
+- **Headless MCP and agents:** `project.import_kicad_schematic` with `text` (the
+  file's UTF-8 contents, at most 8 MiB) and an optional `name`. It replaces the
+  open project in one undoable step and returns the revision and a `report` of
+  what was left out, each entry with a description and a count, also with
+  `inspect: false`. The `[{what, count}]` shape is stable; the descriptions are
+  for people and may be reworded, so don't match on them. Read-only sessions
+  can't run it. Headless MCP reads requests of up to 16 MiB, which holds a
+  typical 8 MiB schematic once escaped as JSON; text that escapes heavily
+  (many quotes, backslashes or control characters, or non-ASCII text from a
+  client that escapes it) can exceed that, and the CLI has no such limit.
 - **Command line:** `pcbcraft-cli import-kicad SCHEMATIC DESTINATION` writes a
   new project folder, or a `.pc` package when the destination ends in `.pc`, and
   prints the report. Existing destinations are never replaced.
 
-There is no desktop menu entry yet.
+An open editor doesn't offer the import: live MCP and the in-app Assistant
+leave it out of their command lists and refuse it. In an editor the import
+would block the window while it runs, and a request can expire before it
+finishes; a live request may also be at most 64 KiB. Offering it there needs the import prepared off the window's thread
+and checked again against the request, the project and unsaved work before it
+replaces anything. There is no desktop menu entry yet.
 
 ## What is imported
 

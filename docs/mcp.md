@@ -157,7 +157,9 @@ The live connection runs every project command in `list_commands`, such as
 `schematic.delete_wire` or `edit.undo`, in the window's own session, so the
 editor and the agent share one undo history and the status bar names each edit
 (for example **Delete Wire through MCP**). `project.new` waits until the open
-project's unsaved changes are saved or discarded in the editor. Commands normally
+project's unsaved changes are saved or discarded in the editor. Headless-only
+commands, such as the [KiCad schematic import](kicad-import.md), are not in the
+live `list_commands` and fail with `unavailable` there. Commands normally
 wait while an inline text edit, dialog or file operation is open. Addressed
 `app.library_pin_remap` apply/cancel may resolve its own remap dialog; a new live
 preview and other gated document/presentation commands still refuse that dialog.
@@ -424,7 +426,7 @@ a malformed reply from another editor may omit the facts it describes.
 | --- | --- |
 | `unknown_command` | No command has the requested id. |
 | `invalid_params` | The parameters are a non-null scalar or array, name a parameter the command does not describe, leave out a required one, have the wrong type or range, or fail the command's own checks. |
-| `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar. |
+| `unavailable` | The command cannot run in the current state: no project is open, nothing to undo, a dialog or file operation is open in the editor, and similar; also a headless-only command sent to an open editor. |
 | `stale_revision` | `expected_revision` is not the current revision. `details.current_revision` gives the current one; inspect it and retry. |
 | `not_found` | An ID names nothing in the project, such as a deleted wire, symbol, net label, sheet or footprint. Some commands report an ID that is not of the expected form the same way, others as `invalid_params`. |
 | `cap_exceeded` | The edit would pass a fixed limit, such as 256 net labels on a sheet, the sheet or wire limit, bends on a wire, or the project's object IDs, or a live `schematic.complete_packages` report would exceed the 16 MiB reply limit (nothing is edited). |
