@@ -418,17 +418,34 @@ impl Document {
         if self.selected != previous_selected {
             self.selected_vertex = None;
         }
+        self.remap_selected_vertex_after(&old, transforming);
+        self.error = None;
+        Ok(())
+    }
+    /// Carry the chosen courtyard vertex across an edit already applied to the session: keep or
+    /// remap it by point identity while the selection is still a closed courtyard outline, and
+    /// clear it otherwise. Every path that replaces the selected outline goes through this.
+    fn remap_selected_vertex_after(&mut self, old: &Item, preserve_index: bool) {
+        use pcbcraft_engine::authoring::courtyard::courtyard_polygon;
+        let next = self.session.snapshot();
         if let Some(id) = self.selected
-            && let Some((points, _)) = next.objects.get(&id).and_then(pcbcraft_engine::authoring::courtyard::courtyard_polygon)
+            && let Some((points, _)) = next.objects.get(&id).and_then(courtyard_polygon)
         {
             if let Some(idx) = self.selected_vertex {
-                let old_points = old.objects.get(&id).and_then(pcbcraft_engine::authoring::courtyard::courtyard_polygon).map(|(pts, _)| pts);
-                self.selected_vertex = old_points.and_then(|old_pts| remap_selected_vertex(old_pts, points, idx, transforming));
+                let old_points = old.objects.get(&id).and_then(courtyard_polygon).map(|(pts, _)| pts);
+                self.selected_vertex = old_points.and_then(|old_pts| remap_selected_vertex(old_pts, points, idx, preserve_index));
             }
         } else {
             self.selected_vertex = None;
         }
-        self.error = None;
+    }
+    /// Apply a validated Properties draft as one transaction, then remap the chosen courtyard
+    /// vertex exactly as `execute` does, so an inspector Apply never leaves a stale index.
+    fn apply_properties(&mut self, revision: u64, action: Action) -> Result<(), String> {
+        let transforming = matches!(&action, Action::Transform { .. });
+        let old = self.session.snapshot();
+        self.session.execute(revision, action)?;
+        self.remap_selected_vertex_after(&old, transforming);
         Ok(())
     }
     /// A form retains invalid input and its original revision until Apply or Reset.
@@ -516,9 +533,9 @@ impl Document {
         });
         if apply {
             if let Some((revision, action_result)) = self.draft.as_ref().map(|d| (d.revision, d.action())) {
-                let result = action_result.and_then(|action| self.session.execute(revision, action));
+                let result = action_result.and_then(|action| self.apply_properties(revision, action));
                 match result {
-                    Ok(_) => {
+                    Ok(()) => {
                         self.draft = None;
                         self.tool = canvas::Tool::Select;
                         self.error = None;

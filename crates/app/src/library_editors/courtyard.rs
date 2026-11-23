@@ -413,12 +413,9 @@ impl Document {
         };
 
         if let Some((revision, action_result)) = apply_payload {
-            let result = action_result.and_then(|action| self.session.execute(revision, action));
+            let result = action_result.and_then(|action| self.apply_properties(revision, action));
             match result {
-                Ok(_) => {
-                    if self.session.snapshot().objects.get(&object_id).and_then(courtyard::courtyard_polygon).is_none() {
-                        self.selected_vertex = None;
-                    }
+                Ok(()) => {
                     self.draft = None;
                     self.tool = canvas::Tool::Select;
                     self.error = None;
@@ -2284,6 +2281,62 @@ mod tests {
 
         // Ambiguous duplicate point on a same-count reorder clears the selection.
         assert_eq!(super::super::remap_selected_vertex(&[a, b, c, d], &[c, b, c, a], 2, false), None);
+    }
+
+    /// Applying a cyclic rotation through the expanded Properties "All vertices" form keeps the
+    /// chosen point selected at its new index, so a following Backspace removes that point.
+    #[test]
+    fn courtyard_properties_apply_remaps_selected_vertex_on_cyclic_rotation() {
+        let (mut h, id, cy_id) = harness_with_generated_courtyard();
+        let original = {
+            let snap = h.state().library_editors.documents[&id].session.snapshot();
+            courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap().0.to_vec()
+        };
+        assert_eq!(original.len(), 4);
+        let [a, b, c, d] = [original[0], original[1], original[2], original[3]];
+
+        // Choose vertex C (index 2), then open the expanded Properties dialog.
+        select_vertex_on_canvas(&mut h, id, cy_id, 2);
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::E);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryProperties(..)));
+
+        // Type the rotated outline [B, C, D, A] into the All vertices rows and apply it once.
+        let mm = |nm: i64| format!("{}", nm as f64 / 1_000_000.0);
+        for (row, point) in [b, c, d, a].into_iter().enumerate() {
+            for (axis, value) in [("X", point.x_nm), ("Y", point.y_nm)] {
+                let label = format!("Vertex {} {axis} (mm)", row + 1);
+                enabled_by_label(&h, &label).click();
+                h.run();
+                h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+                enabled_by_label(&h, &label).type_text(&mm(value));
+                h.run();
+            }
+        }
+        let rev_before = h.state().library_editors.documents[&id].session.revision();
+        enabled_by_label(&h, "Apply").click();
+        h.run();
+        {
+            let doc = &h.state().library_editors.documents[&id];
+            assert_eq!(doc.error, None);
+            assert_eq!(doc.session.revision(), rev_before + 1);
+            let snap = doc.session.snapshot();
+            assert_eq!(courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap().0, &[b, c, d, a]);
+            assert_eq!(doc.selected, Some(cy_id));
+            assert_eq!(doc.selected_vertex, Some(1));
+        }
+
+        // Backspace on the canvas removes C, leaving [B, D, A], rather than deleting D.
+        h.state_mut().dialog = Dialog::None;
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        let snap = h.state().library_editors.documents[&id].session.snapshot();
+        assert_eq!(courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap().0, &[b, d, a]);
     }
 
     /// A Backspace that arrives in the same frame as a midpoint click removes the vertex that
