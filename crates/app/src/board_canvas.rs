@@ -159,6 +159,7 @@ impl FootprintCache {
 /// ordinary source, enabled-input and focus checks while crossing pad copper.
 /// Eligible pad presses take priority over owner/track picks, and idle Shift+Space cycles
 /// through the visible selectable items at the pointer.
+/// `navigation_enabled` grants pan and zoom alone, so an unfocused pane follows the pointer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -170,6 +171,7 @@ pub(super) fn show(
     filters: crate::selection_filters::Filters,
     appearance: &crate::board_appearance::Appearance,
     owner_enabled: bool,
+    navigation_enabled: bool,
     navigation: Navigation,
     opacity: u8,
     grid_style: pcbcraft_chrome::grid::Style,
@@ -200,7 +202,7 @@ pub(super) fn show(
         state.context_menu_allowed = idle;
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
-    camera.navigate_board(&response, rect, project, enabled, navigation);
+    camera.navigate_board(&response, rect, project, navigation_enabled && !egui::Popup::is_any_open(ui.ctx()), navigation);
     let placement_enabled = enabled;
     let enabled = enabled && state.placement.is_none();
     // The view-only ruler owns its clicks, so nothing else selects or edits while it is armed.

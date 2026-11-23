@@ -578,18 +578,19 @@ impl PcbApp {
         self.views.active.board.tracks.start();
     }
 
-    /// Paint any addressed board pane, with input granted only to its focused view. The renderer
+    /// Paint any addressed board pane, with input granted only to its focused view; pan and zoom
+    /// follow the pointer into either pane without focusing it. The renderer
     /// returns selection and transform intent; validation and dispatch follow after its borrow ends.
     /// All board panes use the shared grid display preference without changing their cameras.
     /// Rejected drawing creation restores its captured gesture so the user can correct it.
     /// An accepted zone creation renews its armed net choice for the next outline only.
     pub(super) fn board_pane(&mut self, ui: &mut Ui, id: ViewId) {
-        let enabled = ui.is_enabled()
+        let navigation_enabled = ui.is_enabled()
             && (crate::IN_BROWSER || ui.input(|input| input.focused))
             && !self.home
-            && self.views.active.id() == id
             && matches!(self.dialog, Dialog::None)
             && !self.project_action_pending();
+        let enabled = navigation_enabled && self.views.active.id() == id;
         let owner_enabled = enabled;
         let enabled = enabled && !egui::Popup::is_any_open(ui.ctx());
         if self.session.project().is_some_and(|project| project.board_target().is_none())
@@ -639,6 +640,7 @@ impl PcbApp {
                         view.filters,
                         &self.board_appearance,
                         owner_enabled,
+                        navigation_enabled,
                         self.preferences.navigation,
                         self.preferences.grid_opacity(true),
                         self.preferences.board_grid_style,

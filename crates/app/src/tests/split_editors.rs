@@ -972,3 +972,192 @@ fn hidden_split_grids_still_snap_in_each_view() {
         assert_eq!(h.state().session.project().unwrap().symbols().len(), 1);
     }
 }
+
+/// One wheel notch in whole lines, as a mouse wheel or trackpad scroll reports it.
+fn wheel_lines(lines: f32) -> egui::Event {
+    egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, lines),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    }
+}
+
+/// Press, move and release the middle button, the default drag-to-pan gesture.
+fn middle_drag(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2) {
+    h.hover_at(from);
+    h.run();
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Middle, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Middle, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+}
+
+/// A pointer inside the pane that no floating card covers, so its canvas owns the wheel.
+fn uncovered_point(h: &Harness<'_, PcbApp>, id: ViewId, rect: egui::Rect) -> egui::Pos2 {
+    let cards = &h.state().views.view(id).unwrap().canvas_cards;
+    [0.5, 0.35, 0.65, 0.2, 0.8]
+        .into_iter()
+        .flat_map(|x| [0.5, 0.3, 0.7].map(|y| rect.lerp_inside(egui::vec2(x, y))))
+        .find(|point| !cards.iter().any(|card| card.contains(*point)))
+        .unwrap()
+}
+
+/// Wheel, pinch, scroll-pan and middle-drag follow the pointer into the inactive pane without
+/// focusing it. Only that camera moves; focus, both selections and the project stay as they were.
+#[test]
+fn hovering_the_inactive_pane_navigates_it_without_focus() {
+    let mut h = split_harness();
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    click_point(&mut h, 0, origin);
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+    assert_eq!(view(&h, 0).schematic.selection.single_symbol(), Some("symbol-2"));
+    let snapshot = h.state().session.snapshot().unwrap();
+    let first = (view(&h, 0).camera.zoom(), view(&h, 0).camera.screen(origin, canvas(&h, 0)));
+    let pointer = uncovered_point(&h, ViewId(1), canvas(&h, 1));
+    h.hover_at(pointer);
+    h.run();
+    let zoom = view(&h, 1).camera.zoom();
+    h.event(wheel_lines(2.0));
+    h.run();
+    assert!(view(&h, 1).camera.zoom() > zoom, "the wheel zooms the hovered pane");
+    let zoom = view(&h, 1).camera.zoom();
+    h.event(egui::Event::Zoom(1.5));
+    h.run();
+    assert!(view(&h, 1).camera.zoom() > zoom, "a pinch zooms the hovered pane");
+    h.state_mut().preferences.navigation.scroll = ScrollAction::Pan;
+    let before = view(&h, 1).camera.screen(origin, canvas(&h, 1));
+    h.event(wheel_lines(2.0));
+    h.run();
+    let panned = view(&h, 1).camera.screen(origin, canvas(&h, 1));
+    assert_ne!(panned, before, "scrolling pans the hovered pane");
+    middle_drag(&mut h, pointer, pointer + egui::vec2(23.0, 17.0));
+    assert_ne!(view(&h, 1).camera.screen(origin, canvas(&h, 1)), panned, "a middle drag pans the hovered pane");
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+    assert_eq!((view(&h, 0).camera.zoom(), view(&h, 0).camera.screen(origin, canvas(&h, 0))), first);
+    assert_eq!(view(&h, 0).schematic.selection.single_symbol(), Some("symbol-2"));
+    assert!(view(&h, 1).schematic.selection.is_empty());
+    assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+}
+
+/// A schematic pane beside a board pane. Whichever pane has focus, the wheel, a pinch and a
+/// middle drag over the other pane navigate it without moving focus, selection or the focused
+/// pane's camera.
+#[test]
+fn mixed_schematic_and_board_panes_navigate_under_the_pointer() {
+    for focus_board in [true, false] {
+        let mut h = harness();
+        h.set_size(egui::vec2(1400.0, 900.0));
+        resistor_with_board_at_origin(&mut h);
+        h.state_mut().browser.open = false;
+        click(&mut h, "View");
+        click(&mut h, "Split editor views");
+        let schematic = h.state().views.active.id();
+        let board = {
+            let app = h.state_mut();
+            let other = app.views.other_mut();
+            other.switch(Workspace::Board, &app.session);
+            other.id()
+        };
+        h.run();
+        let ctx = h.ctx.clone();
+        let (focused, hovered) = if focus_board { (board, schematic) } else { (schematic, board) };
+        h.state_mut().activate_editor(&ctx, focused);
+        h.run();
+        assert_eq!(h.state().views.active.id(), focused);
+        assert_eq!(h.state().views.view(board).unwrap().workspace, Workspace::Board);
+        assert_eq!(h.state().views.view(schematic).unwrap().workspace, Workspace::Schematic);
+        let rect = |h: &Harness<'_, PcbApp>, id: ViewId| {
+            let name = if id == board { "PCB canvas" } else { "Schematic canvas" };
+            h.get_by_label(&format!("{name} {}", id.0 + 1)).rect()
+        };
+        let camera = |h: &Harness<'_, PcbApp>, id: ViewId| h.state().views.view(id).unwrap().camera.clone();
+        let origin = Point { x_nm: 0, y_nm: 0 };
+        let snapshot = h.state().session.snapshot().unwrap();
+        let schematic_selection = h.state().views.view(schematic).unwrap().schematic.selection.clone();
+        let board_selection = h.state().views.view(board).unwrap().board.selection.clone();
+        let still = (camera(&h, focused).zoom(), camera(&h, focused).screen(origin, rect(&h, focused)));
+        let pointer = uncovered_point(&h, hovered, rect(&h, hovered));
+        h.hover_at(pointer);
+        h.run();
+        let zoom = camera(&h, hovered).zoom();
+        h.event(wheel_lines(2.0));
+        h.run();
+        assert!(camera(&h, hovered).zoom() > zoom, "the wheel zooms the hovered pane (board focused: {focus_board})");
+        let zoom = camera(&h, hovered).zoom();
+        h.event(egui::Event::Zoom(1.5));
+        h.run();
+        assert!(camera(&h, hovered).zoom() > zoom, "a pinch zooms the hovered pane (board focused: {focus_board})");
+        let before = camera(&h, hovered).screen(origin, rect(&h, hovered));
+        middle_drag(&mut h, pointer, pointer + egui::vec2(23.0, 17.0));
+        assert_ne!(camera(&h, hovered).screen(origin, rect(&h, hovered)), before, "a middle drag pans the hovered pane");
+        assert_eq!(h.state().views.active.id(), focused);
+        assert_eq!((camera(&h, focused).zoom(), camera(&h, focused).screen(origin, rect(&h, focused))), still);
+        assert_eq!(h.state().views.view(schematic).unwrap().schematic.selection, schematic_selection);
+        assert_eq!(h.state().views.view(board).unwrap().board.selection, board_selection);
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    }
+}
+
+/// A floating window over the inactive pane keeps its own wheel; the canvas underneath neither
+/// navigates nor takes focus.
+#[test]
+fn a_floating_window_over_the_inactive_pane_keeps_its_wheel() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
+        |ui, app: &mut PcbApp| {
+            app.frame(ui);
+            if app.views.is_split() {
+                egui::Window::new("Overlay").fixed_pos(egui::pos2(950.0, 380.0)).show(ui.ctx(), |ui| {
+                    ui.label("Overlay text");
+                });
+            }
+        },
+        PcbApp::default(),
+    );
+    h.run();
+    resistor_at_origin(&mut h);
+    h.state_mut().browser.open = false;
+    click(&mut h, "View");
+    click(&mut h, "Split editor views");
+    let over = h.get_by_label("Overlay text").rect().center();
+    assert!(canvas(&h, 1).contains(over));
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let before = (view(&h, 1).camera.zoom(), view(&h, 1).camera.screen(origin, canvas(&h, 1)));
+    h.hover_at(over);
+    h.run();
+    h.event(wheel_lines(2.0));
+    h.event(egui::Event::Zoom(1.5));
+    h.run();
+    assert_eq!((view(&h, 1).camera.zoom(), view(&h, 1).camera.screen(origin, canvas(&h, 1))), before);
+    assert_eq!(h.state().views.active.id(), ViewId(0));
+}
+
+/// A single pane navigates exactly as before: the pointer's wheel and middle drag move its camera.
+#[test]
+fn a_single_pane_still_navigates_under_the_pointer() {
+    let mut h = harness();
+    h.set_size(egui::vec2(1400.0, 900.0));
+    resistor_at_origin(&mut h);
+    h.state_mut().browser.open = false;
+    h.run();
+    assert!(!h.state().views.is_split());
+    let id = h.state().views.active.id();
+    let rect = h.get_by_label("Schematic canvas").rect();
+    let pointer = uncovered_point(&h, id, rect);
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let snapshot = h.state().session.snapshot().unwrap();
+    h.hover_at(pointer);
+    h.run();
+    let zoom = h.state().views.active.camera.zoom();
+    h.event(wheel_lines(2.0));
+    h.run();
+    assert!(h.state().views.active.camera.zoom() > zoom);
+    let before = h.state().views.active.camera.screen(origin, rect);
+    middle_drag(&mut h, pointer, pointer + egui::vec2(23.0, 17.0));
+    assert_ne!(h.state().views.active.camera.screen(origin, rect), before);
+    assert_eq!(h.state().views.active.id(), id);
+    assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+}

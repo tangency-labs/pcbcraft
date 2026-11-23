@@ -1079,15 +1079,19 @@ impl PcbApp {
 
     /// Resolve a new pointer press before consuming keyboard input. A held drag crossing the
     /// divider keeps its original owner; popups and modals do not transfer editor focus.
+    /// A middle press alone only navigates, so it pans or zooms a project pane without focusing it.
     pub(super) fn editor_pointer_focus(&mut self, ctx: &egui::Context) {
         if self.parts.is_modal() || !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
             return;
         }
         let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
+        let navigating = ctx.input(|input| {
+            input.pointer.button_pressed(egui::PointerButton::Middle) && !input.pointer.primary_pressed() && !input.pointer.secondary_pressed()
+        });
         if let Some(pointer) = pressed
             && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))
             && (self.views.view(*id).is_some_and(|view| view.auxiliary())
-                || !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
+                || !navigating && !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
         {
             self.activate_editor(ctx, *id);
         }
@@ -1287,6 +1291,14 @@ impl PcbApp {
                     if matches!(self.dialog, Dialog::None) && self.views.reveal_for(id, &self.session, self.preferences.selection_follow) {
                         ui.ctx().request_repaint();
                     }
+                    // Pan and zoom follow the pointer here, without granting selection, tools or keys.
+                    let navigation_enabled = ui.is_enabled()
+                        && (crate::IN_BROWSER || ui.input(|input| input.focused))
+                        && !self.home
+                        && !self.project_action_pending()
+                        && matches!(self.dialog, Dialog::None)
+                        && !self.parts.is_modal()
+                        && !egui::Popup::is_any_open(ui.ctx());
                     let highlight = self.views.highlight_for(id, &self.session);
                     let label = format!("Schematic canvas {}", id.0 + 1);
                     let Some(view) = self.views.view_mut(id) else {
@@ -1314,7 +1326,7 @@ impl PcbApp {
                                     &view.inspection,
                                     view.filters,
                                     false,
-                                    false,
+                                    navigation_enabled,
                                     self.preferences.navigation,
                                     self.preferences.schematic_display(),
                                     self.preferences.auto_heal_wires,
