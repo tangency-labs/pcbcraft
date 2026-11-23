@@ -337,12 +337,67 @@ fn schema(walk: &mut Walk, path: &str, old: &Value, new: &Value) {
         return;
     };
     let closed = old_object.get("additionalProperties") == Some(&Value::Bool(false)) && !old_object.contains_key("patternProperties");
+    let compatible_if_then = is_new_variant_if_then(old_object, new_object);
     for key in old_object.keys().chain(new_object.keys()).collect::<BTreeSet<_>>() {
         let (before, after) = (old_object.get(key), new_object.get(key));
         if before != after {
-            keyword(walk, &format!("{path}.{key}"), key, before, after, closed);
+            if compatible_if_then && matches!(key.as_str(), "if" | "then") {
+                walk.push(false, &format!("{path}.{key}"), format!("changed from {} to {}", shown(before), shown(after)));
+            } else {
+                keyword(walk, &format!("{path}.{key}"), key, before, after, closed);
+            }
         }
     }
+}
+
+/// Whether two JSON values are equal under JSON Schema equality (where `1` and `1.0` are equal).
+fn json_schema_equal(a: &Value, b: &Value) -> bool {
+    if a.is_number() && b.is_number() {
+        return number_order(a, b) == Some(std::cmp::Ordering::Equal);
+    }
+    a == b
+}
+
+/// Whether adding an `if`/`then` (with no `else`) to `old` is guaranteed compatible because `old`
+/// accepts only objects with a required `enum`-constrained property whose allowed values are
+/// disjoint from `if`'s condition on that property, so no value valid under `old` can match `if`.
+fn is_new_variant_if_then(old: &Map<String, Value>, new: &Map<String, Value>) -> bool {
+    if old.contains_key("if") || old.contains_key("then") || old.contains_key("else") || new.contains_key("else") {
+        return false;
+    }
+    let (Some(Value::Object(if_obj)), Some(_)) = (new.get("if"), new.get("then")) else {
+        return false;
+    };
+    if old.get("type").and_then(Value::as_str) != Some("object") {
+        return false;
+    }
+    let Some(old_required) = old.get("required").and_then(Value::as_array) else {
+        return false;
+    };
+    let Some(old_props) = old.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    let Some(if_props) = if_obj.get("properties").and_then(Value::as_object) else {
+        return false;
+    };
+    if_props.iter().any(|(prop, cond)| {
+        if !old_required.iter().any(|name| name.as_str() == Some(prop.as_str())) {
+            return false;
+        }
+        let Some(old_enum) = old_props.get(prop).and_then(|s| s.get("enum")).and_then(Value::as_array) else {
+            return false;
+        };
+        let Some(cond_obj) = cond.as_object() else {
+            return false;
+        };
+        if let Some(const_val) = cond_obj.get("const") {
+            return !old_enum.iter().any(|member| json_schema_equal(member, const_val));
+        }
+        if let Some(cond_enum) = cond_obj.get("enum").and_then(Value::as_array) {
+            return cond_enum.iter().all(|v| !old_enum.iter().any(|member| json_schema_equal(member, v)));
+        }
+        false
+    })
 }
 
 /// Classify one keyword that differs between two schemas; see [`compare`] for the rules.
