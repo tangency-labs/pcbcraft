@@ -3058,6 +3058,119 @@ fn shove_menu_preview_cancel_and_atomic_publication() {
     }
 }
 
+/// The route menu enables through-via shove in either theme. Preview replaces the live
+/// ring at its source, with Escape and publication sharing the normal route lifecycle.
+#[test]
+fn shove_via_menu_previews_and_publishes_the_displayed_center() {
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let (start, end) = (p(2_540_000, -7_620_000), p(7_620_000, -7_620_000));
+    let original = p(5_080_000, -7_920_000);
+    for (theme, cancel) in [(ThemeChoice::Dark, true), (ThemeChoice::Light, false)] {
+        let mut h = routable();
+        h.state_mut().preferences.theme = theme;
+        let revision = h.state().session.revision();
+        h.state_mut()
+            .run(pcbcraft_engine::ADD_VIA, &json!({"at":original,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}));
+        h.run();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+        let id = vias(&h)[0].id;
+        h.key_press(Key::X);
+        h.run();
+        right_click_route(&mut h, start);
+        let tracks_row = h.get_by_label("Shove tracks").rect();
+        let vias_row = h.get_by_label("Shove tracks and vias").rect();
+        assert!((tracks_row.left() - vias_row.left()).abs() < 1. && vias_row.top() >= tracks_row.bottom() - 1.);
+        click(&mut h, "Shove tracks and vias");
+        click_route(&mut h, start);
+        h.hover_at(at(&h, end));
+        h.run_steps(200);
+        let moves = h.state().views.active.board.tracks.displacements().1;
+        assert_eq!(moves.len(), 1, "{theme:?} {:?}", h.state().views.active.board.tracks.preparation_status());
+        assert_eq!(moves[0].via, id);
+        let target = moves[0].at;
+        assert_ne!(target, original);
+        let ring_at = |h: &Harness<'_, PcbApp>, point, color| {
+            let center = at(h, point);
+            h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.fill == color && c.center.distance(center) < 0.05))
+        };
+        let tokens = pcbcraft_chrome::Tokens::get();
+        assert!(ring_at(&h, target, tokens.accent.gamma_multiply(0.6)));
+        assert!(!ring_at(&h, original, tokens.board_through));
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(ring_at(&h, original, tokens.board_through));
+            assert_eq!(h.state().session.revision(), revision);
+        } else {
+            click_route(&mut h, end);
+            h.key_press(Key::Enter);
+            h.run_steps(200);
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            assert_eq!((vias(&h)[0].id, vias(&h)[0].at), (id, target));
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// D retains the selected shove policy, stretches the attached track, and moves an
+/// unrelated rail to its prepared preview geometry in the same undoable command.
+#[test]
+fn shove_drag_previews_connected_ends_and_publishes_the_neighbor() {
+    let mut h = routable();
+    let p = |x, y| Point { x_nm: x, y_nm: y };
+    let joint = p(2_540_000, -5_080_000);
+    let pinned = p(2_540_000, -2_540_000);
+    let segment = add_track(&mut h, joint, p(7_620_000, -5_080_000));
+    let attached = add_track(&mut h, pinned, joint);
+    let rail = add_track(&mut h, p(0, -7_720_000), p(10_160_000, -7_720_000));
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let originals = tracks(&h);
+    let revision = h.state().session.revision();
+    let pickup = p(5_080_000, -5_080_000);
+    let target = p(5_080_000, -7_620_000);
+    h.key_press(Key::X);
+    h.run();
+    right_click_route(&mut h, pickup);
+    click(&mut h, "Shove tracks");
+    h.key_press(Key::Escape);
+    h.run();
+    for cancel in [true, false] {
+        h.hover_at(at(&h, pickup));
+        h.run();
+        h.key_press(Key::D);
+        h.run();
+        h.hover_at(at(&h, target));
+        h.run_steps(200);
+        let paths = h.state().views.active.board.tracks.replacements().to_vec();
+        assert!(paths.iter().any(|path| path.track == rail), "missing dragged rail: {:?}", h.state().views.active.board.tracks.preparation_status());
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+        if cancel {
+            h.key_press(Key::Escape);
+            h.run();
+            assert!(h.state().views.active.board.tracks.replacements().is_empty());
+        } else {
+            click_route(&mut h, target);
+            h.run_steps(200);
+            assert_eq!(h.state().message, None);
+            assert_eq!(h.state().session.revision(), revision + 1);
+            let laid = tracks(&h);
+            let dragged = laid.iter().find(|t| t.id == segment).unwrap();
+            let follower = laid.iter().find(|t| t.id == attached).unwrap();
+            assert_eq!((dragged.start, dragged.end), (p(joint.x_nm, target.y_nm), p(7_620_000, target.y_nm)));
+            assert_eq!((follower.start, follower.end), (pinned, dragged.start));
+            assert_published_replacements(&originals, &laid, &paths);
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+        }
+        assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
 /// A first click outside copper but inside a corner's clearance cannot become an inescapable
 /// draft. Keep X armed so the next clear click starts an ordinary route without Escape/relaunch.
 #[test]
