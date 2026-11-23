@@ -203,7 +203,10 @@ impl Motion {
         let motion = Self::vias(query, &route, chains, pickup, budget, &progress).await?;
         let Some((projected, frozen)) = motion.projection(query, chains)? else { return Ok(None) };
         let search = Search::prepare(&projected, chains, request, budget, progress, pickup.clone(), &frozen).await?;
-        let mut plan = search.solve_guides(request, std::iter::once(Approach::Continue(guide))).await?;
+        // At a fixed vertex the open guide is a single point. The ordinary walker
+        // certifies that point before the cascade rechecks the whole fixed prefix.
+        let approach = if request.head == request.target { Approach::Walk(request.flipped) } else { Approach::Continue(guide) };
+        let mut plan = search.solve_guides(request, std::iter::once(approach)).await?;
         if plan.outcome != Outcome::Reached {
             return Ok(None);
         }

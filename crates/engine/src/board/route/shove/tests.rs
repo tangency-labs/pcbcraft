@@ -1158,6 +1158,17 @@ fn a_route_moves_the_via_and_its_attached_segments() {
     let plan = s.plan_route(&query(&s), &request, MAX_BUDGET, &|| false).unwrap();
     assert_eq!(plan.points, vec![request.head, request.target]);
     assert_eq!(plan.via_moves.len(), 2, "{plan:?}");
+    let fixed = Request {
+        head: request.target,
+        origin: Some((request.head, request.layer)),
+        fixed: vec![FixedCopper::Segment { start: request.head, end: request.target, layer: request.layer, width_nm: request.width_nm }],
+        ..request.clone()
+    };
+    let at_vertex = s.plan_route(&query(&s), &fixed, MAX_BUDGET, &|| false).unwrap();
+    assert_eq!(at_vertex.outcome, Outcome::Reached, "{at_vertex:?}");
+    assert_eq!(at_vertex.points, vec![fixed.head]);
+    assert_eq!(at_vertex.via_moves, plan.via_moves);
+    assert_eq!(at_vertex.replacements, plan.replacements);
     let moved = plan.via_moves.iter().find(|m| m.via == via).unwrap().at;
     let free = plan.via_moves.iter().find(|m| m.via == lone).unwrap().at;
     assert_eq!(free.x_nm, lone_at.x_nm);
