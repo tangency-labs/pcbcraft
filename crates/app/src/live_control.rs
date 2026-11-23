@@ -1576,10 +1576,10 @@ mod copper_tests {
 
     /// On the full-capacity `envelope-v1` fixture (65,536 tracks, 32,768 selected), live
     /// `pcb.merge_tracks` prepares across bounded batches, leaves the board unchanged on
-    /// mid-flight cancellation or stale revision, and completes deferred preview cleanly.
+    /// mid-flight cancellation or stale revision, and completes deferred preview and apply in
+    /// one undo step.
     #[cfg(feature = "performance-harness")]
-    #[test]
-    fn deferred_merge_tracks_on_envelope_v1_cancels_rejects_stale_and_previews() {
+    pub(super) fn verify_envelope_v1_deferred_merge() {
         use pcbcraft_engine as engine;
         let artifact_json = crate::performance::generate("envelope-v1", "test").unwrap();
         let artifact: Value = serde_json::from_str(&artifact_json).unwrap();
@@ -1590,9 +1590,11 @@ mod copper_tests {
         app.session.open_snapshot(project);
         app.live_control = Some(LiveControl::start(&ctx).unwrap());
         let target = app.session.project().unwrap().board_target().unwrap();
-        let all_tracks = app.session.project().unwrap().board_view(target).unwrap().tracks();
-        assert_eq!(all_tracks.len(), 65_536);
-        let selected: Vec<_> = all_tracks.iter().take(32_768).map(|t| t.id).collect();
+        let selected: Vec<_> = {
+            let tracks = app.session.project().unwrap().board_view(target).unwrap().tracks();
+            assert_eq!(tracks.len(), 65_536);
+            tracks.iter().take(32_768).map(|t| t.id).collect()
+        };
         let before = app.session.snapshot().unwrap();
         let revision = app.session.revision();
         let make_body = |rev: u64, dry_run: bool| {
@@ -1626,24 +1628,69 @@ mod copper_tests {
         // Deferred preview completes cleanly on envelope-v1 without mutating revision.
         let cur_rev = app.session.revision();
         let cur_snapshot = app.session.snapshot().unwrap();
-        let (req, reply, _) = request(&app, make_body(cur_rev, true));
+        let (mut req, reply, _) = request(&app, make_body(cur_rev, true));
+        req.deadline = Instant::now() + Duration::from_secs(60);
+        let preview_started = Instant::now();
         app.start_remote_copper(&ctx, req, false);
-        let mut polls = 0usize;
-        let response = loop {
+        let mut preview_polls = 0usize;
+        let preview_response = loop {
             app.poll_remote_copper(&ctx);
-            polls += 1;
+            preview_polls += 1;
             if let Ok(value) = reply.try_recv() {
                 break value;
             }
-            assert!(polls < 50_000, "deferred envelope-v1 merge preview did not finish");
+            assert!(preview_polls < 200_000, "deferred envelope-v1 merge preview did not finish");
         };
-        assert!(polls > 1);
-        assert_eq!(response["result"]["revision"], json!(cur_rev));
-        assert_eq!(response["result"]["merge_tracks"]["dry_run"], json!(true));
+        let preview_elapsed = preview_started.elapsed();
+        assert!(preview_polls > 1);
+        assert_eq!(preview_response["result"]["revision"], json!(cur_rev));
+        assert_eq!(preview_response["result"]["merge_tracks"]["dry_run"], json!(true));
+        assert_eq!(preview_response["result"]["merge_tracks"]["changed"], json!(true));
         assert!(Arc::ptr_eq(&cur_snapshot, &app.session.snapshot().unwrap()));
         assert_eq!(app.session.revision(), cur_rev);
         assert!(!app.remote_copper.queue.busy());
+
+        // Deferred apply completes on envelope-v1 with the full diff response and one undo step.
+        let (mut req, reply, _) = request(&app, make_body(cur_rev, false));
+        req.deadline = Instant::now() + Duration::from_secs(60);
+        let apply_started = Instant::now();
+        app.start_remote_copper(&ctx, req, false);
+        let mut apply_polls = 0usize;
+        let apply_response = loop {
+            app.poll_remote_copper(&ctx);
+            apply_polls += 1;
+            if let Ok(value) = reply.try_recv() {
+                break value;
+            }
+            assert!(apply_polls < 200_000, "deferred envelope-v1 merge apply did not finish");
+        };
+        let apply_elapsed = apply_started.elapsed();
+        assert!(apply_polls > 1);
+        let result = &apply_response["result"];
+        assert_eq!(result["revision"], json!(cur_rev + 1), "{apply_response}");
+        assert_eq!(result["merge_tracks"]["dry_run"], json!(false));
+        for key in ["before", "after", "removed", "reshaped", "locked", "changed"] {
+            assert_eq!(result["merge_tracks"][key], preview_response["result"]["merge_tracks"][key], "{key}");
+        }
+        let removed = result["merge_tracks"]["removed"].as_array().unwrap().len();
+        assert!(removed > 0);
+        assert_eq!(app.session.revision(), cur_rev + 1);
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 65_536 - removed);
+        eprintln!(
+            "envelope-v1 deferred merge: preview={:?} ({preview_polls} polls), apply={:?} ({apply_polls} polls), removed={removed}",
+            preview_elapsed, apply_elapsed
+        );
+
+        app.session.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&cur_snapshot, &app.session.snapshot().unwrap()));
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 65_536);
+        assert!(!app.remote_copper.queue.busy());
     }
+}
+
+#[cfg(all(test, feature = "performance-harness"))]
+pub(crate) fn verify_envelope_v1_deferred_merge() {
+    copper_tests::verify_envelope_v1_deferred_merge();
 }
 
 #[cfg(all(test, unix))]

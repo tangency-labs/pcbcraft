@@ -275,6 +275,9 @@ impl CopperEditJob {
     }
     /// Report work progress without treating partial validation as a valid candidate.
     pub fn progress(&self) -> Progress {
+        if self.command == MERGE_TRACKS && self.phase == 0 {
+            return Progress { stage: "Planning track merge", completed: self.work, total: self.work.saturating_add(1) };
+        }
         if self.command == unroute::UNROUTE_CONNECTION {
             let done = self.phase == 5;
             return Progress {
@@ -282,9 +285,6 @@ impl CopperEditJob {
                 completed: self.work,
                 total: self.work.saturating_add(usize::from(!done)),
             };
-        }
-        if self.command == MERGE_TRACKS && self.phase == 0 {
-            return Progress { stage: "Planning track merge", completed: self.work, total: self.work.saturating_add(1) };
         }
         let total = self.lands.as_ref().map_or(1, |lands| {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
