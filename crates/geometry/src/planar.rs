@@ -251,8 +251,17 @@ impl Regions {
                     {
                         return Ok(None);
                     }
+                    // A cutter's outer loop normally winds counter-clockwise. Once
+                    // stored as a hole it must subtract from analytic area, independently
+                    // of the B-rep's own winding normalization.
+                    let lp = solidcore_convert::loop2(&region.outer);
+                    let hole = match lp.signed_area().map_err(kernel_error)?.sign() {
+                        Some(true) => solidcore_convert::record_loop2(&lp.reversed()),
+                        Some(false) => region.outer.clone(),
+                        None => return Ok(None),
+                    };
                     envelopes.push(envelope);
-                    holes.push(region.outer.clone());
+                    holes.push(hole);
                 }
             }
             let value = checked_assembled(vec![Region2 { outer: stock.outer.clone(), holes }])?;
