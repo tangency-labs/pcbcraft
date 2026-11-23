@@ -654,6 +654,23 @@ fn wire_surface_color(paper: impl Fn(&mut crate::preferences::Preferences)) -> e
     super::super::surface_at(project, midpoint, app.preferences.paper())
 }
 
+/// The contrast check considers both resolved surfaces, not just the surface under the midpoint:
+/// a wire crossing from the canvas onto custom paper of the same colour must still get the cue on
+/// the paper portion even when its midpoint sits on the canvas.
+#[test]
+fn wire_crossing_canvas_and_matching_custom_paper_keeps_a_cue() {
+    let paper_color = egui::Color32::from_rgb(0x12, 0x34, 0x56);
+    let canvas = egui::Color32::from_rgb(0x2E, 0x34, 0x40);
+    let custom = pcbcraft_chrome::paper::Appearance { canvas, paper: Some(paper_color) };
+    assert_ne!(custom.canvas, custom.fill(), "custom paper must differ from the canvas for this case");
+    // The midpoint's surface is the canvas, which does not match the saved colour; the paper fill
+    // does, and the crossing route paints over both surfaces.
+    assert!(!super::matches_any_surface(paper_color, pcbcraft_chrome::paper::Appearance { canvas, paper: None }));
+    assert!(super::matches_any_surface(paper_color, custom), "a crossing wire must match the paper fill");
+    assert!(super::matches_any_surface(canvas, custom), "a wire matching the canvas must still match");
+    assert!(!super::matches_any_surface(egui::Color32::WHITE, custom), "an unrelated colour needs no cue");
+}
+
 /// On the default dark, uniform background the whole sheet is painted with `tokens.canvas`
 /// (#2E3440), not the shaded-paper token. A wire saved with that exact colour must still get the
 /// contrasting underlay, without selection or highlight, or it vanishes into the canvas.
