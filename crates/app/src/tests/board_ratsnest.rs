@@ -358,10 +358,22 @@ fn ratsnest_visibility_is_saved_per_view_and_exposed_to_live_control() {
     h.set_size(egui::vec2(760., 560.));
     h.run();
     let checkbox = h.get_by_label("Ratsnest").rect();
-    let toolbar = h.get_by_label("Show all").rect();
-    assert!((checkbox.center().y - toolbar.center().y).abs() < 2.);
-    assert!(checkbox.right() <= h.get_by_label("Collapse Layers").rect().right());
+    let visibility = h.get_by_label("Show all").rect();
+    let net_names = h.get_by_label("Net names").rect();
+    let net_colors = h.get_by_label("Net colors").rect();
+    let right = h.get_by_label("Collapse Layers").rect().right();
+    assert!((checkbox.center().y - visibility.center().y).abs() < 2.);
+    assert!((net_colors.center().y - net_names.center().y).abs() < 2.);
+    assert!(net_colors.left() >= net_names.right());
+    assert!(net_colors.right() <= right, "the Net colors control exceeds the compact Layers panel: {net_colors:?}, right edge {right}");
+    assert!(checkbox.right() <= right);
     assert!(checkbox.bottom() < 540.);
+    h.get_by_label("Ratsnest").click();
+    h.run();
+    assert!(airwires(&h).is_empty(), "the Ratsnest control stays clickable in the compact Layers panel");
+    h.get_by_label("Net colors").click();
+    h.run();
+    assert!(!h.state().views.active.board.net_colors_visible(), "the Net colors control stays clickable in the compact Layers panel");
     assert_eq!(h.state().session.inspect(), before);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }

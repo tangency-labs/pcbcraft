@@ -4,9 +4,9 @@
 editable, net-addressed outlines on one copper layer. [Fill #232](https://github.com/tangency-labs/pcbcraft/issues/232)
 derives conductive material inside a closed Board Outline, with clearance holes,
 thermal or solid pad connections, priority and minimum island area. Short diagonal
-boundary hatching continues to identify the authored outline. Gerber zone output
-remains [#233](https://github.com/tangency-labs/pcbcraft/issues/233); the current
-fabrication exporter does not include this material.
+boundary hatching continues to identify the authored outline. Fabrication export
+rejects boards containing zones until Gerber zone output is available in
+[#233](https://github.com/tangency-labs/pcbcraft/issues/233).
 
 ## Drawing and editing
 

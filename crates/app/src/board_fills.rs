@@ -112,7 +112,7 @@ impl State {
                 self.requested = None;
             }
         }
-        self.queue.busy() || (zones && target.is_some() && self.requested.is_none())
+        self.queue.busy() || (schedule && zones && target.is_some() && self.requested.is_none())
     }
 }
 impl crate::PcbApp {
@@ -327,7 +327,9 @@ mod tests {
             assert!(!old.queue.busy(), "non-first owner remains pending");
             assert!(old.queue.completed > before);
             assert_eq!(old.notice.is_some(), failure);
-            assert_eq!(app.views.view(peer).unwrap().board.fills.queue.completed, 0, "focus changes must not duplicate current-source work");
+            let peer_fills = &mut app.views.view_mut(peer).unwrap().board.fills;
+            assert_eq!(peer_fills.queue.completed, 0, "focus changes must not duplicate current-source work");
+            assert!(!peer_fills.poll(&app.session, Some(target), true, false, &ctx), "an idle peer must not request another frame");
         }
     }
 }

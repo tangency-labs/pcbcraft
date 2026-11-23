@@ -73,21 +73,17 @@ impl PcbApp {
                 ui.horizontal(|ui| {
                     setup_open = pcbcraft_chrome::board_setup::open_button(ui, settings_enabled).clicked();
                     pcbcraft_chrome::controls::checkbox(ui, &mut net_names_visible, "Net names");
+                    pcbcraft_chrome::controls::checkbox(ui, &mut net_colors_visible, "Net colors");
                 });
                 ui.horizontal(|ui| {
                     show_all = pcbcraft_chrome::controls::small_button(ui, "Show all").clicked();
                     isolate = ui.add_enabled_ui(can_isolate, |ui| pcbcraft_chrome::controls::small_button(ui, "Isolate active")).inner.clicked();
-                });
-            },
-            |ui| {
-                ui.horizontal(|ui| {
-                    pcbcraft_chrome::controls::checkbox(ui, &mut net_colors_visible, "Net colors");
                     if target.has_accepted_connectivity() {
                         pcbcraft_chrome::board::ratsnest_visibility(ui, &mut ratsnest_visible);
                     }
                 });
-                layer_groups(ui, target, state, Id::unique((view_id, target.target)), &self.board_appearance, &mut color_pick);
             },
+            |ui| layer_groups(ui, target, state, Id::unique((view_id, target.target)), &self.board_appearance, &mut color_pick),
         );
         if collapse {
             state.layers_collapsed = !state.layers_collapsed;

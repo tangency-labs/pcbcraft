@@ -997,6 +997,6 @@ for checking, worker failures and current output limits.
 **Layout → Board → Remove pours** (Ctrl+B, or Command+B on macOS) removes the
 copper while retaining zone outlines and settings; affected airwires return.
 **Pour copper** (B) restores the fill and resumes automatic refill after edits.
-Each zone belongs to a chosen net and copper layer; other layers do not flood
-automatically. Full-board zone generation from a layer's assigned default net
-is planned in #263.
+Fabrication export is unavailable on boards with copper zones. Each zone belongs
+to a chosen net and copper layer. Full-board zone generation from a layer's
+assigned default net is planned in #263.
