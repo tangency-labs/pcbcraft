@@ -135,7 +135,7 @@ impl Motion {
                 let other = &query.objects()[j];
                 if i != j
                     && old.contour.touches(&other.contour)
-                    && !retained_joint(&old.contour, &other.contour, shape, moved.get(&j).or(self.contours.get(&j)).unwrap_or(&other.contour))
+                    && !retained_joint(&old.contour, &other.contour, shape, moved.get(&j).or(self.contours.get(&j)).unwrap_or(&other.contour), 0.)
                 {
                     return Ok(false);
                 }
@@ -144,7 +144,7 @@ impl Motion {
                 let other = &query.objects()[hit.second];
                 if hit.conflicting_nets
                     || (hit.gap_nm < hit.clearance_nm as f64 || hit.touches)
-                        && (other.mechanical || !retained_joint(&old.contour, &other.contour, shape, &other.contour))
+                        && (other.mechanical || !retained_joint(&old.contour, &other.contour, shape, &other.contour, hit.clearance_nm as f64))
                 {
                     return Ok(false);
                 }
@@ -152,11 +152,11 @@ impl Motion {
             for (&j, other_shape) in self.contours.iter().chain(moved) {
                 super::super::search::yield_unit().await;
                 let other = &query.objects()[j];
+                let clearance = query.membership_clearance(&old.intended_nets, &other.intended_nets) as f64;
                 if i != j
                     && old.layers.iter().any(|l| other.layers.contains(l))
-                    && (shape.touches(other_shape)
-                        || shape.gap(other_shape) < query.membership_clearance(&old.intended_nets, &other.intended_nets) as f64)
-                    && !retained_joint(&old.contour, &other.contour, shape, other_shape)
+                    && (shape.touches(other_shape) || shape.gap(other_shape) < clearance)
+                    && !retained_joint(&old.contour, &other.contour, shape, other_shape, clearance)
                 {
                     return Ok(false);
                 }
@@ -242,6 +242,7 @@ pub(in crate::board::route) async fn drag(
     if !view.zones().is_empty() {
         return Err(CommandError::Unavailable("Moving routing joints on boards with zones is not supported.".into()));
     }
+    // Bound the directly supplied geometry by the existing placement gesture budget.
     if ends.len() > crate::board::track::MAX_PATH_POINTS {
         return Err(CommandError::InvalidParams("A shove drag supports at most 256 directly moved tracks.".into()));
     }
