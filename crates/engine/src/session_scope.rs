@@ -1,8 +1,8 @@
 //! Runtime authority for command dispatch. Project snapshots do not carry permission to edit.
 
 use crate::{
-    CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, PREVIEW_ASSEMBLY_PROFILE, PREVIEW_BOARD_SETUP,
-    PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command,
+    CANCEL_BOARD_SETUP_PREVIEW, CANCEL_UPDATE, CHECK_DESIGN, CommandError, EXPORT_FABRICATION, INSPECT_LAYER_GROUPS, PREVIEW_ASSEMBLY_PROFILE,
+    PREVIEW_BOARD_SETUP, PREVIEW_UPDATE, Session, annotation, board, clipboard, clipboard_text, command,
     library::{check, sources},
     net_classes, netlist, nets, no_connect, parameters, part_groups, sheets,
 };
@@ -74,6 +74,7 @@ fn is_read_command(id: &str) -> bool {
             | CANCEL_UPDATE
             | PREVIEW_BOARD_SETUP
             | CANCEL_BOARD_SETUP_PREVIEW
+            | INSPECT_LAYER_GROUPS
             | PREVIEW_ASSEMBLY_PROFILE
             | board::class_rules::ROUTE_RULES
             | board::route::PLAN_ROUTE
@@ -87,6 +88,7 @@ fn is_read_command(id: &str) -> bool {
             | sources::LIST
             | sources::SEARCH
             | sources::AVAILABLE_REVISIONS
+            | sources::WHERE_USED
             | sources::RESOLVE_PART
             | sources::PARSE_QUANTITY
             | sources::PREVIEW_PIN_REMAP

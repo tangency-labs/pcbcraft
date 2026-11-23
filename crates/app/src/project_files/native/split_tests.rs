@@ -12,6 +12,8 @@ use std::{
     sync::{Barrier, mpsc},
 };
 
+mod open_preservation;
+
 /// Start from the checked-in migration fixture so comparisons retain stable UUIDs. The
 /// snapshot is prepared as opening does, so it already has its paper.
 fn session() -> Session {
@@ -719,10 +721,10 @@ fn manifest_less_archive_save_adds_manifest_and_preserves_document_bytes() {
     assert_eq!(decode_packed(&packed).unwrap().documents, custom);
 }
 
-/// Native Save reuses an unchanged lock-bearing board verbatim but rewrites it after
-/// deletion of the only locked placement.
+/// Native Save reuses lock-bearing board bytes after a refused delete, but rewrites them
+/// after deletion of an unlocked neighbor without losing the remaining lock.
 #[test]
-fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() {
+fn working_documents_preserves_lock_bytes_after_refused_delete() {
     let mut s = Session::default();
     s.apply("project.new", &json!({"create_board":true})).unwrap();
     for x_nm in [0, 25_400_000] {
@@ -736,7 +738,7 @@ fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() 
     assert_eq!(board["format"], "pcbcraft-board/1");
     assert_eq!(board["footprints"].as_array().unwrap().len(), 2);
     let locked_id = board["footprints"][0]["id"].as_u64().unwrap();
-    let survivor = board["footprints"][1].clone();
+    let unlocked_id = board["footprints"][1]["id"].as_u64().unwrap();
     board["format"] = json!("pcbcraft-board/34");
     board["footprints"][0]["locked"] = json!(true);
     board["footprints"][1]["locked"] = json!(false);
@@ -750,13 +752,70 @@ fn working_documents_reuses_lock_bytes_until_last_locked_placement_is_deleted() 
     assert!(saved.iter().any(|(name, bytes)| name.starts_with("sheets/") && original.get(name) != Some(bytes)));
     assert_eq!(saved[&path], original[&path]);
 
-    apply(&mut s, pcbcraft_engine::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{locked_id}")]}));
+    let refused = s
+        .apply(pcbcraft_engine::DELETE_FOOTPRINTS, &json!({"footprints":[format!("footprint-{locked_id}")],"expected_revision":s.revision()}))
+        .unwrap_err();
+    assert!(refused.to_string().contains(&format!("footprint-{locked_id}")), "{refused}");
+    assert_eq!(working_documents(&s.snapshot().unwrap(), Some(&moved), Some(&saved)).unwrap(), saved);
+
+    apply(&mut s, pcbcraft_engine::DELETE_FOOTPRINTS, json!({"footprints":[format!("footprint-{unlocked_id}")]}));
     let rewritten = working_documents(&s.snapshot().unwrap(), Some(&moved), Some(&saved)).unwrap();
-    let board: serde_json::Value = serde_json::from_slice(&rewritten[&path]).unwrap();
+    let canonical: serde_json::Value = serde_json::from_slice(&rewritten[&path]).unwrap();
     assert_ne!(rewritten[&path], saved[&path]);
-    assert_eq!(board["format"], "pcbcraft-board/1");
-    assert_eq!(board["footprints"], json!([survivor]));
+    assert_eq!(canonical["format"], "pcbcraft-board/34");
+    assert_eq!(canonical["footprints"], json!([board["footprints"][0]]));
     assert_eq!(encode_documents(decode_documents(&rewritten).unwrap()).unwrap(), rewritten);
+}
+
+/// Unchanged group-free legacy boards keep their format and bytes across Save and Save As,
+/// while boards with named layer groups round-trip in format 41.
+#[test]
+fn group_free_legacy_save_preserves_format_and_groups_round_trip_in_format_41() {
+    use pcbcraft_engine::{INITIALIZE_BOARD_SETUP, SET_BOARD_SETUP};
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = session();
+    apply(&mut s, INITIALIZE_BOARD_SETUP, json!({"copper_layers":2}));
+    let path = s.project().unwrap().board_document_path().unwrap();
+    let mut legacy = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&legacy[&path]).unwrap()["format"], "pcbcraft-board/2");
+    legacy.get_mut(&path).unwrap().extend_from_slice(b"\n \t");
+    let root = dir.path().join("legacy");
+    let archive = dir.path().join("legacy.pc");
+    folder::save(&root, None, &legacy, &mut |_| Ok(())).unwrap();
+    fs::write(&archive, encode_packed_documents(legacy.clone()).unwrap()).unwrap();
+    for target in [&root, &archive] {
+        let loaded = load(target).unwrap();
+        let snapshot = loaded.snapshot.clone();
+        save_target(snapshot.clone(), Some(&snapshot), loaded.target, &mut |_| Ok(())).unwrap();
+        let reopened = load(target).unwrap();
+        assert_eq!(reopened.target.documents.as_ref().unwrap()[&path], legacy[&path]);
+    }
+    let loaded = load(&root).unwrap();
+    let save_as = working_documents(&loaded.snapshot, Some(&loaded.snapshot), loaded.target.documents.as_deref()).unwrap();
+    assert_eq!(save_as[&path], legacy[&path]);
+
+    let top = s.project().unwrap().board_setup().unwrap().copper_stack().next().unwrap().layer;
+    let mut grouped_setup = serde_json::to_value(s.project().unwrap().board_setup().unwrap()).unwrap();
+    grouped_setup["stackup"]["layer_groups"] = json!([{"id":uuid::Uuid::from_u128(1),"name":"Outer","layers":[top]}]);
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":grouped_setup}));
+    let grouped_docs = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&grouped_docs[&path]).unwrap()["format"], "pcbcraft-board/41");
+    let grouped_root = dir.path().join("grouped");
+    let grouped_archive = dir.path().join("grouped.pc");
+    folder::save(&grouped_root, None, &grouped_docs, &mut |_| Ok(())).unwrap();
+    fs::write(&grouped_archive, encode_packed(s.snapshot().unwrap()).unwrap()).unwrap();
+    for target in [&grouped_root, &grouped_archive] {
+        let loaded = load(target).unwrap();
+        assert_eq!(encode_documents(loaded.snapshot.clone()).unwrap(), grouped_docs);
+        save_target(loaded.snapshot.clone(), Some(&loaded.snapshot), loaded.target, &mut |_| Ok(())).unwrap();
+        assert_eq!(encode_documents(load(target).unwrap().snapshot).unwrap(), grouped_docs);
+    }
+
+    let mut cleared_setup = serde_json::to_value(s.project().unwrap().board_setup().unwrap()).unwrap();
+    cleared_setup["stackup"]["layer_groups"] = json!([]);
+    apply(&mut s, SET_BOARD_SETUP, json!({"setup":cleared_setup}));
+    let cleared_docs = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(&cleared_docs[&path]).unwrap()["format"], "pcbcraft-board/2");
 }
 
 /// The shared headless reader accepts the same folder, entry point and archive as desktop.

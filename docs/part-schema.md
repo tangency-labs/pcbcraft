@@ -27,6 +27,7 @@ while **Edit copy** authors a separate library definition.
 
 | Record | Format | Machine-readable schema |
 | --- | --- | --- |
+| Part definition with device supply ranges | `pcbcraft-part/4` | [part-v4.schema.json](schemas/part-v4.schema.json) |
 | Part definition | `pcbcraft-part/2` | [part-v2.schema.json](schemas/part-v2.schema.json) |
 | Retained electrical part definition | `pcbcraft-part/1` | [part-v1.schema.json](schemas/part-v1.schema.json) |
 | Manufacturer part | `pcbcraft-manufacturer-part/1` | [manufacturer-part-v1.schema.json](schemas/manufacturer-part-v1.schema.json) |
@@ -108,10 +109,11 @@ Adding/removing/refreshing a source invalidates dependency-resolution caches.
 | --- | --- |
 | Common identity fields | `format`, `library`, `id`, `revision`, `name`, `license` |
 | `source` | Required provenance `kind`, `reference`, `locator`; descriptive metadata, never fetched on load |
-| `symbol` | Optional exact symbol reference in format 2; required in format 1. Omit when absent; null and placeholder references are invalid. |
+| `symbol` | Optional exact symbol reference in format 2; required in formats 1 and 4. Omit when absent; null and placeholder references are invalid. |
 | `category` | Optional exact category `definition` and optional `primary_value` field binding |
 | `fixed_parameters` | Optional nonempty map of namespaced field IDs to known typed fixed values; requires `category` |
 | `packages` | Required map of stable variant IDs to package records; an empty map is valid for library and schematic work |
+| `terminal_ratings` | Required nonempty map in format 4 only; keys are exact logical terminal IDs of the device's symbol. |
 
 No manufacturer, MPN, stock, price, drawing, terminal geometry or pad geometry
 belongs in this record. The part links the independently versioned definitions.
@@ -171,6 +173,47 @@ fields and satisfy their types, units, bounds and permitted choices. A unit
 error reports the category field ID when preparing a part or manufacturer
 record, applying an instance requirement, or editing an explicitly bound
 primary Value. This uses the category's existing field IDs and units.
+
+### Device supply range
+
+A reusable device can declare an inclusive `supply_min`, `supply_max`, or both
+on any logical `power_in` terminal of its exact symbol revision. The key is the
+terminal ID (the same key used in a package map), not its displayed pin name,
+its graphical occurrence, or a pad number. Devices that share a symbol can
+have different ranges. An orderable inherits its generic device's ranges; the
+symbol, orderable and project instance do not store overrides.
+
+```json
+"terminal_ratings": {
+  "1": {
+    "supply_min": {"type": "quantity", "value": "4.5", "unit": "V"},
+    "supply_max": {"type": "quantity", "value": "36", "unit": "V"}
+  }
+}
+```
+
+A bound is a canonical decimal voltage in `V`. Omit an unknown bound rather
+than storing `null` or zero; omit the terminal if both bounds are unknown. The
+map holds at most 128 entries. Validation rejects an empty range, a non-voltage
+quantity, an unknown or non-`power_in` terminal and a minimum above the maximum
+using exact decimal order. Negative bounds and equal endpoints are allowed.
+
+In a generic part document, open **Device supply ranges** and apply both bounds
+on a pin together; blank inputs remove the corresponding bounds. Changing to
+an unrelated symbol removes the old ranges in the same undoable edit. To change
+revisions of the same symbol, first remove the existing ranges from the draft,
+choose the new revision, then re-enter the bounds on the correct inputs. Terminal
+numbers can be reassigned between revisions, so they do not establish
+correspondence. If the exact power input becomes unavailable, the form still shows
+unapplied bound text so it can be discarded without changing saved bounds.
+The schematic's **Pin functions**
+shows the device's pinned limits read-only. `library.resolve_part` returns the
+map under `part.terminal_ratings`; placed-part inspection reads it under the
+pinned `part.definition`. This does not yet run an electrical rule check.
+
+Only a part with a nonempty map uses `pcbcraft-part/4`. Unrated files keep
+formats 1 or 2; removing the last range from a format-4 draft returns to format 2.
+Earlier readers refuse format 4 rather than opening the part without its ranges.
 
 ## Canonical quantities
 

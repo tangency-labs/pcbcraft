@@ -21,6 +21,7 @@ pub mod empty_state;
 pub mod fonts;
 pub mod grid;
 pub mod home;
+pub mod i18n;
 pub mod library_sources;
 pub mod library_workspace;
 pub mod menu;
@@ -61,9 +62,10 @@ pub fn begin_frame() {
 
 /// The kit resolves its generic labels through a host-installed catalog, including
 /// text-edit context menus. Keep electronics/application copy owned by PCBcraft.
-fn install_text() {
+pub(crate) fn install_text() {
     static ENGLISH: solidcraft_ui_text::Catalog = solidcraft_ui_text::Catalog::new("en", "English", include_str!("../assets/shared-ui/en.json"));
-    static CATALOGS: [&solidcraft_ui_text::Catalog; 1] = [&ENGLISH];
+    static HEBREW: solidcraft_ui_text::Catalog = solidcraft_ui_text::Catalog::new("he", "עברית", include_str!("../assets/shared-ui/he.json"));
+    static CATALOGS: [&solidcraft_ui_text::Catalog; 2] = [&ENGLISH, &HEBREW];
     solidcraft_ui_text::install(&CATALOGS);
 }
 

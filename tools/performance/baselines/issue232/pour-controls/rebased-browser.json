@@ -1,0 +1,41 @@
+{
+  "browser": "156.0.8078.79",
+  "wasm": [
+    "pcbcraft-web-38f22b438f353e34_bg.wasm"
+  ],
+  "source_revision": "c665edd rebased on 3841189 plus current-part-group regression",
+  "workers": {
+    "started": 3,
+    "completed": [
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      },
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      },
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      }
+    ]
+  },
+  "errors": [],
+  "pixel_oracle": {
+    "unfilled": [
+      0,
+      16,
+      32
+    ],
+    "repoured": [
+      82,
+      26,
+      37
+    ],
+    "pass": true
+  }
+}

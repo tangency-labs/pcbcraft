@@ -1,6 +1,7 @@
 //! Sheet ownership, immutable schematic projections and atomic sheet transactions.
 
 use super::*;
+use crate::selection::Selection;
 use std::collections::BTreeSet;
 use std::ops::Deref;
 
@@ -137,6 +138,23 @@ impl Project {
     pub fn for_sheet(&self, target: SheetTarget) -> Option<Self> {
         let sheet_index = self.sheets().position(|sheet| sheet.target == target)?;
         Some(Self { sheet_index, ..self.clone() })
+    }
+
+    /// Find the first sheet in project order containing a selected symbol. The bounded sheet
+    /// list and each sheet's sorted placement IDs avoid scanning unrelated units or projecting
+    /// candidate sheets. Non-symbol selection members and stale IDs do not match.
+    pub fn first_sheet_for_symbols(&self, selection: &Selection) -> Option<SheetTarget> {
+        self.first_sheet_for_symbols_by(selection, |unit| unit.ordinal)
+    }
+
+    /// Use the same ordinal comparison path for production and the lookup work-bound test.
+    fn first_sheet_for_symbols_by(&self, selection: &Selection, mut ordinal: impl FnMut(&SymbolPlacement) -> u64) -> Option<SheetTarget> {
+        let ids: Vec<_> = selection.symbols.iter().filter_map(|id| schematic::wiring::parse_id(id, "symbol-")).collect();
+        if ids.is_empty() {
+            return None;
+        }
+        let sheet = self.sheets.iter().find(|sheet| ids.iter().any(|id| sheet.symbols.binary_search_by_key(id, &mut ordinal).is_ok()))?;
+        Some(SheetTarget { project: self.id, sheet: sheet.sheet_id })
     }
 
     /// Resolve explicit UUIDs by value, so every spelling the parameter check accepts (any case,
@@ -285,10 +303,14 @@ impl Session {
                     sheet.connectivity = Arc::default();
                 }
                 let removed = Arc::make_mut(&mut project.sheets).remove(index);
+                let retired: std::collections::BTreeSet<_> = removed
+                    .symbols
+                    .iter()
+                    .map(|symbol| symbol.component)
+                    .filter(|&component| !project.all_symbols().any(|other| other.component == component))
+                    .collect();
+                project.retire_components(retired)?;
                 for symbol in removed.symbols.iter() {
-                    if !project.all_symbols().any(|other| other.component == symbol.component) {
-                        project.retire_component(symbol.component);
-                    }
                     Arc::make_mut(&mut project.units).remove(&(symbol.component, symbol.unit.clone()));
                 }
             }

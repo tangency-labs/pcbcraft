@@ -220,6 +220,8 @@ struct ComponentRecord<'a> {
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     no_connects: Option<Vec<crate::no_connect::Intent>>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
+    pin_functions: Option<Vec<crate::pin_functions::Choice>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "present")]
     designator_locked: Option<bool>,
 }
 
@@ -402,6 +404,7 @@ fn migrate_to_4(document: Document2) -> Result<Document, String> {
             metadata: None,
             part: None,
             no_connects: None,
+            pin_functions: None,
             designator_locked: None,
         });
         used.insert((definition.id.clone(), definition.revision()), definition);
@@ -512,6 +515,9 @@ impl Encoder {
         }
         if !project.part_groups.groups.is_empty() {
             return Err("Part groups require split documents or a packed archive.".into());
+        }
+        if project.pin_function_count() != 0 {
+            return Err("Alternate pin functions require split documents or a packed archive.".into());
         }
         if project.no_connect_count() != 0 {
             return Err("No-connect intent requires split documents or a packed archive.".into());
@@ -646,6 +652,7 @@ impl Encoder {
                     metadata: None,
                     part: None,
                     no_connects: None,
+                    pin_functions: None,
                     designator_locked: None,
                 };
                 let more = self.project.components.last_key_value().is_some_and(|(&last, _)| last != id);
@@ -854,8 +861,11 @@ fn validate_with_hierarchy(
     let mut shown = BTreeSet::new();
     let mut components = BTreeMap::new();
     for record in records {
+        if record.pin_functions.is_some() {
+            return Err("Alternate pin functions require native project format 48 or 56.".into());
+        }
         if record.designator_locked.is_some() {
-            return Err("Designator locks require split project format 51.".into());
+            return Err("Designator locks require split project format 51 or 56.".into());
         }
         if record.no_connects.is_some() {
             return Err("No-connect intent requires the split marker format.".into());
@@ -1070,11 +1080,13 @@ fn validate_with_hierarchy(
         sheet_index: 0,
         name,
         components: Arc::new(components),
+        pin_functions: Arc::default(),
         units: Arc::new(units),
         schematic_packages: Arc::default(),
         board: Arc::new(layout),
         named_graph: Arc::default(),
         board_graphics: Arc::default(),
+        board_fill: Arc::default(),
         upgraded_from,
         layout: None,
         circuit_use: None,

@@ -52,13 +52,14 @@ fn fixture() -> Fixture {
     let mut symbol_editor = crate::authoring::Session::new(Item::new(Kind::Symbol).unwrap(), false).unwrap();
     let drawn = symbol_editor.snapshot();
     for (object, number) in [(1, "3"), (3, "4")] {
-        let Primitive::Pin { electrical_type, at, appearance, .. } = drawn.objects[&object].clone() else { panic!("pin expected") };
+        let Primitive::Pin { electrical_type, at, appearance, alternates, .. } = drawn.objects[&object].clone() else { panic!("pin expected") };
         let primitive = Primitive::Pin {
             number: number.into(),
             name: Some(format!("P{number}")),
             electrical_type,
             at: Point { y_nm: 2_540_000, ..at },
             appearance,
+            alternates,
         };
         symbol_editor.execute(symbol_editor.revision(), Action::Insert { primitive }).unwrap();
     }
@@ -347,8 +348,8 @@ fn malformed_document_is_an_error_not_a_clean_report() {
 #[test]
 fn unsupported_or_mismatched_format_is_an_error() {
     let fixture = fixture();
-    for format in ["pcbcraft-footprint/99", FootprintDefinition::format_for(true)] {
-        let documents = edited(&fixture, |text| text.replacen(FootprintDefinition::format_for(false), format, 1));
+    for format in ["pcbcraft-footprint/99", FootprintDefinition::format_for(true, &[])] {
+        let documents = edited(&fixture, |text| text.replacen(FootprintDefinition::format_for(false, &[]), format, 1));
         let error = Capture::from_documents(&documents, &Catalog::default()).unwrap_err();
         assert_eq!(error, CheckError::UnsupportedFormat { file: fixture.footprint_path.clone(), format: format.into() });
     }
@@ -499,7 +500,7 @@ fn non_plated_holes_are_not_pad_occurrences() {
     let older = json!({"item":item.as_ref(),"documents":{"library.json":manifest}});
     assert!(fixture.session.execute(PREPARE_PUBLICATION, &older).is_err(), "an edit without its base still needs consent");
     let (_, path, text) = publish(&mut fixture.session, &item, &manifest, Some(fixture.footprint.revision));
-    assert!(text.contains(FootprintDefinition::format_for(true)));
+    assert!(text.contains(FootprintDefinition::format_for(true, &[])));
     let documents = Documents::from([("library.json".into(), manifest), (path, text)]);
     for capture in [Capture::from_documents(&documents, &Catalog::default()).unwrap(), Capture::from_item(&item).unwrap()] {
         let numbers: Vec<_> = capture.footprints()[0].pads.iter().map(|pad| pad.number.as_str()).collect();

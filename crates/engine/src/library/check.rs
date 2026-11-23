@@ -473,11 +473,11 @@ impl Transported {
 fn decode_footprint(path: &str, text: &str) -> Result<FootprintDefinition, CheckError> {
     let malformed = |error: serde_json::Error| CheckError::Malformed { file: path.into(), reason: error.to_string() };
     let header: Header = serde_json::from_str(text).map_err(malformed)?;
-    if header.format != FootprintDefinition::format_for(false) && header.format != FootprintDefinition::format_for(true) {
+    if !crate::board::definition::FORMATS.contains(&header.format.as_str()) {
         return Err(CheckError::UnsupportedFormat { file: path.into(), format: header.format });
     }
     let definition: FootprintDefinition = serde_json::from_str(text).map_err(malformed)?;
-    if definition.format != FootprintDefinition::format_for(!definition.non_plated_holes.is_empty()) {
+    if definition.format != FootprintDefinition::format_for(!definition.non_plated_holes.is_empty(), &definition.pads) {
         return Err(CheckError::UnsupportedFormat { file: path.into(), format: definition.format });
     }
     Ok(definition)

@@ -1,0 +1,13 @@
+{
+  "median_compute_ms": {
+    "before-dev": 5877.211302,
+    "before-release": 428.011035,
+    "after-dev": 1281.262029,
+    "after-release": 105.841072
+  },
+  "release_ratio": 4.043903060619038,
+  "original_test_build_to_new_release_ratio": 55.52864489127623,
+  "counts_match": true,
+  "unchanged_native_and_revision": true,
+  "scope": "Three samples per build on one supplied demo; headless calculation, not physical input-to-visible latency, large-board throughput or a vendor comparison."
+}

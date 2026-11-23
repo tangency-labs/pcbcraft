@@ -108,6 +108,260 @@ fn invalid_mapping_and_pending_input_never_replace_published_records() {
     app.library_editors.close_part(id, true).unwrap();
     assert!(!app.library_editors.parts.contains_key(&id));
 }
+/// The fixture part bound to a synthetic symbol whose terminal 1 is a power input,
+/// published in its own removable native source.
+fn supply_fixture() -> (PcbApp, tempfile::TempDir, u64) {
+    use pcbcraft_engine::{
+        authoring::{Item, Kind as ItemKind, Primitive, publishing},
+        library::sources::{Documents, NativeSource},
+        schematic::ElectricalType,
+    };
+
+    let (mut app, temp, id) = fixture();
+    let manifest = publishing::new_library("test-drawings", "Synthetic drawings", "MIT OR Apache-2.0").unwrap();
+    let mut item = Item::new(ItemKind::Symbol).unwrap();
+    item.library = "test-drawings".into();
+    item.id = "synthetic-supply".into();
+    let Some(Primitive::Pin { electrical_type, .. }) = item.objects.get_mut(&1) else { panic!("fixture needs a pin") };
+    *electrical_type = ElectricalType::PowerIn;
+    let prepared = publishing::prepare(Arc::new(item), &manifest, 0, None, false).unwrap();
+    let mut documents = Documents::from([("library.json".into(), manifest)]);
+    documents.extend(prepared.documents().clone());
+    app.session.install_library_source("test-drawings", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+
+    let symbol = prepared.item();
+    let reference = Reference { library: symbol.library.clone(), id: symbol.id.clone(), revision: symbol.revision };
+    let revision = app.library_editors.parts[&id].session.revision();
+    app.choose_part_reference(id, revision, &ReferenceField::Symbol, Some(reference)).unwrap();
+    (app, temp, id)
+}
+/// Losing a source with a pending bound leaves a visible way to discard just that text,
+/// without undoing or rewriting the authored range or discarding unrelated typed edits.
+#[test]
+fn missing_supply_symbol_keeps_pending_text_visible_and_discardable() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::library::sources;
+
+    let (mut app, _temp, id) = supply_fixture();
+    let doc = &app.library_editors.parts[&id];
+    let revision = doc.session.revision();
+    let mut record = doc.session.record().clone();
+    let Record::Part(part) = &mut record else { panic!() };
+    part.set_supply_range("1", "4.5 V", "36 V").unwrap();
+    app.replace_part_document(id, revision, record.clone()).unwrap();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    let revision = doc.session.revision();
+    doc.pending.insert("supply/1/min".into(), "unfinished".into());
+    doc.pending.insert("test:field".into(), "other edit".into());
+    // The form renders outside `app.frame`, so install the interface fonts the frame would.
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    assert!(h.query_by_label("Discard unavailable supply edits").is_none());
+    h.state_mut().session.execute(sources::REMOVE, &json!({"source":"test-drawings"})).unwrap();
+    h.run();
+    h.get_by_label("Terminal 1 minimum: \"unfinished\"");
+    h.get_by_label("Discard unavailable supply edits").click();
+    h.run();
+    assert!(h.query_by_label("Discard unavailable supply edits").is_none());
+    let doc = h.state_mut().library_editors.parts.get_mut(&id).unwrap();
+    assert_eq!(doc.pending, BTreeMap::from([("test:field".into(), "other edit".into())]));
+    assert_eq!(doc.session.record(), &record);
+    assert_eq!(doc.session.revision(), revision);
+    doc.pending.clear();
+    let ctx = h.ctx.clone();
+    h.state_mut().begin_part_reference(&ctx, id, ReferenceField::Symbol).unwrap();
+}
+
+/// A supply range applied while the draft sits at the native size limit is refused as a
+/// whole: the typed bounds stay pending and visible, and the draft and history are unchanged.
+/// Once the draft fits, the same Apply clears the text and is a single undo step.
+#[test]
+fn rejected_supply_range_at_the_size_limit_keeps_the_entered_text() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::library::sources::MAX_FILE_BYTES;
+
+    let (mut app, _temp, id) = supply_fixture();
+    let doc = &app.library_editors.parts[&id];
+    let revision = doc.session.revision();
+    let unrated = doc.session.record().clone();
+    let mut rated = unrated.clone();
+    let Record::Part(part) = &mut rated else { panic!() };
+    part.set_supply_range("1", "4.5 V", "36 V").unwrap();
+    let growth = serde_json::to_vec(&rated).unwrap().len() - serde_json::to_vec(&unrated).unwrap().len();
+    assert!(growth > 8, "a range must add more bytes than the slack below");
+    // Pad a field the form keeps collapsed until the unrated draft is just under the limit.
+    let mut padded = unrated.clone();
+    let Record::Part(part) = &mut padded else { panic!() };
+    part.license.push_str(&"x".repeat(MAX_FILE_BYTES - 8 - serde_json::to_vec(&unrated).unwrap().len()));
+    let mut padded_rated = padded.clone();
+    let Record::Part(part) = &mut padded_rated else { panic!() };
+    part.set_supply_range("1", "4.5 V", "36 V").unwrap();
+    assert!(serde_json::to_vec(&padded_rated).unwrap().len() > MAX_FILE_BYTES);
+    app.replace_part_document(id, revision, padded.clone()).unwrap();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    let revision = doc.session.revision();
+    let entered = BTreeMap::from([("supply/1/max".to_string(), "36 V".to_string()), ("supply/1/min".to_string(), "4.5 V".to_string())]);
+    doc.pending = entered.clone();
+
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Device supply ranges").click();
+    h.run();
+    h.get_by_label("Apply range").click();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending, entered);
+    assert_eq!(doc.session.record(), &padded);
+    assert_eq!(doc.session.revision(), revision);
+    assert!(doc.error.as_deref().is_some_and(|error| error.contains("1 MiB")), "{:?}", doc.error);
+    h.get_by_label("Apply range");
+
+    // Shrink the draft without touching the pending text; the retained entry now applies.
+    let doc = h.state_mut().library_editors.parts.get_mut(&id).unwrap();
+    doc.session.replace(revision, unrated.clone()).unwrap();
+    let revision = doc.session.revision();
+    h.run();
+    h.get_by_label("Apply range").click();
+    h.run();
+    let doc = h.state_mut().library_editors.parts.get_mut(&id).unwrap();
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+    assert_eq!(doc.error, None);
+    assert_eq!(doc.session.record(), &rated);
+    assert_eq!(doc.session.revision(), revision + 1);
+    doc.session.history(revision + 1, false).unwrap();
+    assert_eq!(doc.session.record(), &unrated);
+}
+
+/// Publishing and reopening a part at [`MAX_TERMINAL_RATINGS`] succeeds; applying one more
+/// rating in the form leaves the draft and its undo history unchanged and keeps the typed bounds.
+#[test]
+fn terminal_rating_limit_publishes_reopens_and_keeps_typed_bounds_on_overflow() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::{
+        authoring::{Action, Item, Kind as ItemKind, Primitive, Session as AuthoringSession, publishing},
+        library::{
+            parts::MAX_TERMINAL_RATINGS,
+            sources::{Documents, NativeSource},
+        },
+        schematic::{ElectricalType, Point},
+    };
+
+    let (mut app, _temp, id) = fixture();
+    let manifest = publishing::new_library("test-drawings", "Synthetic drawings", "MIT OR Apache-2.0").unwrap();
+    let mut symbol = Item::new(ItemKind::Symbol).unwrap();
+    symbol.library = "test-drawings".into();
+    symbol.id = "max-supply".into();
+    let mut symbol_editor = AuthoringSession::new(symbol, false).unwrap();
+    symbol_editor.execute(0, Action::Delete { objects: vec![1, 3] }).unwrap();
+    for index in 1..=MAX_TERMINAL_RATINGS {
+        let grid = index as i64 - 1;
+        symbol_editor
+            .execute(
+                symbol_editor.revision(),
+                Action::Insert {
+                    primitive: Primitive::Pin {
+                        number: index.to_string(),
+                        name: Some(format!("VIN{index}")),
+                        electrical_type: ElectricalType::PowerIn,
+                        alternates: Vec::new(),
+                        at: Point { x_nm: (grid % 16 - 8) * 1_270_000, y_nm: (grid / 16 - 4) * 1_270_000 },
+                        appearance: None,
+                    },
+                },
+            )
+            .unwrap();
+    }
+    let mut footprint = Item::new(ItemKind::Footprint).unwrap();
+    footprint.library = "test-drawings".into();
+    footprint.id = "max-supply-package".into();
+    let Primitive::Pad { pad: template } = footprint.objects[&1].clone() else { panic!("fixture needs a pad") };
+    let mut footprint_editor = AuthoringSession::new(footprint, false).unwrap();
+    for index in 3..=MAX_TERMINAL_RATINGS {
+        let mut pad = template.clone();
+        pad.number = index.to_string();
+        pad.center = Point { x_nm: (index as i64 % 16) * 1_270_000, y_nm: (index as i64 / 16 + 1) * 1_270_000 };
+        footprint_editor.execute(footprint_editor.revision(), Action::Insert { primitive: Primitive::Pad { pad } }).unwrap();
+    }
+    let prepared_symbol = publishing::prepare(symbol_editor.snapshot(), &manifest, 0, None, false).unwrap();
+    let prepared_footprint = publishing::prepare(footprint_editor.snapshot(), &manifest, 0, None, false).unwrap();
+    let mut documents = Documents::from([("library.json".into(), manifest)]);
+    documents.extend(prepared_symbol.documents().clone());
+    documents.extend(prepared_footprint.documents().clone());
+    app.session.install_library_source("test-drawings", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+
+    let symbol_item = prepared_symbol.item();
+    let symbol_ref = Reference { library: symbol_item.library.clone(), id: symbol_item.id.clone(), revision: symbol_item.revision };
+    let footprint_item = prepared_footprint.item();
+    let footprint_ref = Reference { library: footprint_item.library.clone(), id: footprint_item.id.clone(), revision: footprint_item.revision };
+    let revision = app.library_editors.parts[&id].session.revision();
+    app.choose_part_reference(id, revision, &ReferenceField::Symbol, Some(symbol_ref)).unwrap();
+    let revision = app.library_editors.parts[&id].session.revision();
+    let mut record = app.library_editors.parts[&id].session.record().clone();
+    let Record::Part(part) = &mut record else { panic!() };
+    part.packages.clear();
+    part.packages.insert(
+        "max".into(),
+        Package {
+            name: "Max package".into(),
+            footprint: footprint_ref,
+            mapping: (1..=MAX_TERMINAL_RATINGS).map(|index| (index.to_string(), vec![index.to_string()])).collect(),
+            unconnected_pads: Vec::new(),
+        },
+    );
+    for index in 1..=MAX_TERMINAL_RATINGS {
+        part.set_supply_range(&index.to_string(), "4.5 V", "36 V").unwrap();
+    }
+    app.replace_part_document(id, revision, record).unwrap();
+    let ctx = egui::Context::default();
+    let revision = app.library_editors.parts[&id].session.revision();
+    app.publish_library_item(&ctx, id, revision, "workshop", false).unwrap();
+    finish(&mut app, &ctx);
+    assert!(!app.library_editors.parts[&id].dirty(), "{:?}", app.library_editors.notice());
+    let source = pcbcraft_storage::library::load(std::path::Path::new(&app.library_sources.registered[0].path)).unwrap();
+    assert!(source.problems().is_empty());
+    let reference = app.library_editors.parts[&id].session.record().reference();
+    let reopened = app.session.libraries().resolve_part(&reference).unwrap();
+    assert_eq!(reopened.definition.terminal_ratings.len(), MAX_TERMINAL_RATINGS);
+
+    // Keep 128 ratings authored while leaving terminal 1 unrated so the form offers Apply range for it.
+    let published = app.library_editors.parts[&id].session.record().clone();
+    let mut at_limit = published.clone();
+    let Record::Part(part) = &mut at_limit else { panic!() };
+    part.set_supply_range("1", "", "").unwrap();
+    part.set_supply_range(&(MAX_TERMINAL_RATINGS + 1).to_string(), "4.5 V", "36 V").unwrap();
+    assert_eq!(part.terminal_ratings.len(), MAX_TERMINAL_RATINGS);
+    let revision = app.library_editors.parts[&id].session.revision();
+    app.replace_part_document(id, revision, at_limit.clone()).unwrap();
+    let doc = app.library_editors.parts.get_mut(&id).unwrap();
+    let revision = doc.session.revision();
+    let entered = BTreeMap::from([("supply/1/max".to_string(), "36 V".to_string()), ("supply/1/min".to_string(), "4.5 V".to_string())]);
+    doc.pending = entered.clone();
+
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Device supply ranges").click();
+    h.run();
+    h.get_by_label("Apply range").click();
+    h.run();
+    h.get_by_label("Apply range");
+    let doc = h.state_mut().library_editors.parts.get_mut(&id).unwrap();
+    assert_eq!(doc.pending, entered);
+    assert_eq!(doc.session.record(), &at_limit);
+    assert_eq!(doc.session.revision(), revision);
+    assert!(doc.error.as_deref().is_some_and(|error| error.contains(&MAX_TERMINAL_RATINGS.to_string())), "{:?}", doc.error);
+    doc.session.history(revision, false).unwrap();
+    assert_eq!(doc.session.record(), &published);
+}
+
 /// Real workspace input creates a document and renders it in wide dark and compact light layouts.
 #[test]
 fn new_generic_part_uses_existing_workspace_and_discard_dialog() {

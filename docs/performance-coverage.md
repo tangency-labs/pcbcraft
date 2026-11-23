@@ -20,7 +20,7 @@ to collect matched evidence for a change.
 | Requirement | Implemented and exercised | Limit or follow-on owner |
 | --- | --- | --- |
 | Reproducible inputs | Original native-command/encoder artifacts, recipe/seed/revision, exact project/envelope hashes, versioned pointer/key trace | Production commands allocate UUIDs; reuse the saved bytes instead of regenerating comparison inputs |
-| Supported limits | Exactly 4,096 tracks / 2,048 vias (the board limits when measured); 4,096 schematic symbols / 64 sheets; explicit 63-link hierarchy | The recorded board-limit run is a smoke sample, not a tail baseline. A separate test saves, reloads and checks a board at the new 65,536-track / 16,384-via limits. |
+| Supported limits | Exactly 4,096 tracks / 2,048 vias (the board limits when measured); 4,096 schematic symbols / 64 sheets; explicit 63-link hierarchy | The recorded board-limit run is a smoke sample, not a tail baseline. `envelope-v1` generates a board at the current 65,536-track, 16,384-via and 1,024-pad BGA envelope through shared commands, and a separate engine test saves, reloads and checks a board at the 65,536-track / 16,384-via limits. |
 | Dense/crowded geometry | Existing dense diagonals/mixed pad widths, plus parallel narrow rails and attached branches; oracle-checked channel probe | `bga-v1` adds regenerated, unrouted BGA-only diagnostics distinct from its saved reference-plus-BGA artifact; BGA fan-out and routing belong with #253; radius/outline/offset traces with #259–#262 |
 | Cold versus steady | Fresh model decode and lazy sheet connectivity separated from repeated access, preparation, queries, validated command publication and warmed replay | Whole-project first/repeat projection is not labeled as a cache hit; process/module startup is outside timings |
 | Cancel/layer/reversal | Actual app assertions before each captured frame; cancellation preserves authored bytes; layer transition and inactive final tool required | Serialized screenshots pace inputs; this is not an uninterrupted OS event-stream benchmark |
@@ -222,3 +222,19 @@ broad replay. These short shared-host runs do not qualify statistical tails,
 native-window/browser rendered latency, allocation, large-class capacity or
 Wayland endurance. Headless dark/light GPU images verify the reused route halo;
 WASI correctness and browser compilation cover separate boundaries.
+
+## Zone-fill slice (#232)
+
+The [bounded #232 evidence](../tools/performance/baselines/issue232/README.md)
+retains the saved-project navigation pair, raw samples, source/artifact hashes
+and packaged-worker success/failure record. The navigation fixture lacks a closed
+outline and correctly has unavailable fill; it does not measure filled-material
+rendering or refill throughput. The final packaged demo exercises actual automatic
+fill, while native window/endurance and realistic-board capture costs remain open.
+
+The subsequent [supplied-demo fill calculation comparison](../tools/performance/baselines/issue232/fill-speed/README.md)
+records three original/optimized samples per build and a prepared-operand change.
+Optimized calculation median falls from 428.011 to 105.841 ms on that one board;
+the initial development build took about 5.9 seconds. This isolates headless fill
+calculation and does not qualify physical presentation, large-board throughput,
+retained-topology memory growth or a vendor comparison.
