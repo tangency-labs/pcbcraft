@@ -129,6 +129,54 @@ fn sheet_overview_is_shared_by_live_and_headless_clients() {
     assert!(!editor.session.available("edit.undo"));
 }
 
+/// Over MCP, `nets.sheet_overview` keeps its response shape and reports only links that actually
+/// carry a net across sheets: an unmatched global label on the parent is omitted until a matching
+/// global label appears on the child.
+#[test]
+fn sheet_overview_mcp_reports_only_crossing_via_links() {
+    use pcbcraft_engine::{DRAW_WIRE, WireEndpoint, hierarchy, net_labels, schematic::Point};
+    let mut setup = Session::default();
+    apply(&mut setup, "project.new", json!({}));
+    let parent = setup.project().unwrap().sheet_target();
+    apply(&mut setup, hierarchy::CREATE_CHILD, json!({"name":"Power","x_nm":0,"y_nm":0}));
+    let child = setup.project().unwrap().sheets().nth(1).unwrap().target;
+    apply(&mut setup, hierarchy::ADD_LABEL, json!({"sheet":child.id(),"name":"SIGNAL","direction":"input","x_nm":0,"y_nm":0}));
+    let id = setup.project().unwrap().for_sheet(child).unwrap().hierarchical_labels()[0].id;
+    let mut terminals = Vec::new();
+    for sheet in [parent, child] {
+        apply(&mut setup, PLACE_RESISTOR, json!({"sheet":sheet.id(),"x_nm":10_000_000,"y_nm":0}));
+        let projection = setup.project().unwrap().for_sheet(sheet).unwrap();
+        let terminal = projection.symbols()[0].terminals()[0];
+        let endpoint = if sheet == parent { WireEndpoint::SheetPin(id) } else { WireEndpoint::Label(id) };
+        let from = projection.terminal_position(terminal).unwrap();
+        let to = projection.endpoint_position(endpoint).unwrap();
+        let bends = if from.x_nm != to.x_nm && from.y_nm != to.y_nm { vec![Point { x_nm: from.x_nm, y_nm: to.y_nm }] } else { vec![] };
+        apply(&mut setup, DRAW_WIRE, json!({"sheet":sheet.id(),"from":terminal.inspect(),"to":endpoint.inspect(),"bends":bends,"auto_heal":false}));
+        terminals.push(terminal);
+    }
+    let parent_at = setup.project().unwrap().for_sheet(parent).unwrap().terminal_position(terminals[0]).unwrap();
+    apply(
+        &mut setup,
+        net_labels::ADD,
+        json!({"sheet":parent.id(),"name":"PARENT_ONLY","style":"global","x_nm":parent_at.x_nm,"y_nm":parent_at.y_nm}),
+    );
+
+    let mut headless = Headless::with_project(setup.snapshot().unwrap());
+    let request = json!({"command":nets::SHEET_OVERVIEW,"inspect":false,"params":{}});
+    let unmatched = headless.call("engine.execute", request.clone()).unwrap();
+    let sheets = &unmatched["sheet_overview"]["nets"][0]["sheets"];
+    assert_eq!(sheets[0]["via"], json!(["sheet_pin"]));
+    assert_eq!(sheets[1]["via"], json!(["hierarchical_label"]));
+
+    let child_at = setup.project().unwrap().for_sheet(child).unwrap().terminal_position(terminals[1]).unwrap();
+    apply(&mut setup, net_labels::ADD, json!({"sheet":child.id(),"name":"PARENT_ONLY","style":"global","x_nm":child_at.x_nm,"y_nm":child_at.y_nm}));
+    let mut headless = Headless::with_project(setup.snapshot().unwrap());
+    let matched = headless.call("engine.execute", request).unwrap();
+    let sheets = &matched["sheet_overview"]["nets"][0]["sheets"];
+    assert_eq!(sheets[0]["via"], json!(["global_label", "sheet_pin"]));
+    assert_eq!(sheets[1]["via"], json!(["global_label", "hierarchical_label"]));
+}
+
 /// Model the real live adapter's ownership/refusal boundary without opening an OS window.
 struct OpenEditor {
     session: Session,

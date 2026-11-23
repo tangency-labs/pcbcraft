@@ -157,6 +157,9 @@ impl Project {
         let pages: BTreeMap<Uuid, usize> = self.page_order().into_iter().enumerate().map(|(index, target)| (target.id(), index + 1)).collect();
         let mut sheets = Vec::new();
         let mut rows = Rows::default();
+        let mut global_markers = BTreeMap::<(usize, String), BTreeMap<Uuid, (bool, bool)>>::new();
+        let mut hierarchical_labels = BTreeMap::<u64, (usize, Uuid)>::new();
+        let mut sheet_pins = Vec::<(u64, usize, Uuid)>::new();
         let mut units = BTreeMap::<(u64, String), (usize, BTreeSet<Uuid>)>::new();
         for sheet in self.sheets() {
             sheets.push(SheetInfo {
@@ -166,32 +169,71 @@ impl Project {
                 page: pages.get(&sheet.target.id()).copied().ok_or("Missing page while building the sheet overview.")?,
             });
             let own = self.for_sheet(sheet.target).ok_or("Unknown sheet while building the sheet overview.")?;
-            let power: BTreeSet<_> = own.power_terminals().map(|(end, _, _)| end).collect();
+            let power: BTreeMap<_, _> = own.power_terminals().map(|(end, name, _)| (end, name.to_owned())).collect();
             for symbol in own.symbols() {
                 for terminal in symbol.terminals() {
                     let end = WireEndpoint::Terminal(terminal);
-                    if power.contains(&end) {
-                        rows.mark(electrical, sheet.target, end, symbol.component, Some(Via::PowerSymbol));
+                    if let Some(name) = power.get(&end) {
+                        if let Some(row) = rows.mark(electrical, sheet.target, end, symbol.component) {
+                            global_markers.entry((row, name.clone())).or_default().entry(sheet.target.id()).or_default().1 = true;
+                        }
                         continue;
                     }
                     let key = (symbol.component, terminal.number().to_owned());
-                    if let Some(reach) = rows.mark(electrical, sheet.target, end, symbol.component, None) {
-                        reach.terminals.insert(key.clone());
-                    }
-                    if let Some(row) = electrical.net_index_for(terminal) {
+                    if let Some(row) = rows.mark(electrical, sheet.target, end, symbol.component) {
+                        if let Some(reach) = rows.reached.get_mut(&row).and_then(|reached| reached.get_mut(&sheet.target.id())) {
+                            reach.terminals.insert(key.clone());
+                        }
                         units.entry(key).or_insert_with(|| (row, BTreeSet::new())).1.insert(sheet.target.id());
                     }
                 }
             }
             for label in own.net_labels() {
-                rows.mark(electrical, sheet.target, WireEndpoint::NetLabel(label.id), 0, label.style.global().then_some(Via::GlobalLabel));
+                if let Some(row) = rows.mark(electrical, sheet.target, WireEndpoint::NetLabel(label.id), 0)
+                    && label.style.global()
+                {
+                    global_markers.entry((row, label.name.clone())).or_default().entry(sheet.target.id()).or_default().0 = true;
+                }
             }
             for label in own.hierarchical_labels() {
-                rows.mark(electrical, sheet.target, WireEndpoint::Label(label.id), 0, Some(Via::HierarchicalLabel));
+                if let Some(row) = rows.mark(electrical, sheet.target, WireEndpoint::Label(label.id), 0) {
+                    hierarchical_labels.insert(label.id, (row, sheet.target.id()));
+                }
             }
             for block in own.sheet_symbols() {
                 for pin in own.sheet_pins(block) {
-                    rows.mark(electrical, sheet.target, WireEndpoint::SheetPin(pin.label.id), 0, Some(Via::SheetPin));
+                    if let Some(row) = rows.mark(electrical, sheet.target, WireEndpoint::SheetPin(pin.label.id), 0) {
+                        sheet_pins.push((pin.label.id, row, sheet.target.id()));
+                    }
+                }
+            }
+        }
+        // A global label or power symbol counts as a crossing only when the same name appears on
+        // another sheet occurrence.
+        for ((row, _), by_sheet) in global_markers.into_iter().filter(|(_, by_sheet)| by_sheet.len() > 1) {
+            for (sheet, (has_global, has_power)) in by_sheet {
+                if let Some(reach) = rows.reached.get_mut(&row).and_then(|reached| reached.get_mut(&sheet)) {
+                    if has_global {
+                        reach.via.insert(Via::GlobalLabel);
+                    }
+                    if has_power {
+                        reach.via.insert(Via::PowerSymbol);
+                    }
+                }
+            }
+        }
+        // A sheet pin and its child hierarchical label count as a crossing only when joined on the
+        // same net across distinct sheets.
+        for (label_id, pin_row, parent_sheet) in sheet_pins {
+            if let Some(&(child_row, child_sheet)) = hierarchical_labels.get(&label_id)
+                && pin_row == child_row
+                && parent_sheet != child_sheet
+            {
+                if let Some(reach) = rows.reached.get_mut(&pin_row).and_then(|reached| reached.get_mut(&parent_sheet)) {
+                    reach.via.insert(Via::SheetPin);
+                }
+                if let Some(reach) = rows.reached.get_mut(&child_row).and_then(|reached| reached.get_mut(&child_sheet)) {
+                    reach.via.insert(Via::HierarchicalLabel);
                 }
             }
         }
@@ -285,12 +327,11 @@ struct Rows {
 impl Rows {
     /// Record that the net holding `end`, when it has one, reaches `sheet`. `part` is the part
     /// owning a terminal endpoint and zero otherwise.
-    fn mark(&mut self, electrical: &Connectivity, sheet: SheetTarget, end: WireEndpoint, part: u64, via: Option<Via>) -> Option<&mut Reach> {
+    fn mark(&mut self, electrical: &Connectivity, sheet: SheetTarget, end: WireEndpoint, part: u64) -> Option<usize> {
         let row = electrical.net_index_for_endpoint(end)?;
         self.endpoints.entry(row).or_default().insert((sheet.id(), end, part));
-        let reach = self.reached.entry(row).or_default().entry(sheet.id()).or_default();
-        reach.via.extend(via);
-        Some(reach)
+        self.reached.entry(row).or_default().entry(sheet.id()).or_default();
+        Some(row)
     }
 }
 

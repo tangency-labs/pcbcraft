@@ -140,6 +140,47 @@ fn hierarchy_reports_sheet_pin_and_hierarchical_label() {
     assert_eq!(reach[1]["terminals"], json!(1));
 }
 
+/// An unmatched global label on one sheet does not count as a cross-sheet link when the net
+/// only crosses through a hierarchical sheet pin; adding the matching global label on the child
+/// reports `global_label` on both sheets.
+#[test]
+fn unmatched_global_label_on_sheet_pin_net_is_not_reported_in_via() {
+    let mut s = session();
+    let parent = s.project().unwrap().sheet_target();
+    apply(&mut s, hierarchy::CREATE_CHILD, json!({"name":"Power","x_nm":0,"y_nm":0}));
+    let child = s.project().unwrap().sheets().nth(1).unwrap().target;
+    apply(&mut s, hierarchy::ADD_LABEL, json!({"sheet":child.id(),"name":"SIGNAL","direction":"input","x_nm":0,"y_nm":0}));
+    let id = s.project().unwrap().for_sheet(child).unwrap().hierarchical_labels()[0].id;
+    let mut pins = Vec::new();
+    for sheet in [parent, child] {
+        apply(&mut s, PLACE_RESISTOR, json!({"sheet":sheet.id(),"x_nm":10_000_000,"y_nm":0}));
+        let projection = s.project().unwrap().for_sheet(sheet).unwrap();
+        let terminal = projection.symbols()[0].terminals()[0];
+        let endpoint = if sheet == parent { WireEndpoint::SheetPin(id) } else { WireEndpoint::Label(id) };
+        let from = projection.terminal_position(terminal).unwrap();
+        let to = projection.endpoint_position(endpoint).unwrap();
+        let bends = if from.x_nm != to.x_nm && from.y_nm != to.y_nm { vec![Point { x_nm: from.x_nm, y_nm: to.y_nm }] } else { vec![] };
+        apply(&mut s, DRAW_WIRE, json!({"sheet":sheet.id(),"from":terminal.inspect(),"to":endpoint.inspect(),"bends":bends,"auto_heal":false}));
+        pins.push(terminal);
+    }
+    label(&mut s, parent, pins[0], "PARENT_ONLY", "global");
+
+    let report = overview(&mut s, json!({}));
+    assert_eq!(report["nets"].as_array().unwrap().len(), 1);
+    let reach = &report["nets"][0]["sheets"];
+    assert_eq!(reach[0]["sheet"], json!(parent.id()));
+    assert_eq!(reach[0]["via"], json!(["sheet_pin"]));
+    assert_eq!(reach[1]["sheet"], json!(child.id()));
+    assert_eq!(reach[1]["via"], json!(["hierarchical_label"]));
+
+    label(&mut s, child, pins[1], "PARENT_ONLY", "global");
+    let matched = overview(&mut s, json!({}));
+    assert_eq!(matched["nets"].as_array().unwrap().len(), 1);
+    let reach = &matched["nets"][0]["sheets"];
+    assert_eq!(reach[0]["via"], json!(["global_label", "sheet_pin"]));
+    assert_eq!(reach[1]["via"], json!(["global_label", "hierarchical_label"]));
+}
+
 /// A power symbol's value names a rail on every sheet; the symbol itself is not counted as a
 /// part terminal.
 #[test]

@@ -557,8 +557,9 @@ the persistent `id` (null before the net has one), a typed `anchor` that
 `nets.inspect_classes` and `nets.set_classes` accept as a derived target, the readable `name`, all authored
 `names`, and `sheets` in page order. Each sheet gives its `sheet` UUID, sheet
 `occurrence`, `name`, `page`, `terminals` (part pins on that sheet, not counting
-power symbols) and `via`: any of `global_label`, `power_symbol`,
-`hierarchical_label`, `sheet_pin` and `shared_terminal`. An optional `sheet` keeps
+power symbols) and `via`: only the connection kinds that actually carry the net
+across sheets (`global_label`, `power_symbol`, `hierarchical_label`, `sheet_pin`,
+`shared_terminal`). An optional `sheet` keeps
 the nets that reach that sheet; an unknown sheet is `not_found`. Results are kept
 with `inspect: false`. See [hierarchical sheets](hierarchical-sheets.md).
 

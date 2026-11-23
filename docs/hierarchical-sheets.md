@@ -17,9 +17,9 @@ pin with **W**; an ordinary click also starts a wire at an unconnected anchor.
 Parent wires and child wires then belong to one project electrical net. Repeated
 names on other sheets do not connect them. The Net Inspector lists the active sheet's endpoints after resolving named connections across the project.
 Its **Across sheets** section lists every net that reaches more than one sheet:
-each sheet's page number and name, and how the net arrives there (global label,
-power symbol, hierarchical label, sheet pin, or a shared terminal of a part whose
-units sit on several sheets). The active sheet is highlighted, and the search box
+each sheet's page number and name, and the links that carry the net across sheets
+there (global label, power symbol, hierarchical label, sheet pin, or a shared
+terminal of a part whose units sit on several sheets). The active sheet is highlighted, and the search box
 also matches sheet names. The list is read-only and follows edits, Undo and
 reopening; equal local names on two sheets are two nets and are not listed.
 Agents read the same list with `nets.sheet_overview`. Each entry names a sheet
