@@ -1210,7 +1210,10 @@ impl JournalRecorder {
 pub struct RecorderOptions {
     /// When edits arrive faster than the worker writes them, encode and record only the newest
     /// of each queued run. Recovery reaches the same documents; [`Recovered::commands`] then
-    /// names only the last command of each coalesced run.
+    /// names only the last command of each coalesced run. If the newest state of a compacted
+    /// burst fails to encode, fallback tries only the bounded retained candidates (the oldest
+    /// and newest pending states, up to the queue compaction limit), so intermediate states
+    /// dropped across multiple compactions are not retried.
     pub coalesce_edits: bool,
     /// Prune entries left by earlier runs when the recorder starts.
     pub retention: Option<Retention>,
@@ -1639,10 +1642,12 @@ fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: 
     Ok(())
 }
 
-/// After the newest coalesced or compacted state fails to encode, record the newest earlier
-/// pending state that still encodes, leaving the caller to report the newest state's error.
-/// Compacted bursts always write a snapshot (`as_snapshot == true`) so an edit after a
-/// compacted `Opened` is never appended to a pre-open journal.
+/// After the newest coalesced or compacted state fails to encode, record the newest retained
+/// earlier pending candidate that still encodes, leaving the caller to report the newest state's
+/// error. Compacted bursts retain at most `PENDING_LIMIT` candidates (the oldest and newest
+/// entries via [`bound_fallbacks`]), so intermediate states dropped across multiple compactions
+/// are not retried. Compacted bursts always write a snapshot (`as_snapshot == true`) so an edit
+/// after a compacted `Opened` is never appended to a pre-open journal.
 fn record_fallback(journal: &mut Option<EditJournal>, dir: &Path, id: &str, fallbacks: Vec<Message>, as_snapshot: bool) -> bool {
     for fallback in fallbacks.into_iter().rev() {
         let result = match fallback {

@@ -2053,9 +2053,10 @@ fn coalescing_keeps_newest_encodable_edit_when_replacement_fails_to_encode() {
     assert_eq!(ok_recovered.documents, c_docs);
 }
 
-/// Compacting a burst above `PENDING_LIMIT` keeps a bounded fallback to the newest encodable
-/// pending state: if the compacted latest state fails to encode, recovery preserves the newest
-/// encodable state from the burst and still reports the fault for the latest state.
+/// Compacting a burst above `PENDING_LIMIT` keeps a bounded set of retained fallback candidates
+/// (`PENDING_LIMIT` entries: oldest and newest): if the compacted latest state fails to encode,
+/// recovery preserves the newest encodable retained candidate and still reports the fault for
+/// the latest state.
 #[test]
 fn compaction_keeps_newest_encodable_state_when_latest_fails_to_encode() {
     let dir = tempfile::tempdir().unwrap();
@@ -2099,6 +2100,70 @@ fn compaction_keeps_newest_encodable_state_when_latest_fails_to_encode() {
     assert_eq!(recovered.stop, None);
     assert_eq!(recovered.project.name, format!("Edit {PENDING_LIMIT}"));
     assert_eq!(recovered.documents, last_good_docs);
+}
+
+/// Across multiple compactions in a stalled burst, `bound_fallbacks` retains only `PENDING_LIMIT`
+/// candidates (the oldest and the newest `PENDING_LIMIT - 1`). When all newer retained candidates
+/// fail to encode, fallback records the retained oldest candidate rather than intermediate states
+/// dropped during earlier compactions.
+#[test]
+fn multi_compaction_fallback_covers_only_retained_candidates() {
+    let dir = tempfile::tempdir().unwrap();
+    let mailbox = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "State A"})).unwrap();
+    mailbox.push(Message::Opened(session.snapshot().unwrap()));
+    let (a_tx, a_rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(a_tx));
+
+    let mut first_good_docs = None;
+    let mut last_good_project = session.snapshot().unwrap();
+    // `PENDING_LIMIT + 1` good edits trigger the first compaction (Edit 33 with fallbacks 1..=32).
+    for index in 1..=(PENDING_LIMIT + 1) {
+        let name = format!("Edit {index}");
+        let revision = session.apply("project.rename", &json!({"name": name})).unwrap();
+        let project = session.snapshot().unwrap();
+        if index == 1 {
+            first_good_docs = Some(encode_documents(project.clone()).unwrap());
+        }
+        last_good_project = project.clone();
+        mailbox.push(Message::Committed(CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision, project }));
+    }
+    let first_good_docs = first_good_docs.unwrap();
+
+    // `PENDING_LIMIT` unencodable edits trigger a second compaction, dropping intermediate edits
+    // `2..=PENDING_LIMIT + 1` and retaining `[Edit 1, bad 1..=bad (PENDING_LIMIT - 1)]`.
+    let mut bad_project = Project::clone(&last_good_project);
+    bad_project.name = "x".repeat(pcbcraft_engine::persistence::MAX_DOCUMENT_BYTES + 1);
+    let bad_project = Arc::new(bad_project);
+    for offset in 1..=PENDING_LIMIT {
+        mailbox.push(Message::Committed(CommittedEdit {
+            command: "project.rename".to_owned(),
+            params: json!({}),
+            revision: session.revision() + offset as u64,
+            project: Arc::clone(&bad_project),
+        }));
+    }
+
+    assert!(matches!(
+        mailbox.state.lock().unwrap().queue.back(),
+        Some(Message::Compacted { fallbacks, .. }) if fallbacks.len() == PENDING_LIMIT
+    ));
+
+    let (tx, rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(tx));
+    mailbox.close(None);
+
+    record(dir.path(), "entry", &mailbox, &|| {}, None).unwrap();
+    a_rx.recv().unwrap().unwrap();
+    let err = rx.recv().unwrap().unwrap_err();
+    assert!(err.contains("size limit"), "unexpected error: {err}");
+    assert_eq!(mailbox.state.lock().unwrap().fault.as_ref().map(|f| f.message.as_str()), Some(err.as_str()));
+
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.project.name, "Edit 1");
+    assert_eq!(recovered.documents, first_good_docs);
 }
 
 /// An explicit `Message::Opened` reusing the exact same `Arc<Project>` pointer as a compacted
