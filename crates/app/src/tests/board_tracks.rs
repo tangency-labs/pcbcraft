@@ -852,7 +852,12 @@ fn route_menu_owns_input_and_places_a_via_at_its_opening_point() {
     h.run();
     click_route(&mut h, start);
     right_click_route(&mut h, via);
-    let close = at(&h, Point { x_nm: 7_620_000, y_nm: -2_540_000 });
+    // Dismiss on the open side of the canvas even as the route menu grows or flips.
+    let canvas = h.get_by_label("PCB canvas").rect().shrink(12.);
+    let menu = h.get_by_label("Cancel").rect();
+    let close = if menu.center().x < canvas.center().x { canvas.right_center() } else { canvas.left_center() };
+    assert!(!menu.expand(12.).contains(close));
+    let dismissal = h.state().views.active.camera.snap(close, h.get_by_label("PCB canvas").rect());
     click_canvas_at(&mut h, close);
     assert!(h.query_by_label("Place through via").is_none());
     assert!(h.state().views.active.board.tracks.routing());
@@ -867,7 +872,7 @@ fn route_menu_owns_input_and_places_a_via_at_its_opening_point() {
     assert_eq!(vias(&h).iter().map(|via| via.at).collect::<Vec<_>>(), [via]);
     let ends: Vec<_> = tracks(&h).iter().flat_map(|track| [track.start, track.end]).collect();
     assert!(ends.contains(&start) && ends.contains(&end));
-    assert!(!ends.contains(&Point { x_nm: 7_620_000, y_nm: -2_540_000 }));
+    assert!(!ends.contains(&dismissal));
 }
 
 /// Without a tool, clicking a track selects it and Delete removes it through the shared command.
