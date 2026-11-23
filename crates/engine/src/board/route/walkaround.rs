@@ -126,7 +126,7 @@ impl<'a> Walker<'a> {
         let at_head = Contour::capsule(request.head, request.head, half);
         let objects = query;
         let head_candidates = query.candidates(&at_head, &layers)?;
-        let (origin, origin_layer, origin_width) = if request.mode == super::Mode::Shove {
+        let (origin, origin_layer, origin_width) = if request.mode != super::Mode::Walkaround {
             super::shove::pickup_geometry(request)
         } else {
             let (origin, layer) = request.origin.unwrap_or((request.head, request.layer));
@@ -251,7 +251,7 @@ impl<'a> Walker<'a> {
             return first.map(|mut plan| {
                 // Shove can try a board-edge prefix on its overlay. Placement still
                 // requires successful propagation, and a copper blocker stays blocked.
-                if request.mode == super::Mode::Shove
+                if request.mode != super::Mode::Walkaround
                     && goal.edge_blocked
                     && plan.blocker.is_none()
                     && plan.points.len() >= 2
@@ -331,7 +331,17 @@ impl<'a> Walker<'a> {
     /// Assemble a result, naming the blocking copper by its query address.
     fn plan(&self, points: Vec<Point>, outcome: Outcome, blocker: Option<usize>) -> Plan {
         let blocker = blocker.filter(|_| matches!(outcome, Outcome::Blocked { .. })).and_then(|i| self.query.get(i)).map(|o| o.name.clone());
-        Plan { adjusted_target: None, start_blocked: false, replacements: Vec::new(), shove: None, points, outcome, blocker, probes: self.probes }
+        Plan {
+            adjusted_target: None,
+            start_blocked: false,
+            via_moves: Vec::new(),
+            replacements: Vec::new(),
+            shove: None,
+            points,
+            outcome,
+            blocker,
+            probes: self.probes,
+        }
     }
 
     /// Certify an incoming shove candidate against the same geometry and membership as

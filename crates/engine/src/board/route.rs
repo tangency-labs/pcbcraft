@@ -19,7 +19,9 @@ mod hull;
 mod posture;
 mod preparation;
 mod search;
+pub(in crate::board) use search::Search;
 mod shove;
+pub use super::track::replacements::ViaMove;
 pub use shove::{FixedCopper, Mode, ShoveStats};
 pub(crate) use shove::{fixed_schema, valid_fixed};
 #[cfg(test)]
@@ -92,6 +94,9 @@ pub struct Plan {
     /// Source track paths to replace atomically with this route; empty for walkaround.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub replacements: Vec<super::track::replacements::Replacement>,
+    /// Through vias translated together with their endpoint tracks.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub via_moves: Vec<ViaMove>,
     /// Bounded shove work, absent for walkaround.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shove: Option<ShoveStats>,
@@ -147,6 +152,7 @@ impl Session {
             return Ok(Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: None,
                 points: Vec::new(),
@@ -189,6 +195,7 @@ impl Session {
             Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: None,
                 points: Vec::new(),
@@ -203,7 +210,7 @@ impl Session {
         let mut result = json!({"revision":self.revision(),"route_plan":{
             "board":target.board,"layer":layer,"mode":mode,"merge_same_net":merge_same_net,"width_nm":width_nm,"posture":posture,"flipped":flipped,"budget":budget,
             "points":plan.points,"outcome":plan.outcome,"blocker":plan.blocker,"probes":plan.probes,
-            "replacements":plan.replacements,"shove":plan.shove,"start_blocked":plan.start_blocked
+            "replacements":plan.replacements,"via_moves":plan.via_moves,"shove":plan.shove,"start_blocked":plan.start_blocked
         }});
         if let Some(point) = plan.adjusted_target {
             result["route_plan"]["adjusted_target"] = json!(point);
