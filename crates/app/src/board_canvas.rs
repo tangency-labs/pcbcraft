@@ -467,7 +467,7 @@ pub(super) fn show(
     let rotation = camera.model_rotation(std::mem::take(&mut state.rotate_requested));
     let rotating = rotation != 0;
     let flipping = std::mem::take(&mut state.flip_requested);
-    let cancelled = enabled && ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary));
+    let cancelled = enabled && secondary_pressed_here(&response);
     if cancelled {
         state.draft = None;
     }
@@ -906,9 +906,7 @@ fn place_group(
         state.placement = Some(placement);
         return None;
     }
-    if ui.input(|i| {
-        i.pointer.button_pressed(PointerButton::Secondary) || i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))
-    }) {
+    if secondary_pressed_here(response) || ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false)))) {
         return None;
     }
     if !enabled {
@@ -1147,6 +1145,14 @@ fn reference_bounds(
     })
 }
 
+/// A secondary press on this canvas cancels its gesture. A press over another pane, such as a
+/// right-drag pan there, leaves this canvas's move, placement or reference drag running.
+fn secondary_pressed_here(response: &Response) -> bool {
+    response.ctx.input(|input| {
+        input.pointer.button_pressed(PointerButton::Secondary) && input.pointer.interact_pos().is_some_and(|pos| response.rect.contains(pos))
+    })
+}
+
 /// Project a local reference displacement into the editor-only label's screen coordinates.
 fn reference_shift(footprint: &FootprintView<'_>, camera: &Camera, rect: Rect) -> Vec2 {
     let local = footprint.reference_offset;
@@ -1169,7 +1175,7 @@ fn move_reference(
 ) -> (bool, Option<ReferenceDrag>) {
     let rect = response.rect;
     let mut draft = if let Some(draft) = state.reference_drag.take() {
-        if Some(draft.source) != source || response.ctx.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+        if Some(draft.source) != source || secondary_pressed_here(response) {
             return (true, None);
         }
         draft

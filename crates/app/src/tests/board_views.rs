@@ -1273,6 +1273,59 @@ fn footprint_tools_in_split_views_share_history_without_sharing_input() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
+/// With right-drag panning on, a right drag over the other pane pans it while the focused board
+/// keeps its footprint move. A right press on the board itself still cancels the move.
+#[test]
+fn right_drag_pan_in_the_other_pane_keeps_the_board_move() {
+    let mut h = board_harness();
+    h.state_mut().preferences.navigation.right_drag_pan = true;
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let board_id = ViewId(2);
+    h.state_mut().views.view_mut(board_id).unwrap().camera.center_on(Point { x_nm: 0, y_nm: 0 });
+    h.run();
+    let rect = h.get_by_label("PCB canvas 3").rect();
+    let origin = h.state().views.view(board_id).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+    click_canvas_at(&mut h, origin);
+    h.hover_at(origin);
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    assert_eq!(h.state().views.active.id(), board_id);
+    assert!(h.state().views.active.board.draft.is_some());
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let schematic = h.get_by_label("Schematic canvas 1").rect();
+    let cards = h.state().views.view(ViewId(0)).unwrap().canvas_cards.clone();
+    let from = [0.5, 0.35, 0.65, 0.2, 0.8]
+        .into_iter()
+        .flat_map(|x| [0.5, 0.3, 0.7].map(|y| schematic.lerp_inside(egui::vec2(x, y))))
+        .find(|point| !cards.iter().any(|card| card.contains(*point)))
+        .unwrap();
+    let to = from + egui::vec2(23.0, 17.0);
+    let camera = |h: &Harness<'_, PcbApp>| h.state().views.view(ViewId(0)).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, schematic);
+    let panned = camera(&h);
+    let secondary = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+    h.hover_at(from);
+    h.run();
+    h.event(secondary(from, true));
+    h.run();
+    h.event(egui::Event::PointerMoved(to));
+    h.run();
+    h.event(secondary(to, false));
+    h.run();
+    assert_ne!(camera(&h), panned, "the right drag pans the schematic pane");
+    assert_eq!(h.state().views.active.id(), board_id);
+    assert!(h.state().views.view(board_id).unwrap().board.draft.is_some(), "a press in the other pane keeps the board move");
+    h.hover_at(origin);
+    h.run();
+    h.event(secondary(origin, true));
+    h.run();
+    h.event(secondary(origin, false));
+    h.run();
+    assert!(h.state().views.view(board_id).unwrap().board.draft.is_none(), "a right press on the board cancels its move");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// A successful folder/archive Open from PCB layout binds the incoming project's board before
 /// constructing its fallback arrangement, including cached views of the outgoing project.
 #[cfg(not(target_arch = "wasm32"))]
