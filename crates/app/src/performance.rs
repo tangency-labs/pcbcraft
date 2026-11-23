@@ -735,6 +735,7 @@ mod tests {
     /// Deferred live `pcb.merge_tracks` on `envelope-v1` (65,536 tracks, 32,768 selected)
     /// runs under `performance::` in CI, cancels and rejects stale revisions mid-flight,
     /// and completes preview and full apply in one undo step.
+    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn deferred_merge_tracks_on_envelope_v1_cancels_rejects_stale_and_applies() {
         crate::live_control::verify_envelope_v1_deferred_merge();
