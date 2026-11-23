@@ -3051,8 +3051,7 @@ impl eframe::App for PcbApp {
     /// the later edit was never covered by Close approval, so recovery may hold the only copy.
     #[cfg(not(target_arch = "wasm32"))]
     fn on_exit(&mut self) {
-        let approved =
-            self.close_allowed && !self.close_keeps_recovery && !self.files.busy() && self.close_approved_revision == Some(self.session.revision());
+        let approved = self.close_discard_approved();
         self.autosave.finish(&mut self.session, approved);
     }
 }

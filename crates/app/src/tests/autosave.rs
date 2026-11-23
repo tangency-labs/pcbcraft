@@ -522,6 +522,49 @@ fn edit_committed_after_close_approval_keeps_recovery() {
     assert_eq!(pcbcraft_storage::recovery::recover(&dir, &entry).unwrap().documents, expected);
 }
 
+/// If a revision commits after Close approval and the recorder target then changes before
+/// `on_exit` (snapshots turned Off or the project replaced), `follow_project` must retire the
+/// old recorder without discarding that unapproved revision's recovery entry.
+#[test]
+fn edit_committed_after_close_approval_keeps_recovery_when_target_changes_before_exit() {
+    use crate::unsaved::{Then, Waiting};
+    for replace_project in [false, true] {
+        let work = tempfile::tempdir().unwrap();
+        let root = work.path().join("project");
+        let dir = work.path().join("recovery");
+        let mut source = Session::default();
+        source.apply("project.new", &json!({"name":"Close target change"})).unwrap();
+        pcbcraft_storage::save(&root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
+        let mut h = harness();
+        h.state_mut().autosave.dir = Some(dir.clone());
+        h.state_mut().preferences.autosave_minutes = 5;
+        let rev = h.state().session.revision();
+        h.state_mut().files.open_path_for_test(&root.join("project.json"), rev);
+        run_at(&mut h, 1.0);
+        place(&mut h, 0);
+        let (_, entry) = h.state().recovery_entry().unwrap();
+        let ctx = h.ctx.clone();
+        h.state_mut().save_project_file(None, &ctx);
+        h.state_mut().waiting = Some(Waiting::ForSave(Then::Close));
+        finish_file_job(&mut h);
+        assert!(h.state().close_allowed);
+        place(&mut h, 1);
+        let expected = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        if replace_project {
+            h.state_mut().start_new_project();
+        } else {
+            h.state_mut().preferences.autosave_minutes = 0;
+        }
+        run_at(&mut h, 2.0);
+        assert!(h.state().recovery_entry().is_none(), "no new recorder should attach after close_allowed");
+        if let Some(finished) = h.state_mut().wait_for_recovery_retirement() {
+            finished.unwrap();
+        }
+        eframe::App::on_exit(h.state_mut());
+        assert_eq!(pcbcraft_storage::recovery::recover(&dir, &entry).unwrap().documents, expected);
+    }
+}
+
 /// Interrupting Preferences with a dirty-project close cannot activate a staged timed Save.
 #[test]
 fn interrupted_preferences_do_not_enable_timed_save() {

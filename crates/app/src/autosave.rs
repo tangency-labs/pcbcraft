@@ -199,12 +199,20 @@ impl PcbApp {
         saves.wait(now)
     }
 
+    /// Whether an approved Close still covers the live session: no forced-close preservation,
+    /// no running file job, and no revision committed after approval.
+    pub(crate) fn close_discard_approved(&self) -> bool {
+        self.close_allowed && !self.close_keeps_recovery && !self.files.busy() && self.close_approved_revision == Some(self.session.revision())
+    }
+
     /// Detach an outgoing observer before retiring it. If retirement stalls we don't multiply
     /// workers; when it completes, attach to the newest state, not to an obsolete intermediate
     /// project. A failed worker spawn is retried even without a new edit. With snapshots Off no
-    /// recorder is attached, and turning them Off removes this window's entry.
+    /// recorder is attached, and turning them Off removes this window's entry unless Close has
+    /// already been approved and a later edit or running file job invalidated discard approval.
     fn follow_project(&mut self, ctx: &egui::Context, now: Duration) {
         let enabled = self.preferences.autosave_minutes > 0;
+        let allow_discard = if self.close_allowed { self.close_discard_approved() } else { !self.close_keeps_recovery };
         let autosave = &mut self.autosave;
         if !autosave.resolved {
             autosave.resolved = true;
@@ -224,7 +232,7 @@ impl PcbApp {
             }
             self.session.observe_edits(None);
             if let Some(recorder) = autosave.recorder.take().and_then(Arc::into_inner) {
-                let discard = (!self.close_keeps_recovery).then(|| Instant::now() + EXIT_BUDGET);
+                let discard = allow_discard.then(|| Instant::now() + EXIT_BUDGET);
                 autosave.retiring = Some(recorder.writer.retire(discard));
             }
             autosave.snapshots.taken();
