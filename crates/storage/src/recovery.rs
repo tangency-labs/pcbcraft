@@ -919,6 +919,8 @@ pub struct RecordingFault {
     pub removed: bool,
 }
 
+const WORKER_STOPPED_UNEXPECTEDLY: &str = "The recovery worker stopped unexpectedly.";
+
 /// Mark a panicked or stopped worker unavailable, release queued barriers, publish the worker's
 /// completion outcome, and wake the host afterwards.
 struct WorkerExit<F: Fn()> {
@@ -928,17 +930,17 @@ struct WorkerExit<F: Fn()> {
 }
 
 impl<F: Fn()> WorkerExit<F> {
-    fn mark_exited(&self) {
+    fn mark_exited(&self, panicked: bool) {
         let mut state = self.mailbox.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.exited = true;
         state.queue.clear();
-        if std::thread::panicking() {
-            state.fault = Some(RecordingFault { message: "The recovery worker stopped unexpectedly.".into(), removed: true });
+        if panicked {
+            state.fault = Some(RecordingFault { message: WORKER_STOPPED_UNEXPECTEDLY.into(), removed: true });
         }
     }
 
-    fn finish(mut self, result: Result<(), String>) {
-        self.mark_exited();
+    fn finish(mut self, result: Result<(), String>, panicked: bool) {
+        self.mark_exited(panicked);
         if let Some(done) = self.done.take() {
             let _ = done.send(result);
         }
@@ -949,15 +951,14 @@ impl<F: Fn()> WorkerExit<F> {
 impl<F: Fn()> Drop for WorkerExit<F> {
     fn drop(&mut self) {
         if let Some(done) = self.done.take() {
-            self.mark_exited();
+            self.mark_exited(std::thread::panicking());
             drop(done);
-            (self.wake)();
         }
     }
 }
 
 /// Run the recorder worker body so both normal completion and unexpected panics mark the mailbox
-/// exited and publish the outcome to [`RecorderExit`] before waking the host.
+/// exited and publish the outcome to [`RecorderExit`] before waking the host outside unwinding.
 fn run_worker<F: Fn()>(
     mailbox: Arc<Mailbox>,
     done: mpsc::SyncSender<Result<(), String>>,
@@ -965,8 +966,13 @@ fn run_worker<F: Fn()>(
     work: impl FnOnce(&Arc<Mailbox>, &F) -> Result<(), String>,
 ) {
     let exit = WorkerExit { mailbox, done: Some(done), wake };
-    let result = work(&exit.mailbox, &exit.wake);
-    exit.finish(result);
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&exit.mailbox, &exit.wake))) {
+        Ok(result) => exit.finish(result, false),
+        Err(payload) => {
+            exit.finish(Err(WORKER_STOPPED_UNEXPECTEDLY.into()), true);
+            std::panic::resume_unwind(payload);
+        }
+    }
 }
 
 impl Mailbox {

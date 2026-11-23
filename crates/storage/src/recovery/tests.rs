@@ -1888,6 +1888,89 @@ fn worker_exit_publishes_outcome_and_wakes_host_on_normal_exit_and_panic() {
     }
 }
 
+/// A worker panic must run the exit wake outside unwinding so a panicking host callback
+/// cannot double-panic and abort the process, whether the initial panic came from the worker
+/// body or from an in-loop health-change wake.
+#[test]
+fn worker_exit_runs_wake_outside_unwind_even_when_wake_panics() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    // 1. After a worker-body panic, the exit wake must run outside unwinding (`!panicking()`).
+    let mailbox = Arc::new(Mailbox::default());
+    let (done, rx) = mpsc::sync_channel(1);
+    let exit = Arc::new(RecorderExit(Mutex::new(rx)));
+    let wake_saw_panicking = Arc::new(AtomicBool::new(false));
+    let saw_cb = Arc::clone(&wake_saw_panicking);
+    let handle = std::thread::spawn(move || {
+        run_worker(
+            mailbox,
+            done,
+            move || {
+                saw_cb.store(std::thread::panicking(), Ordering::SeqCst);
+            },
+            |_, _| panic!("simulated worker panic"),
+        );
+    });
+    assert!(handle.join().is_err(), "worker thread should unwind on panic");
+    assert!(!wake_saw_panicking.load(Ordering::SeqCst), "host wake callback must not run while unwinding");
+    assert_eq!(exit.poll(), Some(Err("The recovery worker stopped unexpectedly.".into())));
+
+    // 2. If both the worker body and the exit wake panic, the thread unwinds without aborting
+    //    and has already published exited state, fault, and exit outcome.
+    let mailbox = Arc::new(Mailbox::default());
+    let (done, rx) = mpsc::sync_channel(1);
+    let exit = RecorderExit(Mutex::new(rx));
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let (mb_cb, wakes_cb) = (Arc::clone(&mailbox), Arc::clone(&wakes));
+    let handle = std::thread::spawn(move || {
+        run_worker(
+            mailbox,
+            done,
+            move || {
+                wakes_cb.fetch_add(1, Ordering::SeqCst);
+                let state = mb_cb.state.lock().unwrap();
+                assert!(state.exited);
+                assert_eq!(state.fault, Some(RecordingFault { message: "The recovery worker stopped unexpectedly.".into(), removed: true }));
+                drop(state);
+                panic!("simulated panicking host wake");
+            },
+            |_, _| panic!("simulated worker panic"),
+        );
+    });
+    assert!(handle.join().is_err(), "worker thread should unwind cleanly instead of aborting");
+    assert_eq!(wakes.load(Ordering::SeqCst), 1);
+    assert_eq!(exit.wait(Duration::from_secs(1)), Err("The recovery worker stopped unexpectedly.".into()));
+
+    // 3. If a health-change wake inside the worker body panics and the exit wake also panics,
+    //    the thread still unwinds cleanly without aborting and publishes the failure first.
+    let mailbox = Arc::new(Mailbox::default());
+    let (done, rx) = mpsc::sync_channel(1);
+    let exit = Arc::new(RecorderExit(Mutex::new(rx)));
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let (mb_check, wakes_cb) = (Arc::clone(&mailbox), Arc::clone(&wakes));
+    let handle = std::thread::spawn(move || {
+        run_worker(
+            mailbox,
+            done,
+            move || {
+                wakes_cb.fetch_add(1, Ordering::SeqCst);
+                panic!("simulated always-panicking host wake");
+            },
+            |_, wake| {
+                wake();
+                Ok(())
+            },
+        );
+    });
+    assert!(handle.join().is_err(), "worker thread should unwind cleanly instead of aborting");
+    assert_eq!(wakes.load(Ordering::SeqCst), 2);
+    let state = mb_check.state.lock().unwrap();
+    assert!(state.exited);
+    assert_eq!(state.fault, Some(RecordingFault { message: "The recovery worker stopped unexpectedly.".into(), removed: true }));
+    drop(state);
+    assert_eq!(exit.poll(), Some(Err("The recovery worker stopped unexpectedly.".into())));
+}
+
 /// `snapshot` must verify the journal's expected byte length and publication header before
 /// skipping as a no-op: in-place truncation or same-length header corruption keeps the same
 /// open file identity, yet must trigger a rebuild under the held lock so later edits replay.
