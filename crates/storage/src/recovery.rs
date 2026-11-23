@@ -474,13 +474,12 @@ fn write_record(dir: &Path, file: &mut File, bytes: &[u8]) -> std::io::Result<()
 /// Stage a private recovery snapshot: its version and framed header, then the ordinary packed
 /// project. The staging name's 24 random characters identify this publication, not its content.
 /// Nothing at the entry's destination changes until the caller publishes the staged file.
-fn stage_snapshot(dir: &Path, base: &Documents) -> Result<(tempfile::NamedTempFile, Header, u64), String> {
-    let packed = encode_packed_documents(base.clone())?;
+fn stage_snapshot(dir: &Path, base: &Documents, packed: &[u8]) -> Result<(tempfile::NamedTempFile, Header, u64), String> {
     let mut staged = tempfile::Builder::new().prefix(".recovery-").rand_bytes(24).tempfile_in(dir).map_err(|e| e.to_string())?;
     let generation = staged.path().file_name().ok_or("The recovery staging file has no name.")?.to_string_lossy().into_owned();
     let header = Header { generation, base_sha256: documents_sha256(base) };
     let metadata = frame(&serde_json::to_vec(&header).map_err(|e| e.to_string())?)?;
-    staged.write_all(MAGIC).and_then(|()| staged.write_all(&metadata)).and_then(|()| staged.write_all(&packed)).map_err(|e| e.to_string())?;
+    staged.write_all(MAGIC).and_then(|()| staged.write_all(&metadata)).and_then(|()| staged.write_all(packed)).map_err(|e| e.to_string())?;
     let size = MAGIC.len().saturating_add(metadata.len()).saturating_add(packed.len());
     Ok((staged, header, u64::try_from(size).unwrap_or(u64::MAX)))
 }
@@ -638,7 +637,17 @@ impl EditJournal {
     /// original lock handle cannot protect a recreated lock path.
     pub fn rebase(&mut self, base: Documents) -> Result<(), String> {
         self.ensure_lock_owned()?;
-        let (staged, header, snapshot_bytes) = stage_snapshot(&self.dir, &base)?;
+        let packed = encode_packed_documents(base.clone())?;
+        self.rebase_with_packed(base, &packed)
+    }
+
+    fn rebase_packed(&mut self, base: Documents, packed: &[u8]) -> Result<(), String> {
+        self.ensure_lock_owned()?;
+        self.rebase_with_packed(base, packed)
+    }
+
+    fn rebase_with_packed(&mut self, base: Documents, packed: &[u8]) -> Result<(), String> {
+        let (staged, header, snapshot_bytes) = stage_snapshot(&self.dir, &base, packed)?;
         let published = publish_staged(&self.dir, &entry_file(&self.dir, &self.id, "pc"), staged);
         if let Err(PublishError { replaced: false, message }) = published {
             return Err(message);
@@ -1593,9 +1602,9 @@ fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: 
                 }
                 result
             }
-            Message::Compacted { project, fallbacks } => match encode_documents(project) {
-                Ok(documents) => {
-                    let result = write(&mut journal, dir, id, None, documents);
+            Message::Compacted { project, fallbacks } => match encode_snapshot(project) {
+                Ok((documents, packed)) => {
+                    let result = write_snapshot(&mut journal, dir, id, documents, &packed);
                     if result.is_err()
                         && let Some(journal) = &mut journal
                     {
@@ -1614,6 +1623,15 @@ fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: 
             },
             // An edit that cannot be encoded is folded into the next record, which starts from
             // the last state written; the journal closes itself after a failed write.
+            Message::Committed(edit) if journal.as_ref().is_none_or(|journal| journal.file.is_none()) => {
+                match encode_snapshot(edit.project.clone()) {
+                    Ok((documents, packed)) => write_snapshot(&mut journal, dir, id, documents, &packed),
+                    Err(encode_error) => {
+                        let _ = record_fallback(&mut journal, dir, id, fallbacks, false);
+                        Err(encode_error)
+                    }
+                }
+            }
             Message::Committed(edit) => match encode_documents(edit.project.clone()) {
                 Ok(documents) => write(&mut journal, dir, id, Some(&edit), documents),
                 Err(encode_error) => {
@@ -1655,28 +1673,53 @@ fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: 
 /// are not retried. Compacted bursts always write a snapshot (`as_snapshot == true`) so an edit
 /// after a compacted `Opened` is never appended to a pre-open journal.
 fn record_fallback(journal: &mut Option<EditJournal>, dir: &Path, id: &str, fallbacks: Vec<Message>, as_snapshot: bool) -> bool {
+    let needs_snapshot = as_snapshot || journal.as_ref().is_none_or(|journal| journal.file.is_none());
     for fallback in fallbacks.into_iter().rev() {
         let result = match fallback {
             Message::Sync(_) => continue,
-            Message::Opened(project) | Message::Compacted { project, .. } => match encode_documents(project) {
-                Ok(documents) => write(journal, dir, id, None, documents),
+            Message::Opened(project) | Message::Compacted { project, .. } => match encode_snapshot(project) {
+                Ok((documents, packed)) => write_snapshot(journal, dir, id, documents, &packed),
+                Err(_) => continue,
+            },
+            Message::Committed(edit) if needs_snapshot => match encode_snapshot(edit.project.clone()) {
+                Ok((documents, packed)) => write_snapshot(journal, dir, id, documents, &packed),
                 Err(_) => continue,
             },
             Message::Committed(edit) => match encode_documents(edit.project.clone()) {
-                Ok(documents) => write(journal, dir, id, (!as_snapshot).then_some(&edit), documents),
+                Ok(documents) => write(journal, dir, id, Some(&edit), documents),
                 Err(_) => continue,
             },
-            Message::Snapshot(project) => match encode_documents(project) {
-                Ok(documents) => match journal.as_mut() {
-                    Some(journal) if !as_snapshot => journal.snapshot(documents).map(drop),
-                    _ => write(journal, dir, id, None, documents),
+            Message::Snapshot(project) => match journal.as_mut() {
+                Some(journal) if !needs_snapshot => match encode_documents(project) {
+                    Ok(documents) => journal.snapshot(documents).map(drop),
+                    Err(_) => continue,
                 },
-                Err(_) => continue,
+                _ => match encode_snapshot(project) {
+                    Ok((documents, packed)) => write_snapshot(journal, dir, id, documents, &packed),
+                    Err(_) => continue,
+                },
             },
         };
         return result.is_ok();
     }
     false
+}
+
+/// Encode and pack a project snapshot before staging it, so a manifest-limit packing failure is
+/// classified like an encoding failure instead of an I/O write error.
+fn encode_snapshot(project: Arc<Project>) -> Result<(Documents, Vec<u8>), String> {
+    let documents = encode_documents(project)?;
+    let packed = encode_packed_documents(documents.clone())?;
+    Ok((documents, packed))
+}
+
+/// Write a pre-packed snapshot to `journal`, locking the entry first when none is open yet.
+fn write_snapshot(journal: &mut Option<EditJournal>, dir: &Path, id: &str, documents: Documents, packed: &[u8]) -> Result<(), String> {
+    match journal.as_mut() {
+        Some(journal) => journal.rebase_packed(documents, packed),
+        // The lock is kept even if this first snapshot fails; the next state tries again.
+        None => journal.insert(EditJournal::lock(dir, id, true)?).rebase_packed(documents, packed),
+    }
 }
 
 /// Record `documents` as the result of `edit`, or as a new snapshot when there is no edit. The

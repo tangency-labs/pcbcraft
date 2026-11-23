@@ -2448,3 +2448,165 @@ fn compaction_across_opened_writes_fallback_as_snapshot_and_closes_on_total_fail
     assert!(recovered2.commands.is_empty(), "journal must be closed on total compacted failure so the next edit rebases");
     assert_eq!(recovered2.documents, after_docs);
 }
+
+/// Build a project that passes `encode_documents` (`<= MAX_DOCUMENTS`, well within byte limits)
+/// but fails `encode_packed_documents` because its packed `manifest.json` exceeds 1 MiB.
+fn manifest_overflow_project() -> Arc<Project> {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Manifest Overflow"})).unwrap();
+    session.apply(PLACE_SYMBOL, &json!({"definition": "resistor", "x_nm": 0, "y_nm": 0, "expected_revision": session.revision()})).unwrap();
+    let mut docs = encode_documents(session.snapshot().unwrap()).unwrap();
+
+    let (sym_path, sym_bytes) = docs.iter().find(|(path, _)| path.starts_with("library/symbols/")).map(|(k, v)| (k.clone(), v.clone())).unwrap();
+    let (sheet_path, sheet_bytes) = docs.iter().find(|(path, _)| path.starts_with("sheets/")).map(|(k, v)| (k.clone(), v.clone())).unwrap();
+    let mut project_json: serde_json::Value = serde_json::from_slice(docs.get("project.json").unwrap()).unwrap();
+    let mut sheet_json: serde_json::Value = serde_json::from_slice(&sheet_bytes).unwrap();
+    let sym_template: serde_json::Value = serde_json::from_slice(&sym_bytes).unwrap();
+
+    let comp_template = project_json["components"][0].clone();
+    let placed_template = sheet_json["symbols"][0].clone();
+    docs.remove(&sym_path);
+
+    let library = "l".repeat(64);
+    let revision = u32::MAX;
+    let count: u64 = 4000;
+    let mut components = Vec::with_capacity(count as usize);
+    let mut placed_symbols = Vec::with_capacity(count as usize);
+    for i in 1..=count {
+        let comp_id = 2 * i - 1;
+        let placed_id = 2 * i;
+        let def_id = format!("s{i:063}");
+        let mut comp = comp_template.clone();
+        comp["id"] = json!(comp_id);
+        comp["reference"] = json!(format!("R{i}"));
+        comp["reference_number"] = json!(i);
+        comp["library"] = json!(&library);
+        comp["definition"] = json!(&def_id);
+        comp["definition_revision"] = json!(revision);
+        components.push(comp);
+
+        let mut placed = placed_template.clone();
+        placed["id"] = json!(placed_id);
+        placed["component"] = json!(comp_id);
+        placed_symbols.push(placed);
+
+        let mut sym = sym_template.clone();
+        sym["library"] = json!(&library);
+        sym["id"] = json!(&def_id);
+        sym["revision"] = json!(revision);
+        let path = format!("library/symbols/{library}/{def_id}.r{revision}.json");
+        docs.insert(path, serde_json::to_vec(&sym).unwrap());
+    }
+    if project_json.get("numeric_id_high_water").is_some() {
+        project_json["numeric_id_high_water"] = json!(count * 2);
+    }
+    project_json["components"] = serde_json::Value::Array(components);
+    sheet_json["symbols"] = serde_json::Value::Array(placed_symbols);
+    docs.insert("project.json".to_owned(), serde_json::to_vec(&project_json).unwrap());
+    docs.insert(sheet_path, serde_json::to_vec(&sheet_json).unwrap());
+
+    let project = decode_documents(&docs).unwrap();
+    let encoded = encode_documents(project.clone()).unwrap();
+    let pack_err = encode_packed_documents(encoded).unwrap_err();
+    assert!(pack_err.contains("manifest"), "expected manifest size error, got: {pack_err}");
+    project
+}
+
+/// A compacted state that encodes cleanly but fails packing (manifest > 1 MiB) must fall back to
+/// the newest earlier packable pending state and still report the newest state's packing error.
+#[test]
+fn compaction_falls_back_when_latest_state_exceeds_packed_manifest_limit() {
+    let unpackable = manifest_overflow_project();
+
+    // Sub-case 1: newest compacted state and its immediate predecessor both fail packing;
+    // recovery falls back to the newest earlier packable edit and reports the manifest error.
+    let dir = tempfile::tempdir().unwrap();
+    let mailbox = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "State A"})).unwrap();
+    mailbox.push(Message::Opened(session.snapshot().unwrap()));
+    let (a_tx, a_rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(a_tx));
+
+    let mut last_good_project = session.snapshot().unwrap();
+    for index in 1..PENDING_LIMIT {
+        let name = format!("Edit {index}");
+        let revision = session.apply("project.rename", &json!({"name": name})).unwrap();
+        let project = session.snapshot().unwrap();
+        last_good_project = project.clone();
+        mailbox.push(Message::Committed(CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision, project }));
+    }
+    let last_good_docs = encode_documents(last_good_project).unwrap();
+
+    for offset in 1..=2 {
+        mailbox.push(Message::Committed(CommittedEdit {
+            command: "project.rename".to_owned(),
+            params: json!({}),
+            revision: session.revision() + offset,
+            project: Arc::clone(&unpackable),
+        }));
+    }
+
+    let (tx, rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(tx));
+    mailbox.close(None);
+
+    record(dir.path(), "entry", &mailbox, &|| {}, None).unwrap();
+    a_rx.recv().unwrap().unwrap();
+    let err = rx.recv().unwrap().unwrap_err();
+    assert!(err.contains("manifest"), "unexpected error: {err}");
+    assert_eq!(mailbox.state.lock().unwrap().fault.as_ref().map(|f| f.message.as_str()), Some(err.as_str()));
+
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.project.name, format!("Edit {}", PENDING_LIMIT - 1));
+    assert_eq!(recovered.documents, last_good_docs);
+
+    // Sub-case 2: when a compacted burst after an explicit `Opened` has no packable fallback,
+    // the pre-open journal handle is closed so the next packable edit starts a fresh snapshot.
+    let dir2 = tempfile::tempdir().unwrap();
+    let mailbox2 = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut old = Session::default();
+    old.apply("project.new", &json!({"name": "Project Old"})).unwrap();
+    mailbox2.push(Message::Opened(old.snapshot().unwrap()));
+    let (init_tx, init_rx) = mpsc::sync_channel(1);
+    mailbox2.push(Message::Sync(init_tx));
+
+    for index in 1..PENDING_LIMIT {
+        let revision = old.apply("project.rename", &json!({"name": format!("Old {index}")})).unwrap();
+        mailbox2.push(Message::Committed(CommittedEdit {
+            command: "project.rename".to_owned(),
+            params: json!({}),
+            revision,
+            project: old.snapshot().unwrap(),
+        }));
+    }
+    mailbox2.push(Message::Opened(Arc::clone(&unpackable)));
+    mailbox2.push(Message::Committed(CommittedEdit {
+        command: "project.rename".to_owned(),
+        params: json!({}),
+        revision: 1,
+        project: Arc::clone(&unpackable),
+    }));
+    let (fail_tx, fail_rx) = mpsc::sync_channel(1);
+    mailbox2.push(Message::Sync(fail_tx));
+
+    let mut after = Session::default();
+    after.apply("project.new", &json!({"name": "After Pack Failure"})).unwrap();
+    let after_project = after.snapshot().unwrap();
+    let after_docs = encode_documents(after_project.clone()).unwrap();
+    mailbox2.push(Message::Committed(CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision: 2, project: after_project }));
+    let (after_tx, after_rx) = mpsc::sync_channel(1);
+    mailbox2.push(Message::Sync(after_tx));
+    mailbox2.close(None);
+
+    record(dir2.path(), "entry", &mailbox2, &|| {}, None).unwrap();
+    init_rx.recv().unwrap().unwrap();
+    assert!(fail_rx.recv().unwrap().unwrap_err().contains("manifest"));
+    after_rx.recv().unwrap().unwrap();
+    let recovered2 = recover(dir2.path(), "entry").unwrap();
+    assert_eq!(recovered2.stop, None);
+    assert_eq!(recovered2.project.name, "After Pack Failure");
+    assert!(recovered2.commands.is_empty(), "journal must be closed on total packing failure so the next edit rebases");
+    assert_eq!(recovered2.documents, after_docs);
+}
