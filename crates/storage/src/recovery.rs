@@ -1577,8 +1577,8 @@ impl EditObserver for JournalRecorder {
 }
 
 /// The worker: encode each reported state and write it to the entry, until the recorder is gone.
-/// Errors are kept for the next `sync`. A state that cannot be encoded is skipped; the next
-/// recorded edit carries its changes, or a new snapshot follows a root that failed.
+/// Errors are kept for the next `sync`. A state that cannot be encoded or packed is skipped; the
+/// next recorded edit carries its changes, or a new snapshot follows a root that failed.
 fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: Option<String>) -> Result<(), String> {
     let mut journal: Option<EditJournal> = None;
     let discard_before = loop {
@@ -1666,12 +1666,13 @@ fn record(dir: &Path, id: &str, mailbox: &Mailbox, wake: &impl Fn(), mut error: 
     Ok(())
 }
 
-/// After the newest coalesced or compacted state fails to encode, record the newest retained
-/// earlier pending candidate that still encodes, leaving the caller to report the newest state's
-/// error. Compacted bursts retain at most `PENDING_LIMIT` candidates (the oldest and newest
-/// entries via [`bound_fallbacks`]), so intermediate states dropped across multiple compactions
-/// are not retried. Compacted bursts always write a snapshot (`as_snapshot == true`) so an edit
-/// after a compacted `Opened` is never appended to a pre-open journal.
+/// After the newest coalesced or compacted state fails to encode or pack, record the newest
+/// retained earlier pending candidate that still encodes (and packs, when a snapshot is written),
+/// leaving the caller to report the newest state's error. Compacted bursts retain at most
+/// `PENDING_LIMIT` candidates (the oldest and newest entries via [`bound_fallbacks`]), so
+/// intermediate states dropped across multiple compactions are not retried. Compacted bursts
+/// (`as_snapshot == true`) and entries without an open journal always encode and pack a snapshot
+/// so an edit after a compacted `Opened` is never appended to a pre-open journal.
 fn record_fallback(journal: &mut Option<EditJournal>, dir: &Path, id: &str, fallbacks: Vec<Message>, as_snapshot: bool) -> bool {
     let needs_snapshot = as_snapshot || journal.as_ref().is_none_or(|journal| journal.file.is_none());
     for fallback in fallbacks.into_iter().rev() {
