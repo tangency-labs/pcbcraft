@@ -563,6 +563,9 @@ impl PcbApp {
             } else {
                 completion.report.map_err(|message| snapshot_worker_failure(completion.schedule_failure, message)).and_then(|edit| {
                     let edit = edit.ok_or_else(|| Failure::new(ErrorCode::Cancelled, format!("{subject} canceled")))??;
+                    if !request.authority.grant_commit(request.deadline) {
+                        return Err(Failure::new(ErrorCode::Cancelled, format!("{subject} request expired or disconnected before publication")));
+                    }
                     let (revision, report) = edit.commit(&mut self.session)?;
                     Ok(if let Some(report) = report {
                         report
@@ -1661,6 +1664,59 @@ mod copper_tests {
             assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
             assert!(!app.remote_copper.queue.busy());
         }
+    }
+    /// Deferred copper edits must acquire the request's commit grant before publishing: a lost
+    /// grant leaves board state and Undo history untouched, and a live publication claims the
+    /// grant so a subsequent socket timeout or cancel cannot abandon it.
+    #[test]
+    fn deferred_edit_requires_and_acquires_commit_grant_before_publish() {
+        let (mut app, ctx, mut body) = fixture();
+        let before_rename = app.session.snapshot().unwrap();
+        app.session.apply("project.rename", &json!({"name":"Prior edit"})).unwrap();
+        let before = app.session.snapshot().unwrap();
+        let revision = app.session.revision();
+        body["params"]["params"]["expected_revision"] = json!(revision);
+
+        // Claim the commit grant before poll_remote_copper publishes. The request is neither
+        // expired nor cancelled, so only grant_commit prevents publication.
+        let (r, reply, authority) = request(&app, body.clone());
+        app.start_remote_copper(&ctx, r, false);
+        assert!(authority.grant_commit(Instant::now() + Duration::from_secs(10)));
+        let refused = (0..100)
+            .find_map(|_| {
+                app.poll_remote_copper(&ctx);
+                reply.try_recv().ok()
+            })
+            .expect("deferred edit with spent grant must answer");
+        assert_eq!(refused["code"], "cancelled", "{refused}");
+        assert_eq!(app.session.revision(), revision);
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+        assert!(app.session.project().unwrap().boards().next().unwrap().tracks().is_empty());
+        assert!(!app.remote_copper.queue.busy());
+        // Undo reverts the prior rename rather than a refused deferred edit.
+        app.session.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before_rename, &app.session.snapshot().unwrap()));
+        app.session.apply("edit.redo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+
+        // A live request acquires the commit grant when it publishes, locking out socket timeouts.
+        body["params"]["params"]["expected_revision"] = json!(app.session.revision());
+        let (r, reply, authority) = request(&app, body);
+        let live_revision = app.session.revision();
+        app.start_remote_copper(&ctx, r, false);
+        let committed = (0..100)
+            .find_map(|_| {
+                app.poll_remote_copper(&ctx);
+                reply.try_recv().ok()
+            })
+            .expect("live deferred edit must answer");
+        assert_eq!(committed["result"], json!({"revision": live_revision + 1}), "{committed}");
+        assert_eq!(app.session.revision(), live_revision + 1);
+        assert_eq!(app.session.project().unwrap().boards().next().unwrap().tracks().len(), 1);
+        assert_eq!(authority.next_wait(Instant::now()), Some(ACCEPT_POLL));
+        authority.cancel();
+        assert!(!authority.cancelled());
+        assert!(!authority.grant_commit(Instant::now() + Duration::from_secs(10)));
     }
 }
 
