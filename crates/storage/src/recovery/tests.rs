@@ -1521,3 +1521,83 @@ fn pruning_skips_unwritable_directory_and_symlink_lock_paths_without_blocking_re
         fs::set_permissions(&readonly_lock, fs::Permissions::from_mode(0o644)).unwrap();
     }
 }
+
+/// Retention drops each candidate's `.lock` handle before moving on to the next candidate, so
+/// at most one entry lock is held open at any point during the scan regardless of folder size.
+#[test]
+fn pruning_holds_at_most_one_entry_lock_at_a_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Bounded"})).unwrap();
+    let docs = encode_documents(session.snapshot().unwrap()).unwrap();
+
+    let ids = ["e1", "e2", "e3", "e4"];
+    for id in ids {
+        drop(EditJournal::create(dir.path(), id, docs.clone()).unwrap());
+        age_entry(dir.path(), id, DAY * 30);
+    }
+
+    let retention = Retention { max_age: DAY * 14, max_entries: 16 };
+    let mut scanned = 0usize;
+    let removed = prune_with_hooks(
+        dir.path(),
+        retention,
+        SCAN_LIMIT,
+        |dir| Ok(fs::read_dir(dir).unwrap().map(|entry| entry.ok().map(|entry| entry.file_name()))),
+        |current| {
+            scanned += 1;
+            let current_lock = open_entry_lock(&entry_file(dir.path(), current, "lock"), false).unwrap();
+            assert!(current_lock.try_lock().is_err(), "{current} should be locked while scanned");
+            for other in ids {
+                if other != current {
+                    let other_lock = open_entry_lock(&entry_file(dir.path(), other, "lock"), false).unwrap();
+                    assert!(other_lock.try_lock().is_ok(), "{other} should not remain locked while scanning {current}");
+                }
+            }
+        },
+        |_| {},
+    );
+    assert_eq!(scanned, ids.len());
+    assert_eq!(removed, Ok(ids.len()));
+    assert!(entry_ids(dir.path()).is_empty());
+}
+
+/// If a candidate selected for deletion is modified between the scan pass and the delete pass,
+/// retention observes the changed modification time under the re-acquired lock and keeps it.
+#[test]
+fn pruning_keeps_entry_touched_between_scan_and_delete() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Touched"})).unwrap();
+    let docs = encode_documents(session.snapshot().unwrap()).unwrap();
+
+    for id in ["touched", "stale"] {
+        drop(EditJournal::create(dir.path(), id, docs.clone()).unwrap());
+        age_entry(dir.path(), id, DAY * 30);
+    }
+
+    let retention = Retention { max_age: DAY * 14, max_entries: 16 };
+    let mut touched_in_hook = false;
+    let removed = prune_with_hooks(
+        dir.path(),
+        retention,
+        SCAN_LIMIT,
+        |dir| Ok(fs::read_dir(dir).unwrap().map(|entry| entry.ok().map(|entry| entry.file_name()))),
+        |_| {},
+        |id| {
+            if id == "touched" {
+                touched_in_hook = true;
+                File::options()
+                    .write(true)
+                    .open(entry_file(dir.path(), "touched", "journal"))
+                    .unwrap()
+                    .set_modified(std::time::SystemTime::now())
+                    .unwrap();
+            }
+        },
+    );
+    assert!(touched_in_hook);
+    assert_eq!(removed, Ok(1));
+    assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["touched".to_owned()]));
+    assert_eq!(recover(dir.path(), "touched").unwrap().documents, docs);
+}

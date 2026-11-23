@@ -1060,11 +1060,42 @@ fn entry_modified(dir: &Path, id: &str) -> Option<SystemTime> {
     newest
 }
 
+/// Try to acquire candidate `id`'s `.lock` file without following symlinks.
+/// Returns `Some(Some(file))` when locked, `Some(None)` when no `.lock` file exists, or `None`
+/// when the entry is busy, non-regular (symlink/directory), or unreadable and should be skipped.
+fn try_lock_candidate(dir: &Path, id: &str) -> Option<Option<File>> {
+    let lock_path = entry_file(dir, id, "lock");
+    match fs::symlink_metadata(&lock_path) {
+        Err(error) if error.kind() == ErrorKind::NotFound => Some(None),
+        Ok(metadata) if metadata.file_type().is_file() => match open_entry_lock(&lock_path, false) {
+            Ok(lock) if lock.try_lock().is_ok() => Some(Some(lock)),
+            Ok(_) => None,
+            Err(error) if error.kind() == ErrorKind::NotFound => Some(None),
+            Err(_) => None,
+        },
+        Ok(_) | Err(_) => None,
+    }
+}
+
 fn prune_with_discovery<I>(
     dir: &Path,
     retention: Retention,
     scan_limit: usize,
     discover: impl FnOnce(&Path) -> Result<I, String>,
+) -> Result<usize, String>
+where
+    I: IntoIterator<Item = Option<std::ffi::OsString>>,
+{
+    prune_with_hooks(dir, retention, scan_limit, discover, |_| {}, |_| {})
+}
+
+fn prune_with_hooks<I>(
+    dir: &Path,
+    retention: Retention,
+    scan_limit: usize,
+    discover: impl FnOnce(&Path) -> Result<I, String>,
+    mut on_scan: impl FnMut(&str),
+    mut before_delete: impl FnMut(&str),
 ) -> Result<usize, String>
 where
     I: IntoIterator<Item = Option<std::ffi::OsString>>,
@@ -1090,42 +1121,50 @@ where
         }
         ids.insert(id.to_owned());
     }
-    let mut entries: Vec<(SystemTime, String, Option<File>)> = Vec::new();
+    // Pass 1 (scan): acquire each candidate's entry lock before reading its headers or timestamps,
+    // then drop the lock immediately so retention holds at most one entry lock handle at a time.
+    let mut entries: Vec<(SystemTime, String)> = Vec::new();
     for id in ids {
-        let lock_path = entry_file(dir, &id, "lock");
-        // Acquire each candidate's entry lock before reading its headers or timestamps so an
-        // active recorder cannot update and release the entry between inspection and deletion.
-        // Inspect the lock path without following symlinks so non-regular or unreadable `.lock`
-        // entries are skipped rather than followed, deleted unguarded, or allowed to abort retention.
-        let lock = match fs::symlink_metadata(&lock_path) {
-            Err(error) if error.kind() == ErrorKind::NotFound => None,
-            Ok(metadata) if metadata.file_type().is_file() => match open_entry_lock(&lock_path, false) {
-                Ok(lock) if lock.try_lock().is_ok() => Some(lock),
-                Ok(_) => continue,
-                Err(error) if error.kind() == ErrorKind::NotFound => None,
-                Err(_) => continue,
-            },
-            Ok(_) | Err(_) => continue,
+        let Some(lock) = try_lock_candidate(dir, &id) else {
+            continue;
         };
+        on_scan(&id);
         if !is_recovery_entry(dir, &id) {
             continue;
         }
         let Some(modified) = entry_modified(dir, &id) else {
             continue;
         };
-        entries.push((modified, id, lock));
+        drop(lock);
+        entries.push((modified, id));
     }
+    // Pass 2 (rank): newest first, tie-broken deterministically by id.
     entries.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| b.1.cmp(&a.1)));
     let now = SystemTime::now();
     let (mut kept, mut removed) = (0, 0);
-    for (modified, id, lock) in entries {
-        let old = now.duration_since(modified).unwrap_or_default() > retention.max_age;
-        if old || kept >= retention.max_entries {
-            remove_unlocked(dir, &id, lock)?;
-            removed += 1;
-        } else {
+    // Pass 3 (delete): re-acquire each selected entry's lock under the folder gate, re-verify
+    // its recovery header and modification time, and skip it if it became busy or changed.
+    for (recorded_modified, id) in entries {
+        let old = now.duration_since(recorded_modified).unwrap_or_default() > retention.max_age;
+        if !old && kept < retention.max_entries {
             kept += 1;
+            continue;
         }
+        before_delete(&id);
+        let Some(lock) = try_lock_candidate(dir, &id) else {
+            continue;
+        };
+        if !is_recovery_entry(dir, &id) {
+            continue;
+        }
+        let Some(current_modified) = entry_modified(dir, &id) else {
+            continue;
+        };
+        if current_modified != recorded_modified {
+            continue;
+        }
+        remove_unlocked(dir, &id, lock)?;
+        removed += 1;
     }
     drop(gate);
     Ok(removed)
