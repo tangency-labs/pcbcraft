@@ -402,15 +402,22 @@ mod tests {
                 .unwrap();
         }
 
-        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 900.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        harness.run();
+        click(&mut harness, "Toggle Net Inspector");
         harness.ctx.global_style_mut(|style| {
             style.interaction.tooltip_delay = 0.0;
             style.interaction.show_tooltips_only_when_still = false;
         });
-        harness.run();
-        click(&mut harness, "Toggle Net Inspector");
         let row_label = format!("2 · {long_name} — global label, hierarchical label");
+        harness.get_by_label(row_label.as_str()).scroll_to_me();
+        harness.run();
         let row = harness.get_by_label(row_label.as_str()).rect();
+        assert!(
+            harness.state().net_inspector.rect.contains(row.center()),
+            "row {row:?} should be inside Net Inspector {:?}",
+            harness.state().net_inspector.rect
+        );
         harness.hover_at(row.center());
         harness.run_steps(3);
         let expected_tip = format!("{row_label} · 1 part pin on this sheet");
