@@ -26,6 +26,81 @@ fn at(h: &Harness<'_, PcbApp>, x: i64, y: i64) -> egui::Pos2 {
     h.state().views.active.camera.screen(Point { x_nm: x, y_nm: y }, h.get_by_label("PCB canvas").rect())
 }
 
+/// A selected outline resizes one side, aligns a corner to its neighbor, and moves as a
+/// unit from the interior. Each release creates its own undo step.
+#[test]
+fn polygon_edges_resize_and_vertices_align_while_the_body_moves() {
+    let mut h = board();
+    assert!(h.state_mut().views.active.camera.set_snap_nm(10_000));
+    let point = |x_nm, y_nm| Point { x_nm, y_nm };
+    let original = [point(-10_160_000, -10_160_000), point(10_160_000, -10_160_000), point(10_160_000, 10_160_000), point(-10_160_000, 10_160_000)];
+    let layer = h.state().views.active.board.active_layer.clone().unwrap();
+    let revision = h.state().session.revision();
+    h.state_mut().run(ADD_DRAWING, &json!({"layer":layer,"points":original,"closed":true,"expected_revision":revision}));
+    h.run();
+    let edge = at(&h, 0, -10_160_000);
+    click_canvas_at(&mut h, edge);
+    let revision = h.state().session.revision();
+
+    let resize = at(&h, 5_080_000, -15_240_000);
+    h.drag_at(edge);
+    h.run();
+    h.hover_at(resize);
+    h.run();
+    assert_eq!(drawings(&h)[0].points, original, "the preview is view-local");
+    h.drop_at(resize);
+    h.run();
+    let mut resized = original;
+    resized[0].y_nm = -15_240_000;
+    resized[1].y_nm = -15_240_000;
+    assert_eq!(drawings(&h)[0].points, resized);
+
+    let corner = at(&h, -10_160_000, -15_240_000);
+    let nearby = at(&h, -7_620_000, -14_730_000);
+    h.drag_at(corner);
+    h.run();
+    h.hover_at(nearby);
+    h.run();
+    let aligned = at(&h, -7_620_000, -15_240_000);
+    assert!(painted_path_through(&h, aligned), "the preview snaps before release");
+    h.drop_at(nearby);
+    h.run();
+    let mut reshaped = resized;
+    reshaped[0].x_nm = -7_620_000;
+    assert_eq!(drawings(&h)[0].points, reshaped);
+
+    let corner = at(&h, 10_160_000, -15_240_000);
+    let nearby = at(&h, 9_650_000, -12_700_000);
+    h.drag_at(corner);
+    h.run();
+    h.hover_at(nearby);
+    h.run();
+    assert!(painted_path_through(&h, at(&h, 10_160_000, -12_700_000)), "the preview snaps on x too");
+    h.drop_at(nearby);
+    h.run();
+    let mut aligned_both = reshaped;
+    aligned_both[1].y_nm = -12_700_000;
+    assert_eq!(drawings(&h)[0].points, aligned_both);
+
+    let inside = at(&h, 0, 0);
+    let moved = at(&h, 5_080_000, 5_080_000);
+    h.hover_at(inside);
+    h.run();
+    h.drag_at(inside);
+    h.run();
+    h.hover_at(moved);
+    h.run();
+    h.drop_at(moved);
+    h.run();
+    assert_eq!(drawings(&h)[0].points, aligned_both.map(|p| point(p.x_nm + 5_080_000, p.y_nm + 5_080_000)));
+    assert_eq!(h.state().session.revision(), revision + 4);
+    for expected in [aligned_both, reshaped, resized, original] {
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(drawings(&h)[0].points, expected);
+    }
+}
+
 /// Disabling graphic selection cancels edge moves and blocks later picks without hiding edges
 /// or preventing an explicitly chosen drawing tool from creating new geometry.
 #[test]

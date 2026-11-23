@@ -170,6 +170,14 @@ pub fn drawing_target(p: &Painter, point: Pos2) {
     p.circle_stroke(point, 5., Stroke::new(1., Tokens::get().accent));
 }
 
+/// Indicate the reference for a snapped outline axis using the canvas selection accent.
+pub fn drawing_alignment(p: &Painter, points: [Pos2; 2]) {
+    let extension = (points[1] - points[0]).normalized() * 16.;
+    let stroke = Stroke::new(1., Tokens::get().accent.gamma_multiply(0.7));
+    p.extend(egui::Shape::dashed_line(&[points[0] - extension, points[1] + extension], stroke, 4., 3.));
+    drawing_target(p, points[0]);
+}
+
 /// Return the shared palette's copper colors; `None` denotes an internal layer.
 pub fn copper_color(front: Option<bool>) -> Color32 {
     let t = Tokens::get();
