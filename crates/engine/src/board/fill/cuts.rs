@@ -11,6 +11,41 @@ pub(super) fn near(a: [f64; 4], b: [f64; 4], grow_nm: f64) -> bool {
     a[0] <= b[2] + grow_nm && b[0] <= a[2] + grow_nm && a[1] <= b[3] + grow_nm && b[1] <= a[3] + grow_nm
 }
 
+/// Fold neighboring keepouts into an expanded plane when the geometry proves the
+/// same union. A keepout that can extend beyond the plane remains an independent cut.
+pub(super) fn add_plane(keepouts: &mut Vec<Keepout>, plane: Regions, canceled: Option<&AtomicBool>) -> Result<(), String> {
+    let Some(envelope) = plane.bounds_nm() else { return Ok(()) };
+    let candidates: Vec<_> = keepouts
+        .iter()
+        .enumerate()
+        .filter_map(|(index, cut)| cut.region.bounds_nm().filter(|bounds| near(*bounds, envelope, BOUND_RESERVE_NM)).map(|bounds| (index, bounds)))
+        .collect();
+    let tree = Tree::new(candidates.iter().map(|(_, bounds)| *bounds).collect());
+    let plane = plane
+        .fill_covered_holes(|hole| {
+            if check_cancel(canceled).is_err() {
+                return Vec::new();
+            }
+            tree.candidates(hole, BOUND_RESERVE_NM).into_iter().map(|index| &keepouts[candidates[index].0].region).collect()
+        })
+        .map_err(|error| error.to_string())?
+        .unwrap_or(plane);
+    check_cancel(canceled)?;
+    let mut redundant = vec![false; keepouts.len()];
+    for (index, bounds) in candidates {
+        check_cancel(canceled)?;
+        redundant[index] = plane.covers_box(bounds).map_err(|error| error.to_string())?;
+    }
+    let mut index = 0;
+    keepouts.retain(|_| {
+        let keep = !redundant[index];
+        index += 1;
+        keep
+    });
+    keepouts.push(Keepout::plane(plane));
+    Ok(())
+}
+
 pub(super) struct Cuts {
     pub(super) shapes: Vec<Regions>,
     bounds: Vec<[f64; 4]>,

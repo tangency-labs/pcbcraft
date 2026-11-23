@@ -211,8 +211,14 @@ fn zone_fill(
     for other in fill.zones.iter().filter(|other| other.layer == zone.layer && other.net != zone.net) {
         for island in &other.islands {
             check_cancel(canceled)?;
-            let expanded = island.region.offset(clearance.max(other.clearance_nm)).map_err(|e| e.to_string())?;
-            cuts.push(Keepout::plane(expanded));
+            let margin = clearance.max(other.clearance_nm);
+            if let (Some(base), Some(foreign)) = (bounds, island.region.bounds_nm())
+                && !near(base, foreign, margin as f64 + cuts::BOUND_RESERVE_NM)
+            {
+                continue;
+            }
+            let expanded = island.region.offset(margin).map_err(|e| e.to_string())?;
+            cuts::add_plane(&mut cuts, expanded, canceled)?;
         }
     }
     for other in view.zones().iter().filter(|other| {

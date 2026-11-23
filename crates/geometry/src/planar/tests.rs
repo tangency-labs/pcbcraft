@@ -406,3 +406,23 @@ fn contact_box_rejection_keeps_boundary_and_partial_contacts() {
     assert!(may_intersect([5 * MM, 6 * MM, 7 * MM, 7 * MM]));
     assert!(may_intersect([-MM, -MM, 13 * MM, 13 * MM]));
 }
+
+/// A covered hole can leave the union calculation; partial cover and exterior
+/// material must remain in the Boolean operands.
+#[test]
+fn covered_holes_preserve_the_union_with_adjacent_cutters() {
+    let plane = rectangle(0, 0, 10 * MM, 10 * MM);
+    let first = Regions::circle([3 * MM, 5 * MM], MM).unwrap();
+    let second = Regions::circle([7 * MM, 5 * MM], 2 * MM).unwrap();
+    let holed = plane.boolean(&first, Operation::Difference).unwrap().boolean(&second, Operation::Difference).unwrap();
+    let whole_cover = Regions::circle([3 * MM, 5 * MM], 2 * MM).unwrap();
+    let partial_cover = rectangle(7 * MM, 4 * MM, 4 * MM, 2 * MM);
+    let filled = holed.fill_covered_holes(|_| vec![&whole_cover, &partial_cover]).unwrap().unwrap();
+    assert!(filled.covers_box(whole_cover.bounds_nm().unwrap()).unwrap());
+    assert!(!filled.covers_box(partial_cover.bounds_nm().unwrap()).unwrap());
+    assert_eq!(filled.contains([6_500_000, 5 * MM]).unwrap(), Some(false));
+    let expected = Regions::union_all(&[holed, whole_cover, partial_cover.clone()]).unwrap();
+    let actual = Regions::union_all(&[filled, partial_cover]).unwrap();
+    assert!(actual.boolean(&expected, Operation::Difference).unwrap().is_empty());
+    assert!(expected.boolean(&actual, Operation::Difference).unwrap().is_empty());
+}

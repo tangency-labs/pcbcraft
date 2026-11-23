@@ -281,6 +281,28 @@ impl Regions {
         })
     }
 
+    /// Fill a hole only if one other union operand covers its entire envelope. The
+    /// replacement region and the original operands have the same union. The caller
+    /// may then discard any operand proved wholly inside the replacement. The caller
+    /// supplies nearby operands through a query on each hole's nanometre envelope.
+    pub fn fill_covered_holes<'a>(&self, mut candidates: impl FnMut([f64; 4]) -> Vec<&'a Self>) -> Result<Option<Self>> {
+        guard("planar covered holes", || {
+            let [region] = self.regions.as_slice() else { return Ok(None) };
+            let hole_bounds = &self.profile_bounds()[0][1..];
+            let holes: Vec<_> = region
+                .holes
+                .iter()
+                .zip(hole_bounds)
+                .filter(|(_, envelope)| !candidates(envelope_nm(**envelope)).into_iter().any(|cover| cover.covering_region(**envelope).is_some()))
+                .map(|(hole, _)| hole.clone())
+                .collect();
+            if holes.len() == region.holes.len() {
+                return Ok(None);
+            }
+            Ok(checked(vec![Region2 { outer: region.outer.clone(), holes }]).ok())
+        })
+    }
+
     /// Subtract independently enclosed cutters from their owning faces. A cutter with nested
     /// or overlapping region envelopes gets a Boolean in its own local rectangle. The result
     /// retains its copper islands without passing unrelated holes through that Boolean.

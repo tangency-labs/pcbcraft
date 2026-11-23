@@ -109,7 +109,10 @@ the zone boundary, enclosed clearance groups can be assembled as analytic holes
 and retained copper islands. Groups with separated source contours stay independent
 when their aggregate bounds overlap. The fill subtracts boundary cuts separately
 and assigns the enclosed holes to the material faces left by that cut. It uses a
-local SolidCore Boolean for nested shapes within one group. A fill that exceeds
+local SolidCore Boolean for nested shapes within one group. An expanded higher-priority
+zone can absorb an enclosed clearance cut when it covers the cut's full envelope.
+Any cut that may extend beyond the expanded material still goes through the
+normal Boolean path. A fill that exceeds
 the applicable geometry budget reports unavailable material. The pad count alone
 does not determine that budget.
 
