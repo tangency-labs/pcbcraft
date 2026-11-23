@@ -107,7 +107,11 @@ slice.
 
 Format 5 extends [format 4](part-schema.md#formats-and-implementation): every
 package may carry a `model`, and `terminal_ratings` becomes optional, still
-nonempty when present. A writer selects the lowest format that holds the
+nonempty when present. It keeps format 2's
+[optional drawings](part-schema.md#optional-drawings-and-compatibility): a
+footprint-only part with no `symbol` and an empty `mapping` on each package is
+valid and can be bound. `terminal_ratings` still requires a `symbol`, with the
+format-4 terminal checks. A writer selects the lowest format that holds the
 content:
 
 | Content | Format written |
@@ -264,8 +268,13 @@ must have an empty `assets` list, and any missing file or digest mismatch fails
 the open. The storage slice adds asset support in a new container format,
 `pcbcraft-container/4`, and keeps the two kinds of entry apart:
 
-- **Documents stay strict.** Every `parts` entry, model records included, keeps
-  the current rules, and an unlisted file still fails the open.
+- **Other documents stay strict.** Every other `parts` entry keeps the current
+  rules, and an unlisted file still fails the open.
+- **Model records are recoverable.** A listed model record whose file is
+  missing, differs from its manifest entry or cannot be read gives its
+  components `record_missing`. It does not prevent the open, because a missing
+  model never blocks one. The notice names the record, and a save leaves it and
+  its entry out while the bindings stay.
 - **Model assets are optional.** A listed asset whose file is missing gives its
   components `geometry_unavailable`. One whose size or SHA-256 differs from the
   manifest or the record gives `hash_mismatch`, and its bytes are not used. The
@@ -320,14 +329,16 @@ height stands in for a missing model in a mechanical output.
   footprint origin.
 - **Part formats.** A part with supply ranges and a bound model round-trips as
   format 5. Removing its binding writes format 4, then removing its ranges
-  writes format 2. A format-4 reader refuses the format-5 file.
+  writes format 2. A format-4 reader refuses the format-5 file. A footprint-only
+  part with no symbol and a `no_body` binding round-trips as format 5.
 - **Storage.** Link and embed round trips reopen offline; switching mode keeps
   identity and alignment; an unchanged save is byte-identical; tampered bytes
   report `hash_mismatch`.
-- **Packed projects.** A `.pc` with a listed model asset missing opens editable
-  and reports `geometry_unavailable`. One with an asset whose bytes differ opens
-  editable and reports `hash_mismatch`. In both cases the notice names the
-  asset, and the next save leaves it out.
+- **Packed projects.** A `.pc` opens editable in each of these cases: a listed
+  model record missing reports `record_missing`, a listed model asset missing
+  reports `geometry_unavailable`, and an asset whose bytes differ reports
+  `hash_mismatch`. In each case the notice names the file, and the next save
+  leaves it out.
 - **States.** Each state above is produced by a command-built fixture, and none
   blocks electrical editing. A file with one refused solid beside a valid one
   reports `unreadable`.
