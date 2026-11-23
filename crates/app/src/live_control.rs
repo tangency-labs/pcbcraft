@@ -1800,13 +1800,13 @@ mod copper_tests {
         let before = app.session.snapshot().unwrap();
         let before_bytes = pcbcraft_engine::persistence::encode_documents(before.clone()).unwrap();
         let revision = app.session.revision();
-        let make_body = |dry_run: bool| {
+        let make_body = |expected_revision: u64, dry_run: bool| {
             json!({"method":"engine.execute","params":{"command":pcbcraft_engine::MERGE_TRACKS,"inspect":false,"params":{
-                "board":target.board,"tracks":tracks,"dry_run":dry_run,"expected_revision":revision}}})
+                "board":target.board,"tracks":tracks,"dry_run":dry_run,"expected_revision":expected_revision}}})
         };
 
         // Dry-run preview does not consume the commit grant.
-        let (req, reply, preview_authority) = request(&app, make_body(true));
+        let (req, reply, preview_authority) = request(&app, make_body(revision, true));
         app.start_remote_copper(&ctx, req, false);
         let preview = (0..500)
             .find_map(|_| {
@@ -1822,7 +1822,7 @@ mod copper_tests {
         // If the commit grant is lost right before publication (while `request.expired()` is
         // still false so `poll_remote_copper` reaches `grant_commit` after worker validation),
         // publication is refused and board + undo history stay untouched.
-        let (req, reply, lost_authority) = request(&app, make_body(false));
+        let (req, reply, lost_authority) = request(&app, make_body(revision, false));
         app.start_remote_copper(&ctx, req, false);
         *lost_authority.0.lock().unwrap() = RequestDecision::Committing;
         let refused = (0..500)
@@ -1838,14 +1838,17 @@ mod copper_tests {
         assert_eq!(pcbcraft_engine::persistence::encode_documents(app.session.snapshot().unwrap()).unwrap(), before_bytes);
 
         // Undo still undoes the earlier `ADD_TRACKS` (no phantom merge history entry was pushed).
+        // `Session::revision` is monotonic, so undo + redo advances it by 2 while restoring `before_bytes`.
         app.session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 0);
         app.session.apply("edit.redo", &Value::Null).unwrap();
         assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 3);
-        assert_eq!(app.session.revision(), revision);
+        assert_eq!(app.session.revision(), revision + 2);
+        assert_eq!(pcbcraft_engine::persistence::encode_documents(app.session.snapshot().unwrap()).unwrap(), before_bytes);
 
         // With a live grant, apply acquires `Committing`, publishes one undoable step, and undo restores `before`.
-        let (req, reply, live_authority) = request(&app, make_body(false));
+        let cur_revision = app.session.revision();
+        let (req, reply, live_authority) = request(&app, make_body(cur_revision, false));
         app.start_remote_copper(&ctx, req, false);
         let applied = (0..500)
             .find_map(|_| {
@@ -1853,9 +1856,9 @@ mod copper_tests {
                 reply.try_recv().ok()
             })
             .expect("live-grant apply completes");
-        assert_eq!(applied["result"]["revision"], json!(revision + 1), "{applied}");
+        assert_eq!(applied["result"]["revision"], json!(cur_revision + 1), "{applied}");
         assert_eq!(*live_authority.0.lock().unwrap(), RequestDecision::Committing);
-        assert_eq!(app.session.revision(), revision + 1);
+        assert_eq!(app.session.revision(), cur_revision + 1);
         assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 1);
         app.session.apply("edit.undo", &Value::Null).unwrap();
         assert_eq!(pcbcraft_engine::persistence::encode_documents(app.session.snapshot().unwrap()).unwrap(), before_bytes);

@@ -88,7 +88,7 @@ impl<T> Completion<T> {
 pub(crate) struct Queue<J: Work = CheckJob> {
     active: Option<Running<J>>,
     pending: Option<Request<J>>,
-    #[cfg(all(test, not(target_arch = "wasm32")))]
+    #[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
     use_native: bool,
     pub replaced: u64,
     pub canceled: u64,
@@ -99,7 +99,7 @@ impl<J: Work> Default for Queue<J> {
         Self {
             active: None,
             pending: None,
-            #[cfg(all(test, not(target_arch = "wasm32")))]
+            #[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
             use_native: false,
             replaced: 0,
             canceled: 0,
@@ -115,20 +115,20 @@ impl<J: Work> std::fmt::Debug for Queue<J> {
 }
 impl<J: Work> Queue<J> {
     /// Run queued work on the desktop background worker thread during native tests.
-    #[cfg(all(test, not(target_arch = "wasm32")))]
+    #[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
     pub fn enable_native_worker(&mut self) {
         self.use_native = true;
     }
     fn start_request(&self, request: Request<J>) -> Running<J> {
-        #[cfg(all(test, not(target_arch = "wasm32")))]
+        #[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
         {
             if self.use_native {
-                Running::Native(native::Running::start(request))
+                Running::Native(Box::new(native::Running::start(request)))
             } else {
-                Running::Incremental(incremental::Running::start(request))
+                Running::Incremental(Box::new(incremental::Running::start(request)))
             }
         }
-        #[cfg(not(all(test, not(target_arch = "wasm32"))))]
+        #[cfg(not(all(test, feature = "performance-harness", not(target_arch = "wasm32"))))]
         {
             Running::start(request)
         }
@@ -186,17 +186,17 @@ impl<J: Work> Queue<J> {
         self.active.is_some() || self.pending.is_some()
     }
 }
-#[cfg(target_arch = "wasm32")]
+#[cfg(any(target_arch = "wasm32", all(test, not(feature = "performance-harness"))))]
 use incremental::Running;
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
 use native::Running;
 
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
 enum Running<J: Work> {
-    Incremental(incremental::Running<J>),
-    Native(native::Running<J>),
+    Incremental(Box<incremental::Running<J>>),
+    Native(Box<native::Running<J>>),
 }
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
 impl<J: Work> Running<J> {
     fn source(&self) -> Option<&CheckSource> {
         match self {
@@ -223,7 +223,7 @@ impl<J: Work> Running<J> {
         }
     }
 }
-#[cfg(all(test, not(target_arch = "wasm32")))]
+#[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
 pub(crate) fn native_test_lock() -> std::sync::MutexGuard<'static, ()> {
     native::TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
