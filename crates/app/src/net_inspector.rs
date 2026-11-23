@@ -106,13 +106,14 @@ fn tree_row(
     response.fold || response.clicked
 }
 
-/// Sheet row tooltip: how many part pins of the net are drawn on that sheet.
-fn sheet_tip(terminals: usize) -> String {
-    match terminals {
+/// Sheet row tooltip: full sheet name, all cross-sheet connection types, and part-pin count.
+fn sheet_tip(page: usize, name: &str, via: &[Via], terminals: usize) -> String {
+    let pins = match terminals {
         0 => "No part pins on this sheet".into(),
         1 => "1 part pin on this sheet".into(),
         count => format!("{count} part pins on this sheet"),
-    }
+    };
+    format!("{} · {pins}", sheet_line(page, name, via))
 }
 
 /// Sheet row text: page number, sheet name and how the net arrives there.
@@ -234,7 +235,7 @@ impl NetInspector {
                             if expanded {
                                 for sheet in &net.sheets {
                                     let line = sheet_line(sheet.page, &sheet.name, &sheet.via);
-                                    let tip = sheet_tip(sheet.terminals);
+                                    let tip = sheet_tip(sheet.page, &sheet.name, &sheet.via, sheet.terminals);
                                     tree_row(ui, ("sheet_net_page", index, sheet.sheet), &line, None, 1, None, &tip, active == Some(sheet.sheet));
                                 }
                             }
@@ -341,12 +342,79 @@ mod tests {
         harness.get_by_label("Cross-sheet net CAN_H");
     }
 
-    /// Sheet row tooltips count part pins in the right number, including none.
+    /// Sheet row tooltips include the full sheet name, all connection types, and the part-pin count.
     #[test]
     fn sheet_row_tooltips_count_part_pins() {
-        assert_eq!(super::sheet_tip(0), "No part pins on this sheet");
-        assert_eq!(super::sheet_tip(1), "1 part pin on this sheet");
-        assert_eq!(super::sheet_tip(2), "2 part pins on this sheet");
+        use pcbcraft_engine::nets::Via;
+        assert_eq!(super::sheet_tip(1, "Main", &[], 0), "1 · Main · No part pins on this sheet");
+        assert_eq!(
+            super::sheet_tip(2, "Radio Front End and RF Interface", &[Via::GlobalLabel, Via::HierarchicalLabel], 1),
+            "2 · Radio Front End and RF Interface — global label, hierarchical label · 1 part pin on this sheet"
+        );
+        assert_eq!(super::sheet_tip(3, "Power", &[Via::SheetPin], 2), "3 · Power — sheet pin · 2 part pins on this sheet");
+    }
+
+    /// Hovering a truncated long sheet row in the Net Inspector shows the full sheet name,
+    /// all cross-sheet connection types, and the part-pin count in its tooltip.
+    #[test]
+    fn net_inspector_long_sheet_name_tooltip_shows_full_name_via_and_pins() {
+        use pcbcraft_engine::{DRAW_WIRE, WireEndpoint, hierarchy, net_labels, schematic::Point};
+        let mut app = PcbApp::default();
+        app.session.execute("project.new", &json!({"name": "radio"})).unwrap();
+        let parent = app.session.project().unwrap().sheet_target();
+        let long_name = "Radio Front End and RF Interface";
+        let rev = app.session.revision();
+        app.session.execute(hierarchy::CREATE_CHILD, &json!({"name": long_name, "x_nm": 0, "y_nm": 0, "expected_revision": rev})).unwrap();
+        let child = app.session.project().unwrap().sheets().nth(1).unwrap().target;
+        let rev = app.session.revision();
+        app.session
+            .execute(
+                hierarchy::ADD_LABEL,
+                &json!({"sheet": child.id(), "name": "SIGNAL", "direction": "input", "x_nm": 0, "y_nm": 0, "expected_revision": rev}),
+            )
+            .unwrap();
+        let label_id = app.session.project().unwrap().for_sheet(child).unwrap().hierarchical_labels()[0].id;
+        for sheet in [parent, child] {
+            let rev = app.session.revision();
+            app.session.execute(PLACE_RESISTOR, &json!({"sheet": sheet.id(), "x_nm": 10_000_000, "y_nm": 0, "expected_revision": rev})).unwrap();
+            let projection = app.session.project().unwrap().for_sheet(sheet).unwrap();
+            let terminal = projection.symbols()[0].terminals()[0];
+            let endpoint = if sheet == parent { WireEndpoint::SheetPin(label_id) } else { WireEndpoint::Label(label_id) };
+            let from = projection.terminal_position(terminal).unwrap();
+            let to = projection.endpoint_position(endpoint).unwrap();
+            let bends = if from.x_nm != to.x_nm && from.y_nm != to.y_nm { vec![Point { x_nm: from.x_nm, y_nm: to.y_nm }] } else { vec![] };
+            let rev = app.session.revision();
+            app.session
+                .execute(
+                    DRAW_WIRE,
+                    &json!({"sheet": sheet.id(), "from": terminal.inspect(), "to": endpoint.inspect(), "bends": bends, "auto_heal": false, "expected_revision": rev}),
+                )
+                .unwrap();
+            let rev = app.session.revision();
+            app.session
+                .execute(
+                    net_labels::ADD,
+                    &json!({"sheet": sheet.id(), "name": "RF_BUS", "style": "global", "x_nm": from.x_nm, "y_nm": from.y_nm, "expected_revision": rev}),
+                )
+                .unwrap();
+        }
+
+        let mut harness = Harness::builder().with_size(egui::vec2(1000.0, 700.0)).build_ui_state(|ui, app| app.frame(ui), app);
+        harness.ctx.global_style_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.show_tooltips_only_when_still = false;
+        });
+        harness.run();
+        click(&mut harness, "Toggle Net Inspector");
+        let row_label = format!("2 · {long_name} — global label, hierarchical label");
+        let row = harness.get_by_label(row_label.as_str()).rect();
+        harness.hover_at(row.center());
+        harness.run_steps(3);
+        let expected_tip = format!("{row_label} · 1 part pin on this sheet");
+        assert!(
+            harness.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(glyphs) if glyphs.galley.job.text == expected_tip)),
+            "expected tooltip {expected_tip:?}"
+        );
     }
 
     /// The three-sheet project with the Net Inspector open on page 1.
