@@ -4,6 +4,10 @@
 
 #[cfg(target_arch = "wasm32")]
 fn main() {
+    // The same module is imported by an isolated fill worker; it must not bootstrap a UI there.
+    if web_sys::window().is_none() {
+        return;
+    }
     use eframe::wasm_bindgen::JsCast as _;
 
     const CANVAS_ID: &str = "pcbcraft_canvas";
@@ -28,6 +32,15 @@ fn main() {
             }
         }
     });
+}
+
+/// Forward completed-zone counts while calculation stays in the isolated worker.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn pcbcraft_fill_worker(request: &str, progress: &js_sys::Function) -> String {
+    pcbcraft_engine::board::fill::worker::execute_reporting(request, &mut |completed| {
+        let _ = progress.call1(&wasm_bindgen::JsValue::NULL, &wasm_bindgen::JsValue::from(completed as u32));
+    })
 }
 
 #[cfg(not(target_arch = "wasm32"))]

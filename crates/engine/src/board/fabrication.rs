@@ -14,7 +14,7 @@
 //! Mounting-side pads follow the placement side; silkscreen follows the top or bottom legend.
 //! X2 aperture functions describe the emitted features without changing their geometry.
 //! Copper object attributes describe intended nets and component pins.
-//! Track and Board Outline strokes remain linear; zones are not plotted.
+//! Track and Board Outline strokes remain linear. Export refuses boards with copper zones.
 mod object_attributes;
 
 use self::object_attributes::{Object, RoutedNets};
@@ -620,7 +620,7 @@ impl BoardView<'_> {
     /// Build every fabrication file for this board, in a fixed order, measured from the board's
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
-    /// Circular copper is refused before generating any straight-only output.
+    /// Refuses circular copper and copper zones before generating any output files.
     /// Outputs include an independent non-plated drill file only when the board has such holes.
     /// Refuses a non-plated diameter that rounds to zero at the drill output's resolution.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
@@ -629,6 +629,9 @@ impl BoardView<'_> {
     /// A placed slot is refused until the plated machining output can preserve its geometry.
     pub fn fabrication(self) -> Result<Fabrication, String> {
         self.require_linear_copper()?;
+        if !self.zones().is_empty() {
+            return Err("Fabrication export is unavailable on boards with copper zones.".into());
+        }
         let board = &self.project().board;
         if board.footprints().iter().filter_map(|footprint| board.definition_for(footprint)).any(|definition| definition.has_plated_slots()) {
             return Err("Fabrication output cannot yet machine plated slots; no files were generated.".into());
@@ -676,7 +679,7 @@ impl BoardView<'_> {
                     let cardinal = placed_cardinal && cardinal_pads.contains(pad.number.as_str());
                     let has_pin = !unconnected.contains(pad.number.as_str());
                     let net = nets.pad_name(&footprint.id, &pad.number);
-                    Some((pad, cardinal, reference, has_pin, net))
+                    Some((pad, cardinal, reference.clone(), has_pin, net))
                 })
             })
             .collect();
