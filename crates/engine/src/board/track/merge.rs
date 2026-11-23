@@ -422,7 +422,10 @@ async fn prepare(project: &Project, target: BoardTarget, revision: u64, params: 
     if !report_fits(&report, report_budget) {
         return Err(CommandError::CapExceeded(format!("the merge report would exceed {report_budget} bytes; merge fewer tracks at a time")));
     }
-    let envelope = json!({"revision": revision, "merge_tracks": report});
+    let mut envelope = serde_json::Map::with_capacity(2);
+    envelope.insert("revision".into(), json!(revision));
+    envelope.insert("merge_tracks".into(), report);
+    let envelope = Value::Object(envelope);
     if !plan.changed() || dry_run {
         return Ok(PreparedMerge { candidate: None, added: BTreeSet::new(), report: envelope });
     }

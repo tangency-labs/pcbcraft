@@ -506,6 +506,9 @@ impl PcbApp {
             } else {
                 completion.report.map_err(|message| snapshot_worker_failure(completion.schedule_failure, message)).and_then(|edit| {
                     let edit = edit.ok_or_else(|| Failure::new(ErrorCode::Cancelled, "Copper preparation canceled"))??;
+                    if edit.is_effectful() && !request.authority.grant_commit(request.deadline) {
+                        return Err(Failure::new(ErrorCode::Cancelled, "Copper edit request expired or disconnected before publication"));
+                    }
                     let (revision, report) = self.session.commit_copper_edit_with_report(edit)?;
                     Ok(if let Some(report) = report {
                         report
@@ -1775,11 +1778,194 @@ mod copper_tests {
         assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 65_536);
         assert!(!app.remote_copper.queue.busy());
     }
+
+    /// An effectful deferred `pcb.merge_tracks` apply must acquire `RequestAuthority::grant_commit`
+    /// after validation and immediately before publication; if cancellation wins at that boundary,
+    /// the board and undo history remain unchanged. A live apply transitions the authority to
+    /// `Committing` and publishes one undoable step, while a dry-run preview leaves it `Pending`.
+    #[test]
+    fn remote_merge_tracks_requires_commit_grant_before_publication() {
+        let (mut app, ctx, base) = fixture();
+        let mut route = base["params"]["params"].clone();
+        route["points"] = json!([
+            {"x_nm": 0, "y_nm": 0},
+            {"x_nm": 1_000_000, "y_nm": 0},
+            {"x_nm": 2_000_000, "y_nm": 0},
+            {"x_nm": 3_000_000, "y_nm": 0},
+        ]);
+        app.session.apply(pcbcraft_engine::ADD_TRACKS, &route).unwrap();
+        let target = app.session.project().unwrap().board_target().unwrap();
+        let tracks: Vec<_> = app.session.project().unwrap().board_view(target).unwrap().tracks().iter().map(|t| t.id).collect();
+        assert_eq!(tracks.len(), 3);
+        let before = app.session.snapshot().unwrap();
+        let before_bytes = pcbcraft_engine::persistence::encode_documents(before.clone()).unwrap();
+        let revision = app.session.revision();
+        let make_body = |dry_run: bool| {
+            json!({"method":"engine.execute","params":{"command":pcbcraft_engine::MERGE_TRACKS,"inspect":false,"params":{
+                "board":target.board,"tracks":tracks,"dry_run":dry_run,"expected_revision":revision}}})
+        };
+
+        // Dry-run preview does not consume the commit grant.
+        let (req, reply, preview_authority) = request(&app, make_body(true));
+        app.start_remote_copper(&ctx, req, false);
+        let preview = (0..500)
+            .find_map(|_| {
+                app.poll_remote_copper(&ctx);
+                reply.try_recv().ok()
+            })
+            .expect("preview completes");
+        assert_eq!(preview["result"]["merge_tracks"]["changed"], json!(true));
+        assert_eq!(*preview_authority.0.lock().unwrap(), RequestDecision::Pending);
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+        assert_eq!(app.session.revision(), revision);
+
+        // If the commit grant is lost right before publication (while `request.expired()` is
+        // still false so `poll_remote_copper` reaches `grant_commit` after worker validation),
+        // publication is refused and board + undo history stay untouched.
+        let (req, reply, lost_authority) = request(&app, make_body(false));
+        app.start_remote_copper(&ctx, req, false);
+        *lost_authority.0.lock().unwrap() = RequestDecision::Committing;
+        let refused = (0..500)
+            .find_map(|_| {
+                app.poll_remote_copper(&ctx);
+                reply.try_recv().ok()
+            })
+            .expect("lost-grant apply returns cancellation");
+        assert_eq!(refused["code"], json!("cancelled"), "{refused}");
+        assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
+        assert_eq!(app.session.revision(), revision);
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 3);
+        assert_eq!(pcbcraft_engine::persistence::encode_documents(app.session.snapshot().unwrap()).unwrap(), before_bytes);
+
+        // Undo still undoes the earlier `ADD_TRACKS` (no phantom merge history entry was pushed).
+        app.session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 0);
+        app.session.apply("edit.redo", &Value::Null).unwrap();
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 3);
+        assert_eq!(app.session.revision(), revision);
+
+        // With a live grant, apply acquires `Committing`, publishes one undoable step, and undo restores `before`.
+        let (req, reply, live_authority) = request(&app, make_body(false));
+        app.start_remote_copper(&ctx, req, false);
+        let applied = (0..500)
+            .find_map(|_| {
+                app.poll_remote_copper(&ctx);
+                reply.try_recv().ok()
+            })
+            .expect("live-grant apply completes");
+        assert_eq!(applied["result"]["revision"], json!(revision + 1), "{applied}");
+        assert_eq!(*live_authority.0.lock().unwrap(), RequestDecision::Committing);
+        assert_eq!(app.session.revision(), revision + 1);
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 1);
+        app.session.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(pcbcraft_engine::persistence::encode_documents(app.session.snapshot().unwrap()).unwrap(), before_bytes);
+    }
+
+    /// Measure editor-thread admission and completion separately for deferred `pcb.merge_tracks`
+    /// on `envelope-v1` (65,536 tracks, 32,768 selected) using the native desktop worker queue.
+    #[cfg(all(feature = "performance-harness", not(target_arch = "wasm32")))]
+    pub(super) fn measure_envelope_v1_native_merge() {
+        use pcbcraft_engine as engine;
+        let _worker_lock = crate::board_drc::jobs::native_test_lock();
+        let artifact_json = crate::performance::generate("envelope-v1", "test").unwrap();
+        let artifact: Value = serde_json::from_str(&artifact_json).unwrap();
+        let archive: Vec<u8> = serde_json::from_value(artifact["project"].clone()).unwrap();
+        let project = engine::persistence::decode_packed(&archive).unwrap().project;
+        let ctx = egui::Context::default();
+        let mut app = PcbApp::default();
+        app.remote_copper.queue.enable_native_worker();
+        app.session.open_snapshot(project);
+        app.live_control = Some(LiveControl::start(&ctx).unwrap());
+        let target = app.session.project().unwrap().board_target().unwrap();
+        let selected: Vec<_> = {
+            let tracks = app.session.project().unwrap().board_view(target).unwrap().tracks();
+            assert_eq!(tracks.len(), 65_536);
+            tracks.iter().take(32_768).map(|t| t.id).collect()
+        };
+        let cur_rev = app.session.revision();
+        let cur_snapshot = app.session.snapshot().unwrap();
+        let make_body = |rev: u64, dry_run: bool| {
+            json!({"method":"engine.execute","params":{"command":engine::MERGE_TRACKS,"inspect":false,"params":{
+                "board":target.board,"tracks":selected,"dry_run":dry_run,"expected_revision":rev}}})
+        };
+
+        // Preview on the native desktop worker: measure admission and completion separately.
+        let (mut req, reply, preview_authority) = request(&app, make_body(cur_rev, true));
+        req.deadline = Instant::now() + Duration::from_secs(60);
+        let preview_wall_start = Instant::now();
+        let t_admit = Instant::now();
+        app.start_remote_copper(&ctx, req, false);
+        let preview_admission_ms = t_admit.elapsed().as_secs_f64() * 1_000.0;
+        let mut preview_completion_ms = 0.0_f64;
+        let preview_response = loop {
+            let t_poll = Instant::now();
+            app.poll_remote_copper(&ctx);
+            let dt = t_poll.elapsed().as_secs_f64() * 1_000.0;
+            if let Ok(value) = reply.try_recv() {
+                preview_completion_ms = dt;
+                break value;
+            }
+            assert!(preview_wall_start.elapsed() < Duration::from_secs(60), "native envelope-v1 merge preview timed out");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let preview_wall_ms = preview_wall_start.elapsed().as_secs_f64() * 1_000.0;
+        assert_eq!(preview_response["result"]["revision"], json!(cur_rev));
+        assert_eq!(preview_response["result"]["merge_tracks"]["dry_run"], json!(true));
+        assert_eq!(preview_response["result"]["merge_tracks"]["changed"], json!(true));
+        assert_eq!(*preview_authority.0.lock().unwrap(), RequestDecision::Pending);
+        assert!(Arc::ptr_eq(&cur_snapshot, &app.session.snapshot().unwrap()));
+        assert_eq!(app.session.revision(), cur_rev);
+
+        // Apply on the native desktop worker: measure admission and completion separately.
+        let (mut req, reply, apply_authority) = request(&app, make_body(cur_rev, false));
+        req.deadline = Instant::now() + Duration::from_secs(60);
+        let apply_wall_start = Instant::now();
+        let t_admit = Instant::now();
+        app.start_remote_copper(&ctx, req, false);
+        let apply_admission_ms = t_admit.elapsed().as_secs_f64() * 1_000.0;
+        let mut apply_completion_ms = 0.0_f64;
+        let apply_response = loop {
+            let t_poll = Instant::now();
+            app.poll_remote_copper(&ctx);
+            let dt = t_poll.elapsed().as_secs_f64() * 1_000.0;
+            if let Ok(value) = reply.try_recv() {
+                apply_completion_ms = dt;
+                break value;
+            }
+            assert!(apply_wall_start.elapsed() < Duration::from_secs(60), "native envelope-v1 merge apply timed out");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let apply_wall_ms = apply_wall_start.elapsed().as_secs_f64() * 1_000.0;
+        let result = &apply_response["result"];
+        assert_eq!(result["revision"], json!(cur_rev + 1), "{apply_response}");
+        assert_eq!(result["merge_tracks"]["dry_run"], json!(false));
+        assert_eq!(*apply_authority.0.lock().unwrap(), RequestDecision::Committing);
+        for key in ["before", "after", "removed", "reshaped", "locked", "changed"] {
+            assert_eq!(result["merge_tracks"][key], preview_response["result"]["merge_tracks"][key], "{key}");
+        }
+        let removed = result["merge_tracks"]["removed"].as_array().unwrap().len();
+        assert!(removed > 0);
+        assert_eq!(app.session.revision(), cur_rev + 1);
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 65_536 - removed);
+
+        app.session.apply("edit.undo", &Value::Null).unwrap();
+        assert!(Arc::ptr_eq(&cur_snapshot, &app.session.snapshot().unwrap()));
+        assert_eq!(app.session.project().unwrap().board_view(target).unwrap().tracks().len(), 65_536);
+
+        eprintln!(
+            "NATIVE-TIMING preview_admission_ms={preview_admission_ms:.2} preview_completion_ms={preview_completion_ms:.2} preview_wall_ms={preview_wall_ms:.1} apply_admission_ms={apply_admission_ms:.2} apply_completion_ms={apply_completion_ms:.2} apply_wall_ms={apply_wall_ms:.1} removed={removed}"
+        );
+    }
 }
 
 #[cfg(all(test, feature = "performance-harness"))]
 pub(crate) fn verify_envelope_v1_deferred_merge() {
     copper_tests::verify_envelope_v1_deferred_merge();
+}
+
+#[cfg(all(test, feature = "performance-harness", not(target_arch = "wasm32")))]
+pub(crate) fn measure_envelope_v1_native_merge() {
+    copper_tests::measure_envelope_v1_native_merge();
 }
 
 #[cfg(all(test, unix))]

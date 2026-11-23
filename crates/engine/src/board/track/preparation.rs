@@ -90,6 +90,10 @@ impl PreparedCopperEdit {
     pub fn command(&self) -> &'static str {
         self.command
     }
+    /// Whether publishing this prepared edit mutates the open project.
+    pub fn is_effectful(&self) -> bool {
+        self.candidate.is_some()
+    }
 }
 
 /// Candidate construction, reusable pad projection and bounded contact validation for a copper

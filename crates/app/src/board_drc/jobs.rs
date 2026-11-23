@@ -88,13 +88,23 @@ impl<T> Completion<T> {
 pub(crate) struct Queue<J: Work = CheckJob> {
     active: Option<Running<J>>,
     pending: Option<Request<J>>,
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    use_native: bool,
     pub replaced: u64,
     pub canceled: u64,
     pub completed: u64,
 }
 impl<J: Work> Default for Queue<J> {
     fn default() -> Self {
-        Self { active: None, pending: None, replaced: 0, canceled: 0, completed: 0 }
+        Self {
+            active: None,
+            pending: None,
+            #[cfg(all(test, not(target_arch = "wasm32")))]
+            use_native: false,
+            replaced: 0,
+            canceled: 0,
+            completed: 0,
+        }
     }
 }
 impl<J: Work> std::fmt::Debug for Queue<J> {
@@ -104,6 +114,25 @@ impl<J: Work> std::fmt::Debug for Queue<J> {
     }
 }
 impl<J: Work> Queue<J> {
+    /// Run queued work on the desktop background worker thread during native tests.
+    #[cfg(all(test, not(target_arch = "wasm32")))]
+    pub fn enable_native_worker(&mut self) {
+        self.use_native = true;
+    }
+    fn start_request(&self, request: Request<J>) -> Running<J> {
+        #[cfg(all(test, not(target_arch = "wasm32")))]
+        {
+            if self.use_native {
+                Running::Native(native::Running::start(request))
+            } else {
+                Running::Incremental(incremental::Running::start(request))
+            }
+        }
+        #[cfg(not(all(test, not(target_arch = "wasm32"))))]
+        {
+            Running::start(request)
+        }
+    }
     /// Coalesce replacements without starting another worker until cancellation is acknowledged.
     pub fn submit(&mut self, request: Request<J>) {
         if let Some(active) = &mut self.active {
@@ -111,7 +140,7 @@ impl<J: Work> Queue<J> {
             self.replaced += u64::from(self.pending.is_some());
             self.pending = Some(request);
         } else {
-            self.active = Some(Running::start(request));
+            self.active = Some(self.start_request(request));
         }
     }
     /// Signal cancellation and discard queued work without waiting or joining.
@@ -129,7 +158,7 @@ impl<J: Work> Queue<J> {
             self.active = None;
             self.completed += 1;
             if let Some(request) = self.pending.take() {
-                self.active = Some(Running::start(request));
+                self.active = Some(self.start_request(request));
             }
         }
         result
@@ -157,10 +186,47 @@ impl<J: Work> Queue<J> {
         self.active.is_some() || self.pending.is_some()
     }
 }
-#[cfg(any(target_arch = "wasm32", test))]
+#[cfg(target_arch = "wasm32")]
 use incremental::Running;
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
 use native::Running;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+enum Running<J: Work> {
+    Incremental(incremental::Running<J>),
+    Native(native::Running<J>),
+}
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl<J: Work> Running<J> {
+    fn source(&self) -> Option<&CheckSource> {
+        match self {
+            Self::Incremental(running) => running.source(),
+            Self::Native(running) => running.source(),
+        }
+    }
+    fn cancel(&mut self) {
+        match self {
+            Self::Incremental(running) => running.cancel(),
+            Self::Native(running) => running.cancel(),
+        }
+    }
+    fn progress(&self) -> Option<CheckProgress> {
+        match self {
+            Self::Incremental(running) => running.progress(),
+            Self::Native(running) => running.progress(),
+        }
+    }
+    fn poll(&mut self) -> Option<Completion<J::Output>> {
+        match self {
+            Self::Incremental(running) => running.poll(),
+            Self::Native(running) => running.poll(),
+        }
+    }
+}
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn native_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    native::TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 #[cfg(any(target_arch = "wasm32", test))]
 mod incremental {
