@@ -1,7 +1,7 @@
 //! Window commands: the editor's view, window, settings and file controls as named commands, so
 //! a live MCP client reaches them through the same handlers as the ribbon, sheet tabs, status
-//! bar and Preferences. They change how the project is shown, never the project document, its
-//! revision or its undo history. Each view or window is addressed by the ID inspection reports.
+//! bar and Preferences. Appearance edits retain local undo entries without changing project
+//! documents or revisions. Each view or window is addressed by the ID inspection reports.
 
 use egui::Context;
 
@@ -942,7 +942,7 @@ mod live {
         WindowCommand {
             id: "view.set_layer_color",
             title: "Layer Color",
-            summary: "Set or reset a board's personal layer color, through the same handler as its swatch. Shared by every view of that board, saved locally and excluded from project files/undo.",
+            summary: "Set or reset a board's personal layer color, through the same handler as its swatch. Shared by every view of that board and saved locally. Changes are undoable in the editor.",
             params: &[
                 VIEW,
                 Param { name: "layer", summary: "Layer UUID on the view's board", required: true, kind: Kind::Object },

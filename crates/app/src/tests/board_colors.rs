@@ -287,6 +287,82 @@ fn zone_net_color_follows_copper_and_restores_layer_colors() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }
 
+/// Color Undo/Redo retains file bytes, follows authored edits and restores an explicit reset.
+#[test]
+fn net_color_undo_and_redo_follow_the_editor_history() {
+    let mut h = super::board_fill::board();
+    let (target, zone, net, name) = {
+        let project = h.state().session.project().unwrap();
+        let board = project.board_view(project.board_target().unwrap()).unwrap();
+        (board.target, board.zones()[0].id.to_string(), board.zones()[0].net, project.name.clone())
+    };
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let color = |h: &Harness<'_, PcbApp>| h.state().board_appearance.net_palette(target, true).and_then(|palette| palette.get(&net)).copied();
+    let cyan = egui::Color32::from_rgb(0x29, 0xB6, 0xC8);
+    h.state_mut().views.active.board.zones.select(Some(zone.clone()));
+    h.run();
+    click(&mut h, "Net color…");
+    hex_field(&mut h, "#29B6C8");
+    click(&mut h, "Apply color");
+    assert_eq!(color(&h), Some(cyan));
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(color(&h), None);
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+    click(&mut h, "Redo");
+    assert_eq!(color(&h), Some(cyan));
+
+    // A later authored edit is the first thing Undo reverts. The next step reaches the color.
+    h.state_mut().run("project.rename", &json!({"name":"Changed"}));
+    h.run();
+    click(&mut h, "Undo");
+    assert_eq!(h.state().session.project().unwrap().name, name);
+    assert_eq!(color(&h), Some(cyan));
+    let revision = h.state().session.revision();
+    click(&mut h, "Undo");
+    assert_eq!(color(&h), None);
+    assert_eq!(h.state().session.revision(), revision);
+    click(&mut h, "Redo");
+    assert_eq!(color(&h), Some(cyan));
+    h.state_mut().views.active.board.zones.select(Some(zone));
+    h.run();
+    click(&mut h, "Net color…");
+    click(&mut h, "Use layer color");
+    assert_eq!(color(&h), None);
+    assert!(!h.state().session.available("edit.redo"));
+    click(&mut h, "Undo");
+    assert_eq!(color(&h), Some(cyan));
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// Live palette edits and project Undo run through the same cursor as GUI actions.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn live_net_color_undo_returns_the_previous_override() {
+    let mut h = super::board_fill::board();
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    let (target, net) = {
+        let project = h.state().session.project().unwrap();
+        let board = project.board_view(project.board_target().unwrap()).unwrap();
+        (board.target, board.zones()[0].net)
+    };
+    let revision = h.state().session.revision();
+    for (command, params) in [("view.set_net_color", json!({"view":view,"net":net,"color":"#29B6C8"})), ("edit.undo", serde_json::Value::Null)] {
+        let mut editor = crate::live_control::LiveEditor { app: h.state_mut(), ctx: &ctx };
+        let reply = pcbcraft_mcp::live::call_editor(
+            &mut editor,
+            &json!({"method":"engine.execute","params":{"command":command,"params":params,"inspect":false}}),
+        )
+        .unwrap();
+        assert_eq!(reply["revision"], revision);
+    }
+    assert!(h.state().board_appearance.net_palette(target, true).is_none());
+}
+
 /// The live command shares the palette handler and refuses unknown/foreign layers before mutation.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

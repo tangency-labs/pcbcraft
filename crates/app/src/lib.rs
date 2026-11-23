@@ -522,6 +522,9 @@ impl PcbApp {
             object.insert("sheet".into(), json!(sheet.id()));
         }
         self.message = self.session.apply(id, &params).err().map(|e| e.to_string());
+        if self.message.is_none() && matches!(id, "edit.undo" | "edit.redo") {
+            self.restore_local_history();
+        }
         self.views.sync(&self.session);
     }
 
@@ -965,6 +968,7 @@ impl PcbApp {
                     let shortcut = ui.ctx().format_shortcut(&key);
                     if menu::quick_action(ui, icon, label, &shortcut, self.session.available(command)).clicked() {
                         self.run(command, &Value::Null);
+                        self.repaint_editors(ui.ctx());
                     }
                 }
             },
@@ -2306,9 +2310,11 @@ impl PcbApp {
         }
         if pressed(&COMMAND_Z) && self.session.available("edit.undo") {
             self.run("edit.undo", &Value::Null);
+            self.repaint_editors(ctx);
         }
         if pressed(&COMMAND_Y) && self.session.available("edit.redo") {
             self.run("edit.redo", &Value::Null);
+            self.repaint_editors(ctx);
         }
         if pressed(&COMMAND_COMMA) {
             self.open_preferences();

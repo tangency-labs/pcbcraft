@@ -55,7 +55,9 @@ copper layers, as well as surface-mount pads and tracks with an unambiguous
 physical connection to the net. Via rings and plated through-hole pads retain
 their usual display colors. Choose **Use layer color** to clear the override,
 or turn off **Net colors** in **Layers** to see layer colors in the current view.
-Overrides are stored in local app settings with the board and net IDs.
+Undo and Redo restore net and layer colors in the same order as other editor
+edits. The colors stay in local app settings, so changing them leaves the board
+file and project revision unchanged.
 
 ## Filling and checking
 

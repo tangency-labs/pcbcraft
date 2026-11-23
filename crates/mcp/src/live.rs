@@ -202,6 +202,8 @@ pub trait Editor {
     fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, Failure> {
         Err(Failure::new(ErrorCode::Unavailable, "This editor does not support UI input automation"))
     }
+    /// Apply any host-owned preference returned by a successful session Undo or Redo.
+    fn restore_local_history(&mut self) {}
     /// The editor's project session, which document commands edit directly.
     fn session(&mut self) -> &mut Session;
     /// Why `command` can't run now (a dialog or file operation, say), or `None` when it can.
@@ -214,7 +216,7 @@ pub trait Editor {
     /// The editor's windows, views, panels and settings, without project data.
     fn inspect(&self) -> Value;
     /// Run one window command through the handlers the editor's own controls use. A failure
-    /// leaves the windows as they were; success never changes the project or its history.
+    /// leaves the windows as they were. Editable local preferences may enter runtime history.
     fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), Failure>;
 }
 
@@ -339,6 +341,9 @@ fn call_editor_with_package_commit_limit(
             }
             if !is_window_command(id) {
                 let result = call_session(editor.session(), method, params)?;
+                if matches!(id, "edit.undo" | "edit.redo") {
+                    editor.restore_local_history();
+                }
                 // This dry run cannot publish an edit. Refuse an oversized reply before the
                 // host writes its frame, rather than truncating the proposed documents.
                 if id == pcbcraft_engine::SET_SYMBOL_FIELDS

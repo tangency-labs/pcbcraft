@@ -747,6 +747,11 @@ impl Editor for LiveEditor<'_> {
         crate::ui_automation::check_command(id, params)?;
         self.app.automation_command(self.ctx, id, params).map_err(Failure::from)
     }
+    /// Finish a local color Undo or Redo inside the request that moved the history cursor.
+    fn restore_local_history(&mut self) {
+        self.app.restore_local_history();
+        self.app.repaint_editors(self.ctx);
+    }
     fn session(&mut self) -> &mut Session {
         &mut self.app.session
     }

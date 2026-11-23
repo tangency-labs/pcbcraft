@@ -22,6 +22,16 @@ pub struct CommittedEdit {
     pub project: Arc<Project>,
 }
 
+/// A host-owned change traversed by the same Undo and Redo commands as authored edits.
+/// Its payload stays local to this running session and is omitted from project snapshots.
+#[derive(Debug)]
+pub struct LocalHistoryStep {
+    /// The exact value the host recorded when it made the change.
+    pub edit: Arc<dyn std::any::Any + Send + Sync>,
+    /// Redo restores the new value. Undo restores the previous value.
+    pub forward: bool,
+}
+
 /// Receives the session's history roots and committed edits, in order.
 ///
 /// Calls are made on the thread that runs the command, while the session is borrowed, so an
@@ -91,6 +101,33 @@ mod tests {
                 ("opened Observed".to_owned(), 0),
             ]
         );
+    }
+
+    /// Local history shares ordering with project edits and leaves recovery and file state alone.
+    #[test]
+    fn local_history_leaves_authored_state_and_recovery_untouched() {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name":"Observed"})).unwrap();
+        let snapshot = session.snapshot().unwrap();
+        session.open_snapshot(snapshot.clone());
+        let log = Arc::new(Log::default());
+        session.observe_edits(Some(log.clone()));
+        let revision = session.revision();
+        assert!(!session.available("edit.undo"));
+        session.record_local_edit(42_u64);
+        for (command, forward) in [("edit.undo", false), ("edit.redo", true)] {
+            assert!(session.available(command));
+            assert_eq!(session.apply(command, &Value::Null).unwrap(), revision);
+            let step = session.take_local_history_step().unwrap();
+            assert_eq!(step.edit.downcast_ref::<u64>(), Some(&42));
+            assert_eq!(step.forward, forward);
+            assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+        }
+        assert_eq!(*log.0.lock().unwrap(), [("opened Observed".to_owned(), 0)]);
+        session.open_snapshot(snapshot);
+        assert!(!session.available("edit.undo"));
+        assert!(!session.available("edit.redo"));
+        assert!(session.take_local_history_step().is_none());
     }
 
     /// A prepared copper edit is reported as its command with its parameters once committed, and

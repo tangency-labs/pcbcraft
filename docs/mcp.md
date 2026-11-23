@@ -658,8 +658,9 @@ The earlier `board.copper_colors` subset remains for compatibility.
 across layers. `view.set_net_colors_visibility` switches the addressed view
 between net and layer colors. `inspect_editor` exposes the saved overrides in
 `board.net_colors` and the display setting in `board.net_colors_visible`.
-These values persist locally without changing project revision or undo. Physical
-pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
+Effective net and layer color changes enter the live editor’s Undo and Redo
+sequence. They persist locally and leave the project revision and files
+unchanged. Physical pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
 binding and stack-ordered layer UUIDs; `unconfigured` retains the explicit library
 binding without invented layers. Marker-only pins omit physical membership.
 `view.navigate_layer` takes `view` and `direction` (`next`, `previous`, `front`,

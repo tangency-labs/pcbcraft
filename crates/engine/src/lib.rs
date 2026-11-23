@@ -3235,6 +3235,45 @@ impl Project {
     }
 }
 
+/// A history entry either exchanges an authored snapshot or asks the host to restore local state.
+#[derive(Debug)]
+#[cfg_attr(test, derive(Clone))]
+enum HistoryEntry {
+    Project(Option<Arc<Project>>),
+    Local(Arc<dyn std::any::Any + Send + Sync>),
+}
+
+impl HistoryEntry {
+    /// Save metadata adoption touches authored snapshots only.
+    fn project_mut(&mut self) -> Option<&mut Option<Arc<Project>>> {
+        match self {
+            Self::Project(project) => Some(project),
+            Self::Local(_) => None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl HistoryEntry {
+    /// Access authored snapshots in tests that exercise only the document history.
+    fn project(&self) -> Option<&Arc<Project>> {
+        match self {
+            Self::Project(project) => project.as_ref(),
+            Self::Local(_) => None,
+        }
+    }
+
+    /// Refused commands must preserve the exact allocations and the kind of every history entry.
+    fn same_entry(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Project(Some(a)), Self::Project(Some(b))) => Arc::ptr_eq(a, b),
+            (Self::Project(None), Self::Project(None)) => true,
+            (Self::Local(a), Self::Local(b)) => Arc::ptr_eq(a, b),
+            _ => false,
+        }
+    }
+}
+
 /// The open project and its history. Editor views share this authority; headless MCP owns a
 /// separate session. Window placement and navigation are not part of the project history.
 #[derive(Debug)]
@@ -3247,9 +3286,11 @@ pub struct Session {
     clearance_cache: std::sync::Mutex<Option<board::clearance::Cached>>,
     libraries: Arc<library::sources::Catalog>,
     project: Option<Arc<Project>>,
-    undo: Vec<Option<Arc<Project>>>,
-    redo: Vec<Option<Arc<Project>>>,
-    /// Goes up with every change, undo and redo included, so it never repeats.
+    undo: Vec<HistoryEntry>,
+    redo: Vec<HistoryEntry>,
+    /// The host consumes this notification within the command that produced it.
+    local_history_step: Option<edits::LocalHistoryStep>,
+    /// Increases with every authored change, including authored Undo and Redo.
     revision: u64,
     /// Revision at the latest file adoption. View bindings use it to distinguish reopening the
     /// same persistent project from an edit or undo within the current history.
@@ -3275,6 +3316,7 @@ impl Default for Session {
             project: None,
             undo: Vec::new(),
             redo: Vec::new(),
+            local_history_step: None,
             revision: 0,
             history_root_revision: 0,
             update_plan: None,
@@ -3324,6 +3366,7 @@ impl Session {
         self.project = Some(if project.sheet_index == 0 { project } else { Arc::new(Project { sheet_index: 0, ..Project::clone(&project) }) });
         self.undo.clear();
         self.redo.clear();
+        self.local_history_step = None;
         self.report_opened();
     }
 
@@ -3344,7 +3387,7 @@ impl Session {
             return false;
         }
         let mut changed = false;
-        for slot in std::iter::once(&mut self.project).chain(self.undo.iter_mut()).chain(self.redo.iter_mut()) {
+        for slot in std::iter::once(&mut self.project).chain(self.undo.iter_mut().chain(self.redo.iter_mut()).filter_map(HistoryEntry::project_mut)) {
             let Some(project) = slot.as_mut() else { continue };
             if !project.same_document(original) {
                 continue;
@@ -4885,31 +4928,57 @@ impl Session {
     fn publish_change(&mut self, project: Arc<Project>, highest: u64) {
         self.update_plan = None;
         self.setup_preview = None;
-        self.undo.push(self.project.replace(project));
+        let previous = self.project.replace(project);
+        self.new_history_entry(HistoryEntry::Project(previous));
+        self.revision = (self.revision + 1).max(highest);
+    }
+
+    /// Order a successful host preference edit with the session's authored edits. The host must
+    /// record only effective changes. Recording an edit discards redo and leaves the authored
+    /// snapshot, revision, recovery journal and file dirty state alone.
+    pub fn record_local_edit(&mut self, edit: impl std::any::Any + Send + Sync) {
+        self.new_history_entry(HistoryEntry::Local(Arc::new(edit)));
+    }
+
+    /// Read the local action from the last Undo or Redo. Hosts apply it before dispatching another
+    /// history command. Ordinary project changes and fresh sessions have no local action.
+    pub fn take_local_history_step(&mut self) -> Option<edits::LocalHistoryStep> {
+        self.local_history_step.take()
+    }
+
+    /// Both kinds of new edits share the history bound and clear the same redo stack.
+    fn new_history_entry(&mut self, entry: HistoryEntry) {
+        self.undo.push(entry);
         if self.undo.len() > MAX_HISTORY {
             self.undo.remove(0);
         }
         self.redo.clear();
-        self.revision = (self.revision + 1).max(highest);
     }
 
-    /// Restore authored content and advance the revision, retaining allocation and profile-revision
-    /// watermarks from the state being left when both snapshots belong to the same project.
+    /// Move through authored snapshots and local changes in order. Only authored changes advance
+    /// revision and adopt allocation and profile watermarks from the snapshot being left.
     fn step(&mut self, forward: bool) {
+        self.local_history_step = None;
         let (from, to) = if forward { (&mut self.redo, &mut self.undo) } else { (&mut self.undo, &mut self.redo) };
-        if let Some(state) = from.pop() {
-            self.update_plan = None;
-            self.setup_preview = None;
-            to.push(std::mem::replace(&mut self.project, state));
-            self.revision += 1;
-        }
-        if let Some(project) = self.project.clone() {
-            // The state just left is now at the end of the opposite history stack.
-            let prior = if forward { self.undo.last() } else { self.redo.last() }.and_then(Option::as_ref);
-            if let Some(prior) = prior.filter(|prior| prior.same_document(&project)) {
-                let project = Project::with_allocation_watermark(project, prior.numeric_id_high_water);
-                self.project = Some(Project::with_assembly_profile_watermarks(project, prior));
+        match from.pop() {
+            Some(HistoryEntry::Local(edit)) => {
+                self.local_history_step = Some(edits::LocalHistoryStep { edit: edit.clone(), forward });
+                to.push(HistoryEntry::Local(edit));
             }
+            Some(HistoryEntry::Project(state)) => {
+                self.update_plan = None;
+                self.setup_preview = None;
+                let prior = std::mem::replace(&mut self.project, state);
+                if let (Some(project), Some(previous)) = (&self.project, &prior)
+                    && previous.same_document(project)
+                {
+                    let project = Project::with_allocation_watermark(project.clone(), previous.numeric_id_high_water);
+                    self.project = Some(Project::with_assembly_profile_watermarks(project, previous));
+                }
+                to.push(HistoryEntry::Project(prior));
+                self.revision += 1;
+            }
+            None => {}
         }
     }
 

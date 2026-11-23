@@ -197,6 +197,20 @@ pub(super) struct Appearance {
     pub(super) dirty: bool,
 }
 
+/// A personal override addressed by persistent board and copper identity.
+#[derive(Debug)]
+struct ColorAddress {
+    board: BoardTarget,
+    target: ColorTarget,
+}
+
+/// Only RGB preferences are recorded. Layer visibility and document content have separate owners.
+struct ColorChange {
+    address: ColorAddress,
+    before: Option<[u8; 3]>,
+    after: Option<[u8; 3]>,
+}
+
 impl Appearance {
     /// Invalid/oversized local settings fall back to defaults without affecting an open project.
     pub(super) fn from_storage(text: Option<String>) -> Self {
@@ -297,6 +311,25 @@ impl Appearance {
         self.dirty = true;
         Ok(())
     }
+    /// Snapshots record only an actual override, allowing Undo to restore the default palette.
+    fn override_at(&self, address: &ColorAddress) -> Option<[u8; 3]> {
+        match &address.target {
+            ColorTarget::Layer(layer) => self.lookup.get(&(address.board, layer.clone())).copied(),
+            ColorTarget::Net(net) => {
+                let [r, g, b, _] = self.net_lookup.get(&address.board)?.get(net)?.to_array();
+                Some([r, g, b])
+            }
+        }
+    }
+
+    /// Use the same settings write for picker edits and history traversal.
+    fn set_color(&mut self, address: &ColorAddress, rgb: Option<[u8; 3]>) -> Result<(), String> {
+        match &address.target {
+            ColorTarget::Layer(layer) => self.set(address.board, layer, rgb),
+            ColorTarget::Net(net) => self.set_net(address.board, *net, rgb),
+        }
+    }
+
     /// Technical footprint graphics follow their current component-side purpose binding. The
     /// active matching visible layer wins; unconfigured boards retain existing preview defaults.
     pub(super) fn technical(
@@ -414,11 +447,11 @@ pub(super) fn hex(color: egui::Color32) -> String {
     format!("#{r:02X}{g:02X}{b:02X}")
 }
 
-/// A disposable color draft captures its view authority; Apply never edits board geometry/history.
+/// A disposable color draft captures its view authority. Apply records a local history entry.
 #[derive(Debug)]
 pub(super) struct Edit {
     source: ViewInput,
-    target: ColorTarget,
+    address: ColorAddress,
     return_rules: Option<Box<crate::net_class_editor::Edit>>,
     label: String,
     rgb: [u8; 3],
@@ -436,10 +469,30 @@ impl Edit {
 #[derive(Debug)]
 enum ColorTarget {
     Layer(String),
-    Net { board: BoardTarget, net: Uuid },
+    Net(Uuid),
 }
 
 impl PcbApp {
+    /// Record the original and new preference together only after a successful, effective write.
+    fn edit_color(&mut self, address: ColorAddress, after: Option<[u8; 3]>) -> Result<(), String> {
+        let before = self.board_appearance.override_at(&address);
+        if before != after {
+            self.board_appearance.set_color(&address, after)?;
+            self.session.record_local_edit(ColorChange { address, before, after });
+        }
+        Ok(())
+    }
+
+    /// Complete the preference part of a shared Undo or Redo before painting or answering a client.
+    pub(super) fn restore_local_history(&mut self) {
+        if let Some(step) = self.session.take_local_history_step()
+            && let Some(edit) = step.edit.downcast_ref::<ColorChange>()
+        {
+            let rgb = if step.forward { edit.after } else { edit.before };
+            self.message = self.board_appearance.set_color(&edit.address, rgb).err();
+        }
+    }
+
     /// Validate the addressed layer before changing any local settings. All editor views
     /// share this board/layer palette; unknown and foreign layers are refused atomically.
     pub(super) fn set_layer_color(&mut self, view: ViewId, layer: &str, rgb: Option<[u8; 3]>) -> Result<(), String> {
@@ -453,7 +506,7 @@ impl PcbApp {
         if !board.layers().iter().any(|item| item.id.to_string() == layer) {
             return Err("Unknown layer on this view's board".into());
         }
-        self.board_appearance.set(target, layer, rgb)
+        self.edit_color(ColorAddress { board: target, target: ColorTarget::Layer(layer.to_owned()) }, rgb)
     }
     /// Set a personal color for an active persistent net, enabling net colors in the initiating view.
     #[cfg(not(target_arch = "wasm32"))]
@@ -469,7 +522,7 @@ impl PcbApp {
         if board.zone_net_state(net) != "active" {
             return Err("Choose an active persistent net on this view's board.".into());
         }
-        self.board_appearance.set_net(target, net, rgb)?;
+        self.edit_color(ColorAddress { board: target, target: ColorTarget::Net(net) }, rgb)?;
         if rgb.is_some()
             && let Some(editor) = self.views.view_mut(view)
             && editor.target() == Some(DocumentTarget::Board(target))
@@ -493,7 +546,7 @@ impl PcbApp {
         let [r, g, b, _] = color.to_array();
         self.dialog = crate::Dialog::BoardColor(Edit {
             source,
-            target: ColorTarget::Layer(layer),
+            address: ColorAddress { board: board.target, target: ColorTarget::Layer(layer) },
             return_rules: None,
             label: record.name,
             rgb: [r, g, b],
@@ -565,7 +618,7 @@ impl PcbApp {
         let [r, g, b, _] = color.to_array();
         Some(Edit {
             source,
-            target: ColorTarget::Net { board: target, net },
+            address: ColorAddress { board: target, target: ColorTarget::Net(net) },
             return_rules: None,
             label,
             rgb: [r, g, b],
@@ -582,9 +635,9 @@ impl PcbApp {
             }
             return;
         }
-        let (title, reset) = match &edit.target {
+        let (title, reset) = match &edit.address.target {
             ColorTarget::Layer(_) => ("Layer Color", "Reset to default"),
-            ColorTarget::Net { .. } => ("Net Color", "Use layer color"),
+            ColorTarget::Net(_) => ("Net Color", "Use layer color"),
         };
         let action = board::color_dialog(ctx, title, &edit.label, reset, &mut edit.rgb, &mut edit.hex, edit.error.as_deref());
         let value = match action {
@@ -607,9 +660,9 @@ impl PcbApp {
             board::LayerColorAction::Apply => parse_color(&edit.hex).map(Some),
             board::LayerColorAction::Reset => Ok(None),
         };
-        let result = value.and_then(|rgb| match &edit.target {
+        let result = value.and_then(|rgb| match &edit.address.target {
             ColorTarget::Layer(layer) => self.set_layer_color(edit.source.view(), layer, rgb),
-            ColorTarget::Net { board, net } => self.set_board_net_color(edit.source.view(), *board, *net, rgb),
+            ColorTarget::Net(net) => self.set_board_net_color(edit.source.view(), edit.address.board, *net, rgb),
         });
         match result {
             Ok(()) => {
