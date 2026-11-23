@@ -89,6 +89,8 @@ pub struct PadView {
     pub shape: super::definition::PadShape,
     pub corner_radius_nm: i64,
     pub drill_nm: Option<i64>,
+    /// Finished plated slot resolved after placement mirroring and rotation.
+    pub plated_slot: Option<super::slot::ResolvedPlatedSlot>,
     pub through_hole: bool,
     /// Snapshot-local connectivity label, matching Net Inspector; not a persisted net identity.
     pub net: Option<String>,
@@ -263,6 +265,12 @@ impl<'a> BoardView<'a> {
         self.project.board.footprints().iter().map(|footprint| format!("footprint-{}", footprint.id))
     }
 
+    /// Read the stored lock of a canonical placement without resolving geometry or net membership.
+    /// Unknown IDs and noncanonical aliases return `None`.
+    pub fn footprint_locked(self, id: &str) -> Option<bool> {
+        self.placement(id).map(|footprint| footprint.locked)
+    }
+
     /// Resolve one canonical placement ID, generating geometry only for that placement.
     /// Unknown IDs, other object kinds and noncanonical numeric aliases return `None`.
     pub fn footprint(self, id: &str) -> Option<FootprintView<'a>> {
@@ -297,9 +305,7 @@ impl<'a> BoardView<'a> {
         if id != format!("footprint-{ordinal}") {
             return None;
         }
-        let placements = self.project.board.footprints();
-        let index = placements.binary_search_by_key(&ordinal, |footprint| footprint.id).ok()?;
-        placements.get(index)
+        self.project.board.placement(ordinal)
     }
 
     /// Resolve only supplied placements against one immutable accepted-net index. Empty or
@@ -311,6 +317,8 @@ impl<'a> BoardView<'a> {
         let mut placements = placements.peekable();
         let accepted = placements.peek().and(self.project.board.baseline.as_ref()).map(|baseline| (baseline, baseline.terminal_net_index()));
         placements.filter_map(move |footprint| {
+            #[cfg(test)]
+            super::PLACEMENT_GEOMETRY_VISITS.set(super::PLACEMENT_GEOMETRY_VISITS.get() + 1);
             let component = self.project.components.get(&footprint.component);
             let historical = self.project.board.baseline.as_ref().and_then(|baseline| baseline.components.get(&footprint.component));
             let reference = component.map(|component| component.reference()).or_else(|| historical.map(|component| component.reference.as_str()))?;
@@ -347,6 +355,9 @@ impl<'a> BoardView<'a> {
                             shape: physical.map_or(super::definition::PadShape::Rectangle, |p| p.shape),
                             corner_radius_nm: physical.map_or(0, |p| p.corner_radius_nm),
                             drill_nm: physical.and_then(|p| p.drill_nm),
+                            plated_slot: physical
+                                .and_then(|p| p.plated_slot)
+                                .and_then(|slot| slot.resolve(center, footprint.rotation, footprint.bottom)),
                             through_hole: physical.is_some_and(|p| p.copper == super::definition::CopperBinding::AllCopper),
                             net,
                         }

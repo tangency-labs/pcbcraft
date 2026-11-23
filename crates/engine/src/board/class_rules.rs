@@ -238,6 +238,7 @@ impl crate::Session {
 
 /// Current stable assignments projected onto this snapshot's accepted physical memberships.
 /// The map is transient, qualified by its owner's snapshot, and never saved as a second netlist.
+#[derive(Clone)]
 pub(crate) struct NetRules {
     baseline: rules::Effective,
     by_membership: BTreeMap<usize, BTreeSet<Uuid>>,

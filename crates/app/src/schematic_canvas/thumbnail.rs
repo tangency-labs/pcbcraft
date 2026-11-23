@@ -151,7 +151,7 @@ impl Thumbnail {
             let placement = &symbol.placement;
             paint_symbol(
                 &painter,
-                placement.unit_definition(),
+                placement.unit_definition().graphics(),
                 screen(grid_pos(placement.position)),
                 step,
                 placement.turns(),

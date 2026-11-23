@@ -1804,6 +1804,58 @@ fn pcb_box_selection_direction_modifiers_and_delete() {
     }
 }
 
+/// Locked placements are selectable by default, then excluded from real boxes without changing inspection or the board.
+#[test]
+fn footprint_box_excludes_locked_without_hiding_inspection() {
+    use egui::PointerButton::Primary;
+    let mut h = editable_board();
+    let path = h.state().session.project().unwrap().board_document_path().unwrap();
+    let mut documents = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let mut board: Value = serde_json::from_slice(&documents[&path]).unwrap();
+    // The placement is authored through commands; seed the existing native flag because there is no footprint lock command.
+    board["format"] = json!("pcbcraft-board/34");
+    board["footprints"][0]["locked"] = json!(true);
+    documents.insert(path, serde_json::to_vec(&board).unwrap());
+    h.state_mut().session.open_snapshot(pcbcraft_engine::persistence::decode_documents(&documents).unwrap());
+    h.run();
+    let before = h.state().session.inspect();
+    let snapshot = h.state().session.snapshot().unwrap();
+    assert_eq!(placement(&h)["locked"], true);
+    let view = h.state().views.active.id();
+    let from = board_point(&h, Point { x_nm: -5_000_000, y_nm: -5_000_000 });
+    let to = board_point(&h, Point { x_nm: 5_000_000, y_nm: 5_000_000 });
+    board_box(&mut h, from, to, Primary, Modifiers::NONE, true);
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    let wrong_type = h.state_mut().set_selection_filters(view, &json!({"include_locked":"false"})).unwrap_err();
+    assert!(wrong_type.contains("must be true or false"));
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ctx = h.ctx.clone();
+        h.state_mut().run_window_command(&ctx, "view.set_selection_filters", &json!({"view":view.0,"include_locked":false})).unwrap();
+        let result = h.state_mut().run_window_command(&ctx, "view.select_footprints", &json!({"view":view.0,"footprints":["footprint-3"]}));
+        assert!(result.unwrap_err().contains("Locked footprint selection"));
+        let editor = crate::window_commands::inspect_editor(h.state());
+        let addressed = editor["views"].as_array().unwrap().iter().find(|state| state["id"] == json!(view.0)).unwrap();
+        assert_eq!(addressed["selection_filters"]["include_locked"], false);
+    }
+    #[cfg(target_arch = "wasm32")]
+    h.state_mut().set_selection_filters(view, &json!({"include_locked":false})).unwrap();
+    assert!(h.state().views.active.board.selection.is_empty());
+    for (start, end) in [(from, to), (to, from)] {
+        board_box(&mut h, start, end, Primary, Modifiers::NONE, true);
+        assert!(h.state().views.active.board.selection.is_empty());
+    }
+    let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+    click_canvas_at(&mut h, origin);
+    assert!(h.state().views.active.board.selection.is_empty());
+    assert_eq!(h.state().session.inspect(), before);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    h.state_mut().set_selection_filters(view, &json!({"include_locked":true})).unwrap();
+    board_box(&mut h, from, to, Primary, Modifiers::NONE, true);
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+}
+
 /// Escape, focus loss, changed revisions and release over chrome cannot commit a box. Disabled
 /// footprint filters and hidden geometry produce no hits, including fast move/release frames.
 #[test]
