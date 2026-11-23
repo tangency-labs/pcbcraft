@@ -142,7 +142,8 @@ fn draw(
         if let Some(text) = text {
             shape = shape.with_angle_and_anchor(-(text.rotation as f32).to_radians(), align);
         } else if matches!(style, Style::Global) {
-            shape = shape.with_angle_and_anchor(-(rotation as f32).to_radians(), Align2::CENTER_CENTER);
+            let upright = rotation % 180;
+            shape = shape.with_angle_and_anchor(-(upright as f32).to_radians(), Align2::CENTER_CENTER);
         }
         let name_bounds = shape.visual_bounding_rect();
         bounds = bounds.union(name_bounds);

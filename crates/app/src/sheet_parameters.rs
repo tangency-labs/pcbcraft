@@ -1,15 +1,23 @@
-//! The Parameters table that Properties shows for the current sheet when nothing is selected.
+//! The sheet inspector that Properties shows for the current sheet when nothing is selected.
 //!
-//! It lists the sheet's and the project's parameters as editable values. A standard value that
+//! It shows the sheet's paper size, orientation and frame as selectors, then lists the sheet's
+//! and the project's parameters as editable values. A paper or frame pick returns the same
+//! Browser action as the sheet's context menu, so both run `sheet.set_page` or
+//! `sheet.set_template` through one host path. A standard value that
 //! has not been set shows its inherited value as a dim hint. Leaving a field submits one
 //! `parameter.set`, the same command MCP uses; clearing a field removes the value, so a standard
 //! sheet parameter returns to its default. This module holds only presentation and drafts; the
-//! host runs the returned [`Change`].
+//! host runs the returned [`Edit`].
+use crate::project_browser::Action;
 use egui::Ui;
 use pcbcraft_chrome::properties as chrome;
 use pcbcraft_engine::{
     Project, SheetTarget,
     parameters::{Row, Scope, Source},
+    sheets::{
+        page::{Orientation, Page, Paper},
+        template,
+    },
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +47,16 @@ pub(crate) struct Change {
     name: String,
     /// `None` removes the parameter.
     value: Option<String>,
+}
+
+/// One edit picked in the sheet inspector, for the host to run.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Edit {
+    /// A parameter value to submit as `parameter.set`.
+    Parameter(Change),
+    /// A paper or frame choice, as the same [`Action::SetPage`] or [`Action::SetTemplate`] the
+    /// sheet's Browser context menu produces.
+    Page(Action),
 }
 
 impl Change {
@@ -193,16 +211,54 @@ fn scope_rows(ui: &mut Ui, project: &Project, sheet: SheetTarget, scope: Scope, 
     change
 }
 
-/// Draw the sheet heading and the sheet and project parameter groups. Returns the edit to
-/// submit; the host runs it and reports errors.
-pub(crate) fn show(ui: &mut Ui, project: &Project, sheet: SheetTarget, revision: u64, drafts: &mut Drafts) -> Option<Change> {
+/// Draw the paper size, orientation and frame of `sheet` as the shared dropdowns, showing
+/// `page`'s current choices. Picking a different value returns the matching [`Action::SetPage`]
+/// or [`Action::SetTemplate`]; picking the current value returns `None`. Orientation keeps the
+/// paper size and the size keeps the orientation, as in the Browser's Paper menu.
+fn paper_rows(ui: &mut Ui, sheet: SheetTarget, page: Page) -> Option<Action> {
+    let scope = ui.scope_id();
+    let sizes: Vec<_> = Paper::ALL.iter().map(|paper| (paper.as_str(), paper.label().to_owned())).collect();
+    let mut size = page.paper().as_str().to_owned();
+    chrome::choice(ui, "Size", scope.with("sheet_paper"), &mut size, &sizes);
+    let orientations: Vec<_> = Orientation::ALL.iter().map(|orientation| (orientation.as_str(), orientation.label().to_owned())).collect();
+    let mut orientation = page.orientation().as_str().to_owned();
+    chrome::choice(ui, "Orientation", scope.with("sheet_orientation"), &mut orientation, &orientations);
+    // Frames are keyed by their position in the bundled list, after "none" for a plain border.
+    let frames = template::bundled();
+    let keys: Vec<String> = (0..frames.len()).map(|index| index.to_string()).collect();
+    let mut options = vec![("none", "None".to_owned())];
+    options.extend(keys.iter().zip(frames).map(|(key, frame)| (key.as_str(), frame.title().to_owned())));
+    let current = page.template().map(template::Template::reference);
+    let current_key =
+        frames.iter().position(|frame| current.as_ref() == Some(&frame.reference())).map_or("none".to_owned(), |index| index.to_string());
+    let mut frame = current_key.clone();
+    chrome::choice(ui, "Frame", scope.with("sheet_frame"), &mut frame, &options);
+
+    if let Some(paper) = Paper::ALL.into_iter().find(|paper| paper.as_str() == size && *paper != page.paper()) {
+        return Some(Action::SetPage { sheet, paper, orientation: page.orientation() });
+    }
+    if let Some(orientation) = Orientation::ALL.into_iter().find(|choice| choice.as_str() == orientation && *choice != page.orientation()) {
+        return Some(Action::SetPage { sheet, paper: page.paper(), orientation });
+    }
+    (frame != current_key).then(|| Action::SetTemplate {
+        sheet,
+        template: frame.parse::<usize>().ok().and_then(|index| frames.get(index)).map(template::Template::reference),
+    })
+}
+
+/// Draw the sheet heading, its paper group and the sheet and project parameter groups. Returns
+/// the edit to submit; the host runs it and reports errors. A sheet without paper (only an old
+/// format not yet adopted) omits the paper group.
+pub(crate) fn show(ui: &mut Ui, project: &Project, sheet: SheetTarget, revision: u64, drafts: &mut Drafts) -> Option<Edit> {
     drafts.sync(project, sheet, revision);
     let page = project.resolve_text(Some(sheet), "Page @instance.Page of @instance.Pages").text;
     let name = project.sheets().find(|info| info.target == sheet).map_or("", |info| info.name);
     chrome::identity(ui, name, &page);
+    let paper = project.for_sheet(sheet).and_then(|projection| projection.page());
+    let page_change = paper.and_then(|paper| chrome::group(ui, "Paper", |ui| paper_rows(ui, sheet, paper)));
     let sheet_change = chrome::group(ui, "Sheet parameters", |ui| scope_rows(ui, project, sheet, Scope::Sheet, drafts));
     let project_change = chrome::group(ui, "Project parameters", |ui| scope_rows(ui, project, sheet, Scope::Project, drafts));
-    sheet_change.or(project_change)
+    page_change.map(Edit::Page).or(sheet_change.or(project_change).map(Edit::Parameter))
 }
 
 #[cfg(test)]

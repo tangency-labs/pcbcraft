@@ -72,6 +72,12 @@ fn extract(objects: &[&str], page: usize) -> String {
 /// Decode each PDF text object of the one-based page object with the translation of its
 /// text matrix, in points.
 fn runs(objects: &[&str], page: usize) -> Vec<(String, [f64; 2])> {
+    text_runs(objects, page).into_iter().map(|(text, matrix)| (text, [matrix[4], matrix[5]])).collect()
+}
+
+/// Decode each PDF text object of the one-based page object with its full 6-number text
+/// matrix (`a b c d e f Tm`).
+fn text_runs(objects: &[&str], page: usize) -> Vec<(String, [f64; 6])> {
     let object = objects[page - 1];
     let contents = reference(object, "/Contents ").unwrap();
     let resources = object.split_once("/Font << ").unwrap().1.split_once(">>").unwrap().0;
@@ -101,13 +107,13 @@ fn runs(objects: &[&str], page: usize) -> Vec<(String, [f64; 2])> {
     }
     let mut runs = Vec::new();
     let mut text = String::new();
-    let mut at = [f64::NAN; 2];
+    let mut matrix = [f64::NAN; 6];
     for line in objects[contents - 1].lines() {
         if line == "ET" {
-            runs.push((std::mem::take(&mut text), at));
-        } else if let Some(matrix) = line.strip_suffix(" Tm") {
-            let matrix: Vec<f64> = matrix.split_whitespace().map(|n| n.parse().unwrap()).collect();
-            at = [matrix[4], matrix[5]];
+            runs.push((std::mem::take(&mut text), matrix));
+        } else if let Some(tm) = line.strip_suffix(" Tm") {
+            let parsed: Vec<f64> = tm.split_whitespace().map(|n| n.parse().unwrap()).collect();
+            matrix = parsed.try_into().unwrap();
         } else if let Some((font, run)) = line.split_once(" Tf <") {
             let font = font.split_whitespace().next().unwrap();
             let run = run.strip_suffix("> Tj").unwrap();
@@ -592,4 +598,95 @@ fn hierarchy_export_refuses_an_incomplete_document() {
     let mut active = project.for_sheet(shared).unwrap();
     active.sheet_mut().page = None;
     assert_eq!(export_project(&active), Err(PdfError::MissingPaper));
+}
+
+/// Selecting an alternate pin function replaces the primary pin label in exported schematic PDFs.
+#[test]
+fn selected_alternate_pin_function_appears_in_exported_pdf() {
+    use crate::{
+        authoring::{Action, Item, Kind, Primitive},
+        library,
+        schematic::{AlternatePinFunction, ElectricalType},
+    };
+
+    let item = Item::new(Kind::Symbol).unwrap();
+    let mut pin = item.objects[&1].clone();
+    let Primitive::Pin { name, electrical_type, alternates, .. } = &mut pin else { panic!("expected starter pin") };
+    *name = Some("GPIO".into());
+    *electrical_type = ElectricalType::Bidirectional;
+    *alternates = vec![AlternatePinFunction { name: "ADC_IN".into(), electrical_type: ElectricalType::Input }];
+    let mut editor = crate::authoring::Session::new(item, false).unwrap();
+    editor.execute(0, Action::Replace { object: 1, primitive: pin }).unwrap();
+    let manifest = crate::authoring::publishing::new_library("synthetic", "Synthetic", "MIT OR Apache-2.0").unwrap();
+    let published = crate::authoring::publishing::prepare_copy(editor.snapshot(), &manifest).unwrap();
+    let published_item = published.item();
+
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let target = session.project().unwrap().sheet_target();
+    apply(&mut session, crate::sheets::page::SET_PAGE, json!({"sheet":target.id(),"paper":"a4","orientation":"landscape","at":{"x_nm":0,"y_nm":0}}));
+    let mut documents = published.documents().clone();
+    documents.insert("library.json".into(), manifest);
+    session.execute("library.load_source", &json!({"source":"mcu","documents":documents})).unwrap();
+    let definition = session.libraries.symbol(&published_item.library, &published_item.id, published_item.revision).unwrap();
+    let digest = library::sources::symbol_digest(&definition).unwrap();
+    apply(
+        &mut session,
+        crate::PLACE_SYMBOL,
+        json!({
+            "library": published_item.library,
+            "definition": published_item.id,
+            "definition_revision": published_item.revision,
+            "definition_digest": digest,
+            "x_nm": 20 * GRID_NM,
+            "y_nm": 20 * GRID_NM,
+        }),
+    );
+
+    let before_bytes = export(session.project().unwrap(), target).unwrap();
+    let before_text = extract(&objects(&before_bytes), 3);
+    assert!(before_text.contains("GPIO"), "missing primary pin label before override: {before_text}");
+    assert!(!before_text.contains("ADC_IN"), "unexpected alternate pin label before override: {before_text}");
+
+    let part = session.project().unwrap().symbols()[0].component_id();
+    session
+        .execute(
+            crate::pin_functions::SET,
+            &json!({"target":{"part":part,"terminal":"1"},"function":"ADC_IN","expected_revision":session.revision()}),
+        )
+        .unwrap();
+
+    let after_bytes = export(session.project().unwrap(), target).unwrap();
+    let after_text = extract(&objects(&after_bytes), 3);
+    assert!(after_text.contains("ADC_IN"), "missing selected alternate pin label in PDF: {after_text}");
+    assert!(!after_text.contains("GPIO"), "overridden primary pin label remained in PDF: {after_text}");
+}
+
+/// A local net label with a saved 180-degree Start-aligned text appearance preserves that exact
+/// rotation and anchor in the PDF content stream instead of flipping upright to 0 degrees and End.
+#[test]
+fn saved_net_label_text_keeps_180_rotation_and_start_alignment() {
+    let (mut session, target) = fixture();
+    let (x, y) = (80 * GRID_NM, 40 * GRID_NM);
+    let offset = Point { x_nm: 2 * GRID_NM, y_nm: -GRID_NM };
+    let text = Layout { offset: Some(offset), rotation: 180, align: TextAlign::Start, ..Layout::default() };
+    apply(
+        &mut session,
+        crate::net_labels::ADD,
+        json!({"sheet":target.id(),"name":"INVERTED_NET","style":"local","x_nm":x,"y_nm":y,"rotation":0,"text":text}),
+    );
+    let bytes = export(session.project().unwrap(), target).unwrap();
+    let runs = text_runs(&objects(&bytes), 3);
+    let (_, [a, b, c, d, tx, ty]) = *runs.iter().find(|(name, _)| name == "INVERTED_NET").unwrap();
+    assert!(
+        (a + 1.).abs() < 1e-5 && b.abs() < 1e-5 && c.abs() < 1e-5 && (d + 1.).abs() < 1e-5,
+        "expected 180-degree text matrix (-1 0 0 -1), got [{a}, {b}, {c}, {d}]"
+    );
+    let anchor_x = (x + offset.x_nm) as f64 * PT_PER_NM;
+    let anchor_y = (210_000_000 - (y + offset.y_nm)) as f64 * PT_PER_NM;
+    let expected_ty = anchor_y + text.height_nm as f64 * PT_PER_NM / 2.;
+    assert!(
+        (tx - anchor_x).abs() < 1e-4 && (ty - expected_ty).abs() < 1e-4,
+        "expected Start-aligned anchor ({anchor_x}, {expected_ty}), got ({tx}, {ty})"
+    );
 }

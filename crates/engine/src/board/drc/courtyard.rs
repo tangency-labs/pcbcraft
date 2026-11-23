@@ -310,7 +310,7 @@ fn crosses_properly(a: Point, b: Point, c: Point, d: Point) -> bool {
 }
 
 /// Closed segments share at least one point, including touching ends and collinear overlap.
-fn segments_meet(a: Point, b: Point, c: Point, d: Point) -> bool {
+pub(super) fn segments_meet(a: Point, b: Point, c: Point, d: Point) -> bool {
     crosses_properly(a, b, c, d)
         || (cross(a, b, c) == 0 && within(a, b, c))
         || (cross(a, b, d) == 0 && within(a, b, d))

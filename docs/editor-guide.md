@@ -502,6 +502,14 @@ Deleting a sheet removes its symbols, wires and associated board footprints in
 one undo step, and the project always retains at least one sheet. Each pane keeps
 its sheet target, camera and selection independently.
 
+New sheets use A4 landscape paper with the Default frame. With nothing selected,
+Properties shows the current sheet: its **Paper** group lists **Size** (A4–A0),
+**Orientation** and **Frame** (the Default title block or **None** for a plain
+border), followed by the sheet and project parameters that fill the title block.
+A sheet row's **Paper** and **Frame** submenus in the Browser make the same choices.
+Each pick is one undo step and keeps the drawing and the paper's top-left corner in
+place.
+
 Use **S** or **Sheets → Subsheet** to place a hierarchical sheet symbol,
 then choose a new child or an existing unparented sheet. Double-click inside the
 symbol to enter its child; **Alt+Backspace** returns to the parent. The sheet name
@@ -589,8 +597,10 @@ view in amber; blue remains each view's own edit selection. Highlights follow th
 latest selection without taking focus. **View → Settings → Follow selection**
 offers highlight only (the default), all views, other views following primary,
 or primary following other views. Following reveals out-of-view items once while
-preserving zoom. Primary is the original view even if detached; closing it
-transfers that role to the main window's focused view. Delete acts only on the
+preserving zoom. When you select a PCB footprint, a following schematic pane
+can switch to the sheet containing its linked symbol. The pane does not take
+focus or select that symbol for editing. Primary is the original view even if detached, and its
+pane keeps the role whichever sheet it shows; closing it transfers that role to the main window's focused view. Delete acts only on the
 focused view's own selection, and clearing the source selection clears its
 highlights.
 
@@ -765,9 +775,18 @@ remain documentation in the native board.
 
 Select **Board Outline** when drawing the physical boundary. Its centerline
 continues to define the board edge; a closed boundary is required for fabrication.
+A closed Board Outline drawn inside another is a cut-out, a hole through the board,
+and one drawn inside a cut-out is board again: closed outlines whose boundaries cross,
+touch or share an edge (such as an L-shaped board drawn as two overlapping rectangles or
+an outline drawn twice) form one union component, while disjoint outlines remain separate
+components, and a point is on the board when it lies inside an odd number of components.
+When closed outlines meet, DRC reports an `ambiguous_outline` finding naming those
+drawings so the ambiguity is visible, while disjoint cut-outs elsewhere on the board
+remain cut-outs.
 Board Outline is also available without a copper setup. Fit and layer visibility
 include these graphics, while DRC reports a missing closed outline and copper
-outside it or too close to the edge.
+outside it, inside a cut-out or too close to an edge. Routing and teardrops treat a
+cut-out edge like the outer board edge.
 
 To route copper, select a copper layer such as **Top** and press **X** or use
 **Layout → Route → Track**. Set **Track / line width** in the persistent controls in the display units
@@ -801,8 +820,10 @@ pads on two different nets is refused with a message, leaving the board unchange
 listing up to 1,000 findings. It reports a short when one copper island joins pads from
 different intended nets, copper of different nets closer than the clearance
 (0.2 mm), tracks narrower than 0.15 mm, via annular rings under 0.1 mm, each unrouted
-connection, a missing closed Board Outline, copper outside the outline or within 0.3 mm
-of its edge, and overlapping footprint courtyards. Courtyards on the same side are
+connection, a missing closed Board Outline, copper outside the outline or inside a
+cut-out (the finding also names the cut-out drawing, and the same applies to non-plated
+holes), copper within 0.3 mm of any
+edge, and overlapping footprint courtyards. Courtyards on the same side are
 compared by their actual rectangle and closed-polyline shapes after rotation and flip,
 so empty space between separate courtyard elements or inside a concave outline is free.
 Courtyards that only touch at an edge or corner pass; overlap and containment are
@@ -833,7 +854,9 @@ not a manufacturing sign-off.
 (suggested name `<project>-fabrication.zip`), with Gerber X2 files for each
 copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
-through-hole pads). Coordinates are in millimeters with Y up, as seen from the top,
+through-hole pads). Circular non-plated footprint holes, when present, go in a separate
+`-NPTH.drl` file (see [Fabrication drill files](pcb-layout-workflow.md#fabrication-drill-files)).
+Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
 with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Gerber coordinates
 are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves going up,
@@ -855,8 +878,23 @@ same shape and size. Pad regions carry a descriptive aperture attribute but are
 not pad flashes. Copper obrounds emitted as strokes are not tagged as pads. Mask,
 paste and silkscreen artwork use `Material`. Closed Board Outline drawings are
 tagged `Profile`; open outline artwork is still plotted but untagged. Remove stray
-open artwork before sending the profile to fabrication. The attributes do not
-change plotted geometry or add net and pin information.
+open artwork before sending the profile to fabrication. The aperture attributes do
+not change plotted geometry.
+
+On copper, X2 `.N` identifies the intended net of pads, tracks and vias. Component pads
+carry `.C` (reference designator) and, on outer copper, `.P` (reference and physical pin
+number). A footprint land explicitly unmapped to a pin has an empty pin number.
+A short between intended nets or an unresolved via assignment leaves the affected
+tracks and vias without `.N`; individually assigned pads keep their intended net.
+Pads, tracks and vias use the same Gerber name for a given intended net. Distinct
+nets with the same display name get distinct Gerber names. Separate unwired
+terminals that each join several pads get distinct names even before the board
+has an accepted update baseline. Copper with no net has an empty `.N`.
+To avoid the reserved `N/C` marker, net names
+that equal `N/C` or begin with `N/C:` gain one `N/C:` prefix in Gerber only.
+These attributes change neither the plotted geometry nor the saved board. They describe
+intent, not verification of connectivity. Layer exports include the actual net and pin
+names; review what you are sharing before sending files to a fabricator.
 
 For pads exported on a layer, round pads use standard circular (`C`) flashes.
 Rectangular (`R`) and obround (`O`) flashes require library-pad and placement rotations
@@ -869,9 +907,16 @@ match the engine land contour. Mixed-parity or other rotated obrounds retain the
 approximate round-ended stroke (a C flash when both resolved sides are equal). Other
 rectangles remain regions, including net-cardinal poses reached through non-cardinal
 intermediate rotations. Very small collapsed rectangular pads can emit a retraced path
-with zero area. Rounded rectangles emit polygon regions with chorded corners when the
-resolved radius is positive, or the four resolved corners when it clamps to zero.
-Export adds no native arcs and does not change saved pad geometry.
+with zero area. Rounded rectangles flash a Gerber aperture macro with circular
+corners when the inner shape is a convex quadrilateral, a line or a point and the
+emitted radius is within 1 nm of the authored radius. The diameter is rounded to
+the nearest nanometre after projection. The macro uses the placed pad's geometry,
+including rotation and side. Export stops without a file set if a convex macro
+core is not covered by its edge strips under Gerber coordinate and size
+tolerances and its outline could cross under coordinate perturbation.
+Rounded pads that do not qualify for the macro retain resolved polygon regions.
+This changes only generated pad artwork, not saved pad geometry, track or Board
+Outline output.
 
 Copper filenames receive numeric suffixes when sanitized names collide with
 another output, including names that differ only in case. Fixed mask, paste,

@@ -73,6 +73,7 @@ fn label(kind: Kind) -> &'static str {
         Kind::AnnularRing => "Annular ring",
         Kind::Unconnected => "Unconnected",
         Kind::NoOutline => "No outline",
+        Kind::AmbiguousOutline => "Ambiguous outline",
         Kind::OutsideBoard => "Outside board",
         Kind::EdgeClearance => "Edge clearance",
         Kind::CourtyardOverlap => "Courtyard overlap",
