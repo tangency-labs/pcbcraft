@@ -976,3 +976,27 @@ a current board net and confirm **Use net** before placing, or keep **Automatic*
 Selected-via Properties uses the same search form to change or clear
 that assignment; [via net assignments](via-net-assignments.md) explains how intent
 remains distinct from physical copper connections.
+
+## Try copper-zone fill
+
+Generate a command-built demonstration into a new directory:
+
+```sh
+cargo run --locked -p pcbcraft-engine --example zone_fill_fixture -- /tmp/pcbcraft-zone-demo
+```
+
+Open `/tmp/pcbcraft-zone-demo/project/project.json` on desktop, or upload
+`/tmp/pcbcraft-zone-demo/zone-fill.pc` in the browser. Switch to **PCB Layout**
+and choose **Fit board**. The front-copper zone connects three resistor pads with
+thermal spokes while clearing their other pads. Move a footprint or zone and
+wait for automatic refill; **Layout → Board → Pour copper** requests another
+calculation. Change the selected zone's Connection to Solid or None in Properties
+to compare pad contact and airwires. See the [zone guide](copper-zone-outlines.md)
+for checking, worker failures and current output limits.
+
+**Layout → Board → Remove pours** (Ctrl+B, or Command+B on macOS) removes the
+copper while retaining zone outlines and settings; affected airwires return.
+**Pour copper** (B) restores the fill and resumes automatic refill after edits.
+Fabrication export is unavailable on boards with copper zones. Each zone belongs
+to a chosen net and copper layer. Full-board zone generation from a layer's
+assigned default net is planned in #263.

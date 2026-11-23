@@ -1,6 +1,5 @@
-//! The kernel boundary for builds without a kernel (`wasm32` without the `wasm-kernel` feature):
-//! every operation that reaches it answers [`ErrorCode::KernelUnavailable`], and no body can
-//! exist.
+//! The 3D and STEP boundary on wasm32 when the optional kernel feature is disabled.
+//! Operations that reach it return [`ErrorCode::KernelUnavailable`].
 
 use std::collections::BTreeSet;
 
@@ -12,7 +11,7 @@ pub(crate) enum KernelBody {}
 
 /// The `kernel_unavailable` error for the operation `what`.
 fn unavailable(what: &str) -> GeometryError {
-    GeometryError::new(ErrorCode::KernelUnavailable, format!("{what}: this build has no geometry kernel"))
+    GeometryError::new(ErrorCode::KernelUnavailable, format!("{what}: this build has no 3D/STEP kernel"))
 }
 
 /// No block can be made: always `kernel_unavailable`.

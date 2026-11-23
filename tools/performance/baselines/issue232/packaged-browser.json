@@ -1,0 +1,44 @@
+{
+  "browser": "156.0.8078.79",
+  "snippet": "/snippets/pcbcraft-app-7126f162910234c6/inline5.js",
+  "scope": "One actual packaged Chrome worker run per success/failure case; heartbeat demonstrates foreground scheduling only. Timeout timer shortened to 50 ms. Worker call exception injected with null argument, not a reproduced kernel abort.",
+  "cases": [
+    {
+      "name": "same-build physical fill",
+      "elapsed_ms": 906.7999999523163,
+      "foreground_heartbeat_ticks": 181,
+      "zones": 1,
+      "islands": 1
+    },
+    {
+      "name": "immediate cancellation",
+      "pass": true
+    },
+    {
+      "name": "capacity two and release",
+      "pass": true
+    },
+    {
+      "name": "malformed source refusal",
+      "pass": true
+    },
+    {
+      "name": "worker call exception contained",
+      "response": "ETypeError: Cannot read properties of null (reading 'length')"
+    },
+    {
+      "name": "timeout and retirement (accelerated timer)",
+      "elapsed_ms": 60.39999997615814
+    },
+    {
+      "name": "missing packaged entry refusal",
+      "pass": true
+    },
+    {
+      "name": "fresh worker after failure",
+      "pass": true
+    }
+  ],
+  "wasm": "pcbcraft-web-2395f1cf4e07e761_bg.wasm",
+  "errors": []
+}

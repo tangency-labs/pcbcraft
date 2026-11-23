@@ -14,6 +14,8 @@ use super::*;
 mod app_bar_utilities;
 mod board_colors;
 mod board_drawing;
+mod board_fill;
+pub(crate) use board_fill::board as fill_harness;
 mod board_layers;
 mod board_properties;
 mod board_ratsnest;

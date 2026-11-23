@@ -526,11 +526,12 @@ changes; explicit drills must be smaller than their pads.
 addresses such as `{"footprint":"footprint-7","pad":"2"}`. Pick `from` on the
 arm to remove and `to` on the retained side. `execute` returns `revision`,
 `dry_run`, `removed` (sorted `tracks` and `vias` UUID lists), `requested` (the
-input pair), and `unrouted` (the newly displayed ratsnest edges, as pairs of pad
-addresses), even with project inspection disabled. An edge may end at a different
-pad on the retained side than the requested `to`. Without accepted connectivity,
-there are no display edges to report. Set `dry_run: true` to get the same report
-without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
+input pair), and `unrouted` (new ratsnest edges from the change to authored
+copper, as pairs of pad addresses), even with project inspection disabled. An
+edge may end at a different pad on the retained side than the requested `to`.
+Refilled zones can reconnect the pads and clear those edges. Without accepted
+connectivity there are no edges to report. Set `dry_run: true` to get the same
+report without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
 `details`; a missing copper endpoint returns `not_found`. See
 [Unroute one connection](pcb-layout-workflow.md#unroute-one-connection) for the
 behavior and other refusal cases.
@@ -558,8 +559,8 @@ and `fabrication.origin`, the placement origin every coordinate is measured from
 Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
 plus one Excellon plated drill file. Boards with placed circular non-plated holes also get
 a separate non-plated drill file. It needs a board setup, a closed Board Outline and a
-resolvable placement origin. It refuses a non-plated hole whose diameter rounds to zero in
-the drill file; no partial set is returned.
+resolvable placement origin. Boards with copper zones or non-plated holes whose
+diameters round to zero in the drill file are refused before any output is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns
@@ -654,8 +655,14 @@ hides the others and cancels unfinished drawing in that view.
 personal board/layer palette across all views. `inspect_editor` reports effective
 `board.layer_colors` per view, including whether each value is overridden.
 The earlier `board.copper_colors` subset remains for compatibility.
-These values persist locally without changing project revision or undo. Physical
-pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
+`view.set_net_color` takes `view`, an active persistent `net` UUID and `color`
+(`#RRGGBB`, or null to use the layer palette). The shared personal color applies
+across layers. `view.set_net_colors_visibility` switches the addressed view
+between net and layer colors. `inspect_editor` exposes the saved overrides in
+`board.net_colors` and the display setting in `board.net_colors_visible`.
+Effective net and layer color changes enter the live editor’s Undo and Redo
+sequence. They persist locally and leave the project revision and files
+unchanged. Physical pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
 binding and stack-ordered layer UUIDs; `unconfigured` retains the explicit library
 binding without invented layers. Marker-only pins omit physical membership.
 `view.navigate_layer` takes `view` and `direction` (`next`, `previous`, `front`,
