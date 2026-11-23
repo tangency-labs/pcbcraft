@@ -614,9 +614,13 @@ Copy/paste preserve locks on new identities; Cut of protected copper is refused.
 
 `pcb.merge_tracks` takes an explicit `board`, `expected_revision` and `tracks` (unique
 UUIDs) and merges the listed unlocked segments that share a layer and width and lie on
-one line: stacked duplicates are absorbed, and two segments join where they meet at an
-end that no third track end, via or pad touches. The lowest UUID survives with the
-merged ends and keeps its direction; the copper outline and connectivity are unchanged.
+one line: a segment that lies wholly within another (a stacked duplicate, or a shorter
+segment such as `[2,8]` inside `[0,10]`) is absorbed even beside a junction, via or pad,
+and two segments join where they meet at an end that no third track end, via or pad
+touches; a partial overlap such as `[0,10]` and `[5,15]` alone stays two tracks. The
+lowest UUID survives with the merged ends and keeps its direction, even when it is the
+shorter segment, and every other merged UUID is deleted and listed in `removed`; the
+copper outline and connectivity are unchanged.
 The result is `revision` plus `merge_tracks`: `before` and `after` track records,
 `removed` and `reshaped` UUIDs, the `locked` segments left alone, `changed` and
 `dry_run`. With `dry_run` true, or when nothing merges, revision and history stay
