@@ -1028,8 +1028,8 @@ fn a_press_focuses_the_pane_it_lands_in_within_the_frame() {
             |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
         h.hover_at(press);
         h.run();
-        h.event(secondary(press, true));
-        h.event(egui::Event::PointerMoved(moved));
+        // `Harness::event` runs one frame per event; the raw input carries all of them in one frame.
+        h.input_mut().events.extend([secondary(press, true), egui::Event::PointerMoved(moved)]);
         h.run();
         h.event(secondary(moved, false));
         h.run();
@@ -1058,9 +1058,11 @@ fn a_focusing_press_decides_focus_over_an_earlier_middle_press() {
         let button = |pos, button, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE };
         h.hover_at(at_middle);
         h.run();
-        h.event(button(at_middle, egui::PointerButton::Middle, true));
-        h.event(egui::Event::PointerMoved(at_primary));
-        h.event(button(at_primary, focusing, true));
+        h.input_mut().events.extend([
+            button(at_middle, egui::PointerButton::Middle, true),
+            egui::Event::PointerMoved(at_primary),
+            button(at_primary, focusing, true),
+        ]);
         h.run();
         h.event(button(at_primary, egui::PointerButton::Middle, false));
         h.event(button(at_primary, focusing, false));
@@ -1089,9 +1091,7 @@ fn a_primary_press_decides_focus_over_a_right_press_in_the_same_frame() {
         let button = |pos, button, pressed| egui::Event::PointerButton { pos, button, pressed, modifiers: Modifiers::NONE };
         h.hover_at(at_x);
         h.run();
-        h.event(button(at_x, first, true));
-        h.event(egui::Event::PointerMoved(at_y));
-        h.event(button(at_y, second, true));
+        h.input_mut().events.extend([button(at_x, first, true), egui::Event::PointerMoved(at_y), button(at_y, second, true)]);
         h.run();
         h.event(button(at_y, first, false));
         h.event(button(at_y, second, false));

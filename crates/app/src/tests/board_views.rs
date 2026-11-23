@@ -1532,8 +1532,8 @@ fn a_right_press_counts_where_it_lands_within_the_frame() {
             |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
         h.hover_at(from);
         h.run();
-        h.event(secondary(from, true));
-        h.event(egui::Event::PointerMoved(to));
+        // `Harness::event` runs one frame per event; the raw input carries both in one frame.
+        h.input_mut().events.extend([secondary(from, true), egui::Event::PointerMoved(to)]);
         h.run();
         h.event(secondary(to, false));
         h.run();
