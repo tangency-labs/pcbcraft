@@ -354,6 +354,9 @@ Library tabs show the exact definition retained by the project. The **Footprint*
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
+With nothing selected on a schematic sheet, use **Properties → Paper** to change
+the sheet's paper size, orientation, or frame.
+
 ### Designator locks
 
 Select a symbol and check **Lock designator** in compact Properties, then choose
