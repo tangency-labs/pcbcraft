@@ -526,6 +526,8 @@ pub struct EditJournal {
     /// Unix `(dev, ino)` of the published `.pc` snapshot file.
     #[cfg(unix)]
     snapshot_file_id: Option<(u64, u64)>,
+    /// Bytes in the published header-only journal file.
+    journal_header_bytes: u64,
     /// Bytes in the journal file, header included.
     journal_bytes: u64,
     /// Journal size above which the next recorded edit starts a new snapshot.
@@ -577,6 +579,7 @@ impl EditJournal {
             snapshot_bytes: 0,
             #[cfg(unix)]
             snapshot_file_id: None,
+            journal_header_bytes: 0,
             journal_bytes: 0,
             rebase_after: REBASE_FLOOR_BYTES,
             floor: REBASE_FLOOR_BYTES,
@@ -660,20 +663,25 @@ impl EditJournal {
         drop(published_file);
         let (file, journal_bytes) = publish_journal(&self.dir, &self.id, &header)?;
         self.file = Some(file);
+        self.journal_header_bytes = journal_bytes;
         self.journal_bytes = journal_bytes;
         self.rebase_after = rebase_limit(snapshot_bytes, self.floor);
         Ok(())
     }
 
     /// Take a recovery snapshot of `documents`: [`Self::rebase`] onto them, unless the journal
-    /// is open, both its recorded result and its base already equal the requested state, the
-    /// current `.pc` snapshot file still matches this recorder's publication, and the `.journal`
-    /// file still names the open journal with its expected byte length and publication header.
-    /// Checking the recorded result matters if a notification failed to return the journal to its
-    /// base, for example when an undo could not be encoded. Returns whether it wrote.
+    /// is open and header-only (no appended records), both its recorded result and its base
+    /// already equal the requested state, the current `.pc` snapshot file still matches this
+    /// recorder's publication, and the `.journal` file still names the open header-only journal
+    /// with its expected byte length and publication header. Rebasing whenever the journal holds
+    /// records prevents skipping publication over unverified or in-place damaged records (for
+    /// example after edits that return to the base state). Checking the recorded result matters
+    /// if a notification failed to return the journal to its base, for example when an undo could
+    /// not be encoded. Returns whether it wrote.
     pub fn snapshot(&mut self, documents: Documents) -> Result<bool, String> {
         self.ensure_lock_owned()?;
         if self.file.is_some()
+            && self.journal_bytes == self.journal_header_bytes
             && self.base_sha256 == self.sha256
             && documents_sha256(&documents) == self.base_sha256
             && self.snapshot_matches_publication()?
@@ -684,11 +692,12 @@ impl EditJournal {
         self.rebase(documents).map(|()| true)
     }
 
-    /// Return whether `<id>.journal` still names the open regular journal file this recorder
-    /// published (same open file, expected byte length, and matching header generation and base
-    /// hash). Missing, non-regular, replaced, truncated, or corrupted journals return `Ok(false)`
-    /// so [`Self::snapshot`] rebuilds the pair under the held entry lock; other metadata,
-    /// identity, or read errors propagate as faults.
+    /// Return whether `<id>.journal` still names the open header-only regular journal file this
+    /// recorder published (same open file, expected byte length, and exact matching header
+    /// generation and base hash with no trailing bytes). Missing, non-regular, replaced,
+    /// truncated, or corrupted journals return `Ok(false)` so [`Self::snapshot`] rebuilds the
+    /// pair under the held entry lock; other metadata, identity, or read errors propagate as
+    /// faults.
     fn journal_matches_publication(&mut self) -> Result<bool, String> {
         let Some(journal_file) = self.file.as_mut() else {
             return Ok(false);
@@ -703,10 +712,14 @@ impl EditJournal {
         }
         let mut buf = [0u8; SNAPSHOT_OVERHEAD_BYTES];
         let read = read_header_prefix(journal_file, &mut buf).map_err(|e| e.to_string())?;
-        let Ok(header) = read_recovery_header_from(&buf[..read]) else {
+        if u64::try_from(read).ok() != Some(self.journal_bytes) {
+            return Ok(false);
+        }
+        let mut cursor = &buf[..read];
+        let Ok(header) = read_recovery_header_from(&mut cursor) else {
             return Ok(false);
         };
-        Ok(header.generation == self.generation && header.base_sha256 == self.base_sha256)
+        Ok(cursor.is_empty() && header.generation == self.generation && header.base_sha256 == self.base_sha256)
     }
 
     /// Return whether `<id>.pc` still names the regular recovery snapshot publication this

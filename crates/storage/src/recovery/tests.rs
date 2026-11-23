@@ -1935,6 +1935,61 @@ fn snapshot_republishes_when_journal_is_truncated_or_header_corrupted_in_place()
     assert_eq!(recovered.documents, state_1);
 }
 
+/// A non-empty journal that returns to its base state (e.g. A -> B -> A) must not use the
+/// `snapshot` no-op fast path: if a record is damaged in place without changing the file length,
+/// skipping publication would leave `recover` returning B instead of A. Rebasing compacts and
+/// repairs the entry, after which a header-only journal keeps the fast path.
+#[test]
+fn snapshot_republishes_when_non_empty_journal_returns_to_base_with_damaged_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "BaseA"})).unwrap();
+    let state_a = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut journal = EditJournal::create(dir.path(), "entry", state_a.clone()).unwrap();
+
+    // Header-only journal keeps the no-op fast path.
+    assert_eq!(journal.snapshot(state_a.clone()), Ok(false));
+
+    // Append A -> B, then B -> A so `sha256 == base_sha256` while the journal holds two records.
+    let rev_b = session.apply("project.rename", &json!({"name": "EditedB"})).unwrap();
+    let project_b = session.snapshot().unwrap();
+    let state_b = encode_documents(project_b.clone()).unwrap();
+    let edit_ab = CommittedEdit { command: "project.rename".to_owned(), params: json!({"name": "EditedB"}), revision: rev_b, project: project_b };
+    assert_eq!(journal.append(&edit_ab, state_b.clone()), Ok(()));
+
+    let rev_a = session.apply("project.rename", &json!({"name": "BaseA"})).unwrap();
+    let project_a = session.snapshot().unwrap();
+    assert_eq!(encode_documents(project_a.clone()).unwrap(), state_a);
+    let edit_ba = CommittedEdit { command: "project.rename".to_owned(), params: json!({"name": "BaseA"}), revision: rev_a, project: project_a };
+    assert_eq!(journal.append(&edit_ba, state_a.clone()), Ok(()));
+
+    // Damage the second record in place without changing the journal's byte length or identity.
+    let journal_path = entry_file(dir.path(), "entry", "journal");
+    let mut raw = fs::read(&journal_path).unwrap();
+    let last = raw.len() - 1;
+    raw[last] ^= 0xff;
+    {
+        let mut handle = fs::OpenOptions::new().write(true).open(&journal_path).unwrap();
+        handle.write_all(&raw).unwrap();
+        handle.sync_all().unwrap();
+    }
+
+    // Confirm the in-place corruption causes `recover` to stop at the second record and return B.
+    let broken = recover(dir.path(), "entry").unwrap();
+    assert_eq!(broken.documents, state_b);
+    assert!(matches!(broken.stop, Some(Stop::Unreadable { index: 1, .. })));
+
+    // `snapshot(A)` must rebase instead of skipping, repairing recovery back to A.
+    assert_eq!(journal.snapshot(state_a.clone()), Ok(true));
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert!(recovered.commands.is_empty());
+    assert_eq!(recovered.documents, state_a);
+
+    // Once rebased to a header-only journal, `snapshot(A)` takes the no-op fast path again.
+    assert_eq!(journal.snapshot(state_a), Ok(false));
+}
+
 /// Coalescing consecutive edits keeps earlier pending edits until the replacement encodes: if the
 /// newest edit fails to encode, the newest encodable pending edit is still recorded and the fault
 /// for the failed edit is reported; if the newest edit encodes, only it is written.
