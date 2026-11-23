@@ -224,7 +224,8 @@ impl PcbApp {
             }
             self.session.observe_edits(None);
             if let Some(recorder) = autosave.recorder.take().and_then(Arc::into_inner) {
-                autosave.retiring = Some(recorder.writer.retire(Some(Instant::now() + EXIT_BUDGET)));
+                let discard = (!self.close_keeps_recovery).then(|| Instant::now() + EXIT_BUDGET);
+                autosave.retiring = Some(recorder.writer.retire(discard));
             }
             autosave.snapshots.taken();
             autosave.retry_at = None;

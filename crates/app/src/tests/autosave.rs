@@ -454,6 +454,44 @@ fn close_without_waiting_keeps_recovery_when_pending_save_fails_before_exit() {
     assert_eq!(pcbcraft_storage::recovery::recover(&dir, &entry).unwrap().documents, expected);
 }
 
+/// Closing without waiting must also keep the outgoing recovery entry if a pending Open
+/// finishes and is adopted on the closing frame before `on_exit` runs.
+#[test]
+fn close_without_waiting_keeps_recovery_when_pending_open_adopts_before_exit() {
+    let work = tempfile::tempdir().unwrap();
+    let outgoing = work.path().join("outgoing");
+    let incoming = work.path().join("incoming");
+    let dir = work.path().join("recovery");
+    for (root, name) in [(&outgoing, "Outgoing"), (&incoming, "Incoming")] {
+        let mut source = Session::default();
+        source.apply("project.new", &json!({"name": name})).unwrap();
+        pcbcraft_storage::save(root, None, &encode_documents(source.snapshot().unwrap()).unwrap(), &mut |_| Ok(())).unwrap();
+    }
+    let mut h = harness();
+    h.state_mut().autosave.dir = Some(dir.clone());
+    h.state_mut().preferences.autosave_minutes = 5;
+    let rev = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&outgoing.join("project.json"), rev);
+    run_at(&mut h, 1.0);
+    place(&mut h, 0);
+    let expected = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let (_, entry) = h.state().recovery_entry().unwrap();
+    let rev = h.state().session.revision();
+    h.state_mut().files.open_path_for_test(&incoming.join("project.json"), rev);
+    let ctx = h.ctx.clone();
+    h.state_mut().close_without_waiting(&ctx);
+    run_at(&mut h, 2.0);
+    assert!(h.state().close_allowed);
+    assert!(!h.state().files.busy(), "the closing frame already adopted the pending Open");
+    assert_eq!(h.state().session.project().unwrap().name, "Incoming");
+    assert!(h.state().recovery_entry().is_none(), "no new recorder should attach after close_allowed");
+    if let Some(finished) = h.state_mut().wait_for_recovery_retirement() {
+        finished.unwrap();
+    }
+    eframe::App::on_exit(h.state_mut());
+    assert_eq!(pcbcraft_storage::recovery::recover(&dir, &entry).unwrap().documents, expected);
+}
+
 /// Interrupting Preferences with a dirty-project close cannot activate a staged timed Save.
 #[test]
 fn interrupted_preferences_do_not_enable_timed_save() {
@@ -796,6 +834,18 @@ fn timed_save_holds_back_on_legacy_archive_until_explicit_save() {
     assert_ne!(upgraded_bytes, original_bytes);
     let reopened = pcbcraft_engine::persistence::decode_packed(&upgraded_bytes).unwrap();
     assert!(!reopened.needs_manifest, "explicit Save must upgrade the legacy archive");
+
+    place(&mut h, 40);
+    let expected = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.state_mut().native_project_tick(&ctx, std::time::Duration::from_secs(181));
+    assert!(h.state().files.dirty(&h.state().session));
+    h.state_mut().native_project_tick(&ctx, std::time::Duration::from_secs(242));
+    assert!(h.state().files.busy(), "timed Save must resume after the explicit Save upgrades the legacy archive");
+    finish_file_job(&mut h);
+    assert_eq!(h.state().message, None);
+    assert!(!h.state().files.dirty(&h.state().session));
+    let saved_bytes = std::fs::read(&archive).unwrap();
+    assert_eq!(pcbcraft_engine::persistence::decode_packed(&saved_bytes).unwrap().documents, expected);
     eframe::App::on_exit(h.state_mut());
 }
 
@@ -842,6 +892,17 @@ fn timed_save_holds_back_on_legacy_split_folder_until_explicit_save() {
         assert!(!root.join("project.pc").exists());
         let (_, migrated) = pcbcraft_storage::load_with_upgrade(&root).unwrap();
         assert!(!migrated, "explicit Save must upgrade the legacy split folder (rename_entry={rename_entry})");
+
+        place(&mut h, 40);
+        let expected = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        h.state_mut().native_project_tick(&ctx, std::time::Duration::from_secs(181));
+        assert!(h.state().files.dirty(&h.state().session));
+        h.state_mut().native_project_tick(&ctx, std::time::Duration::from_secs(242));
+        assert!(h.state().files.busy(), "timed Save must resume after the explicit Save upgrades the legacy folder (rename_entry={rename_entry})");
+        finish_file_job(&mut h);
+        assert_eq!(h.state().message, None);
+        assert!(!h.state().files.dirty(&h.state().session));
+        assert_eq!(pcbcraft_storage::load(&root).unwrap(), expected);
         eframe::App::on_exit(h.state_mut());
     }
 }
