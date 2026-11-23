@@ -1424,6 +1424,79 @@ fn right_drag_pan_in_the_other_pane_keeps_the_copper_move() {
     assert_eq!(h.state().session.revision(), revision);
 }
 
+/// A right press on a floating window over the board belongs to that window, so the board keeps
+/// its footprint move or ruler. A right press on the bare board still ends each one.
+#[test]
+fn a_right_press_on_a_floating_window_keeps_the_board_move() {
+    for ruler in [false, true] {
+        let overlay = std::rc::Rc::new(std::cell::Cell::new(None::<egui::Pos2>));
+        let shown = overlay.clone();
+        let mut app = PcbApp::default();
+        app.parts.set_repeat(false);
+        for view in app.views.all_mut() {
+            view.filters_open = false;
+        }
+        let mut h = Harness::builder().with_max_steps(64).with_size(egui::vec2(1400.0, 900.0)).build_ui_state(
+            move |ui, app: &mut PcbApp| {
+                app.frame(ui);
+                if let Some(at) = shown.get() {
+                    egui::Window::new("Overlay").fixed_pos(at).show(ui.ctx(), |ui| {
+                        ui.label("Overlay text");
+                    });
+                }
+            },
+            app,
+        );
+        h.run();
+        resistor_with_board_at_origin(&mut h);
+        {
+            let app = h.state_mut();
+            app.browser.open = false;
+            app.run(
+                pcbcraft_engine::PLACE_FOOTPRINT,
+                &json!({"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0,"expected_revision":2}),
+            );
+            app.views.active.switch(Workspace::Board, &app.session);
+            app.views.active.camera.center_on(Point { x_nm: 0, y_nm: 0 });
+        }
+        h.run();
+        let rect = h.get_by_label("PCB canvas").rect();
+        let origin = h.state().views.active.camera.screen(Point { x_nm: 0, y_nm: 0 }, rect);
+        click_canvas_at(&mut h, origin);
+        h.hover_at(origin);
+        h.run();
+        if ruler {
+            h.state_mut().start_measure();
+        } else {
+            h.key_press(Key::M);
+        }
+        h.run();
+        let live = |h: &Harness<'_, PcbApp>| {
+            let board = &h.state().views.active.board;
+            if ruler { board.measure.tool } else { board.draft.is_some() }
+        };
+        assert!(live(&h), "ruler: {ruler}");
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        overlay.set(Some(origin + egui::vec2(150.0, -150.0)));
+        h.run();
+        h.run();
+        let over = h.get_by_label("Overlay text").rect().center();
+        assert!(rect.contains(over), "the window floats over the board");
+        let secondary =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        for at in [over, origin] {
+            h.hover_at(at);
+            h.run();
+            h.event(secondary(at, true));
+            h.run();
+            h.event(secondary(at, false));
+            h.run();
+            assert_eq!(live(&h), at == over, "a right press on the window keeps the board gesture, one on the board ends it (ruler: {ruler})");
+        }
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
+}
+
 /// A successful folder/archive Open from PCB layout binds the incoming project's board before
 /// constructing its fallback arrangement, including cached views of the outgoing project.
 #[cfg(not(target_arch = "wasm32"))]
