@@ -34,6 +34,27 @@ impl PcbApp {
         self.run(pcbcraft_engine::ALIGN_FOOTPRINTS, &params);
     }
 
+    /// The focused view's selected track segments, without vias, in board order.
+    fn selected_track_ids(&self) -> Vec<uuid::Uuid> {
+        let Some(board) = self.views.active.board.target.and_then(|target| self.session.project()?.board_view(target)) else { return Vec::new() };
+        let tracks = board.tracks();
+        self.views.active.board.tracks.selected.iter().filter(|id| tracks.binary_search_by_key(*id, |t| t.id).is_ok()).copied().collect()
+    }
+
+    /// Merge the focused view's selected track segments through the shared `pcb.merge_tracks`
+    /// command. Like other canvas copper edits, it is validated by background copper preparation
+    /// and published as one undo step; refusals appear in the status bar.
+    pub(super) fn merge_selected_tracks(&mut self) {
+        let Some(source) = self.views.active.input(&self.session) else { return };
+        let Some(target) = self.views.active.board.target else { return };
+        let tracks = self.selected_track_ids();
+        if tracks.is_empty() {
+            return;
+        }
+        let params = serde_json::json!({"board": target.board, "tracks": tracks, "expected_revision": source.revision});
+        self.prepare_canvas_copper(crate::board_drawing::Command::new(source, pcbcraft_engine::MERGE_TRACKS, params));
+    }
+
     /// Present the requested document here, beside it, or directly in a native window. Target
     /// changes cancel old input and retain each workspace's camera without creating document edits.
     pub(super) fn open_workspace(&mut self, workspace: Workspace, placement: Placement, ctx: &egui::Context) {
@@ -192,6 +213,15 @@ impl PcbApp {
             active: false,
             menu_check: None,
         };
+        let merge = RibbonTool {
+            icon: ToolIcon::Track,
+            label: "Merge Tracks",
+            description: "Merge selected straight track segments",
+            shortcut: "",
+            enabled: idle && !editing && !self.views.active.board.tracks.committing() && self.selected_track_ids().len() >= 2,
+            active: false,
+            menu_check: None,
+        };
         let count = self.views.active.board.selection.len();
         let aligns: Vec<RibbonTool> = ALIGNMENTS
             .iter()
@@ -205,13 +235,14 @@ impl PcbApp {
                 menu_check: None,
             })
             .collect();
-        let menu: Vec<_> = std::iter::once(delete).chain(aligns).collect();
+        let menu: Vec<_> = [delete, merge].into_iter().chain(aligns).collect();
         match workspace::ribbon_group_with_menu(ui, "Modify", &modify, &menu) {
             Some(0) => self.views.active.board.move_requested = true,
             Some(1) => self.views.active.board.rotate_requested = 90,
             Some(2) => self.views.active.board.flip_requested = true,
             Some(3) => self.delete_board_items(),
-            Some(index) if (4..4 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 4].1),
+            Some(4) => self.merge_selected_tracks(),
+            Some(index) if (5..5 + ALIGNMENTS.len()).contains(&index) => self.align_footprints(ALIGNMENTS[index - 5].1),
             _ => {}
         }
         workspace::ribbon_separator(ui);

@@ -31,7 +31,8 @@ on the same layer and width that meet at a free end, and absorbs stacked
 duplicates, keeping the lowest UUID with the merged ends. Ends at a junction,
 via or pad and locked segments stay as they are, so connectivity does not change.
 The whole merge is one undo step, and a dry run returns the same diff without
-changing the project.
+changing the project. In the PCB editor, **Layout → Modify → Merge Tracks** runs
+it on the selected tracks.
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,

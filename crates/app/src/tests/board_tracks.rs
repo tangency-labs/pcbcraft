@@ -2217,6 +2217,46 @@ fn modify_menu_aligns_selected_footprints() {
     assert_eq!(ys[0], ys[1], "identical footprints aligned by their tops share a Y");
 }
 
+/// Modify › Merge Tracks joins a selected straight run into one segment through the shared
+/// `pcb.merge_tracks` command and copper preparation; one Undo restores the original segments.
+#[test]
+fn modify_menu_merges_selected_straight_run_in_one_undo_step() {
+    let mut h = routable();
+    let top = layer_named(&h, "Top");
+    let p = |x: i64| Point { x_nm: x, y_nm: 2_540_000 };
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_TRACKS,
+        &json!({"layer":top,"width_nm":250_000,"points":[p(1_270_000), p(3_810_000), p(6_350_000), p(8_890_000)],"expected_revision":revision}),
+    );
+    h.run();
+    let segments = tracks(&h);
+    assert_eq!(segments.len(), 3);
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    click(&mut h, "Modify menu");
+    assert!(h.get_by_label("Merge Tracks").accesskit_node().is_disabled(), "merging needs selected segments");
+    h.key_press(Key::Escape);
+    h.run();
+    h.state_mut().views.active.board.tracks.selected = segments.iter().map(|t| t.id).collect();
+    h.run();
+    let revision = h.state().session.revision();
+    click(&mut h, "Modify menu");
+    click(&mut h, "Merge Tracks");
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1, "one edit");
+    let merged = tracks(&h);
+    assert_eq!(merged.len(), 1, "the straight run is one track");
+    let ends = BTreeSet::from([(merged[0].start.x_nm, merged[0].start.y_nm), (merged[0].end.x_nm, merged[0].end.y_nm)]);
+    assert_eq!(ends, BTreeSet::from([(1_270_000, 2_540_000), (8_890_000, 2_540_000)]));
+
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(tracks(&h), segments, "one Undo restores the original segments");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// D drags the segment under the pointer while its neighbors stretch to stay attached; a click
 /// commits all of them as one edit, and Esc cancels a drag without editing.
 #[test]
