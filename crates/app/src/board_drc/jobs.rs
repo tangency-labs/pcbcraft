@@ -411,6 +411,78 @@ mod native {
             assert_eq!(session.inspect(), before);
             assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
         }
+        /// A real native worker prepares `pcb.merge_tracks` off the editor thread, honors
+        /// cancellation cleanly, and returns the full diff report for single-step publication.
+        #[test]
+        fn native_merge_worker_prepares_without_publication_and_cancels_cleanly() {
+            let _lock = TEST_LOCK.lock().unwrap();
+            let mut session = pcbcraft_engine::Session::default();
+            session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
+            session
+                .apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &serde_json::json!({"copper_layers":2,"expected_revision":session.revision()}))
+                .unwrap();
+            let target = session.project().unwrap().board_target().unwrap();
+            let layer = session
+                .project()
+                .unwrap()
+                .board_view(target)
+                .unwrap()
+                .layers()
+                .into_iter()
+                .find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+                .unwrap()
+                .id;
+            let points: Vec<_> = (0..=200).map(|i| serde_json::json!({"x_nm":i * 1_000_000,"y_nm":0})).collect();
+            session
+                .apply(
+                    pcbcraft_engine::ADD_TRACKS,
+                    &serde_json::json!({"board":target.board,"layer":layer,"width_nm":250_000,"points":points,"expected_revision":session.revision()}),
+                )
+                .unwrap();
+            let tracks: Vec<_> = session.project().unwrap().board_view(target).unwrap().tracks().iter().map(|t| t.id).collect();
+            assert_eq!(tracks.len(), 200);
+            let before = session.snapshot().unwrap();
+            let revision = session.revision();
+            let params = serde_json::json!({"board":target.board,"tracks":tracks,"dry_run":false,"expected_revision":revision});
+
+            // Cancel a running native worker and confirm the board stays untouched and slots clear.
+            let job = session.prepare_copper_edit(pcbcraft_engine::MERGE_TRACKS, &params).unwrap();
+            let mut cancelled = Running::start(Request { id: 1, job });
+            cancelled.cancel();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let _ = loop {
+                if let Some(done) = cancelled.poll() {
+                    break done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+            assert_eq!(session.revision(), revision);
+            assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
+
+            // A fresh native worker prepares the merge off-thread and commits in one undo step.
+            let job = session.prepare_copper_edit(pcbcraft_engine::MERGE_TRACKS, &params).unwrap();
+            let mut running = Running::start(Request { id: 2, job });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let completion = loop {
+                if let Some(done) = running.poll() {
+                    break done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            assert!(std::sync::Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+            assert_eq!(session.revision(), revision);
+            let prepared = completion.report.unwrap().unwrap().unwrap();
+            let (new_rev, report) = session.commit_copper_edit_with_report(prepared).unwrap();
+            assert_eq!(new_rev, revision + 1);
+            let report = report.unwrap();
+            assert_eq!(report["revision"], serde_json::json!(revision + 1));
+            assert_eq!(report["merge_tracks"]["removed"].as_array().unwrap().len(), 199);
+            assert_eq!(session.project().unwrap().board_view(target).unwrap().tracks().len(), 1);
+            assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
+        }
         /// Excess native work is refused without spawning a third worker or waiting.
         #[test]
         fn native_worker_capacity_is_bounded() {

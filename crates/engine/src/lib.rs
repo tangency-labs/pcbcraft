@@ -3648,11 +3648,10 @@ impl Session {
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value, CommandError> {
         self.authorize_command(id)?;
         self.refuse_stale(id, params)?;
-        if matches!(id, board::arc::SET_ARCS | board::teardrop::EDIT_TEARDROPS | MERGE_TRACKS) {
+        if matches!(id, board::arc::SET_ARCS | board::teardrop::EDIT_TEARDROPS) {
             let before = self.revision;
             let result = match id {
                 board::arc::SET_ARCS => self.set_arc_tracks(params)?,
-                MERGE_TRACKS => self.merge_tracks(params)?,
                 _ => self.edit_teardrops(params)?,
             };
             if self.revision != before {
@@ -3749,6 +3748,9 @@ impl Session {
                 self.report_committed(id, params);
             }
             return Ok(json!({"revision":self.revision,"pin_function_change":report}));
+        }
+        if id == MERGE_TRACKS {
+            return self.merge_tracks(params);
         }
         if id == UNROUTE_CONNECTION {
             return self.unroute_connection(params);

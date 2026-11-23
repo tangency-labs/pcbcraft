@@ -402,3 +402,90 @@ fn overlapping_bridge_joins_earlier_span_when_free_and_stays_separate_when_block
     assert_eq!(report["changed"], false, "partial overlap alone stays two tracks: {report}");
     assert_eq!(tests::view(&partial).tracks().len(), 2);
 }
+
+/// Merge preparation yields between bounded units without mutating the board, matches the
+/// synchronous command for preview and apply, cancels cleanly on drop, rejects stale revisions,
+/// and publishes one undoable step.
+#[test]
+fn merge_preparation_is_resumable_cancellable_and_rejects_stale_revision() {
+    let mut s = tests::routed_fixture();
+    let front = tests::copper_layers(&s)[0];
+    let y = 40 * MM;
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(0, y), at(MM, y), at(2 * MM, y), at(3 * MM, y)]);
+    let tracks = all_tracks(&s);
+    let target = board(&s);
+    let before = s.snapshot().unwrap();
+    let before_bytes = encode_documents(before.clone()).unwrap();
+    let revision = s.revision();
+
+    // Synchronous preview establishes the baseline diff.
+    let preview_params = json!({"board":target,"tracks":tracks,"dry_run":true,"expected_revision":revision});
+    let sync_preview = s.execute(MERGE_TRACKS, &preview_params).unwrap();
+
+    // Resumable preview yields multiple times, never mutates, and returns the identical report.
+    let mut preview_job = s.prepare_copper_edit(MERGE_TRACKS, &preview_params).unwrap();
+    assert!(!preview_job.step(0));
+    assert_eq!(preview_job.progress().stage, "Planning track merge");
+    let mut preview_steps = 0usize;
+    while !preview_job.step(1) {
+        preview_steps += 1;
+        assert!(preview_steps < 10_000);
+    }
+    assert!(preview_steps > 1, "expected multiple bounded planning steps");
+    let prepared_preview = preview_job.take_result().unwrap().unwrap();
+    assert_eq!(prepared_preview.command(), MERGE_TRACKS);
+    assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    let (preview_rev, preview_report) = s.commit_copper_edit_with_report(prepared_preview).unwrap();
+    assert_eq!(preview_rev, revision);
+    assert_eq!(preview_report.unwrap(), sync_preview);
+    assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+
+    // Dropping an in-flight apply job cancels cleanly with no board or history change.
+    let apply_params = json!({"board":target,"tracks":tracks,"dry_run":false,"expected_revision":revision});
+    let mut cancelled = s.prepare_copper_edit(MERGE_TRACKS, &apply_params).unwrap();
+    assert!(!cancelled.step(1));
+    drop(cancelled);
+    assert!(std::sync::Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+    assert_eq!(s.revision(), revision);
+
+    // A prepared apply cannot commit once the board revision moves.
+    let mut stale_job = s.prepare_copper_edit(MERGE_TRACKS, &apply_params).unwrap();
+    while !stale_job.step(4) {}
+    let stale_prepared = stale_job.take_result().unwrap().unwrap();
+    s.apply("project.rename", &json!({"name":"Concurrent edit"})).unwrap();
+    let renamed = s.snapshot().unwrap();
+    let renamed_rev = s.revision();
+    let err = s.commit_copper_edit_with_report(stale_prepared).unwrap_err();
+    assert!(err.to_string().contains("stale"), "{err}");
+    assert!(std::sync::Arc::ptr_eq(&renamed, &s.snapshot().unwrap()));
+    assert_eq!(s.revision(), renamed_rev);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before_bytes);
+
+    // A fresh prepared apply commits in one undoable step with the full diff report.
+    let current_rev = s.revision();
+    let current_snapshot = s.snapshot().unwrap();
+    let fresh_params = json!({"board":target,"tracks":tracks,"dry_run":false,"expected_revision":current_rev});
+    let mut apply_job = s.prepare_copper_edit(MERGE_TRACKS, &fresh_params).unwrap();
+    let mut apply_steps = 0usize;
+    while !apply_job.step(4) {
+        apply_steps += 1;
+        assert!(apply_steps < 10_000);
+    }
+    assert!(apply_steps > 1, "expected multiple bounded apply steps");
+    assert!(std::sync::Arc::ptr_eq(&current_snapshot, &s.snapshot().unwrap()));
+    let prepared_apply = apply_job.take_result().unwrap().unwrap();
+    let (new_rev, apply_report) = s.commit_copper_edit_with_report(prepared_apply).unwrap();
+    assert_eq!(new_rev, current_rev + 1);
+    assert_eq!(s.revision(), current_rev + 1);
+    let apply_report = apply_report.unwrap();
+    assert_eq!(apply_report["revision"], json!(current_rev + 1));
+    assert_eq!(apply_report["merge_tracks"]["dry_run"], json!(false));
+    for key in ["before", "after", "removed", "reshaped", "locked", "changed"] {
+        assert_eq!(apply_report["merge_tracks"][key], sync_preview["merge_tracks"][key], "{key}");
+    }
+    assert_eq!(tests::view(&s).tracks().len(), 1);
+
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before_bytes);
+}

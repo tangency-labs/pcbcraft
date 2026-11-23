@@ -7,8 +7,54 @@
 //! with the lowest UUID survives with the merged ends; the others are deleted. The whole edit
 //! is one undo step, and merging an already merged selection changes nothing.
 use super::*;
-use crate::board::{geometry::continues_straight, view::BoardTarget};
-use std::cell::OnceCell;
+use crate::board::{geometry::continues_straight, view::BoardTarget, work::yield_unit};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll, Waker},
+};
+
+/// Planned merge output ready for copper validation and publication.
+pub(super) struct PreparedMerge {
+    /// Next project when applying a non-empty merge; `None` for dry runs and no-ops.
+    pub candidate: Option<Project>,
+    /// Reshaped survivor track IDs requiring contact and net-class validation.
+    pub added: BTreeSet<Uuid>,
+    /// Full command response (`revision` + `merge_tracks`), with `revision` updated on commit.
+    pub report: Value,
+}
+
+/// Own the immutable inputs while any native or browser work queue advances the merge planner.
+/// Dropping the continuation cancels all remaining work without producing a candidate.
+pub(super) struct Planner {
+    work: Pin<Box<dyn Future<Output = Result<PreparedMerge, CommandError>> + Send>>,
+    completed: usize,
+}
+
+impl Planner {
+    /// Capture only owned inputs; the first planning unit runs when polled.
+    pub(super) fn new(snapshot: Arc<Project>, target: BoardTarget, revision: u64, params: Value, report_budget: usize) -> Self {
+        Self { work: Box::pin(async move { prepare(&snapshot, target, revision, &params, report_budget).await }), completed: 0 }
+    }
+
+    /// Consume at most `budget` units, retaining planning state between polls.
+    pub(super) fn step(&mut self, budget: usize) -> Option<Result<PreparedMerge, CommandError>> {
+        let mut context = Context::from_waker(Waker::noop());
+        for _ in 0..budget {
+            match self.work.as_mut().poll(&mut context) {
+                Poll::Ready(result) => return Some(result),
+                Poll::Pending => self.completed = self.completed.saturating_add(1),
+            }
+        }
+        None
+    }
+
+    /// Logical progress, not an estimate of total work on a dense board.
+    pub(super) fn completed(&self) -> usize {
+        self.completed
+    }
+}
 
 /// A track end on one copper layer, in board nanometres.
 type End = (Uuid, i64, i64);
@@ -83,24 +129,26 @@ struct Obstacles {
 }
 
 impl Obstacles {
-    /// Capture the board's via and pad copper once per plan.
-    fn new(view: BoardView<'_>) -> Self {
-        let mut vias: Vec<_> = view
-            .vias()
-            .iter()
-            .map(|via| {
-                let contour = PadContour::capsule(via.at, via.at, via.diameter_nm as f64 / 2.);
-                (contour.bounds(), contour)
-            })
-            .collect();
+    /// Capture the board's via and pad copper once per plan in bounded batches.
+    async fn new_async(project: &Project, view: BoardView<'_>) -> Self {
+        let mut vias = Vec::with_capacity(view.vias().len());
+        for via in view.vias() {
+            yield_unit().await;
+            let contour = PadContour::capsule(via.at, via.at, via.diameter_nm as f64 / 2.);
+            vias.push((contour.bounds(), contour));
+        }
         vias.sort_by(|a, b| a.0[0].total_cmp(&b.0[0]));
-        let mut pads: Vec<_> = lands(view)
-            .into_iter()
-            .map(|land| {
+        let mut pads = Vec::new();
+        let total_footprints = project.board.footprints.len();
+        let mut next = 0;
+        while next < total_footprints {
+            yield_unit().await;
+            for land in lands_from_footprints(view.footprints_range(next, 32)) {
                 let contour = land.contour();
-                (contour.bounds(), contour, land.layers)
-            })
-            .collect();
+                pads.push((contour.bounds(), contour, land.layers));
+            }
+            next = next.saturating_add(32);
+        }
         pads.sort_by(|a, b| a.0[0].total_cmp(&b.0[0]));
         let via_width = vias.iter().map(|v| v.0[2] - v.0[0]).fold(0., f64::max);
         let pad_width = pads.iter().map(|p| p.0[2] - p.0[0]).fold(0., f64::max);
@@ -165,15 +213,32 @@ fn line(track: &Track) -> (Line, i128, i128) {
     ((track.layer, track.width_nm, ux, uy, offset), along(track.start), along(track.end))
 }
 
+/// Parse and validate `tracks` against the board's existing tracks, yielding per item.
+async fn selected_ids(params: &Value, tracks: &[Track]) -> Result<BTreeSet<Uuid>, CommandError> {
+    if params.get("tracks").is_none() {
+        return Ok(BTreeSet::new());
+    }
+    let ids: Vec<Uuid> = param(params, "tracks")?;
+    let mut unique = BTreeSet::new();
+    for id in ids {
+        yield_unit().await;
+        if !unique.insert(id) || tracks.binary_search_by_key(&id, |track| track.id).is_err() {
+            return Err(CommandError::InvalidParams("tracks must be unique IDs of existing board items".into()));
+        }
+    }
+    Ok(unique)
+}
+
 /// Plan the merge of the addressed segments on one board snapshot without changing it.
 /// `selected` holds existing track UUIDs; locked ones are reported and left alone. Track ends
 /// are counted over the whole board, so unaddressed and locked copper still blocks a join.
-pub(crate) fn plan(view: BoardView<'_>, selected: &BTreeSet<Uuid>) -> Plan {
+async fn plan(project: &Project, view: BoardView<'_>, selected: &BTreeSet<Uuid>) -> Plan {
     let tracks = view.tracks();
     let mut ends: BTreeMap<End, usize> = BTreeMap::new();
     let mut lines: BTreeMap<Line, Vec<Span>> = BTreeMap::new();
     let mut locked = Vec::new();
     for track in tracks {
+        yield_unit().await;
         for end in [track.start, track.end] {
             *ends.entry((track.layer, end.x_nm, end.y_nm)).or_default() += 1;
         }
@@ -189,7 +254,7 @@ pub(crate) fn plan(view: BoardView<'_>, selected: &BTreeSet<Uuid>) -> Plan {
         let (low, high) = if forward { (track.start, track.end) } else { (track.end, track.start) };
         lines.entry(key).or_default().push(Span { id: track.id, forward, low_t: start_t.min(end_t), high_t: start_t.max(end_t), low, high });
     }
-    let obstacles = OnceCell::new();
+    let mut obstacles = None;
     let mut removed = BTreeSet::new();
     // Repeat across all line groups until a full pass changes nothing, because absorbing a
     // covered segment on one line can drop a shared end's count to 2 and free a join on an
@@ -198,8 +263,8 @@ pub(crate) fn plan(view: BoardView<'_>, selected: &BTreeSet<Uuid>) -> Plan {
         let mut changed = false;
         for (&(layer, width_nm, ..), spans) in &mut lines {
             if spans.len() > 1 {
-                let join = Join { layer, width_nm, view, obstacles: &obstacles };
-                changed |= join.merge_line(spans, &mut ends, &mut removed);
+                let mut join = Join { layer, width_nm, project, view, obstacles: &mut obstacles };
+                changed |= join.merge_line(spans, &mut ends, &mut removed).await;
             }
         }
         if !changed {
@@ -210,6 +275,7 @@ pub(crate) fn plan(view: BoardView<'_>, selected: &BTreeSet<Uuid>) -> Plan {
     let original = move |id: &Uuid| tracks.binary_search_by_key(id, |track| track.id).ok().map(|index| &tracks[index]);
     let mut plan = Plan { locked, removed: removed.into_iter().collect(), ..Plan::default() };
     for span in survivors {
+        yield_unit().await;
         let Some(track) = original(&span.id) else { continue };
         let merged = span.track(track);
         if merged != *track {
@@ -227,9 +293,10 @@ pub(crate) fn plan(view: BoardView<'_>, selected: &BTreeSet<Uuid>) -> Plan {
 struct Join<'a> {
     layer: Uuid,
     width_nm: i64,
+    project: &'a Project,
     view: BoardView<'a>,
     /// Via and pad copper, captured only when a join first needs it.
-    obstacles: &'a OnceCell<Obstacles>,
+    obstacles: &'a mut Option<Obstacles>,
 }
 
 impl Join<'_> {
@@ -241,7 +308,7 @@ impl Join<'_> {
     /// [`Self::free_end`]). Every merge removes a span, so the passes end; a later pass absorbs
     /// any intermediate overlapping spans now covered by the extended run and adds joins that
     /// earlier absorptions unblocked.
-    fn merge_line(&self, spans: &mut Vec<Span>, ends: &mut BTreeMap<End, usize>, removed: &mut BTreeSet<Uuid>) -> bool {
+    async fn merge_line(&mut self, spans: &mut Vec<Span>, ends: &mut BTreeMap<End, usize>, removed: &mut BTreeSet<Uuid>) -> bool {
         let mut any = false;
         loop {
             spans.sort_by(|a, b| a.low_t.cmp(&b.low_t).then(b.high_t.cmp(&a.high_t)).then(a.id.cmp(&b.id)));
@@ -250,6 +317,7 @@ impl Join<'_> {
             let mut by_high: BTreeMap<i128, usize> = BTreeMap::new();
             let mut furthest = 0usize;
             for span in spans.drain(..) {
+                yield_unit().await;
                 if !kept.is_empty() {
                     if span.high_t <= kept[furthest].high_t {
                         self.absorb(&mut kept[furthest], span, ends, removed);
@@ -258,7 +326,7 @@ impl Join<'_> {
                     }
                     if let Some(&idx) = by_high.get(&span.low_t)
                         && continues_straight(kept[idx].low, kept[idx].high, span.high)
-                        && self.free_end(kept[idx].high, ends)
+                        && self.free_end(kept[idx].high, ends).await
                     {
                         by_high.remove(&span.low_t);
                         self.absorb(&mut kept[idx], span, ends, removed);
@@ -283,9 +351,14 @@ impl Join<'_> {
 
     /// Whether exactly two track ends meet at `at` on this layer and no via or pad copper
     /// touches the round track end there, so joining the two segments hides no junction.
-    fn free_end(&self, at: Point, ends: &BTreeMap<End, usize>) -> bool {
-        ends.get(&(self.layer, at.x_nm, at.y_nm)) == Some(&2)
-            && !self.obstacles.get_or_init(|| Obstacles::new(self.view)).touch(at, self.layer, self.width_nm)
+    async fn free_end(&mut self, at: Point, ends: &BTreeMap<End, usize>) -> bool {
+        if ends.get(&(self.layer, at.x_nm, at.y_nm)) != Some(&2) {
+            return false;
+        }
+        if self.obstacles.is_none() {
+            *self.obstacles = Some(Obstacles::new_async(self.project, self.view).await);
+        }
+        self.obstacles.as_ref().is_none_or(|obstacles| !obstacles.touch(at, self.layer, self.width_nm))
     }
 
     /// Fold `other` into `into`: the run covers both, the lower UUID survives, and the track
@@ -314,60 +387,83 @@ impl Join<'_> {
     }
 }
 
+/// Plan and validate a track merge against an immutable board snapshot without changing it.
+/// Preview and apply both check the selection and report byte budget; applying builds and
+/// validates the candidate board for copper contact and class-rule checks before publication.
+async fn prepare(project: &Project, target: BoardTarget, revision: u64, params: &Value, report_budget: usize) -> Result<PreparedMerge, CommandError> {
+    let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
+    let selected = selected_ids(params, view.tracks()).await?;
+    if selected.is_empty() {
+        return Err(CommandError::InvalidParams("name at least one track to merge".into()));
+    }
+    let plan = plan(project, view, &selected).await;
+    let dry_run = params["dry_run"].as_bool().unwrap_or(false);
+    let report = plan.report(target.board, dry_run);
+    yield_unit().await;
+    if !report_fits(&report, report_budget) {
+        return Err(CommandError::CapExceeded(format!("the merge report would exceed {report_budget} bytes; merge fewer tracks at a time")));
+    }
+    let envelope = json!({"revision": revision, "merge_tracks": report});
+    if !plan.changed() || dry_run {
+        return Ok(PreparedMerge { candidate: None, added: BTreeSet::new(), report: envelope });
+    }
+    let (candidate, added) = build_candidate(project, &plan).await?;
+    Ok(PreparedMerge { candidate, added, report: envelope })
+}
+
+/// Apply the planned deletions and reshapes to a private board copy, validating geometry and
+/// lock protection before copper contact validation runs.
+async fn build_candidate(project: &Project, plan: &Plan) -> Result<(Option<Project>, BTreeSet<Uuid>), CommandError> {
+    let removed: BTreeSet<Uuid> = plan.removed.iter().copied().collect();
+    let mut reshaped: BTreeMap<Uuid, &Track> = BTreeMap::new();
+    for track in &plan.after {
+        yield_unit().await;
+        reshaped.insert(track.id, track);
+    }
+    let mut tracks = Vec::with_capacity(project.board.tracks.len().saturating_sub(removed.len()));
+    for track in &project.board.tracks {
+        yield_unit().await;
+        if removed.contains(&track.id) {
+            continue;
+        }
+        if let Some(updated) = reshaped.get(&track.id) {
+            tracks.push((*updated).clone());
+        } else {
+            tracks.push(track.clone());
+        }
+    }
+    let mut vias = project.board.vias.clone();
+    yield_unit().await;
+    validate(project, &mut tracks, &mut vias).map_err(CommandError::InvalidParams)?;
+    if tracks == project.board.tracks && vias == project.board.vias {
+        return Ok((None, BTreeSet::new()));
+    }
+    let mut next = project.clone();
+    let board = Arc::make_mut(&mut next.board);
+    board.tracks = tracks;
+    board.vias = vias;
+    protect_locked(project, &next)?;
+    let added: BTreeSet<Uuid> = plan.after.iter().map(|track| track.id).collect();
+    Ok((Some(next), added))
+}
+
 impl Session {
     /// Merge the addressed segments, or only report the merge on a dry run. The result lists
     /// the original and final records of every changed segment, the deleted and reshaped
-    /// UUIDs, the locked segments left alone and whether anything changed. Applying deletes
-    /// the absorbed segments and reshapes the survivors through the shared track commands in
-    /// one private transaction, so their validation, lock protection and net-short refusal
-    /// apply, then publishes one undo step. With nothing to merge, revision and history stay
-    /// unchanged. A report larger than [`MERGE_REPORT_MAX_BYTES`] is refused with
-    /// `cap_exceeded` before anything changes, for a dry run as for an applied merge.
+    /// UUIDs, the locked segments left alone and whether anything changed. Applying validates
+    /// the merged copper through the shared preparation job and publishes one undo step. With
+    /// nothing to merge, revision and history stay unchanged. A report larger than
+    /// [`MERGE_REPORT_MAX_BYTES`] is refused with `cap_exceeded` before anything changes, for
+    /// a dry run as for an applied merge.
     pub(crate) fn merge_tracks(&mut self, params: &Value) -> Result<Value, CommandError> {
         self.merge_tracks_within(params, MERGE_REPORT_MAX_BYTES)
     }
 
     /// [`Self::merge_tracks`] with an explicit report byte budget.
     pub(crate) fn merge_tracks_within(&mut self, params: &Value, report_budget: usize) -> Result<Value, CommandError> {
-        self.validate_project_command(MERGE_TRACKS, params)?;
-        self.check_revision(params)?;
-        let project = self.open_project()?;
-        let target = project.resolve_board(params.get("board").and_then(Value::as_str))?;
-        let view = project.board_view(target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
-        let selected = ids(params, "tracks", |id| view.tracks().binary_search_by_key(id, |track| track.id).is_ok())?;
-        if selected.is_empty() {
-            return Err(CommandError::InvalidParams("name at least one track to merge".into()));
-        }
-        let plan = plan(view, &selected);
-        let dry_run = params["dry_run"].as_bool().unwrap_or(false);
-        let report = plan.report(target.board, dry_run);
-        if !report_fits(&report, report_budget) {
-            return Err(CommandError::CapExceeded(format!("the merge report would exceed {report_budget} bytes; merge fewer tracks at a time")));
-        }
-        if plan.changed() && !dry_run {
-            self.publish_merge(target, &plan)?;
-        }
-        Ok(json!({"revision": self.revision(), "merge_tracks": report}))
-    }
-
-    /// Delete the absorbed segments, then reshape the survivors, in a private transaction, and
-    /// publish the result as one undo step. Inner command histories stay private.
-    fn publish_merge(&mut self, target: BoardTarget, plan: &Plan) -> Result<(), CommandError> {
-        let mut transaction = Self {
-            libraries: self.libraries.clone(),
-            project: self.snapshot(),
-            revision: self.revision,
-            history_root_revision: self.history_root_revision,
-            ..Self::default()
-        };
-        if !plan.removed.is_empty() {
-            transaction.apply(DELETE_TRACKS, &json!({"board":target.board,"tracks":plan.removed,"expected_revision":transaction.revision()}))?;
-        }
-        if !plan.after.is_empty() {
-            let reshape: Vec<_> = plan.after.iter().map(|track| json!({"track":track.id,"start":track.start,"end":track.end})).collect();
-            transaction.apply(RESHAPE_TRACKS, &json!({"board":target.board,"tracks":reshape,"expected_revision":transaction.revision()}))?;
-        }
-        let next = transaction.open_project()?.clone();
-        self.change(next)
+        let mut job = self.prepare_merge_tracks_within(params, report_budget)?;
+        while !job.step(1024) {}
+        let prepared = job.take_result()?.ok_or_else(|| CommandError::Unavailable("Merge preparation returned no result.".into()))?;
+        self.commit_copper_edit_with_report(prepared)?.1.ok_or_else(|| CommandError::Unavailable("Merge preparation returned no report.".into()))
     }
 }

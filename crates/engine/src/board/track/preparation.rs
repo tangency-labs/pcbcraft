@@ -18,6 +18,7 @@ pub fn is_copper_edit(command: &str) -> bool {
             | SET_TRACK_WIDTH
             | SET_VIA_SIZE
             | DELETE_TRACKS
+            | MERGE_TRACKS
             | unroute::UNROUTE_CONNECTION
     )
 }
@@ -89,6 +90,9 @@ pub struct CopperEditJob {
     lands: Option<Arc<Vec<Land>>>,
     builder: Option<IslandBuilder>,
     unroute: Option<unroute::Planner>,
+    merge: Option<merge::Planner>,
+    merge_report_budget: usize,
+    report: Option<Value>,
     work: usize,
     result: Option<Result<PreparedCopperEdit, CommandError>>,
     class_islands: Option<(Copper, Vec<Vec<usize>>)>,
@@ -167,6 +171,9 @@ impl Session {
             lands: None,
             builder: None,
             unroute: None,
+            merge: None,
+            merge_report_budget: MERGE_REPORT_MAX_BYTES,
+            report: None,
             work: 0,
             result: None,
             class_islands: None,
@@ -183,6 +190,13 @@ impl Session {
     pub fn prepare_copper_edit(&self, command: &str, params: &Value) -> Result<CopperEditJob, CommandError> {
         let (command, target) = self.admit_copper_edit(command, params)?;
         Ok(Self::copper_job(&self.copper_preparation(target)?, command, params))
+    }
+
+    /// Prepare a track merge with an explicit report byte budget.
+    pub(crate) fn prepare_merge_tracks_within(&self, params: &Value, report_budget: usize) -> Result<CopperEditJob, CommandError> {
+        let mut job = self.prepare_copper_edit(MERGE_TRACKS, params)?;
+        job.merge_report_budget = report_budget;
+        Ok(job)
     }
     /// Consume an engine-validated candidate in one shared history transaction. Another session,
     /// reopening, rule/geometry edit or Undo/Redo makes the prepared source stale before publication.
@@ -230,6 +244,31 @@ impl CopperEditJob {
         Ok(true)
     }
 
+    /// Advance merge planning in bounded units; if any survivor was reshaped, hand the validated
+    /// candidate to the shared copper contact and class-rule phases before finishing.
+    fn advance_merge(&mut self, budget: usize) -> Result<bool, CommandError> {
+        let source = &self.context.source;
+        let report_budget = self.merge_report_budget;
+        let planner = self.merge.get_or_insert_with(|| {
+            merge::Planner::new(source.snapshot.clone(), source.target(), source.revision(), self.params.clone(), report_budget)
+        });
+        let prepared = planner.step(budget);
+        self.work = planner.completed();
+        let Some(prepared) = prepared else { return Ok(false) };
+        self.merge = None;
+        let merge::PreparedMerge { candidate, added, report } = prepared?;
+        self.candidate = candidate.map(Arc::new);
+        self.added = added;
+        self.report = Some(report);
+        if self.candidate.is_none() || self.added.is_empty() {
+            self.finish_prepared();
+            return Ok(true);
+        }
+        self.phase = 1;
+        self.work = 0;
+        Ok(false)
+    }
+
     /// Captured source authority; the host also owns and validates its input generation.
     pub fn source(&self) -> &Source {
         &self.context.source
@@ -243,6 +282,9 @@ impl CopperEditJob {
                 completed: self.work,
                 total: self.work.saturating_add(usize::from(!done)),
             };
+        }
+        if self.command == MERGE_TRACKS && self.phase == 0 {
+            return Progress { stage: "Planning track merge", completed: self.work, total: self.work.saturating_add(1) };
         }
         let total = self.lands.as_ref().map_or(1, |lands| {
             let n = lands.len() + self.candidate.as_ref().map_or(0, |p| p.board.tracks.len() + p.board.vias.len());
@@ -293,7 +335,7 @@ impl CopperEditJob {
             command: self.command,
             params: self.params.clone(),
             class_rules: self.class_rules.take(),
-            report: None,
+            report: self.report.take(),
         }));
         self.phase = 5;
     }
@@ -301,6 +343,9 @@ impl CopperEditJob {
     fn advance(&mut self, budget: usize) -> Result<bool, CommandError> {
         if self.command == unroute::UNROUTE_CONNECTION {
             return self.advance_unroute(budget);
+        }
+        if self.command == MERGE_TRACKS && self.phase == 0 {
+            return self.advance_merge(budget);
         }
         match self.phase {
             0 => {
