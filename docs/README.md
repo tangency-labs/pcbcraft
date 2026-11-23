@@ -93,6 +93,7 @@ availability by themselves.
 | Schematic-to-board regression | [Single-board forward-update acceptance](single-board-forward-acceptance.md); automated coverage, separate from owner-manual acceptance |
 | Measurement method and limits | [Performance testing](performance-testing.md) · [Coverage record](performance-coverage.md) |
 | Recorded baseline | [Initial performance baseline](performance-baseline.md), with its original environment and revision |
+| Via displacement and connected drag measurements | [Saved #248 fixtures, native replays and results](../tools/performance/baselines/issue248/README.md) |
 | Releases and attribution | [Changelog](../CHANGELOG.md) · [Third-party notices](../ATTRIBUTION.md) |
 | Source-boundary history | [November 7 layer-shortcut search](source-boundaries/2026-11-07-layer-shortcut-search.md); apply the current [source rules](../AGENTS.md#license-and-sources-the-rule-that-cant-be-undone) and task-specific resolution records |
 

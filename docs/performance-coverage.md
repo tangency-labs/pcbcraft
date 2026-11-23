@@ -238,3 +238,8 @@ Optimized calculation median falls from 428.011 to 105.841 ms on that one board;
 the initial development build took about 5.9 seconds. This isolates headless fill
 calculation and does not qualify physical presentation, large-board throughput,
 retained-topology memory growth or a vendor comparison.
+
+The [#248 shove measurements](../tools/performance/baselines/issue248/README.md)
+cover native planning and command costs for moving a via and its two attached
+tracks, and for dragging a connected pair into another track. The same evidence
+includes a matched replay of the original four track-only shove cases.

@@ -620,3 +620,13 @@ legacy center-only markers are excluded without consulting solver outcomes.
 The trace waits for a fully validated preview, clicks a different final target,
 and records input-to-publication UI and GPU-readback intervals. Full DRC,
 one-step Undo/Redo, and exact native reopen run outside the commit interval.
+
+For via displacement and connected D-drag, use the saved #248 fixtures and
+`board_perf shove ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT`. The ordinary
+shove fixture exercises the original single, cascade, branch and lock cases.
+The joint fixture moves a through via with tracks on both layers, then starts
+a fresh session and drags a connected pair into an unrelated rail. To make a
+new joint fixture, run `board_perf shove_joint_fixture SHOVE_FIXTURE GENERATOR_REV OUTPUT`
+once and retain the resulting native project bytes for later comparisons.
+The [#248 evidence](../tools/performance/baselines/issue248/README.md) records
+the timed boundaries and the geometry and history checks.
