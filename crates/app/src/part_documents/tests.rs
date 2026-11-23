@@ -1,4 +1,5 @@
 use super::*;
+use egui_kittest::kittest::NodeT;
 use pcbcraft_engine::library::parts::Package;
 use serde_json::json;
 use std::{
@@ -806,4 +807,250 @@ fn removed_pad_assignments_are_visible_repairable_and_undoable() {
     assert_eq!(part.packages["header"].mapping["2"], vec!["3"]);
     assert!(part.packages["header"].unconnected_pads.is_empty());
     assert!(Arc::ptr_eq(&before, &h.state().session.snapshot().unwrap()));
+}
+
+/// Render metadata controls in isolation: each valid edit reaches the session once, undo and
+/// redo share its history, and blank text removes the authored value instead of storing it.
+#[test]
+fn metadata_fields_commit_undo_redo_and_clear() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (app, _temp, id) = fixture();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Search metadata").click();
+    h.run();
+    h.get_by_label("Description");
+    h.get_by_label("Keywords");
+    h.get_by_label("Add link");
+    let revision = h.state().library_editors.parts[&id].session.revision();
+    h.get_by_label("Description").click();
+    h.run();
+    h.get_by_label("Description").type_text("Low ESR ceramic");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.description.as_deref(), Some("Low ESR ceramic"));
+    assert_eq!(part.format, pcbcraft_engine::library::parts::METADATA_PART_FORMAT);
+    assert_eq!(doc.session.revision(), revision + 1);
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+
+    h.get_by_label("Keywords").click();
+    h.run();
+    h.get_by_label("Keywords").type_text("low-esr\nceramic");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.keywords, ["low-esr", "ceramic"]);
+    assert_eq!(doc.session.revision(), revision + 2);
+
+    h.get_by_label("Undo").click();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert!(part.keywords.is_empty());
+    assert_eq!(part.description.as_deref(), Some("Low ESR ceramic"));
+    h.get_by_label("Redo").click();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.keywords, ["low-esr", "ceramic"]);
+
+    h.get_by_label("Description").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.description, None);
+    h.get_by_label("Keywords").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert!(part.keywords.is_empty());
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+    assert_eq!(part.format, pcbcraft_engine::library::parts::PART_FORMAT);
+}
+
+/// Rejected bounds and non-HTTP links stay visible as pending text without moving the
+/// published revision; correcting one field clears only that field's pending entry.
+#[test]
+fn metadata_rejects_oversized_text_and_bad_urls_without_publishing() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::library::parts::{MAX_DESCRIPTION_CHARS, MAX_KEYWORD_CHARS, MAX_KEYWORDS};
+    let (mut app, temp, id) = fixture();
+    let ctx = egui::Context::default();
+    app.publish_library_item(&ctx, id, 2, "workshop", false).unwrap();
+    finish(&mut app, &ctx);
+    let folder = temp.path().join("workshop/parts");
+    let file = std::fs::read_dir(&folder).unwrap().next().unwrap().unwrap().path();
+    let bytes = std::fs::read(&file).unwrap();
+    let published = app.library_editors.parts[&id].session.record().clone();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Search metadata").click();
+    h.run();
+    let revision = h.state().library_editors.parts[&id].session.revision();
+
+    let oversized = "x".repeat(MAX_DESCRIPTION_CHARS + 1);
+    h.get_by_label("Description").click();
+    h.run();
+    h.get_by_label("Description").type_text(&oversized);
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending.get("metadata/description"), Some(&oversized));
+    assert_eq!(doc.session.record(), &published);
+    assert_eq!(doc.session.revision(), revision);
+    assert!(doc.error.as_deref().is_some_and(|error| error.contains(&MAX_DESCRIPTION_CHARS.to_string())), "{:?}", doc.error);
+    assert!(h.get_by_label("Publish…").accesskit_node().is_disabled());
+    h.get_by_label("Publish…").click();
+    h.run();
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+
+    let duplicate = (1..MAX_KEYWORDS).map(|n| format!("keyword-{n}")).collect::<Vec<_>>().join("\n");
+    let duplicate = format!("{duplicate}\nKEYWORD-1");
+    h.get_by_label("Keywords").click();
+    h.run();
+    h.get_by_label("Keywords").type_text(&duplicate);
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending.get("metadata/keywords"), Some(&duplicate));
+    assert_eq!(doc.session.record(), &published);
+    assert!(doc.error.as_deref().is_some_and(|error| error.contains("Duplicate keyword")), "{:?}", doc.error);
+    let long = "y".repeat(MAX_KEYWORD_CHARS + 1);
+    h.get_by_label("Keywords").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("Keywords").type_text(&long);
+    h.run();
+    assert_eq!(h.state().library_editors.parts[&id].pending.get("metadata/keywords"), Some(&long));
+
+    h.get_by_label("Description").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("Description").type_text("Ceramic resistor");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert!(!doc.pending.contains_key("metadata/description"));
+    assert_eq!(doc.pending.get("metadata/keywords"), Some(&long));
+    assert!(h.get_by_label("Publish…").accesskit_node().is_disabled());
+
+    h.get_by_label("Add link").click();
+    h.run();
+    h.get_by_label("Link label 1").click();
+    h.run();
+    h.get_by_label("Link label 1").type_text("Datasheet");
+    h.run();
+    h.get_by_label("Link URL 1").click();
+    h.run();
+    h.get_by_label("Link URL 1").type_text("ftp://example.com/ds");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert_eq!(doc.pending.get("metadata/link/0/url").map(String::as_str), Some("ftp://example.com/ds"));
+    assert_eq!(doc.pending.get("metadata/link/0/label").map(String::as_str), Some("Datasheet"));
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert!(part.links.is_empty());
+    assert!(doc.error.as_deref().is_some_and(|error| error.contains("HTTP(S)")), "{:?}", doc.error);
+    assert_eq!(std::fs::read(&file).unwrap(), bytes);
+
+    h.get_by_label("Link URL 1").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.get_by_label("Link URL 1").type_text("https://example.com/ds");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    assert!(!doc.pending.contains_key("metadata/link/0/url"));
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.links.len(), 1);
+    assert_eq!(part.links[0].label, "Datasheet");
+    assert_eq!(part.links[0].url, "https://example.com/ds");
+    assert!(doc.pending.contains_key("metadata/keywords"));
+    assert!(h.get_by_label("Publish…").accesskit_node().is_disabled());
+}
+
+/// Adding, removing and clearing link rows keeps pending text aligned with authored links
+/// after indices shift, and the whole edit remains one revision with working undo/redo.
+#[test]
+fn link_rows_add_remove_clear_and_compact() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (app, _temp, id) = fixture();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1000., 900.))
+        .with_context_setup(pcbcraft_chrome::install)
+        .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+    h.run();
+    h.get_by_label("Expand Search metadata").click();
+    h.run();
+    h.get_by_label("Add link").click();
+    h.run();
+    h.get_by_label("Link label 1").click();
+    h.run();
+    h.get_by_label("Link label 1").type_text("Datasheet");
+    h.run();
+    h.get_by_label("Link URL 1").click();
+    h.run();
+    h.get_by_label("Link URL 1").type_text("https://example.com/ds");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.links.len(), 1);
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
+    let revision = doc.session.revision();
+
+    h.get_by_label("Undo").click();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert!(part.links.is_empty());
+    h.get_by_label("Redo").click();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.links.len(), 1);
+
+    h.get_by_label("Add link").click();
+    h.run();
+    h.get_by_label("Link label 2").click();
+    h.run();
+    h.get_by_label("Link label 2").type_text("Application note");
+    h.run();
+    h.get_by_label("Link URL 2").click();
+    h.run();
+    h.get_by_label("Link URL 2").type_text("http://example.com/app");
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.links.len(), 2);
+
+    h.get_by_label("Remove link 1").click();
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert_eq!(part.links.len(), 1);
+    assert_eq!(part.links[0].label, "Application note");
+    assert_eq!(doc.session.revision(), revision + 4); // undo, redo, second link, removal
+
+    h.get_by_label("Link label 1").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run();
+    h.get_by_label("Link URL 1").click();
+    h.run();
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run();
+    let doc = &h.state().library_editors.parts[&id];
+    let Record::Part(part) = doc.session.record() else { panic!() };
+    assert!(part.links.is_empty());
+    assert!(doc.pending.is_empty(), "{:?}", doc.pending);
 }

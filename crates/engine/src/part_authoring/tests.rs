@@ -1,5 +1,5 @@
 use super::*;
-use crate::library::parts::Package;
+use crate::library::parts::{MAX_KEYWORDS, MAX_LINKS, METADATA_PART_FORMAT, Package, PartLink, RATED_PART_FORMAT};
 
 /// Original bundled connector and header geometry supplies an independent native assembly.
 fn fixture() -> (Catalog, Record, String) {
@@ -237,4 +237,110 @@ fn optional_symbol_transition_preserves_legacy_encoding_and_undo() {
     let mut value = serde_json::to_value(part).unwrap();
     value["symbol"] = Value::Null;
     assert!(PartDefinition::read(&value.to_string()).is_err());
+}
+
+/// Author one bounded set of metadata on the current draft.
+fn with_metadata(record: &mut Record, description: &str) {
+    let Record::Part(part) = record else { panic!("fixture needs a generic part") };
+    part.description = Some(description.into());
+    part.keywords = vec!["Precision".into(), "low-noise".into()];
+    part.links = vec![PartLink { label: "Datasheet".into(), url: "https://example.invalid/ds.pdf".into() }];
+}
+
+/// Draft metadata selects /5, and publication writes the same envelope with a fixed summary.
+#[test]
+fn metadata_draft_upgrades_to_part5_and_publishes_the_same_bytes() {
+    let (mut catalog, record, manifest) = fixture();
+    let mut session = Session::new(record, false).unwrap();
+    let mut edited = session.record().clone();
+    with_metadata(&mut edited, "Precision connector");
+    let Record::Part(part) = &edited else { panic!() };
+    assert_eq!(part.format, crate::library::parts::PART_FORMAT);
+    session.replace(1, edited).unwrap();
+    let Record::Part(part) = session.record() else { panic!() };
+    assert_eq!(part.format, METADATA_PART_FORMAT);
+    assert_eq!(part.search_text(), "precision connector precision low-noise");
+
+    let prepared = session.prepare(&catalog, &manifest, 0, false, false).unwrap();
+    let Record::Part(published) = prepared.record() else { panic!() };
+    assert_eq!(published.format, METADATA_PART_FORMAT);
+    assert_eq!(published.description.as_deref(), Some("Precision connector"));
+    let mut documents = prepared.documents().clone();
+    let text = documents.iter().find(|(path, _)| path.starts_with("parts/")).unwrap().1;
+    assert_eq!(PartDefinition::read(text).unwrap(), *published);
+    documents.insert("library.json".into(), manifest.clone());
+    catalog.install("workshop", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    let resolved = catalog.resolve_part(&prepared.reference()).unwrap();
+    assert_eq!(resolved.definition.description.as_deref(), Some("Precision connector"));
+    assert_eq!(resolved.definition.links.len(), 1);
+}
+
+/// Bounded metadata is edited atomically with one revision, undo/redo and stale-capture checks.
+#[test]
+fn metadata_edits_are_bounded_and_join_the_draft_history() {
+    let (_, original, _) = fixture();
+    let mut session = Session::new(original.clone(), false).unwrap();
+    let mut valid = original.clone();
+    with_metadata(&mut valid, "Revised connector");
+    valid.select_format();
+    session.replace(1, valid.clone()).unwrap();
+    assert_eq!(session.revision(), 2);
+    assert_eq!(session.record(), &valid);
+    session.history(2, false).unwrap();
+    assert_eq!(session.record(), &original);
+    session.history(3, true).unwrap();
+    assert_eq!(session.record(), &valid);
+    assert!(session.replace(3, original.clone()).is_err());
+    assert_eq!(session.record(), &valid);
+    assert_eq!(session.revision(), 4);
+
+    type Edit = (fn(&mut PartDefinition), &'static str);
+    let edits: [Edit; 3] = [
+        (|p: &mut PartDefinition| p.description = Some("x".repeat(513)), "description"),
+        (|p: &mut PartDefinition| p.keywords = (0..MAX_KEYWORDS + 1).map(|i| format!("k{i}")).collect(), "keywords"),
+        (
+            |p: &mut PartDefinition| {
+                p.links = (0..MAX_LINKS + 1).map(|i| PartLink { label: format!("L{i}"), url: "https://example.invalid".into() }).collect()
+            },
+            "links",
+        ),
+    ];
+    for (edit, message) in edits {
+        let mut over = valid.clone();
+        let Record::Part(part) = &mut over else { panic!() };
+        edit(part);
+        assert!(session.replace(4, over).unwrap_err().contains(message), "{message}");
+        assert_eq!(session.record(), &valid);
+        assert_eq!(session.revision(), 4);
+    }
+}
+
+/// Ratings and metadata share /5; removing the symbol drops ratings but keeps searchable metadata.
+#[test]
+fn metadata_and_ratings_share_part5_until_the_symbol_is_removed() {
+    let (catalog, record, _) = fixture();
+    let mut session = Session::new(record.clone(), false).unwrap();
+    let mut both = record.clone();
+    with_metadata(&mut both, "Rated connector");
+    let Record::Part(part) = &mut both else { panic!() };
+    part.set_supply_range("1", "4.5 V", "36 V").unwrap();
+    assert_eq!(part.format, METADATA_PART_FORMAT);
+    session.replace(1, both.clone()).unwrap();
+    assert_eq!(session.record(), &both);
+
+    let physical = session.record().select_reference(&ReferenceField::Symbol, None, &catalog).unwrap();
+    let Record::Part(part) = &physical else { panic!() };
+    assert_eq!(part.format, METADATA_PART_FORMAT, "metadata keeps /5 after the rating is cleared");
+    assert!(part.terminal_ratings.is_empty());
+    assert!(part.symbol.is_none());
+    assert_eq!(part.description.as_deref(), Some("Rated connector"));
+    assert!(part.packages.values().all(|package| package.mapping.is_empty()));
+    let mut clear = both.clone();
+    let Record::Part(part) = &mut clear else { panic!() };
+    part.description = None;
+    part.keywords.clear();
+    part.links.clear();
+    part.select_format();
+    assert_eq!(part.format, RATED_PART_FORMAT);
+    let _ = physical;
 }

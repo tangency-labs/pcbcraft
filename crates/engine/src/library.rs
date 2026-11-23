@@ -735,6 +735,17 @@ fn check_text(field: &str, text: &str, limit: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Check a bounded HTTP(S) reference: a nonempty host after `http://` or `https://`, and no
+/// whitespace anywhere. Reading a native record never fetches the URL.
+pub(crate) fn check_http_url(field: &str, url: &str, limit: usize) -> Result<(), String> {
+    check_text(field, url, limit)?;
+    let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
+    if host.is_empty() || url.chars().any(char::is_whitespace) {
+        return Err(format!("{field} must be an HTTP(S) URL; loading performs no fetch."));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

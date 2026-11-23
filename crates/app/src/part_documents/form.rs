@@ -1,7 +1,10 @@
 //! Native part relationships are edited here; geometry remains in the drawing editors.
 use super::*;
-use pcbcraft_engine::library::parts::{Category, FieldType, PartDefinition, Value as TypedValue};
-use std::sync::Arc;
+use pcbcraft_engine::library::parts::{
+    Category, FieldType, MAX_DESCRIPTION_CHARS, MAX_KEYWORD_CHARS, MAX_KEYWORDS, MAX_LINK_LABEL_CHARS, MAX_LINK_URL_CHARS, MAX_LINKS, PartDefinition,
+    PartLink, Value as TypedValue,
+};
+use std::{collections::BTreeSet, sync::Arc};
 
 impl PcbApp {
     /// Render a retained document in the Items region, preserving invalid typed input until Apply/Reset.
@@ -58,6 +61,7 @@ impl PcbApp {
                 match &mut record {
                     Record::Part(part) => {
                         properties::text(ui, "Name", &mut part.name);
+                        metadata_form(ui, part, &mut doc.pending, &mut doc.error);
                         match pcbcraft_chrome::part_form::reference(
                             ui,
                             "Symbol",
@@ -219,6 +223,227 @@ impl PcbApp {
         }
     }
 }
+/// Description and keywords occupy one pending key each; link rows use positional keys
+/// because an uncommitted row can sit beside authored links. The form never writes rejected
+/// text to the record, so the engine's bounded replacement stays the only commit path.
+const DESCRIPTION_KEY: &str = "metadata/description";
+const KEYWORDS_KEY: &str = "metadata/keywords";
+
+fn link_key(index: usize, field: &str) -> String {
+    format!("metadata/link/{index}/{field}")
+}
+
+/// Number of displayed link rows, including pending rows that have no authored link yet.
+fn pending_link_rows(pending: &BTreeMap<String, String>) -> usize {
+    pending
+        .keys()
+        .filter_map(|key| key.strip_prefix("metadata/link/"))
+        .filter_map(|rest| rest.split('/').next())
+        .filter_map(|index| index.parse::<usize>().ok())
+        .map(|index| index + 1)
+        .max()
+        .unwrap_or(0)
+}
+
+/// Drop one link row and compact the pending keys of later rows so their text stays attached
+/// to the same visible row after the list shifts.
+fn remove_link(part: &mut PartDefinition, pending: &mut BTreeMap<String, String>, index: usize) {
+    if index < part.links.len() {
+        part.links.remove(index);
+    }
+    for field in ["label", "url"] {
+        pending.remove(&link_key(index, field));
+    }
+    let later: Vec<_> = pending
+        .keys()
+        .filter_map(|key| {
+            let rest = key.strip_prefix("metadata/link/")?;
+            let (number, field) = rest.split_once('/')?;
+            Some((number.parse::<usize>().ok()?, field.to_owned(), key.clone()))
+        })
+        .filter(|(number, _, _)| *number > index)
+        .collect();
+    for (number, field, key) in later {
+        if let Some(text) = pending.remove(&key) {
+            pending.insert(link_key(number - 1, &field), text);
+        }
+    }
+}
+
+/// Mirror the engine's one-line text bounds so rejected text stays editable instead of
+/// reaching the bounded session replacement. The engine remains authoritative on commit.
+fn metadata_text(field: &str, text: &str, limit: usize) -> Result<String, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() || trimmed.chars().count() > limit || trimmed.chars().any(char::is_control) {
+        Err(format!("{field} must be 1 to {limit} characters on one line"))
+    } else {
+        Ok(trimmed.to_owned())
+    }
+}
+
+/// Accept only bounded HTTP(S) references with a host, matching the native part validator.
+fn metadata_url(text: &str) -> Result<String, String> {
+    let url = metadata_text("Link URL", text, MAX_LINK_URL_CHARS)?;
+    let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
+    if host.is_empty() || url.chars().any(char::is_whitespace) {
+        return Err("Link URL must be an HTTP(S) URL; loading performs no fetch.".into());
+    }
+    Ok(url)
+}
+
+/// Validate the one-keyword-per-line draft before it replaces the authored list.
+fn metadata_keywords(lines: &[String]) -> Result<Vec<String>, String> {
+    if lines.len() > MAX_KEYWORDS {
+        return Err(format!("A part supports at most {MAX_KEYWORDS} keywords, not {}.", lines.len()));
+    }
+    let mut seen = BTreeSet::new();
+    let mut keywords = Vec::with_capacity(lines.len());
+    for line in lines {
+        let keyword = metadata_text("Keyword", line, MAX_KEYWORD_CHARS)?;
+        if !seen.insert(keyword.to_lowercase()) {
+            return Err(format!("Duplicate keyword {keyword:?} after trimming and case folding."));
+        }
+        keywords.push(keyword);
+    }
+    Ok(keywords)
+}
+
+/// Build one link from its row, checking it against the labels visible in every other row
+/// so a duplicate cannot be committed by editing either side of the pair.
+fn metadata_link(
+    index: usize,
+    label: &str,
+    url: &str,
+    part: &PartDefinition,
+    pending: &BTreeMap<String, String>,
+    rows: usize,
+) -> Result<PartLink, String> {
+    let label = metadata_text("Link label", label, MAX_LINK_LABEL_CHARS)?;
+    let url = metadata_url(url)?;
+    let duplicate = (0..rows).filter(|other| *other != index).any(|other| {
+        let other = pending
+            .get(&link_key(other, "label"))
+            .cloned()
+            .unwrap_or_else(|| part.links.get(other).map_or_else(String::new, |link| link.label.clone()));
+        other.trim().to_lowercase() == label.to_lowercase()
+    });
+    if duplicate {
+        return Err(format!("Duplicate link label {label:?} after trimming and case folding."));
+    }
+    Ok(PartLink { label, url })
+}
+
+/// Keep metadata near the part name behind one disclosure so compact hosts retain the
+/// existing Category row on screen while the same implicit replacement commits valid input.
+fn metadata_form(ui: &mut egui::Ui, part: &mut PartDefinition, pending: &mut BTreeMap<String, String>, error: &mut Option<String>) {
+    controls::collapsing(ui, "part_metadata", "Search metadata", false, None, |ui| metadata_fields(ui, part, pending, error));
+}
+
+/// Edit description, keywords and labeled links. Valid input reaches the draft immediately
+/// through the existing implicit replacement; invalid input stays in `pending` and visible
+/// in the field while publishing remains unavailable.
+fn metadata_fields(ui: &mut egui::Ui, part: &mut PartDefinition, pending: &mut BTreeMap<String, String>, error: &mut Option<String>) {
+    let mut description = pending.get(DESCRIPTION_KEY).cloned().unwrap_or_else(|| part.description.clone().unwrap_or_default());
+    if properties::text(ui, "Description", &mut description).changed() {
+        if description.trim().is_empty() {
+            part.description = None;
+            pending.remove(DESCRIPTION_KEY);
+            *error = None;
+        } else {
+            match metadata_text("Description", &description, MAX_DESCRIPTION_CHARS) {
+                Ok(value) => {
+                    part.description = Some(value);
+                    pending.remove(DESCRIPTION_KEY);
+                    *error = None;
+                }
+                Err(reason) => {
+                    pending.insert(DESCRIPTION_KEY.into(), description);
+                    *error = Some(reason);
+                }
+            }
+        }
+    }
+
+    let mut keywords = pending.get(KEYWORDS_KEY).cloned().unwrap_or_else(|| part.keywords.join("\n"));
+    let t = pcbcraft_chrome::Tokens::get();
+    let response = ui
+        .horizontal(|ui| {
+            let label = ui.add_sized(egui::vec2(72.0, t.control_height), egui::Label::new("Keywords").halign(egui::Align::Min));
+            ui.add(
+                egui::TextEdit::multiline(&mut keywords)
+                    .margin(egui::Margin::symmetric(t.space_8 as i8, t.space_4 as i8))
+                    .min_size(egui::vec2(ui.available_width(), t.control_height * 3.0))
+                    .hint_text("One keyword per line"),
+            )
+            .labelled_by(label.id)
+        })
+        .inner;
+    pcbcraft_chrome::automation::publish(ui, &response, "field:Keywords");
+    if response.changed() {
+        let lines: Vec<String> = keywords.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
+        if lines.is_empty() {
+            part.keywords.clear();
+            pending.remove(KEYWORDS_KEY);
+            *error = None;
+        } else {
+            match metadata_keywords(&lines) {
+                Ok(value) => {
+                    part.keywords = value;
+                    pending.remove(KEYWORDS_KEY);
+                    *error = None;
+                }
+                Err(reason) => {
+                    pending.insert(KEYWORDS_KEY.into(), keywords);
+                    *error = Some(reason);
+                }
+            }
+        }
+    }
+
+    properties::section(ui, "Links");
+    let rows = part.links.len().max(pending_link_rows(pending));
+    for index in 0..rows {
+        ui.push_id(("part_link", index), |ui| {
+            let label_key = link_key(index, "label");
+            let url_key = link_key(index, "url");
+            let mut label =
+                pending.get(&label_key).cloned().unwrap_or_else(|| part.links.get(index).map_or_else(String::new, |link| link.label.clone()));
+            let mut url = pending.get(&url_key).cloned().unwrap_or_else(|| part.links.get(index).map_or_else(String::new, |link| link.url.clone()));
+            let label_changed = properties::text(ui, &format!("Link label {}", index + 1), &mut label).changed();
+            let url_changed = properties::text(ui, &format!("Link URL {}", index + 1), &mut url).changed();
+            let remove = controls::button(ui, format!("Remove link {}", index + 1)).clicked();
+            if remove || (label_changed || url_changed) && label.trim().is_empty() && url.trim().is_empty() {
+                remove_link(part, pending, index);
+                *error = None;
+                return;
+            }
+            if label_changed || url_changed {
+                match metadata_link(index, &label, &url, part, pending, rows) {
+                    Ok(link) => {
+                        if index < part.links.len() {
+                            part.links[index] = link;
+                        } else {
+                            part.links.push(link);
+                        }
+                        pending.remove(&label_key);
+                        pending.remove(&url_key);
+                        *error = None;
+                    }
+                    Err(reason) => {
+                        pending.insert(label_key, label);
+                        pending.insert(url_key, url);
+                        *error = Some(reason);
+                    }
+                }
+            }
+        });
+    }
+    if controls::enabled_button(ui, rows < MAX_LINKS, "Add link").clicked() {
+        pending.entry(link_key(rows, "label")).or_default();
+        pending.entry(link_key(rows, "url")).or_default();
+    }
+}
+
 /// Edit both bounds of one power input in one Apply/undo. Pending text is session UI,
 /// never a native value; errors leave the previous authored range untouched. Applied keys
 /// go to `applied` so the caller clears them only after the draft accepts the edit.
