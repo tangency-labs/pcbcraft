@@ -765,9 +765,9 @@ stroke. Esc cancels unfinished geometry before exiting the tool.
 On copper, these tools create conductive linework: a rectangle outline becomes
 four connected segments. It participates in connectivity, short checks, DRC and
 fabrication and uses the ordinary copper selection/editing tools. Filled copper
-zones use **Layout → Route → Zone** to draw
-[editable zone outlines](copper-zone-outlines.md), with fill and refill remaining
-separate follow-ups. Non-copper shapes remain independent
+zones use **Layout → Place → Zone** to draw
+[editable zone outlines](copper-zone-outlines.md). **Pour copper** and **Remove
+pours** are in the **Board** group on the same ribbon. Non-copper shapes remain independent
 editable graphics: select a line, drag a vertex or segment, use M to move it, or
 Delete to remove it. Silkscreen, mask and paste artwork reaches its matching
 fabrication surface. Mechanical, fabrication, courtyard and user-layer graphics

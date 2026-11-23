@@ -14,7 +14,7 @@
 //! Mounting-side pads follow the placement side; silkscreen follows the top or bottom legend.
 //! X2 aperture functions describe the emitted features without changing their geometry.
 //! Copper object attributes describe intended nets and component pins.
-//! Track and Board Outline strokes remain linear; zones are not plotted.
+//! Track and Board Outline strokes remain linear. Export refuses boards with copper zones.
 mod object_attributes;
 
 use self::object_attributes::{Object, RoutedNets};
@@ -129,7 +129,13 @@ enum Aperture {
     Circle(i64),
     Rectangle(i64, i64),
     Obround(i64, i64),
-    Rounded { diameter: i64, core: RoundedCore, fill: RoundedFill },
+    /// A four-vertex regular polygon with a vertex on +X, used as the X3 key-pin diamond.
+    Diamond(i64),
+    Rounded {
+        diameter: i64,
+        core: RoundedCore,
+        fill: RoundedFill,
+    },
 }
 
 /// Aperture functions supported by the board writers (Ucamco Gerber 2026.05 §5.6.10).
@@ -144,6 +150,9 @@ enum ApertureFunction {
     Profile,
     /// A flash marking the placed part's reference point, independent of its pads.
     PartMain,
+    PartBody,
+    PartCourtyard,
+    PartPin,
 }
 
 const DELETE_APERTURE_FUNCTION: &str = "%TD.AperFunction*%\n";
@@ -159,6 +168,9 @@ impl ApertureFunction {
             Self::Material => "Material",
             Self::Profile => "Profile",
             Self::PartMain => "ComponentMain",
+            Self::PartBody => "ComponentOutline,Body",
+            Self::PartCourtyard => "ComponentOutline,Courtyard",
+            Self::PartPin => "ComponentPin",
         };
         let _ = writeln!(text, "%TA.AperFunction,{value}*%");
     }
@@ -375,6 +387,9 @@ impl Gerber {
             match *aperture {
                 Aperture::Circle(diameter) => {
                     let _ = writeln!(text, "%ADD{code}C,{}*%", mm(diameter, 6));
+                }
+                Aperture::Diamond(diameter) => {
+                    let _ = writeln!(text, "%ADD{code}P,{}X4X0.0*%", mm(diameter, 6));
                 }
                 Aperture::Rectangle(width, height) | Aperture::Obround(width, height) => {
                     let kind = if matches!(aperture, Aperture::Rectangle(..)) { 'R' } else { 'O' };
@@ -605,7 +620,7 @@ impl BoardView<'_> {
     /// Build every fabrication file for this board, in a fixed order, measured from the board's
     /// placement origin, and name that origin. Requires a board setup with copper layers and a
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
-    /// Circular copper is refused before generating any straight-only output.
+    /// Refuses circular copper and copper zones before generating any output files.
     /// Outputs include an independent non-plated drill file only when the board has such holes.
     /// Refuses a non-plated diameter that rounds to zero at the drill output's resolution.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
@@ -614,6 +629,9 @@ impl BoardView<'_> {
     /// A placed slot is refused until the plated machining output can preserve its geometry.
     pub fn fabrication(self) -> Result<Fabrication, String> {
         self.require_linear_copper()?;
+        if !self.zones().is_empty() {
+            return Err("Fabrication export is unavailable on boards with copper zones.".into());
+        }
         let board = &self.project().board;
         if board.footprints().iter().filter_map(|footprint| board.definition_for(footprint)).any(|definition| definition.has_plated_slots()) {
             return Err("Fabrication output cannot yet machine plated slots; no files were generated.".into());
@@ -661,7 +679,7 @@ impl BoardView<'_> {
                     let cardinal = placed_cardinal && cardinal_pads.contains(pad.number.as_str());
                     let has_pin = !unconnected.contains(pad.number.as_str());
                     let net = nets.pad_name(&footprint.id, &pad.number);
-                    Some((pad, cardinal, reference, has_pin, net))
+                    Some((pad, cardinal, reference.clone(), has_pin, net))
                 })
             })
             .collect();

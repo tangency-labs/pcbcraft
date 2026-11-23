@@ -134,6 +134,7 @@ impl Session {
         view.require_linear_copper().map_err(CommandError::Unavailable)?;
         let effective = view.effective_rules();
         let source = Source {
+            fill_authority: snapshot.fill_authority(),
             snapshot,
             session: self.clearance_identity.clone(),
             opening: self.history_root_revision(),

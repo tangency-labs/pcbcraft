@@ -7,10 +7,87 @@ pub(crate) trait Work: Send + 'static {
     fn source(&self) -> &CheckSource;
     fn progress(&self) -> CheckProgress;
     fn step(&mut self, budget: usize) -> bool;
+    /// Report after a batch by default. Indivisible batches may also report within the step.
+    fn step_reporting(&mut self, budget: usize, report: &mut dyn FnMut(CheckProgress)) -> bool {
+        let done = self.step(budget);
+        report(self.progress());
+        done
+    }
     fn take_output(&mut self) -> Result<Option<Self::Output>, String>;
+    /// Jobs with indivisible kernel work may sample the same host cancellation between calls.
+    fn cancellation(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        None
+    }
+    /// Browser work that cannot safely run in the foreground supplies an isolated request.
+    #[cfg(target_arch = "wasm32")]
+    fn browser_request(&mut self) -> Option<Result<String, String>> {
+        None
+    }
+    /// Some isolated work prepares a job that must subsequently resume incremental phases.
+    #[cfg(target_arch = "wasm32")]
+    fn browser_prepares(&self) -> bool {
+        false
+    }
+    /// Translate intermediate worker counts for jobs that expose that worker's progress.
+    #[cfg(target_arch = "wasm32")]
+    fn browser_progress(&self, _completed: usize) -> CheckProgress {
+        self.progress()
+    }
+    /// Decode a completed isolated result into the same engine output as native work.
+    #[cfg(target_arch = "wasm32")]
+    fn browser_response(&mut self, _response: &str) -> Result<Option<Self::Output>, String> {
+        Err("This job has no isolated browser result adapter".into())
+    }
+}
+impl Work for pcbcraft_engine::board::fill::FillJob {
+    type Output = std::sync::Arc<pcbcraft_engine::board::fill::Fill>;
+    fn source(&self) -> &CheckSource {
+        self.source()
+    }
+    fn progress(&self) -> CheckProgress {
+        self.progress()
+    }
+    fn step(&mut self, budget: usize) -> bool {
+        self.step(budget)
+    }
+    fn step_reporting(&mut self, budget: usize, report: &mut dyn FnMut(CheckProgress)) -> bool {
+        self.step_reporting(budget, report)
+    }
+    fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
+        self.take_result()
+    }
+    fn cancellation(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        Some(self.cancellation())
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_request(&mut self) -> Option<Result<String, String>> {
+        if self.is_ready() { None } else { Some(self.worker_request()) }
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_response(&mut self, response: &str) -> Result<Option<Self::Output>, String> {
+        self.accept_worker_response(response)
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_progress(&self, completed: usize) -> CheckProgress {
+        let progress = self.progress();
+        CheckProgress { completed: completed.min(progress.total), ..progress }
+    }
 }
 impl Work for CheckJob {
     type Output = Report;
+    #[cfg(target_arch = "wasm32")]
+    fn browser_request(&mut self) -> Option<Result<String, String>> {
+        self.browser_zone_request()
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_prepares(&self) -> bool {
+        true
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn browser_response(&mut self, response: &str) -> Result<Option<Report>, String> {
+        self.accept_browser_zones(response)?;
+        Ok(None)
+    }
     fn source(&self) -> &CheckSource {
         self.source()
     }
@@ -65,7 +142,6 @@ pub(crate) struct Request<J: Work = CheckJob> {
 /// Scheduling can fail before engine validation; only capacity indicates contention.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ScheduleFailure {
-    #[cfg(not(target_arch = "wasm32"))]
     Capacity,
     #[cfg(not(target_arch = "wasm32"))]
     Spawn,
@@ -167,6 +243,13 @@ impl<J: Work> Queue<J> {
     pub fn progress(&self) -> Option<CheckProgress> {
         self.active.as_ref().and_then(Running::progress)
     }
+    /// Do not display a canceled predecessor's progress while its replacement waits.
+    pub fn progress_for(&self, id: u64) -> Option<CheckProgress> {
+        if let Some(pending) = &self.pending {
+            return (pending.id == id).then(|| pending.job.progress());
+        }
+        self.active.as_ref().filter(|running| running.id() == Some(id)).and_then(Running::progress)
+    }
     /// Reject edits/reopen independently of which view currently has focus.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn authority_current(&self, session: &pcbcraft_engine::Session) -> bool {
@@ -239,28 +322,85 @@ mod incremental {
     pub(super) struct Running<J: Work> {
         request: Option<Request<J>>,
         canceled: bool,
+        #[cfg(target_arch = "wasm32")]
+        worker: Option<u32>,
+        #[cfg(target_arch = "wasm32")]
+        failure: Option<String>,
     }
     impl<J: Work> Running<J> {
-        /// Retain the captured engine job directly; browser execution serializes no project.
+        /// Retain incremental jobs directly; kernel jobs capture one same-build isolated request.
         pub fn start(request: Request<J>) -> Self {
-            Self { request: Some(request), canceled: false }
+            #[cfg(target_arch = "wasm32")]
+            let mut request = request;
+            #[cfg(target_arch = "wasm32")]
+            let (worker, failure) = match request.job.browser_request() {
+                Some(Ok(payload)) => match super::browser_worker::start(&payload) {
+                    Ok(id) => (Some(id), None),
+                    Err(error) => (None, Some(error)),
+                },
+                Some(Err(error)) => (None, Some(error)),
+                None => (None, None),
+            };
+            Self {
+                request: Some(request),
+                canceled: false,
+                #[cfg(target_arch = "wasm32")]
+                worker,
+                #[cfg(target_arch = "wasm32")]
+                failure,
+            }
         }
         /// Captured source, absent after an incremental request has been consumed.
         pub fn source(&self) -> Option<&CheckSource> {
             self.request.as_ref().map(|r| r.job.source())
         }
+        /// Identify the request whose progress can still be copied.
+        pub fn id(&self) -> Option<u64> {
+            self.request.as_ref().map(|request| request.id)
+        }
         /// Signal cooperative cancellation without waiting for the current batch.
         pub fn cancel(&mut self) {
             self.canceled = true;
+            #[cfg(target_arch = "wasm32")]
+            if let Some(worker) = self.worker.take() {
+                super::browser_worker::cancel(worker);
+            }
+            if let Some(cancel) = self.request.as_ref().and_then(|r| r.job.cancellation()) {
+                cancel.store(true, std::sync::atomic::Ordering::Release);
+            }
         }
         /// Copy the latest progress when available; never block the caller.
         pub fn progress(&self) -> Option<CheckProgress> {
-            self.request.as_ref().map(|r| r.job.progress())
+            let request = self.request.as_ref()?;
+            #[cfg(target_arch = "wasm32")]
+            if let Some(id) = self.worker {
+                return Some(request.job.browser_progress(super::browser_worker::progress(id)));
+            }
+            Some(request.job.progress())
         }
         /// Advance one engine batch, publishing only a complete report or cancellation.
         fn poll_batch(&mut self) -> Option<Completion<J::Output>> {
+            #[cfg(target_arch = "wasm32")]
+            if !self.canceled && (self.worker.is_some() || self.failure.is_some()) {
+                let response = if let Some(error) = self.failure.take() {
+                    Err(error)
+                } else {
+                    let id = self.worker?;
+                    let response = super::browser_worker::poll(id)?;
+                    self.worker = None;
+                    response
+                };
+                let mut request = self.request.take()?;
+                let schedule_failure = response.as_ref().err().is_some_and(|e| e.contains("worker capacity")).then_some(ScheduleFailure::Capacity);
+                let result = response.and_then(|response| request.job.browser_response(&response));
+                if request.job.browser_prepares() && result.is_ok() {
+                    self.request = Some(request);
+                } else {
+                    return Some(Completion { id: request.id, source: request.job.source().clone(), report: result, schedule_failure });
+                }
+            }
             let request = self.request.as_mut()?;
-            if !self.canceled && !request.job.step(256) {
+            if !self.canceled && !request.job.step_reporting(256, &mut |_| {}) {
                 return None;
             }
             let mut request = self.request.take()?;
@@ -290,7 +430,19 @@ mod incremental {
             self.poll_batch()
         }
     }
+    #[cfg(target_arch = "wasm32")]
+    impl<J: Work> Drop for Running<J> {
+        /// Closing a view retires only its worker, with no join or foreground kernel work.
+        fn drop(&mut self) {
+            if let Some(worker) = self.worker.take() {
+                super::browser_worker::cancel(worker);
+            }
+        }
+    }
 }
+
+#[cfg(target_arch = "wasm32")]
+mod browser_worker;
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
@@ -336,7 +488,7 @@ mod native {
     impl<J: Work> Running<J> {
         /// Own a snapshot on one worker; its one-result channel never blocks publication.
         pub fn start(mut request: Request<J>) -> Self {
-            let cancel = Arc::new(AtomicBool::new(false));
+            let cancel = request.job.cancellation().unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
             let progress = Arc::new(Mutex::new(request.job.progress()));
             let (tx, result) = mpsc::sync_channel(1);
             let (stop, update) = (cancel.clone(), progress.clone());
@@ -354,10 +506,11 @@ mod native {
                         if stop.load(Ordering::Relaxed) {
                             break Ok(None);
                         }
-                        let done = request.job.step(256);
-                        if let Ok(mut p) = update.lock() {
-                            *p = request.job.progress();
-                        }
+                        let done = request.job.step_reporting(256, &mut |progress| {
+                            if let Ok(mut p) = update.lock() {
+                                *p = progress;
+                            }
+                        });
                         if done {
                             break request.job.take_output();
                         }
@@ -374,6 +527,10 @@ mod native {
         /// Captured source, absent after an incremental request has been consumed.
         pub fn source(&self) -> Option<&CheckSource> {
             Some(&self.source)
+        }
+        /// Identify the request whose progress this worker owns.
+        pub fn id(&self) -> Option<u64> {
+            Some(self.id)
         }
         /// Signal cooperative cancellation without waiting for the current batch.
         pub fn cancel(&mut self) {
@@ -687,10 +844,13 @@ mod tests {
         let s = session();
         let mut q = Queue::default();
         q.submit(request(&s, 1));
+        assert!(q.progress_for(1).is_some());
         for id in 2..100 {
             q.submit(request(&s, id));
             assert!(q.active.is_some());
             assert!(q.pending.is_some());
+            assert!(q.progress_for(id - 1).is_none());
+            assert!(q.progress_for(id).is_some());
         }
         assert_eq!(q.replaced, 97);
         let old = q.poll().unwrap();
@@ -721,6 +881,7 @@ mod tests {
         use std::time::{Duration, Instant};
         let s = session();
         let mut running = native::Running::start(request(&s, 1));
+        assert_eq!(running.id(), Some(1));
         assert!(running.source().unwrap().is_current(&s));
         let _ = running.progress();
         let deadline = Instant::now() + Duration::from_secs(5);

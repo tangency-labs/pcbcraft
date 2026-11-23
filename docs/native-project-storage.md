@@ -1390,7 +1390,11 @@ folders used a plain JSON `project.pc` entry point, and split archives used
 `.pc.zip` with container version 2. Older single-document projects could also
 use `.pc` for plain JSON or container version 1. Normal desktop, browser and
 headless opens accept the immediately previous split layouts without rewriting
-their source files. Previews are read-only too. On desktop, first Save upgrades
+their saved project documents. Closing without saving does not publish an upgrade.
+A settled archive needs no lock or journal on Open; a folder can acquire the
+persistent sibling lock described under [folder recovery](#folder-publication-and-recovery).
+Completing an interrupted folder save on Open is recovery, not a format upgrade.
+Previews are read-only too. On desktop, first Save upgrades
 a split folder in place: one journaled transaction installs `project.json`, removes
 `project.pc` and migrates any flat board payload. Desktop Save of a previous split
 archive replaces it with a verified container-v3 package at its existing path.
@@ -1471,9 +1475,11 @@ The output directory must not already exist. The generator uses the production
 encoder; regression tests compare document boundaries, library-copy lifetimes,
 archive round trips and the compatibility boundary. The separate
 [frozen archive corpus](../crates/storage/tests/fixtures/native-open/README.md)
-checks that normal native Open still reads previously saved bytes. When a release
-adds a format, append fixtures saved by that release rather than regenerating the
-existing corpus. See [release notes](../CHANGELOG.md).
+checks that normal native Open still reads previously saved bytes and preserves
+logical connectivity and object counts. The two previous split archive forms
+are also checked after explicit conversion. When a release adds a format,
+append fixtures saved by that release rather than regenerating the existing
+corpus. See [release notes](../CHANGELOG.md).
 
 ## Design references
 

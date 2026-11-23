@@ -234,6 +234,14 @@ pub struct Copper {
     pub vias: BTreeMap<Uuid, usize>,
 }
 
+/// Physical copper and its unambiguous intended nets for one presentation snapshot.
+pub struct CopperPresentation {
+    pub copper: Copper,
+    pub names: BTreeMap<Uuid, String>,
+    /// Active persistent net per physical island. Unresolved or conflicting islands have no ID.
+    pub net_ids: Vec<Option<Uuid>>,
+}
+
 /// Resolved pad geometry and net membership used by connectivity, DRC and footprint edits.
 #[derive(Clone)]
 pub(super) struct Land {
@@ -272,6 +280,9 @@ impl<'a> BoardView<'a> {
     /// no copper and stay isolated. Circular copper returns an unsupported-geometry error.
     pub fn copper(self) -> Result<Copper, String> {
         self.require_linear_copper()?;
+        if let Some(Ok(fill)) = self.filled_zones() {
+            return Ok(fill.copper.clone());
+        }
         Ok(islands(&lands(self), self.tracks(), self.vias()).0)
     }
 
@@ -303,12 +314,22 @@ impl<'a> BoardView<'a> {
     /// Resolve physical islands and complete authored/contact-derived intent in one contact pass.
     /// Circular copper returns an error before any partial geometry is resolved.
     pub fn copper_with_nets(self) -> Result<(Copper, BTreeMap<Uuid, String>), String> {
+        let projected = self.copper_presentation(false)?;
+        Ok((projected.copper, projected.names))
+    }
+
+    /// Resolve optional persistent colors in the same contact pass as the existing display names.
+    /// When IDs are omitted, no additional registry reconciliation is performed.
+    pub fn copper_presentation(self, include_ids: bool) -> Result<CopperPresentation, String> {
         self.require_linear_copper()?;
         let lands = lands(self);
         let (tracks, vias) = (self.tracks(), self.vias());
-        let (copper, members) = islands(&lands, tracks, vias);
+        let (copper, members) = match self.filled_zones() {
+            Some(Ok(fill)) => (fill.copper.clone(), fill.members.clone()),
+            _ => islands(&lands, tracks, vias),
+        };
         let members = if vias.iter().any(|v| v.net_assignment.is_some()) { with_pad_contacts(&lands, &copper, members) } else { members };
-        let intent = self.project().board_intent_memberships();
+        let intent = if include_ids { self.project().accepted_net_memberships() } else { self.project().board_intent_memberships() };
         let intrinsic = super::via_nets::node_membership(self.project(), &lands, tracks.len(), vias, &intent);
         let island_net: Vec<_> = members
             .iter()
@@ -321,11 +342,18 @@ impl<'a> BoardView<'a> {
                 if unresolved || ids.len() != 1 {
                     return None;
                 }
-                intent.names.get(ids.first()?).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone()))
+                ids.first().copied()
             })
             .collect();
+        let net_ids = if include_ids {
+            let ids: BTreeMap<_, _> = intent.ids.iter().map(|(&id, &member)| (member, id)).collect();
+            island_net.iter().map(|member| member.and_then(|index| ids.get(&index).copied())).collect()
+        } else {
+            Vec::new()
+        };
         let mut nets = BTreeMap::new();
-        for (nodes, name) in members.iter().zip(island_net) {
+        for (nodes, member) in members.iter().zip(island_net) {
+            let name = member.and_then(|member| intent.names.get(&member).cloned().or_else(|| nodes.iter().find_map(|n| lands.get(*n)?.net.clone())));
             let Some(name) = name else { continue };
             for node in nodes {
                 if let Some(index) = node.checked_sub(lands.len()) {
@@ -336,7 +364,7 @@ impl<'a> BoardView<'a> {
                 }
             }
         }
-        Ok((copper, nets))
+        Ok(CopperPresentation { copper, names: nets, net_ids })
     }
 }
 

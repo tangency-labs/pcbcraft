@@ -5,7 +5,7 @@ use std::{io, time::Duration};
 
 use craft_control::loopback::{Connection, Token};
 use pcbcraft_engine::{
-    Session,
+    CommandError, Session,
     command_api::{self, COMMAND_API_VERSION, DEPRECATIONS},
     error_codes::ErrorCode,
 };
@@ -188,11 +188,22 @@ view., window., arrangement., app. and file. commands change its views, windows,
 /// What an open editor provides to the live connection. The editor runs on its own thread
 /// and owns every policy: which commands may run now, and how window commands act.
 pub trait Editor {
+    /// Interactive removal retires the addressed board's workers as well as clearing engine
+    /// material. Hosts without such work use the ordinary session implementation.
+    fn zone_unfill(&mut self, _params: &Value) -> Option<Result<Value, CommandError>> {
+        None
+    }
+    /// An interactive host schedules pouring through its view-owned worker.
+    fn zone_refill(&mut self, _params: &Value) -> Option<Result<Value, CommandError>> {
+        None
+    }
     /// Run opt-in UI automation through the live host, with native input lifecycle ownership.
     /// Implementations without input automation retain an explicit refusal.
     fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, Failure> {
         Err(Failure::new(ErrorCode::Unavailable, "This editor does not support UI input automation"))
     }
+    /// Apply any host-owned preference returned by a successful session Undo or Redo.
+    fn restore_local_history(&mut self) {}
     /// The editor's project session, which document commands edit directly.
     fn session(&mut self) -> &mut Session;
     /// Why `command` can't run now (a dialog or file operation, say), or `None` when it can.
@@ -205,7 +216,7 @@ pub trait Editor {
     /// The editor's windows, views, panels and settings, without project data.
     fn inspect(&self) -> Value;
     /// Run one window command through the handlers the editor's own controls use. A failure
-    /// leaves the windows as they were; success never changes the project or its history.
+    /// leaves the windows as they were. Editable local preferences may enter runtime history.
     fn run_window_command(&mut self, id: &str, params: &Value) -> Result<(), Failure>;
 }
 
@@ -307,6 +318,19 @@ fn call_editor_with_package_commit_limit(
             if let Some(reason) = editor.refusal(id) {
                 return Err(Failure::new(ErrorCode::Unavailable, reason));
             }
+            if matches!(id, pcbcraft_engine::UNFILL_ZONES | pcbcraft_engine::REFILL_ZONES) {
+                check_deferred_version(id, params)?;
+            }
+            if id == pcbcraft_engine::UNFILL_ZONES
+                && let Some(result) = editor.zone_unfill(&params["params"])
+            {
+                return result.map_err(Failure::from);
+            }
+            if id == pcbcraft_engine::REFILL_ZONES
+                && let Some(result) = editor.zone_refill(&params["params"])
+            {
+                return result.map_err(Failure::from);
+            }
             if id == pcbcraft_engine::COMPLETE_PACKAGES {
                 check_deferred_version(id, params)?;
                 let prepared = editor.session().prepare_package_completion(&params["params"])?.finish()?;
@@ -318,6 +342,9 @@ fn call_editor_with_package_commit_limit(
             }
             if !is_window_command(id) {
                 let result = call_session(editor.session(), method, params)?;
+                if matches!(id, "edit.undo" | "edit.redo") {
+                    editor.restore_local_history();
+                }
                 // This dry run cannot publish an edit. Refuse an oversized reply before the
                 // host writes its frame, rather than truncating the proposed documents.
                 if id == pcbcraft_engine::SET_SYMBOL_FIELDS

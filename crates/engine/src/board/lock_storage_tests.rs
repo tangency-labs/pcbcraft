@@ -63,7 +63,7 @@ fn assert_refused_legacy_retire(original: &Arc<Project>, component: u64, locked_
     let revision = session.revision();
     let root = session.history_root_revision();
     let history = |session: &Session| {
-        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.as_ref().map(Arc::as_ptr)).collect::<Vec<_>>())
+        [&session.undo, &session.redo].map(|entries| entries.iter().map(|entry| entry.project().map(Arc::as_ptr)).collect::<Vec<_>>())
     };
     let before_history = history(&session);
     assert!(before_history.iter().all(|entries| entries.iter().any(Option::is_some)));
@@ -1054,7 +1054,10 @@ fn assert_clipboard_refusal(session: &mut Session, command: &str, args: &Value, 
     let root = session.history_root_revision();
     let undo = session.undo.clone();
     let redo = session.redo.clone();
-    assert!(undo.iter().any(Option::is_some) && redo.iter().any(Option::is_some), "{command} must exercise both history stacks");
+    assert!(
+        undo.iter().any(|entry| entry.project().is_some()) && redo.iter().any(|entry| entry.project().is_some()),
+        "{command} must exercise both history stacks"
+    );
     let error = if apply_directly { session.apply(command, args).unwrap_err() } else { session.execute(command, args).unwrap_err() };
     assert!(matches!(&error, crate::CommandError::InvalidParams(_)), "{command}: {error}");
     assert!(error.to_string().contains("footprint locks are not supported by the board clipboard format"), "{command}: {error}");
@@ -1066,11 +1069,7 @@ fn assert_clipboard_refusal(session: &mut Session, command: &str, args: &Value, 
     for (previous, current) in [(&undo, &session.undo), (&redo, &session.redo)] {
         assert_eq!(previous.len(), current.len(), "{command}");
         for (before, after) in previous.iter().zip(current) {
-            match (before, after) {
-                (Some(before), Some(after)) => assert!(Arc::ptr_eq(before, after), "{command}"),
-                (None, None) => (),
-                _ => panic!("{command} changed a history entry"),
-            }
+            assert!(before.same_entry(after), "{command} changed a history entry");
         }
     }
 }
