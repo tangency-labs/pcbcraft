@@ -182,7 +182,14 @@ impl PcbApp {
         if doc.has_unapplied() {
             return Err("Apply or reset typed fields before replacing the part draft.".into());
         }
-        doc.session.replace(revision, record)
+        let discard_description = doc.has_applied_description();
+        let result = doc.session.replace(revision, record);
+        // An applied description buffer is display-only; drop it only once the draft accepts the
+        // replacement so a refused (for example oversized) edit keeps what was typed.
+        if result.is_ok() && discard_description {
+            doc.discard_applied_description();
+        }
+        result
     }
 }
 /// Exact selection never silently falls back to the latest record or another source.

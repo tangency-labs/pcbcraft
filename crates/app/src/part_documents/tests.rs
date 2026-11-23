@@ -1239,3 +1239,55 @@ fn rejected_link_edit_keeps_label_and_url_until_the_draft_accepts_it() {
     assert_eq!(part.links[0].label, "Datasheet");
     assert_eq!(part.links[0].url, "https://example.com/ds/v2");
 }
+
+/// A valid description or keyword edit that the bounded draft refuses must keep the raw text in
+/// `pending`; the applied-key cleanup is only allowed after `Session::replace` succeeds.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn rejected_keyword_and_description_edits_keep_their_typed_text() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    use pcbcraft_engine::library::sources::MAX_FILE_BYTES;
+
+    for field in ["Description", "Keywords"] {
+        let (mut app, _temp, id) = fixture();
+        let revision = app.library_editors.parts[&id].session.revision();
+        let base = app.library_editors.parts[&id].session.record().clone();
+        let mut candidate = base.clone();
+        let Record::Part(part) = &mut candidate else { panic!() };
+        match field {
+            "Description" => part.description = Some("A deliberately long low-ESR ceramic description".into()),
+            _ => part.keywords = vec!["specific-keyword".into()],
+        }
+        let growth = serde_json::to_vec(&candidate).unwrap().len() - serde_json::to_vec(&base).unwrap().len();
+        assert!(growth > 8, "{field} must add more bytes than the slack below");
+        let slack = growth / 2;
+        let mut padded = base.clone();
+        let Record::Part(part) = &mut padded else { panic!() };
+        part.license.push_str(&"x".repeat(MAX_FILE_BYTES - slack - serde_json::to_vec(&base).unwrap().len()));
+        assert!(serde_json::to_vec(&padded).unwrap().len() <= MAX_FILE_BYTES);
+        app.replace_part_document(id, revision, padded.clone()).unwrap();
+
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1000., 900.))
+            .with_context_setup(pcbcraft_chrome::install)
+            .build_ui_state(move |ui, app: &mut PcbApp| app.part_document_form(ui, id), app);
+        h.run();
+        h.get_by_label("Expand Search metadata").click();
+        h.run();
+        h.get_by_label(field).click();
+        h.run();
+        h.get_by_label(field).type_text(match field {
+            "Description" => "A deliberately long low-ESR ceramic description",
+            _ => "specific-keyword",
+        });
+        h.run();
+        let doc = &h.state().library_editors.parts[&id];
+        let key = match field {
+            "Description" => "metadata/description",
+            _ => "metadata/keywords",
+        };
+        assert!(doc.pending.contains_key(key), "{field}: {:?}", doc.pending);
+        assert_eq!(doc.session.record(), &padded, "{field} must not move the refused draft");
+        assert!(doc.error.as_deref().is_some_and(|error| error.contains("1 MiB")), "{field}: {:?}", doc.error);
+    }
+}

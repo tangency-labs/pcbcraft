@@ -15,7 +15,33 @@ impl Document {
             Record::Part(part) => part.description.as_deref(),
             Record::Orderable(_) => None,
         };
-        self.pending.iter().any(|(key, text)| key.as_str() != DESCRIPTION_KEY || !description_applied(text, stored))
+        let keywords = match self.session.record() {
+            Record::Part(part) => part.keywords.as_slice(),
+            Record::Orderable(_) => &[][..],
+        };
+        self.pending.iter().any(|(key, text)| match key.as_str() {
+            DESCRIPTION_KEY => !description_applied(text, stored),
+            KEYWORDS_KEY => !keyword_applied(text, keywords),
+            _ => true,
+        })
+    }
+
+    /// Whether the pending description is only an active editing buffer that already matches the
+    /// current draft. Such a buffer can be discarded after a successful record change, but must be
+    /// kept when the change is refused.
+    pub(crate) fn has_applied_description(&self) -> bool {
+        let stored = match self.session.record() {
+            Record::Part(part) => part.description.as_deref(),
+            Record::Orderable(_) => None,
+        };
+        self.pending.get(DESCRIPTION_KEY).is_some_and(|raw| description_applied(raw, stored))
+    }
+
+    /// Drop the applied description buffer after a successful record change.
+    pub(crate) fn discard_applied_description(&mut self) {
+        if self.has_applied_description() {
+            self.pending.remove(DESCRIPTION_KEY);
+        }
     }
 }
 
@@ -65,7 +91,12 @@ impl PcbApp {
                 ui.horizontal(|ui| {
                     for (label, redo) in [("Undo", false), ("Redo", true)] {
                         if controls::enabled_button(ui, !doc.has_unapplied(), label).clicked() {
+                            let discard_description = doc.has_applied_description();
                             doc.error = doc.session.history(revision, redo).err();
+                            // Keep the active buffer when history refuses the change.
+                            if doc.error.is_none() && discard_description {
+                                doc.discard_applied_description();
+                            }
                             record = doc.session.record().clone();
                         }
                     }
@@ -140,8 +171,14 @@ impl PcbApp {
                 }
                 if let Some(field) = clear_field.take() {
                     if !doc.has_unapplied() {
+                        let discard_description = doc.has_applied_description();
                         match record.select_reference(&field, None, catalog) {
-                            Ok(candidate) => record = candidate,
+                            Ok(candidate) => {
+                                if discard_description {
+                                    doc.discard_applied_description();
+                                }
+                                record = candidate;
+                            }
                             Err(error) => doc.error = Some(error),
                         }
                     } else {
@@ -261,6 +298,13 @@ fn description_applied(raw: &str, stored: Option<&str>) -> bool {
         return stored.is_none();
     }
     trimmed.chars().count() <= MAX_DESCRIPTION_CHARS && !trimmed.chars().any(char::is_control) && stored == Some(trimmed)
+}
+
+/// Whether a raw keywords buffer normalizes to the stored list, so it is an active edit rather
+/// than unapplied input (the normalized value has already reached the draft).
+fn keyword_applied(raw: &str, stored: &[String]) -> bool {
+    let lines: Vec<String> = raw.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
+    lines == stored
 }
 
 /// Number of displayed link rows, including pending rows that have no authored link yet.
@@ -442,15 +486,13 @@ fn metadata_fields(
             match metadata_text("Description", &description, MAX_DESCRIPTION_CHARS) {
                 Ok(value) => {
                     part.description = Some(value.clone());
-                    if description == value {
+                    // Keep the raw text in `pending` until the bounded session accepts the draft:
+                    // a refused replacement must not discard what was typed. A buffer that already
+                    // normalizes to the stored value is an active edit (not unapplied input), and
+                    // is only queued for clearing once the field loses focus or needs no normalization.
+                    pending.insert(DESCRIPTION_KEY.into(), description.clone());
+                    if !response.has_focus() || description == value {
                         applied.push(DESCRIPTION_KEY.into());
-                    } else {
-                        // Keep the raw text while editing so trailing spaces stay visible;
-                        // it normalizes to the committed value and is not an unapplied edit.
-                        pending.insert(DESCRIPTION_KEY.into(), description);
-                        if !response.has_focus() {
-                            applied.push(DESCRIPTION_KEY.into());
-                        }
                     }
                     *error = None;
                 }
@@ -483,13 +525,16 @@ fn metadata_fields(
         let lines: Vec<String> = keywords.lines().map(str::trim).filter(|line| !line.is_empty()).map(str::to_owned).collect();
         if lines.is_empty() {
             part.keywords.clear();
-            pending.remove(KEYWORDS_KEY);
+            pending.insert(KEYWORDS_KEY.into(), keywords);
+            applied.push(KEYWORDS_KEY.into());
             *error = None;
         } else {
             match metadata_keywords(&lines) {
                 Ok(value) => {
                     part.keywords = value;
-                    pending.remove(KEYWORDS_KEY);
+                    // As with links, keep the typed text until the bounded draft accepts it.
+                    pending.insert(KEYWORDS_KEY.into(), keywords);
+                    applied.push(KEYWORDS_KEY.into());
                     *error = None;
                 }
                 Err(reason) => {
