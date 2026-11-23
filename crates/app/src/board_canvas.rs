@@ -198,7 +198,7 @@ pub(super) fn show(
     let response = ui.allocate_rect(rect, Sense::CLICK | Sense::DRAG);
     let enabled = owner_enabled && !egui::Popup::is_any_open(ui.ctx());
     let route_menu_open = state.tracks.tool && response.context_menu_opened();
-    if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) {
+    if secondary_pressed_here(&response) {
         state.context_menu_allowed = idle;
     }
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Pane, true, label));
@@ -1146,8 +1146,8 @@ fn reference_bounds(
 }
 
 /// A secondary press on this canvas cancels its gesture. A press over another pane, such as a
-/// right-drag pan there, leaves this canvas's move, placement or reference drag running.
-fn secondary_pressed_here(response: &Response) -> bool {
+/// right-drag pan there, leaves this canvas's tools and gestures running.
+pub(super) fn secondary_pressed_here(response: &Response) -> bool {
     response.ctx.input(|input| {
         input.pointer.button_pressed(PointerButton::Secondary) && input.pointer.interact_pos().is_some_and(|pos| response.rect.contains(pos))
     })

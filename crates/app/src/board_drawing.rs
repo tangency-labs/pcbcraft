@@ -302,7 +302,7 @@ pub(super) fn interact(
         state.press = None;
     }
 
-    if ui.input(|input| input.pointer.button_pressed(PointerButton::Secondary)) && (state.tool.is_some() || state.edit.is_some()) {
+    if crate::board_canvas::secondary_pressed_here(response) && (state.tool.is_some() || state.edit.is_some()) {
         state.escape();
         out.consumed = true;
         return out;
