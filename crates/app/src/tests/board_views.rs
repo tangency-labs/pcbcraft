@@ -1364,10 +1364,26 @@ fn right_drag_pan_in_the_other_pane_keeps_the_copper_move() {
     let track = super::board_tracks::add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
     click(&mut h, "View");
     click(&mut h, "Split editor views");
-    let focused = h.state().views.active.id();
-    let other = h.state_mut().views.other_mut().id();
+    // The split may restore a pane that kept another workspace; show the board in both panes and
+    // address them by the canvas labels actually painted.
+    {
+        let app = h.state_mut();
+        for pane in app.views.all_mut().filter(|pane| pane.workspace != Workspace::Board) {
+            pane.switch(Workspace::Board, &app.session);
+        }
+    }
+    h.run();
+    let panes: Vec<ViewId> = (0..8).map(ViewId).filter(|id| h.query_by_label(&format!("PCB canvas {}", id.0 + 1)).is_some()).collect();
+    assert_eq!(panes.len(), 2, "two board panes are painted: {panes:?}");
+    let (focused, other) = (panes[0], panes[1]);
+    let ctx = h.ctx.clone();
+    h.state_mut().activate_editor(&ctx, focused);
+    let center = Point { x_nm: 5_080_000, y_nm: 2_540_000 };
+    h.state_mut().views.view_mut(focused).unwrap().camera.center_on(center);
+    h.run();
+    assert_eq!(h.state().views.active.id(), focused);
     let rect = |h: &Harness<'_, PcbApp>, id: ViewId| h.get_by_label(&format!("PCB canvas {}", id.0 + 1)).rect();
-    let middle = h.state().views.active.camera.screen(Point { x_nm: 5_080_000, y_nm: 2_540_000 }, rect(&h, focused));
+    let middle = h.state().views.active.camera.screen(center, rect(&h, focused));
     click_canvas_at(&mut h, middle);
     assert_eq!(h.state().views.active.board.tracks.selected, std::collections::BTreeSet::from([track]));
     let revision = h.state().session.revision();
