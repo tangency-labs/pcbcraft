@@ -287,6 +287,12 @@ impl<J: Work> Running<J> {
             Self::Native(running) => running.source(),
         }
     }
+    fn id(&self) -> Option<u64> {
+        match self {
+            Self::Incremental(running) => running.id(),
+            Self::Native(running) => running.id(),
+        }
+    }
     fn cancel(&mut self) {
         match self {
             Self::Incremental(running) => running.cancel(),
