@@ -579,7 +579,7 @@ fn saving(ui: &mut Ui, data: &mut PageData<'_>) {
         });
         settings::hint(
             ui,
-            "Saves a project that already has a folder or .pc file after it has been changed, the same way Save does. A project changed by another program is not overwritten.",
+            "Saves a project that already has a folder or .pc file after it has been changed, the same way Save does. Older project formats wait for an explicit Save first to upgrade, and a project changed by another program is not overwritten.",
         );
     });
     *data.saving = (draft != effective).then_some(draft);

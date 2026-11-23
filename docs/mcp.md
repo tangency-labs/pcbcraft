@@ -251,7 +251,10 @@ edits or reach file controls. Headless sessions cannot run them.
 
 `app.set_preferences` changes personal editor settings, including the
 Preferences → Saving intervals `autosave_minutes` and `save_to_project_minutes`;
-it never changes project documents or project Undo.
+it never changes project documents or project Undo, and writes no project file
+during the call. Enabling `save_to_project_minutes` lets the editor later save
+an eligible dirty project to its existing location on that schedule without
+another command.
 
 ## Command API version
 

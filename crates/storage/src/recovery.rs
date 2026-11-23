@@ -52,6 +52,8 @@ pub const FORMAT: &str = "pcbcraft-recovery/2";
 const MAGIC: &[u8] = b"pcbcraft-recovery/2\n";
 /// Room for the version and framed snapshot header, in addition to the bounded project archive.
 const SNAPSHOT_OVERHEAD_BYTES: usize = 4096;
+/// Maximum payload bytes of a framed recovery header within [`SNAPSHOT_OVERHEAD_BYTES`].
+const MAX_HEADER_BYTES: usize = SNAPSHOT_OVERHEAD_BYTES - MAGIC.len() - 36;
 const REMOVED_ENTRY: &str = "The recovery journal was removed; start a new recovery entry to record further edits.";
 /// Overrides the recovery folder, for tests, portable installs and headless runs.
 pub const DIR_VARIABLE: &str = "PCBCRAFT_RECOVERY_DIR";
@@ -271,6 +273,11 @@ fn frame(payload: &[u8]) -> Result<Vec<u8>, String> {
 /// Read the next frame. `Ok(None)` is a clean end of file; `Err` is a short, oversized or
 /// damaged frame, which is what a crash during an append leaves behind.
 fn read_frame(reader: &mut impl Read) -> Result<Option<Vec<u8>>, String> {
+    read_frame_bounded(reader, MAX_FRAME_BYTES)
+}
+
+/// Read the next frame, rejecting any declared payload length above `max_bytes` before allocating.
+fn read_frame_bounded(reader: &mut impl Read, max_bytes: usize) -> Result<Option<Vec<u8>>, String> {
     let mut length = [0; 4];
     let mut filled = 0;
     while filled < length.len() {
@@ -283,7 +290,7 @@ fn read_frame(reader: &mut impl Read) -> Result<Option<Vec<u8>>, String> {
         }
     }
     let length = usize::try_from(u32::from_le_bytes(length)).map_err(|_| "record exceeds its size limit".to_owned())?;
-    if length > MAX_FRAME_BYTES {
+    if length > max_bytes {
         return Err("record exceeds its size limit".to_owned());
     }
     let mut payload = vec![0; length];
@@ -774,27 +781,26 @@ impl Mailbox {
         if state.exited {
             return;
         }
-        let tail = state.queue.iter().rev().take_while(|m| !matches!(m, Message::Sync(_))).count();
-        let compactable = self.coalesce
-            || (!matches!(message, Message::Committed(_)) && state.queue.iter().rev().take(tail).all(|m| !matches!(m, Message::Committed(_))));
-        let message = if compactable && tail >= PENDING_LIMIT {
-            match message {
-                Message::Opened(project) | Message::Snapshot(project) => Message::Opened(project),
-                Message::Committed(edit) => Message::Opened(edit.project),
-                Message::Sync(_) => {
-                    state.queue.push_back(message);
-                    self.ready.notify_one();
-                    return;
-                }
-            }
-        } else {
+        if matches!(message, Message::Sync(_)) || (!self.coalesce && matches!(message, Message::Committed(_))) {
             state.queue.push_back(message);
             self.ready.notify_one();
             return;
-        };
-        let retained = state.queue.len() - tail;
-        state.queue.truncate(retained);
-        state.queue.push_back(message);
+        }
+        let tail = state.queue.iter().rev().take_while(|m| !matches!(m, Message::Sync(_))).count();
+        let compactable =
+            tail >= PENDING_LIMIT && (self.coalesce || state.queue.iter().rev().take(tail).all(|m| !matches!(m, Message::Committed(_))));
+        if compactable {
+            let compacted = match message {
+                Message::Opened(project) | Message::Snapshot(project) => Message::Opened(project),
+                Message::Committed(edit) => Message::Opened(edit.project),
+                Message::Sync(reply) => Message::Sync(reply),
+            };
+            let retained = state.queue.len() - tail;
+            state.queue.truncate(retained);
+            state.queue.push_back(compacted);
+        } else {
+            state.queue.push_back(message);
+        }
         self.ready.notify_one();
     }
 
@@ -992,7 +998,9 @@ const SCAN_LIMIT: usize = 16_384;
 /// session are never touched. Returns how many entries were removed; while another entry is
 /// being opened or removed it removes nothing and does not wait.
 pub fn prune(dir: &Path, retention: Retention) -> Result<usize, String> {
-    prune_with_scan_limit(dir, retention, SCAN_LIMIT)
+    prune_with_discovery(dir, retention, SCAN_LIMIT, |dir| {
+        Ok(fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.map(|entry| entry.ok().map(|entry| entry.file_name())))
+    })
 }
 
 /// Read and verify the versioned recovery header from a regular `.pc` or `.journal` file.
@@ -1015,7 +1023,7 @@ fn read_recovery_header(path: &Path) -> Result<Option<Header>, ()> {
     if magic != MAGIC {
         return Err(());
     }
-    let payload = read_frame(&mut reader).map_err(|_| ())?.ok_or(())?;
+    let payload = read_frame_bounded(&mut reader, MAX_HEADER_BYTES).map_err(|_| ())?.ok_or(())?;
     let header: Header = serde_json::from_slice(&payload).map_err(|_| ())?;
     Ok(Some(header))
 }
@@ -1052,7 +1060,15 @@ fn entry_modified(dir: &Path, id: &str) -> Option<SystemTime> {
     newest
 }
 
-fn prune_with_scan_limit(dir: &Path, retention: Retention, scan_limit: usize) -> Result<usize, String> {
+fn prune_with_discovery<I>(
+    dir: &Path,
+    retention: Retention,
+    scan_limit: usize,
+    discover: impl FnOnce(&Path) -> Result<I, String>,
+) -> Result<usize, String>
+where
+    I: IntoIterator<Item = Option<std::ffi::OsString>>,
+{
     // A folder not created yet holds nothing; failing to create one is the recorder's to report.
     if !dir.is_dir() {
         return Ok(0);
@@ -1066,9 +1082,8 @@ fn prune_with_scan_limit(dir: &Path, retention: Retention, scan_limit: usize) ->
         return Ok(0);
     }
     let mut ids = std::collections::BTreeSet::new();
-    for entry in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?.take(scan_limit) {
-        let Ok(entry) = entry else { continue };
-        let name = entry.file_name();
+    for name in discover(dir)?.into_iter().take(scan_limit) {
+        let Some(name) = name else { continue };
         let Some((id, ext)) = name.to_str().and_then(|name| name.rsplit_once('.')) else { continue };
         if !matches!(ext, "pc" | "journal" | "lock") || !valid_id(id) {
             continue;

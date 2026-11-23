@@ -866,41 +866,49 @@ fn pruning_reads_complete_entry_times_under_scan_cap() {
     let (journal, states) = journal_with(dir.path(), 1);
     drop(journal);
 
-    // Discover the filesystem's directory iteration order for the three files of "entry",
-    // age the first two past max_age, keep the third fresh, and cap the scan before the third.
-    let mut positions: Vec<(usize, String)> = fs::read_dir(dir.path())
-        .unwrap()
-        .enumerate()
-        .filter_map(|(index, entry)| {
-            let name = entry.unwrap().file_name().into_string().ok()?;
-            let (id, ext) = name.rsplit_once('.')?;
-            (id == "entry" && matches!(ext, "pc" | "journal" | "lock")).then(|| (index + 1, ext.to_owned()))
-        })
-        .collect();
-    assert_eq!(positions.len(), 3);
+    // Age `.pc` and `.lock` past max_age, keep `.journal` fresh, and inject a fixed discovery
+    // order that places `.journal` beyond the scan cap while keeping real filesystem timestamps.
     let old_time = std::time::SystemTime::now() - DAY * 20;
-    for (_, ext) in &positions[..2] {
+    for ext in ["pc", "lock"] {
         File::options().write(true).open(entry_file(dir.path(), "entry", ext)).unwrap().set_modified(old_time).unwrap();
     }
-    let fresh_ext = positions.pop().unwrap().1;
-    let cutoff = positions.last().unwrap().0;
     let retention = Retention { max_age: DAY * 14, max_entries: 16 };
+    let order = ["entry.pc", "entry.lock", "entry.journal"].map(|name| Some(std::ffi::OsString::from(name)));
 
-    assert_eq!(prune_with_scan_limit(dir.path(), retention, cutoff), Ok(0));
-    assert!(entry_file(dir.path(), "entry", &fresh_ext).exists());
+    assert_eq!(prune_with_discovery(dir.path(), retention, 2, |_| Ok(order)), Ok(0));
+    assert!(entry_file(dir.path(), "entry", "journal").exists());
     assert_eq!(recover(dir.path(), "entry").unwrap().documents, states[1]);
 
-    // If a metadata error prevents determining an entry's age, leave the entry in place.
+    // If a metadata error prevents determining an entry's age after the header check passes,
+    // leave the entry in place.
     #[cfg(unix)]
     {
         drop(EditJournal::create(dir.path(), "unreadable", states[1].clone()).unwrap());
         fs::remove_file(entry_file(dir.path(), "unreadable", "journal")).unwrap();
         fs::remove_file(entry_file(dir.path(), "unreadable", "lock")).unwrap();
         File::options().write(true).open(entry_file(dir.path(), "unreadable", "pc")).unwrap().set_modified(old_time).unwrap();
-        std::os::unix::fs::symlink("unreadable.journal", entry_file(dir.path(), "unreadable", "journal")).unwrap();
+        std::os::unix::fs::symlink("unreadable.lock", entry_file(dir.path(), "unreadable", "lock")).unwrap();
         assert_eq!(prune(dir.path(), retention), Ok(0));
         assert!(entry_file(dir.path(), "unreadable", "pc").exists());
     }
+}
+
+/// Retention's header probe rejects a declared header length above the snapshot-overhead limit
+/// before allocating the payload buffer.
+#[test]
+fn retention_header_probe_rejects_oversized_declared_length() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("oversized.pc");
+    let mut bytes = MAGIC.to_vec();
+    bytes.extend_from_slice(&u32::try_from(MAX_HEADER_BYTES + 1).unwrap().to_le_bytes());
+    fs::write(&path, bytes).unwrap();
+    assert!(read_recovery_header(&path).is_err());
+
+    let huge = dir.path().join("huge.pc");
+    let mut huge_bytes = MAGIC.to_vec();
+    huge_bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+    fs::write(&huge, huge_bytes).unwrap();
+    assert!(read_recovery_header(&huge).is_err());
 }
 
 /// Retention verifies recovery-entry headers before applying age or count limits, so an ordinary
