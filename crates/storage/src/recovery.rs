@@ -1124,19 +1124,24 @@ struct EntryTimes {
     newest: SystemTime,
 }
 
+#[cfg_attr(not(test), allow(unused_variables))]
+fn entry_file_metadata(dir: &Path, path: &Path) -> std::io::Result<fs::Metadata> {
+    #[cfg(test)]
+    if faults::fails(dir, faults::Fault::EntryMetadata) {
+        return Err(std::io::Error::new(ErrorKind::PermissionDenied, "permission denied"));
+    }
+    fs::metadata(path)
+}
+
 /// Modification times of all three known files of recovery entry `id`, plus their maximum.
 /// Returns `None` if a metadata error prevents determining any existing file's time, or if none
 /// of the files exist, so retention leaves the entry in place rather than treating it as expired.
 fn entry_times(dir: &Path, id: &str) -> Option<EntryTimes> {
-    #[cfg(test)]
-    if faults::fails(dir, faults::Fault::EntryMetadata) {
-        return None;
-    }
     let mut times = [None; 3];
     let mut newest: Option<SystemTime> = None;
     for (slot, ext) in times.iter_mut().zip(["pc", "journal", "lock"]) {
         let path = entry_file(dir, id, ext);
-        match fs::metadata(&path) {
+        match entry_file_metadata(dir, &path) {
             Ok(metadata) => {
                 let modified = metadata.modified().ok()?;
                 *slot = Some(modified);

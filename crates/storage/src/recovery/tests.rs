@@ -1699,9 +1699,10 @@ fn pruning_detects_journal_update_masked_by_future_lock_mtime() {
     assert_eq!(recover(dir.path(), "masked-update").unwrap().documents, docs);
 }
 
-/// When an entry has a valid lock and recovery header but its modification-time lookup fails
-/// during retention, pruning leaves the entry untouched; without the failure the same aged entry
-/// is removed.
+/// When an entry has a valid lock and recovery header but reading metadata for one of its files
+/// fails with a non-`NotFound` I/O error during retention, `entry_times` returns `None` and
+/// pruning skips the entry before reaching deletion; without the error the same aged entry is
+/// removed.
 #[test]
 fn pruning_keeps_entry_when_metadata_lookup_fails_after_lock_and_header() {
     let dir = tempfile::tempdir().unwrap();
@@ -1713,13 +1714,37 @@ fn pruning_keeps_entry_when_metadata_lookup_fails_after_lock_and_header() {
     age_entry(dir.path(), "aged", DAY * 30);
 
     let retention = Retention { max_age: DAY * 14, max_entries: 16 };
-    faults::arm(dir.path(), Fault::EntryMetadata, 1);
-    assert_eq!(prune(dir.path(), retention), Ok(0));
+    // Fail the 2nd `fs::metadata` call (`aged.journal`) with `PermissionDenied` while `aged.pc`
+    // and `aged.lock` still exist and are aged: if `Err(_)` were treated like `NotFound`,
+    // `aged.pc`/`aged.lock` would still produce an expired `newest` timestamp and schedule
+    // `aged` for deletion.
+    faults::arm(dir.path(), Fault::EntryMetadata, 2);
+    let mut delete_attempted = false;
+    let removed = prune_with_hooks(
+        dir.path(),
+        retention,
+        SCAN_LIMIT,
+        |dir| Ok(fs::read_dir(dir).unwrap().map(|entry| entry.ok().map(|entry| entry.file_name()))),
+        |_| {},
+        |_| delete_attempted = true,
+    );
+    assert_eq!(removed, Ok(0));
+    assert!(!delete_attempted, "non-NotFound metadata error must drop the candidate during scan");
     assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["aged".to_owned()]));
     assert_eq!(recover(dir.path(), "aged").unwrap().documents, docs);
 
     // Control case: the exact same fixture without the metadata failure is pruned.
-    assert_eq!(prune(dir.path(), retention), Ok(1));
+    let mut control_delete_attempted = false;
+    let removed = prune_with_hooks(
+        dir.path(),
+        retention,
+        SCAN_LIMIT,
+        |dir| Ok(fs::read_dir(dir).unwrap().map(|entry| entry.ok().map(|entry| entry.file_name()))),
+        |_| {},
+        |_| control_delete_attempted = true,
+    );
+    assert_eq!(removed, Ok(1));
+    assert!(control_delete_attempted);
     assert!(entry_ids(dir.path()).is_empty());
 }
 
