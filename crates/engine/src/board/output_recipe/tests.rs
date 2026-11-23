@@ -312,6 +312,9 @@ fn recipe_command_schema_matches_runtime_validation() {
     let forbidden_stems: Vec<&str> = stem_schema["not"]["enum"].as_array().unwrap().iter().map(|item| item.as_str().unwrap()).collect();
     assert_eq!(forbidden_stems, RESERVED_PORTABLE_SEGMENTS);
 
+    // `scripts/test_output_recipe_schema.py` evaluates the published `pattern`, `minLength`,
+    // `maxLength` and `not.enum` rules in `docs/schemas/command-contracts.json` against these same
+    // cases through `Draft202012Validator` and ECMA-262 `RegExp`; this test keeps the runtime side.
     let name_matches_schema = |value: &str| {
         let count = value.chars().count();
         let min = name_schema["minLength"].as_u64().unwrap() as usize;
