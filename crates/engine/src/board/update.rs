@@ -617,18 +617,21 @@ impl Baseline {
         let component = self.components.get_mut(&previous.component).ok_or("Missing accepted part instance.")?;
         let package = Package::from_assignment(assignment);
         package.validate(&component.terminals)?;
+        let mut extra_lands: BTreeSet<_> = package.mapping.iter().filter(|(_, pads)| pads.pads().len() > 1).map(|(pin, _)| pin.clone()).collect();
+        // Only pad-only unnamed singletons may be retired when a package edit reduces pads.
+        for net in self
+            .nets
+            .iter()
+            .filter(|net| net.needs_origin() && net.terminals[0].component == previous.component && !extra_lands.contains(&net.terminals[0].terminal))
+        {
+            match net.origin {
+                None => return Err("Cannot remove an accepted connection without explicit net origin.".into()),
+                Some(NetOrigin::Schematic) => return Err("Cannot remove an accepted schematic connection through a footprint revision.".into()),
+                Some(NetOrigin::PadOnly) => {}
+            }
+        }
         if self.format == FORMAT && package.extended() {
             self.format = MULTIPAD_FORMAT.into();
-        }
-        let mut extra_lands: BTreeSet<_> = package.mapping.iter().filter(|(_, pads)| pads.pads().len() > 1).map(|(pin, _)| pin.clone()).collect();
-        // Do not guess the provenance of an unnamed singleton when a package edit would remove it.
-        if self.nets.iter().any(|net| {
-            net.needs_origin()
-                && net.terminals[0].component == previous.component
-                && !extra_lands.contains(&net.terminals[0].terminal)
-                && net.origin.is_none()
-        }) {
-            return Err("Cannot remove an accepted connection without explicit net origin.".into());
         }
         component.package = Some(package);
         self.nets.retain(|net| {
