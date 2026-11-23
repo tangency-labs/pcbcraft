@@ -1,5 +1,8 @@
-//! Personal layer colors are shared across views by board/layer identity, outside engineering files.
-use crate::{PcbApp, ViewId, Workspace, editor_view::ViewInput};
+//! Personal layer and net colors are shared across views of a board, outside engineering files.
+use crate::{
+    PcbApp, ViewId, Workspace,
+    editor_view::{DocumentTarget, ViewInput},
+};
 use pcbcraft_chrome::board;
 use pcbcraft_engine::board::{
     setup::{Layer, LayerPurpose, Side},
@@ -16,6 +19,43 @@ pub(super) struct Connectivity {
     pub(super) copper: Copper,
     pub(super) names_pending: bool,
     pub(super) nets: BTreeMap<Uuid, String>,
+    pub(super) net_ids: Vec<Option<Uuid>>,
+}
+
+impl Connectivity {
+    /// Resolve copper only when its island has an unambiguous active net identity.
+    fn island_net(&self, island: Option<&usize>) -> Option<Uuid> {
+        *self.net_ids.get(*island?)?
+    }
+
+    /// Resolve a selected track or via without relying on a possibly duplicated display name.
+    pub(super) fn copper_net(&self, id: &Uuid) -> Option<Uuid> {
+        self.island_net(self.copper.tracks.get(id).or_else(|| self.copper.vias.get(id)))
+    }
+
+    /// Resolve an inspected pad at its exact physical board address.
+    pub(super) fn pad_net(&self, footprint: &str, number: &str) -> Option<Uuid> {
+        self.island_net(self.copper.pads.get(&(footprint.to_owned(), number.to_owned())))
+    }
+}
+
+/// One board palette and the physical membership of its visible copper.
+#[derive(Clone, Copy)]
+pub(super) struct NetColors<'a> {
+    pub(super) palette: &'a BTreeMap<Uuid, egui::Color32>,
+    pub(super) connectivity: &'a Connectivity,
+}
+
+impl NetColors<'_> {
+    /// Use the track's resolved electrical identity rather than a possibly shared display name.
+    pub(super) fn track(self, id: &Uuid) -> Option<egui::Color32> {
+        self.connectivity.copper_net(id).and_then(|net| self.palette.get(&net).copied())
+    }
+
+    /// Apply a net color only to physical pads on a resolved island.
+    pub(super) fn pad(self, footprint: &str, number: &str) -> Option<egui::Color32> {
+        self.connectivity.pad_net(footprint, number).and_then(|net| self.palette.get(&net).copied())
+    }
 }
 
 /// The contact a route started from. A trace or via without a logical net can still have an island.
@@ -82,6 +122,14 @@ struct Override {
     rgb: [u8; 3],
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetOverride {
+    board: BoardTarget,
+    net: Uuid,
+    rgb: [u8; 3],
+}
+
 /// Colors resolved once for one canvas pass, including the current theme and personal overrides.
 /// This disposable palette never survives a layer, visibility, theme or preference change.
 pub(super) struct FootprintColors {
@@ -139,8 +187,12 @@ impl FootprintColors {
 #[serde(deny_unknown_fields)]
 pub(super) struct Appearance {
     colors: Vec<Override>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    net_colors: Vec<NetOverride>,
     #[serde(skip)]
     lookup: BTreeMap<(BoardTarget, String), [u8; 3]>,
+    #[serde(skip)]
+    net_lookup: BTreeMap<BoardTarget, BTreeMap<Uuid, egui::Color32>>,
     #[serde(skip)]
     pub(super) dirty: bool,
 }
@@ -152,16 +204,24 @@ impl Appearance {
             .and_then(|text| serde_json::from_str::<Self>(&text).ok())
             .filter(|data| {
                 let mut keys = BTreeSet::new();
-                data.colors.len() <= MAX_COLORS
+                let mut net_keys = BTreeSet::new();
+                data.colors.len() + data.net_colors.len() <= MAX_COLORS
                     && data.colors.iter().all(|item| {
                         !item.board.project.is_nil()
                             && !item.board.board.is_nil()
                             && valid_id(&item.layer)
                             && keys.insert((item.board, item.layer.clone()))
                     })
+                    && data.net_colors.iter().all(|item| {
+                        !item.board.project.is_nil() && !item.board.board.is_nil() && !item.net.is_nil() && net_keys.insert((item.board, item.net))
+                    })
             })
             .map(|mut data| {
                 data.lookup = data.colors.iter().map(|item| ((item.board, item.layer.clone()), item.rgb)).collect();
+                for item in &data.net_colors {
+                    let [r, g, b] = item.rgb;
+                    data.net_lookup.entry(item.board).or_default().insert(item.net, egui::Color32::from_rgb(r, g, b));
+                }
                 data
             })
             .unwrap_or_default()
@@ -188,8 +248,8 @@ impl Appearance {
         if index.and_then(|i| self.colors.get(i)).map(|item| item.rgb) == rgb {
             return Ok(());
         }
-        if index.is_none() && rgb.is_some() && self.colors.len() >= MAX_COLORS {
-            return Err("The saved layer-color limit has been reached. Reset an existing override first.".into());
+        if index.is_none() && rgb.is_some() && self.colors.len() + self.net_colors.len() >= MAX_COLORS {
+            return Err("The saved color limit has been reached. Reset an existing override first.".into());
         }
         if let Some(index) = index {
             self.colors.remove(index);
@@ -205,6 +265,34 @@ impl Appearance {
             None => {
                 self.lookup.remove(&(board, layer.to_owned()));
             }
+        }
+        self.dirty = true;
+        Ok(())
+    }
+    /// Return only the addressed board's custom net palette when this view displays it.
+    pub(super) fn net_palette(&self, board: BoardTarget, enabled: bool) -> Option<&BTreeMap<Uuid, egui::Color32>> {
+        self.net_lookup.get(&board).filter(|palette| enabled && !palette.is_empty())
+    }
+
+    /// Replace or reset a local net override without changing electrical intent or history.
+    fn set_net(&mut self, board: BoardTarget, net: Uuid, rgb: Option<[u8; 3]>) -> Result<(), String> {
+        let index = self.net_colors.iter().position(|item| item.board == board && item.net == net);
+        if index.map(|i| self.net_colors[i].rgb) == rgb {
+            return Ok(());
+        }
+        if index.is_none() && rgb.is_some() && self.colors.len() + self.net_colors.len() >= MAX_COLORS {
+            return Err("The saved color limit has been reached. Reset an existing override first.".into());
+        }
+        if let Some(index) = index {
+            self.net_colors.remove(index);
+        }
+        if let Some(rgb) = rgb {
+            let [r, g, b] = rgb;
+            self.net_colors.push(NetOverride { board, net, rgb });
+            self.net_colors.sort_by_key(|item| (item.board, item.net));
+            self.net_lookup.entry(board).or_default().insert(net, egui::Color32::from_rgb(r, g, b));
+        } else if let Some(palette) = self.net_lookup.get_mut(&board) {
+            palette.remove(&net);
         }
         self.dirty = true;
         Ok(())
@@ -330,10 +418,25 @@ pub(super) fn hex(color: egui::Color32) -> String {
 #[derive(Debug)]
 pub(super) struct Edit {
     source: ViewInput,
-    layer: String,
+    target: ColorTarget,
+    return_rules: Option<Box<crate::net_class_editor::Edit>>,
+    label: String,
     rgb: [u8; 3],
     hex: String,
     error: Option<String>,
+}
+
+impl Edit {
+    /// Keep the modal in the window that owns the input authority.
+    pub(super) fn source(&self) -> ViewInput {
+        self.source
+    }
+}
+
+#[derive(Debug)]
+enum ColorTarget {
+    Layer(String),
+    Net { board: BoardTarget, net: Uuid },
 }
 
 impl PcbApp {
@@ -352,6 +455,30 @@ impl PcbApp {
         }
         self.board_appearance.set(target, layer, rgb)
     }
+    /// Set a personal color for an active persistent net, enabling net colors in the initiating view.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn set_net_color(&mut self, view: ViewId, net: Uuid, rgb: Option<[u8; 3]>) -> Result<(), String> {
+        let editor = self.views.view(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
+        let target = editor.board.target.ok_or("No board is bound to this view")?;
+        self.set_board_net_color(view, target, net, rgb)
+    }
+
+    /// Save settings for the validated board. Only an initiating PCB view changes its toggle.
+    fn set_board_net_color(&mut self, view: ViewId, target: BoardTarget, net: Uuid, rgb: Option<[u8; 3]>) -> Result<(), String> {
+        let board = self.session.project().and_then(|project| project.board_view(target)).ok_or("The view's board is unavailable")?;
+        if board.zone_net_state(net) != "active" {
+            return Err("Choose an active persistent net on this view's board.".into());
+        }
+        self.board_appearance.set_net(target, net, rgb)?;
+        if rgb.is_some()
+            && let Some(editor) = self.views.view_mut(view)
+            && editor.target() == Some(DocumentTarget::Board(target))
+        {
+            editor.board.set_net_colors_visible(true);
+        }
+        Ok(())
+    }
+
     /// Open the same themed color dialog from a layer swatch without activating that layer.
     pub(super) fn begin_layer_color(&mut self, view: ViewId, layer: String) {
         let Some(editor) = self.views.view(view) else { return };
@@ -364,24 +491,109 @@ impl PcbApp {
         };
         let color = self.board_appearance.color(board, &record);
         let [r, g, b, _] = color.to_array();
-        self.dialog = crate::Dialog::LayerColor(Edit { source, layer, rgb: [r, g, b], hex: hex(color), error: None });
+        self.dialog = crate::Dialog::BoardColor(Edit {
+            source,
+            target: ColorTarget::Layer(layer),
+            return_rules: None,
+            label: record.name,
+            rgb: [r, g, b],
+            hex: hex(color),
+            error: None,
+        });
     }
-    /// Discard stale drafts and apply validated sRGB/reset through the shared presentation handler.
-    pub(super) fn layer_color_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
+
+    /// Open the shared picker from PCB Properties using the exact active net identity.
+    pub(super) fn begin_board_net_color(&mut self, view: ViewId, net: Uuid, layer: Option<Uuid>) {
+        let Some(editor) = self.views.view(view) else { return };
+        let Some(source) = editor.input(&self.session) else { return };
+        let Some(DocumentTarget::Board(target)) = editor.target() else { return };
+        let Some(board) = self.session.project().and_then(|project| project.board_view(target)) else { return };
+        let label = board
+            .inspect_zone_nets()
+            .ok()
+            .and_then(|rows| crate::board_net_choice::net_choices(&rows).into_iter().find(|choice| choice.id == Some(net)))
+            .map_or_else(|| net.to_string(), |choice| choice.label);
+        self.begin_net_color_for(source, target, net, label, layer, None);
+    }
+
+    /// The picker shares one palette across Properties and Rules. Closing it resumes the Rules form.
+    pub(super) fn begin_net_color_for(
+        &mut self,
+        source: ViewInput,
+        target: BoardTarget,
+        net: Uuid,
+        label: String,
+        layer: Option<Uuid>,
+        return_rules: Option<Box<crate::net_class_editor::Edit>>,
+    ) -> bool {
+        let edit = self.net_color_edit(source, target, net, label, layer);
+        if let Some(mut edit) = edit {
+            edit.return_rules = return_rules;
+            self.dialog = crate::Dialog::BoardColor(edit);
+            true
+        } else {
+            if let Some(rules) = return_rules {
+                self.dialog = crate::Dialog::Rules(rules);
+            }
+            false
+        }
+    }
+
+    /// Bind the picker to the view's current revision and an explicit board in the same project.
+    fn net_color_edit(&self, source: ViewInput, target: BoardTarget, net: Uuid, label: String, layer: Option<Uuid>) -> Option<Edit> {
+        let editor = self.views.view(source.view()).filter(|editor| editor.accepts(source, &self.session))?;
+        let project = self.session.project()?;
+        match editor.target()? {
+            DocumentTarget::Board(board) if board == target => {}
+            DocumentTarget::Sheet(sheet) if project.for_sheet(sheet).is_some() => {}
+            _ => return None,
+        }
+        let board = project.board_view(target)?;
+        if board.zone_net_state(net) != "active" {
+            return None;
+        }
+        let layer = layer.or_else(|| editor.board.active_layer.as_ref().and_then(|id| Uuid::try_parse(id).ok()));
+        let color = self.board_appearance.net_palette(target, true).and_then(|palette| palette.get(&net)).copied().unwrap_or_else(|| {
+            let layers = board.layers();
+            layers
+                .iter()
+                .filter(|record| record.purpose == LayerPurpose::Copper)
+                .find(|record| Some(record.id) == layer)
+                .or_else(|| layers.iter().find(|record| record.purpose == LayerPurpose::Copper && record.side == Some(Side::Front)))
+                .map_or_else(|| board::copper_color(Some(true)), |layer| self.board_appearance.color(board, layer))
+        });
+        let [r, g, b, _] = color.to_array();
+        Some(Edit {
+            source,
+            target: ColorTarget::Net { board: target, net },
+            return_rules: None,
+            label,
+            rgb: [r, g, b],
+            hex: hex(color),
+            error: None,
+        })
+    }
+
+    /// Reject a stale draft before applying local sRGB settings or a reset.
+    pub(super) fn board_color_dialog(&mut self, ctx: &egui::Context, mut edit: Edit) {
         if !self.views.view(edit.source.view()).is_some_and(|view| view.accepts(edit.source, &self.session)) {
+            if let Some(rules) = edit.return_rules {
+                self.dialog = crate::Dialog::Rules(rules);
+            }
             return;
         }
-        let Some(record) = self
-            .session
-            .project()
-            .and_then(|project| self.views.view(edit.source.view()).and_then(|view| view.board.target).and_then(|target| project.board_view(target)))
-            .and_then(|board| board.layers().into_iter().find(|item| item.id.to_string() == edit.layer))
-        else {
-            return;
+        let (title, reset) = match &edit.target {
+            ColorTarget::Layer(_) => ("Layer Color", "Reset to default"),
+            ColorTarget::Net { .. } => ("Net Color", "Use layer color"),
         };
-        let action = board::layer_color_dialog(ctx, &record.name, &mut edit.rgb, &mut edit.hex, edit.error.as_deref());
+        let action = board::color_dialog(ctx, title, &edit.label, reset, &mut edit.rgb, &mut edit.hex, edit.error.as_deref());
         let value = match action {
-            board::LayerColorAction::Cancel => return,
+            board::LayerColorAction::Cancel => {
+                if let Some(rules) = edit.return_rules {
+                    self.dialog = crate::Dialog::Rules(rules);
+                }
+                return;
+            }
             board::LayerColorAction::None | board::LayerColorAction::HexChanged => {
                 if action == board::LayerColorAction::HexChanged
                     && let Ok(rgb) = parse_color(&edit.hex)
@@ -389,17 +601,26 @@ impl PcbApp {
                     edit.rgb = rgb;
                     edit.error = None;
                 }
-                self.dialog = crate::Dialog::LayerColor(edit);
+                self.dialog = crate::Dialog::BoardColor(edit);
                 return;
             }
             board::LayerColorAction::Apply => parse_color(&edit.hex).map(Some),
             board::LayerColorAction::Reset => Ok(None),
         };
-        match value.and_then(|rgb| self.set_layer_color(edit.source.view(), &edit.layer, rgb)) {
-            Ok(()) => self.repaint_editors(ctx),
+        let result = value.and_then(|rgb| match &edit.target {
+            ColorTarget::Layer(layer) => self.set_layer_color(edit.source.view(), layer, rgb),
+            ColorTarget::Net { board, net } => self.set_board_net_color(edit.source.view(), *board, *net, rgb),
+        });
+        match result {
+            Ok(()) => {
+                if let Some(rules) = edit.return_rules {
+                    self.dialog = crate::Dialog::Rules(rules);
+                }
+                self.repaint_editors(ctx);
+            }
             Err(error) => {
                 edit.error = Some(error);
-                self.dialog = crate::Dialog::LayerColor(edit);
+                self.dialog = crate::Dialog::BoardColor(edit);
             }
         }
     }

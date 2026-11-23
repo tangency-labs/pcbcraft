@@ -249,7 +249,7 @@ enum Dialog {
     Footprint(Box<footprint_assignment::Edit>),
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
-    LayerColor(board_appearance::Edit),
+    BoardColor(board_appearance::Edit),
     Zone(Box<board_zones::Edit>),
     CopperPour(board_fills::PourDialog),
     ViaNet(Box<board_net_choice::Edit>),
@@ -2400,7 +2400,7 @@ impl PcbApp {
             Dialog::LibraryPinRemap(draft) => self.library_pin_remap_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
-            Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
+            Dialog::BoardColor(edit) => self.board_color_dialog(ctx, edit),
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
@@ -2870,6 +2870,7 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("PCB Layout", "Place via", key(&PLACE_VIA)));
     list.push(("PCB Layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
     list.push(("PCB Layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB Layout", "Cycle overlapping items under the pointer", "Shift+Space".to_owned()));
     list.push(("PCB Layout", "Drag a track segment, keeping it attached", "D".to_owned()));
     list.push(("PCB Layout", "Highlight the net under the pointer", "`".to_owned()));
     list.push(("PCB Layout", "Move selected PCB group", "M".to_owned()));

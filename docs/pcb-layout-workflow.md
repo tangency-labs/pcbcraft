@@ -46,6 +46,12 @@ Each edit is one undo step.
 | Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus separate [Excellon drill files](#fabrication-drill-files) in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
+When items overlap, hover over them and press **Shift+Space** to cycle through
+the selectable items at that point. A click on overlapping tracks starts with
+the active copper layer. Layer visibility and selection filters also apply when
+cycling. Tracks and vias in the gaps between footprint pads can be clicked
+directly.
+
 Copper connectivity is derived from overlap on shared layers. Track edits and
 footprint transforms refuse new shorts in the copper they touch. DRC separately
 reports existing islands that contain conflicting intended nets, including direct

@@ -918,6 +918,22 @@ mod live {
             params: &[VIEW, Param { name: "visible", summary: "Show copper net names", required: true, kind: Kind::Bool }],
         },
         WindowCommand {
+            id: "view.set_net_colors_visibility",
+            title: "Show Net Colors",
+            summary: "Show personal net colors or the physical layer palette in one PCB view.",
+            params: &[VIEW, Param { name: "visible", summary: "Use personal net colors", required: true, kind: Kind::Bool }],
+        },
+        WindowCommand {
+            id: "view.set_net_color",
+            title: "Net Color",
+            summary: "Set or reset a personal color shared by a board's zones and connected copper on an active persistent net.",
+            params: &[
+                VIEW,
+                Param { name: "net", summary: "Active persistent net UUID on the view's board", required: true, kind: Kind::Object },
+                Param { name: "color", summary: "Opaque #RRGGBB or null to use the layer palette", required: true, kind: Kind::Color },
+            ],
+        },
+        WindowCommand {
             id: "view.set_board_flipped",
             title: "Flip Board View",
             summary: "View the board from below or above in this PCB view, as Design › Flip view does. Keeps the centered point and zoom; changes no project data or undo history.",
@@ -1434,6 +1450,10 @@ mod live {
                         "reference_selection": view.board.reference.selected,
                         "hidden_layers": view.board.hidden_layers,
                         "net_names_visible": !view.board.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY),
+                        "net_colors_visible": view.board.net_colors_visible(),
+                        "net_colors": view.board.target.and_then(|target| app.board_appearance.net_palette(target, true))
+                            .map(|palette| palette.iter().map(|(net, color)| json!({"net":net,"color":crate::board_appearance::hex(*color)})).collect::<Vec<_>>())
+                            .unwrap_or_default(),
                         "ratsnest_visible": view.board.target.and_then(|target| app.session.project().and_then(|project| project.board_view(target)))
                             .filter(|board| board.has_accepted_connectivity()).map(|_| !view.board.hidden_layers.contains(crate::editor_view::RATSNEST_KEY)),
                         "active_layer": view.board.active_layer,
@@ -1739,6 +1759,16 @@ mod live {
                     let state =
                         self.views.view_mut(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
                     state.board.set_net_names_visibility(params["visible"].as_bool() == Some(true));
+                }
+                ("view.set_net_colors_visibility", Some((view, _)), _) => {
+                    let state =
+                        self.views.view_mut(view).filter(|view| view.workspace == Workspace::Board).ok_or("The addressed view must show a board")?;
+                    state.board.set_net_colors_visible(params["visible"].as_bool() == Some(true));
+                }
+                ("view.set_net_color", Some((view, _)), _) => {
+                    let net = uuid::Uuid::parse_str(params["net"].as_str().unwrap_or_default()).map_err(|_| "Expected a persistent net UUID")?;
+                    let rgb = params["color"].as_str().map(crate::board_appearance::parse_color).transpose()?;
+                    self.set_net_color(view, net, rgb)?;
                 }
                 ("view.set_board_flipped", Some((view, _)), _) => {
                     let state =

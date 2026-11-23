@@ -261,6 +261,7 @@ pub(super) fn paint(
     view: BoardView<'_>,
     hidden: &BTreeSet<String>,
     appearance: &crate::board_appearance::Appearance,
+    palette: Option<&std::collections::BTreeMap<uuid::Uuid, egui::Color32>>,
 ) {
     let Some(Ok(fill)) = view.filled_zones() else { return };
     let layers = view.layers();
@@ -269,7 +270,7 @@ pub(super) fn paint(
             continue;
         }
         let Some(layer) = layers.iter().find(|l| l.id == zone.layer) else { continue };
-        let color = appearance.color(view, layer).gamma_multiply(0.32);
+        let color = palette.and_then(|palette| palette.get(&zone.net)).copied().unwrap_or_else(|| appearance.color(view, layer)).gamma_multiply(0.32);
         for island in &zone.islands {
             let mut mesh = egui::Mesh::default();
             mesh.vertices = island

@@ -2,7 +2,10 @@
 use crate::{PcbApp, editor_view::BoardState};
 use egui::{Id, Rect, Ui};
 use pcbcraft_chrome::{board, units, workspace};
-use pcbcraft_engine::board::setup::{Layer, LayerPurpose, Stratum};
+use pcbcraft_engine::board::{
+    correspondence::Source,
+    setup::{Layer, LayerPurpose, Stratum},
+};
 pub(super) mod properties;
 use properties::{copper_properties, footprint_transform};
 
@@ -28,6 +31,7 @@ impl PcbApp {
         let mut browser_area = area;
         browser_area.max.y = board::browser_bottom(area);
         let mut color_pick = None;
+        let mut net_color_pick = None;
         let mut setup_open = false;
         let (mut show_all, mut isolate) = (false, false);
         let mut pick = None;
@@ -54,6 +58,7 @@ impl PcbApp {
         let compact = self.preferences.panel_style == workspace::PanelStyle::Compact;
         let can_isolate = state.active_layer.is_some();
         let mut ratsnest_visible = !state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY);
+        let mut net_colors_visible = state.net_colors_visible();
         let mut net_names_visible = !state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY);
         let (layers, collapse) = self.views.active.panels[crate::workspace_panels::LAYERS].show_with_toolbar(
             ui,
@@ -72,12 +77,15 @@ impl PcbApp {
                 ui.horizontal(|ui| {
                     show_all = pcbcraft_chrome::controls::small_button(ui, "Show all").clicked();
                     isolate = ui.add_enabled_ui(can_isolate, |ui| pcbcraft_chrome::controls::small_button(ui, "Isolate active")).inner.clicked();
+                });
+            },
+            |ui| {
+                ui.horizontal(|ui| {
+                    pcbcraft_chrome::controls::checkbox(ui, &mut net_colors_visible, "Net colors");
                     if target.has_accepted_connectivity() {
                         pcbcraft_chrome::board::ratsnest_visibility(ui, &mut ratsnest_visible);
                     }
                 });
-            },
-            |ui| {
                 layer_groups(ui, target, state, Id::unique((view_id, target.target)), &self.board_appearance, &mut color_pick);
             },
         );
@@ -86,10 +94,17 @@ impl PcbApp {
         }
         state.set_ratsnest_visibility(ratsnest_visible);
         state.set_net_names_visibility(net_names_visible);
+        state.set_net_colors_visible(net_colors_visible);
         if show_all || isolate {
             state.set_layer_visibility(target.layers().iter().map(|layer| layer.id.to_string()), isolate);
         }
-        let net_presentation = state.copper_connectivity(target, input);
+        let pad = match self.views.active.inspection.as_slice() {
+            [Source::Pad(pad)] if pad.board == target.target => Some(pad.pad),
+            _ => None,
+        };
+        let with_net_ids =
+            self.board_appearance.net_palette(target.target, net_colors_visible).is_some() || !state.tracks.selected.is_empty() || pad.is_some();
+        let net_presentation = state.copper_connectivity(target, input, with_net_ids);
         let net_presentation = match net_presentation {
             Ok(value) => value,
             Err(error) => {
@@ -108,6 +123,14 @@ impl PcbApp {
             }
         };
         let names_pending = net_presentation.names_pending;
+        let selected_net = if let Some(first) = state.tracks.selected.first() {
+            net_presentation.copper_net(first).filter(|id| state.tracks.selected.iter().all(|item| net_presentation.copper_net(item) == Some(*id)))
+        } else if let Some(pad) = pad {
+            let address = pad.inspect();
+            address["footprint"].as_str().and_then(|footprint| net_presentation.pad_net(footprint, address["pad"].as_str()?))
+        } else {
+            None
+        };
         let unit = self.preferences.units;
         let revision = self.session.revision();
         if target.vias().iter().any(|v| state.tracks.selected.contains(&v.id)) {
@@ -147,6 +170,16 @@ impl PcbApp {
                         .max_height(pcbcraft_chrome::properties::form_body_height(area))
                         .show(ui, |ui| {
                             ui.add_enabled_ui(settings_enabled && !state.editing_footprint(), |ui| {
+                                if let Some(zone) = target.zones().iter().find(|zone| state.zones.selected.as_deref() == Some(&zone.id.to_string()))
+                                    && ui
+                                        .add_enabled_ui(target.zone_net_state(zone.net) == "active", |ui| {
+                                            pcbcraft_chrome::controls::button(ui, "Net color…")
+                                        })
+                                        .inner
+                                        .clicked()
+                                {
+                                    net_color_pick = Some((zone.net, Some(zone.layer)));
+                                }
                                 crate::board_zones::properties(ui, target, &mut state.zones, unit, revision)
                             })
                             .inner
@@ -238,6 +271,15 @@ impl PcbApp {
                 if names_pending {
                     property(ui, "Net names", "Schematic update pending");
                 }
+                if state.selection.is_empty()
+                    && let Some(net) = selected_net
+                    && ui
+                        .add_enabled_ui(settings_enabled && !state.tracks.committing(), |ui| pcbcraft_chrome::controls::button(ui, "Net color…"))
+                        .inner
+                        .clicked()
+                {
+                    net_color_pick = Some((net, None));
+                }
                 if !state.tracks.selected.is_empty() {
                     net_rules = ui
                         .add_enabled_ui(settings_enabled && !state.tracks.committing(), |ui| pcbcraft_chrome::controls::button(ui, "Net rules…"))
@@ -282,6 +324,10 @@ impl PcbApp {
         }
         if let Some(layer) = color_pick {
             self.begin_layer_color(view_id, layer);
+            self.repaint_editors(ui.ctx());
+        }
+        if let Some((net, layer)) = net_color_pick {
+            self.begin_board_net_color(view_id, net, layer);
             self.repaint_editors(ui.ctx());
         }
         if net_rules {

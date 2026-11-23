@@ -49,6 +49,14 @@ a split. If that identity becomes ambiguous or retired, Properties and inspectio
 report that state. A zone never silently switches to another branch or merged
 identity. Choose another current net explicitly when that is the desired edit.
 
+With a zone, track, via or pad selected, choose **Net color…** in **Properties**
+to set the color for its active persistent net. The color follows that net's outlines and pours across
+copper layers, as well as surface-mount pads and tracks with an unambiguous
+physical connection to the net. Via rings and plated through-hole pads retain
+their usual display colors. Choose **Use layer color** to clear the override,
+or turn off **Net colors** in **Layers** to see layer colors in the current view.
+Overrides are stored in local app settings with the board and net IDs.
+
 ## Filling and checking
 
 Fill runs automatically after committed board or electrical edits. **Layout →
@@ -96,10 +104,12 @@ teardrops report fill as unavailable until those shapes have clearance support.
 Fill uses the layer's copper envelopes to select nearby clearance shapes. It
 checks each thermal spoke against the local cutouts it can reach. After clipping
 the zone boundary, enclosed clearance groups can be assembled as analytic holes
-and retained copper islands. Nested clearance shapes use a local SolidCore
-Boolean inside their group's envelope, and boundary cuts use the full zone
-geometry. A fill that exceeds the applicable geometry budget reports unavailable
-material. The pad count alone does not determine that budget.
+and retained copper islands. Groups with separated source contours stay independent
+when their aggregate bounds overlap. The fill subtracts boundary cuts separately
+and assigns the enclosed holes to the material faces left by that cut. It uses a
+local SolidCore Boolean for nested shapes within one group. A fill that exceeds
+the applicable geometry budget reports unavailable material. The pad count alone
+does not determine that budget.
 
 Native calculation uses the bounded snapshot worker pool. Browser fill and
 analytic zone checking use disposable same-build Web Workers, with cancellation,

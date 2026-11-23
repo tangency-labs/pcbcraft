@@ -269,7 +269,8 @@ pub fn pad_contour(pad: &PadDrawing) -> Vec<Pos2> {
 
 /// Size and orient pad labels within the land. Snapshot-local net labels appear only when both
 /// lines fit; zooming out removes text before it obscures copper or protrudes into a gap.
-/// Bright copper uses dark labels so personal color choices do not erase pad annotations.
+/// Solid lands use their copper for contrast. Plated openings use a fine halo to keep the
+/// annotation readable across the drill opening and the surrounding copper.
 fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4], copper: Color32) {
     let mut axis = corners[1] - corners[0];
     let mut width = axis.length();
@@ -316,11 +317,13 @@ fn pad_label(p: &Painter, pad: &PadDrawing, corners: [Pos2; 4], copper: Color32)
     if angle < -std::f32::consts::FRAC_PI_2 {
         angle += std::f32::consts::PI;
     }
-    let [r, g, b, _] = copper.to_normalized_gamma_f32();
-    let label_ink = if 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.65 { Tokens::get().board_canvas } else { Color32::WHITE };
+    let opening = pad.drill_radius.is_some() || pad.plated_slot.is_some();
+    let canvas = Tokens::get().board_canvas;
+    let label_ink = copper_label_ink(if opening { canvas } else { copper });
     let galley = crate::canvas_text::layout(p, text, FontId::monospace(size), label_ink, egui::Align::Center);
     let pos = pad.center - galley.rect.center().to_vec2();
-    p.add(egui::epaint::TextShape::new(pos, galley, label_ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER));
+    let text = egui::epaint::TextShape::new(pos, galley, label_ink).with_angle_and_anchor(angle, Align2::CENTER_CENTER);
+    p.add(if opening { outlined_copper_label(text, canvas) } else { egui::Shape::Text(text) });
 }
 
 /// The physical purpose of a projected technical rectangle, independent of copper color.
@@ -543,9 +546,17 @@ pub enum LayerColorAction {
 
 /// Use the existing modal surface and egui color picker for an opaque copper color draft.
 /// Hex edits stay pending until Apply; Cancel never changes any layer appearance.
-pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], hex: &mut String, error: Option<&str>) -> LayerColorAction {
+pub fn color_dialog(
+    ctx: &egui::Context,
+    title: &str,
+    name: &str,
+    reset: &str,
+    rgb: &mut [u8; 3],
+    hex: &mut String,
+    error: Option<&str>,
+) -> LayerColorAction {
     let mut action = LayerColorAction::None;
-    let closing = crate::shell::scrolling_dialog(ctx, "layer_color", "Layer Color", |ui| {
+    let closing = crate::shell::scrolling_dialog(ctx, "board_color", title, |ui| {
         ui.label(name);
         let mut color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
         let changed = ui
@@ -571,7 +582,7 @@ pub fn layer_color_dialog(ctx: &egui::Context, name: &str, rgb: &mut [u8; 3], he
             if crate::controls::button(ui, "Apply color").clicked() {
                 action = LayerColorAction::Apply;
             }
-            if crate::controls::button(ui, "Reset to default").clicked() {
+            if crate::controls::button(ui, reset).clicked() {
                 action = LayerColorAction::Reset;
             }
             if crate::controls::button(ui, "Cancel").clicked() {
@@ -738,11 +749,17 @@ fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> 
     let mut text = egui::epaint::TextShape::new(Pos2::ZERO, galley, ink);
     text.transform(egui::emath::TSTransform::from_scaling(scale));
     text.pos = center - text.galley.mesh_bounds.center().to_vec2();
-    let offset = 0.75;
-    let bounds = text.visual_bounding_rect().expand(offset);
-    if !p.clip_rect().contains_rect(bounds) {
+    if !p.clip_rect().contains_rect(text.visual_bounding_rect().expand(COPPER_LABEL_HALO)) {
         return None;
     }
+    Some(outlined_copper_label(text, halo))
+}
+
+const COPPER_LABEL_HALO: f32 = 0.75;
+
+/// Outline an annotation for contrast where it crosses both a plated opening and its copper.
+fn outlined_copper_label(text: egui::epaint::TextShape, halo: Color32) -> egui::Shape {
+    let offset = COPPER_LABEL_HALO;
     let mut shapes = Vec::with_capacity(5);
     for shift in [vec2(-offset, 0.), vec2(offset, 0.), vec2(0., -offset), vec2(0., offset)] {
         let mut outline = text.clone().with_override_text_color(halo);
@@ -750,7 +767,7 @@ fn via_net_label_shape(p: &Painter, center: Pos2, diameter: f32, name: &str) -> 
         shapes.push(egui::Shape::Text(outline));
     }
     shapes.push(egui::Shape::Text(text));
-    Some(egui::Shape::Vec(shapes))
+    egui::Shape::Vec(shapes)
 }
 
 #[cfg(test)]

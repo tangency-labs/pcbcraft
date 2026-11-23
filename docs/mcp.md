@@ -653,6 +653,11 @@ hides the others and cancels unfinished drawing in that view.
 personal board/layer palette across all views. `inspect_editor` reports effective
 `board.layer_colors` per view, including whether each value is overridden.
 The earlier `board.copper_colors` subset remains for compatibility.
+`view.set_net_color` takes `view`, an active persistent `net` UUID and `color`
+(`#RRGGBB`, or null to use the layer palette). The shared personal color applies
+across layers. `view.set_net_colors_visibility` switches the addressed view
+between net and layer colors. `inspect_editor` exposes the saved overrides in
+`board.net_colors` and the display setting in `board.net_colors_visible`.
 These values persist locally without changing project revision or undo. Physical
 pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
 binding and stack-ordered layer UUIDs; `unconfigured` retains the explicit library

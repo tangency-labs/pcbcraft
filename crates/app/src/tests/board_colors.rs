@@ -103,6 +103,37 @@ fn copper_uses_membership_visibility_and_per_layer_colors() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
+/// Hiding Top leaves plated pads on a visible bright layer with readable drill labels.
+#[test]
+fn plated_pad_labels_keep_contrast_when_top_is_hidden() {
+    let mut h = board();
+    swatch(&mut h, "Bottom");
+    hex_field(&mut h, "#80D484");
+    click(&mut h, "Apply color");
+    click(&mut h, "Activate layer Bottom");
+    click(&mut h, "Show layer Top");
+    assert_eq!(lands(&h, egui::Color32::from_rgb(128, 212, 132)), 2);
+
+    let canvas = h.get_by_label("PCB canvas").rect();
+    for number in ["1", "2"] {
+        assert!(
+            h.output().shapes.iter().any(|clipped| {
+                let egui::Shape::Vec(shapes) = &clipped.shape else { return false };
+                clipped.clip_rect == canvas
+                    && shapes.iter().any(|shape| {
+                        matches!(shape, egui::Shape::Text(text)
+                    if text.galley.job.text == number && text.override_text_color.is_none() && text.fallback_color == egui::Color32::WHITE)
+                    })
+                    && shapes.iter().any(|shape| {
+                        matches!(shape, egui::Shape::Text(text)
+                    if text.galley.job.text == number && text.override_text_color == Some(Tokens::get().board_canvas))
+                    })
+            }),
+            "plated pad {number} should have bright text with a contrasting outline"
+        );
+    }
+}
+
 /// Color drafts are reversible and do not activate a layer or enter document undo/native files.
 #[test]
 fn swatches_apply_cancel_reset_and_persist_locally() {
@@ -127,11 +158,131 @@ fn swatches_apply_cancel_reset_and_persist_locally() {
     swatch(&mut h, "Top");
     hex_field(&mut h, "#💥xx");
     click(&mut h, "Apply color");
-    assert!(matches!(h.state().dialog, Dialog::LayerColor(_)));
+    assert!(matches!(h.state().dialog, Dialog::BoardColor(_)));
     click(&mut h, "Cancel");
     swatch(&mut h, "Top");
     click(&mut h, "Reset to default");
     assert_eq!(lands(&h, Tokens::get().board_front), 4);
+    assert_eq!(h.state().session.inspect(), before);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+}
+
+/// Same-net zones, pads and a contact-connected track share one local color across copper layers.
+#[test]
+fn zone_net_color_follows_copper_and_restores_layer_colors() {
+    use pcbcraft_engine::{board::zones::ADD_ZONE, schematic::Point};
+
+    let mut h = super::board_fill::board();
+    let (zone, from) = {
+        let project = h.state().session.project().unwrap();
+        let board = project.board_view(project.board_target().unwrap()).unwrap();
+        let from = board.footprints().next().unwrap().pads.into_iter().find(|pad| pad.number == "2").unwrap().center;
+        (board.zones()[0].clone(), from)
+    };
+    let bottom = layer(&h, "Bottom");
+    let revision = h.state().session.revision();
+    h.state_mut().run(ADD_ZONE, &json!({"net":zone.net,"layer":bottom,"points":zone.points,"options":zone.options,"expected_revision":revision}));
+    assert!(h.state().message.is_none(), "{:?}", h.state().message);
+    let to = Point { y_nm: from.y_nm + 2_540_000, ..from };
+    super::board_tracks::add_track(&mut h, from, to);
+    let before = h.state().session.inspect();
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let selected = zone.id.to_string();
+    h.state_mut().views.active.board.zones.select(Some(selected.clone()));
+    h.run();
+    click(&mut h, "Net color…");
+    hex_field(&mut h, "#29B6C8");
+    click(&mut h, "Apply color");
+    h.state_mut().views.active.board.zones.select(None);
+    h.run();
+
+    let chosen = egui::Color32::from_rgb(0x29, 0xB6, 0xC8);
+    let mesh_count = |h: &Harness<'_, PcbApp>, color: egui::Color32| {
+        let canvas = h.get_by_label("PCB canvas").rect();
+        let ink = color.gamma_multiply(0.32);
+        h.output()
+            .shapes
+            .iter()
+            .filter(|shape| {
+                shape.clip_rect == canvas
+                    && matches!(&shape.shape, egui::Shape::Mesh(mesh)
+                        if !mesh.indices.is_empty() && mesh.vertices.iter().all(|vertex| vertex.color == ink))
+            })
+            .count()
+    };
+    let outlines = |h: &Harness<'_, PcbApp>, color| {
+        let canvas = h.get_by_label("PCB canvas").rect();
+        h.output()
+            .shapes
+            .iter()
+            .filter(|shape| {
+                shape.clip_rect == canvas
+                    && matches!(&shape.shape, egui::Shape::Path(path)
+                        if path.closed && path.stroke.color == egui::epaint::ColorMode::Solid(color))
+            })
+            .count()
+    };
+    let track_has_color = |h: &Harness<'_, PcbApp>, color| {
+        let canvas = h.get_by_label("PCB canvas").rect();
+        let camera = &h.state().views.active.camera;
+        let endpoints = [camera.screen(from, canvas), camera.screen(to, canvas)];
+        h.output().shapes.iter().any(|shape| {
+            shape.clip_rect == canvas
+                && matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
+                    if points == &endpoints && stroke.color == color)
+        })
+    };
+    assert_eq!(mesh_count(&h, chosen), 2);
+    assert_eq!(outlines(&h, chosen), 2);
+    assert_eq!(lands(&h, chosen), 2);
+    assert_eq!(lands(&h, Tokens::get().board_front), 2);
+    assert!(track_has_color(&h, chosen));
+
+    let saved = h.state().board_appearance.storage_text();
+    assert!(saved.is_some());
+    h.state_mut().board_appearance = crate::board_appearance::Appearance::from_storage(saved.clone());
+    h.run();
+    assert_eq!(mesh_count(&h, chosen), 2);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ctx = h.ctx.clone();
+        let view = h.state().views.active.id().0;
+        let inspect = crate::window_commands::inspect_editor(h.state());
+        let board = inspect["views"].as_array().unwrap().iter().find(|view| view["workspace"] == "board").unwrap();
+        assert_eq!(board["board"]["net_colors"], json!([{"net":zone.net,"color":"#29B6C8"}]));
+        assert_eq!(board["board"]["net_colors_visible"], true);
+        let unknown = json!({"view":view,"net":uuid::Uuid::nil(),"color":"#112233"});
+        assert!(h.state_mut().run_window_command(&ctx, "view.set_net_color", &unknown).is_err());
+        let known = json!({"view":view,"net":zone.net,"color":"#29B6C8"});
+        h.state_mut().run_window_command(&ctx, "view.set_net_color", &known).unwrap();
+        assert_eq!(h.state().board_appearance.storage_text(), saved);
+    }
+    click(&mut h, "Net colors");
+    assert_eq!(mesh_count(&h, chosen), 0);
+    assert_eq!(mesh_count(&h, Tokens::get().board_front), 1);
+    assert_eq!(mesh_count(&h, Tokens::get().board_back), 1);
+    assert!(track_has_color(&h, Tokens::get().board_front));
+    assert_eq!(h.state().board_appearance.storage_text(), saved);
+    click(&mut h, "Net colors");
+    assert_eq!(mesh_count(&h, chosen), 2);
+    h.state_mut().views.active.board.zones.select(Some(selected));
+    h.run();
+    click(&mut h, "Net color…");
+    click(&mut h, "Use layer color");
+    assert_eq!(mesh_count(&h, chosen), 0);
+
+    let track = {
+        let project = h.state().session.project().unwrap();
+        project.board_view(project.board_target().unwrap()).unwrap().tracks()[0].id
+    };
+    let state = &mut h.state_mut().views.active.board;
+    state.zones.select(None);
+    state.tracks.selected.insert(track);
+    h.run();
+    click(&mut h, "Net color…");
+    hex_field(&mut h, "#29B6C8");
+    click(&mut h, "Apply color");
+    assert_eq!(mesh_count(&h, chosen), 2);
     assert_eq!(h.state().session.inspect(), before);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
 }
