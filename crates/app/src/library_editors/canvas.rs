@@ -1031,11 +1031,11 @@ impl Document {
                                 Err(error) => self.error = Some(error),
                             }
                         }
-                    } else {
+                    } else if matches!(self.tool, Tool::Select) {
                         self.delete();
                     }
                 }
-                if ui.input(|i| i.key_pressed(egui::Key::Delete)) {
+                if matches!(self.tool, Tool::Select) && ui.input(|i| i.key_pressed(egui::Key::Delete)) {
                     self.delete();
                 }
                 if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -1617,5 +1617,70 @@ mod tests {
         let updated = doc.session.snapshot();
         let (next_pts, _) = pcbcraft_engine::authoring::courtyard::courtyard_polygon(&updated.objects[&cy_id]).unwrap();
         assert_eq!(next_pts[0], snapped);
+    }
+
+    /// Plain Backspace and Delete only remove the selected primitive in Select mode; active
+    /// drawing tools (including Courtyard) keep the selection intact.
+    #[test]
+    fn backspace_and_delete_only_remove_selection_in_select_tool() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = crate::PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut crate::PcbApp| app.frame(ui), app);
+        h.run();
+        let object = *h.state().library_editors.documents[&id].session.snapshot().objects.keys().next().unwrap();
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select(Some(object)).unwrap();
+        h.run();
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+        let rev = h.state().library_editors.documents[&id].session.revision();
+
+        // Courtyard drawing tool keeps the selected primitive on Backspace and Delete.
+        h.key_press(egui::Key::C);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, Tool::Draw { kind: Place::Courtyard, .. }));
+        assert!(h.state().library_editors.documents[&id].selection.contains(&object));
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        assert!(h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&object));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev);
+        h.key_press(egui::Key::Delete);
+        h.run();
+        assert!(h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&object));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev);
+
+        // Other drawing tools (e.g. Line) also keep the selected primitive on Backspace and Delete.
+        h.key_press(egui::Key::L);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, Tool::Draw { kind: Place::Line, .. }));
+        assert!(h.state().library_editors.documents[&id].selection.contains(&object));
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        assert!(h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&object));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev);
+        h.key_press(egui::Key::Delete);
+        h.run();
+        assert!(h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&object));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev);
+
+        // Returning to Select mode restores Delete and plain Backspace deletion.
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert!(matches!(h.state().library_editors.documents[&id].tool, Tool::Select));
+        h.key_press(egui::Key::Delete);
+        h.run();
+        assert!(!h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&object));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev + 1);
+
+        crate::tests::click(&mut h, "Undo Library Edit");
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().select(Some(object)).unwrap();
+        h.run();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        assert!(!h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&object));
     }
 }
