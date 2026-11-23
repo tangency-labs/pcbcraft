@@ -506,6 +506,14 @@ impl PcbApp {
             }
             let preview = self.library_editors.documents.get(&draft.document).map(|doc| draft.cached_preview(doc));
             match (&draft.error, &preview) {
+                (Some(error), Some(Ok(summary))) => {
+                    ui.label(shell::dim(summary));
+                    ui.label(shell::error(error));
+                }
+                (Some(error), Some(Err(message))) if message != error => {
+                    ui.label(shell::error(message));
+                    ui.label(shell::error(error));
+                }
                 (Some(error), _) => {
                     ui.label(shell::error(error));
                 }
@@ -1172,6 +1180,73 @@ mod tests {
         crate::tests::click(&mut h, "Generate");
         assert!(matches!(h.state().dialog, Dialog::None));
         assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_after_bg + 1);
+    }
+
+    /// Changing the footprint's source dimensions while Generate Courtyard is open must show
+    /// both the recomputed preview dimensions and the rebase notice before the second Generate
+    /// click confirms generation.
+    #[test]
+    fn courtyard_dialog_rebase_shows_updated_preview_and_notice_before_confirm() {
+        use pcbcraft_engine::{
+            authoring::Primitive,
+            board::definition::{CopperBinding, PadShape, RectPad},
+        };
+
+        let mut app = PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let id = h.state().library_editors.active.unwrap();
+
+        crate::tests::click(&mut h, "Generate courtyard…");
+        assert!(matches!(h.state().dialog, Dialog::LibraryCourtyard(..)));
+        assert!(h.query_by_label("Result: 2.10 × 1.30 mm · 4 vertices").is_some());
+
+        // Expand the footprint's source dimensions while the dialog is open.
+        h.state_mut()
+            .library_editors
+            .edit(
+                id,
+                0,
+                Action::Insert {
+                    primitive: Primitive::Pad {
+                        pad: RectPad {
+                            number: "3".into(),
+                            center: Point { x_nm: 3_000_000, y_nm: 2_000_000 },
+                            width_nm: 1_000_000,
+                            height_nm: 1_000_000,
+                            rotation: 0,
+                            shape: PadShape::Rectangle,
+                            copper: CopperBinding::ComponentSide,
+                            corner_radius_nm: 0,
+                            drill_nm: None,
+                            plated_slot: None,
+                        },
+                    },
+                },
+            )
+            .unwrap();
+        let rev_after_bg = h.state().library_editors.documents[&id].session.revision();
+        let before = doc_state(h.state(), id);
+
+        // First Generate rebases without mutating the document and shows both the updated preview
+        // and the rebase notice before confirmation.
+        crate::tests::click(&mut h, "Generate");
+        assert_eq!(doc_state(h.state(), id), before);
+        assert!(h.query_by_label("The footprint changed; check the preview and press Generate again.").is_some());
+        assert!(h.query_by_label("Result: 4.80 × 3.40 mm · 4 vertices").is_some());
+        assert!(h.query_by_label("Result: 2.10 × 1.30 mm · 4 vertices").is_none());
+
+        // Second Generate confirms and generates the updated courtyard dimensions.
+        crate::tests::click(&mut h, "Generate");
+        assert!(matches!(h.state().dialog, Dialog::None));
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_after_bg + 1);
+        let snap = h.state().library_editors.documents[&id].session.snapshot();
+        let selected = h.state().library_editors.documents[&id].selected.unwrap();
+        let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&selected]).unwrap();
+        let metrics = courtyard::metrics(pts).unwrap();
+        assert_eq!(metrics.width_nm, 4_800_000);
+        assert_eq!(metrics.height_nm, 3_400_000);
     }
 
     /// Cmd+C copy chord (even when Cmd is released within the same input batch) and Shift+C must
