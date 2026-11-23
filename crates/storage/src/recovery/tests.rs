@@ -1931,3 +1931,114 @@ fn snapshot_republishes_when_journal_is_truncated_or_header_corrupted_in_place()
     assert_eq!(recovered.stop, None);
     assert_eq!(recovered.documents, state_1);
 }
+
+/// Coalescing consecutive edits keeps earlier pending edits until the replacement encodes: if the
+/// newest edit fails to encode, the newest encodable pending edit is still recorded and the fault
+/// for the failed edit is reported; if the newest edit encodes, only it is written.
+#[test]
+fn coalescing_keeps_newest_encodable_edit_when_replacement_fails_to_encode() {
+    let dir = tempfile::tempdir().unwrap();
+    let mailbox = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "State A"})).unwrap();
+    mailbox.push(Message::Opened(session.snapshot().unwrap()));
+
+    let b_rev = session.apply("project.rename", &json!({"name": "State B"})).unwrap();
+    let b_project = session.snapshot().unwrap();
+    let b_docs = encode_documents(b_project.clone()).unwrap();
+    let b_edit = CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision: b_rev, project: b_project.clone() };
+
+    let mut bad_project = Project::clone(&b_project);
+    bad_project.name = "x".repeat(pcbcraft_engine::persistence::MAX_DOCUMENT_BYTES + 1);
+    let c_edit = CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision: b_rev + 1, project: Arc::new(bad_project) };
+
+    mailbox.push(Message::Committed(b_edit));
+    mailbox.push(Message::Committed(c_edit));
+    let (tx, rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(tx));
+    mailbox.close(None);
+
+    record(dir.path(), "entry", &mailbox, &|| {}, None).unwrap();
+    let err = rx.recv().unwrap().unwrap_err();
+    assert!(err.contains("size limit"), "unexpected error: {err}");
+    assert_eq!(mailbox.state.lock().unwrap().fault.as_ref().map(|f| f.message.as_str()), Some(err.as_str()));
+
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.project.name, "State B");
+    assert_eq!(recovered.documents, b_docs);
+
+    // When the replacement edit encodes, only it is written (single coalesced command record).
+    let ok_dir = tempfile::tempdir().unwrap();
+    let ok_mailbox = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut ok_session = Session::default();
+    ok_session.apply("project.new", &json!({"name": "State A"})).unwrap();
+    ok_mailbox.push(Message::Opened(ok_session.snapshot().unwrap()));
+    let rev_1 = ok_session.apply("project.rename", &json!({"name": "State B"})).unwrap();
+    let edit_1 = CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision: rev_1, project: ok_session.snapshot().unwrap() };
+    let rev_2 = ok_session.apply("project.rename", &json!({"name": "State C"})).unwrap();
+    let c_docs = encode_documents(ok_session.snapshot().unwrap()).unwrap();
+    let edit_2 = CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision: rev_2, project: ok_session.snapshot().unwrap() };
+    ok_mailbox.push(Message::Committed(edit_1));
+    ok_mailbox.push(Message::Committed(edit_2));
+    let (ok_tx, ok_rx) = mpsc::sync_channel(1);
+    ok_mailbox.push(Message::Sync(ok_tx));
+    ok_mailbox.close(None);
+
+    record(ok_dir.path(), "entry", &ok_mailbox, &|| {}, None).unwrap();
+    ok_rx.recv().unwrap().unwrap();
+    assert_eq!(ok_mailbox.state.lock().unwrap().fault, None);
+    let ok_recovered = recover(ok_dir.path(), "entry").unwrap();
+    assert_eq!(ok_recovered.stop, None);
+    assert_eq!(ok_recovered.project.name, "State C");
+    assert_eq!(ok_recovered.commands.len(), 1);
+    assert_eq!(ok_recovered.documents, c_docs);
+}
+
+/// Compacting a burst above `PENDING_LIMIT` keeps a bounded fallback to the newest encodable
+/// pending state: if the compacted latest state fails to encode, recovery preserves the newest
+/// encodable state from the burst and still reports the fault for the latest state.
+#[test]
+fn compaction_keeps_newest_encodable_state_when_latest_fails_to_encode() {
+    let dir = tempfile::tempdir().unwrap();
+    let mailbox = Mailbox { coalesce: true, ..Mailbox::default() };
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "State A"})).unwrap();
+    mailbox.push(Message::Opened(session.snapshot().unwrap()));
+    let (a_tx, a_rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(a_tx));
+
+    let mut last_good_project = session.snapshot().unwrap();
+    for index in 1..=PENDING_LIMIT {
+        let name = format!("Edit {index}");
+        let revision = session.apply("project.rename", &json!({"name": name})).unwrap();
+        let project = session.snapshot().unwrap();
+        last_good_project = project.clone();
+        mailbox.push(Message::Committed(CommittedEdit { command: "project.rename".to_owned(), params: json!({}), revision, project }));
+    }
+    let last_good_docs = encode_documents(last_good_project.clone()).unwrap();
+
+    let mut bad_project = Project::clone(&last_good_project);
+    bad_project.name = "x".repeat(pcbcraft_engine::persistence::MAX_DOCUMENT_BYTES + 1);
+    mailbox.push(Message::Committed(CommittedEdit {
+        command: "project.rename".to_owned(),
+        params: json!({}),
+        revision: session.revision() + 1,
+        project: Arc::new(bad_project),
+    }));
+
+    let (tx, rx) = mpsc::sync_channel(1);
+    mailbox.push(Message::Sync(tx));
+    mailbox.close(None);
+
+    record(dir.path(), "entry", &mailbox, &|| {}, None).unwrap();
+    a_rx.recv().unwrap().unwrap();
+    let err = rx.recv().unwrap().unwrap_err();
+    assert!(err.contains("size limit"), "unexpected error: {err}");
+    assert_eq!(mailbox.state.lock().unwrap().fault.as_ref().map(|f| f.message.as_str()), Some(err.as_str()));
+
+    let recovered = recover(dir.path(), "entry").unwrap();
+    assert_eq!(recovered.stop, None);
+    assert_eq!(recovered.project.name, format!("Edit {PENDING_LIMIT}"));
+    assert_eq!(recovered.documents, last_good_docs);
+}
