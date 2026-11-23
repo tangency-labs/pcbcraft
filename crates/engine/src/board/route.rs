@@ -1,4 +1,4 @@
-//! Clearance-aware walkaround and optional track-shove planning over captured copper.
+//! Clearance-aware walkaround and shove planning over captured copper.
 //!
 //! [`walkaround`] plans one single-layer route from a head point toward a target over a captured
 //! [`ClearanceQuery`]: horizontal, vertical and 45° legs (or horizontal and vertical only) that
@@ -7,8 +7,9 @@
 //! `pcb.add_tracks` command or copper preparation job, which revalidate and publish them in one
 //! undo step. Every kept leg is confirmed by the same exact probe and outline predicates that
 //! DRC uses. The search is deterministic and bounded by a probe budget and a cancellation flag.
-//! Shove mode returns disposable track replacements for one atomic add/replace command.
-//! Pads, vias and locked copper remain fixed; arcs, zones and multilayer search are not planned.
+//! Both shove modes return track replacements for atomic placement. The via-enabled mode can
+//! also move a through via and its attached track endpoints when the incoming copper hits it.
+//! Pads and locked copper stay fixed. Each through-via move is checked on every copper layer.
 use super::clearance::ClearanceQuery;
 use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
@@ -43,7 +44,7 @@ pub const MAX_BUDGET: usize = 65_536;
 /// prefers going round on the same side, so nearly equivalent routes do not alternate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
-    /// Walk around fixed copper or displace unlocked tracks on a disposable overlay.
+    /// Walk around existing copper, shove unlocked tracks, or also move through vias and their attached ends.
     pub mode: Mode,
     /// Opt into joining displaced copper elsewhere on its resolved net/physical island.
     /// False preserves spacing between source objects that were not directly touching.
