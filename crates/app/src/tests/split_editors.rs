@@ -1010,6 +1010,33 @@ fn uncovered_point(h: &Harness<'_, PcbApp>, id: ViewId, rect: egui::Rect) -> egu
         .find(|point| !cards.iter().any(|card| card.contains(*point)))
         .unwrap()
 }
+/// A press is judged where it lands: when the pointer moves on into the other pane before the
+/// frame ends, the pane under the press takes focus, not the pane the pointer reached.
+#[test]
+fn a_press_focuses_the_pane_it_lands_in_within_the_frame() {
+    for (from, to) in [(1, 0), (0, 1)] {
+        let mut h = split_harness();
+        h.state_mut().preferences.navigation.right_drag_pan = false;
+        let ctx = h.ctx.clone();
+        h.state_mut().activate_editor(&ctx, ViewId(to));
+        h.run();
+        assert_eq!(h.state().views.active.id(), ViewId(to));
+        let press = uncovered_point(&h, ViewId(from), canvas(&h, from));
+        let moved = uncovered_point(&h, ViewId(to), canvas(&h, to));
+        let snapshot = h.state().session.snapshot().unwrap();
+        let secondary =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE };
+        h.hover_at(press);
+        h.run();
+        h.event(secondary(press, true));
+        h.event(egui::Event::PointerMoved(moved));
+        h.run();
+        h.event(secondary(moved, false));
+        h.run();
+        assert_eq!(h.state().views.active.id(), ViewId(from), "the pane under the press takes focus");
+        assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    }
+}
 
 /// Wheel, pinch, scroll-pan and middle-drag follow the pointer into the inactive pane without
 /// focusing it. Only that camera moves; focus, both selections and the project stay as they were.

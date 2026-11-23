@@ -1087,9 +1087,19 @@ impl PcbApp {
             return;
         }
         let right_pans = self.preferences.navigation.right_drag_pan;
+        // Each button event carries its own position; the frame's last pointer position may
+        // already lie in another pane.
         let pressed = ctx.input(|input| {
             let right_click = right_pans && input.pointer.button_clicked(egui::PointerButton::Secondary);
-            (input.pointer.any_pressed() || right_click).then(|| input.pointer.interact_pos()).flatten()
+            let press = input.events.iter().find_map(|event| match event {
+                egui::Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
+                _ => None,
+            });
+            let click = input.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, .. } => Some(*pos),
+                _ => None,
+            });
+            press.or(click.filter(|_| right_click))
         });
         let navigating = ctx.input(|input| {
             let right = input.pointer.secondary_pressed();
