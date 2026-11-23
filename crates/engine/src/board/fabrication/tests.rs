@@ -495,6 +495,16 @@ fn read_coordinate(value: &str) -> Result<i64, &'static str> {
     Ok(number)
 }
 
+/// Deterministic `.SameCoordinates` GUID for `Frame::BOARD_ZERO` in direct `Gerber` unit tests.
+fn board_zero_frame_id() -> String {
+    same_coordinates_id(Resolved {
+        anchor: crate::board::origin::Anchor::BoardZero,
+        source: crate::board::origin::Source::Builtin,
+        at: Point { x_nm: 0, y_nm: 0 },
+        axes: "x_right_y_up",
+    })
+}
+
 /// Read the fixture subset: file identity, modes, standard and rounded apertures,
 /// the writer's per-definition/region TA/TD pairs and object attribute lifetimes,
 /// operation order and contour closure.
@@ -874,7 +884,7 @@ fn aperture_identity_and_selection_retain_shape_and_orientation() {
         gerber.body.push_str("X0Y0D03*\n");
     }
     gerber.stroke(&[point, Point { x_nm: 1_000_000, y_nm: 0 }], 400_000, Some(ApertureFunction::Material));
-    let text = gerber.finish("Soldermask,Top", "Negative");
+    let text = gerber.finish("Soldermask,Top", "Negative", &board_zero_frame_id());
     let read = try_read_gerber(&text, "Soldermask,Top", "Negative").unwrap();
     assert_eq!(read.apertures.len(), 7);
     assert_eq!(read.flashes.len(), 7);
@@ -1914,7 +1924,7 @@ fn gerber_object_field_escaping_is_reversible_and_keeps_reserved_names_distinct(
         gerber.object(Object { net: Some(name), component: Some((reference, Some(pin))) }, |gerber| {
             gerber.stroke(&[Point { x_nm: 0, y_nm: 0 }], 100_000, Some(ApertureFunction::ThroughHolePad));
         });
-        let text = gerber.finish("Copper,L1,Top", "Positive");
+        let text = gerber.finish("Copper,L1,Top", "Positive", &board_zero_frame_id());
         let object = try_read_gerber(&text, "Copper,L1,Top", "Positive").unwrap().objects.remove(0).1;
         assert_eq!(object.net.as_deref(), Some(exported));
         assert_eq!(object.pin, Some((reference.to_owned(), pin.to_owned())));
