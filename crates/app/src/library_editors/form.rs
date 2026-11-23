@@ -163,6 +163,15 @@ impl Draft {
         response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))
     }
 
+    /// Render the buffered layer purpose selector for a selected courtyard outline.
+    pub(super) fn show_courtyard_purpose(&mut self, ui: &mut Ui) {
+        let Some(Value::String(purpose)) = self.value.get_mut("artwork").and_then(|a| a.get_mut("purpose")) else {
+            return;
+        };
+        let options = choices(".artwork.purpose").iter().map(|option| (*option, display(option))).collect::<Vec<_>>();
+        properties::choice(ui, &label(".artwork.purpose"), egui::Id::unique(".artwork.purpose"), purpose, &options);
+    }
+
     /// Render the buffered X and Y coordinate fields for the selected courtyard vertex.
     /// Returns `true` when Enter was pressed while either field had focus.
     pub(super) fn show_courtyard_vertex(&mut self, ui: &mut Ui, index: usize) -> bool {

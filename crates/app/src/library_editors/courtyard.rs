@@ -376,6 +376,7 @@ impl Document {
 
         let apply_payload = if let Some(draft) = self.draft.as_mut() {
             if expanded {
+                draft.show_courtyard_purpose(ui);
                 properties::section(ui, "All vertices");
                 for i in 0..count {
                     if draft.show_courtyard_vertex_row(ui, i) {
@@ -415,6 +416,9 @@ impl Document {
             let result = action_result.and_then(|action| self.session.execute(revision, action));
             match result {
                 Ok(_) => {
+                    if self.session.snapshot().objects.get(&object_id).and_then(courtyard::courtyard_polygon).is_none() {
+                        self.selected_vertex = None;
+                    }
                     self.draft = None;
                     self.tool = canvas::Tool::Select;
                     self.error = None;
@@ -1918,6 +1922,86 @@ mod tests {
         h.run();
         assert!(matches!(h.state().dialog, Dialog::LibraryProperties(..)));
         assert!(h.query_by_label("Vertex 1 X (mm)").is_some());
+    }
+
+    /// Expanded Properties on a closed courtyard outline exposes Purpose alongside stroke and
+    /// vertex controls, allowing reclassification to Fabrication or Silkscreen through the
+    /// buffered replacement while keeping geometry-only edits working.
+    #[test]
+    fn courtyard_expanded_properties_reclassifies_purpose_and_keeps_geometry_controls() {
+        use pcbcraft_engine::board::definition::GraphicPurpose;
+
+        let (mut h, id, cy_id) = harness_with_generated_courtyard();
+        select_vertex_on_canvas(&mut h, id, cy_id, 0);
+        let area = h.get_by_label("Library canvas").rect();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::E);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryProperties(..)));
+
+        // Stroke and vertex controls stay functional for geometry-only edits.
+        enabled_by_label(&h, "Stroke (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        enabled_by_label(&h, "Stroke (mm)").type_text("0.2");
+        h.run();
+        enabled_by_label(&h, "Apply").click();
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&id].error, None);
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(0));
+        let (expected_pts, stroke) = {
+            let snap = h.state().library_editors.documents[&id].session.snapshot();
+            let (pts, stroke) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+            (pts.to_vec(), stroke)
+        };
+        assert_eq!(stroke, 200_000);
+
+        // Changing Purpose to Fabrication is buffered until Apply and submits one replacement.
+        let rev_before = h.state().library_editors.documents[&id].session.revision();
+        enabled_by_label(&h, "Purpose").click();
+        h.run();
+        enabled_by_label(&h, "Fabrication").click();
+        h.run();
+        assert!(h.state().library_editors.documents[&id].pending());
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_before);
+
+        enabled_by_label(&h, "Apply").click();
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&id].error, None);
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, None);
+        assert_eq!(h.state().library_editors.documents[&id].session.revision(), rev_before + 1);
+        {
+            let snap = h.state().library_editors.documents[&id].session.snapshot();
+            let pcbcraft_engine::authoring::Primitive::Artwork { artwork } = &snap.objects[&cy_id] else {
+                panic!("expected artwork primitive after purpose reclassification");
+            };
+            assert_eq!(artwork.purpose, GraphicPurpose::Fabrication);
+            assert_eq!(artwork.graphic.stroke_nm, 200_000);
+            let pcbcraft_engine::library_graphics::Geometry::Polyline { points, closed } = &artwork.graphic.geometry else {
+                panic!("expected closed polyline geometry");
+            };
+            assert!(*closed);
+            assert_eq!(points, &expected_pts);
+        }
+
+        // Undo reverts to Courtyard, and reclassifying to Silkscreen works the same way.
+        h.state_mut().library_editors.edit(id, rev_before + 1, Action::Undo).unwrap();
+        h.run();
+        assert!(courtyard::courtyard_polygon(&h.state().library_editors.documents[&id].session.snapshot().objects[&cy_id]).is_some());
+
+        enabled_by_label(&h, "Purpose").click();
+        h.run();
+        enabled_by_label(&h, "Silkscreen").click();
+        h.run();
+        enabled_by_label(&h, "Apply").click();
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&id].error, None);
+        let snap = h.state().library_editors.documents[&id].session.snapshot();
+        let pcbcraft_engine::authoring::Primitive::Artwork { artwork } = &snap.objects[&cy_id] else {
+            panic!("expected artwork primitive after silkscreen reclassification");
+        };
+        assert_eq!(artwork.purpose, GraphicPurpose::Silkscreen);
     }
 
     /// Snapshot state: canvas mid-drag of vertex 0 into a self-intersecting position showing the
