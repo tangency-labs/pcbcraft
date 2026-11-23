@@ -508,7 +508,14 @@ pub(super) fn show(
             } else {
                 None
             };
-            if let Some(footprint) = picked {
+            // Dragging a member of a larger selection keeps it and moves the whole group, as Move does.
+            let group = footprint_drag
+                && picked.is_some_and(|footprint| state.selection.contains(&footprint.id))
+                && crate::board_clipboard::selection_with_vias(state, project.vias().iter().map(|v| v.id)).len() > 1;
+            if group {
+                state.movement.request_drag();
+                ui.ctx().request_repaint();
+            } else if let Some(footprint) = picked {
                 state.drawing.select(None);
                 out.selection = Some(BTreeSet::from([footprint.id.clone()]));
                 let anchor = if footprint_drag {

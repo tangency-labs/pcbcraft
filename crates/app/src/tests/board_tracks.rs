@@ -1338,6 +1338,186 @@ fn m_and_drag_move_selected_copper() {
     assert_ne!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().start, after_m, "the drag moved the track");
 }
 
+/// Two footprints, a loose track, a second unselected track and a via on a 50 mil grid.
+/// Returns the selectable track, the other track and the via.
+fn group_drag_board<'a>() -> (Harness<'a, PcbApp>, Uuid, Uuid, Uuid) {
+    let mut h = routable();
+    let id = h.state().views.active.id();
+    h.state_mut().set_view_grid(id, 50 * pcbcraft_chrome::grid::NM_PER_MIL);
+    let track = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: 2_540_000 }, Point { x_nm: 7_620_000, y_nm: 2_540_000 });
+    let other = add_track(&mut h, Point { x_nm: 2_540_000, y_nm: -2_540_000 }, Point { x_nm: 7_620_000, y_nm: -2_540_000 });
+    let revision = h.state().session.revision();
+    h.state_mut().run(
+        pcbcraft_engine::ADD_VIA,
+        &json!({"at":{"x_nm":0,"y_nm":-5_080_000},"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}),
+    );
+    h.run();
+    assert_eq!(h.state().message, None);
+    let via = vias(&h)[0].id;
+    (h, track, other, via)
+}
+
+/// The fixture's two footprints with their positions.
+fn footprint_pair(h: &Harness<'_, PcbApp>) -> [(String, Point); 2] {
+    let poses = footprint_poses(h);
+    [poses[0].clone(), poses[1].clone()]
+}
+
+/// Every footprint id with its current board position.
+fn footprint_poses(h: &Harness<'_, PcbApp>) -> Vec<(String, Point)> {
+    h.state().session.project().unwrap().boards().next().unwrap().footprints().map(|f| (f.id.clone(), f.position)).collect()
+}
+
+/// Press at `from`, move to `to` and keep the button down.
+fn hold_drag(h: &mut Harness<'_, PcbApp>, from: Point, to: Point) -> egui::Pos2 {
+    let (from, to) = (at(h, from), at(h, to));
+    h.hover_at(from);
+    h.run();
+    h.drag_at(from);
+    h.run();
+    h.hover_at(to);
+    h.run();
+    to
+}
+
+/// `p` translated by `d`.
+fn shifted(p: Point, d: Point) -> Point {
+    Point { x_nm: p.x_nm + d.x_nm, y_nm: p.y_nm + d.y_nm }
+}
+
+/// Dragging one footprint of a mixed selection keeps the selection and moves every selected
+/// footprint, track and via by the same snapped offset in one undoable edit, like Move does.
+#[test]
+fn dragging_a_selected_footprint_moves_the_whole_mixed_selection() {
+    let (mut h, track, other, via) = group_drag_board();
+    let [(a, a_at), (b, b_at)] = footprint_pair(&h);
+    let items = pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: BTreeSet::from([a.clone(), b.clone()]),
+        tracks: BTreeSet::from([track]),
+        vias: BTreeSet::from([via]),
+        ..Default::default()
+    };
+    h.state_mut().select_board_items(items.clone());
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let old_tracks = tracks(&h);
+    let old_via = vias(&h)[0].at;
+    let delta = Point { x_nm: 2_540_000, y_nm: 1_270_000 };
+    let drop = hold_drag(&mut h, a_at, shifted(a_at, delta));
+    assert!(h.state().views.active.board.movement.active(), "the drag picked up the group");
+    assert!(h.state().views.active.board.draft.is_none(), "no single-footprint drag");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "a preview is not an edit");
+    h.drop_at(drop);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1, "one edit for the whole group");
+    assert!(!h.state().views.active.board.movement.active());
+    let poses = footprint_poses(&h);
+    assert!(poses.contains(&(a, shifted(a_at, delta))));
+    assert!(poses.contains(&(b, shifted(b_at, delta))));
+    for old in old_tracks {
+        let new = tracks(&h).into_iter().find(|t| t.id == old.id).unwrap();
+        let expected = if old.id == other { (old.start, old.end) } else { (shifted(old.start, delta), shifted(old.end, delta)) };
+        assert_eq!((new.start, new.end), expected, "only selected copper moves");
+    }
+    assert_eq!(vias(&h)[0].at, shifted(old_via, delta));
+    assert_eq!(
+        crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()),
+        items,
+        "the selection is kept"
+    );
+    h.state_mut().run("edit.undo", &json!({}));
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before, "one undo step restores everything");
+}
+
+/// Dragging a footprint outside the current selection still selects it alone and moves only it.
+#[test]
+fn dragging_an_unselected_footprint_moves_only_that_footprint() {
+    let (mut h, track, _, _) = group_drag_board();
+    let [(a, a_at), (b, b_at)] = footprint_pair(&h);
+    let items = pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: BTreeSet::from([b.clone()]),
+        tracks: BTreeSet::from([track]),
+        ..Default::default()
+    };
+    h.state_mut().select_board_items(items);
+    h.run();
+    let revision = h.state().session.revision();
+    let old_tracks = tracks(&h);
+    let delta = Point { x_nm: 2_540_000, y_nm: 1_270_000 };
+    let drop = hold_drag(&mut h, a_at, shifted(a_at, delta));
+    assert!(!h.state().views.active.board.movement.active());
+    assert!(h.state().views.active.board.draft.is_some());
+    h.drop_at(drop);
+    h.run();
+    assert_eq!(h.state().message, None);
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert_eq!(h.state().views.active.board.selection, BTreeSet::from([a.clone()]));
+    let poses = footprint_poses(&h);
+    assert!(poses.contains(&(a, shifted(a_at, delta))));
+    assert!(poses.contains(&(b, b_at)));
+    assert_eq!(tracks(&h), old_tracks);
+}
+
+/// Esc during a group drag discards the preview, keeps the selection and swallows the release.
+#[test]
+fn escape_cancels_a_group_drag_without_an_edit() {
+    let (mut h, track, _, _) = group_drag_board();
+    let [(a, a_at), (b, _)] = footprint_pair(&h);
+    let items = pcbcraft_engine::board::clipboard::BoardSelection {
+        footprints: BTreeSet::from([a, b]),
+        tracks: BTreeSet::from([track]),
+        ..Default::default()
+    };
+    h.state_mut().select_board_items(items.clone());
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let revision = h.state().session.revision();
+    let drop = hold_drag(&mut h, a_at, shifted(a_at, Point { x_nm: 2_540_000, y_nm: 1_270_000 }));
+    assert!(h.state().views.active.board.movement.active());
+    h.key_press(Key::Escape);
+    h.run();
+    h.drop_at(drop);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert!(h.state().views.active.board.draft.is_none());
+    assert_eq!(h.state().session.revision(), revision, "Esc cancels the drag");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    assert_eq!(crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()), items);
+}
+
+/// A group drag that includes locked copper is refused with the same message as Move, and
+/// nothing moves, not even the footprint under the pointer.
+#[test]
+fn group_drag_follows_move_for_locked_items() {
+    let (mut h, _, _, via) = group_drag_board();
+    let [(a, a_at), (b, _)] = footprint_pair(&h);
+    let revision = h.state().session.revision();
+    let target = h.state().session.project().unwrap().board_target().unwrap().board;
+    h.state_mut().run(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":target,"vias":[via],"locked":true,"expected_revision":revision}));
+    h.run();
+    let items =
+        pcbcraft_engine::board::clipboard::BoardSelection { footprints: BTreeSet::from([a, b]), vias: BTreeSet::from([via]), ..Default::default() };
+    h.state_mut().select_board_items(items.clone());
+    h.run();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.hover_at(at(&h, a_at));
+    h.run();
+    h.key_press(Key::M);
+    h.run();
+    let refused = h.state_mut().message.take();
+    assert!(refused.as_ref().is_some_and(|m| m.contains("Unlock")), "{refused:?}");
+    let drop = hold_drag(&mut h, a_at, shifted(a_at, Point { x_nm: 2_540_000, y_nm: 1_270_000 }));
+    assert!(h.state().views.active.board.draft.is_none(), "the pressed footprint does not move alone");
+    h.drop_at(drop);
+    h.run();
+    assert_eq!(h.state().message, refused, "the drag gives the same refusal as Move");
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    assert_eq!(crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()), items);
+}
+
 /// Properties shows a selected track's width in the display units (millimeters here); typing a
 /// new width and pressing Enter sets it through the shared command in one edit.
 #[test]

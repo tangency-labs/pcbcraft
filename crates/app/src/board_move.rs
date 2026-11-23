@@ -19,11 +19,13 @@ use std::{collections::BTreeSet, sync::Arc};
 pub(super) struct State {
     draft: Option<Draft>,
     cancelled: bool,
+    drag: bool,
 }
 #[derive(Debug)]
 struct Draft {
     source: ViewInput,
     pickup: bool,
+    drag: bool,
     plan: MovePlan,
     items: BoardSelection,
     anchor: Point,
@@ -37,11 +39,16 @@ struct Draft {
 impl State {
     /// Pending cancellation also owns the current release, preventing a new single-item gesture.
     pub(super) fn active(&self) -> bool {
-        self.draft.is_some() || self.cancelled
+        self.draft.is_some() || self.cancelled || self.drag
     }
     /// Discard preview geometry while preserving selection and the source project.
     pub(super) fn cancel(&mut self) {
-        self.cancelled |= self.draft.take().is_some();
+        let requested = std::mem::take(&mut self.drag);
+        self.cancelled |= self.draft.take().is_some() || requested;
+    }
+    /// A canvas drag pressed on a member of the selection picks up the whole group on the next pass.
+    pub(super) fn request_drag(&mut self) {
+        self.drag = true;
     }
     /// Escape leaves the complete selection intact for another pickup.
     pub(super) fn escape(&mut self) -> bool {
@@ -64,6 +71,7 @@ impl PcbApp {
     pub(super) fn board_move_ready(&mut self, ctx: &Context, id: ViewId, enabled: bool) -> bool {
         let Some(project) = self.session.snapshot() else { return false };
         let Some(view) = self.views.view_mut(id) else { return false };
+        let drag = std::mem::take(&mut view.board.movement.drag);
         if view.board.movement.active() {
             let stale = view.board.movement.draft.as_ref().is_some_and(|draft| {
                 view.input(&self.session) != Some(draft.source)
@@ -78,7 +86,7 @@ impl PcbApp {
             view.board.move_requested = false;
             return true;
         }
-        if !enabled || !view.board.move_requested || view.board.reference.selected.is_some() {
+        if !enabled || !(view.board.move_requested || drag) || view.board.reference.selected.is_some() {
             return false;
         }
         let items = crate::board_clipboard::selection(&view.board, &project);
@@ -114,6 +122,7 @@ impl PcbApp {
                 view.board.movement.draft = Some(Draft {
                     source,
                     pickup: true,
+                    drag,
                     plan,
                     items,
                     anchor: fallback,
@@ -145,8 +154,10 @@ impl PcbApp {
                 view.board.move_requested = false;
             }
             // First pass: pickup stays under the current pointer without moving the source.
+            // A drag is anchored where its button went down, so the group keeps its grab offset.
             if d.pickup {
-                if let Some(p) = pointer {
+                let press = if d.drag { ui.input(|i| i.pointer.press_origin()) } else { None };
+                if let Some(p) = press.or(pointer) {
                     d.anchor = view.camera.snap(p, rect);
                 }
                 d.pickup = false;
@@ -210,7 +221,21 @@ impl PcbApp {
             if ui.input(|i| i.pointer.secondary_clicked()) {
                 return;
             }
-            if pointer.is_some() && ui.input(|i| i.pointer.primary_clicked()) {
+            // A drag places on release over the canvas; a lost release, an off-canvas release or
+            // an unchanged offset ends it without an edit.
+            let place = if d.drag {
+                let released = ui.input(|i| i.pointer.primary_released());
+                if !released && !ui.input(|i| i.pointer.primary_down()) {
+                    return;
+                }
+                released
+            } else {
+                ui.input(|i| i.pointer.primary_clicked())
+            };
+            if place && d.drag && (pointer.is_none() || d.delta == Point { x_nm: 0, y_nm: 0 }) {
+                return;
+            }
+            if pointer.is_some() && place {
                 if let Some(error) = d.error {
                     self.message = Some(error);
                     return;
