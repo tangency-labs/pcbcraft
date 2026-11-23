@@ -502,6 +502,14 @@ Deleting a sheet removes its symbols, wires and associated board footprints in
 one undo step, and the project always retains at least one sheet. Each pane keeps
 its sheet target, camera and selection independently.
 
+New sheets use A4 landscape paper with the Default frame. With nothing selected,
+Properties shows the current sheet: its **Paper** group lists **Size** (A4–A0),
+**Orientation** and **Frame** (the Default title block or **None** for a plain
+border), followed by the sheet and project parameters that fill the title block.
+A sheet row's **Paper** and **Frame** submenus in the Browser make the same choices.
+Each pick is one undo step and keeps the drawing and the paper's top-left corner in
+place.
+
 Use **S** or **Sheets → Subsheet** to place a hierarchical sheet symbol,
 then choose a new child or an existing unparented sheet. Double-click inside the
 symbol to enter its child; **Alt+Backspace** returns to the parent. The sheet name
