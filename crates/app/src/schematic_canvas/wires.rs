@@ -363,7 +363,9 @@ fn paint_emphasized(painter: &Painter, rect: Rect, camera: &Camera, points: Vec<
 /// connectivity. A selected or highlighted wire gets the contrasting underlay from
 /// [`emphasis_strokes`] beneath its ink, so it stays distinguishable even when a net color matches
 /// the theme's selection accent and its drawn width is already the maximum. A plain wire whose saved
-/// color equals the paper gets the same underlay so it cannot disappear into the background.
+/// color equals the resolved surface under it (the canvas on uniform paper, or the shaded/custom
+/// fill on the sheet from `paper`) gets the same underlay so it cannot disappear into the background
+/// in any paper mode.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn paint(
     painter: &Painter,
@@ -374,6 +376,7 @@ pub(super) fn paint(
     selected: &std::collections::BTreeSet<String>,
     highlighted: &std::collections::BTreeSet<String>,
     appearances: &Appearances,
+    paper: pcbcraft_chrome::paper::Appearance,
 ) {
     let tokens = Tokens::get();
     let preview =
@@ -408,10 +411,13 @@ pub(super) fn paint(
         let width =
             override_.and_then(|appearance| appearance.width_cp).map_or(theme::SCHEMATIC_SYMBOL_STROKE, |width_cp| f32::from(width_cp) / 100.0);
         let route = pcbcraft_engine::wire::wire_path(wire, from, to);
-        // A saved color can equal the paper, which would otherwise make an ordinary wire vanish.
-        // The same contrasting underlay keeps it readable without changing its saved color.
-        let matches_paper = color == tokens.schematic_paper;
-        if is_selected || is_highlighted || matches_paper {
+        // A saved color can equal the surface the wire is drawn on, which would otherwise make an
+        // ordinary wire vanish. Compare against the resolved surface at the wire's midpoint so
+        // Uniform, Shaded and Custom paper are all covered; the same contrasting underlay keeps it
+        // readable without changing its saved color.
+        let midpoint = Point { x_nm: from.x_nm + (to.x_nm - from.x_nm) / 2, y_nm: from.y_nm + (to.y_nm - from.y_nm) / 2 };
+        let matches_surface = color == super::surface_at(project, midpoint, paper);
+        if is_selected || is_highlighted || matches_surface {
             paint_emphasized(painter, rect, camera, route, color, width);
         } else {
             paint_stroked_route(painter, rect, camera, route, color, width);

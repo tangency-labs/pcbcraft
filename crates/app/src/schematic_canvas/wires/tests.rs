@@ -33,6 +33,12 @@ fn styled_harness() -> Harness<'static, PcbApp> {
 
 /// A single-wire project whose net is styled with `color` at the maximum drawn width.
 fn styled_harness_with(color: egui::Color32) -> Harness<'static, PcbApp> {
+    styled_harness_with_paper(color, |_| {})
+}
+
+/// As [`styled_harness_with`], but applies `paper` to personal preferences before the first frame
+/// so a test can paint the saved colour over Uniform, Shaded or Custom paper.
+fn styled_harness_with_paper(color: egui::Color32, paper: impl Fn(&mut crate::preferences::Preferences)) -> Harness<'static, PcbApp> {
     let mut app = PcbApp::default();
     app.run("project.new", &json!({"name":"Styled"}));
     app.parts.open = false;
@@ -59,6 +65,7 @@ fn styled_harness_with(color: egui::Color32) -> Harness<'static, PcbApp> {
     );
     assert_eq!(app.session.project().unwrap().wire_appearances().unwrap().get(&wire), Some(&expected));
 
+    paper(&mut app.preferences);
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(|ui, app| app.frame(ui), app);
     h.run();
     h
@@ -623,16 +630,67 @@ fn selected_wire_paints_the_contrasting_cue_under_its_ink() {
     assert!(painted_stroke(&h, &points, halo_width, halo_color), "selection cue under the styled selected wire");
 }
 
-/// An ordinary wire whose saved color equals the paper still gets the contrasting underlay, so it
-/// does not disappear into the background without being selected or highlighted.
-#[test]
-fn paper_colored_wire_keeps_a_cue_without_selection() {
-    let paper = pcbcraft_chrome::Tokens::get().schematic_paper;
-    let h = styled_harness_with(paper);
+/// Assert both the saved ink and its wider contrasting underlay were painted on the unselected
+/// wire, i.e. paint recognised the saved colour as matching its surface.
+fn assert_matching_wire_has_cue(h: &Harness<'_, PcbApp>, color: egui::Color32, mode: &str) {
     let project = h.state().session.project().unwrap();
     let route = project.wire_path(&project.wires()[0]);
-    let points: Vec<_> = route.iter().map(|point| screen(&h, *point)).collect();
-    let [(halo_width, halo_color), (ink_width, ink_color)] = super::emphasis_strokes(paper, pcbcraft_engine::nets::MAX_WIDTH_CP as f32 / 100.0);
-    assert!(painted_stroke(&h, &points, ink_width, ink_color), "paper-colored ink on the unselected wire");
-    assert!(painted_stroke(&h, &points, halo_width, halo_color), "contrasting cue under the unselected wire");
+    let points: Vec<_> = route.iter().map(|point| screen(h, *point)).collect();
+    let [(halo_width, halo_color), (ink_width, ink_color)] = super::emphasis_strokes(color, pcbcraft_engine::nets::MAX_WIDTH_CP as f32 / 100.0);
+    assert!(painted_stroke(h, &points, ink_width, ink_color), "{mode}: matching ink on the unselected wire");
+    assert!(painted_stroke(h, &points, halo_width, halo_color), "{mode}: contrasting cue under the unselected wire");
+}
+
+/// Resolve the surface colour under the styled wire's midpoint for a paper preference, using the
+/// same [`super::super::surface_at`] that painting uses. A probe frame applies the preference so
+/// Uniform, Shaded and Custom fills are all reflected.
+fn wire_surface_color(paper: impl Fn(&mut crate::preferences::Preferences)) -> egui::Color32 {
+    let probe = styled_harness_with_paper(egui::Color32::WHITE, paper);
+    let app = probe.state();
+    let project = app.session.project().unwrap();
+    let route = project.wire_path(&project.wires()[0]);
+    let (a, b) = (route[0], *route.last().unwrap());
+    let midpoint = pcbcraft_engine::schematic::Point { x_nm: a.x_nm + (b.x_nm - a.x_nm) / 2, y_nm: a.y_nm + (b.y_nm - a.y_nm) / 2 };
+    super::super::surface_at(project, midpoint, app.preferences.paper())
+}
+
+/// On the default dark, uniform background the whole sheet is painted with `tokens.canvas`
+/// (#2E3440), not the shaded-paper token. A wire saved with that exact colour must still get the
+/// contrasting underlay, without selection or highlight, or it vanishes into the canvas.
+#[test]
+fn default_uniform_background_canvas_colored_wire_keeps_a_cue() {
+    let ctx = egui::Context::default();
+    pcbcraft_chrome::theme::apply(&ctx, true);
+    let canvas = pcbcraft_chrome::Tokens::get().canvas;
+    assert_eq!(canvas, egui::Color32::from_rgb(0x2E, 0x34, 0x40), "the default dark canvas is #2E3440");
+    assert_ne!(canvas, pcbcraft_chrome::Tokens::get().schematic_paper, "the canvas differs from the shaded-paper token");
+
+    let h = styled_harness_with(canvas);
+    assert_eq!(h.state().preferences.schematic_paper_background, crate::preferences::PaperBackground::Uniform);
+    assert_eq!(h.state().preferences.paper().fill(), canvas, "uniform paper fills with the resolved canvas");
+    assert_matching_wire_has_cue(&h, canvas, "default uniform canvas");
+}
+
+/// A wire whose saved colour matches the resolved surface also gets the cue under Shaded and Custom
+/// paper, where the sheet is filled with the shaded or custom colour rather than the canvas.
+#[test]
+fn shaded_and_custom_paper_matching_wires_keep_a_cue() {
+    let ctx = egui::Context::default();
+    pcbcraft_chrome::theme::apply(&ctx, true);
+
+    let shaded = |p: &mut crate::preferences::Preferences| p.schematic_paper_background = crate::preferences::PaperBackground::Shaded;
+    let shaded_surface = wire_surface_color(shaded);
+    assert_eq!(shaded_surface, pcbcraft_chrome::Tokens::get().schematic_paper, "the shaded wire sits on paper");
+    let h = styled_harness_with_paper(shaded_surface, shaded);
+    assert_matching_wire_has_cue(&h, shaded_surface, "shaded paper");
+
+    let custom_rgb = [0x12, 0x34, 0x56];
+    let custom = |p: &mut crate::preferences::Preferences| {
+        p.schematic_paper_background = crate::preferences::PaperBackground::Custom;
+        p.schematic_paper_color_dark = Some(custom_rgb);
+    };
+    let custom_surface = wire_surface_color(custom);
+    assert_eq!(custom_surface, egui::Color32::from_rgb(custom_rgb[0], custom_rgb[1], custom_rgb[2]), "the custom wire sits on paper");
+    let h = styled_harness_with_paper(custom_surface, custom);
+    assert_matching_wire_has_cue(&h, custom_surface, "custom paper");
 }

@@ -469,7 +469,7 @@ pub(crate) fn show(
     // Overriding them with the captured starting symbol would draw wires to its old rotation.
     let moved_wires = if group_preview.is_some() { None } else { moved.clone() };
     let appearances: wires::Appearances = draft.appearances(project, revision, !std::ptr::eq(project, base_project));
-    wires::paint(&painter, rect, project, camera, moved_wires, &whole_wires, &highlighted.wires, &appearances);
+    wires::paint(&painter, rect, project, camera, moved_wires, &whole_wires, &highlighted.wires, &appearances, display.appearance);
     if group_preview.is_some()
         && let Some(target) = reshape_target
         && !matches!(target, Anchor::Free(_))
