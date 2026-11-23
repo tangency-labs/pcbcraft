@@ -76,6 +76,7 @@ impl Session {
         let effective =
             snapshot.board_view(target).ok_or_else(|| CommandError::Unavailable("The resolved board is unavailable.".into()))?.effective_rules();
         let source = Source {
+            fill_authority: snapshot.fill_authority(),
             snapshot,
             session: self.clearance_identity.clone(),
             opening: self.history_root_revision(),

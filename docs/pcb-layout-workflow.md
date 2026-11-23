@@ -46,6 +46,12 @@ Each edit is one undo step.
 | Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus separate [Excellon drill files](#fabrication-drill-files) in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
 
+When items overlap, hover over them and press **Shift+Space** to cycle through
+the selectable items at that point. A click on overlapping tracks starts with
+the active copper layer. Layer visibility and selection filters also apply when
+cycling. Tracks and vias in the gaps between footprint pads can be clicked
+directly.
+
 Copper connectivity is derived from overlap on shared layers. Track edits and
 footprint transforms refuse new shorts in the copper they touch. DRC separately
 reports existing islands that contain conflicting intended nets, including direct
@@ -67,9 +73,9 @@ via anchors the group. An explicitly assigned via on the arm itself is kept
 with the copper beyond it; the cut stops before it. Already isolated copper is
 unchanged.
 
-Use `dry_run` to preview the same removal and newly displayed ratsnest edges
-without making an edit. Applying it
-is one Undo step and changes no storage format. If a locked object would have
+Use `dry_run` to preview the removal and its effect on ratsnest edges from
+authored copper without making an edit. After a commit, zone fill can reconnect
+those pads. Applying the removal is one Undo step and changes no storage format. If a locked object would have
 to be removed, or there is no exclusive arm that safely separates the pads,
 the command refuses the whole request. It also refuses when the pad to detach
 overlaps another pad, or when overlapping pads elsewhere would keep the two
@@ -215,10 +221,11 @@ clearance enforcement and gesture integration remain later work.
 
 This is #57.
 
-**Implemented first slice.** [Zone outline authoring](copper-zone-outlines.md)
-(#231) draws and edits single-layer, net-addressed outlines with saved fill intent.
-It creates no conductive fill. The fill, thermal, DRC and output behavior below
-remains the proposal for #232/#233; **Refill zones** is still planned.
+**Implemented authoring and fill.** [Copper zones](copper-zone-outlines.md)
+(#231/#232) draws and edits single-layer, net-addressed outlines and derives their
+conductive material. Automatic and explicit **Pour copper**, thermal connections,
+priority, island filtering, connectivity/ratsnest and zone DRC share that result.
+Fabrication output remains #233; advanced policy remains #304.
 
 **Behavior.**
 - Drawing a zone works like a Board Outline rectangle or polygon on a copper
@@ -228,8 +235,9 @@ remains the proposal for #232/#233; **Refill zones** is still planned.
 - The fill connects same-net pads with thermal spokes or a solid connection.
   Islands smaller than a minimum area are dropped.
 - Overlapping zones fill by priority.
-- A refill runs after edits, or on demand with **Refill zones**. A changed fill
-  updates connectivity and the ratsnest.
+- A refill runs after edits, or on demand with **Pour copper**. After **Remove
+  pours**, edits leave automatic refill suppressed until **Pour copper** resumes
+  it. A changed fill updates connectivity and the ratsnest.
 
 **Model and commands.**
 - **Authored record:** the zone (outline, layer, net, priority, clearance

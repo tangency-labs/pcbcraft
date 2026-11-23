@@ -51,3 +51,23 @@ reads its archived documents using only the standard library. A separate
 bytes and runs `project.export_netlist`. Both compare parts, pin names and types,
 net membership and unwired terminals to the same checked-in expected result.
 The comparison is independent of export ordering, display net names and net UUIDs.
+
+### Compare counts with a source project
+
+Record the source project's counts separately, as a JSON object with exactly
+three nonnegative integers: `parts`, `pins`, and `nets`. Use the same logical
+scope on both sides: count each schematic part once, count all its logical pins
+(including unwired pins), and count connected groups with at least one terminal
+(not copper, physical pads, or isolated unwired terminals). The source counts
+must come from the source project, not the reader's output.
+
+```sh
+python3 -B scripts/read-flat-project-netlist.py /path/to/unpacked-project --expected-counts /path/to/source-counts.json
+```
+
+The command prints the three counts only if they all match. A mismatch or an
+unsupported input exits with status 1 and reports the error on stderr; neither
+input is written. The same flat-format limits apply as for the listing mode.
+Count agreement alone does not establish that pins or nets correspond one to
+one. For automated application integrations, use `inspect_project` or netlist
+export rather than this example.

@@ -209,7 +209,7 @@ fn tool_context_actions_belong_to_their_split_pane() {
 }
 
 /// Open the pointer menu with complete secondary events without starting a selection rectangle.
-fn right_click(h: &mut Harness<'_, PcbApp>, at: egui::Pos2) {
+pub(super) fn right_click(h: &mut Harness<'_, PcbApp>, at: egui::Pos2) {
     h.hover_at(at);
     h.run();
     for pressed in [true, false] {

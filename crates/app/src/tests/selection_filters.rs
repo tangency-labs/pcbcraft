@@ -452,7 +452,7 @@ fn named_labels_follow_the_label_selection_category() {
         h.state_mut().set_selection_filters(id, &json!({other:false})).unwrap();
         assert_eq!(h.state().views.active.schematic.selection.single_net_label(), Some(label.id));
         let revision = h.state().session.revision();
-        h.state_mut().views.active.schematic.tool = Some(Tool::NetLabel { label: label.clone(), revision, drag: None });
+        h.state_mut().views.active.schematic.tool = Some(Tool::NetLabel { label: label.clone(), revision, drag: None, orient_to_pin: false });
         h.state_mut().set_selection_filters(id, &json!({category:false})).unwrap();
         assert!(h.state().views.active.schematic.selection.single_net_label().is_none());
         assert!(h.state().views.active.schematic.tool.is_none());

@@ -178,10 +178,10 @@ impl Lists {
                 let mut footprints = board
                     .footprints()
                     .map(|footprint| {
-                        let reference = footprint.reference.to_owned();
+                        let reference = footprint.reference.into_owned();
                         let item = Item {
                             label: if footprint.value.is_empty() { reference.clone() } else { format!("{reference}  {}", footprint.value) },
-                            tip: footprint.definition.to_owned(),
+                            tip: footprint.definition.into_owned(),
                             target: Some((footprint.id, footprint.position)),
                         };
                         (reference, item)
