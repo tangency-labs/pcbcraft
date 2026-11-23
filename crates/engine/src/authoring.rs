@@ -1022,17 +1022,28 @@ impl Session {
                     next.format = if next.has_npth() { NPTH_FORMAT } else { FORMAT }.into();
                 }
                 next.validate()?;
-                // Every action that adds or changes courtyard artwork must keep a valid courtyard
-                // stroke, and any closed courtyard polyline must stay a simple polygon. This runs
-                // after the bounds check above, so the polygon arithmetic only sees bounded
-                // coordinates. Unchanged outlines are not rechecked, so a loaded definition stays
-                // editable.
+                // Every action that adds courtyard artwork, changes a primitive into courtyard
+                // artwork, or changes a courtyard's stroke must satisfy the minimum courtyard
+                // stroke; geometry-only edits preserve a stroke that was valid when saved. Any
+                // added or changed closed courtyard polyline must also stay a simple polygon.
+                // This runs after the bounds check above, so the polygon arithmetic only sees
+                // bounded coordinates. Unchanged outlines are not rechecked, so a loaded
+                // definition stays editable.
                 for (id, primitive) in &next.objects {
-                    if self.item.objects.get(id) != Some(primitive) {
+                    let previous = self.item.objects.get(id);
+                    if previous != Some(primitive) {
                         if let Primitive::Artwork { artwork } = primitive
                             && courtyard::is_courtyard_primitive(primitive)
                         {
-                            courtyard::validate_stroke(artwork.graphic.stroke_nm)?;
+                            let preserved_stroke = matches!(
+                                previous,
+                                Some(prev @ Primitive::Artwork { artwork: prev_art })
+                                    if courtyard::is_courtyard_primitive(prev)
+                                        && prev_art.graphic.stroke_nm == artwork.graphic.stroke_nm
+                            );
+                            if !preserved_stroke {
+                                courtyard::validate_stroke(artwork.graphic.stroke_nm)?;
+                            }
                         }
                         if let Some((points, _)) = courtyard::courtyard_polygon(primitive) {
                             courtyard::validate_polygon(points)?;

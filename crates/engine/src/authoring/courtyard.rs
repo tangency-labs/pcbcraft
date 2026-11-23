@@ -11,8 +11,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Default courtyard clearance: 0.25 mm (IPC-7351 Density Level B nominal courtyard excess,
-/// Table 3-13).
+/// Default courtyard clearance: 0.25 mm.
 pub const DEFAULT_CLEARANCE_NM: i64 = 250_000;
 /// Default courtyard outline stroke width: 0.05 mm.
 pub const DEFAULT_STROKE_NM: i64 = 50_000;
@@ -86,6 +85,16 @@ pub fn courtyard_polygon(primitive: &Primitive) -> Option<(&[Point], i64)> {
     }
 }
 
+/// Build a closed courtyard polygon primitive from `points` and `stroke_nm` after checking
+/// polygon simplicity and footprint schema bounds, without re-checking the minimum stroke
+/// enforced for new outlines so geometry-only edits can preserve a valid saved thin stroke.
+fn build_courtyard_polygon(points: Vec<Point>, stroke_nm: i64) -> Result<Primitive, String> {
+    validate_polygon(&points)?;
+    let graphic = Graphic { geometry: Geometry::Polyline { points, closed: true }, stroke_nm, fill: Fill::None };
+    graphic.validate(footprint::MAX_OFFSET_NM)?;
+    Ok(Primitive::Artwork { artwork: footprint::Artwork { purpose: GraphicPurpose::Courtyard, graphic } })
+}
+
 /// Build and validate a closed courtyard polygon primitive from `points` and `stroke_nm`.
 ///
 /// Rejects polygons with fewer than 3 or more than 64 vertices, duplicate consecutive
@@ -93,10 +102,7 @@ pub fn courtyard_polygon(primitive: &Primitive) -> Option<(&[Point], i64)> {
 /// stroke widths.
 pub fn make_courtyard_polygon(points: Vec<Point>, stroke_nm: i64) -> Result<Primitive, String> {
     validate_stroke(stroke_nm)?;
-    validate_polygon(&points)?;
-    let graphic = Graphic { geometry: Geometry::Polyline { points, closed: true }, stroke_nm, fill: Fill::None };
-    graphic.validate(footprint::MAX_OFFSET_NM)?;
-    Ok(Primitive::Artwork { artwork: footprint::Artwork { purpose: GraphicPurpose::Courtyard, graphic } })
+    build_courtyard_polygon(points, stroke_nm)
 }
 
 /// Generate a closed rectangular courtyard polygon enclosing the selected primitives in `item`
@@ -158,7 +164,7 @@ pub fn with_moved_vertex(primitive: &Primitive, index: usize, to: Point) -> Resu
     let mut updated = points.to_vec();
     let slot = updated.get_mut(index).ok_or("Courtyard vertex index is out of range.")?;
     *slot = to;
-    make_courtyard_polygon(updated, stroke_nm)
+    build_courtyard_polygon(updated, stroke_nm)
 }
 
 /// Insert a new vertex immediately after `edge_index` (between `edge_index` and the next vertex).
@@ -175,7 +181,7 @@ pub fn with_inserted_vertex(primitive: &Primitive, edge_index: usize, point: Poi
     }
     let mut updated = points.to_vec();
     updated.insert(edge_index + 1, point);
-    make_courtyard_polygon(updated, stroke_nm)
+    build_courtyard_polygon(updated, stroke_nm)
 }
 
 /// Remove vertex `index` from a courtyard polygon, requiring at least [`MIN_VERTICES`] to remain.
@@ -189,7 +195,7 @@ pub fn with_removed_vertex(primitive: &Primitive, index: usize) -> Result<Primit
     }
     let mut updated = points.to_vec();
     updated.remove(index);
-    make_courtyard_polygon(updated, stroke_nm)
+    build_courtyard_polygon(updated, stroke_nm)
 }
 
 /// Compute the midpoint of edge `edge_index` (wrapping from the last vertex to the first),
@@ -371,6 +377,8 @@ fn arc_extents(center: Point, radius_nm: i64, start_degrees: i16, sweep_degrees:
 }
 
 /// Collect boundary points of a footprint primitive for courtyard generation.
+/// Fabrication artwork bounds include half their stroke width so clearance is measured from the
+/// visible outer body edge rather than the stroke centerline.
 fn primitive_extents(primitive: &Primitive) -> Vec<Point> {
     let rect_corners = |center: Point, width_nm: i64, height_nm: i64, rotation: u16| {
         let angle = f64::from(rotation).to_radians();
@@ -390,11 +398,28 @@ fn primitive_extents(primitive: &Primitive) -> Vec<Point> {
         Primitive::Pad { pad } => rect_corners(pad.center, pad.width_nm, pad.height_nm, pad.rotation),
         Primitive::NonPlatedHole { hole } => rect_corners(hole.center, hole.diameter_nm, hole.diameter_nm, 0),
         Primitive::Outline { graphic } => rect_corners(graphic.center, graphic.width_nm, graphic.height_nm, graphic.rotation),
-        Primitive::Artwork { artwork } => match &artwork.graphic.geometry {
-            Geometry::Text { .. } => Vec::new(),
-            Geometry::Arc { center, radius_nm, start_degrees, sweep_degrees } => arc_extents(*center, *radius_nm, *start_degrees, *sweep_degrees),
-            _ => artwork.graphic.paths().into_iter().flatten().collect(),
-        },
+        Primitive::Artwork { artwork } => {
+            let centerline = match &artwork.graphic.geometry {
+                Geometry::Text { .. } => return Vec::new(),
+                Geometry::Arc { center, radius_nm, start_degrees, sweep_degrees } => arc_extents(*center, *radius_nm, *start_degrees, *sweep_degrees),
+                _ => artwork.graphic.paths().into_iter().flatten().collect(),
+            };
+            let Some(&first) = centerline.first() else {
+                return Vec::new();
+            };
+            let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.x_nm, first.y_nm, first.x_nm, first.y_nm);
+            for &point in centerline.iter().skip(1) {
+                min_x = min_x.min(point.x_nm);
+                min_y = min_y.min(point.y_nm);
+                max_x = max_x.max(point.x_nm);
+                max_y = max_y.max(point.y_nm);
+            }
+            let half_stroke = artwork.graphic.stroke_nm.max(0).saturating_add(1) / 2;
+            vec![
+                Point { x_nm: min_x.saturating_sub(half_stroke), y_nm: min_y.saturating_sub(half_stroke) },
+                Point { x_nm: max_x.saturating_add(half_stroke), y_nm: max_y.saturating_add(half_stroke) },
+            ]
+        }
         _ => Vec::new(),
     }
 }
@@ -479,11 +504,14 @@ mod tests {
         assert_eq!(m.height_nm, 1_300_000);
     }
 
-    /// Fabrication arc courtyard bounds include exact cardinal extrema within the sweep,
-    /// not only tessellated sample points (both positive and negative sweeps/starts).
+    /// Fabrication arc courtyard bounds include exact cardinal extrema plus half the stroke
+    /// width within the sweep, not only tessellated sample points (both positive and negative
+    /// sweeps/starts).
     #[test]
     fn generate_from_fabrication_arc_includes_exact_cardinal_extrema() {
         let radius = 50_000_000;
+        let stroke = 120_000;
+        let half_stroke = stroke / 2;
         for (start_degrees, sweep_degrees) in [(1, 180), (181, -180)] {
             let mut item = Item::new(Kind::Footprint).unwrap();
             item.objects.insert(
@@ -493,7 +521,7 @@ mod tests {
                         purpose: GraphicPurpose::Fabrication,
                         graphic: Graphic {
                             geometry: Geometry::Arc { center: pt(0, 0), radius_nm: radius, start_degrees, sweep_degrees },
-                            stroke_nm: 120_000,
+                            stroke_nm: stroke,
                             fill: Fill::None,
                         },
                     },
@@ -504,8 +532,8 @@ mod tests {
                 let (points, _) = courtyard_polygon(&primitive).unwrap();
                 let min_x = points.iter().map(|p| p.x_nm).min().unwrap();
                 let max_y = points.iter().map(|p| p.y_nm).max().unwrap();
-                assert_eq!(min_x, -radius - clearance);
-                assert_eq!(max_y, radius + clearance);
+                assert_eq!(min_x, -radius - half_stroke - clearance);
+                assert_eq!(max_y, radius + half_stroke + clearance);
             }
         }
 
@@ -518,7 +546,7 @@ mod tests {
                     purpose: GraphicPurpose::Fabrication,
                     graphic: Graphic {
                         geometry: Geometry::Arc { center: pt(0, 0), radius_nm: radius, start_degrees: -100, sweep_degrees: 200 },
-                        stroke_nm: 120_000,
+                        stroke_nm: stroke,
                         fill: Fill::None,
                     },
                 },
@@ -526,9 +554,37 @@ mod tests {
         );
         let primitive = generate(&neg, 0, CourtyardSource::PadsAndBody, DEFAULT_STROKE_NM).unwrap();
         let (points, _) = courtyard_polygon(&primitive).unwrap();
-        assert_eq!(points.iter().map(|p| p.x_nm).max().unwrap(), radius);
-        assert_eq!(points.iter().map(|p| p.y_nm).min().unwrap(), -radius);
-        assert_eq!(points.iter().map(|p| p.y_nm).max().unwrap(), radius);
+        assert_eq!(points.iter().map(|p| p.x_nm).max().unwrap(), radius + half_stroke);
+        assert_eq!(points.iter().map(|p| p.y_nm).min().unwrap(), -radius - half_stroke);
+        assert_eq!(points.iter().map(|p| p.y_nm).max().unwrap(), radius + half_stroke);
+    }
+
+    /// Fabrication artwork bounds include half their stroke width so a thick-stroked body
+    /// rectangle (2 mm centerline, 0.60 mm stroke => visible edge at ±1.30 mm) with 0.25 mm
+    /// clearance puts the courtyard centerline at ±1.55 mm (0.25 mm outside the visible edge).
+    #[test]
+    fn generate_from_thick_fabrication_stroke_clears_visible_body_edge() {
+        let mut item = Item::new(Kind::Footprint).unwrap();
+        item.objects.clear();
+        item.objects.insert(
+            1,
+            Primitive::Artwork {
+                artwork: footprint::Artwork {
+                    purpose: GraphicPurpose::Fabrication,
+                    graphic: Graphic {
+                        geometry: Geometry::Rectangle { min: pt(-1_000_000, -1_000_000), max: pt(1_000_000, 1_000_000) },
+                        stroke_nm: 600_000,
+                        fill: Fill::None,
+                    },
+                },
+            },
+        );
+        let primitive = generate(&item, 250_000, CourtyardSource::PadsAndBody, DEFAULT_STROKE_NM).unwrap();
+        let (points, _) = courtyard_polygon(&primitive).unwrap();
+        assert_eq!(points, &[pt(-1_550_000, -1_550_000), pt(1_550_000, -1_550_000), pt(1_550_000, 1_550_000), pt(-1_550_000, 1_550_000)]);
+        let m = metrics(points).unwrap();
+        assert_eq!(m.width_nm, 3_100_000);
+        assert_eq!(m.height_nm, 3_100_000);
     }
 
     /// Inserting an exact edge midpoint on a default 0.25 mm outline keeps its area and bounds unchanged.
@@ -759,6 +815,72 @@ mod tests {
         let error = session.execute(rev, Action::Replace { object: id, primitive: rect(MIN_STROKE_NM - 1) }).unwrap_err();
         assert_eq!(error, message);
         assert_eq!(session.snapshot(), accepted);
+        assert_eq!(session.revision(), rev);
+    }
+
+    /// A valid saved footprint with a 500 nm courtyard stroke stays editable for plain moves and
+    /// geometry-only vertex edits, preserving 500 nm, while an explicit stroke change below
+    /// `MIN_STROKE_NM` is still refused.
+    #[test]
+    fn thin_saved_courtyard_survives_move_and_vertex_edit_while_explicit_stroke_change_is_refused() {
+        let mut saved = Item::new(Kind::Footprint).unwrap();
+        let thin_stroke = 500;
+        let thin = Primitive::Artwork {
+            artwork: footprint::Artwork {
+                purpose: GraphicPurpose::Courtyard,
+                graphic: Graphic {
+                    geometry: Geometry::Polyline {
+                        points: vec![pt(0, 0), pt(2_000_000, 0), pt(2_000_000, 2_000_000), pt(0, 2_000_000)],
+                        closed: true,
+                    },
+                    stroke_nm: thin_stroke,
+                    fill: Fill::None,
+                },
+            },
+        };
+        saved.objects.insert(99, thin);
+        let bytes = saved.encode().unwrap();
+        let loaded = Item::decode(&bytes).unwrap();
+        let id = *loaded.objects.iter().find(|(_, p)| is_courtyard_primitive(p)).unwrap().0;
+
+        let mut session = Session::new(loaded, false).unwrap();
+        let rev = session
+            .execute(
+                0,
+                Action::Transform {
+                    objects: vec![id],
+                    transform: crate::library_graphics::Transform {
+                        pivot: pt(0, 0),
+                        offset: pt(500_000, -250_000),
+                        quarter_turns: 0,
+                        mirror_x: false,
+                        mirror_y: false,
+                    },
+                },
+            )
+            .unwrap();
+        assert_eq!(rev, 1);
+        let after_move = session.snapshot();
+        let (moved_pts, moved_stroke) = courtyard_polygon(&after_move.objects[&id]).unwrap();
+        assert_eq!(moved_stroke, thin_stroke);
+        assert_eq!(moved_pts[0], pt(500_000, -250_000));
+
+        let vertex_edited = with_moved_vertex(&after_move.objects[&id], 1, pt(3_000_000, -250_000)).unwrap();
+        let rev = session.execute(rev, Action::Replace { object: id, primitive: vertex_edited }).unwrap();
+        assert_eq!(rev, 2);
+        let after_vertex = session.snapshot();
+        let (vertex_pts, vertex_stroke) = courtyard_polygon(&after_vertex.objects[&id]).unwrap();
+        assert_eq!(vertex_stroke, thin_stroke);
+        assert_eq!(vertex_pts[1], pt(3_000_000, -250_000));
+
+        // Explicit stroke change below 1,000 nm (even from 500 nm to 600 nm) is still refused.
+        let mut changed_stroke = after_vertex.objects[&id].clone();
+        if let Primitive::Artwork { artwork } = &mut changed_stroke {
+            artwork.graphic.stroke_nm = 600;
+        }
+        let error = session.execute(rev, Action::Replace { object: id, primitive: changed_stroke }).unwrap_err();
+        assert_eq!(error, "Stroke (mm) must be between 0.001 and 2 mm.");
+        assert_eq!(session.snapshot(), after_vertex);
         assert_eq!(session.revision(), rev);
     }
 
