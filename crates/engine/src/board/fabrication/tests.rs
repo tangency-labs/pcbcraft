@@ -70,7 +70,7 @@ fn decorated_aperture_fixture(
             (shape, width, height, pad_rotation, radius)
         })
         .collect();
-    build_footprint_fixture(&pads, (rotation, bottom), (offset, pitch), position, plated_from, mapping, &[], decorate)
+    build_footprint_fixture(&pads, (rotation, bottom), (offset, pitch), (position, plated_from), mapping, &[], decorate)
 }
 
 /// Author command-built lands with an explicit corner radius per pad.
@@ -110,7 +110,7 @@ fn footprint_fixture(
     mapping: Option<serde_json::Value>,
     holes: &[crate::board::definition::CircularNpth],
 ) -> Session {
-    build_footprint_fixture(pads, (rotation, bottom), (offset, pitch), position, plated_from, mapping, holes, |_| {})
+    build_footprint_fixture(pads, (rotation, bottom), (offset, pitch), (position, plated_from), mapping, holes, |_| {})
 }
 
 /// Shared footprint-fixture builder supporting explicit pad radii, non-plated holes and
@@ -119,8 +119,7 @@ fn build_footprint_fixture(
     pads: &[(PadShape, i64, i64, u16, i64)],
     (rotation, bottom): (u16, bool),
     (offset, pitch): (Point, Point),
-    position: Point,
-    plated_from: Option<usize>,
+    (position, plated_from): (Point, Option<usize>),
     mapping: Option<serde_json::Value>,
     holes: &[crate::board::definition::CircularNpth],
     decorate: impl FnOnce(&mut crate::authoring::Session),
