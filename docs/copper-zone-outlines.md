@@ -10,7 +10,7 @@ fabrication exporter does not include this material.
 
 ## Drawing and editing
 
-In PCB Layout, activate a visible copper layer and choose **Layout → Route → Zone**.
+In PCB Layout, activate a visible copper layer and choose **Layout → Place → Zone**.
 Choose a current net in **New Zone**. Leave **Rectangle** unchecked for a polygon,
 or check it to draw a rectangle with two opposite corners, then choose **Draw**.
 A polygon finishes by clicking its first vertex, double-clicking after at least
@@ -62,10 +62,10 @@ file and project revision unchanged.
 ## Filling and checking
 
 Fill runs automatically after committed board or electrical edits. **Layout →
-Route → Pour copper** explicitly recalculates it. The status bar shows active
+Board → Pour copper** explicitly recalculates it. The status bar shows active
 work or a calculation failure, while zone Properties shows whether current fill
 is ready. Pending or failed fill contributes no copper; a previous revision's
-material is never displayed as current. A closed Board Outline is required. **Layout → Route → Remove pours** removes
+material is never displayed as current. A closed Board Outline is required. **Layout → Board → Remove pours** removes
 the actual derived copper while retaining zone outlines, so affected airwires
 return. It stays unfilled across edits and DRC until **Pour copper** is used again.
 B pours; Ctrl+B (Command+B on macOS) removes pours. These actions apply to all

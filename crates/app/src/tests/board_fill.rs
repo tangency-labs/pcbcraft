@@ -58,17 +58,21 @@ fn automatic_fill_updates_real_canvas_and_ratsnest_without_an_authored_edit() {
 }
 
 #[test]
-fn shared_route_menu_refills_without_dirtying_or_adding_undo() {
+fn board_ribbon_refills_without_dirtying_or_adding_undo() {
     let mut h = board();
+    h.set_size(egui::vec2(1400., 780.));
     h.run();
     let revision = h.state().session.revision();
     let p = h.state().session.project().unwrap();
     let target = p.board_target().unwrap();
     let before = p.board_view(target).unwrap().filled_zones().unwrap().unwrap();
     click(&mut h, "Layout");
-    click(&mut h, "Route menu");
-    assert!(!h.get_by_label("Pour copper").accesskit_node().is_disabled());
-    click(&mut h, "Pour copper");
+    for label in ["Fill zone outlines with copper", "Remove poured copper and keep zone outlines"] {
+        let button = h.get_by_label(label).rect();
+        assert!(button.right() < h.get_by_label("Active layer").rect().left());
+    }
+    assert!(!h.get_by_label("Fill zone outlines with copper").accesskit_node().is_disabled());
+    click(&mut h, "Fill zone outlines with copper");
     h.run();
     let after = h.state().session.project().unwrap().board_view(target).unwrap().filled_zones().unwrap().unwrap();
     assert!(!std::sync::Arc::ptr_eq(&before, &after));
@@ -133,34 +137,36 @@ fn poured_triangles(h: &Harness<'_, PcbApp>) -> usize {
 /// layer visibility, native bytes and authored history. Pending automatic work cannot repour.
 #[test]
 fn ribbon_pour_and_remove_change_physical_copper_without_deleting_zones() {
-    let mut h = board();
-    h.run();
-    let revision = h.state().session.revision();
-    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-    let hidden = h.state().views.active.board.hidden_layers.clone();
-    assert!(poured_triangles(&h) > 0);
-    click(&mut h, "Layout");
-    click(&mut h, "Route menu");
-    click(&mut h, "Remove pours");
-    h.run();
-    assert_eq!(poured_triangles(&h), 0);
-    let project = h.state().session.project().unwrap();
-    let view = project.board_view(project.board_target().unwrap()).unwrap();
-    assert_eq!(view.zones().len(), 1);
-    assert!(!view.ratsnest().unwrap().lines.is_empty());
-    assert!(!view.zone_fill_enabled());
-    assert_eq!(h.state().views.active.board.hidden_layers, hidden);
-    click(&mut h, "Route menu");
-    assert!(h.get_by_label("Remove pours").accesskit_node().is_disabled());
-    assert!(!h.get_by_label("Pour copper").accesskit_node().is_disabled());
-    click(&mut h, "Pour copper");
-    h.run();
-    assert!(poured_triangles(&h) > 0);
-    let project = h.state().session.project().unwrap();
-    let view = project.board_view(project.board_target().unwrap()).unwrap();
-    assert!(view.ratsnest().unwrap().lines.is_empty());
-    assert_eq!(h.state().session.revision(), revision);
-    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    for (width, theme) in [(1400., crate::preferences::ThemeChoice::Dark), (760., crate::preferences::ThemeChoice::Light)] {
+        let mut h = board();
+        h.set_size(egui::vec2(width, 750.));
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        let revision = h.state().session.revision();
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let hidden = h.state().views.active.board.hidden_layers.clone();
+        assert!(poured_triangles(&h) > 0);
+        click(&mut h, "Layout");
+        click(&mut h, "Remove poured copper and keep zone outlines");
+        h.run();
+        assert_eq!(poured_triangles(&h), 0);
+        let project = h.state().session.project().unwrap();
+        let view = project.board_view(project.board_target().unwrap()).unwrap();
+        assert_eq!(view.zones().len(), 1);
+        assert!(!view.ratsnest().unwrap().lines.is_empty());
+        assert!(!view.zone_fill_enabled());
+        assert_eq!(h.state().views.active.board.hidden_layers, hidden);
+        assert!(h.get_by_label("Remove poured copper and keep zone outlines").accesskit_node().is_disabled());
+        assert!(!h.get_by_label("Fill zone outlines with copper").accesskit_node().is_disabled());
+        click(&mut h, "Fill zone outlines with copper");
+        h.run();
+        assert!(poured_triangles(&h) > 0);
+        let project = h.state().session.project().unwrap();
+        let view = project.board_view(project.board_target().unwrap()).unwrap();
+        assert!(view.ratsnest().unwrap().lines.is_empty());
+        assert_eq!(h.state().session.revision(), revision);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    }
 }
 
 /// Keyboard and live MCP take the same board-wide derived command path as the ribbon.

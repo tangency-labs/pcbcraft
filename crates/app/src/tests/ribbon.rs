@@ -218,10 +218,25 @@ fn pcb_tasks_are_grouped_on_separate_tabs() {
     assert!(h.query_by_role_and_label(egui::Role::Tab, "Route").is_none());
     assert!(h.query_by_label("Align menu").is_none());
     h.get_by_label("Active layer");
-    click(&mut h, "Route menu");
-    for tool in ["Zone", "Pair", "Tune", "Pour copper", "Remove pours"] {
+    for tool in ["Draw zone outlines", "Fill zone outlines with copper", "Remove poured copper and keep zone outlines"] {
         assert!(h.get_by_label(tool).accesskit_node().is_disabled());
     }
+    click(&mut h, "Route menu");
+    for tool in ["Pair", "Tune"] {
+        assert!(h.get_by_label(tool).accesskit_node().is_disabled());
+    }
+    for tool in ["Zone", "Pour copper", "Remove pours"] {
+        assert!(h.query_by_label(tool).is_none(), "{tool} does not belong in Route");
+    }
+    h.key_press(Key::Escape);
+    h.run();
+    click(&mut h, "Place menu");
+    assert!(h.get_by_label("Zone").accesskit_node().is_disabled());
+    h.key_press(Key::Escape);
+    h.run();
+    click(&mut h, "Board menu");
+    assert!(h.get_by_label("Pour copper").accesskit_node().is_disabled());
+    assert!(h.get_by_label("Remove pours").accesskit_node().is_disabled());
     h.key_press(Key::Escape);
     h.run();
     click(&mut h, "Analyze");
