@@ -1298,15 +1298,46 @@ impl PcbApp {
 
     /// Resolve a new pointer press before consuming keyboard input. A held drag crossing the
     /// divider keeps its original owner; popups and modals do not transfer editor focus.
+    /// A middle press alone only navigates, so it pans or zooms a project pane without focusing it.
+    /// When right-drag pans, a right press waits for its click: the click focuses the pane and
+    /// opens its menu, while a drag pans it without taking focus.
     pub(super) fn editor_pointer_focus(&mut self, ctx: &egui::Context) {
         if self.parts.is_modal() || !self.views.is_split() || self.home || !matches!(self.dialog, Dialog::None) || egui::Popup::is_any_open(ctx) {
             return;
         }
-        let pressed = ctx.input(|input| input.pointer.any_pressed().then(|| input.pointer.interact_pos()).flatten());
+        let right_pans = self.preferences.navigation.right_drag_pan;
+        // Each button event carries its own position; the frame's last pointer position may
+        // already lie in another pane.
+        let pressed = ctx.input(|input| {
+            let right_click = right_pans && input.pointer.button_clicked(egui::PointerButton::Secondary);
+            // A primary press decides focus whenever there is one, then another press that can
+            // focus (right when right-drag does not pan), even when a navigation-only press
+            // came first in the same frame.
+            let navigates =
+                |button: egui::PointerButton| button == egui::PointerButton::Middle || (right_pans && button == egui::PointerButton::Secondary);
+            let press_of = |wanted: &dyn Fn(egui::PointerButton) -> bool| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::PointerButton { pos, button, pressed: true, .. } if wanted(*button) => Some(*pos),
+                    _ => None,
+                })
+            };
+            let press = press_of(&|button| button == egui::PointerButton::Primary)
+                .or_else(|| press_of(&|button| !navigates(button)))
+                .or_else(|| press_of(&|_| true));
+            let click = input.events.iter().rev().find_map(|event| match event {
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed: false, .. } => Some(*pos),
+                _ => None,
+            });
+            press.or(click.filter(|_| right_click))
+        });
+        let navigating = ctx.input(|input| {
+            let right = input.pointer.secondary_pressed();
+            (input.pointer.button_pressed(egui::PointerButton::Middle) || right) && !input.pointer.primary_pressed() && (right_pans || !right)
+        });
         if let Some(pointer) = pressed
             && let Some((id, _)) = self.views.hosts.get(&self.views.host).and_then(|host| host.rects.iter().find(|(_, rect)| rect.contains(pointer)))
             && (self.views.view(*id).is_some_and(|view| view.auxiliary())
-                || !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
+                || !navigating && !ctx.layer_id_at(pointer).is_some_and(|layer| layer.order != egui::Order::Background))
         {
             self.activate_editor(ctx, *id);
         }
@@ -1510,6 +1541,14 @@ impl PcbApp {
                     if matches!(self.dialog, Dialog::None) && self.views.reveal_for(id, &self.session, self.preferences.selection_follow) {
                         ui.ctx().request_repaint();
                     }
+                    // Pan and zoom follow the pointer here, without granting selection, tools or keys.
+                    let navigation_enabled = ui.is_enabled()
+                        && (crate::IN_BROWSER || ui.input(|input| input.focused))
+                        && !self.home
+                        && !self.project_action_pending()
+                        && matches!(self.dialog, Dialog::None)
+                        && !self.parts.is_modal()
+                        && !egui::Popup::is_any_open(ui.ctx());
                     let highlight = self.views.schematic_paint_highlight(id, &self.session);
                     let label = format!("Schematic canvas {}", id.0 + 1);
                     let Some(view) = self.views.view_mut(id) else {
@@ -1537,7 +1576,7 @@ impl PcbApp {
                                     &view.inspection,
                                     view.filters,
                                     false,
-                                    false,
+                                    navigation_enabled,
                                     self.preferences.navigation,
                                     self.preferences.schematic_display(),
                                     self.preferences.auto_heal_wires,

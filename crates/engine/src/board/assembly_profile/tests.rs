@@ -37,7 +37,7 @@ fn fixture() -> (Session, [String; 3]) {
         .unwrap();
     }
     s.apply(INITIALIZE_BOARD_SETUP, &json!({"copper_layers":2,"resolve_existing_footprints":true,"expected_revision":s.revision()})).unwrap();
-    let ids: Vec<_> = view(&s).footprints().map(|f| (f.id, f.definition.to_owned())).collect();
+    let ids: Vec<_> = view(&s).footprints().map(|f| (f.id, f.definition.into_owned())).collect();
     let [(first, a), (second, b), (third, c)] = &ids[..] else { panic!("three footprints") };
     assert_eq!([a.as_str(), b, c], ["resistor-0402", "resistor-0402", "capacitor-0402"]);
     (s, [first.clone(), second.clone(), third.clone()])

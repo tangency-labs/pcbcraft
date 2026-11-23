@@ -513,6 +513,7 @@ impl Camera {
         if response.ctx.input(|input| input.pointer.any_pressed()) {
             self.cancel_zoom();
         }
+        let start = self.offset;
         let middle_drag = response.dragged_by(PointerButton::Middle);
         let right_drag = !middle_drag && navigation.right_drag_pan && response.dragged_by(PointerButton::Secondary);
         if middle_drag || right_drag {
@@ -561,9 +562,12 @@ impl Camera {
         } else {
             self.cancel_zoom();
         }
-        // Keep the view center within reach of the full schematic coordinate range.
-        let limit = Vec2::splat((MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f32 / GRID_NM as f32 * self.unit_step());
-        self.offset = self.offset.clamp(-limit, limit);
+        // Keep navigation within reach of the full schematic coordinate range. A frame without
+        // pan or zoom leaves the camera alone, so hovering never moves a programmatic center.
+        if self.offset != start {
+            let limit = Vec2::splat((MAX_CENTER_NM + MAX_PIN_OFFSET_NM) as f32 / GRID_NM as f32 * self.unit_step());
+            self.offset = self.offset.clamp(-limit, limit);
+        }
     }
 
     /// Center the sheet's paper together with symbol and wire bounds, including free routes and a

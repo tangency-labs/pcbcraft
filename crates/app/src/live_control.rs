@@ -728,12 +728,29 @@ pub(super) struct LiveEditor<'a> {
 }
 
 impl Editor for LiveEditor<'_> {
+    /// Removal revokes every addressed board-view worker through the shared command path.
+    fn zone_unfill(&mut self, params: &Value) -> Option<Result<Value, pcbcraft_engine::CommandError>> {
+        let result = self.app.queue_zone_unfill(params);
+        self.ctx.request_repaint();
+        Some(result)
+    }
+    /// Refill returns source-qualified pending state while the existing bounded worker runs.
+    fn zone_refill(&mut self, params: &Value) -> Option<Result<Value, pcbcraft_engine::CommandError>> {
+        let result = self.app.queue_zone_refill(params);
+        self.ctx.request_repaint();
+        Some(result)
+    }
     /// UI actions retain normal dialog and text-field interaction rather than bypassing them
     /// through project commands. The queue validates native focus and endpoint ownership.
     /// UI handler refusals read as unavailable, apart from parameters the catalog refuses.
     fn ui_command(&mut self, id: &str, params: &Value) -> Result<Value, Failure> {
         crate::ui_automation::check_command(id, params)?;
         self.app.automation_command(self.ctx, id, params).map_err(Failure::from)
+    }
+    /// Finish a local color Undo or Redo inside the request that moved the history cursor.
+    fn restore_local_history(&mut self) {
+        self.app.restore_local_history();
+        self.app.repaint_editors(self.ctx);
     }
     fn session(&mut self) -> &mut Session {
         &mut self.app.session

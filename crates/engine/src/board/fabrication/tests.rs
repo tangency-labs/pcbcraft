@@ -1755,11 +1755,11 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
             let read = read_gerber(&outputs, output);
             assert_eq!(read.flashes, expected, "{}", output.0);
             assert!(read.regions.is_empty() && read.strokes.is_empty());
-            let reference = view(&s).footprints().next().unwrap().reference;
+            let reference = view(&s).footprints().next().unwrap().reference.into_owned();
             for (index, (_, object)) in read.objects.iter().enumerate() {
                 if output.1.starts_with("Copper,") {
                     assert_eq!(object.net.as_deref(), Some(""));
-                    assert_eq!(object.component.as_deref(), Some(reference));
+                    assert_eq!(object.component.as_deref(), Some(reference.as_str()));
                     let pin = (!output.1.ends_with(",Inr")).then(|| (reference.to_owned(), (index + 1).to_string()));
                     assert_eq!(object.pin, pin);
                 } else {
@@ -1865,7 +1865,7 @@ fn gerber_object_attributes_round_trip_two_layer_board_netlist() {
     let outputs = s.export_fabrication(&json!({"board":board})).unwrap();
     assert_eq!(outputs, s.export_fabrication(&json!({"board":board})).unwrap());
     assert_eq!(s.revision(), revision);
-    let references: BTreeMap<_, _> = view(&s).footprints().map(|f| (f.component, f.reference.to_owned())).collect();
+    let references: BTreeMap<_, _> = view(&s).footprints().map(|f| (f.component, f.reference.into_owned())).collect();
     let inspection = s.inspect();
     let netlist = &inspection["project"]["board"]["netlist"];
     assert_eq!(netlist["basis"], "accepted");
@@ -2409,6 +2409,46 @@ fn non_plated_drill_rejects_a_diameter_that_rounds_to_zero() {
 fn embedded_manifest(capture: &Archive) -> Value {
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(capture.bytes())).unwrap();
     serde_json::from_reader(archive.by_name("manifest.json").unwrap()).unwrap()
+}
+
+/// Even an unfilled or suppressed zone carries copper intent that fabrication would omit.
+#[test]
+fn fabrication_refuses_boards_with_zones_in_every_fill_state() {
+    use crate::board::{
+        fill::{INSPECT_FILL, REFILL_ZONES, UNFILL_ZONES},
+        zones::{ADD_ZONE, Connection, DELETE_ZONES, Options},
+    };
+    use std::sync::Arc;
+
+    let mut session = routed_fixture();
+    outline(&mut session);
+    let (target, points) = {
+        let view = view(&session);
+        let airwires = view.ratsnest().unwrap();
+        let end = &airwires.lines[0].from;
+        let target = view.net_class_target_for_copper(&format!("{}:{}", end.footprint, end.pad.number.as_str())).unwrap().unwrap();
+        let points = view.drawings().first().unwrap().points.clone();
+        (target, points)
+    };
+    let layer = copper_layers(&session)[0];
+    let options = Options { connection: Connection::Solid, ..Options::default() };
+    session
+        .apply(ADD_ZONE, &json!({"target":target,"points":points,"layer":layer,"options":options,"expected_revision":session.revision()}))
+        .unwrap();
+    let params = json!({});
+    let revision = session.revision();
+    let snapshot = session.snapshot().unwrap();
+    for (command, state) in [(INSPECT_FILL, "pending"), (REFILL_ZONES, "ready"), (UNFILL_ZONES, "unfilled")] {
+        let result = session.execute(command, &params).unwrap();
+        assert_eq!(result["zone_fill"]["result"]["state"], state);
+        let check = |error: CommandError| assert!(matches!(error, CommandError::Unavailable(message) if message.contains("copper zones")));
+        check(session.export_fabrication_archive(&params).unwrap_err());
+        check(session.execute(EXPORT_FABRICATION, &params).unwrap_err());
+        assert_eq!(session.revision(), revision);
+        assert!(Arc::ptr_eq(&snapshot, &session.snapshot().unwrap()));
+    }
+    session.apply(DELETE_ZONES, &json!({"zones":[view(&session).zones()[0].id],"expected_revision":revision})).unwrap();
+    assert!(session.export_fabrication_archive(&params).is_ok());
 }
 
 /// The same board gives byte-identical outputs and archives, including rounded pad macros.
