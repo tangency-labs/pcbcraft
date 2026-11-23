@@ -575,8 +575,17 @@ fn window_corners(h: &Harness<'_, PcbApp>, min: (i64, i64), max: (i64, i64)) -> 
     (egui::pos2(a.x.min(b.x), a.y.max(b.y)), egui::pos2(a.x.max(b.x), a.y.min(b.y)))
 }
 
-/// Drag a primary box from the canvas and release it at `to`, optionally pressing Escape first.
-fn box_onto(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, escape: bool) {
+/// What happens between the last move of a held box and its release.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Interrupt {
+    None,
+    Escape,
+    /// A dialog disables canvas input for one frame, then input is enabled again.
+    Disabled,
+}
+
+/// Drag a primary box from the canvas and release it at `to`, after an optional interruption.
+fn box_onto(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, interrupt: Interrupt) {
     use egui::PointerButton::Primary;
     h.event(egui::Event::PointerMoved(from));
     h.event(egui::Event::PointerButton { pos: from, button: Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -585,16 +594,26 @@ fn box_onto(h: &mut Harness<'_, PcbApp>, from: egui::Pos2, to: egui::Pos2, escap
     h.run();
     h.event(egui::Event::PointerMoved(to));
     h.run();
-    if escape {
-        h.key_press(Key::Escape);
-        h.run();
+    match interrupt {
+        Interrupt::None => {}
+        Interrupt::Escape => {
+            h.key_press(Key::Escape);
+            h.run();
+        }
+        Interrupt::Disabled => {
+            h.state_mut().dialog = crate::Dialog::About;
+            h.run();
+            h.state_mut().dialog = crate::Dialog::None;
+            h.run();
+        }
     }
     h.event(egui::Event::PointerButton { pos: to, button: Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run();
 }
 
 /// A schematic box that starts on the canvas keeps its hits when released over the floating
-/// filter card. Escape still cancels it, and plain clicks still select or clear.
+/// filter card. Escape or a frame of disabled input still cancels it, and plain clicks still
+/// select or clear.
 #[test]
 fn schematic_box_released_over_the_filter_card_selects_enclosed_items() {
     let mut h = fixture();
@@ -606,17 +625,18 @@ fn schematic_box_released_over_the_filter_card_selects_enclosed_items() {
     click_canvas_at(&mut h, from);
     assert!(h.state().views.active.schematic.selection.is_empty());
     float_filters_over(&mut h, to);
-    for escape in [true, false] {
-        box_onto(&mut h, from, to, escape);
+    for interrupt in [Interrupt::Escape, Interrupt::Disabled, Interrupt::None] {
+        box_onto(&mut h, from, to, interrupt);
         assert!(h.state().views.active.schematic.tool.is_none());
         let selection = &h.state().views.active.schematic.selection;
-        assert_eq!((selection.symbols.len(), selection.wires.len()), if escape { (0, 0) } else { (1, 1) }, "escape={escape}");
+        let expected = if interrupt == Interrupt::None { (1, 1) } else { (0, 0) };
+        assert_eq!((selection.symbols.len(), selection.wires.len()), expected, "{interrupt:?}");
     }
     assert_eq!(document(&h), before);
 }
 
 /// A PCB box that starts on the canvas keeps its hits when released over the floating filter
-/// card. Escape still cancels it, and plain clicks still select or clear.
+/// card. Escape or a frame of disabled input still cancels it, and plain clicks still select or clear.
 #[test]
 fn board_box_released_over_the_filter_card_selects_enclosed_items() {
     let mut h = fixture();
@@ -638,10 +658,10 @@ fn board_box_released_over_the_filter_card_selects_enclosed_items() {
     click_canvas_at(&mut h, from);
     assert!(h.state().views.active.board.selection.is_empty());
     float_filters_over(&mut h, to);
-    for escape in [true, false] {
-        box_onto(&mut h, from, to, escape);
+    for interrupt in [Interrupt::Escape, Interrupt::Disabled, Interrupt::None] {
+        box_onto(&mut h, from, to, interrupt);
         assert!(h.state().views.active.board.box_drag.is_none());
-        assert_eq!(h.state().views.active.board.selection.len(), usize::from(!escape), "escape={escape}");
+        assert_eq!(h.state().views.active.board.selection.len(), usize::from(interrupt == Interrupt::None), "{interrupt:?}");
     }
     assert_eq!(document(&h), before);
 }

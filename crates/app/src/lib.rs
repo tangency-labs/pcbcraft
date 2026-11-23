@@ -1590,6 +1590,11 @@ impl PcbApp {
             && matches!(self.dialog, Dialog::None)
             && !self.parts.is_modal()
             && !egui::Popup::is_any_open(ui.ctx());
+        // Disabled input on any frame cancels a box and keeps the selection it started from, so a
+        // later enabled release cannot commit it. Canvas clicks are dropped while a dialog is open.
+        if !input_enabled && matches!(self.views.active.schematic.tool, Some(Tool::BoxSelect { .. })) {
+            self.views.active.schematic.tool = None;
+        }
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
