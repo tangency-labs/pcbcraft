@@ -830,13 +830,21 @@ impl Document {
                             points.push(at);
                         }
                         if closing || points.len() >= pcbcraft_engine::authoring::courtyard::MAX_VERTICES {
-                            let result = pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(points, self.drawing_stroke_nm)
-                                .and_then(|primitive| self.execute(revision, Action::Insert { primitive }));
-                            if result.is_ok() {
-                                self.show_courtyard = true;
-                                self.tool = Tool::Select;
+                            match pcbcraft_engine::authoring::courtyard::make_courtyard_polygon(points, self.drawing_stroke_nm) {
+                                Ok(primitive) => {
+                                    let result = self.execute(revision, Action::Insert { primitive });
+                                    if result.is_ok() {
+                                        self.show_courtyard = true;
+                                        self.tool = Tool::Select;
+                                    }
+                                    result
+                                }
+                                Err(error) if revision != self.session.revision() => Err(error),
+                                Err(error) => {
+                                    self.error = Some(error);
+                                    Ok(())
+                                }
                             }
-                            result
                         } else {
                             self.tool = Tool::Courtyard { points, revision };
                             Ok(())
@@ -1682,5 +1690,112 @@ mod tests {
         h.key_press(egui::Key::Backspace);
         h.run();
         assert!(!h.state().library_editors.documents[&id].session.snapshot().objects.contains_key(&object));
+    }
+
+    /// Closing a self-intersecting courtyard draft by clicking the first vertex reports the
+    /// validation error while keeping the drawing tool and editable points; a valid mouse close
+    /// still commits in one edit and exits to Select, and a stale captured revision discards the
+    /// draft so a fresh draft is required.
+    #[test]
+    fn courtyard_mouse_close_keeps_draft_on_geometry_error_and_discards_stale_revision() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        fn click(h: &mut Harness<'_, crate::PcbApp>, pos: egui::Pos2) {
+            h.hover_at(pos);
+            h.run();
+            h.run_steps(30);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run();
+            }
+        }
+
+        let mut app = crate::PcbApp::default();
+        app.new_library_item(Kind::Footprint);
+        let id = app.library_editors.active.unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut crate::PcbApp| app.frame(ui), app);
+        h.run();
+        if let Some(doc) = h.state_mut().library_editors.documents.get_mut(&id) {
+            let zoom = doc.camera.zoom();
+            doc.camera.set_zoom(zoom / 4.0);
+        }
+        h.run();
+        let area = h.get_by_label("Library canvas").rect();
+        let p0 = Point { x_nm: -1_000_000, y_nm: -1_000_000 };
+        let p1 = Point { x_nm: 1_000_000, y_nm: 1_000_000 };
+        let p2 = Point { x_nm: 1_000_000, y_nm: -1_000_000 };
+        let p3 = Point { x_nm: -1_000_000, y_nm: 1_000_000 };
+        let (s0, s1, s2, s3) = {
+            let doc = &h.state().library_editors.documents[&id];
+            (doc.camera.screen(p0, area), doc.camera.screen(p1, area), doc.camera.screen(p2, area), doc.camera.screen(p3, area))
+        };
+        for pos in [s0, s1, s2, s3] {
+            assert!(area.contains(pos));
+        }
+
+        let rev0 = h.state().library_editors.documents[&id].session.revision();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        click(&mut h, s0);
+        click(&mut h, s1);
+        click(&mut h, s2);
+        click(&mut h, s3);
+        assert!(matches!(
+            &h.state().library_editors.documents[&id].tool,
+            Tool::Courtyard { points, revision } if points.as_slice() == [p0, p1, p2, p3] && *revision == rev0
+        ));
+
+        // Clicking the first vertex on a self-intersecting draft reports an error but keeps the
+        // drawing tool and editable points so the user does not lose the outline.
+        click(&mut h, s0);
+        {
+            let doc = &h.state().library_editors.documents[&id];
+            assert!(doc.error.is_some());
+            assert!(matches!(
+                &doc.tool,
+                Tool::Courtyard { points, revision } if points.as_slice() == [p0, p1, p2, p3] && *revision == rev0
+            ));
+            assert_eq!(doc.session.revision(), rev0);
+        }
+
+        // Cancel the invalid draft and verify a valid mouse close still commits in one edit.
+        h.key_press(egui::Key::Escape);
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        click(&mut h, s0);
+        click(&mut h, s2);
+        click(&mut h, s1);
+        click(&mut h, s0);
+        let cy_id = {
+            let doc = &h.state().library_editors.documents[&id];
+            assert_eq!(doc.error, None);
+            assert!(matches!(doc.tool, Tool::Select));
+            assert!(doc.show_courtyard);
+            assert_eq!(doc.session.revision(), rev0 + 1);
+            let cy_id = doc.selected.unwrap();
+            assert_eq!(pcbcraft_engine::authoring::courtyard::courtyard_polygon(&doc.session.snapshot().objects[&cy_id]).unwrap().0.len(), 3);
+            cy_id
+        };
+
+        // A stale captured revision still discards the draft and returns to Select on close.
+        let rev1 = h.state().library_editors.documents[&id].session.revision();
+        h.hover_at(area.center());
+        h.run();
+        h.key_press(egui::Key::C);
+        h.run();
+        click(&mut h, s0);
+        click(&mut h, s2);
+        click(&mut h, s1);
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().session.execute(rev1, Action::Delete { objects: vec![cy_id] }).unwrap();
+        let rev_stale = h.state().library_editors.documents[&id].session.revision();
+        click(&mut h, s0);
+        {
+            let doc = &h.state().library_editors.documents[&id];
+            assert!(doc.error.is_some());
+            assert!(matches!(doc.tool, Tool::Select));
+            assert_eq!(doc.session.revision(), rev_stale);
+        }
     }
 }
