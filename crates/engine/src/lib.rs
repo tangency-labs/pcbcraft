@@ -3840,12 +3840,13 @@ impl Session {
     }
 
     /// Check catalog parameters, board identity and availability without generating query data
-    /// or changing the session. Layer-group inspection reads only stackup metadata, so it can
-    /// run regardless of copper geometry. State-specific setup diagnostics remain with handlers.
+    /// or changing the session. Layer-group inspection reads only stackup metadata and the
+    /// assembly check reads only package pads and drawings, so both can run regardless of
+    /// copper geometry. State-specific setup diagnostics remain with handlers.
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        let check_copper_geometry = id.starts_with("pcb.") && id != INSPECT_LAYER_GROUPS;
+        let check_copper_geometry = id.starts_with("pcb.") && !matches!(id, INSPECT_LAYER_GROUPS | CHECK_ASSEMBLY);
         if check_copper_geometry
             && id != board::arc::SET_ARCS
             && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())

@@ -207,7 +207,7 @@ fn invalid_arcs_fail_atomically_on_the_shared_command_path() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Geometry consumers refuse exact arcs, while stackup inspection remains available.
+/// Geometry consumers refuse exact arcs, while stackup inspection and the assembly check remain available.
 #[test]
 fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     let (mut s, arc) = fixture();
@@ -240,6 +240,16 @@ fn unsupported_consumers_refuse_curves_instead_of_using_the_chord() {
     assert_eq!(
         s.execute(crate::INSPECT_LAYER_GROUPS, &json!({"board":target.board})).unwrap(),
         json!({"revision":s.revision(),"layer_groups":groups})
+    );
+    let findings = view(&s).orientation_findings();
+    assert_eq!(
+        s.execute(crate::CHECK_ASSEMBLY, &json!({"board":target.board})).unwrap(),
+        json!({"revision":s.revision(),"assembly_check":{"board":target,"findings":findings}})
+    );
+    assert_eq!(s.apply(crate::CHECK_ASSEMBLY, &json!({"board":target.board})).unwrap(), s.revision());
+    assert_eq!(
+        s.execute(crate::CHECK_ASSEMBLY, &json!({"board":uuid::Uuid::from_u128(9)})).unwrap_err().code(),
+        crate::error_codes::ErrorCode::NotFound
     );
     assert_unavailable(
         s.apply(crate::ADD_VIA, &json!({"board":target.board,"at":{"x_nm":0,"y_nm":0},"expected_revision":s.revision()})).unwrap_err(),

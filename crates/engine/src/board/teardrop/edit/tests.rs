@@ -177,6 +177,17 @@ fn command_adds_eight_reports_two_and_round_trips_intent() {
         session.execute(crate::INSPECT_LAYER_GROUPS, &json!({"board":target.board})).unwrap(),
         json!({"revision":applied_revision,"layer_groups":groups})
     );
+    let findings = view(&session).orientation_findings();
+    assert_eq!(
+        session.execute(crate::CHECK_ASSEMBLY, &json!({"board":target.board})).unwrap(),
+        json!({"revision":applied_revision,"assembly_check":{"board":target,"findings":findings}})
+    );
+    assert_eq!(session.apply(crate::CHECK_ASSEMBLY, &json!({"board":target.board})).unwrap(), applied_revision);
+    assert_eq!(
+        session.execute(crate::CHECK_ASSEMBLY, &json!({"board":uuid::Uuid::from_u128(9)})).unwrap_err().code(),
+        crate::error_codes::ErrorCode::NotFound
+    );
+    assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
     session.execute("edit.undo", &serde_json::Value::Null).unwrap();
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before_docs);
     session.execute("edit.redo", &serde_json::Value::Null).unwrap();
