@@ -2134,7 +2134,13 @@ impl PcbApp {
             {
                 self.select_board_items(Default::default());
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
+            // Backspace deletes like Delete (it is the delete key on Mac keyboards), except while a
+            // route or line tool owns it for removing the last vertex below.
+            let board = &self.views.active.board;
+            let backspace_deletes =
+                !board.tracks.tool && board.zones.tool != Some(board_drawing::Tool::Lines) && board.drawing.tool != Some(board_drawing::Tool::Lines);
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || (backspace_deletes && i.consume_key(Modifiers::NONE, Key::Backspace)))
+            {
                 if !board_clipboard::busy(&self.views.active.board) {
                     self.delete_board_items();
                 } else if !self.views.active.board.tracks.selected.is_empty() {

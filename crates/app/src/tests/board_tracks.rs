@@ -838,6 +838,38 @@ fn unfinished_routes_cancel_and_finish_from_the_keyboard() {
     assert_eq!(routed[0].width_nm, 500_000);
 }
 
+/// While a route or a copper line is being drawn, Backspace still removes its last vertex and
+/// leaves a board selection and everything else in place.
+#[test]
+fn backspace_keeps_removing_the_last_vertex_while_items_are_selected() {
+    for draw in [false, true] {
+        let mut h = routable();
+        let footprint = h.state().session.project().unwrap().boards().next().unwrap().footprints().next().unwrap().id.clone();
+        let count = h.state().session.project().unwrap().boards().next().unwrap().footprints().count();
+        if draw {
+            click(&mut h, "Draw");
+            click(&mut h, "Draw lines on active layer");
+        } else {
+            click(&mut h, "Layout");
+            click(&mut h, "Route tracks on the active copper layer");
+        }
+        for x in [2_540_000, 5_080_000, 7_620_000] {
+            click_route(&mut h, Point { x_nm: x, y_nm: 2_540_000 });
+        }
+        h.state_mut().views.active.board.selection.insert(footprint.clone());
+        let revision = h.state().session.revision();
+        h.key_press(Key::Backspace);
+        h.run();
+        assert_eq!(h.state().session.revision(), revision, "draw={draw}: Backspace edits nothing");
+        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), count, "draw={draw}");
+        h.key_press(Key::Enter);
+        h.run();
+        let routed = tracks(&h);
+        assert_eq!(routed.len(), 1, "draw={draw}: Backspace removed the last vertex: {routed:?}");
+        assert_eq!(h.state().session.project().unwrap().boards().next().unwrap().footprints().count(), count, "draw={draw}");
+    }
+}
+
 /// The routing popup keeps the draft through dismissal. Via placement uses its opening point,
 /// and Finish commits through the same track transaction as Enter.
 #[test]
