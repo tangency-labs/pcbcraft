@@ -721,7 +721,10 @@ typed requirements through the same revision-checked command path as the GUI.
 
 `library.check` takes transported `documents` with an optional footprint `item`
 or generic part `record` and returns typed findings for repeated pad numbers and
-incomplete or inconsistent package maps, even with `inspect: false`. It needs no
+incomplete or inconsistent package maps, each with its severity, plus counts per
+severity and `blocks_publish`, even with `inspect: false`. Optional `stage` and
+per-rule `severity` parameters choose which rules run and how much their
+findings matter. It needs no
 open project, runs in a `--read-only` session and changes nothing. A malformed or
 unresolvable capture is `invalid_params`, never a clean report. See
 [check library items](native-library-sources.md#check-library-items).

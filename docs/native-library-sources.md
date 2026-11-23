@@ -239,9 +239,10 @@ more than 64 packages in one part or 1024 terminals or pads in one package, and
 documents over the 1 MiB file limit are `invalid_params` errors, never a clean
 report.
 
-The result has `capture_digest`, the SHA-256 of the canonical capture, and
-`findings`. An empty list is clean. Findings are sorted by rule and exact
-identity, independent of document or authored order. Each finding has `rule`, a
+The result has `capture_digest`, the SHA-256 of the canonical capture, the
+`stage` that ran, `findings`, `counts` of findings per severity (`error`,
+`warning`, `info`) and `blocks_publish`. An empty list is clean. Findings are sorted by rule and exact
+identity, independent of document or authored order. Each finding has `rule`, its `severity` in this run, a
 `subject` (`kind` is `pad`, `terminal` or `package_pad`, with its exact
 footprint or part reference and a `source` whose `kind` is `document` with its
 `path`, `draft` or `catalog`),
@@ -255,6 +256,19 @@ the authored pad `occurrences` it involves (`index` and 1-based `ordinal`), the
 | `package.pad.unaccounted` | A package with a symbol has a footprint pad that is neither mapped nor listed as unconnected. |
 | `package.pad.not_in_footprint` | A package names a pad number its footprint does not have. |
 | `package.pad.repeated` | A package assigns the same pad number more than once. |
+
+Every rule has a severity (`error`, `warning` or `info`), the stages it runs at
+(`edit`, `publish` and `place`) and whether it is required. The five rules above
+are required errors that run at every stage. The optional `stage` parameter
+(default `edit`) runs only the rules for that stage. `blocks_publish` is true
+when a finding is an error from a rule that also runs at `publish`.
+
+The optional `severity` parameter maps rule IDs to a severity for this run, for
+example `{"package.pad.repeated": "warning"}`. A required rule can be lowered to
+`warning` but not to `info`, and an unknown rule ID is refused; both are
+`invalid_params`. Overrides change only the report, never the capture digest,
+loading or publication. Rules are registered by ID; user-written rules are not
+supported yet.
 
 The check reports defects; it does not relax validation, repair a document or
 make a refused one loadable.

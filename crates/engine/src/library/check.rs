@@ -96,6 +96,10 @@ pub enum CheckError {
     Unresolved { kind: &'static str, reference: Reference },
     /// More data than the native formats allow.
     TooLarge { what: String, limit: usize },
+    /// A severity override names no registered rule.
+    UnknownRule { rule: String },
+    /// A severity override lowers a required rule below its floor.
+    BelowFloor { rule: String, floor: Severity },
 }
 
 impl std::fmt::Display for CheckError {
@@ -108,6 +112,8 @@ impl std::fmt::Display for CheckError {
                 write!(f, "Unresolved {kind} {}/{} revision {}", reference.library, reference.id, reference.revision)
             }
             Self::TooLarge { what, limit } => write!(f, "{what} exceeds the limit of {limit}"),
+            Self::UnknownRule { rule } => write!(f, "Unknown library check rule {rule:?}"),
+            Self::BelowFloor { rule, floor } => write!(f, "Rule {rule} is required and cannot be set below {}", floor.id()),
         }
     }
 }
@@ -162,6 +168,100 @@ impl RuleId {
             }
         }
     }
+}
+
+/// How much a finding matters. Declared from least to most severe, so severities compare.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Severity {
+    /// Worth knowing; never blocks anything.
+    Info,
+    /// Worth fixing; does not block publication.
+    Warning,
+    /// Blocks publication of the item.
+    Error,
+}
+
+impl Severity {
+    /// The stable text identity used in reports and parameters.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// Where in an item's life a check runs: while editing, before publication or before placement.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Stage {
+    #[default]
+    Edit,
+    Publish,
+    Place,
+}
+
+/// Every stage, for rules that always run.
+const ALL_STAGES: &[Stage] = &[Stage::Edit, Stage::Publish, Stage::Place];
+
+/// The lowest severity an override may give a required rule.
+const REQUIRED_FLOOR: Severity = Severity::Warning;
+
+/// One registered rule: its identity, its default severity, the stages it runs at and whether an
+/// override may lower it below [`REQUIRED_FLOOR`]. Rules are found by their text identity, so a
+/// rule set can grow without changing how overrides or reports name them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rule {
+    pub id: RuleId,
+    pub severity: Severity,
+    pub stages: &'static [Stage],
+    pub required: bool,
+}
+
+/// The built-in rules, in report order. Strict loading and publication refuse each of these
+/// defects, so every one is a required error that runs at every stage.
+pub const RULES: &[Rule] = &[
+    Rule { id: RuleId::PadNumberRepeated, severity: Severity::Error, stages: ALL_STAGES, required: true },
+    Rule { id: RuleId::PackageTerminalUnmapped, severity: Severity::Error, stages: ALL_STAGES, required: true },
+    Rule { id: RuleId::PackagePadUnaccounted, severity: Severity::Error, stages: ALL_STAGES, required: true },
+    Rule { id: RuleId::PackagePadNotInFootprint, severity: Severity::Error, stages: ALL_STAGES, required: true },
+    Rule { id: RuleId::PackagePadRepeated, severity: Severity::Error, stages: ALL_STAGES, required: true },
+];
+
+/// The choices of one check run.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Options {
+    /// Only rules that run at this stage report findings.
+    pub stage: Stage,
+    /// A severity per rule identity, replacing that rule's default for this run.
+    pub severity: BTreeMap<String, Severity>,
+}
+
+impl Options {
+    /// The rules of `rules` with this run's severities applied.
+    ///
+    /// # Errors
+    /// Refuses an override naming no rule in `rules`, and one that sets a required rule below
+    /// [`REQUIRED_FLOOR`]; a refused run has no report.
+    fn resolve(&self, rules: &[Rule]) -> Result<Vec<Rule>, CheckError> {
+        for (id, severity) in &self.severity {
+            let rule = rules.iter().find(|rule| rule.id.id() == id).ok_or_else(|| CheckError::UnknownRule { rule: id.clone() })?;
+            if rule.required && *severity < REQUIRED_FLOOR {
+                return Err(CheckError::BelowFloor { rule: id.clone(), floor: REQUIRED_FLOOR });
+            }
+        }
+        Ok(rules.iter().map(|rule| Rule { severity: self.severity.get(rule.id.id()).copied().unwrap_or(rule.severity), ..*rule }).collect())
+    }
+}
+
+/// Findings per severity in one report.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct Counts {
+    pub error: usize,
+    pub warning: usize,
+    pub info: usize,
 }
 
 /// What a finding is about. Fields are ordered so reports sort by identity before source.
@@ -221,6 +321,8 @@ pub enum Basis {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Finding {
     pub rule: RuleId,
+    /// The rule's severity in the run that produced this finding.
+    pub severity: Severity,
     pub subject: Subject,
     /// Every footprint occurrence involved, in authored order; empty when none exists.
     pub occurrences: Vec<PadOccurrenceRef>,
@@ -230,10 +332,12 @@ pub struct Finding {
 }
 
 impl Finding {
-    /// Fill the limit and basis from the rule, so one rule cannot report two limits.
+    /// Fill the limit and basis from the rule, so one rule cannot report two limits. The severity
+    /// starts as an error and the run sets it from its resolved rule.
     fn new(rule: RuleId, subject: Subject, measured: usize, occurrences: Vec<PadOccurrenceRef>) -> Self {
         Self {
             rule,
+            severity: Severity::Error,
             subject,
             occurrences,
             measured: Quantity { value: i64::try_from(measured).unwrap_or(i64::MAX), unit: Unit::Count },
@@ -247,7 +351,10 @@ impl Finding {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Report {
     capture_digest: String,
+    stage: Stage,
     findings: Vec<Finding>,
+    counts: Counts,
+    blocks_publish: bool,
 }
 
 impl Report {
@@ -262,6 +369,18 @@ impl Report {
     /// Clean only when no rule reports a finding; errors never produce a report.
     pub fn is_clean(&self) -> bool {
         self.findings.is_empty()
+    }
+    /// The stage whose rules ran.
+    pub fn stage(&self) -> Stage {
+        self.stage
+    }
+    /// Findings per severity.
+    pub fn counts(&self) -> Counts {
+        self.counts
+    }
+    /// True when a finding is an error from a rule that runs before publication.
+    pub fn blocks_publish(&self) -> bool {
+        self.blocks_publish
     }
 }
 
@@ -528,8 +647,44 @@ fn by_number(pads: &[PadOccurrence]) -> BTreeMap<&str, Vec<PadOccurrenceRef>> {
     groups
 }
 
-/// The one checker. GUI, MCP and publication gates call it on the same capture.
+/// The one checker with the built-in rules at the edit stage and their default severities.
 pub fn check(capture: &Capture) -> Report {
+    report(capture, evaluate(capture), RULES, Stage::Edit)
+}
+
+/// The one checker. GUI, MCP and publication gates call it on the same capture with their stage
+/// and severity overrides; `rules` is the registered rule set, normally [`RULES`].
+///
+/// # Errors
+/// Refuses an override of an unknown rule or one below a required rule's floor.
+pub fn check_with(capture: &Capture, options: &Options, rules: &[Rule]) -> Result<Report, CheckError> {
+    let rules = options.resolve(rules)?;
+    Ok(report(capture, evaluate(capture), &rules, options.stage))
+}
+
+/// Keep the findings of rules that run at `stage`, give each its rule's severity and count them.
+/// A rule missing from `rules` reports nothing.
+fn report(capture: &Capture, findings: Vec<Finding>, rules: &[Rule], stage: Stage) -> Report {
+    let mut counts = Counts::default();
+    let mut blocks_publish = false;
+    let findings: Vec<Finding> = findings
+        .into_iter()
+        .filter_map(|finding| {
+            let rule = rules.iter().find(|rule| rule.id == finding.rule && rule.stages.contains(&stage))?;
+            match rule.severity {
+                Severity::Error => counts.error += 1,
+                Severity::Warning => counts.warning += 1,
+                Severity::Info => counts.info += 1,
+            }
+            blocks_publish |= rule.severity == Severity::Error && rule.stages.contains(&Stage::Publish);
+            Some(Finding { severity: rule.severity, ..finding })
+        })
+        .collect();
+    Report { capture_digest: capture.digest.clone(), stage, findings, counts, blocks_publish }
+}
+
+/// Every built-in rule's findings, sorted by rule, subject and first occurrence.
+fn evaluate(capture: &Capture) -> Vec<Finding> {
     let mut findings = Vec::new();
     for footprint in &capture.footprints {
         for (number, occurrences) in by_number(&footprint.pads).into_iter().filter(|(_, occurrences)| occurrences.len() > 1) {
@@ -587,7 +742,7 @@ pub fn check(capture: &Capture) -> Report {
         }
     }
     findings.sort_by(|a, b| (a.rule, &a.subject, a.occurrences.first()).cmp(&(b.rule, &b.subject, b.occurrences.first())));
-    Report { capture_digest: capture.digest.clone(), findings }
+    findings
 }
 
 /// Decode `library.check` parameters, capture once and return the serialized report.
@@ -599,8 +754,23 @@ pub(crate) fn execute(params: &Value, catalog: &Catalog) -> Result<Value, String
         .transpose()?;
     let record =
         params.get("record").map(|record| serde_json::from_value::<Record>(record.clone()).map_err(|error| error.to_string())).transpose()?;
+    let options = Options {
+        stage: params
+            .get("stage")
+            .map(|stage| serde_json::from_value(stage.clone()))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default(),
+        severity: params
+            .get("severity")
+            .map(|severity| serde_json::from_value(severity.clone()))
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default(),
+    };
     let capture = Capture::new(&documents, item.as_ref(), record.as_ref(), catalog).map_err(|error| error.to_string())?;
-    serde_json::to_value(check(&capture)).map_err(|error| error.to_string())
+    let report = check_with(&capture, &options, RULES).map_err(|error| error.to_string())?;
+    serde_json::to_value(report).map_err(|error| error.to_string())
 }
 
 #[cfg(test)]

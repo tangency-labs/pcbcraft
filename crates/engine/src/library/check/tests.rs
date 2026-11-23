@@ -161,6 +161,7 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
         *repeated,
         Finding {
             rule: RuleId::PadNumberRepeated,
+            severity: Severity::Error,
             subject: Subject::Pad {
                 footprint: fixture.footprint.clone(),
                 number: "3".into(),
@@ -176,6 +177,7 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
         *unmapped,
         Finding {
             rule: RuleId::PackageTerminalUnmapped,
+            severity: Severity::Error,
             subject: Subject::Terminal { part: record.reference(), package: "main".into(), terminal: "4".into(), source: CaptureSource::Draft },
             occurrences: Vec::new(),
             measured: Quantity { value: 0, unit: Unit::Count },
@@ -185,6 +187,8 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
     );
     assert_eq!(report["findings"][0]["rule"], "pad.number.repeated");
     assert_eq!(report["findings"][1]["rule"], "package.terminal.unmapped");
+    assert_eq!(report["findings"][0]["severity"], "error");
+    assert_eq!(report["findings"][1]["severity"], "error");
     assert_eq!(fixture.session.apply(CHECK, &params).unwrap(), revision);
     assert_eq!((editors(&fixture), fixture.session.inspect(), fixture.session.revision(), params), before);
 }
@@ -598,4 +602,110 @@ fn repeated_part_revision_is_malformed_but_distinct_revisions_are_accepted() {
     distinct.insert("parts/b.json".into(), rev2);
     let capture = Capture::from_documents(&distinct, &Catalog::default()).unwrap();
     assert_eq!(capture.packages().len(), 2);
+}
+
+/// The done capture at the publish stage: two errors, no warnings or notes, and a report that
+/// blocks publication. The command and the engine checker agree.
+#[test]
+fn check_report_counts_by_severity() {
+    let mut fixture = fixture();
+    let documents = edited(&fixture, |text| repeat_pad(text, 2, 2_000_000));
+    let item = fixture.footprint_editor.snapshot();
+    let record = fixture.part_editor.record().clone();
+    let capture = Capture::new(&documents, Some(item.as_ref()), Some(&record), fixture.session.libraries()).unwrap();
+    let options = Options { stage: Stage::Publish, ..Options::default() };
+    let report = check_with(&capture, &options, RULES).unwrap();
+    assert_eq!(rules(&report), [RuleId::PadNumberRepeated, RuleId::PackageTerminalUnmapped]);
+    assert!(report.findings().iter().all(|finding| finding.severity == Severity::Error));
+    assert_eq!(report.counts(), Counts { error: 2, warning: 0, info: 0 });
+    assert!(report.blocks_publish());
+    assert_eq!(report.stage(), Stage::Publish);
+    let params = json!({"documents":documents,"item":item.as_ref(),"record":record,"stage":"publish"});
+    let value = fixture.session.execute(CHECK, &params).unwrap();
+    assert_eq!(value, serde_json::to_value(&report).unwrap());
+    assert_eq!(value["counts"], json!({"error":2,"warning":0,"info":0}));
+    assert_eq!(value["blocks_publish"], true);
+    assert_eq!(value["stage"], "publish");
+    // A clean capture counts nothing and blocks nothing.
+    let clean = check_with(&Capture::from_documents(&fixture.documents, &Catalog::default()).unwrap(), &options, RULES).unwrap();
+    assert_eq!((clean.counts(), clean.blocks_publish()), (Counts::default(), false));
+}
+
+/// A rule registered only for publication reports nothing at the edit stage and its finding at
+/// the publish stage. The default stage is edit.
+#[test]
+fn check_stage_filter() {
+    let fixture = fixture();
+    let capture = Capture::from_documents(&edited(&fixture, |text| repeat_pad(text, 2, 2_000_000)), &Catalog::default()).unwrap();
+    let publish_only = [Rule { stages: &[Stage::Publish], ..RULES[0] }];
+    assert_eq!(publish_only[0].id, RuleId::PadNumberRepeated);
+    let edit = check_with(&capture, &Options::default(), &publish_only).unwrap();
+    assert_eq!(edit.stage(), Stage::Edit);
+    assert!(edit.is_clean(), "a publish-only rule does not run while editing");
+    assert_eq!((edit.counts(), edit.blocks_publish()), (Counts::default(), false));
+    let publish = check_with(&capture, &Options { stage: Stage::Publish, ..Options::default() }, &publish_only).unwrap();
+    assert_eq!(rules(&publish), [RuleId::PadNumberRepeated]);
+    assert!(publish.blocks_publish());
+    // The built-in rule runs at every stage.
+    assert_eq!(rules(&check_with(&capture, &Options::default(), RULES).unwrap()), [RuleId::PadNumberRepeated]);
+}
+
+/// Lowering `package.pad.repeated` to a warning keeps its finding but no longer blocks
+/// publication when no other error is reported.
+#[test]
+fn check_override_lowers_to_warning() {
+    let mut fixture = fixture();
+    let record = connector_part(&fixture.footprint, &[("1", &["1", "3"]), ("2", &["2", "3"])], &[]);
+    let capture = Capture::from_part_record(&record, &fixture.documents, &Catalog::bundled()).unwrap();
+    let options = |severity: Severity| Options { stage: Stage::Publish, severity: BTreeMap::from([("package.pad.repeated".to_owned(), severity)]) };
+    let default = check_with(&capture, &Options { stage: Stage::Publish, ..Options::default() }, RULES).unwrap();
+    assert_eq!(rules(&default), [RuleId::PackagePadRepeated]);
+    assert!(default.blocks_publish());
+    let lowered = check_with(&capture, &options(Severity::Warning), RULES).unwrap();
+    assert_eq!(rules(&lowered), [RuleId::PackagePadRepeated]);
+    assert_eq!(lowered.findings()[0].severity, Severity::Warning);
+    assert_eq!(lowered.counts(), Counts { error: 0, warning: 1, info: 0 });
+    assert!(!lowered.blocks_publish());
+    assert_eq!(lowered.capture_digest(), default.capture_digest(), "an override changes the run, not the capture");
+    let params = json!({"documents":fixture.documents,"record":record,"stage":"publish","severity":{"package.pad.repeated":"warning"}});
+    let value = fixture.session.execute(CHECK, &params).unwrap();
+    assert_eq!(value, serde_json::to_value(&lowered).unwrap());
+    assert_eq!(value["findings"][0]["severity"], "warning");
+    assert_eq!(value["blocks_publish"], false);
+}
+
+/// An override naming no registered rule is refused, never ignored.
+#[test]
+fn check_override_unknown_rule_refused() {
+    let mut fixture = fixture();
+    let capture = Capture::from_documents(&fixture.documents, &Catalog::default()).unwrap();
+    let options = Options { severity: BTreeMap::from([("pad.number.missing".to_owned(), Severity::Warning)]), ..Options::default() };
+    assert_eq!(check_with(&capture, &options, RULES).unwrap_err(), CheckError::UnknownRule { rule: "pad.number.missing".into() });
+    let params = json!({"documents":fixture.documents,"severity":{"pad.number.missing":"warning"}});
+    let refused = fixture.session.execute(CHECK, &params).unwrap_err();
+    assert!(matches!(&refused, crate::CommandError::InvalidParams(message) if message.contains("pad.number.missing")), "{refused}");
+    let refused = fixture.session.execute(CHECK, &json!({"documents":fixture.documents,"severity":{"pad.number.repeated":"fatal"}})).unwrap_err();
+    assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
+    let refused = fixture.session.execute(CHECK, &json!({"documents":fixture.documents,"stage":"review"})).unwrap_err();
+    assert!(matches!(refused, crate::CommandError::InvalidParams(_)), "{refused}");
+}
+
+/// A required rule can be lowered to a warning (last good value) but not to info (first bad
+/// value); an optional rule can.
+#[test]
+fn check_override_required_floor() {
+    let mut fixture = fixture();
+    let capture = Capture::from_documents(&fixture.documents, &Catalog::default()).unwrap();
+    let options = |severity: Severity| Options { severity: BTreeMap::from([("pad.number.repeated".to_owned(), severity)]), ..Options::default() };
+    assert!(RULES.iter().all(|rule| rule.required));
+    assert!(check_with(&capture, &options(Severity::Warning), RULES).is_ok());
+    assert_eq!(
+        check_with(&capture, &options(Severity::Info), RULES).unwrap_err(),
+        CheckError::BelowFloor { rule: "pad.number.repeated".into(), floor: Severity::Warning }
+    );
+    let optional = [Rule { required: false, ..RULES[0] }];
+    assert!(check_with(&capture, &options(Severity::Info), &optional).is_ok());
+    let params = json!({"documents":fixture.documents,"severity":{"pad.number.repeated":"info"}});
+    let refused = fixture.session.execute(CHECK, &params).unwrap_err();
+    assert!(matches!(&refused, crate::CommandError::InvalidParams(message) if message.contains("pad.number.repeated")), "{refused}");
 }

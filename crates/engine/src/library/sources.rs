@@ -259,6 +259,13 @@ pub(crate) const COMMANDS: [Command; 12] = [
             },
             Param { name: "item", summary: "Captured footprint authoring envelope", required: false, kind: ParamKind::AuthoringItem },
             Param { name: "record", summary: "Captured native generic part draft", required: false, kind: ParamKind::PartDraft },
+            Param { name: "stage", summary: "Run only rules for edit (default), publish or place", required: false, kind: ParamKind::CheckStage },
+            Param {
+                name: "severity",
+                summary: "Severity per rule ID for this run; required rules go no lower than warning",
+                required: false,
+                kind: ParamKind::CheckSeverities,
+            },
         ],
     },
 ];
