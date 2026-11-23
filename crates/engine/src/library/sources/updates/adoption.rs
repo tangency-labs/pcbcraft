@@ -54,15 +54,19 @@ pub struct PreparedFootprintRevision {
 }
 
 impl Session {
-    /// Validate shared command parameters, then capture immutable authority for native hosts.
+    /// Check session scope and shared command parameters, then capture immutable authority for
+    /// native hosts. A read-only session is refused before any parameter is interpreted.
     pub fn prepare_footprint_revision(&self, params: &Value) -> Result<FootprintRevisionJob, CommandError> {
+        self.authorize_command(APPLY_FOOTPRINT_REVISION)?;
         self.refuse_stale(APPLY_FOOTPRINT_REVISION, params)?;
         self.validate_project_command(APPLY_FOOTPRINT_REVISION, params)?;
         self.footprint_revision_job(params)
     }
 
-    /// Publish one validated edit; a different project, opening, revision or catalog refuses it.
+    /// Publish one validated edit after rechecking session scope; a different project, opening,
+    /// revision or catalog refuses it.
     pub fn commit_footprint_revision(&mut self, edit: PreparedFootprintRevision) -> Result<u64, CommandError> {
+        self.authorize_command(APPLY_FOOTPRINT_REVISION)?;
         self.install_footprint_revision(&edit)?;
         self.report_committed(APPLY_FOOTPRINT_REVISION, &edit.params);
         Ok(self.revision())

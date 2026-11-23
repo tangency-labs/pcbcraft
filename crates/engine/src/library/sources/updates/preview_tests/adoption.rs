@@ -315,6 +315,34 @@ fn large_board_footprint_revision_job_batches_encoding_and_rechecks_authority() 
     assert_eq!(session.project().unwrap().boards().next().unwrap().tracks().len(), TRACKS);
 }
 
+/// The native host's deferred path honors session scope: a read-only session can neither prepare
+/// nor publish a reviewed revision, and refuses with the same error as `execute`.
+#[test]
+fn read_only_session_cannot_prepare_or_commit_footprint_revision() {
+    let (mut session, documents, target) = package_fixture(|_| {}, false, true);
+    let mut params = reviewed(&mut session, &target);
+    params["mapping"] = json!({"1":"1","2":["2","9"]});
+    let mut read_only = Session::with_scope(SessionScope::ReadOnly);
+    read_only.open_snapshot(session.snapshot().unwrap());
+    read_only.install_library_source("test", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    let mut read_only_params = params.clone();
+    read_only_params["expected_revision"] = json!(read_only.revision());
+    let before = read_only.snapshot().unwrap();
+    let before_history = history(&read_only);
+    let expected = read_only.execute(APPLY_FOOTPRINT_REVISION, &read_only_params).unwrap_err();
+    assert_eq!(expected.code(), ErrorCode::OutOfScope);
+    let refused = read_only.prepare_footprint_revision(&read_only_params).err().expect("read-only preparation must be refused");
+    assert_eq!(refused.code(), expected.code());
+    assert!(matches!(refused, crate::CommandError::OutOfScope { command: APPLY_FOOTPRINT_REVISION }), "{refused}");
+    assert_history_unchanged(&read_only, &before, before_history);
+    let mut job = session.prepare_footprint_revision(&params).unwrap();
+    while !job.step(256) {}
+    let edit = job.take_result().unwrap().unwrap();
+    let refused = read_only.commit_footprint_revision(edit).unwrap_err();
+    assert!(matches!(refused, crate::CommandError::OutOfScope { command: APPLY_FOOTPRINT_REVISION }), "{refused}");
+    assert_history_unchanged(&read_only, &before, before_history);
+}
+
 /// A review is invalidated by both document edits and source refresh; a pad-filtered
 /// preview cannot grant review of the whole footprint.
 #[test]
