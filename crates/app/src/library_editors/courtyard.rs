@@ -2125,4 +2125,88 @@ mod tests {
             cached_60_elapsed.as_secs_f64() * 1_000.0,
         );
     }
+
+    /// Loading a valid saved footprint with a 500 nm courtyard stroke lets a Properties vertex
+    /// edit succeed while preserving the 500 nm stroke, whereas explicit stroke changes to 500 nm
+    /// and new courtyard artwork with a 500 nm stroke are still rejected with the range message.
+    #[test]
+    fn thin_saved_courtyard_allows_properties_vertex_edit_and_rejects_explicit_thin_stroke() {
+        let range_message = "Stroke (mm) must be between 0.001 and 2 mm.";
+        let mut setup = pcbcraft_engine::authoring::Session::new(Item::new(Kind::Footprint).unwrap(), false).unwrap();
+        setup
+            .execute(
+                0,
+                Action::GenerateCourtyard {
+                    clearance_nm: courtyard::DEFAULT_CLEARANCE_NM,
+                    source: CourtyardSource::PadsAndBody,
+                    stroke_nm: courtyard::DEFAULT_STROKE_NM,
+                    replace_existing: true,
+                },
+            )
+            .unwrap();
+        let mut saved = (*setup.snapshot()).clone();
+        let cy_id = *saved.objects.iter().find(|(_, p)| courtyard::is_courtyard_primitive(p)).unwrap().0;
+        if let pcbcraft_engine::authoring::Primitive::Artwork { artwork } = saved.objects.get_mut(&cy_id).unwrap() {
+            artwork.graphic.stroke_nm = 500;
+        }
+        saved.validate().unwrap();
+
+        let mut app = PcbApp::default();
+        let id = app.library_editors.open(saved, false).unwrap();
+        app.place_library_document(&Context::default(), id, pcbcraft_chrome::workspace::Placement::Here).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+
+        crate::tests::click(&mut h, "Select courtyard");
+        assert_eq!(h.state().library_editors.documents[&id].selected, Some(cy_id));
+        select_vertex_on_canvas(&mut h, id, cy_id, 0);
+
+        // Geometry-only Vertex X edit in Properties succeeds and preserves the 500 nm stroke.
+        h.get_by_label("Vertex X (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Vertex X (mm)").type_text("-2");
+        h.run();
+        crate::tests::click(&mut h, "Apply");
+        assert_eq!(h.state().library_editors.documents[&id].error, None);
+        let snap = h.state().library_editors.documents[&id].session.snapshot();
+        let (pts, stroke) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+        assert_eq!(pts[0].x_nm, -2_000_000);
+        assert_eq!(stroke, 500);
+
+        // Explicit stroke change in Properties to 0.0005 mm (500 nm) after raising to 0.05 mm is rejected.
+        h.get_by_label("Stroke (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Stroke (mm)").type_text("0.05");
+        h.run();
+        crate::tests::click(&mut h, "Apply");
+        assert_eq!(h.state().library_editors.documents[&id].error, None);
+        let snap = h.state().library_editors.documents[&id].session.snapshot();
+        assert_eq!(courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap().1, 50_000);
+
+        let before = doc_state(h.state(), id);
+        h.get_by_label("Stroke (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.get_by_label("Stroke (mm)").type_text("0.0005");
+        h.run();
+        crate::tests::click(&mut h, "Apply");
+        assert_eq!(h.state().library_editors.documents[&id].error.as_deref(), Some(range_message));
+        assert_eq!(doc_state(h.state(), id), before);
+
+        // New courtyard artwork with a 500 nm stroke via the Generate/Regenerate dialog is also rejected.
+        crate::tests::click(&mut h, "Reset");
+        crate::tests::click(&mut h, "Regenerate…");
+        enabled_by_label(&h, "Stroke (mm)").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        enabled_by_label(&h, "Stroke (mm)").type_text("0.0005");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert!(matches!(h.state().dialog, Dialog::LibraryCourtyard(_)));
+        let Dialog::LibraryCourtyard(dialog) = &h.state().dialog else { panic!("expected courtyard dialog") };
+        assert_eq!(dialog.error.as_deref(), Some(range_message));
+        assert_eq!(doc_state(h.state(), id), before);
+    }
 }
