@@ -442,8 +442,18 @@ mod tests {
         assert_eq!(report.geometry["tracks"], 60);
         assert_eq!(report.geometry["vias"], 0);
         assert_eq!(report.artifact_sha256, digest(artifact.as_bytes()));
-        assert!(report.metrics.iter().all(|m| m.samples_ms.len() == 2));
-        for id in ["replay.start.up.ui", "replay.layer.down.ui", "replay.cancel.up.ui", "replay.shared-edit.command", "command.move_tracks"] {
+        assert!(report.metrics.iter().all(|m| {
+            let expected = if m.id == replay::ROUTE_REVERSAL_METRIC { 12 } else { 2 };
+            m.samples_ms.len() == expected
+        }));
+        for id in [
+            "replay.start.up.ui",
+            "replay.layer.down.ui",
+            "replay.cancel.up.ui",
+            "replay.shared-edit.command",
+            replay::ROUTE_REVERSAL_METRIC,
+            "command.move_tracks",
+        ] {
             assert!(report.metrics.iter().any(|m| m.id == id), "missing boundary {id}");
         }
         assert!(!report.unmeasured.is_empty());

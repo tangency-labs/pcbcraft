@@ -224,7 +224,7 @@ struct RouteReversalTracker {
 impl RouteReversalTracker {
     fn flush(&mut self, samples: &mut BTreeMap<String, Vec<f64>>) {
         if self.reversed && !self.ui_samples.is_empty() {
-            samples.entry(ROUTE_REVERSAL_METRIC.into()).or_default().extend(self.ui_samples.drain(..));
+            samples.entry(ROUTE_REVERSAL_METRIC.into()).or_default().append(&mut self.ui_samples);
         } else {
             self.ui_samples.clear();
         }
