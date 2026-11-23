@@ -2217,6 +2217,75 @@ mod tests {
         assert_eq!(doc.selected_vertex, Some(1));
     }
 
+    /// Same-count vertex reordering remaps the selected vertex by point identity (or clears it if
+    /// the selected point is gone), so a subsequent Backspace removes the selected vertex rather
+    /// than a stale index, while genuine coordinate-only edits keep the index.
+    #[test]
+    fn courtyard_vertex_selection_remaps_or_clears_on_same_count_reorder() {
+        let (mut h, id, cy_id) = harness_with_generated_courtyard();
+        let (original, stroke_nm) = {
+            let doc = &h.state().library_editors.documents[&id];
+            let snap = doc.session.snapshot();
+            let (pts, stroke) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+            (pts.to_vec(), stroke)
+        };
+        assert_eq!(original.len(), 4);
+        let [a, b, c, d] = [original[0], original[1], original[2], original[3]];
+
+        // Select vertex C at index 2 on the canvas, then replace [A, B, C, D] with rotated [B, C, D, A].
+        select_vertex_on_canvas(&mut h, id, cy_id, 2);
+        let rotated = courtyard::make_courtyard_polygon(vec![b, c, d, a], stroke_nm).unwrap();
+        let rev = h.state().library_editors.documents[&id].session.revision();
+        h.state_mut().library_editors.edit(id, rev, Action::Replace { object: cy_id, primitive: rotated }).unwrap();
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(1));
+
+        // Backspace removes vertex C (index 1), leaving [B, D, A], rather than deleting D.
+        h.key_press(egui::Key::Backspace);
+        h.run();
+        {
+            let doc = &h.state().library_editors.documents[&id];
+            let snap = doc.session.snapshot();
+            let (pts, _) = courtyard::courtyard_polygon(&snap.objects[&cy_id]).unwrap();
+            assert_eq!(pts, &[b, d, a]);
+        }
+
+        // Undo Backspace and Undo reorder to restore [A, B, C, D].
+        let rev = h.state().library_editors.documents[&id].session.revision();
+        h.state_mut().library_editors.edit(id, rev, Action::Undo).unwrap();
+        let rev = h.state().library_editors.documents[&id].session.revision();
+        h.state_mut().library_editors.edit(id, rev, Action::Undo).unwrap();
+
+        // Reversed winding [D, C, B, A] remaps vertex C from index 2 to index 1.
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().selected_vertex = Some(2);
+        let reversed = courtyard::make_courtyard_polygon(vec![d, c, b, a], stroke_nm).unwrap();
+        let rev = h.state().library_editors.documents[&id].session.revision();
+        h.state_mut().library_editors.edit(id, rev, Action::Replace { object: cy_id, primitive: reversed }).unwrap();
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(1));
+
+        // Same-count reorder where the selected point is replaced clears the selection.
+        let replaced_c = Point { x_nm: c.x_nm + 100_000, y_nm: c.y_nm + 100_000 };
+        let reordered_missing = courtyard::make_courtyard_polygon(vec![b, replaced_c, d, a], stroke_nm).unwrap();
+        let rev = h.state().library_editors.documents[&id].session.revision();
+        h.state_mut().library_editors.edit(id, rev, Action::Replace { object: cy_id, primitive: reordered_missing }).unwrap();
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, None);
+
+        // Genuine coordinate-only uniform translation keeps the selected index.
+        h.state_mut().library_editors.documents.get_mut(&id).unwrap().selected_vertex = Some(1);
+        let translated_pts = vec![
+            Point { x_nm: b.x_nm + 50_000, y_nm: b.y_nm - 50_000 },
+            Point { x_nm: replaced_c.x_nm + 50_000, y_nm: replaced_c.y_nm - 50_000 },
+            Point { x_nm: d.x_nm + 50_000, y_nm: d.y_nm - 50_000 },
+            Point { x_nm: a.x_nm + 50_000, y_nm: a.y_nm - 50_000 },
+        ];
+        let translated = courtyard::make_courtyard_polygon(translated_pts, stroke_nm).unwrap();
+        let rev = h.state().library_editors.documents[&id].session.revision();
+        h.state_mut().library_editors.edit(id, rev, Action::Replace { object: cy_id, primitive: translated }).unwrap();
+        assert_eq!(h.state().library_editors.documents[&id].selected_vertex, Some(1));
+
+        // Ambiguous duplicate point on a same-count reorder clears the selection.
+        assert_eq!(super::super::remap_selected_vertex(&[a, b, c, d], &[c, b, c, a], 2, false), None);
+    }
+
     /// A Backspace that arrives in the same frame as a midpoint click removes the vertex that
     /// click inserted, so the outline returns to its original corners, rather than reading the
     /// frame-start outline and removing the old vertex at that index.

@@ -393,6 +393,7 @@ impl Document {
         }
         let selecting_unit = matches!(&action, Action::SelectUnit { .. } | Action::AddUnit { .. });
         let remapping = matches!(&action, Action::RemapPins { .. });
+        let transforming = matches!(&action, Action::Transform { .. });
         let previous_selected = self.selected;
         let old = self.session.snapshot();
         self.session.execute(revision, action)?;
@@ -422,14 +423,7 @@ impl Document {
         {
             if let Some(idx) = self.selected_vertex {
                 let old_points = old.objects.get(&id).and_then(pcbcraft_engine::authoring::courtyard::courtyard_polygon).map(|(pts, _)| pts);
-                self.selected_vertex = match old_points {
-                    Some(old_pts) if old_pts.len() == points.len() => (idx < points.len()).then_some(idx),
-                    Some(old_pts) => old_pts.get(idx).and_then(|&point| {
-                        let mut matches = points.iter().enumerate().filter_map(|(i, &p)| (p == point).then_some(i));
-                        matches.next().filter(|_| matches.next().is_none())
-                    }),
-                    None => None,
-                };
+                self.selected_vertex = old_points.and_then(|old_pts| remap_selected_vertex(old_pts, points, idx, transforming));
             }
         } else {
             self.selected_vertex = None;
@@ -1172,4 +1166,37 @@ impl PcbApp {
         ctx.request_repaint();
         Ok(())
     }
+}
+
+/// Keep a selected courtyard vertex index only for genuine coordinate-only edits (unchanged
+/// outline, single-vertex coordinate move, uniform translation, or rigid `Action::Transform`).
+/// For structural edits or same-count reorderings, remap by unique point identity and clear if
+/// the selected point is gone or ambiguous.
+pub(super) fn remap_selected_vertex(
+    old_pts: &[pcbcraft_engine::schematic::Point],
+    new_pts: &[pcbcraft_engine::schematic::Point],
+    idx: usize,
+    preserve_index: bool,
+) -> Option<usize> {
+    let &point = old_pts.get(idx)?;
+    if old_pts.len() == new_pts.len() && (preserve_index || is_coordinate_only_vertex_edit(old_pts, new_pts)) {
+        return Some(idx);
+    }
+    let mut matches = new_pts.iter().enumerate().filter_map(|(i, &p)| (p == point).then_some(i));
+    matches.next().filter(|_| matches.next().is_none())
+}
+
+fn is_coordinate_only_vertex_edit(old_pts: &[pcbcraft_engine::schematic::Point], new_pts: &[pcbcraft_engine::schematic::Point]) -> bool {
+    if old_pts.len() != new_pts.len() {
+        return false;
+    }
+    if old_pts.iter().zip(new_pts).filter(|(a, b)| a != b).count() <= 1 {
+        return true;
+    }
+    if let (Some(first_old), Some(first_new)) = (old_pts.first(), new_pts.first())
+        && let (Some(dx), Some(dy)) = (first_new.x_nm.checked_sub(first_old.x_nm), first_new.y_nm.checked_sub(first_old.y_nm))
+    {
+        return old_pts.iter().zip(new_pts).all(|(a, b)| b.x_nm.checked_sub(a.x_nm) == Some(dx) && b.y_nm.checked_sub(a.y_nm) == Some(dy));
+    }
+    false
 }
