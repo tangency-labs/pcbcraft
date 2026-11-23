@@ -157,10 +157,10 @@ impl PcbApp {
                 let selected: Vec<_> = target.footprints_for_ids(&state.selection).collect();
                 egui::Grid::new("board_properties").num_columns(2).show(ui, |ui| match selected.as_slice() {
                     [footprint] => {
-                        property(ui, "Reference", footprint.reference);
+                        property(ui, "Reference", &footprint.reference);
                         property(ui, "Value", &footprint.value);
                         property(ui, "Board", target.name());
-                        property(ui, "Footprint", footprint.definition);
+                        property(ui, "Footprint", &footprint.definition);
                         ui.label("Silkscreen");
                         if ui.button("Edit silkscreen text").clicked() {
                             reference_pick = Some(footprint.id.clone());

@@ -251,6 +251,7 @@ enum Dialog {
     BoardUpdate(Box<board_update::Edit>),
     LayerColor(board_appearance::Edit),
     Zone(Box<board_zones::Edit>),
+    CopperPour(board_fills::PourDialog),
     ViaNet(Box<board_net_choice::Edit>),
     /// Custom tool dimensions and optional reusable presets, independent of board setup.
     RoutingSize(board_presets::Edit),
@@ -1379,6 +1380,12 @@ impl PcbApp {
     fn status(&mut self, ui: &mut Ui) {
         let name = self.session.project().map_or("No project open", |p| p.name.as_str()).to_owned();
         let message = self.message.clone();
+        let cancelable = if matches!(self.dialog, Dialog::None) && !self.home && self.views.active.workspace == Workspace::Board {
+            self.cancelable_pour()
+        } else {
+            None
+        };
+        let mut cancel_pour = false;
         let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
         let mut spacing = self.views.active.camera.snap_nm();
         let grid_workspace = self.views.active.workspace;
@@ -1460,6 +1467,9 @@ impl PcbApp {
                     }
                     if let Some(status) = self.views.active.board.fills.status() {
                         ui.add(egui::Label::new(dim(status)).truncate());
+                    }
+                    if cancelable.is_some() {
+                        cancel_pour = pcbcraft_chrome::controls::small_button(ui, "Cancel pour").clicked();
                     }
                     // File results, such as a saved fabrication archive, would otherwise be hidden
                     // behind the board status in this workspace.
@@ -1545,6 +1555,10 @@ impl PcbApp {
         );
         if let Some(id) = grid_view.filter(|_| grid_changed) {
             self.set_view_grid(id, spacing);
+        }
+        if let Some(target) = cancelable.filter(|_| cancel_pour) {
+            self.cancel_copper_pour(target);
+            self.repaint_editors(ui.ctx());
         }
         self.preferences.units = unit;
     }
@@ -2334,6 +2348,7 @@ impl PcbApp {
             #[cfg(not(target_arch = "wasm32"))]
             Dialog::DeleteLibraryItem(draft) => self.delete_library_item_dialog(ctx, *draft),
             Dialog::Zone(edit) => self.zone_dialog(ctx, *edit),
+            Dialog::CopperPour(pour) => self.copper_pour_dialog(ctx, pour),
             Dialog::ViaNet(edit) => self.via_net_dialog(ctx, *edit),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
@@ -2776,6 +2791,7 @@ impl PcbApp {
         let dialog_host = self
             .arrangement_dialog_host()
             .or_else(|| self.rule_dialog_host())
+            .or_else(|| self.copper_pour_host())
             .or_else(|| self.paste_options_host())
             .or_else(|| self.board_paste_options_host())
             .or_else(|| self.external_paste_options_host())

@@ -118,6 +118,30 @@ pub(super) struct Interaction {
     pub(super) placement: Option<Placement>,
 }
 
+/// Keep world-space footprint geometry across camera-only frames. The view input
+/// includes the authored revision, current document, and project-opening epoch.
+#[derive(Default)]
+pub(super) struct FootprintCache {
+    source: Option<ViewInput>,
+    items: std::sync::Arc<[FootprintView<'static>]>,
+}
+
+impl std::fmt::Debug for FootprintCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FootprintCache").field("items", &self.items.len()).finish()
+    }
+}
+
+impl FootprintCache {
+    fn resolve(&mut self, project: BoardView<'_>, source: Option<ViewInput>) -> std::sync::Arc<[FootprintView<'static>]> {
+        if source.is_none() || self.source != source {
+            self.source = source;
+            self.items = project.footprints().map(FootprintView::into_owned).collect();
+        }
+        self.items.clone()
+    }
+}
+
 /// Select footprints by click or directional marquee; preview one footprint transform at a time.
 /// Empty-space primary drags and secondary drags box-select visible footprint bounds; Shift adds
 /// and Ctrl/Command toggles against the captured selection. Invalid release cancels the box.
@@ -191,15 +215,20 @@ pub(super) fn show(
     });
     let visible = copper.is_none_or(|layer| layer.is_some());
     let color = board::copper_color(copper.flatten().and_then(|layer| layer.side.map(|side| side == Side::Front)));
-    let footprints: Vec<_> = project.footprints().collect();
+    let footprints = state.footprints.resolve(project, source);
+    let footprints = footprints.as_ref();
     let colors = FootprintColors::new(appearance, project, state.active_layer.as_deref(), &state.hidden_layers);
-    let hit_bounds: Vec<_> = footprints
+    // Picking and painting use the same projected geometry. Only a footprint
+    // whose preview changed its pose needs to be projected again in this frame.
+    let projections: Vec<_> = footprints
         .iter()
         .map(|footprint| {
             let (pads, graphics) = drawing(footprint, camera, rect, visible, &colors);
-            visible_footprint_bounds(footprint, &pads, &graphics, camera, rect)
+            let bounds = visible_footprint_bounds(footprint, &pads, &graphics, camera, rect);
+            (pads, graphics, bounds)
         })
         .collect();
+    let hit_bounds: Vec<_> = projections.iter().map(|(_, _, bounds)| *bounds).collect();
     let selectable = |footprint: &FootprintView<'_>| filters.footprints && filters.permits_lock(footprint.locked);
     let hit = |pointer: egui::Pos2| {
         footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| {
@@ -215,7 +244,7 @@ pub(super) fn show(
     let modifiers = ui.input(|i| i.modifiers);
     let extend_selection = modifiers.shift || modifiers.ctrl || modifiers.command;
     let pad_at = |pointer| {
-        filters.pads.then(|| crate::inspection_selection::pad_at(project, &footprints, camera, rect, pointer, &state.hidden_layers)).flatten()
+        filters.pads.then(|| crate::inspection_selection::pad_at(project, footprints, camera, rect, pointer, &state.hidden_layers)).flatten()
     };
     let pad_hover = response.hover_pos().and_then(pad_at);
     // Classify the press before its first motion can leave the land and acquire owner authority.
@@ -603,32 +632,42 @@ pub(super) fn show(
         let window = egui::Rect::from_two_pos(drag.start, pointer);
         let crossing = pointer.x < drag.start.x;
         let mut hits = geometry_for_box(project, camera, rect, state, filters, window, crossing);
-        hits.footprints = footprints_for_box(&footprints, &hit_bounds, window, crossing, filters);
+        hits.footprints = footprints_for_box(footprints, &hit_bounds, window, crossing, filters);
         (window, crossing, hits)
     });
-    for mut footprint in footprints {
-        if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
-            preview(&mut footprint, draft);
+    for (footprint, projection) in footprints.iter().zip(projections) {
+        let pose = shown.filter(|d| d.footprint == footprint.id);
+        let reference = state.reference_drag.as_ref().or(out.reference_edit.as_ref()).filter(|draft| draft.footprint == footprint.id);
+        let mut footprint = std::borrow::Cow::Borrowed(footprint);
+        if let Some(draft) = pose {
+            preview(footprint.to_mut(), draft);
         }
-        if let Some(draft) = state.reference_drag.as_ref().or(out.reference_edit.as_ref()).filter(|draft| draft.footprint == footprint.id) {
+        if let Some(draft) = reference {
+            let footprint = footprint.to_mut();
             footprint.reference_offset = draft.offset;
             footprint.reference_text = draft.appearance.clone();
             if footprint.physical_reference {
-                let reference = project.reference_preview(&footprint, draft.offset);
+                let reference = project.reference_preview(footprint, draft.offset);
                 footprint.graphics.retain(|graphic| !graphic.reference);
                 footprint.graphics.extend(reference);
             }
         }
         let center = camera.screen(footprint.position, rect);
-        let (mut pads, graphics) = drawing(&footprint, camera, rect, visible, &colors);
-        let bounds = visible_footprint_bounds(&footprint, &pads, &graphics, camera, rect);
-        let shift = reference_shift(&footprint, camera, rect);
-        let label_visible = if footprint.physical_reference {
-            graphics.iter().any(|graphic| graphic.reference && rect.intersects(graphic.bounds()))
+        let (mut pads, graphics, bounds) = if pose.is_some() || reference.is_some() {
+            let (pads, graphics) = drawing(&footprint, camera, rect, visible, &colors);
+            let bounds = visible_footprint_bounds(&footprint, &pads, &graphics, camera, rect);
+            (pads, graphics, bounds)
         } else {
-            rect.intersects(board::footprint_reference_bounds(&p, bounds, footprint.reference, shift))
+            projection
         };
-        if (pads.is_empty() && graphics.is_empty() && footprint.non_plated_holes.is_empty()) || !(rect.intersects(bounds) || label_visible) {
+        let shift = reference_shift(&footprint, camera, rect);
+        let label_visible = rect.intersects(bounds)
+            || if footprint.physical_reference {
+                graphics.iter().any(|graphic| graphic.reference && rect.intersects(graphic.bounds()))
+            } else {
+                rect.intersects(board::footprint_reference_bounds(&p, bounds, &footprint.reference, shift))
+            };
+        if (pads.is_empty() && graphics.is_empty() && footprint.non_plated_holes.is_empty()) || !label_visible {
             continue;
         }
         let inspected = inspected_pads.get(&footprint.id);
@@ -649,6 +688,8 @@ pub(super) fn show(
         }
         let reference_bounds = reference_bounds(&p, camera, rect, project, state, &footprint, bounds, appearance);
         let selected = selected_reference.as_ref() == Some(&footprint.id);
+        let selected_footprint = state.selection.contains(&footprint.id) || pose.is_some() || selected;
+        let emphasized = highlighted.contains(&footprint.id);
         let reference_color = graphics
             .iter()
             .find(|graphic| graphic.reference)
@@ -661,20 +702,24 @@ pub(super) fn show(
                 track_labels.cover_rect(Rect::from_points(&corners));
             }
         }
+        let reference_overview = if pose.is_none() && reference.is_none() {
+            overview_reference(&p, &footprint, &graphics, camera, selected_footprint || emphasized)
+        } else {
+            None
+        };
         board::footprint_in_bounds(
             &p,
             &pads,
             &graphics,
-            if footprint.physical_reference { "" } else { footprint.reference },
+            if footprint.physical_reference { "" } else { &footprint.reference },
             center,
             color,
-            state.selection.contains(&footprint.id)
-                || shown.is_some_and(|d| d.footprint == footprint.id)
-                || selected_reference.as_ref() == Some(&footprint.id),
-            highlighted.contains(&footprint.id),
+            selected_footprint,
+            emphasized,
             focus.is_some(),
             shift,
             bounds,
+            reference_overview,
             Some(&mut slots),
         );
         collect_openings(&mut openings, &mut slots, &footprint, camera, rect, state.selection.contains(&footprint.id));
@@ -706,7 +751,7 @@ pub(super) fn show(
         crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
     }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
-    if project.footprints().next().is_none()
+    if footprints.is_empty()
         && project.zones().is_empty()
         && project.drawings().is_empty()
         && project.tracks().is_empty()
@@ -743,6 +788,41 @@ pub(super) fn show(
         response.on_hover_cursor(egui::CursorIcon::Grabbing);
     }
     out
+}
+
+/// At overview scales, draw ordinary references as atlas text at their ink's
+/// center. Detailed, edited and mirrored lettering keeps its physical strokes.
+fn overview_reference(
+    painter: &egui::Painter,
+    footprint: &FootprintView<'_>,
+    graphics: &[board::GraphicDrawing],
+    camera: &Camera,
+    emphasized: bool,
+) -> Option<egui::Shape> {
+    let appearance = &footprint.reference_appearance;
+    let height = camera.unit_step() * appearance.size.height_nm as f32 / pcbcraft_engine::schematic::GRID_NM as f32;
+    if height >= 48.
+        || emphasized
+        || footprint.reference_text.is_some()
+        || footprint.reference_offset != pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET
+        || footprint.bottom != camera.mirrored()
+    {
+        return None;
+    }
+    let mut lettering = graphics.iter().filter(|graphic| graphic.reference);
+    let first = lettering.next()?;
+    if height < 4. {
+        return Some(egui::Shape::Noop);
+    }
+    let bounds = lettering.fold(first.bounds(), |bounds, graphic| bounds.union(graphic.bounds()));
+    let base = first.color.unwrap_or_else(|| board::graphic_color(first.style));
+    let color = base;
+    let view_rotation = f32::from(footprint.rotation) * if camera.mirrored() { 1. } else { -1. };
+    let angle = (view_rotation - f32::from(appearance.rotation)).to_radians();
+    let font = egui::FontId::monospace(height.round().max(5.));
+    let galley = pcbcraft_chrome::canvas_text::layout_no_wrap(painter, appearance.text.clone(), font, color);
+    let at = bounds.center() - galley.rect.center().to_vec2();
+    Some(egui::epaint::TextShape::new(at, galley, color).with_angle_and_anchor(angle, egui::Align2::CENTER_CENTER).into())
 }
 
 /// Preview a new group using engine-resolved geometry. Until a click commits, cancellation,
@@ -835,7 +915,7 @@ fn place_group(
                 ui.painter(),
                 &pads,
                 &graphics,
-                if footprint.physical_reference { "" } else { footprint.reference },
+                if footprint.physical_reference { "" } else { &footprint.reference },
                 camera.screen(footprint.position, response.rect),
                 color,
                 true,
@@ -843,6 +923,7 @@ fn place_group(
                 false,
                 reference_shift(&footprint, camera, response.rect),
                 bounds,
+                None,
                 Some(&mut slots),
             );
             collect_openings(&mut openings, &mut slots, &footprint, camera, response.rect, true);
@@ -924,7 +1005,7 @@ fn reference_bounds(
 ) -> Rect {
     if !footprint.physical_reference {
         return if bounds.is_finite() {
-            board::footprint_reference_bounds(painter, bounds, footprint.reference, reference_shift(footprint, camera, rect))
+            board::footprint_reference_bounds(painter, bounds, &footprint.reference, reference_shift(footprint, camera, rect))
         } else {
             Rect::NOTHING
         };

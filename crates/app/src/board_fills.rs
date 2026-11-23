@@ -1,7 +1,10 @@
 //! View-owned fill scheduling and display of the engine's immutable analytic result.
 use crate::{
+    Dialog,
     board_drc::jobs::{Queue, Request},
     canvas_camera::Camera,
+    editor_layout::HostId,
+    editor_view::ViewId,
 };
 use pcbcraft_engine::{
     CommandError, Session,
@@ -14,6 +17,14 @@ use pcbcraft_engine::{
 };
 use std::collections::BTreeSet;
 
+/// A modal belongs to the exact manual request and the view that submitted it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PourDialog {
+    view: ViewId,
+    target: BoardTarget,
+    generation: u64,
+}
+
 /// One owner per board schedules work; all views read the shared source-keyed engine slot.
 #[derive(Default)]
 pub(super) struct State {
@@ -21,6 +32,8 @@ pub(super) struct State {
     requested: Option<Source>,
     generation: u64,
     pub(super) notice: Option<String>,
+    #[cfg(test)]
+    pub(super) pause_queue: bool,
 }
 impl std::fmt::Debug for State {
     /// Keep snapshots and derived meshes out of routine view-state logs.
@@ -75,6 +88,10 @@ impl State {
         {
             self.notice = self.submit(session, target, false).err();
         }
+        #[cfg(test)]
+        if self.pause_queue {
+            return self.queue.busy();
+        }
         if let Some(completion) = self.queue.poll()
             && completion.id == self.generation
             && Some(completion.source.target()) == target
@@ -119,7 +136,7 @@ impl crate::PcbApp {
     }
 
     /// Live and GUI refill share engine validation/preparation while the view owns scheduling.
-    pub(crate) fn queue_zone_refill(&mut self, params: &serde_json::Value) -> Result<serde_json::Value, CommandError> {
+    fn submit_zone_refill(&mut self, params: &serde_json::Value) -> Result<PourDialog, CommandError> {
         let target = self
             .session
             .project()
@@ -132,13 +149,78 @@ impl crate::PcbApp {
             .ok_or_else(|| CommandError::Unavailable("Open the addressed board before refilling its zones.".into()))?;
         let job = self.session.prepare_zone_refill(params)?;
         view.board.fills.submit_job(job);
-        self.session.zone_fill_status(target)
+        Ok(PourDialog { view: view.id(), target, generation: view.board.fills.generation })
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn queue_zone_refill(&mut self, params: &serde_json::Value) -> Result<serde_json::Value, CommandError> {
+        let pour = self.submit_zone_refill(params)?;
+        self.session.zone_fill_status(pour.target)
     }
     /// Replace only derived fill; native files, undo and project dirty state remain unchanged.
     pub(super) fn refill_zones(&mut self) {
         if let Some(target) = self.views.active.board.target {
-            self.message = self.queue_zone_refill(&serde_json::json!({"board":target.board})).err().map(|error| error.to_string());
+            self.message = match self.submit_zone_refill(&serde_json::json!({"board":target.board})) {
+                Ok(pour) => {
+                    self.dialog = Dialog::CopperPour(pour);
+                    None
+                }
+                Err(error) => Some(error.to_string()),
+            };
         }
+    }
+
+    pub(super) fn copper_pour_host(&self) -> Option<HostId> {
+        let Dialog::CopperPour(pour) = self.dialog else { return None };
+        self.views.owner(pour.view)
+    }
+
+    pub(super) fn copper_pour_dialog(&mut self, ctx: &egui::Context, pour: PourDialog) {
+        let running = self.views.view(pour.view).is_some_and(|view| {
+            let state = &view.board.fills;
+            state.generation == pour.generation
+                && state.queue.busy()
+                && state.requested.as_ref().is_some_and(|source| source.target() == pour.target && source.is_current(&self.session))
+        });
+        if !running {
+            return;
+        }
+        let mut cancel = false;
+        let dismissed = pcbcraft_chrome::shell::dialog(ctx, "copper_pour", "Pouring copper", |ui| {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label("Calculating copper zones…");
+            });
+            cancel = pcbcraft_chrome::controls::button(ui, "Cancel").clicked();
+        });
+        if cancel || dismissed {
+            self.cancel_copper_pour(pour.target);
+            self.repaint_editors(ctx);
+        } else {
+            self.dialog = Dialog::CopperPour(pour);
+        }
+    }
+
+    /// Revoke the current fill slot as well as the queued job. Otherwise a late worker
+    /// or the automatic scheduler could publish a pour after the dialog has dismissed.
+    pub(super) fn cancel_copper_pour(&mut self, target: BoardTarget) {
+        match self.queue_zone_unfill(&serde_json::json!({"board":target.board})) {
+            Ok(_) => self.file_notice = Some("Copper pour canceled".into()),
+            Err(error) => self.message = Some(error.to_string()),
+        }
+    }
+
+    /// Automatic repours leave the canvas usable. Offer the same cancellation from
+    /// the status bar even when a peer pane owns the work.
+    pub(super) fn cancelable_pour(&mut self) -> Option<BoardTarget> {
+        let target = self.views.active.board.target?;
+        self.views
+            .all_mut()
+            .any(|view| {
+                let fills = &view.board.fills;
+                fills.queue.busy() && fills.requested.as_ref().is_some_and(|source| source.target() == target && source.is_current(&self.session))
+            })
+            .then_some(target)
     }
 
     /// Automatic refill follows committed source changes, not pointer previews. Per-board

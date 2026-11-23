@@ -75,6 +75,38 @@ fn shared_route_menu_refills_without_dirtying_or_adding_undo() {
     assert_eq!(h.state().session.revision(), revision);
 }
 
+#[test]
+fn cancel_pour_dialog_retires_pending_material_and_allows_retry() {
+    let mut h = board();
+    h.run();
+    let revision = h.state().session.revision();
+    let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let target = h.state().session.project().unwrap().board_target().unwrap();
+    for escape in [false, true] {
+        h.state_mut().views.active.board.fills.pause_queue = true;
+        h.key_press(Key::B);
+        h.run_steps(2);
+        assert!(matches!(h.state().dialog, crate::Dialog::CopperPour(_)));
+        if escape {
+            h.key_press(Key::Escape);
+            h.run();
+        } else {
+            click(&mut h, "Cancel");
+        }
+        assert!(matches!(h.state().dialog, crate::Dialog::None));
+        h.state_mut().views.active.board.fills.pause_queue = false;
+        h.run();
+        let status = h.state().session.zone_fill_status(target).unwrap();
+        assert_eq!(status["zone_fill"]["result"]["state"], "unfilled");
+        assert_eq!(poured_triangles(&h), 0);
+        assert_eq!(h.state().session.revision(), revision);
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), bytes);
+        h.key_press(Key::B);
+        h.run();
+        assert!(poured_triangles(&h) > 0);
+    }
+}
+
 /// Count the actual canvas fill triangles, independently from pads, traces and chrome.
 fn poured_triangles(h: &Harness<'_, PcbApp>) -> usize {
     let canvas = h.get_by_label("PCB canvas").rect();

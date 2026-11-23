@@ -413,7 +413,7 @@ pub fn footprint(
     reference_shift: egui::Vec2,
 ) {
     let bounds = footprint_bounds(pads, graphics, center);
-    footprint_in_bounds(p, pads, graphics, reference, center, copper, selected, highlighted, copper_focused, reference_shift, bounds, None);
+    footprint_in_bounds(p, pads, graphics, reference, center, copper, selected, highlighted, copper_focused, reference_shift, bounds, None, None);
 }
 
 /// A plated slot opening with its pad label and styling as resolved by its own footprint pass,
@@ -447,12 +447,13 @@ pub fn footprint_in_bounds(
     copper_focused: bool,
     reference_shift: egui::Vec2,
     bounds: Rect,
+    reference_overview: Option<egui::Shape>,
     mut slots: Option<&mut Vec<SlotOpening>>,
 ) {
     let t = Tokens::get();
     let ink = copper_emphasis(pads.first().and_then(|pad| pad.color).unwrap_or(copper), (selected || highlighted).then_some(true));
     let context = context_painter(p, copper_focused);
-    for graphic in graphics {
+    for graphic in graphics.iter().filter(|graphic| !graphic.reference || reference_overview.is_none()) {
         let width = match graphic.style {
             GraphicStyle::Fabrication => 0.8,
             GraphicStyle::Silkscreen => 1.2,
@@ -471,6 +472,9 @@ pub fn footprint_in_bounds(
                 context.circle_filled(*point, width / 2., color);
             }
         }
+    }
+    if let Some(label) = reference_overview {
+        context.add(label);
     }
     if selected || highlighted {
         context.rect_stroke(bounds, t.radius_sm, Stroke::new(1.5, ink), egui::StrokeKind::Inside);

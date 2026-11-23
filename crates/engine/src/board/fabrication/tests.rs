@@ -1755,11 +1755,11 @@ fn through_hole_pad_flashes_are_excluded_from_paste() {
             let read = read_gerber(&outputs, output);
             assert_eq!(read.flashes, expected, "{}", output.0);
             assert!(read.regions.is_empty() && read.strokes.is_empty());
-            let reference = view(&s).footprints().next().unwrap().reference;
+            let reference = view(&s).footprints().next().unwrap().reference.into_owned();
             for (index, (_, object)) in read.objects.iter().enumerate() {
                 if output.1.starts_with("Copper,") {
                     assert_eq!(object.net.as_deref(), Some(""));
-                    assert_eq!(object.component.as_deref(), Some(reference));
+                    assert_eq!(object.component.as_deref(), Some(reference.as_str()));
                     let pin = (!output.1.ends_with(",Inr")).then(|| (reference.to_owned(), (index + 1).to_string()));
                     assert_eq!(object.pin, pin);
                 } else {
@@ -1865,7 +1865,7 @@ fn gerber_object_attributes_round_trip_two_layer_board_netlist() {
     let outputs = s.export_fabrication(&json!({"board":board})).unwrap();
     assert_eq!(outputs, s.export_fabrication(&json!({"board":board})).unwrap());
     assert_eq!(s.revision(), revision);
-    let references: BTreeMap<_, _> = view(&s).footprints().map(|f| (f.component, f.reference.to_owned())).collect();
+    let references: BTreeMap<_, _> = view(&s).footprints().map(|f| (f.component, f.reference.into_owned())).collect();
     let inspection = s.inspect();
     let netlist = &inspection["project"]["board"]["netlist"];
     assert_eq!(netlist["basis"], "accepted");

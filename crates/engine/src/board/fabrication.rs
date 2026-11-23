@@ -676,7 +676,7 @@ impl BoardView<'_> {
                     let cardinal = placed_cardinal && cardinal_pads.contains(pad.number.as_str());
                     let has_pin = !unconnected.contains(pad.number.as_str());
                     let net = nets.pad_name(&footprint.id, &pad.number);
-                    Some((pad, cardinal, reference, has_pin, net))
+                    Some((pad, cardinal, reference.clone(), has_pin, net))
                 })
             })
             .collect();

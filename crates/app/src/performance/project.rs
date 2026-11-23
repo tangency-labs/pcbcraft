@@ -12,6 +12,7 @@ use std::{collections::BTreeMap, sync::Arc};
 /// between two cached sizes. Reports distinguish this trace from the navigation smoke.
 pub fn zoom_all(project: Arc<Project>, environment: Environment) -> Result<Value> {
     environment.validate()?;
+    let fill_state = prepare_fill(&project)?;
     let original = encode_packed(project.clone())?;
     let mut targets: Vec<_> = project
         .sheets()
@@ -66,7 +67,7 @@ pub fn zoom_all(project: Arc<Project>, environment: Environment) -> Result<Value
         results.push(json!({"workspace":format!("{workspace:?}"),"document":name,"sheet":sheet,"texture_upload_bytes":texture_upload_bytes,"metrics":samples.into_iter().map(|(id,samples)|Metric::new(&id,samples)).collect::<Vec<_>>()}));
     }
     Ok(
-        json!({"schema":"pcbcraft-project-zoom/1","project_sha256":super::digest(&original),"environment":environment,"viewport":[2560,1600],"debug_assertions":cfg!(debug_assertions),"warmup_frames":8,"results":results}),
+        json!({"schema":"pcbcraft-project-zoom/1","project_sha256":super::digest(&original),"environment":environment,"viewport":[2560,1600],"debug_assertions":cfg!(debug_assertions),"warmup_frames":8,"zone_fill":fill_state,"results":results}),
     )
 }
 

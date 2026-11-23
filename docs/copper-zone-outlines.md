@@ -60,6 +60,10 @@ the actual derived copper while retaining zone outlines, so affected airwires
 return. It stays unfilled across edits and DRC until **Pour copper** is used again.
 B pours; Ctrl+B (Command+B on macOS) removes pours. These actions apply to all
 zones on the addressed board, each on its own assigned copper layer.
+An explicit pour opens a progress dialog while work is pending. **Cancel** or
+Escape retires the job and leaves zone outlines available for editing. Automatic
+refills run in the background and offer **Cancel pour** in the board status bar.
+After cancellation, use **Pour copper** to resume pouring.
 Multiple closed outlines use the board checker's existing union interpretation.
 
 Foreign and unknown copper is cleared by the larger applicable board, object

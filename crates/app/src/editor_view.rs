@@ -201,6 +201,7 @@ pub(super) struct SchematicState {
 #[derive(Debug, Default)]
 pub(super) struct BoardState {
     pub(super) fills: crate::board_fills::State,
+    pub(super) footprints: crate::board_canvas::FootprintCache,
     pub(super) clipboard: crate::board_clipboard::State,
     pub(super) movement: crate::board_move::State,
     pub(super) ratsnest_cache: Option<(ViewInput, Arc<pcbcraft_engine::board::ratsnest::Ratsnest>, Option<Arc<pcbcraft_engine::board::fill::Fill>>)>,
