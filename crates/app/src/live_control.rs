@@ -1316,10 +1316,10 @@ mod copper_tests {
         let body = json!({"method":"engine.execute","params":{"command":APPLY_FOOTPRINT_REVISION,"inspect":false,"params":{
             "board":target.board,"part_instance":part,"expected_revision":revision,"acceptance":report["acceptance"],"mapping":{"1":"1","2":"2"}}}});
         assert!(app.defer_copper(&body));
-        let (r, canceled, connected) = request(&app, body.clone());
+        let (r, canceled, authority) = request(&app, body.clone());
         app.start_remote_copper(&ctx, r, false);
         assert_eq!(canceled.try_recv(), Err(mpsc::TryRecvError::Empty));
-        connected.store(false, Ordering::Release);
+        authority.cancel();
         app.poll_remote_copper(&ctx);
         assert_eq!(canceled.try_recv().unwrap()["code"], "cancelled");
         assert!(Arc::ptr_eq(&before, &app.session.snapshot().unwrap()));
