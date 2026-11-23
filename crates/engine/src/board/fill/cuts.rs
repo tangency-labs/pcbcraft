@@ -46,12 +46,46 @@ impl Cuts {
         // Only neighboring cutters need a Boolean union. A group may split into several
         // analytic components, all of which are retained in the resulting local operand.
         let mut groups = Vec::new();
+        let mut enclosed = Vec::new();
+        let mut boundary = Vec::new();
         for group in components(&self.tree, &self.bounds, &candidates, canceled)? {
             check_cancel(canceled)?;
+            let mut inside = true;
+            for &index in &group {
+                check_cancel(canceled)?;
+                if !stock.covers_box(self.bounds[index]).map_err(|e| e.to_string())? {
+                    inside = false;
+                    break;
+                }
+            }
+            let ids = if inside { &mut enclosed } else { &mut boundary };
+            ids.push(groups.len());
             let shapes: Vec<_> = group.into_iter().map(|i| self.shapes[i].clone()).collect();
             groups.push(union(&shapes)?);
         }
         check_cancel(canceled)?;
+        if !enclosed.is_empty() {
+            // Removing a boundary group cannot touch any enclosed source envelope.
+            // Preserve that separation even if the resulting aggregate bounds overlap.
+            let result = if boundary.is_empty() {
+                stock.subtract_independent_enclosed(&groups)
+            } else {
+                let outside: Vec<_> = boundary.into_iter().map(|id| groups[id].clone()).collect();
+                let clipped = difference(&stock, &outside);
+                check_cancel(canceled)?;
+                match clipped {
+                    Ok(clipped) => {
+                        let inside: Vec<_> = enclosed.into_iter().map(|id| groups[id].clone()).collect();
+                        clipped.subtract_independent_enclosed(&inside)
+                    }
+                    Err(_) => Ok(None),
+                }
+            };
+            check_cancel(canceled)?;
+            if let Some(result) = result.map_err(|e| e.to_string())? {
+                return Ok(result);
+            }
+        }
         subtract_groups(stock, groups, canceled)
     }
 }

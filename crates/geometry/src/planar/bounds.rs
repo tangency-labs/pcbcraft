@@ -52,8 +52,42 @@ pub(super) fn loop_bounds(profile: &Loop2) -> Bounds {
     profile.segs.iter().map(segment).fold(empty(), join)
 }
 
+/// A witness on the contour for checking nesting between separated line/arc profiles.
+pub(super) fn first_point(profile: &Loop2) -> Option<Vec2> {
+    match *profile.segs.first()? {
+        Seg2::Line { a, .. } => Some(a),
+        Seg2::Arc { center, radius, start, .. } => Some(center + Vec2::new(start.cos() * radius, start.sin() * radius)),
+        _ => None,
+    }
+}
+
 /// Inclusive overlap with an outward reserve so touching or nearly touching paths fall
 /// back to SolidCore instead of being treated as disjoint.
 pub(super) fn near(a: Bounds, b: Bounds, reserve: f64) -> bool {
     a[0] <= b[2] + reserve && a[2] + reserve >= b[0] && a[1] <= b[3] + reserve && a[3] + reserve >= b[1]
+}
+
+/// Prove more separation than the curve envelope alone for lines and circular arcs.
+/// Keep numerical uncertainty and unsupported curves in the candidate set.
+pub(super) fn meets_box(seg: &Seg2, envelope: Bounds, reserve: f64) -> bool {
+    if !near(segment(seg), envelope, reserve) {
+        return false;
+    }
+    let [x0, y0, x1, y1] = envelope;
+    match *seg {
+        Seg2::Line { a, b } => {
+            let side = |x: f64, y: f64| (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+            let sides = [side(x0, y0), side(x0, y1), side(x1, y0), side(x1, y1)];
+            let limit = reserve * ((b.x - a.x).abs() + (b.y - a.y).abs());
+            !sides.iter().all(|s| *s > limit) && !sides.iter().all(|s| *s < -limit)
+        }
+        Seg2::Arc { center, radius, .. } => {
+            let dx = (x0 - center.x).max(center.x - x1).max(0.);
+            let dy = (y0 - center.y).max(center.y - y1).max(0.);
+            let far_x = (x0 - center.x).abs().max((x1 - center.x).abs());
+            let far_y = (y0 - center.y).abs().max((y1 - center.y).abs());
+            dx.hypot(dy) <= radius + reserve && far_x.hypot(far_y) >= radius - reserve
+        }
+        _ => true,
+    }
 }

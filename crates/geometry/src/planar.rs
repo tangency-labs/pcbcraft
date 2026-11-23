@@ -19,9 +19,11 @@ mod kernel;
 /// must account for approximation and rounding at their own output/contact boundary.
 pub const TOLERANCE_NM: f64 = 0.1;
 const TOLERANCE_MM: f64 = TOLERANCE_NM / NM_PER_MM as f64;
+const BOX_RESERVE_MM: f64 = 0.000_050;
 /// Assembled faces retain many independently checked loops without sending that
 /// total edge count through an offset/Boolean operand's profile validator.
 const MAX_ASSEMBLED_SEGMENTS: usize = 4 * profile::MAX_SEGMENTS;
+type Complement = (Vec<Loop2>, Vec<Region2>);
 
 /// The planar Boolean operation applied to two sets of material.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -244,14 +246,37 @@ impl Regions {
         guard("planar box containment", || Ok(self.covering_region(envelope_nm.map(|value| value / 1e6)).is_some()))
     }
 
+    /// Reject a contact envelope only when it is entirely outside material or inside a hole.
+    /// A boundary match or uncertain containment still requires an exact intersection.
+    pub fn may_intersect_box(&self, envelope_nm: [f64; 4]) -> Result<bool> {
+        guard("planar box contact", || {
+            let envelope = envelope_nm.map(|value| value / 1e6);
+            if envelope.iter().any(|value| !value.is_finite()) || envelope[0] > envelope[2] || envelope[1] > envelope[3] {
+                return Err(invalid("contact box must be finite and ordered"));
+            }
+            let point = solidcore_convert::vec2(Vec2::new(envelope[0], envelope[1]));
+            Ok(self.regions.iter().zip(self.profile_bounds()).any(|(region, profiles)| {
+                if !bounds::near(profiles[0], envelope, BOX_RESERVE_MM) {
+                    return false;
+                }
+                let meets = |lp: &Loop2| lp.segs.iter().any(|seg| bounds::meets_box(seg, envelope, BOX_RESERVE_MM));
+                if !meets(&region.outer) && solidcore_convert::loop2(&region.outer).holds(point) == Some(false) {
+                    return false;
+                }
+                !region.holes.iter().zip(&profiles[1..]).any(|(hole, hole_bounds)| {
+                    bounds::near(*hole_bounds, envelope, BOX_RESERVE_MM) && !meets(hole) && solidcore_convert::loop2(hole).holds(point) == Some(true)
+                })
+            }))
+        })
+    }
+
     /// Work in kernel units and protect the proof from near-coincident boundary cases.
     fn covering_region(&self, envelope: bounds::Bounds) -> Option<usize> {
-        const RESERVE: f64 = 0.000_050;
         let point = solidcore_convert::vec2(Vec2::new(envelope[0], envelope[1]));
         self.regions.iter().zip(self.profile_bounds()).position(|(region, region_bounds)| {
-            bounds::near(region_bounds[0], envelope, RESERVE)
-                && !region_bounds[1..].iter().any(|hole| bounds::near(*hole, envelope, RESERVE))
-                && !region.outer.segs.iter().any(|seg| bounds::near(bounds::segment(seg), envelope, RESERVE))
+            bounds::near(region_bounds[0], envelope, BOX_RESERVE_MM)
+                && !region_bounds[1..].iter().any(|hole| bounds::near(*hole, envelope, BOX_RESERVE_MM))
+                && !region.outer.segs.iter().any(|seg| bounds::meets_box(seg, envelope, BOX_RESERVE_MM))
                 && solidcore_convert::loop2(&region.outer).holds(point) == Some(true)
         })
     }
@@ -274,34 +299,9 @@ impl Regions {
                     return Ok(None);
                 }
                 envelopes.push(envelope);
-                let parts = cutter.profile_bounds();
-                if parts.iter().enumerate().any(|(i, part)| parts[..i].iter().any(|other| bounds::near(part[0], other[0], RESERVE))) {
-                    let Some((holes, islands)) = cutter.local_complement(envelope_nm) else { return Ok(None) };
-                    assembled[owner].holes.extend(holes);
-                    retained.extend(islands);
-                    continue;
-                }
-                for region in &cutter.regions {
-                    // A cutter's outer loop normally winds counter-clockwise. Once
-                    // stored as a hole it must subtract from analytic area, independently
-                    // of the B-rep's own winding normalization.
-                    let lp = solidcore_convert::loop2(&region.outer);
-                    let hole = match lp.signed_area().map_err(kernel_error)?.sign() {
-                        Some(true) => solidcore_convert::record_loop2(&lp.reversed()),
-                        Some(false) => region.outer.clone(),
-                        None => return Ok(None),
-                    };
-                    assembled[owner].holes.push(hole);
-                    for inner in &region.holes {
-                        let lp = solidcore_convert::loop2(inner);
-                        let outer = match lp.signed_area().map_err(kernel_error)?.sign() {
-                            Some(true) => inner.clone(),
-                            Some(false) => solidcore_convert::record_loop2(&lp.reversed()),
-                            None => return Ok(None),
-                        };
-                        retained.push(Region2 { outer, holes: Vec::new() });
-                    }
-                }
+                let Some((holes, islands)) = cutter.complement_loops(envelope_nm)? else { return Ok(None) };
+                assembled[owner].holes.extend(holes);
+                retained.extend(islands);
             }
             assembled.extend(retained);
             let mut value = checked_assembled(assembled)?;
@@ -316,10 +316,81 @@ impl Regions {
         })
     }
 
+    /// Subtract independently grouped cuts whose source envelopes were proved wholly inside
+    /// this stock and separated from every other group's sources. Result envelopes can
+    /// overlap, or one group can sit inside a void of another. Keep that nesting without
+    /// uniting the entire cut set. A nonsimple or ambiguous result uses the caller's Boolean.
+    pub fn subtract_independent_enclosed(&self, cutters: &[Self]) -> Result<Option<Self>> {
+        guard("planar independent holes", || Ok(self.assemble_independent(cutters)))
+    }
+
+    /// Attach each independent cut to its innermost material face. No boundary of another
+    /// group can cross the cut, so one point on its contour classifies the whole contour.
+    fn assemble_independent(&self, cutters: &[Self]) -> Option<Self> {
+        let mut hosts: Vec<_> = self.regions.iter().cloned().map(|region| (None, region)).collect();
+        let mut cuts = Vec::new();
+        for (group, cutter) in cutters.iter().enumerate() {
+            let Some(envelope) = cutter.bounds_nm() else { continue };
+            let (holes, islands) = cutter.complement_loops(envelope).ok()??;
+            hosts.extend(islands.into_iter().map(|island| (Some(group), island)));
+            cuts.extend(holes.into_iter().map(|hole| (group, hole)));
+        }
+        let mut host_order: Vec<_> = (0..hosts.len())
+            .map(|id| {
+                let envelope = bounds::loop_bounds(&hosts[id].1.outer);
+                let box_area = (envelope[2] - envelope[0]) * (envelope[3] - envelope[1]);
+                (id, envelope, box_area)
+            })
+            .collect();
+        host_order.sort_by(|a, b| a.2.total_cmp(&b.2));
+        for (group, hole) in cuts {
+            let point = bounds::first_point(&hole)?;
+            let sample = [point.x, point.y, point.x, point.y];
+            let point = solidcore_convert::vec2(point);
+            let mut owner = None;
+            for &(id, envelope, _) in &host_order {
+                let (source, region) = &hosts[id];
+                if *source == Some(group) || !bounds::near(envelope, sample, BOX_RESERVE_MM) {
+                    continue;
+                }
+                if solidcore_convert::loop2(&region.outer).holds(point)? {
+                    owner = Some(id);
+                    break;
+                }
+            }
+            hosts[owner?].1.holes.push(hole);
+        }
+        let mut value = checked_assembled(hosts.into_iter().map(|(_, region)| region).collect()).ok()?;
+        let operand = kernel::prepare_enclosed(&value.regions).ok()?;
+        let _ = value.prepared.set(Ok(Some(operand)));
+        value.assembled = true;
+        Some(value)
+    }
+
+    /// Get the hole loops and the material trapped inside an individual cutter. A nested
+    /// operand is resolved by the analytic kernel within its own envelope.
+    fn complement_loops(&self, envelope_nm: [f64; 4]) -> Result<Option<Complement>> {
+        let parts = self.profile_bounds();
+        if parts.iter().enumerate().any(|(i, part)| parts[..i].iter().any(|other| bounds::near(part[0], other[0], BOX_RESERVE_MM))) {
+            return Ok(self.local_complement(envelope_nm));
+        }
+        let mut holes = Vec::new();
+        let mut islands = Vec::new();
+        for region in &self.regions {
+            let Some(hole) = oriented_loop(&region.outer, false)? else { return Ok(None) };
+            holes.push(hole);
+            for inner in &region.holes {
+                let Some(outer) = oriented_loop(inner, true)? else { return Ok(None) };
+                islands.push(Region2 { outer, holes: Vec::new() });
+            }
+        }
+        Ok(Some((holes, islands)))
+    }
+
     /// Extract the inside boundary of a local complement. The cutter is strictly inside
     /// the rectangle, so exactly one result face owns the rectangle's perimeter. Only its
     /// holes and the other, enclosed faces affect the original stock.
-    fn local_complement(&self, envelope_nm: [f64; 4]) -> Option<(Vec<Loop2>, Vec<Region2>)> {
+    fn local_complement(&self, envelope_nm: [f64; 4]) -> Option<Complement> {
         const MARGIN_NM: i64 = 1_000;
         let [x0, y0, x1, y1] = envelope_nm;
         let (x0, y0) = (x0.floor() as i64 - MARGIN_NM, y0.floor() as i64 - MARGIN_NM);
@@ -458,6 +529,16 @@ impl Regions {
             Ok(if boundary { None } else { Some(false) })
         })
     }
+}
+
+/// Orient a loop as material or as a hole, refusing an indeterminate area.
+fn oriented_loop(record: &Loop2, positive: bool) -> Result<Option<Loop2>> {
+    let lp = solidcore_convert::loop2(record);
+    Ok(lp
+        .signed_area()
+        .map_err(kernel_error)?
+        .sign()
+        .map(|sign| if sign == positive { record.clone() } else { solidcore_convert::record_loop2(&lp.reversed()) }))
 }
 
 /// Round envelopes outward when moving from kernel millimetres to board nanometres.

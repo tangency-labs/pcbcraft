@@ -350,3 +350,59 @@ fn enclosed_nested_cuts_keep_the_copper_between_them() {
     let probe = rectangle(7 * MM, 8 * MM, MM, MM);
     area_is(&actual.boolean(&probe, Operation::Intersection).unwrap(), 1.);
 }
+
+/// Independent source groups can have nested envelopes. A clearance inside the trapped
+/// copper must cut that island, and the island must still work as a later Boolean operand.
+#[test]
+fn independent_cut_inside_another_groups_void_uses_the_inner_face() {
+    let stock = rectangle(0, 0, 30 * MM, 30 * MM);
+    let outer = rectangle(4 * MM, 4 * MM, 12 * MM, 12 * MM);
+    let inner = rectangle(6 * MM, 6 * MM, 8 * MM, 8 * MM);
+    let ring = outer.boolean(&inner, Operation::Difference).unwrap();
+    let dot = Regions::circle([10 * MM, 10 * MM], 2 * MM).unwrap();
+    let expected = stock.boolean(&Regions::union_all(&[ring.clone(), dot.clone()]).unwrap(), Operation::Difference).unwrap();
+    for cuts in [[ring.clone(), dot.clone()], [dot, ring]] {
+        let actual = stock.subtract_independent_enclosed(&cuts).unwrap().unwrap();
+        assert_eq!(actual.region_count(), 2);
+        assert!((actual.area().unwrap().value_nm2 - expected.area().unwrap().value_nm2).abs() < 1_000.);
+        for (x, retained) in [(2, true), (5, false), (8, true), (10, false)] {
+            assert_eq!(actual.contains([x * MM, 10 * MM]).unwrap(), Some(retained));
+        }
+        let probe = rectangle(7 * MM, 8 * MM, 4 * MM, MM);
+        let reference = expected.boolean(&probe, Operation::Intersection).unwrap();
+        let overlap = actual.boolean(&probe, Operation::Intersection).unwrap();
+        assert!((overlap.area().unwrap().value_nm2 - reference.area().unwrap().value_nm2).abs() < 1_000.);
+    }
+}
+
+/// Boundary clipping can split the stock. Enclosed cuts still go in their respective
+/// faces without repacking them into the boundary Boolean.
+#[test]
+fn independent_cuts_survive_boundary_clipping_that_splits_stock() {
+    let stock = rectangle(0, 0, 20 * MM, 20 * MM);
+    let crossing = rectangle(9 * MM, -MM, 2 * MM, 22 * MM);
+    let stock = stock.boolean(&crossing, Operation::Difference).unwrap();
+    let cuts = [[5 * MM, 10 * MM], [15 * MM, 10 * MM]].map(|p| Regions::circle(p, 2 * MM).unwrap());
+    let actual = stock.subtract_independent_enclosed(&cuts).unwrap().unwrap();
+    let expected = stock.boolean(&Regions::union_all(&cuts).unwrap(), Operation::Difference).unwrap();
+    assert_eq!(actual.region_count(), 2);
+    assert!((actual.area().unwrap().value_nm2 - expected.area().unwrap().value_nm2).abs() < 1_000.);
+    for (x, retained) in [(3, true), (5, false), (10, false), (15, false), (17, true)] {
+        assert_eq!(actual.contains([x * MM, 10 * MM]).unwrap(), Some(retained));
+    }
+}
+
+/// A contact box in a clearance hole or outside a diagonal edge can be rejected. Partial
+/// contact, including when the contour surrounds a piece of material, must still be tested.
+#[test]
+fn contact_box_rejection_keeps_boundary_and_partial_contacts() {
+    let stock = Regions::polygon(&[[0, 0], [12 * MM, 0], [0, 12 * MM]]).unwrap();
+    let hole = Regions::circle([4 * MM, 4 * MM], 3_800_000).unwrap();
+    let material = stock.subtract_enclosed(&[hole]).unwrap().unwrap();
+    let may_intersect = |box_nm: [i64; 4]| material.may_intersect_box(box_nm.map(|v| v as f64)).unwrap();
+    assert!(!may_intersect([3 * MM, 3 * MM, 5 * MM, 5 * MM]));
+    assert!(!may_intersect([7 * MM, 7 * MM, 8 * MM, 8 * MM]));
+    assert!(may_intersect([5 * MM, 4 * MM, 6 * MM, 5 * MM]));
+    assert!(may_intersect([5 * MM, 6 * MM, 7 * MM, 7 * MM]));
+    assert!(may_intersect([-MM, -MM, 13 * MM, 13 * MM]));
+}

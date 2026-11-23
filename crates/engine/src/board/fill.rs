@@ -273,7 +273,8 @@ fn zone_fill(
             // The resolved center is interior to each physical pad, via or track contour.
             // For boundary/partial contacts keep the exact positive-area intersection test.
             if island.contains(center).map_err(|e| e.to_string())? == Some(true)
-                || !clip(&island, &region(&object.object.contour, 0)?, Operation::Intersection)?.is_empty()
+                || (island.may_intersect_box(object.object.contour.bounds()).map_err(|e| e.to_string())?
+                    && !clip(&island, &region(&object.object.contour, 0)?, Operation::Intersection)?.is_empty())
             {
                 contacts.push(index);
             }
