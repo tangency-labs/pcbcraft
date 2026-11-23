@@ -96,7 +96,7 @@ focus, the `monitor`
 size when known, the current `layout` and the latest request. Poll it until
 `resize.state` leaves `pending`:
 
-- `applied`: the measured client size matches the request to a physical pixel.
+- `applied`: the measured client size equals the request in whole physical pixels.
 - `constrained`: two seconds passed and the window kept another size, for
   example because the compositor or a tiling window manager limited it. `client`
   shows the size it actually has.

@@ -49,19 +49,19 @@ fn recording_sizes_are_applied_and_measured_without_changing_the_project() {
     assert_eq!(h.state().views.hosts[&HostId::ROOT].layout.visible_views(), views);
 }
 
-/// A compositor that keeps another size reports `constrained` with the measured size.
-/// Requests the window cannot honor are refused without sending anything.
+/// A compositor that keeps another size, even one physical pixel short, reports `constrained`
+/// with the measured size. Requests the window cannot honor are refused without sending anything.
 #[test]
 fn constrained_and_refused_resizes_are_reported_separately() {
     let mut h = ready();
     command(&mut h, "ui.window", json!({"window":0})).unwrap();
     command(&mut h, "ui.resize", json!({"window":0,"width":1280.0,"height":800.0})).unwrap();
     h.step();
-    h.set_size(egui::vec2(1200.0, 800.0));
+    h.set_size(egui::vec2(1279.0, 800.0));
     h.state_mut().automation.resizes.get_mut(&HostId::ROOT).unwrap().since = Instant::now() - super::super::window::RESIZE_SETTLE;
     let state = settle(&mut h, 0);
     assert_eq!(state["resize"]["state"], "constrained", "{state}");
-    assert_eq!(state["client"], json!({"width":1200.0,"height":800.0}));
+    assert_eq!((&state["client"], &state["scale"]), (&json!({"width":1279.0,"height":800.0}), &json!(1.0)), "{state}");
     assert_eq!(state["resize"]["requested"], json!({"width":1280.0,"height":800.0}));
     for (params, reason) in [
         (json!({"window":9,"width":1280.0,"height":800.0}), "Unknown editor window"),

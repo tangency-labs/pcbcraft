@@ -71,8 +71,9 @@ impl PcbApp {
             }
         });
         if let Some(resize) = self.automation.resizes.get_mut(&host).filter(|resize| resize.state == "pending") {
-            // Native sizes are whole physical pixels.
-            if (window.client - resize.requested).abs().max_elem() <= 1.0 / ctx.pixels_per_point() + 0.001 {
+            // Native sizes are whole physical pixels, rounded from logical points as winit does.
+            let physical = |size: Vec2| (size * ctx.pixels_per_point()).round();
+            if physical(window.client) == physical(resize.requested) {
                 resize.state = "applied";
             } else if resize.since.elapsed() >= RESIZE_SETTLE {
                 resize.state = "constrained";
