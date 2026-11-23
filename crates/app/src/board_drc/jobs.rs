@@ -511,6 +511,91 @@ mod native {
             drop(second);
             assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
         }
+
+        /// Canceling a fixed-pitch edit while its attached-track pass is still in progress
+        /// releases the native snapshot worker slot and publishes no edit.
+        #[test]
+        fn native_pitch_cancel_during_carried_tracks_frees_worker_slot() {
+            let _lock = TEST_LOCK.lock().unwrap();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            while ACTIVE_WORKERS.load(Ordering::Acquire) > 0 {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            }
+            let mut session = pcbcraft_engine::Session::default();
+            session.apply("project.new", &serde_json::json!({"create_board":true})).unwrap();
+            session
+                .apply(pcbcraft_engine::INITIALIZE_BOARD_SETUP, &serde_json::json!({"copper_layers":2,"expected_revision":session.revision()}))
+                .unwrap();
+            for x in [0, 10_000_000, 20_000_000, 30_000_000] {
+                let revision = session.revision();
+                session.apply(pcbcraft_engine::PLACE_RESISTOR, &serde_json::json!({"x_nm":x,"y_nm":0,"expected_revision":revision})).unwrap();
+                let symbol = session.project().unwrap().symbols().last().unwrap().id();
+                let revision = session.revision();
+                session
+                    .apply(
+                        pcbcraft_engine::PLACE_FOOTPRINT,
+                        &serde_json::json!({"symbol":symbol,"definition":"header-1x02-254","mapping":{"1":"1","2":"2"},"x_nm":x,"y_nm":0,"expected_revision":revision}),
+                    )
+                    .unwrap();
+            }
+            let target = session.project().unwrap().board_target().unwrap();
+            let layer = session
+                .project()
+                .unwrap()
+                .board_view(target)
+                .unwrap()
+                .layers()
+                .into_iter()
+                .find(|l| l.purpose == pcbcraft_engine::board::setup::LayerPurpose::Copper)
+                .unwrap()
+                .id;
+            for row in 0..6 {
+                let y = 20_000_000 + row * 1_000_000;
+                let points: Vec<serde_json::Value> = (0..256).map(|i| serde_json::json!({"x_nm":i * 1_000_000,"y_nm":y})).collect();
+                session
+                    .apply(
+                        pcbcraft_engine::ADD_TRACKS,
+                        &serde_json::json!({"board":target.board,"layer":layer,"width_nm":250_000,"points":points,"expected_revision":session.revision()}),
+                    )
+                    .unwrap();
+            }
+            let before = session.snapshot().unwrap();
+            let revision = session.revision();
+            let footprints: Vec<String> = before.board_view(target).unwrap().footprint_ids().collect();
+            let params = serde_json::json!({
+                "board": target.board,
+                "footprints": footprints,
+                "mode": "distribute_x",
+                "pitch_nm": 5_080_000,
+                "expected_revision": revision,
+            });
+            let mut job = session.prepare_copper_edit(pcbcraft_engine::ALIGN_FOOTPRINTS, &params).unwrap();
+            // Advance one bounded step into the attached-track pass (still indexing moved
+            // footprints), so the job is inside the resumable pass when handed to the native
+            // worker and canceled.
+            assert!(!job.step(1));
+            assert_eq!(job.progress().stage, "Carrying attached tracks");
+            assert!(job.progress().completed > 0);
+            assert!(job.progress().completed < job.progress().total);
+
+            let mut running = Running::start(Request { id: 1, job });
+            running.cancel();
+            let completion = loop {
+                if let Some(done) = running.poll() {
+                    break done;
+                }
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::yield_now();
+            };
+            assert!(matches!(completion.report, Ok(None)));
+            assert_eq!(ACTIVE_WORKERS.load(Ordering::Acquire), 0);
+            let reacquired = WorkerSlot::acquire();
+            assert!(reacquired.is_some());
+            drop(reacquired);
+            assert_eq!(session.revision(), revision);
+            assert!(Arc::ptr_eq(&session.snapshot().unwrap(), &before));
+        }
     }
 }
 
