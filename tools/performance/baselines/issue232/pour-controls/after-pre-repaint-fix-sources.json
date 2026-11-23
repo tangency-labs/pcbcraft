@@ -1,0 +1,19 @@
+{
+  "crates/app/src/board_fills.rs": "3b5f49633938734715f2785c891f2f01441a9b5e32998da1d6f79a082b117e10",
+  "crates/app/src/board_workspace.rs": "f3efb5f4f2c35fa54393a727417892254b6f7f1633c0aaec9a921d30e0a311a4",
+  "crates/app/src/board_zones.rs": "155e7aad971796dd0f19b2b445c5a3bbeaa29f879328ea5767d3ce924feee98e",
+  "crates/app/src/lib.rs": "9f6e179856c355ad1ebab1b35df8f5b367b790d59a819c3d7c1e02a88ea7cf6f",
+  "crates/app/src/live_control.rs": "462eeadc8e11a078cceab5176625afcc6d3f2d9b739257a4e0a42d357fa6e7e9",
+  "crates/app/src/tests/board_fill.rs": "7bf655ad458468616f21a02db24ca96e57b731003b89665a5d415a57506034e3",
+  "crates/app/src/tests/ribbon.rs": "8347a162b7b078bf72c83c6efeb40659114ce2c8885152ef618b29dbcaca862c",
+  "crates/engine/src/board/drc/job.rs": "8e7fe2cb0f0b0b71d1d5b45c57dcea9678d1d7c884d25d5002ca3a6a377b43c3",
+  "crates/engine/src/board/fill.rs": "6f9f96088a750b5dfd633eb6432a2de8cc78ba3635166dbecaa9a4c8eb6c7266",
+  "crates/engine/src/board/fill/cache.rs": "e37893862f3fd2c497da66e959ab9f2dfd24e9391aaf6b51bed1a31fd10870eb",
+  "crates/engine/src/board/fill/tests.rs": "a19ec012dcd188bedbcb55c8f00b7339a7ceb6c96d135fe332a1373400222144",
+  "crates/engine/src/board/fill/worker.rs": "832926b4034ff5dbb58b694368101be464144526d81680d1e1a430e3bf598c92",
+  "crates/engine/src/board/track/preparation.rs": "24722bf0e47c3b29cecf1c875164c9bc9e04f3f1f599f486dad1c01eca01423e",
+  "crates/engine/src/board/work.rs": "1e755bdfe3414416f01a4133dbad0bdad4cc5ece4a76692360c8fdd0bd295cb3",
+  "crates/engine/src/lib.rs": "34aadf41d2fff9c1d2d83c2dd04eca44bd14014cccf00cda9c2570129bddb4c3",
+  "crates/mcp/src/backend.rs": "52156919347e7c57c5d1f0be042f008f1d863511e37b83e2af14d32c2c9ddf2c",
+  "crates/mcp/src/live.rs": "c02ff93a049b89c1c71f9a012e115a29341048c99e15939c2da4bb210c1424d0"
+}

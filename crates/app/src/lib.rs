@@ -18,6 +18,7 @@ mod board_canvas;
 mod board_clipboard;
 mod board_drawing;
 mod board_drc;
+mod board_fills;
 mod board_measure;
 mod board_move;
 mod board_outputs;
@@ -131,6 +132,8 @@ const ADD_POWER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::
 const ADD_SYMBOL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::A);
 const ADD_SHEET: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::S);
 const ADD_HIERARCHICAL_LABEL: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::H);
+const POUR_COPPER: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::B);
+const REMOVE_POURS: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND, Key::B);
 const PLACE_VIA: KeyboardShortcut = KeyboardShortcut::new(Modifiers::COMMAND.plus(Modifiers::SHIFT), Key::X);
 const ADD_WIRE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::W);
 const ROTATE: KeyboardShortcut = KeyboardShortcut::new(Modifiers::NONE, Key::R);
@@ -248,8 +251,9 @@ enum Dialog {
     Footprint(Box<footprint_assignment::Edit>),
     /// A captured engine-owned schematic-to-PCB update review.
     BoardUpdate(Box<board_update::Edit>),
-    LayerColor(board_appearance::Edit),
+    BoardColor(board_appearance::Edit),
     Zone(Box<board_zones::Edit>),
+    CopperPour(board_fills::PourDialog),
     ViaNet(Box<board_net_choice::Edit>),
     /// Custom tool dimensions and optional reusable presets, independent of board setup.
     RoutingSize(board_presets::Edit),
@@ -538,6 +542,9 @@ impl PcbApp {
         #[cfg(not(target_arch = "wasm32"))]
         if self.session.revision() != revision {
             self.autosave.command_took(started.elapsed());
+        }
+        if self.message.is_none() && matches!(id, "edit.undo" | "edit.redo") {
+            self.restore_local_history();
         }
         self.views.sync(&self.session);
     }
@@ -982,6 +989,7 @@ impl PcbApp {
                     let shortcut = ui.ctx().format_shortcut(&key);
                     if menu::quick_action(ui, icon, label, &shortcut, self.session.available(command)).clicked() {
                         self.run(command, &Value::Null);
+                        self.repaint_editors(ui.ctx());
                     }
                 }
             },
@@ -1397,6 +1405,12 @@ impl PcbApp {
     fn status(&mut self, ui: &mut Ui) {
         let name = self.session.project().map_or("No project open", |p| p.name.as_str()).to_owned();
         let message = self.message.clone();
+        let cancelable = if matches!(self.dialog, Dialog::None) && !self.home && self.views.active.workspace == Workspace::Board {
+            self.cancelable_pour()
+        } else {
+            None
+        };
+        let mut cancel_pour = false;
         let grid_view = (!self.home && self.session.project().is_some()).then(|| self.views.active.id());
         let mut spacing = self.views.active.camera.snap_nm();
         let grid_workspace = self.views.active.workspace;
@@ -1428,7 +1442,7 @@ impl PcbApp {
                     })
                 },
             );
-        if let Some((input, ratsnest)) = &self.views.active.board.ratsnest_cache
+        if let Some((input, ratsnest, _)) = &self.views.active.board.ratsnest_cache
             && input.revision == self.session.revision()
             && Some(ratsnest.board) == self.views.active.board.target
         {
@@ -1475,6 +1489,12 @@ impl PcbApp {
                     }
                     if !empty {
                         ui.label(dim(self.views.active.board.drc.status(self.views.active.board.target, self.session.revision())));
+                    }
+                    if let Some(status) = self.views.active.board.fills.status() {
+                        ui.add(egui::Label::new(dim(status)).truncate());
+                    }
+                    if cancelable.is_some() {
+                        cancel_pour = pcbcraft_chrome::controls::small_button(ui, "Cancel pour").clicked();
                     }
                     // File results, such as a saved fabrication archive, would otherwise be hidden
                     // behind the board status in this workspace.
@@ -1569,6 +1589,10 @@ impl PcbApp {
         );
         if let Some(id) = grid_view.filter(|_| grid_changed) {
             self.set_view_grid(id, spacing);
+        }
+        if let Some(target) = cancelable.filter(|_| cancel_pour) {
+            self.cancel_copper_pour(target);
+            self.repaint_editors(ui.ctx());
         }
         self.preferences.units = unit;
     }
@@ -2157,6 +2181,13 @@ impl PcbApp {
             if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::X)) {
                 self.start_route();
             }
+            if !self.views.active.board.editing_footprint() {
+                if pressed(&REMOVE_POURS) {
+                    self.unfill_zones();
+                } else if pressed(&POUR_COPPER) {
+                    self.refill_zones();
+                }
+            }
             if pressed(&PLACE_VIA) {
                 self.start_via();
             }
@@ -2309,9 +2340,11 @@ impl PcbApp {
         }
         if pressed(&COMMAND_Z) && self.session.available("edit.undo") {
             self.run("edit.undo", &Value::Null);
+            self.repaint_editors(ctx);
         }
         if pressed(&COMMAND_Y) && self.session.available("edit.redo") {
             self.run("edit.redo", &Value::Null);
+            self.repaint_editors(ctx);
         }
         if pressed(&COMMAND_COMMA) {
             self.open_preferences();
@@ -2351,6 +2384,7 @@ impl PcbApp {
             #[cfg(not(target_arch = "wasm32"))]
             Dialog::DeleteLibraryItem(draft) => self.delete_library_item_dialog(ctx, *draft),
             Dialog::Zone(edit) => self.zone_dialog(ctx, *edit),
+            Dialog::CopperPour(pour) => self.copper_pour_dialog(ctx, pour),
             Dialog::ViaNet(edit) => self.via_net_dialog(ctx, *edit),
             Dialog::None => {}
             Dialog::Arrangement(edit) => self.arrangement_dialog(ctx, edit),
@@ -2402,7 +2436,7 @@ impl PcbApp {
             Dialog::LibraryPinRemap(draft) => self.library_pin_remap_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
-            Dialog::LayerColor(edit) => self.layer_color_dialog(ctx, edit),
+            Dialog::BoardColor(edit) => self.board_color_dialog(ctx, edit),
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
@@ -2705,6 +2739,7 @@ impl PcbApp {
         self.finish_editor_drag(&ctx);
         self.finish_view_actions(&ctx);
         self.poll_copper_preparations(&ctx);
+        self.poll_zone_fills(&ctx);
         for view in self.views.all_mut() {
             if view.board.drc.poll(&self.session, view.board.target) {
                 ctx.request_repaint_after(std::time::Duration::from_millis(8));
@@ -2817,6 +2852,7 @@ impl PcbApp {
         let dialog_host = self
             .arrangement_dialog_host()
             .or_else(|| self.rule_dialog_host())
+            .or_else(|| self.copper_pour_host())
             .or_else(|| self.paste_options_host())
             .or_else(|| self.board_paste_options_host())
             .or_else(|| self.external_paste_options_host())
@@ -2890,9 +2926,12 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("PCB Layout", "Cancel placement", "Esc or right click".to_owned()));
     list.push(("PCB Layout", "Route track", "X".to_owned()));
     list.push(("PCB Layout", "Bypass the routing grid", "Hold Ctrl".to_owned()));
+    list.push(("PCB Layout", "Pour copper", key(&POUR_COPPER)));
+    list.push(("PCB Layout", "Remove pours", key(&REMOVE_POURS)));
     list.push(("PCB Layout", "Place via", key(&PLACE_VIA)));
     list.push(("PCB Layout", "Measure distance", "Ctrl+Shift+M".to_owned()));
     list.push(("PCB Layout", "Select connected copper", "U".to_owned()));
+    list.push(("PCB Layout", "Cycle overlapping items under the pointer", "Shift+Space".to_owned()));
     list.push(("PCB Layout", "Drag a track segment, keeping it attached", "D".to_owned()));
     list.push(("PCB Layout", "Highlight the net under the pointer", "`".to_owned()));
     list.push(("PCB Layout", "Move selected PCB group", "M".to_owned()));
