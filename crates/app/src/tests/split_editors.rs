@@ -1073,11 +1073,14 @@ fn a_focusing_press_decides_focus_over_an_earlier_middle_press() {
 }
 
 /// A primary press decides focus over a right press in the same frame, whichever came first and
-/// whether or not right-drag pans.
+/// whether or not right-drag pans. While right-drag pans, a right press that ends as a click
+/// still focuses its own pane afterwards, as any right click does.
 #[test]
 fn a_primary_press_decides_focus_over_a_right_press_in_the_same_frame() {
     use egui::PointerButton::{Primary, Secondary};
-    for (first, second, right_pans, expected) in [(Secondary, Primary, false, 1), (Primary, Secondary, false, 0), (Secondary, Primary, true, 1)] {
+    for (first, second, right_pans, expected) in
+        [(Secondary, Primary, false, 1), (Primary, Secondary, false, 0), (Secondary, Primary, true, 1), (Primary, Secondary, true, 0)]
+    {
         let mut h = split_harness();
         h.state_mut().preferences.navigation.right_drag_pan = right_pans;
         let focused = 1 - expected;
@@ -1093,10 +1096,12 @@ fn a_primary_press_decides_focus_over_a_right_press_in_the_same_frame() {
         h.run();
         h.input_mut().events.extend([button(at_x, first, true), egui::Event::PointerMoved(at_y), button(at_y, second, true)]);
         h.run();
+        assert_eq!(h.state().views.active.id(), ViewId(expected), "{first:?} then {second:?} (right-drag pans: {right_pans})");
         h.event(button(at_y, first, false));
         h.event(button(at_y, second, false));
         h.run();
-        assert_eq!(h.state().views.active.id(), ViewId(expected), "{first:?} then {second:?} (right-drag pans: {right_pans})");
+        let clicked = if right_pans && second == Secondary { 1 } else { expected };
+        assert_eq!(h.state().views.active.id(), ViewId(clicked), "after release: {first:?} then {second:?} (right-drag pans: {right_pans})");
         assert!(Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
     }
 }
