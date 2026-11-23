@@ -36,6 +36,7 @@ pub mod persistence;
 pub mod pin_functions;
 pub mod query;
 pub mod schematic;
+pub mod schematic_pdf;
 pub mod selection;
 mod session_scope;
 pub mod sheets;

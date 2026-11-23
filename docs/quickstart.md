@@ -357,6 +357,9 @@ pinned definition. The **Footprint**
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
+With nothing selected on a schematic sheet, use **Properties → Paper** to change
+the sheet's paper size, orientation, or frame.
+
 ### Designator locks
 
 Select a symbol and check **Lock designator** in compact Properties, then choose
@@ -406,20 +409,33 @@ placed; ordinary placement does not complete packages automatically.
 
 ## Inspect a board beside its schematic
 
-Generate an original example into a directory that does not already exist:
+Generate an original example into a directory that does not already exist. This
+command uses a relative path beside your checkout, which works the same in
+PowerShell, cmd and POSIX shells:
 
 ```sh
-cargo run --locked -p pcbcraft-engine --example board_workspace -- /tmp/pcbcraft-board-example
+cargo run --locked -p pcbcraft-engine --example board_workspace -- ../pcbcraft-board-example
 ```
 
-Open `/tmp/pcbcraft-board-example/board-inspection/project.json` on desktop, or
+Open `board-inspection/project.json` from that directory on desktop, or
 upload the generated `board-inspection.pc` in the browser. The example has a
 resistor, a two-pin connector, two connections and two generic footprint
-placements. It is an inspection fixture, not a fabrication-ready board.
+placements. It draws no board outline and is an inspection fixture, not a
+fabrication-ready board. The generic placements have no assigned package, so each
+footprint appears only as pad-center markers, without copper pad shapes, body
+outlines, courtyards or silkscreen. The [sensor node demo](../examples/README.md)
+and [transistor flasher](../examples/flasher.md) described at the end of this
+section show complete packages.
 
 Click the workspace tile and choose **PCB layout** to switch the focused pane.
-Drag from empty canvas to enclose footprints in a selection window, or drag
-right-to-left to select footprints the box crosses; Shift adds and Ctrl/Command toggles.
+To select several footprints, start a drag on empty canvas. Dragging left to right
+selects only footprints entirely inside the box; dragging right to left also
+selects footprints the box crosses. The selectable area of each footprint
+extends a little beyond its markers, so leave some space around them when
+dragging left to right. Hold Shift to add to the current selection,
+or Ctrl/Command to toggle footprints in or out of it. If nothing can be selected,
+check the **Selection filters** card described below; **Reset** enables every
+object type again.
 To keep the schematic visible, click the split icon inside the PCB layout card
 (tooltip: **Open PCB layout beside current view**). On desktop, the adjacent
 window icon opens the board directly in another native window; repeat it to open
