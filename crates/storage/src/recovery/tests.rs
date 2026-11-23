@@ -879,8 +879,8 @@ fn pruning_reads_complete_entry_times_under_scan_cap() {
     assert!(entry_file(dir.path(), "entry", "journal").exists());
     assert_eq!(recover(dir.path(), "entry").unwrap().documents, states[1]);
 
-    // If a metadata error prevents determining an entry's age after the header check passes,
-    // leave the entry in place.
+    // If a metadata error prevents determining an entry's age (or its `.lock` is a symlink),
+    // leave the entry in place rather than treating the error as a missing file.
     #[cfg(unix)]
     {
         drop(EditJournal::create(dir.path(), "unreadable", states[1].clone()).unwrap());
@@ -888,6 +888,7 @@ fn pruning_reads_complete_entry_times_under_scan_cap() {
         fs::remove_file(entry_file(dir.path(), "unreadable", "lock")).unwrap();
         File::options().write(true).open(entry_file(dir.path(), "unreadable", "pc")).unwrap().set_modified(old_time).unwrap();
         std::os::unix::fs::symlink("unreadable.lock", entry_file(dir.path(), "unreadable", "lock")).unwrap();
+        assert_eq!(entry_modified(dir.path(), "unreadable"), None);
         assert_eq!(prune(dir.path(), retention), Ok(0));
         assert!(entry_file(dir.path(), "unreadable", "pc").exists());
     }
@@ -1462,4 +1463,61 @@ fn pruning_skips_open_recorder_under_entry_lock_and_prunes_old_unlocked_entries(
     // Once released, the freshly updated entry outranks the older unlocked entry under max_entries.
     assert_eq!(prune(dir.path(), retention), Ok(1));
     assert_eq!(entry_ids(dir.path()), std::collections::BTreeSet::from(["active"].map(str::to_owned)));
+}
+
+/// Non-regular or unreadable `.lock` paths (directories, read-only files, and symlinks) are
+/// skipped without following symlinks, deleting unguarded entries, or aborting retention for
+/// valid expired recovery entries in the same directory.
+#[test]
+fn pruning_skips_unwritable_directory_and_symlink_lock_paths_without_blocking_retention() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Retention"})).unwrap();
+    let docs = encode_documents(session.snapshot().unwrap()).unwrap();
+    #[cfg(unix)]
+    let (dangling_docs, linked_docs) = (docs.clone(), docs.clone());
+
+    drop(EditJournal::create(dir.path(), "expired", docs).unwrap());
+    age_entry(dir.path(), "expired", DAY * 30);
+
+    let dir_lock = entry_file(dir.path(), "dir-lock", "lock");
+    fs::create_dir(&dir_lock).unwrap();
+
+    #[cfg(unix)]
+    let readonly_lock = {
+        use std::os::unix::fs::PermissionsExt;
+        let path = entry_file(dir.path(), "readonly", "lock");
+        fs::write(&path, b"unrelated").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+
+        drop(EditJournal::create(dir.path(), "dangling", dangling_docs).unwrap());
+        fs::remove_file(entry_file(dir.path(), "dangling", "lock")).unwrap();
+        age_entry(dir.path(), "dangling", DAY * 30);
+        std::os::unix::fs::symlink("missing-target", entry_file(dir.path(), "dangling", "lock")).unwrap();
+
+        drop(EditJournal::create(dir.path(), "linked", linked_docs).unwrap());
+        fs::remove_file(entry_file(dir.path(), "linked", "lock")).unwrap();
+        age_entry(dir.path(), "linked", DAY * 30);
+        let target = dir.path().join("target.txt");
+        fs::write(&target, b"keep").unwrap();
+        std::os::unix::fs::symlink(&target, entry_file(dir.path(), "linked", "lock")).unwrap();
+        path
+    };
+
+    let retention = Retention { max_age: DAY * 14, max_entries: 16 };
+    assert_eq!(prune(dir.path(), retention), Ok(1));
+    for ext in ["pc", "journal", "lock"] {
+        assert!(!entry_file(dir.path(), "expired", ext).exists(), "expired.{ext} should be pruned");
+    }
+    assert!(dir_lock.is_dir());
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(readonly_lock.exists());
+        assert!(entry_file(dir.path(), "dangling", "pc").exists());
+        assert!(entry_file(dir.path(), "linked", "pc").exists());
+        assert_eq!(fs::read(dir.path().join("target.txt")).unwrap(), b"keep");
+        fs::set_permissions(&readonly_lock, fs::Permissions::from_mode(0o644)).unwrap();
+    }
 }

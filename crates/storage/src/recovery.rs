@@ -1095,15 +1095,17 @@ where
         let lock_path = entry_file(dir, &id, "lock");
         // Acquire each candidate's entry lock before reading its headers or timestamps so an
         // active recorder cannot update and release the entry between inspection and deletion.
-        // Locks are created under the folder gate, so one missing now stays missing until we finish.
-        let lock = if lock_path.exists() {
-            match open_entry_lock(&lock_path, false) {
+        // Inspect the lock path without following symlinks so non-regular or unreadable `.lock`
+        // entries are skipped rather than followed, deleted unguarded, or allowed to abort retention.
+        let lock = match fs::symlink_metadata(&lock_path) {
+            Err(error) if error.kind() == ErrorKind::NotFound => None,
+            Ok(metadata) if metadata.file_type().is_file() => match open_entry_lock(&lock_path, false) {
                 Ok(lock) if lock.try_lock().is_ok() => Some(lock),
                 Ok(_) => continue,
-                Err(error) => return Err(format!("{}: {error}", lock_path.display())),
-            }
-        } else {
-            None
+                Err(error) if error.kind() == ErrorKind::NotFound => None,
+                Err(_) => continue,
+            },
+            Ok(_) | Err(_) => continue,
         };
         if !is_recovery_entry(dir, &id) {
             continue;
