@@ -828,18 +828,54 @@ pub struct RecordingFault {
     pub removed: bool,
 }
 
-/// Mark a panicked or stopped worker unavailable and release every queued barrier sender.
-struct MarkExited(Arc<Mailbox>);
+/// Mark a panicked or stopped worker unavailable, release queued barriers, publish the worker's
+/// completion outcome, and wake the host afterwards.
+struct WorkerExit<F: Fn()> {
+    mailbox: Arc<Mailbox>,
+    done: Option<mpsc::SyncSender<Result<(), String>>>,
+    wake: F,
+}
 
-impl Drop for MarkExited {
-    fn drop(&mut self) {
-        let mut state = self.0.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+impl<F: Fn()> WorkerExit<F> {
+    fn mark_exited(&self) {
+        let mut state = self.mailbox.state.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         state.exited = true;
         state.queue.clear();
         if std::thread::panicking() {
             state.fault = Some(RecordingFault { message: "The recovery worker stopped unexpectedly.".into(), removed: true });
         }
     }
+
+    fn finish(mut self, result: Result<(), String>) {
+        self.mark_exited();
+        if let Some(done) = self.done.take() {
+            let _ = done.send(result);
+        }
+        (self.wake)();
+    }
+}
+
+impl<F: Fn()> Drop for WorkerExit<F> {
+    fn drop(&mut self) {
+        if let Some(done) = self.done.take() {
+            self.mark_exited();
+            drop(done);
+            (self.wake)();
+        }
+    }
+}
+
+/// Run the recorder worker body so both normal completion and unexpected panics mark the mailbox
+/// exited and publish the outcome to [`RecorderExit`] before waking the host.
+fn run_worker<F: Fn()>(
+    mailbox: Arc<Mailbox>,
+    done: mpsc::SyncSender<Result<(), String>>,
+    wake: F,
+    work: impl FnOnce(&Arc<Mailbox>, &F) -> Result<(), String>,
+) {
+    let exit = WorkerExit { mailbox, done: Some(done), wake };
+    let result = work(&exit.mailbox, &exit.wake);
+    exit.finish(result);
 }
 
 impl Mailbox {
@@ -969,12 +1005,10 @@ impl JournalRecorder {
         std::thread::Builder::new()
             .name("pcbcraft-recovery".to_owned())
             .spawn(move || {
-                let exited = MarkExited(Arc::clone(&worker_mailbox));
-                let pruned = options.retention.map_or(Ok(0), |retention| prune(&worker_dir, retention));
-                let result = record(&worker_dir, &worker_id, &worker_mailbox, &wake, pruned.err());
-                drop(exited);
-                let _ = done.send(result);
-                wake();
+                run_worker(worker_mailbox, done, wake, |mailbox, wake| {
+                    let pruned = options.retention.map_or(Ok(0), |retention| prune(&worker_dir, retention));
+                    record(&worker_dir, &worker_id, mailbox, wake, pruned.err())
+                });
             })
             .map_err(|e| e.to_string())?;
         Ok(Self { dir, id, mailbox, sync_guard: Mutex::new(()), exit: Some(RecorderExit(Mutex::new(exit))) })

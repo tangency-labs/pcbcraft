@@ -1823,3 +1823,64 @@ fn append_closes_journal_when_post_write_identity_check_errors() {
     assert_eq!(recovered.stop, None);
     assert_eq!(recovered.documents, state_3);
 }
+
+/// Both normal completion and an unexpected worker panic mark the mailbox exited and publish the
+/// outcome to `RecorderExit` before waking the host, waking once per exit.
+#[test]
+fn worker_exit_publishes_outcome_and_wakes_host_on_normal_exit_and_panic() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Panic path: wake runs after exited/fault are recorded and `done` is disconnected.
+    let panic_mailbox = Arc::new(Mailbox::default());
+    let (done, rx) = mpsc::sync_channel(1);
+    let panic_exit = Arc::new(RecorderExit(Mutex::new(rx)));
+    let panic_wakes = Arc::new(AtomicUsize::new(0));
+    let observed_panic = Arc::new(Mutex::new(None));
+    let (mb_cb, exit_cb, wakes_cb, obs_cb) =
+        (Arc::clone(&panic_mailbox), Arc::clone(&panic_exit), Arc::clone(&panic_wakes), Arc::clone(&observed_panic));
+    let handle = std::thread::spawn(move || {
+        run_worker(
+            panic_mailbox,
+            done,
+            move || {
+                wakes_cb.fetch_add(1, Ordering::SeqCst);
+                let state = mb_cb.state.lock().unwrap();
+                *obs_cb.lock().unwrap() = Some((state.exited, state.fault.clone(), exit_cb.poll()));
+            },
+            |_, _| panic!("simulated recorder worker panic"),
+        );
+    });
+    assert!(handle.join().is_err(), "worker thread should unwind on panic");
+    assert_eq!(panic_wakes.load(Ordering::SeqCst), 1);
+    let (exited, fault, polled) = observed_panic.lock().unwrap().take().expect("wake must run on panic");
+    assert!(exited);
+    assert_eq!(fault, Some(RecordingFault { message: "The recovery worker stopped unexpectedly.".into(), removed: true }));
+    assert_eq!(polled, Some(Err("The recovery worker stopped unexpectedly.".into())));
+
+    // Normal completion path: wake runs once after `RecorderExit` has the completion result.
+    for expected in [Ok(()), Err("disk full".to_owned())] {
+        let normal_mailbox = Arc::new(Mailbox::default());
+        let (done, rx) = mpsc::sync_channel(1);
+        let normal_exit = Arc::new(RecorderExit(Mutex::new(rx)));
+        let normal_wakes = Arc::new(AtomicUsize::new(0));
+        let observed_normal = Arc::new(Mutex::new(None));
+        let (mb_cb, exit_cb, wakes_cb, obs_cb) =
+            (Arc::clone(&normal_mailbox), Arc::clone(&normal_exit), Arc::clone(&normal_wakes), Arc::clone(&observed_normal));
+        let return_value = expected.clone();
+        run_worker(
+            normal_mailbox,
+            done,
+            move || {
+                wakes_cb.fetch_add(1, Ordering::SeqCst);
+                let state = mb_cb.state.lock().unwrap();
+                *obs_cb.lock().unwrap() = Some((state.exited, state.fault.clone(), exit_cb.poll()));
+            },
+            |_, _| return_value,
+        );
+        assert_eq!(normal_wakes.load(Ordering::SeqCst), 1);
+        let (exited, fault, polled) = observed_normal.lock().unwrap().take().expect("wake must run on normal exit");
+        assert!(exited);
+        assert_eq!(fault, None);
+        assert_eq!(polled, Some(expected));
+    }
+}
