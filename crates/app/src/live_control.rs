@@ -115,6 +115,17 @@ impl Request {
         &self.body
     }
 
+    /// Move `params.params` out of the request in O(1) so large command payloads are not
+    /// deep-cloned on the editor thread before queuing background work.
+    pub(super) fn take_command_params(&mut self) -> Value {
+        self.body
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+            .and_then(|params| params.get_mut("params"))
+            .map(std::mem::take)
+            .unwrap_or(Value::Null)
+    }
+
     /// The endpoint's generation when this request arrived, for [`LiveControl::current`].
     pub(super) fn generation(&self) -> u64 {
         self.generation
@@ -425,7 +436,7 @@ impl PcbApp {
     }
 
     /// Capture a read-only preparation job after policy checks, without executing a mutation.
-    pub(super) fn start_remote_copper(&mut self, ctx: &egui::Context, request: Request, chat: bool) {
+    pub(super) fn start_remote_copper(&mut self, ctx: &egui::Context, mut request: Request, chat: bool) {
         if request.expired() {
             request.answer(Err(Failure::new(ErrorCode::Cancelled, "Copper edit request expired or disconnected")));
             return;
@@ -434,16 +445,22 @@ impl PcbApp {
             request.answer(Err(Failure::new(ErrorCode::Busy, "A copper edit is already preparing; retry after it completes")));
             return;
         }
-        let command = request.body()["params"]["command"].as_str().unwrap_or_default();
-        if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(command) {
+        let command = request.body()["params"]["command"].as_str().unwrap_or_default().to_owned();
+        if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(&command) {
             request.answer(Err(Failure::new(ErrorCode::Unavailable, reason)));
             return;
         }
-        if let Err(failure) = check_deferred_version(command, &request.body()["params"]) {
+        if let Err(failure) = check_deferred_version(&command, &request.body()["params"]) {
             request.answer(Err(failure));
             return;
         }
-        match self.session.prepare_copper_edit(command, &request.body()["params"]["params"]) {
+        let prepared = if command == pcbcraft_engine::MERGE_TRACKS {
+            let params = request.take_command_params();
+            self.session.prepare_copper_edit_owned(&command, params)
+        } else {
+            self.session.prepare_copper_edit(&command, &request.body()["params"]["params"])
+        };
+        match prepared {
             Ok(job) => {
                 let port = self.live_control.as_ref().map_or(0, LiveControl::port);
                 self.remote_copper.queue.submit(crate::board_drc::jobs::Request { id: 0, job });

@@ -34,7 +34,7 @@ pub(super) struct Planner {
 
 impl Planner {
     /// Capture only owned inputs; the first planning unit runs when polled.
-    pub(super) fn new(snapshot: Arc<Project>, target: BoardTarget, revision: u64, params: Value, report_budget: usize) -> Self {
+    pub(super) fn new(snapshot: Arc<Project>, target: BoardTarget, revision: u64, params: Arc<Value>, report_budget: usize) -> Self {
         Self { work: Box::pin(async move { prepare(&snapshot, target, revision, &params, report_budget).await }), completed: 0 }
     }
 
@@ -214,15 +214,34 @@ fn line(track: &Track) -> (Line, i128, i128) {
 }
 
 /// Parse and validate `tracks` against the board's existing tracks, yielding per item.
+/// Admission checks only array shape and bounds; per-item UUID parsing, uniqueness and
+/// board-membership checks run here so large selections do not stall the editor thread.
 async fn selected_ids(params: &Value, tracks: &[Track]) -> Result<BTreeSet<Uuid>, CommandError> {
-    if params.get("tracks").is_none() {
+    let Some(raw) = params.get("tracks") else {
         return Ok(BTreeSet::new());
+    };
+    let Some(items) = raw.as_array() else {
+        return Err(CommandError::InvalidParams("`tracks` must contain unique non-nil track UUIDs".into()));
+    };
+    if items.len() > MAX_TRACKS {
+        return Err(CommandError::InvalidParams("`tracks` must list at most 65536 IDs".into()));
     }
-    let ids: Vec<Uuid> = param(params, "tracks")?;
+    if items.is_empty() {
+        return Err(CommandError::InvalidParams("`tracks` must contain unique non-nil track UUIDs".into()));
+    }
     let mut unique = BTreeSet::new();
-    for id in ids {
+    for item in items {
         yield_unit().await;
-        if !unique.insert(id) || tracks.binary_search_by_key(&id, |track| track.id).is_err() {
+        let Some(id) = item.as_str().and_then(|s| Uuid::parse_str(s).ok()).filter(|id| !id.is_nil()) else {
+            return Err(CommandError::InvalidParams("`tracks` must contain unique non-nil track UUIDs".into()));
+        };
+        if !unique.insert(id) {
+            return Err(CommandError::InvalidParams("`tracks` must contain unique non-nil track UUIDs".into()));
+        }
+    }
+    for id in &unique {
+        yield_unit().await;
+        if tracks.binary_search_by_key(id, |track| track.id).is_err() {
             return Err(CommandError::InvalidParams("tracks must be unique IDs of existing board items".into()));
         }
     }

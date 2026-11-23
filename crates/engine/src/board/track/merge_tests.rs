@@ -489,3 +489,65 @@ fn merge_preparation_is_resumable_cancellable_and_rejects_stale_revision() {
     s.apply("edit.undo", &Value::Null).unwrap();
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before_bytes);
 }
+
+/// Admission checks only O(1) `tracks` array bounds on the editor thread; per-element UUID
+/// validation yields in bounded planner steps and candidate `prepare_change` (including board
+/// document size checking) runs during worker preparation rather than on commit.
+#[test]
+fn merge_tracks_defers_track_id_validation_and_candidate_preparation_off_editor_thread() {
+    let mut s = tests::routed_fixture();
+    let front = tests::copper_layers(&s)[0];
+    let y = 40 * MM;
+    add(&mut s, front, DEFAULT_WIDTH_NM, &[at(0, y), at(MM, y), at(2 * MM, y), at(3 * MM, y)]);
+    let tracks = all_tracks(&s);
+    let target = board(&s);
+    let revision = s.revision();
+
+    // O(1) shape and length checks still fail immediately on admission.
+    let empty_err =
+        s.prepare_copper_edit_owned(MERGE_TRACKS, json!({"board":target,"tracks":[],"dry_run":true,"expected_revision":revision})).err().unwrap();
+    assert!(empty_err.to_string().contains("unique non-nil track UUIDs"), "{empty_err}");
+    let non_array_err =
+        s.prepare_copper_edit_owned(MERGE_TRACKS, json!({"board":target,"tracks":"bad","dry_run":true,"expected_revision":revision})).err().unwrap();
+    assert!(non_array_err.to_string().contains("unique non-nil track UUIDs"), "{non_array_err}");
+    let too_many: Vec<Value> = vec![json!("00000000-0000-0000-0000-000000000001"); MAX_TRACKS + 1];
+    let cap_err = s
+        .prepare_copper_edit_owned(MERGE_TRACKS, json!({"board":target,"tracks":too_many,"dry_run":true,"expected_revision":revision}))
+        .err()
+        .unwrap();
+    assert!(cap_err.to_string().contains("at most 65536 IDs"), "{cap_err}");
+
+    // Per-element UUID validation is deferred off admission and yields in bounded steps.
+    let mut deferred_ids: Vec<Value> = (1..=299u128).map(|n| json!(Uuid::from_u128(n))).collect();
+    deferred_ids.push(json!("not-a-uuid"));
+    let mut bad_job =
+        s.prepare_copper_edit_owned(MERGE_TRACKS, json!({"board":target,"tracks":deferred_ids,"dry_run":true,"expected_revision":revision})).unwrap();
+    assert!(!bad_job.step(128), "validation must yield before scanning 300 entries");
+    assert!(!bad_job.step(128), "validation must remain bounded across steps");
+    while !bad_job.step(128) {}
+    let deferred_err = bad_job.take_result().err().unwrap();
+    assert!(deferred_err.to_string().contains("unique non-nil track UUIDs"), "{deferred_err}");
+
+    // Duplicate UUIDs are also rejected on the worker with the same catalog message.
+    let dup_ids = vec![json!(tracks[0]), json!(tracks[0])];
+    let mut dup_job =
+        s.prepare_copper_edit_owned(MERGE_TRACKS, json!({"board":target,"tracks":dup_ids,"dry_run":true,"expected_revision":revision})).unwrap();
+    while !dup_job.step(128) {}
+    let dup_err = dup_job.take_result().err().unwrap();
+    assert!(dup_err.to_string().contains("unique non-nil track UUIDs"), "{dup_err}");
+
+    // Apply runs candidate full preparation during worker steps, not on commit.
+    let before_worker = crate::pin_functions::FULL_PREPARATIONS.get();
+    let mut apply_job =
+        s.prepare_copper_edit_owned(MERGE_TRACKS, json!({"board":target,"tracks":tracks,"dry_run":false,"expected_revision":revision})).unwrap();
+    assert_eq!(crate::pin_functions::FULL_PREPARATIONS.get(), before_worker);
+    while !apply_job.step(64) {}
+    let after_worker = crate::pin_functions::FULL_PREPARATIONS.get();
+    assert_eq!(after_worker, before_worker + 1, "worker preparation must run full candidate validation once");
+    let prepared = apply_job.take_result().unwrap().unwrap();
+    let (new_rev, report) = s.commit_copper_edit_with_report(prepared).unwrap();
+    assert_eq!(crate::pin_functions::FULL_PREPARATIONS.get(), after_worker, "commit must publish without re-running full preparation");
+    assert_eq!(new_rev, revision + 1);
+    assert_eq!(report.unwrap()["merge_tracks"]["changed"], json!(true));
+    assert_eq!(tests::view(&s).tracks().len(), 1);
+}
