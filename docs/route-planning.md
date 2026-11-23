@@ -306,6 +306,40 @@ the preview hides displaced originals only while their replacement paths are
 displayed. A rejected first click inside clearance releases the draft while
 leaving the routing tool armed.
 
+### Through vias and connected segment drags
+
+Choose **Shove tracks and vias** in the Route context menu to let an incoming
+route move an unlocked through via. The solver tries the nearest position that
+clears the incoming copper in one of the eight routing directions. A segment
+ending at the via center follows it, keeping its other end, width, layer and
+identity. The solver checks the via and its followers on every layer they occupy.
+A locked follower on an inner layer pins the via. Pads, mid-segment via contacts
+and contacts with another via also pin it. The track solver can still route
+around pinned copper. **Shove tracks** keeps vias fixed.
+
+With either shove policy selected, press **D** over a segment and drag it.
+The selected segment and its stretching neighbors act as the incoming copper.
+The solver pushes obstructing tracks and, with **Shove tracks and vias**, can
+move obstructing vias. A click commits the complete validated drag in one
+revision. Escape discards the preview. The command refuses a drag that would
+drop a protected connection or move locked copper.
+
+For MCP, use `pcb.plan_route` with `mode: "shove_vias"`. Pass both the returned
+`replacements` and `via_moves` to `pcb.add_tracks` with the captured
+`expected_revision`. Each via move names the existing `via` UUID and its new
+`at` point. The replacement paths include the tracks that follow the via.
+`pcb.reshape_tracks` accepts `mode: "shove"` or `"shove_vias"` and requires
+`expected_revision` in either mode. Supply the new ends of the connected
+segments being dragged in `tracks`, starting with the selected segment.
+The command plans the neighboring displacements during its normal copper
+preparation and validates them before publication.
+
+This slice covers through vias hit by the incoming geometry and up to 256
+directly dragged segments on one layer. On boards with zones, the route solver
+keeps vias fixed and shove-aware D drags are unavailable. Further propagation,
+zone integration and platform qualification remain under
+[#248](https://github.com/tangency-labs/pcbcraft/issues/248).
+
 ## Measurement
 
 `board_perf walkaround ARTIFACT ENVIRONMENT_JSON ITERATIONS REPORT` times complete

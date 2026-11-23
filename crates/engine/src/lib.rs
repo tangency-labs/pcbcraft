@@ -179,6 +179,7 @@ enum ParamKind {
     ArcTracks,
     TeardropEdits,
     TrackReplacements,
+    ViaMoves,
     AlignMode,
     FootprintPitch,
     BoardSide,
@@ -222,6 +223,7 @@ enum ParamKind {
     /// A route posture spelling, such as `diagonal`.
     RoutePosture,
     RouteMode,
+    DragMode,
     RouteFixed,
     /// A route planner's probe budget.
     RouteBudget,
@@ -315,6 +317,7 @@ impl ParamKind {
                 schema
             }
             Self::LayerChanges => board::track::layer_changes_schema(),
+            Self::ViaMoves => board::track::replacements::via_moves_schema(),
             Self::TrackReplacements => board::track::replacements::schema(),
             Self::TrackEnds => {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
@@ -340,7 +343,8 @@ impl ParamKind {
             }
             Self::Closed | Self::Locked => json!({"type":"boolean"}),
             Self::RoutePosture => board::route::posture_schema(),
-            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove"]}),
+            Self::DragMode => json!({"type":"string","enum":["shove","shove_vias"]}),
+            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove","shove_vias"]}),
             Self::RouteFixed => board::route::fixed_schema(),
             Self::RouteBudget => board::route::budget_schema(),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
@@ -595,11 +599,18 @@ impl ParamKind {
             }
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
             Self::Closed | Self::Locked if value.is_boolean() => Ok(()),
-            Self::RouteMode => {
-                if matches!(value.as_str(), Some("walkaround" | "shove")) {
+            Self::DragMode => {
+                if matches!(value.as_str(), Some("shove" | "shove_vias")) {
                     Ok(())
                 } else {
-                    Err("must be walkaround or shove")
+                    Err("must be shove or shove_vias")
+                }
+            }
+            Self::RouteMode => {
+                if matches!(value.as_str(), Some("walkaround" | "shove" | "shove_vias")) {
+                    Ok(())
+                } else {
+                    Err("must be walkaround, shove or shove_vias")
                 }
             }
             Self::RouteFixed => {
@@ -710,6 +721,9 @@ impl ParamKind {
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
             Self::BoardSide => Err("must be front or back"),
+            Self::ViaMoves => {
+                board::track::replacements::via_moves(value).map(drop).map_err(|_| "must list distinct through vias and bounded positions")
+            }
             Self::TrackReplacements => {
                 board::track::replacements::parse(value).map(drop).map_err(|_| "must list unique track UUIDs with bounded replacement paths")
             }
@@ -2240,6 +2254,12 @@ const CATALOG: &[Command] = &[
                 kind: ParamKind::Flag,
             },
             Param {
+                name: "via_moves",
+                required: false,
+                summary: "Through via UUIDs and new centers; submit the matching endpoint replacements",
+                kind: ParamKind::ViaMoves,
+            },
+            Param {
                 name: "replacements",
                 required: false,
                 summary: "Existing track UUIDs and replacement paths, validated with the new route in one edit; retained widths/layers and existing connections are enforced",
@@ -2308,6 +2328,7 @@ const CATALOG: &[Command] = &[
         params: &[
             BOARD,
             EXPECTED_REVISION,
+            Param { name: "mode", required: false, summary: "Shove tracks or tracks and vias around the connected drag", kind: ParamKind::DragMode },
             Param { name: "tracks", required: true, summary: "Each track UUID with its new start and end", kind: ParamKind::TrackEnds },
         ],
     },

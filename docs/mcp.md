@@ -638,7 +638,12 @@ width, `points`, an `outcome` (`reached`, `blocked` with `last_legal`, `incomple
 pair clearances and board-edge clearance. Check that there are at least two points
 before passing them to `pcb.add_tracks` with the same `layer` and `width_nm`;
 `from` equal to `to` produces a one-point `reached` plan with nothing to add.
-See [walkaround route planning](route-planning.md).
+For track-only shove use `mode: "shove"`. Use `"shove_vias"` to move through
+vias and their attached track ends. Submit the reached plan's `replacements`
+and `via_moves` together with the route and its captured revision. For a
+connected drag, `pcb.reshape_tracks` accepts the same shove modes and computes
+the displacements during preparation. See the
+[route planning and drag contract](route-planning.md#through-vias-and-connected-segment-drags).
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.

@@ -429,3 +429,16 @@ fn compound_edit_enforces_spacing_on_nearly_parallel_return() {
     assert_eq!(s.revision(), revision);
     s.apply(ADD_TRACKS, &command(&s, 600_000)).expect("a separated return is legal");
 }
+
+/// A branch may pivot at its original joint, but its new leg must clear the support
+/// outside that joint. A slightly angled return can overlap even without exact backtracking.
+#[test]
+fn a_retained_joint_cannot_fold_onto_the_support() {
+    let trace = |a, b| PadContour::capsule(a, b, 125_000.);
+    let support = trace(p(0, 0), p(20, 0));
+    let branch = trace(p(0, 0), p(0, 10));
+    let pivoted = trace(p(0, 0), p(10, 10));
+    let folded = trace(p(0, 0), p(10, 1));
+    assert!(retained_joint(&support, &branch, &support, &pivoted, 150_000.));
+    assert!(!retained_joint(&support, &branch, &support, &folded, 150_000.));
+}
