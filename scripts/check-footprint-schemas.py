@@ -32,7 +32,7 @@ def validate(definitions: list[Path], placements: list[Path], placement_version:
     root = Path(__file__).resolve().parent.parent
     schemas = [
         json.loads((root / "docs/schemas" / name).read_text(encoding="utf-8"))
-        for name in ("footprint-v1.schema.json", "footprint-v4.schema.json",
+        for name in ("footprint-v1.schema.json", "footprint-v4.schema.json", "footprint-v5.schema.json",
                      f"footprint-placement-v{placement_version}.schema.json", "library-common-v1.schema.json")
     ]
     for schema in schemas:
@@ -40,15 +40,16 @@ def validate(definitions: list[Path], placements: list[Path], placement_version:
     registry = Registry().with_resources(
         (schema["$id"], Resource.from_contents(schema)) for schema in schemas
     )
-    legacy, npth, placement, _common = [Draft202012Validator(schema, registry=registry) for schema in schemas]
+    legacy, npth, slots, placement, _common = [Draft202012Validator(schema, registry=registry) for schema in schemas]
+    successors = {"pcbcraft-footprint/4": npth, "pcbcraft-footprint/5": slots}
     bundled = sorted((root / "libraries/basic-components/footprints").glob("*.json"))
     if not bundled:
         raise ValueError("No bundled footprint definitions found.")
     for path, validator in [(p, legacy) for p in bundled + definitions] + [(p, placement) for p in placements]:
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-            if validator is legacy and isinstance(value, dict) and value.get("format") == "pcbcraft-footprint/4":
-                validator = npth
+            if validator is legacy and isinstance(value, dict) and isinstance(value.get("format"), str):
+                validator = successors.get(value["format"], legacy)
             validator.validate(value)
         except (OSError, ValueError, ValidationError) as error:
             raise ValueError(f"{path}: {error}") from error

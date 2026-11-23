@@ -310,6 +310,8 @@ pub struct PcbApp {
     remote_check: live_control::RemoteCheck,
     #[cfg(not(target_arch = "wasm32"))]
     remote_copper: live_control::RemoteCopper,
+    #[cfg(not(target_arch = "wasm32"))]
+    remote_package_completion: live_control::RemotePackageCompletion,
     files: project_files::ProjectFiles,
     file_notice: Option<String>,
     preferences: Preferences,
@@ -2566,8 +2568,12 @@ impl PcbApp {
             self.start_remote_copper(ctx, request, false);
             return;
         }
+        if self.defer_package_completion(request.body()) {
+            self.start_remote_package_completion(ctx, request, false);
+            return;
+        }
         let revision = self.session.revision();
-        let result = pcbcraft_mcp::live::call_editor(&mut live_control::LiveEditor { app: self, ctx }, request.body());
+        let result = request.dispatch(self, ctx);
         if let Some(live) = &self.live_control {
             self.automation.authorize(live.automation_owner(false, request.generation()));
         }
@@ -2640,6 +2646,7 @@ impl PcbApp {
         {
             self.poll_remote_check(&ctx);
             self.poll_remote_copper(&ctx);
+            self.poll_remote_package_completion(&ctx);
             self.poll_live_control(&ctx);
         }
         self.poll_route_previews();

@@ -198,7 +198,7 @@ mod live {
                     json!({"type":"object","properties":{"enabled":{"type":"boolean"},"manufacturer":{"type":"boolean"},"footprint":{"type":"boolean"},"category":{"type":["object","null"]},"parameters":{"type":"array","maxItems":32,"items":{"type":"object"}}},"additionalProperties":false,"description":"Complete placement filter: enabled, manufacturer/MPN required, footprint/map required, optional exact native category record, and parameters [{field, requirement?}]. Requirements use native typed exact/at_least/at_most/range/one_of operators; omitted requirement means presence. Inspect library_preferences.filter for its current shape. This affects placement discovery only."})
                 }
                 Self::PartRecord => {
-                    json!({"type":"object","description":"A bounded native pcbcraft-part/1, pcbcraft-part/2 or pcbcraft-manufacturer-part/1 record; inspection returns the current draft."})
+                    json!({"type":"object","description":"A bounded native reusable or manufacturer part record; inspection returns the current draft."})
                 }
                 Self::LibraryAction => {
                     json!({"type":"object","properties":{"operation":{"type":"string","enum":["insert","replace","replace_many","delete","transform","duplicate","paste","array","metadata","undo","redo"]}},"required":["operation"],"description":"A typed authoring Action: insert primitive; replace object/primitive; replace_many primitives map keyed by ID; delete objects; transform objects with transform {pivot,offset,quarter_turns,mirror_x,mirror_y}; duplicate objects/offset; paste primitives array/offset; array objects/columns/rows/column_step/row_step; metadata name/license/source/reference_prefix/default_value; undo/redo. Points are {x_nm,y_nm}; inspect_editor includes typed primitives."})
@@ -980,6 +980,7 @@ mod live {
                 setting("labels", "Select hierarchical labels", Kind::Bool),
                 setting("no_connects", "Select no-connect markers", Kind::Bool),
                 setting("footprints", "Select board footprints", Kind::Bool),
+                setting("include_locked", "Include locked footprints, tracks and vias in selection", Kind::Bool),
                 setting("tracks", "Select board tracks", Kind::Bool),
                 setting("vias", "Select board vias", Kind::Bool),
                 setting("graphics", "Select board graphics", Kind::Bool),
@@ -1814,20 +1815,16 @@ mod live {
                     if reference && wanted.len() != 1 {
                         return Err("Reference selection requires exactly one footprint ID".into());
                     }
-                    let placed: std::collections::BTreeSet<String> = self
-                        .views
-                        .view(view)
-                        .and_then(|view| view.board.target)
-                        .zip(self.session.project())
-                        .and_then(|(target, project)| project.board_view(target))
-                        .into_iter()
-                        .flat_map(|board| board.footprint_ids())
-                        .collect();
-                    if !wanted.is_subset(&placed) {
+                    let state = self.views.view(view).ok_or("The addressed view closed")?;
+                    let board = state.board.target.and_then(|target| self.session.project()?.board_view(target));
+                    if wanted.iter().any(|id| board.and_then(|board| board.footprint_locked(id)).is_none()) {
                         return Err("Some of those footprints aren't on this view's board. Inspect the project for current IDs.".to_owned());
                     }
-                    if !wanted.is_empty() && self.views.view(view).is_some_and(|v| !v.filters.footprints) {
+                    if !wanted.is_empty() && !state.filters.footprints {
                         return Err("Footprint selection is disabled in this view".into());
+                    }
+                    if !state.filters.include_locked && wanted.iter().any(|id| board.and_then(|board| board.footprint_locked(id)) == Some(true)) {
+                        return Err("Locked footprint selection is disabled in this view".into());
                     }
                     let previous = self.views.active.id();
                     self.views.bind(view);
