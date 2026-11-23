@@ -1771,13 +1771,14 @@ impl PcbApp {
             }
             (Some(Tool::NetLabel { .. }), Click::NetLabelCommit(label)) => self.commit_net_label(source, label),
             (Some(Tool::NetLabel { .. }), Click::NetLabelCancel) => self.views.active.schematic.tool = None,
-            (Some(Tool::NetLabel { mut label, revision, drag }), Click::NetLabelRotate) => {
-                label.rotation = (label.rotation + 90) % 360;
-                self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision, drag });
+            (Some(Tool::NetLabel { mut label, revision, drag, .. }), Click::NetLabelRotate(rotation)) => {
+                label.rotation = (rotation + 90) % 360;
+                self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision, drag, orient_to_pin: false });
             }
             (None, Click::NetLabelDrag(label, offset)) => {
                 self.select(Selection::one_net_label(label.id));
-                self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: Some(offset) });
+                self.views.active.schematic.tool =
+                    Some(Tool::NetLabel { label, revision: source.revision, drag: Some(offset), orient_to_pin: false });
             }
             (None, Click::NetLabelAction(label, action)) => self.net_label_action(source, label, action),
             (None, Click::SelectSheetSymbol(id)) => {
@@ -1970,11 +1971,11 @@ impl PcbApp {
             ToolAction::FlipWire => {
                 self.views.active.schematic.wire_draft.horizontal_first = !self.views.active.schematic.wire_draft.horizontal_first;
             }
-            ToolAction::Rotate => match &mut self.views.active.schematic.tool {
-                Some(Tool::PlaceSymbol { turns, .. }) => *turns = (*turns + 1) % 4,
-                Some(Tool::NetLabel { label, .. }) if label.id == 0 => label.rotation = (label.rotation + 90) % 360,
-                _ => {}
-            },
+            ToolAction::Rotate => {
+                if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.schematic.tool {
+                    *turns = (*turns + 1) % 4;
+                }
+            }
             ToolAction::Cancel => {
                 self.views.active.schematic.tool = None;
                 self.views.active.schematic.wire_draft = schematic_canvas::Draft::default();
@@ -2184,12 +2185,6 @@ impl PcbApp {
                 self.parts.focus_power();
                 return;
             }
-            if matches!(self.views.active.schematic.tool, Some(Tool::NetLabel { .. }))
-                && pressed(&ROTATE)
-                && let Some(Tool::NetLabel { label, .. }) = &mut self.views.active.schematic.tool
-            {
-                label.rotation = (label.rotation + 90) % 360;
-            }
             if pressed(&ADD_HIERARCHICAL_LABEL) {
                 self.begin_hierarchy(hierarchy::Kind::Label);
             }
@@ -2242,8 +2237,9 @@ impl PcbApp {
             if self.views.active.schematic.tool.is_none() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::D)) {
                 self.views.active.schematic.datasheet_requested = true;
             }
-            if (!hierarchy_hovered
-                || matches!(self.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. } | Tool::Move { .. } | Tool::Field { .. })))
+            if !matches!(self.views.active.schematic.tool, Some(Tool::NetLabel { .. }))
+                && (!hierarchy_hovered
+                    || matches!(self.views.active.schematic.tool, Some(Tool::PlaceSymbol { .. } | Tool::Move { .. } | Tool::Field { .. })))
                 && pressed(&ROTATE)
             {
                 if let Some(Tool::PlaceSymbol { turns, .. }) = &mut self.views.active.schematic.tool {
