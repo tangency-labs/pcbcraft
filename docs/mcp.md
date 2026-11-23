@@ -524,11 +524,12 @@ changes; explicit drills must be smaller than their pads.
 addresses such as `{"footprint":"footprint-7","pad":"2"}`. Pick `from` on the
 arm to remove and `to` on the retained side. `execute` returns `revision`,
 `dry_run`, `removed` (sorted `tracks` and `vias` UUID lists), `requested` (the
-input pair), and `unrouted` (the newly displayed ratsnest edges, as pairs of pad
-addresses), even with project inspection disabled. An edge may end at a different
-pad on the retained side than the requested `to`. Without accepted connectivity,
-there are no display edges to report. Set `dry_run: true` to get the same report
-without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
+input pair), and `unrouted` (new ratsnest edges from the change to authored
+copper, as pairs of pad addresses), even with project inspection disabled. An
+edge may end at a different pad on the retained side than the requested `to`.
+Refilled zones can reconnect the pads and clear those edges. Without accepted
+connectivity there are no edges to report. Set `dry_run: true` to get the same
+report without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
 `details`; a missing copper endpoint returns `not_found`. See
 [Unroute one connection](pcb-layout-workflow.md#unroute-one-connection) for the
 behavior and other refusal cases.

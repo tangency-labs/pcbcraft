@@ -1,12 +1,13 @@
 # Geometry kernel and STEP library
 
-`crates/geometry` (`pcbcraft-geometry`) is the one place PCBcraft builds solid
-bodies, reads and writes STEP (ISO 10303-21) files and measures them. It is the
+`crates/geometry` (`pcbcraft-geometry`) is the one place PCBcraft clips planar
+regions, builds solid bodies, reads and writes STEP (ISO 10303-21) files and measures them. It is the
 shared base for 3D board inspection and STEP assembly export
 ([#86](https://github.com/tangency-labs/pcbcraft/issues/86)). This page records
 which kernel it uses, why, how the dependency was qualified and what is still
-open. The board substrate adapter uses this crate; no command, panel or saved
-format uses it yet.
+open. The planar adapter supplies [zone fill #232](https://github.com/tangency-labs/pcbcraft/issues/232),
+its canvas material, connectivity and DRC. Derived geometry stays out of native
+files. The board substrate adapter also uses this crate.
 
 ## Choice
 
@@ -18,8 +19,9 @@ of NVIDIA's USD BRep. PCBcraft uses these crates from it:
 | `solidcore` | B-rep solids (already in `Cargo.lock` through the Craft UI crates) |
 | `solidcore-ops` | Modelling calls on kernel bodies: primitives, copies and transforms, record conversion, bounding boxes, assembly placement matrices, the session's panic guard |
 | `solidcore-record` | The product structure of a STEP file: parts, assemblies, occurrences and their placements, in millimetres |
+| `solidcore-convert` | Private planar profile conversion |
+| `solidcore-tess` | Display triangulation for analytic zone fill and the derived substrate body |
 | `solidcore-step` | STEP read (AP203, AP214 and AP242 geometry and topology, units) and AP242 write with products, names and colours |
-| `solidcore-tess` | Tessellation of a derived substrate body; already pinned through the Craft toolkit |
 
 They come from `https://github.com/tangency-labs/solidcraft.git` at
 `73bdb6cdd39efc3899fb54e7217289a630a89efe`, the revision the workspace already
@@ -56,14 +58,13 @@ Alternatives considered:
 
 ## Boundary
 
-`pcbcraft-geometry` is the only crate that directly depends on `solidcore-ops`,
-`solidcore-record` or `solidcore-step`. `pcbcraft-engine` has no kernel dependency, so engine builds,
-engine tests and the browser editor do not pay for the kernel. The same API
-could later move into an engine module if that proves simpler.
+`pcbcraft-geometry` owns the modelling, planar record/conversion and STEP
+adapters. `pcbcraft-engine` uses its kernel-neutral planar API for derived zone
+fill and analytic zone diagnostics; kernel types remain private to geometry.
+The existing UI toolkit's SolidCore dependency remains separate from this boundary.
 
-- **Kernel-neutral API.** No kernel type appears in the public API. Callers use
-  kernel-neutral types such as `Body`, `BoundingBox`, `Transform`, `Placement`,
-  `StepRead`, `RefusedItem`, `ErrorCode` and `GeometryError`, so a
+- **Kernel-neutral API.** Callers use `Body`, `BoundingBox`, `Transform`, `Placement`,
+  `StepRead`, `RefusedItem`, `planar::Regions`, `ErrorCode` and `GeometryError`, so a
   kernel swap touches only this crate.
 - **Units.** Lengths are whole nanometres (`i64`), within
   `pcbcraft_units::MAX_LENGTH_NM` of zero. The kernel's millimetre floats are
@@ -81,8 +82,8 @@ could later move into an engine module if that proves simpler.
 - **Lints.** The crate forbids `unsafe` and denies `unwrap`, `expect` and `panic`
   outside tests.
 - **Kernel availability.** Native builds always have the kernel. On `wasm32`
-  it is opt-in via `wasm-kernel`. Without it, no body can be made and every
-  operation that reaches the kernel returns `kernel_unavailable`; arguments
+  it is opt-in via `wasm-kernel`. Without it, operations that require solid bodies
+  return `kernel_unavailable`; arguments
   refused before the kernel keep their codes. CI runs these kernel-less tests on
   `wasm32-wasip1`. Its separate `wasm32-unknown-unknown` checks are compile-only,
   with and without the kernel.
@@ -94,8 +95,8 @@ could later move into an engine module if that proves simpler.
 
 ### Board substrate
 
-`pcbcraft-board-solid` builds a read-only solid from one addressed board, without
-linking the kernel into `pcbcraft-engine`. It uses the centre lines of Board
+`pcbcraft-board-solid` builds a read-only solid from one addressed board, using
+the solid-body adapter. It uses the centre lines of Board
 Outline drawings, mapped into the board/1 frame described below. Open paths can join only at exactly
 coincident endpoints. Nested contours alternate material and void regardless of
 winding; crossings, touches and unfinished contours are refused. Round through
@@ -151,13 +152,15 @@ Error codes are stable snake_case names that MCP and CLI replies can carry:
 | `model_unreadable` | Not UTF-8 text, not an ISO 10303-21 exchange structure, a malformed solid, a malformed product structure (a cycle, a broken reference, nesting deeper than 32 combined occurrence/mapping levels, or an expansion past 100,000 placed bodies or its input-scaled work budget), or a placement that is not finite or moves a body more than 1 km from the origin |
 | `model_unsupported_entity` | An entity or construct the reader does not support yet |
 | `operation_failed` | The kernel could not complete an operation on valid input, or the crash test was refused because panics abort |
-| `kernel_unavailable` | This build has no kernel (`wasm32` without `wasm-kernel`) |
+| `kernel_unavailable` | This build has no solid-body kernel (`wasm32` without `wasm-kernel`) |
 | `kernel_internal` | The kernel panicked; the panic was caught |
 
 ## Qualification
 
-At SolidCraft revision `73bdb6c`. The table describes the qualification checks
-and the outcomes they require; measured samples retain their stated scope.
+At SolidCraft revision `73bdb6c`. This table records the initial native 3D/STEP
+qualification, before the engine adopted the planar adapter. Its dependency counts
+and engine boundary describe that earlier state; current planar qualification
+follows below. Measured samples retain their stated scope.
 Unless a target is named, runtime checks use Linux, not native Windows, macOS
 or a browser runtime.
 
@@ -303,8 +306,9 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
 - **Qualification set.** The fixtures cover planes, cylinders, holes, assemblies
   and three units. Cones, spheres, tori, B-spline surfaces, mapped items and
   bodies with voids are read by the kernel but not in the set yet.
-- **Browser.** The `wasm32-unknown-unknown` checks do not link a browser module
-  or run it. `apps/pcbcraft-web` leaves `wasm-kernel` off. Before enabling it:
+- **Browser 3D and STEP.** The `wasm32-unknown-unknown` compile checks cover
+  the optional `wasm-kernel` feature. The web app leaves it off and links the
+  planar adapter for zone fill. Before enabling solid-body operations:
   - Account for panics that abort. This is the default on `wasm32`; the guard
     cannot turn an abort into a `GeometryError`. A panic in a wasm call traps
     instead. With the kernel enabled and panics aborting, `kernel_crash_test()`
@@ -324,3 +328,74 @@ file listed under [Dependencies](../ATTRIBUTION.md#dependencies) must include it
   needs it.
 - **Distance and assemblies.** Body distance, assembly export and a 3D view
   are not implemented here. The substrate tessellation supplies geometry only.
+
+## Planar adapter for zone fill
+
+For #232 I selected the existing pin's planar geometry instead of adding
+`i_overlay`. `planar::Regions` holds immutable material regions and holes behind
+an opaque API. Input polygons and circle diameters use integer nanometres,
+including odd diameters with half-nanometre radii. Derived lines, arcs and
+free-form intersections retain their kernel precision through repeated operations;
+there is no intermediate integer polygon or project-file encoding.
+
+The adapter exposes Union, Difference and Intersection, in-plane offsets with
+round corners, analytic area with a numerical error bound, individual islands
+and point containment. An on-boundary/uncertain point remains `None`, rather than
+becoming a positive connectivity claim. Polygon callers supply simple outlines;
+zone authoring already validates crossings. The constructor normalizes winding
+and rejects repeated, degenerate, oversized or out-of-range input. Derived output
+also obeys the kernel's 8,192-segment budget and PCBcraft's coordinate limit;
+arc/control-hull bounds are deliberately conservative near that limit.
+
+Boolean call recipes adapt `solidcore-ops/src/prism.rs` at the pin, using the
+kernel's own profile conversion, planar-face construction, Boolean and region
+reader. Each operation owns a fresh kernel and temporary bodies; it does not
+use or configure the process-global ops session, so planar calculation cannot
+change a later STEP operation's fix flags. Regions are joined in balanced rounds,
+with each region's own holes removed before joining separate material islands.
+No clipping or offset algorithm is implemented in PCBcraft.
+
+Each immutable region value retains its prepared operand, including already
+constructed Boolean/union output. Clones share that disposable cache; separate
+worker payloads contain only analytic profiles and prepare their own operands.
+Repeated thermal/contact queries use the kernel's independent-body copy API,
+rather than repeatedly rebuilding and subtracting the same holes. A mutex
+protects copy-time geometry memos; Boolean and meshing work runs on the owned
+copy after releasing it. An interrupted copy makes that operand unavailable,
+while an independently decoded source remains usable. The cache follows the
+derived value's lifetime, has no project/history reference and is excluded from
+equality, diagnostics and serialization.
+
+The pinned ops wrapper fails when a successful Boolean leaves no faces because
+its public face query refuses an empty list. The adapter walks the completed
+result's topology first and returns empty material only when that walk proves
+there are no faces. It propagates failures from the Boolean and topology walk;
+it does not translate status 1001 or a generic kernel refusal into an empty fill.
+Tests cover identical/covering subtraction and disjoint/boundary-only intersection,
+as well as normal holes and split material.
+
+The same planar tests run natively and in the existing WASI CI job. WebAssembly
+builds require `wasm-kernel` for 3D and STEP. Native unwinding panics are caught by
+the shared guard. A browser `panic=abort` trap cannot be caught by Rust's guard,
+and stack exhaustion is not certified here. Fill-job integration isolates browser
+exceptions in a disposable worker and revokes obsolete authority as described below.
+
+The engine retains analytic material through clearance, thermal and priority
+operations, adds a 2 nm outward reserve to physical clearances, and publishes
+only complete source-keyed results. Both profile and B-rep tolerances are set
+explicitly to PCB scale. Tests sample nanometre boundaries around a rounded
+clearance and check that requested forbidden material does not intersect fill;
+this is a scoped numerical qualification rather than a proof over all inputs.
+The mesher produces display-only triangles, rejecting capped, refused, lenient
+or over-tolerance results. Copper predicates do not use these triangles.
+
+Native fill runs on the bounded snapshot pool and samples cancellation between
+kernel calls. Browser fill and analytic zone diagnostics run in disposable
+same-build Web Workers. Startup errors, traps and a 30-second timeout retire the
+worker; cancellation terminates it immediately. The foreground validates the
+request fingerprint, geometry and display indices before publishing into the
+captured source slot. Source/session/view authority separately rejects obsolete
+completion. Native unwinding uses the existing guard; no hard native kernel-call
+timeout or process isolation is claimed. Gerber conversion remains #233 and must
+consume the same authoritative fill. See the [zone guide](copper-zone-outlines.md)
+for the supported board/rule/connection behavior.

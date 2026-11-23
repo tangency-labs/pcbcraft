@@ -2980,6 +2980,7 @@ version = "0.1.0"
 dependencies = [
  "geo-index",
  "getrandom 0.3.4",
+ "pcbcraft-geometry",
  "pcbcraft-units",
  "rstar",
  "serde",
@@ -2995,7 +2996,10 @@ version = "0.1.0"
 dependencies = [
  "log",
  "pcbcraft-units",
+ "serde",
  "serde_json",
+ "solidcore",
+ "solidcore-convert",
  "solidcore-ops",
  "solidcore-record",
  "solidcore-step",
@@ -3039,6 +3043,7 @@ dependencies = [
  "eframe",
  "log",
  "pcbcraft-app",
+ "pcbcraft-engine",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

@@ -219,7 +219,7 @@ fn pcb_tasks_are_grouped_on_separate_tabs() {
     assert!(h.query_by_label("Align menu").is_none());
     h.get_by_label("Active layer");
     click(&mut h, "Route menu");
-    for tool in ["Zone", "Pair", "Tune", "Refill zones"] {
+    for tool in ["Zone", "Pair", "Tune", "Pour copper", "Remove pours"] {
         assert!(h.get_by_label(tool).accesskit_node().is_disabled());
     }
     h.key_press(Key::Escape);

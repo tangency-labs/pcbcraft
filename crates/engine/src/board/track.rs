@@ -264,6 +264,9 @@ impl<'a> BoardView<'a> {
     /// no copper and stay isolated. Circular copper returns an unsupported-geometry error.
     pub fn copper(self) -> Result<Copper, String> {
         self.require_linear_copper()?;
+        if let Some(Ok(fill)) = self.filled_zones() {
+            return Ok(fill.copper.clone());
+        }
         Ok(islands(&lands(self), self.tracks(), self.vias()).0)
     }
 
@@ -298,7 +301,10 @@ impl<'a> BoardView<'a> {
         self.require_linear_copper()?;
         let lands = lands(self);
         let (tracks, vias) = (self.tracks(), self.vias());
-        let (copper, members) = islands(&lands, tracks, vias);
+        let (copper, members) = match self.filled_zones() {
+            Some(Ok(fill)) => (fill.copper.clone(), fill.members.clone()),
+            _ => islands(&lands, tracks, vias),
+        };
         let members = if vias.iter().any(|v| v.net_assignment.is_some()) { with_pad_contacts(&lands, &copper, members) } else { members };
         let intent = self.project().board_intent_memberships();
         let intrinsic = super::via_nets::node_membership(self.project(), &lands, tracks.len(), vias, &intent);

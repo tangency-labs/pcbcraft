@@ -5,7 +5,7 @@ use std::{io, time::Duration};
 
 use craft_control::loopback::{Connection, Token};
 use pcbcraft_engine::{
-    Session,
+    CommandError, Session,
     command_api::{self, COMMAND_API_VERSION, DEPRECATIONS},
     error_codes::ErrorCode,
 };
@@ -188,6 +188,15 @@ view., window., arrangement., app. and file. commands change its views, windows,
 /// What an open editor provides to the live connection. The editor runs on its own thread
 /// and owns every policy: which commands may run now, and how window commands act.
 pub trait Editor {
+    /// Interactive removal retires the addressed board's workers as well as clearing engine
+    /// material. Hosts without such work use the ordinary session implementation.
+    fn zone_unfill(&mut self, _params: &Value) -> Option<Result<Value, CommandError>> {
+        None
+    }
+    /// An interactive host schedules pouring through its view-owned worker.
+    fn zone_refill(&mut self, _params: &Value) -> Option<Result<Value, CommandError>> {
+        None
+    }
     /// Run opt-in UI automation through the live host, with native input lifecycle ownership.
     /// Implementations without input automation retain an explicit refusal.
     fn ui_command(&mut self, _id: &str, _params: &Value) -> Result<Value, Failure> {
@@ -305,6 +314,19 @@ fn call_editor_with_package_commit_limit(
             }
             if let Some(reason) = editor.refusal(id) {
                 return Err(Failure::new(ErrorCode::Unavailable, reason));
+            }
+            if matches!(id, pcbcraft_engine::UNFILL_ZONES | pcbcraft_engine::REFILL_ZONES) {
+                check_deferred_version(id, params)?;
+            }
+            if id == pcbcraft_engine::UNFILL_ZONES
+                && let Some(result) = editor.zone_unfill(&params["params"])
+            {
+                return result.map_err(Failure::from);
+            }
+            if id == pcbcraft_engine::REFILL_ZONES
+                && let Some(result) = editor.zone_refill(&params["params"])
+            {
+                return result.map_err(Failure::from);
             }
             if id == pcbcraft_engine::COMPLETE_PACKAGES {
                 check_deferred_version(id, params)?;

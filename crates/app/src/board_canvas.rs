@@ -543,6 +543,7 @@ pub(super) fn show(
     }
     let focus = connectivity.as_deref().and_then(|data| CopperFocus::new(data, state.tracks.route_contact(), state.highlight_net.as_deref()));
     let context = board::context_painter(&p, focus.is_some());
+    crate::board_fills::paint(&context, rect, camera, project, &state.hidden_layers, appearance);
     crate::board_drawing::paint(&context, rect, camera, project, &state.zones, state.tracks.width_nm, &state.hidden_layers, appearance);
     crate::board_drawing::paint(&context, rect, camera, project, &state.drawing, state.tracks.width_nm, &state.hidden_layers, appearance);
     // A transform committed in this frame is painted at its new pose. The engine applies it after
