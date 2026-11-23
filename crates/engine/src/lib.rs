@@ -1379,7 +1379,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: kicad_import::IMPORT,
         title: "Import KiCad Schematic",
-        summary: "Replace the open project with one converted from a self-contained KiCad 6-9 schematic (.kicad_sch text). Refuses, with reasons, anything that would change its connections; reports what it left out. Undoable. Headless sessions only.",
+        summary: "Replace the open project with one converted from a self-contained KiCad 6-10 schematic (.kicad_sch text). Refuses, with reasons, anything that would change its connections; reports what it left out. Undoable. Headless sessions only.",
         params: &[
             NEW_NAME,
             Param { name: "text", kind: ParamKind::KicadSchematicText, required: true, summary: "The schematic file's UTF-8 text, at most 8 MiB" },

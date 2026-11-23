@@ -212,3 +212,81 @@ fn symbols_extending_one_parent_share_its_drawing() {
     assert!(s.lib_symbols.values().all(|symbol| Arc::ptr_eq(&symbol.units, base)));
     assert_eq!(base[0].pins.len(), 1000);
 }
+
+const DIVIDER_KICAD10: &str = include_str!("../../tests/fixtures/divider-kicad10.kicad_sch");
+const EXCLUSIONS_KICAD10: &str = include_str!("../../tests/fixtures/exclusions-kicad10.kicad_sch");
+const JUMPER_KICAD10: &str = include_str!("../../tests/fixtures/jumper-kicad10.kicad_sch");
+const JUMPER_CONTROL: &str = include_str!("../../tests/fixtures/jumper-control.kicad_sch");
+
+#[test]
+fn reads_kicad_10_files_without_notes_or_losses() {
+    for text in [DIVIDER_KICAD10, EXCLUSIONS_KICAD10, JUMPER_KICAD10, JUMPER_CONTROL] {
+        let s = read_schematic(text).unwrap();
+        assert_eq!((s.version, s.generator_version.as_deref()), (Some(20_260_306), Some("10.0")));
+        assert!(s.notes.is_empty() && s.lost.is_empty(), "{:?} {:?}", s.notes, s.lost);
+    }
+    let s = read_schematic(DIVIDER_KICAD10).unwrap();
+    let references: Vec<_> = s.symbols.iter().map(|p| (p.reference.as_str(), p.unit)).collect();
+    assert_eq!(references, [("R1", 1), ("R2", 1), ("#PWR01", 1), ("#PWR02", 1), ("U1", 1), ("U1", 2)]);
+    assert!(s.lib_symbols["power:GND"].power && !s.lib_symbols["Device:R"].power);
+}
+
+#[test]
+fn simulation_and_position_file_flags_are_read_from_the_placed_symbol() {
+    // KiCad 10 writes the library symbol's defaults beside the placed symbol's own choice.
+    let r1 = &read_schematic(EXCLUSIONS_KICAD10).unwrap().symbols[0];
+    assert!(r1.exclude_from_sim && !r1.in_pos_files && r1.in_bom && r1.on_board && !r1.dnp);
+    let s = read_schematic(&file(
+        r#"(symbol (lib_id "L:R") (at 0 0 0) (exclude_from_sim yes))
+           (symbol (lib_id "L:R") (at 0 0 0) (in_pos_files no))
+           (symbol (lib_id "L:R") (at 0 0 0))"#,
+    ))
+    .unwrap();
+    let flags: Vec<_> = s.symbols.iter().map(|p| (p.exclude_from_sim, p.in_pos_files)).collect();
+    assert_eq!(flags, [(true, true), (false, false), (false, true)]);
+}
+
+#[test]
+fn jumper_settings_follow_the_extends_chain() {
+    let s = read_schematic(JUMPER_KICAD10).unwrap();
+    let j = &s.lib_symbols["Fixture:InternalJumper"];
+    assert_eq!(j.jumper_pin_groups, [vec!["1".to_owned(), "2".to_owned()]]);
+    assert!(!j.duplicate_pin_numbers_are_jumpers);
+    assert!(read_schematic(JUMPER_CONTROL).unwrap().lib_symbols["Fixture:InternalJumper"].jumper_pin_groups.is_empty());
+    let s = read_schematic(&file(
+        r#"(lib_symbols
+             (symbol "L:Base" (duplicate_pin_numbers_are_jumpers yes) (jumper_pin_groups ("1" "2") ("3" "4" "5") ())
+               (symbol "Base_1_1" (pin passive line (at 0 0 0) (length 1.27) (number "1"))))
+             (symbol "L:Child" (extends "Base") (jumper_pin_groups ("6" "7"))))"#,
+    ))
+    .unwrap();
+    let base = &s.lib_symbols["L:Base"];
+    assert!(base.duplicate_pin_numbers_are_jumpers);
+    assert_eq!(base.jumper_pin_groups.len(), 2, "an empty group is dropped");
+    let child = &s.lib_symbols["L:Child"];
+    assert!(child.duplicate_pin_numbers_are_jumpers);
+    assert_eq!(child.jumper_pin_groups.iter().map(|g| g.join("+")).collect::<Vec<_>>(), ["6+7", "1+2", "3+4+5"]);
+}
+
+#[test]
+fn unknown_symbol_settings_and_pins_outside_units_are_lost() {
+    let s = read_schematic(&file(
+        r#"(lib_symbols
+             (symbol "L:X" (power) (mystery_link "1" "2") (("1" "2")) (pin passive line (at 0 0 0) (length 1.27) (number "9"))
+               (rectangle (start 0 0) (end 1 1))
+               (symbol "X_1_1" (unit_name "A") (strange_thing 1) () (pin passive line (at 0 0 0) (length 1.27) (number "1")))))"#,
+    ))
+    .unwrap();
+    let lost: Vec<_> = s.lost.iter().map(|(what, _)| what).collect();
+    assert_eq!(
+        lost,
+        [
+            "library symbol item without a name left out",
+            "library symbol setting `mystery_link` left out",
+            "pin outside a unit left out",
+            "symbol unit item `strange_thing` left out",
+            "symbol unit item without a name left out",
+        ]
+    );
+    assert_eq!(s.notes.iter().map(|(what, _)| what).collect::<Vec<_>>(), ["symbol drawing outside a unit left out"]);
+}

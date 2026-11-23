@@ -2,11 +2,12 @@
 
 ## 0.1.0 (unreleased)
 
-A self-contained KiCad 6–9 schematic can be imported as a new project, through
+A self-contained KiCad 6–10 schematic can be imported as a new project, through
 `project.import_kicad_schematic` in headless MCP or `pcbcraft-cli import-kicad`.
-Symbols, units, references, values, fields, power symbols, wires, labels and
-no-connects carry over; the import refuses, with reasons, anything that would change which pins
-connect, and lists what it left out. See [KiCad schematic import](docs/kicad-import.md) (#60).
+Symbols, units, references, values, fields, fitting and exclusion flags, power
+symbols, wires, labels and no-connects carry over; the import refuses, with
+reasons, anything that would change which pins connect, such as KiCad 10 jumper
+pin groups, and lists what it left out. See [KiCad schematic import](docs/kicad-import.md) (#60).
 
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses

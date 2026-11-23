@@ -485,7 +485,7 @@ fn check_values(schematic: &Schematic, converted: &BTreeMap<&str, symbols::Conve
             .and_then(|(unit, pin)| Some(schematic.lib_symbols.get(&symbol.lib_symbol)?.units.get(unit)?.pins.get(pin)?.name.as_str()));
         if let Some(name) = pin_name.filter(|name| !value_names_power_nets(schematic) && !name.is_empty() && *name != raw) {
             refusals.add(format!(
-                "power symbol {}'s Value `{}` differs from its power pin's name `{}`; KiCad 6–7 and 8–9 name the net differently",
+                "power symbol {}'s Value `{}` differs from its power pin's name `{}`; KiCad 6–7 and KiCad 8 and later name the net differently",
                 symbol.reference,
                 symbols::shown(raw),
                 symbols::shown(name)
@@ -515,7 +515,9 @@ fn native_value(symbol: &PlacedSymbol) -> Option<String> {
     symbol.property("Value").and_then(|v| symbols::clip(v, 64)).filter(|v| check_value(v).is_ok())
 }
 
-/// Refuse what changes connectivity and has no native form in this slice.
+/// Refuse what changes connectivity and has no native form in this slice: sub-sheets, buses,
+/// hierarchical labels, labels the native model can't name, and parts that join their own pins
+/// (KiCad 10 jumpers), named by reference and library symbol.
 fn refuse_unsupported(schematic: &Schematic, refusals: &mut Refusals) {
     if !schematic.sheets.is_empty() {
         refusals.add(format!("it has {} sub-sheet(s); only self-contained single-sheet schematics are supported", schematic.sheets.len()));
@@ -529,6 +531,31 @@ fn refuse_unsupported(schematic: &Schematic, refusals: &mut Refusals) {
     for label in &schematic.labels {
         if label.name.chars().count() > 200 || label.name.chars().any(char::is_control) {
             refusals.add(format!("label `{}` is longer than 200 characters or spans lines", label.name.chars().take(40).collect::<String>()));
+        }
+    }
+    for symbol in &schematic.symbols {
+        let Some(lib) = schematic.lib_symbols.get(&symbol.lib_symbol) else { continue };
+        let name = symbol.lib_symbol.chars().take(80).collect::<String>();
+        // A group of one pin joins nothing.
+        let joining: Vec<String> = lib
+            .jumper_pin_groups
+            .iter()
+            .filter(|group| group.iter().collect::<BTreeSet<_>>().len() > 1)
+            .map(|group| group.iter().map(|pin| pin.chars().take(16).collect::<String>()).collect::<Vec<_>>().join("+"))
+            .collect();
+        if !joining.is_empty() {
+            let more = if joining.len() > 4 { ", …" } else { "" };
+            let groups = format!("{}{more}", joining[..joining.len().min(4)].join(", "));
+            refusals.add(format!(
+                "{} (`{name}`) joins pins {groups} inside the part (a KiCad 10 jumper pin group), which PCBCraft doesn't have yet",
+                symbol.reference
+            ));
+        }
+        if lib.duplicate_pin_numbers_are_jumpers {
+            refusals.add(format!(
+                "{} (`{name}`) joins pins that share a number inside the part (KiCad 10 \"duplicate pin numbers are jumpers\"), which PCBCraft doesn't have yet",
+                symbol.reference
+            ));
         }
     }
 }
@@ -978,8 +1005,8 @@ fn metadata(symbol: &PlacedSymbol, report: &mut Report) -> Result<Value, Command
         "do_not_populate": symbol.dnp,
         "exclude_from_bom": !symbol.in_bom,
         "exclude_from_board": !symbol.on_board,
-        "exclude_from_simulation": false,
-        "exclude_from_position_files": false,
+        "exclude_from_simulation": symbol.exclude_from_sim,
+        "exclude_from_position_files": !symbol.in_pos_files,
     }}))
 }
 

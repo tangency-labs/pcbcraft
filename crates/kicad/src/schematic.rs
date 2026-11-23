@@ -1,4 +1,4 @@
-//! One KiCad schematic file (`.kicad_sch`, KiCad 6 to 9), read into a KiCad-shaped model.
+//! One KiCad schematic file (`.kicad_sch`, KiCad 6 to 10), read into a KiCad-shaped model.
 //!
 //! The reader keeps the file's own terms and frames: sheet points have y growing downward,
 //! symbol-library points y growing upward, angles are counterclockwise millidegrees, and
@@ -30,9 +30,9 @@ pub const MAX_BYTES: usize = 64 << 20;
 /// The most items (placed symbols, wires, labels, pins and drawings together) one file may give.
 pub const MAX_ITEMS: usize = 1_000_000;
 
-/// The newest file version this reader was written against (KiCad 9). Newer files are read as
-/// far as they go, with a note.
-const NEWEST_KNOWN: f64 = 20_250_114.0;
+/// The newest file version this reader was written against (KiCad 10.0). Newer files are read
+/// as far as they go, with a note.
+const NEWEST_KNOWN: f64 = 20_260_306.0;
 
 /// How many `extends` steps are followed before a chain counts as broken.
 const MAX_EXTENDS: usize = 16;
@@ -106,6 +106,12 @@ pub struct LibSymbol {
     /// The drawing, by unit and body style. Unit 0 is common to every unit. Symbol frame.
     /// Symbols that `extends` one parent share its drawing rather than copying it.
     pub units: Arc<Vec<SymbolUnit>>,
+    /// Groups of pin numbers the part joins inside itself (KiCad 10's `jumper_pin_groups`),
+    /// from the symbol and every symbol up its `extends` chain.
+    pub jumper_pin_groups: Vec<Vec<String>>,
+    /// Whether the part joins pins that share a number (KiCad 10's
+    /// `duplicate_pin_numbers_are_jumpers`), said by the symbol or any symbol up its chain.
+    pub duplicate_pin_numbers_are_jumpers: bool,
 }
 
 impl LibSymbol {
@@ -196,6 +202,11 @@ pub struct PlacedSymbol {
     pub on_board: bool,
     /// Whether the part is marked do-not-populate.
     pub dnp: bool,
+    /// Whether the part is left out of simulation (`exclude_from_sim`; default no).
+    pub exclude_from_sim: bool,
+    /// Whether the part is listed in position (pick-and-place) files (`in_pos_files`; default
+    /// yes).
+    pub in_pos_files: bool,
 }
 
 impl PlacedSymbol {
@@ -447,6 +458,8 @@ struct RawLibSymbol {
     pin_names_hidden: bool,
     pin_numbers_hidden: bool,
     units: Arc<Vec<SymbolUnit>>,
+    jumper_pin_groups: Vec<Vec<String>>,
+    duplicate_pin_numbers_are_jumpers: bool,
 }
 
 impl State {
@@ -465,7 +478,7 @@ impl State {
             "version" => {
                 let version = node.number(0);
                 if version.is_some_and(|v| v > NEWEST_KNOWN) {
-                    self.schematic.notes.add("file newer than KiCad 9: read as far as it goes");
+                    self.schematic.notes.add("file newer than KiCad 10: read as far as it goes");
                 }
                 self.schematic.version = version.filter(|v| *v >= 0.0 && v.fract() == 0.0 && *v <= u64::MAX as f64).map(|v| v as u64);
             }
@@ -521,7 +534,7 @@ impl State {
             "rule_area" => self.schematic.notes.add("rule area left out"),
             "table" => self.schematic.notes.add("table left out"),
             "generator" | "title_block" | "sheet_instances" | "embedded_fonts" | "embedded_files" => {}
-            other => self.schematic.lost.add(&format!("{} left out", other.chars().take(40).collect::<String>())),
+            other => self.schematic.lost.add(&format!("{} left out", short(other))),
         }
         Ok(())
     }
@@ -574,7 +587,40 @@ impl State {
     }
 
     /// A library symbol as written: its fields and flags, and its units by `NAME_UNIT_STYLE`.
+    /// A setting or unit item this reader doesn't know, a list without a name, or a pin outside
+    /// a unit is counted in [`Schematic::lost`], since it could change which pins connect;
+    /// drawings outside a unit are noted.
     fn raw_lib_symbol(&mut self, node: &Node) -> Result<RawLibSymbol, Error> {
+        for part in node.args() {
+            match part.head() {
+                // Read below, or settings that only show, list or export the part.
+                Some(
+                    "symbol"
+                    | "property"
+                    | "extends"
+                    | "power"
+                    | "pin_names"
+                    | "pin_numbers"
+                    | "in_bom"
+                    | "on_board"
+                    | "exclude_from_sim"
+                    | "in_pos_files"
+                    | "dnp"
+                    | "jumper_pin_groups"
+                    | "duplicate_pin_numbers_are_jumpers"
+                    | "embedded_fonts"
+                    | "embedded_files",
+                ) => {}
+                Some("polyline" | "rectangle" | "circle" | "arc" | "bezier" | "text" | "text_box") => {
+                    self.schematic.notes.add("symbol drawing outside a unit left out")
+                }
+                Some("pin") => self.schematic.lost.add("pin outside a unit left out"),
+                Some(other) => self.schematic.lost.add(&format!("library symbol setting `{}` left out", short(other))),
+                // The name and bare words such as `power`.
+                None if part.word().is_some() => {}
+                None => self.schematic.lost.add("library symbol item without a name left out"),
+            }
+        }
         let mut units = Vec::new();
         for unit in node.all("symbol") {
             let Some((number, style)) = unit.text(0).and_then(unit_and_style) else {
@@ -590,6 +636,10 @@ impl State {
                 pins: Vec::new(),
             };
             for part in unit.args() {
+                if part.word().is_some() {
+                    // The unit's name.
+                    continue;
+                }
                 match part.head().unwrap_or_default() {
                     kind @ ("polyline" | "rectangle" | "circle" | "arc" | "bezier") => match graphic(part, kind) {
                         Some(g) => out.graphics.push(g),
@@ -604,7 +654,10 @@ impl State {
                         None => self.schematic.lost.add("pin without a number or out of range left out"),
                     },
                     "text_box" => self.schematic.notes.add("text box left out"),
-                    _ => {}
+                    "unit_name" => {}
+                    "" => self.schematic.lost.add("symbol unit item without a name left out"),
+                    // An item this reader doesn't know could carry a connection.
+                    other => self.schematic.lost.add(&format!("symbol unit item `{}` left out", short(other))),
                 }
             }
             self.count(out.graphics.len().saturating_add(out.texts.len()).saturating_add(out.pins.len()).saturating_add(1))?;
@@ -619,6 +672,14 @@ impl State {
             pin_names_hidden: node.child("pin_names").is_some_and(hidden),
             pin_numbers_hidden: node.child("pin_numbers").is_some_and(hidden),
             units: Arc::new(units),
+            jumper_pin_groups: node
+                .child("jumper_pin_groups")
+                .into_iter()
+                .flat_map(|groups| groups.args())
+                .map(|group| group.head().into_iter().chain(group.args().iter().filter_map(Node::word)).map(str::to_owned).collect::<Vec<_>>())
+                .filter(|group| !group.is_empty())
+                .collect(),
+            duplicate_pin_numbers_are_jumpers: node.child("duplicate_pin_numbers_are_jumpers").and_then(|n| n.text(0)) == Some("yes"),
         })
     }
 
@@ -727,6 +788,8 @@ impl State {
             in_bom: says("in_bom", true),
             on_board: says("on_board", true),
             dnp: says("dnp", false),
+            exclude_from_sim: says("exclude_from_sim", false),
+            in_pos_files: says("in_pos_files", true),
         });
         self.instances.push(Instances { records });
         Ok(())
@@ -821,13 +884,20 @@ impl State {
     }
 
     /// A library symbol with its drawing taken from the end of its `extends` chain and its own
-    /// fields kept. `None`, with a note, when the chain breaks or is longer than
-    /// [`MAX_EXTENDS`]. Symbols extending one parent share its drawing, so however many there
-    /// are, the drawing is held once.
+    /// fields kept. Jumper settings are gathered from every symbol on the chain: its jumper pin
+    /// groups are all of theirs, and it joins duplicate pin numbers when any of them says so.
+    /// `None`, with a note, when the chain breaks or is longer than [`MAX_EXTENDS`]. Symbols
+    /// extending one parent share its drawing, so however many there are, the drawing is held
+    /// once.
     fn resolved(&mut self, name: &str) -> Option<LibSymbol> {
         let own = self.raw_lib.get(name)?;
         let mut drawn = own;
+        // Pins joined inside the part anywhere up the chain stay joined.
+        let mut jumper_pin_groups = Vec::new();
+        let mut duplicate_pin_numbers_are_jumpers = false;
         for _ in 0..=MAX_EXTENDS {
+            jumper_pin_groups.extend(drawn.jumper_pin_groups.iter().cloned());
+            duplicate_pin_numbers_are_jumpers |= drawn.duplicate_pin_numbers_are_jumpers;
             let Some(parent) = &drawn.extends else {
                 return Some(LibSymbol {
                     name: name.to_owned(),
@@ -836,6 +906,8 @@ impl State {
                     pin_names_hidden: drawn.pin_names_hidden,
                     pin_numbers_hidden: drawn.pin_numbers_hidden,
                     units: Arc::clone(&drawn.units),
+                    jumper_pin_groups,
+                    duplicate_pin_numbers_are_jumpers,
                 });
             };
             // A parent is named by its full name, or by its entry name within the same library.
@@ -903,6 +975,11 @@ fn file_name(name: &str) -> String {
         rest = r;
     }
     rest.to_owned()
+}
+
+/// At most the first 40 characters of a token, to name it in a note.
+fn short(token: &str) -> String {
+    token.chars().take(40).collect()
 }
 
 /// Whether a node, or the effects inside it, says hide: the bare word, or `(hide yes)`.

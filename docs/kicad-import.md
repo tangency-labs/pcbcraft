@@ -2,7 +2,7 @@
 
 PCBcraft can open a self-contained KiCad schematic as a new, editable project
 ([#60](https://github.com/tangency-labs/pcbcraft/issues/60)). This first slice
-covers one `.kicad_sch` file written by KiCad 6 to 9. Board import follows once
+covers one `.kicad_sch` file written by KiCad 6 to 10. Board import follows once
 the representation of footprints that arrive without a schematic is agreed.
 
 The import is exact or refused: a project it produces connects the same pins
@@ -42,7 +42,7 @@ replaces anything. There is no desktop menu entry yet.
 | Pins, with electrical type, name, number, length, direction and inverted/clock marks | Terminals and integrated pin appearance; `free` pins become `unspecified` |
 | Placed symbols, rotated by quarter turns and mirrored | Placed parts and units in the same pose |
 | References and units from the instance records (KiCad 7 and later) or `symbol_instances` (KiCad 6) | Part references; units of one reference share a part. A unit placed twice under one reference (a copy) becomes a second part with a new reference, as do unannotated (`R?`) and invalid references; each is reported |
-| Value, Datasheet, Description and other fields; DNP, in-BOM and on-board flags | Value, standard and custom fields, and the part's fitting attributes. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
+| Value, Datasheet, Description and other fields; DNP, in-BOM, on-board, exclude-from-simulation and in-position-files flags (each as the placed symbol says) | Value, standard and custom fields, and the part's fitting attributes; *in position files: no* becomes *exclude from position files*. The Footprint field is kept as a `KiCad footprint` field; assigning footprints is separate work |
 | Power symbols | Parts whose power terminal joins the global net their Value names. Power flags (`PWR_FLAG`: a power symbol whose one pin is a power output) only drive KiCad's electrical rules check and are left out, reported; flags sitting on crossings without a dot, so that alone or together they join those wires, refuse the file instead |
 | Wires, junction dots, local and global labels | Native wire routes, junctions and net labels |
 | No-connect marks on pins or wire ends | No-connect intent on that terminal or wire end |
@@ -51,7 +51,13 @@ replaces anything. There is no desktop menu entry yet.
 
 - Anything the reader couldn't read that can carry a connection: a pin without a
   number, a wire, junction, label or symbol out of range, a symbol unit whose name
-  gives no unit, or an item it doesn't know.
+  gives no unit, a pin outside a unit, or an item, library-symbol setting or
+  symbol-unit item it doesn't know. Unknown settings of a placed symbol are not
+  checked yet.
+- Parts that join their own pins: a library symbol with a KiCad 10 jumper pin
+  group of two or more pins, or with *duplicate pin numbers are jumpers* set
+  (even if no number repeats), including through `extends`. The message names
+  the part and the joined pins.
 - Sub-sheets, hierarchical labels, buses and bus entries
   ([#43](https://github.com/tangency-labs/pcbcraft/issues/43)).
 - Diagonal wires, and symbols turned by other than a quarter turn.
@@ -122,7 +128,10 @@ were written from KiCad's
 [published file format documentation](https://dev-docs.kicad.org/en/file-formats/)
 and from reading schematic files of public designs saved by KiCad; see
 [ATTRIBUTION.md](../ATTRIBUTION.md#adapted-from-circuitcraft). No KiCad source
-was consulted. The test fixtures here are original, written by hand.
+was consulted. The fixtures and their provenance are listed in
+[`crates/kicad/tests/fixtures`](../crates/kicad/tests/fixtures/README.md): the
+divider was written by hand, and its KiCad 10 variants were saved and exported
+by KiCad 10.0.8 so the import is checked against KiCad's own netlists.
 
 The import builds the project through the ordinary commands in a scratch
 session, so the command path, validation and undo are the same as for edits

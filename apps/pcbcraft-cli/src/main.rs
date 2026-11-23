@@ -17,7 +17,7 @@ const USAGE: &str = "Usage: pcbcraft-cli mcp [--read-only] [--project FILE_OR_FO
                         Convert a previous split project to a new destination. A .pc destination
                         creates a ZIP package; other names create a new project folder.
        pcbcraft-cli import-kicad SCHEMATIC DESTINATION
-                        Import a self-contained KiCad 6-9 schematic (.kicad_sch) as a new project
+                        Import a self-contained KiCad 6-10 schematic (.kicad_sch) as a new project
                         at DESTINATION, a .pc package or a new folder, and list what was left out.
        pcbcraft-cli --help, -h
                         Print this usage information.

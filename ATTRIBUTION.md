@@ -1873,5 +1873,6 @@ consulted, and none of those files is included here.
 | `crates/kicad/src/sexp.rs` | `crates/import/src/sexp.rs` | Kept the bounded one-item-at-a-time reader and node accessors. Uses this crate's error type. Tests rewritten. |
 | `crates/kicad/src/schematic.rs` | `crates/import/src/kicad_sch.rs` | Kept the item dispatch, paper sizes, unit/style naming, pin, label, drawing and text reading, the `extends` resolution and the reference lookup order. Reads one file into a KiCad-shaped model instead of CircuitCraft's schematic model; sheet files are not followed. Tests and fixtures are new. |
 
-The test fixtures in `crates/kicad/tests/fixtures/` are original, written by hand for
-PCBCraft; see the README there.
+The divider fixture in `crates/kicad/tests/fixtures/` is original, written by hand for
+PCBCraft. Its KiCad 10 variants were saved and exported by KiCad 10.0.8, run as a black box,
+and contributed in the review of #503; the README there gives their provenance.

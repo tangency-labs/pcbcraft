@@ -135,6 +135,8 @@ fn every_rotation_and_mirror_puts_each_pin_where_kicad_does() {
             in_bom: true,
             on_board: true,
             dnp: false,
+            exclude_from_sim: false,
+            in_pos_files: true,
         };
         for (number, (px, py)) in [("1", (-3.81, 0.0)), ("2", (3.81, 1.27)), ("3", (0.0, -3.81))] {
             let library = Point { x_nm: (px * 1e6_f64).round() as i64, y_nm: (py * 1e6_f64).round() as i64 };
@@ -171,6 +173,8 @@ fn kicad_pin_rules_turn_counterclockwise_then_mirror() {
         in_bom: true,
         on_board: true,
         dnp: false,
+        exclude_from_sim: false,
+        in_pos_files: true,
     };
     // A pin to the right of the origin in the library (y upward).
     let right = Point { x_nm: 10, y_nm: 0 };
@@ -465,6 +469,8 @@ fn a_wire_ending_where_the_other_mirror_order_puts_a_pin_refuses_the_pose() {
         in_bom: true,
         on_board: true,
         dnp: false,
+        exclude_from_sim: false,
+        in_pos_files: true,
     };
     // Pin 2 sits at (3.81, 1.27) in the library; find where it lands with the other mirror axis.
     let other = PlacedSymbol { mirror: Mirror::Y, ..symbol.clone() };
@@ -806,4 +812,160 @@ fn symbols_sharing_a_drawing_share_one_pin_table() {
     assert_eq!(numbers(&placed("L:D7", 5)), ["9"]);
     // A single-unit symbol shows its unit whichever unit is placed.
     assert_eq!(numbers(&placed("L:One", 3)), ["1"]);
+}
+
+/// A KiCad 10 fixture and KiCad 10.0.8's XML netlist export of it.
+fn kicad10(name: &str) -> (String, String) {
+    let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../kicad/tests/fixtures/");
+    let read = |extension: &str| std::fs::read_to_string(format!("{dir}{name}.{extension}")).unwrap();
+    (read("kicad_sch"), read("xml"))
+}
+
+/// The named nets of a KiCad XML netlist as name → `reference.pin`, in the terms PCBCraft uses:
+/// KiCad's `/` prefix for a root-sheet local label dropped, its generated `unconnected-…` nets
+/// and power symbols (which it doesn't list as parts) left out.
+fn kicad_named_nets(xml: &str) -> BTreeMap<String, BTreeSet<String>> {
+    let attribute = |line: &str, key: &str| line.split(&format!("{key}=\"")).nth(1).and_then(|rest| rest.split('"').next()).map(str::to_owned);
+    let mut nets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut current = None;
+    for line in xml.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            current = attribute(line, "name").filter(|name| !name.starts_with("unconnected-")).map(|name| name.trim_start_matches('/').to_owned());
+        } else if let (Some(name), true) = (&current, line.starts_with("<node ")) {
+            let pin = format!("{}.{}", attribute(line, "ref").unwrap(), attribute(line, "pin").unwrap());
+            nets.entry(name.clone()).or_default().insert(pin);
+        }
+    }
+    nets
+}
+
+/// The named nets of a project as name → `reference.pin`, power symbols left out.
+fn named_nets(project: &Project) -> BTreeMap<String, BTreeSet<String>> {
+    let connectivity = project.connectivity();
+    let mut nets: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for symbol in project.symbols() {
+        let reference = project.reference(symbol);
+        for terminal in symbol.terminals() {
+            let Some(index) = connectivity.net_index_for(terminal) else { continue };
+            let Some(name) = connectivity.net_names(index).first() else { continue };
+            if !reference.starts_with('#') {
+                nets.entry(name.clone()).or_default().insert(format!("{reference}.{}", terminal.number()));
+            }
+        }
+    }
+    nets
+}
+
+/// Every pin of a KiCad XML netlist grouped by net, unconnected pins each on their own. KiCad
+/// lists a pin every unit shares once per unit, so groups sharing a pin are merged.
+fn kicad_partition(xml: &str) -> BTreeSet<BTreeSet<String>> {
+    let attribute = |line: &str, key: &str| line.split(&format!("{key}=\"")).nth(1).and_then(|rest| rest.split('"').next()).map(str::to_owned);
+    let mut groups: Vec<BTreeSet<String>> = Vec::new();
+    for line in xml.lines().map(str::trim) {
+        if line.starts_with("<net ") {
+            groups.push(BTreeSet::new());
+        } else if let (Some(group), true) = (groups.last_mut(), line.starts_with("<node ")) {
+            group.insert(format!("{}.{}", attribute(line, "ref").unwrap(), attribute(line, "pin").unwrap()));
+        }
+    }
+    let mut merged: Vec<BTreeSet<String>> = Vec::new();
+    for group in groups {
+        let (mut joined, rest): (Vec<_>, Vec<_>) = merged.into_iter().partition(|m| !m.is_disjoint(&group));
+        let mut group = group;
+        for m in joined.drain(..) {
+            group.extend(m);
+        }
+        merged = rest;
+        merged.push(group);
+    }
+    merged.into_iter().collect()
+}
+
+/// Every pin of a project grouped by net, unconnected pins each on their own, power symbols left
+/// out as KiCad's netlist leaves them out.
+fn partition(project: &Project) -> BTreeSet<BTreeSet<String>> {
+    let connectivity = project.connectivity();
+    let mut groups: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for symbol in project.symbols() {
+        let reference = project.reference(symbol);
+        if reference.starts_with('#') {
+            continue;
+        }
+        for terminal in symbol.terminals() {
+            let pin = format!("{reference}.{}", terminal.number());
+            let key = connectivity.net_index_for(terminal).map_or_else(|| format!("alone {pin}"), |index| format!("net {index}"));
+            groups.entry(key).or_default().insert(pin);
+        }
+    }
+    groups.into_values().collect()
+}
+
+#[test]
+fn a_kicad_10_divider_imports_with_the_nets_kicad_exports() {
+    let (text, xml) = kicad10("divider-kicad10");
+    let imported = import(&text, "Divider").unwrap();
+    let reopened = decode_documents(&encode_documents(imported.project.clone()).unwrap()).unwrap();
+    // Which pins connect, unconnected ones included, then the names of the named nets.
+    let expected = kicad_partition(&xml);
+    assert_eq!(expected.len(), 9, "{expected:?}");
+    let names = kicad_named_nets(&xml);
+    assert_eq!(names.keys().map(String::as_str).collect::<Vec<_>>(), ["+3V3", "GND", "IN", "VOUT"]);
+    for project in [&imported.project, &reopened] {
+        assert_eq!(partition(project), expected);
+        assert_eq!(named_nets(project), names);
+    }
+}
+
+#[test]
+fn simulation_and_position_file_exclusions_survive_save_and_reopen() {
+    let (text, xml) = kicad10("exclusions-kicad10");
+    // KiCad's own export marks R1 as left out of position files.
+    assert!(xml.contains(r#"<property name="exclude_from_pos_files"/>"#));
+    let attributes = |text: &str| {
+        let project = import(text, "Flags").unwrap().project;
+        let reopened = decode_documents(&encode_documents(project).unwrap()).unwrap();
+        let attributes = reopened.components().map(|c| c.metadata.attributes.clone()).collect::<Vec<_>>();
+        assert_eq!(attributes.len(), 1);
+        let a = &attributes[0];
+        (a.exclude_from_simulation, a.exclude_from_position_files, a.exclude_from_bom, a.exclude_from_board, a.do_not_populate)
+    };
+    assert_eq!(attributes(&text), (true, true, false, false, false));
+    // Each flag on its own maps to its own attribute, the position-file one inverted.
+    let one = |flag: &str| file(&format!(r#"(symbol (lib_id "T:R") (at 0 0 0) (unit 1) {flag} (property "Reference" "R1") (property "Value" "v"))"#));
+    assert_eq!(attributes(&one("(exclude_from_sim yes)")), (true, false, false, false, false));
+    assert_eq!(attributes(&one("(in_pos_files no)")), (false, true, false, false, false));
+    assert_eq!(attributes(&one("")), (false, false, false, false, false));
+}
+
+#[test]
+fn a_part_that_joins_its_own_pins_refuses_the_file() {
+    // KiCad joins J1.1 and J1.2 through the jumper group; PCBCraft can't, so the file is refused.
+    let (text, xml) = kicad10("jumper-kicad10");
+    assert_eq!(kicad_named_nets(&xml)["JUMPER_BUS"], net(&["J1.1", "J1.2"]));
+    let refused = import(&text, "Jumper");
+    assert!(
+        matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("J1 (`Fixture:InternalJumper`) joins pins 1+2") && m.contains("jumper pin group")),
+        "{refused:?}"
+    );
+    // Without the group KiCad leaves J1.2 apart, and so does the import.
+    let (text, xml) = kicad10("jumper-control");
+    let expected = kicad_named_nets(&xml);
+    assert_eq!(expected, BTreeMap::from([("JUMPER_BUS".to_owned(), net(&["J1.1"]))]));
+    let control = import(&text, "Control").unwrap().project;
+    assert_eq!(named_nets(&control), expected);
+    assert_eq!(partition(&control), kicad_partition(&xml));
+    // A group of one pin joins nothing and imports.
+    let single = text.replace("(duplicate_pin_numbers_are_jumpers no)", "(duplicate_pin_numbers_are_jumpers no) (jumper_pin_groups (\"1\"))");
+    assert_eq!(partition(&import(&single, "Single").unwrap().project), kicad_partition(&xml));
+    // Joining pins that share a number refuses too.
+    let duplicate = text.replace("(duplicate_pin_numbers_are_jumpers no)", "(duplicate_pin_numbers_are_jumpers yes)");
+    let refused = import(&duplicate, "Duplicate");
+    assert!(matches!(&refused, Err(CommandError::InvalidParams(m)) if m.contains("pins that share a number")), "{refused:?}");
+}
+
+#[test]
+fn kicad_10_counts_as_kicad_8_or_later_for_power_net_names() {
+    let says = |version: Option<&str>| value_names_power_nets(&Schematic { generator_version: version.map(str::to_owned), ..Default::default() });
+    assert!(says(Some("10.0")) && says(Some("8.0")) && says(Some("9.0")));
+    assert!(!says(Some("7.0")) && !says(None));
 }

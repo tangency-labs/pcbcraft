@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<export version="E">
+  <design>
+    <source>/tmp/pcbcraft-503-fixtures.Oqn5rM/jumper-control.kicad_sch</source>
+    <date>2026-11-23T01:03:29</date>
+    <tool>Eeschema 10.0.8-unknown-1000.20261030gitf38aee7.fc44</tool>
+    <sheet number="1" name="/" tstamps="/">
+      <title_block>
+        <title/>
+        <company/>
+        <rev/>
+        <date/>
+        <source>jumper-control.kicad_sch</source>
+        <comment number="1" value=""/>
+        <comment number="2" value=""/>
+        <comment number="3" value=""/>
+        <comment number="4" value=""/>
+        <comment number="5" value=""/>
+        <comment number="6" value=""/>
+        <comment number="7" value=""/>
+        <comment number="8" value=""/>
+        <comment number="9" value=""/>
+      </title_block>
+    </sheet>
+  </design>
+  <components>
+    <comp ref="J1">
+      <value>InternalJumper</value>
+      <footprint>Resistor_SMD:R_0603_1608Metric</footprint>
+      <fields>
+        <field name="Tolerance">1%</field>
+        <field name="Footprint">Resistor_SMD:R_0603_1608Metric</field>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <libsource lib="Fixture" part="InternalJumper" description=""/>
+      <property name="Tolerance" value="1%"/>
+      <property name="Sheetname" value="Root"/>
+      <property name="Sheetfile" value="jumper-control.kicad_sch"/>
+      <sheetpath names="/" tstamps="/"/>
+      <tstamps>0d1e0000-0000-4000-8000-000000000501</tstamps>
+      <units>
+        <unit name="A">
+          <pins>
+            <pin num="1"/>
+            <pin num="2"/>
+          </pins>
+        </unit>
+      </units>
+    </comp>
+  </components>
+  <libparts>
+    <libpart lib="Fixture" part="InternalJumper">
+      <fields>
+        <field name="Reference">J</field>
+        <field name="Value">InternalJumper</field>
+        <field name="Footprint"/>
+        <field name="Datasheet"/>
+        <field name="Description"/>
+      </fields>
+      <pins>
+        <pin num="1" name="" type="passive"/>
+        <pin num="2" name="" type="passive"/>
+      </pins>
+    </libpart>
+  </libparts>
+  <libraries/>
+  <nets>
+    <net code="1" name="/JUMPER_BUS" class="Default">
+      <node ref="J1" pin="1" pintype="passive"/>
+    </net>
+    <net code="2" name="unconnected-(J1-Pad2)" class="Default">
+      <node ref="J1" pin="2" pintype="passive"/>
+    </net>
+  </nets>
+</export>
