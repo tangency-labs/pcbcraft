@@ -49,7 +49,17 @@ impl Document {
     }
     /// Invalid typed input participates in close/deletion protection even before it is applied.
     pub(crate) fn dirty(&self) -> bool {
-        self.session.dirty() || !self.pending.is_empty()
+        self.session.dirty() || self.has_unapplied()
+    }
+    /// Change history only after unresolved input is handled. Clear applied editing buffers
+    /// after success so they cannot hide the restored record or block another history action.
+    fn change_history(&mut self, revision: u64, redo: bool) -> Result<(), String> {
+        if self.has_unapplied() {
+            return Err("Apply or reset typed fields before changing history.".into());
+        }
+        self.session.history(revision, redo)?;
+        self.pending.clear();
+        Ok(())
     }
 }
 impl PcbApp {
@@ -179,10 +189,12 @@ impl PcbApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn replace_part_document(&mut self, id: u64, revision: u64, record: Record) -> Result<(), String> {
         let doc = self.library_editors.parts.get_mut(&id).ok_or("Unknown part document.")?;
-        if !doc.pending.is_empty() {
+        if doc.has_unapplied() {
             return Err("Apply or reset typed fields before replacing the part draft.".into());
         }
-        doc.session.replace(revision, record)
+        doc.session.replace(revision, record)?;
+        doc.pending.clear();
+        Ok(())
     }
 }
 /// Exact selection never silently falls back to the latest record or another source.
@@ -234,10 +246,7 @@ impl PcbApp {
             }
             "app.part_history" => {
                 let doc = self.library_editors.parts.get_mut(&document()?).ok_or("Unknown part document.")?;
-                if !doc.pending.is_empty() {
-                    return Err("Apply or reset typed fields before changing history.".into());
-                }
-                doc.session.history(revision()?, params["redo"] == true)?;
+                doc.change_history(revision()?, params["redo"] == true)?;
             }
             "app.part_focus" => self.place_part_document(ctx, document()?)?,
             _ => return Err("Unknown part document command.".into()),

@@ -50,6 +50,7 @@ mod library_preview;
 mod library_workspace;
 #[cfg(not(target_arch = "wasm32"))]
 mod live_control;
+mod manufacturing;
 mod native_part_properties;
 mod native_sources;
 mod net_class_editor;
@@ -100,7 +101,7 @@ use pcbcraft_engine::{
 };
 use serde_json::{Value, json};
 
-pub use editor_windows::APP_TITLE;
+pub use editor_windows::{APP_TITLE, MAIN_WINDOW_MIN_SIZE};
 pub use pcbcraft_chrome::i18n::LanguageChoice;
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
 use project_files::SaveFormat;
@@ -267,6 +268,7 @@ enum Dialog {
     LibraryClose(Option<u64>),
     LibraryProperties(u64, ViewId),
     LibraryArray(Box<library_editors::editing::ArrayDraft>),
+    LibraryCourtyard(Box<library_editors::courtyard::CourtyardDraft>),
     LibraryPinRemap(Box<library_editors::remap::Draft>),
     LibraryPublish(library_editors::publishing::Draft),
     PartReference(Box<part_documents::picker::State>),
@@ -300,6 +302,7 @@ pub struct PcbApp {
     clipboard_request: Option<(ViewInput, bool)>,
     library_sources: native_sources::Sources,
     library_inventory: std::cell::RefCell<library_workspace::project::Cache>,
+    manufacturing_files: manufacturing::Files,
     arrangements: arrangements::Arrangements,
     views: EditorViews,
     windows: EditorWindows,
@@ -430,6 +433,15 @@ const WORKSPACES: workspace::Workspaces<'static> = workspace::Workspaces {
             description: "Author footprint definitions and pads",
             tabs: Some("Draw · Library · View"),
             icon: workspace::WorkspaceIcon::Layout,
+            multiple_views: true,
+            current: false,
+        },
+        workspace::Workspace {
+            id: "manufacturing",
+            title: "Manufacturing",
+            description: "Review Gerber layers and drill hits from a fabrication ZIP",
+            tabs: Some("Review · View"),
+            icon: workspace::WorkspaceIcon::Factory,
             multiple_views: true,
             current: false,
         },
@@ -1620,6 +1632,11 @@ impl PcbApp {
             && matches!(self.dialog, Dialog::None)
             && !self.parts.is_modal()
             && !egui::Popup::is_any_open(ui.ctx());
+        // Disabled input on any frame cancels a box and keeps the selection it started from, so a
+        // later enabled release cannot commit it. Canvas clicks are dropped while a dialog is open.
+        if !input_enabled && matches!(self.views.active.schematic.tool, Some(Tool::BoxSelect { .. })) {
+            self.views.active.schematic.tool = None;
+        }
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
@@ -2433,6 +2450,7 @@ impl PcbApp {
             Dialog::BoardPasteOptions(draft) => self.board_paste_options_dialog(ctx, draft),
             Dialog::ExternalPasteOptions(draft) => self.external_paste_options_dialog(ctx, draft),
             Dialog::LibraryArray(draft) => self.library_array_dialog(ctx, draft),
+            Dialog::LibraryCourtyard(draft) => self.library_courtyard_dialog(ctx, draft),
             Dialog::LibraryPinRemap(draft) => self.library_pin_remap_dialog(ctx, draft),
             Dialog::Footprint(edit) => self.footprint_assignment_dialog(ctx, *edit),
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
@@ -2656,6 +2674,7 @@ impl PcbApp {
     /// a logic-only native pass. Repaint hosts when adoption or finishing a job changes them.
     fn project_file_tick(&mut self, ctx: &egui::Context) {
         self.handle_close_request(ctx);
+        self.poll_manufacturing(ctx);
         // The desktop command line's open starts once, before this frame's poll can report it.
         #[cfg(not(target_arch = "wasm32"))]
         self.begin_startup_open(ctx);
@@ -2708,7 +2727,7 @@ impl PcbApp {
         self.adopt_opened_library(&ctx);
         self.sync_library_bindings();
         match self.fabrication_exports.poll() {
-            Some(Ok(board_outputs::Outcome::Saved)) => self.file_notice = Some("Saved fabrication ZIP".into()),
+            Some(Ok(board_outputs::Outcome::Saved(_))) => self.file_notice = Some("Saved fabrication ZIP".into()),
             #[cfg(any(test, target_arch = "wasm32"))]
             Some(Ok(board_outputs::Outcome::DownloadRequested)) => {
                 self.file_notice = Some("Requested fabrication ZIP download; check your browser".into());
@@ -2795,6 +2814,10 @@ impl PcbApp {
         self.editor_pointer_focus(&ctx);
         self.sync_library_focus();
         self.pending_clipboard_response(&ctx);
+        if self.views.active.manufacturing.is_some() && !(main && self.home) {
+            self.manufacturing_frame(ui, integrated_titlebar);
+            return;
+        }
         if self.views.active.library.is_some() && !(main && self.home) {
             self.library_workspace_frame(ui, integrated_titlebar);
             return;

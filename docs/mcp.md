@@ -241,11 +241,22 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window stays in the editor, which asks about unsaved changes.
 Headless sessions refuse window commands with a reason.
 
-The native live connection also exposes `ui.handles`, `ui.at`, `ui.project` and queued pointer,
-keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
-for named targets, window-local coordinates, completion tickets and cancellation.
+The native live connection also exposes `ui.handles`, `ui.at`, `ui.project`,
+`ui.window`, `ui.resize` and queued pointer, keyboard, text and wheel input
+through `execute`. See [UI automation](ui-automation.md) for named targets,
+window-local coordinates, window sizes, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
+
+To review a PCBcraft fabrication ZIP, use `app.set_workspace` with
+`workspace: "manufacturing"` and the desired pane placement, then call
+`app.open_fabrication_package` with that view ID and an absolute ZIP path.
+The `last_fabrication_export` field in `inspect_editor` reports the last
+successful desktop export path for the current project opening.
+Inspect `views[].manufacturing` for the pending read, verified layer and drill-tool
+details, preflight findings, or an error. A failed read preserves the previous
+package. Use `app.set_fabrication_layer` with the exact member filename to set
+visibility in that pane, and `view.fit` to frame the package.
 
 ### Preferences and external updates
 
@@ -647,7 +658,14 @@ width, `points`, an `outcome` (`reached`, `blocked` with `last_legal`, `incomple
 pair clearances and board-edge clearance. Check that there are at least two points
 before passing them to `pcb.add_tracks` with the same `layer` and `width_nm`;
 `from` equal to `to` produces a one-point `reached` plan with nothing to add.
-See [walkaround route planning](route-planning.md).
+For track-only shove use `mode: "shove"`. Use `"shove_vias"` to move through
+vias and their attached track ends. Submit the reached plan's `replacements`
+and `via_moves` together with the route and its captured revision. For a
+connected drag, `pcb.reshape_tracks` accepts the same shove modes and computes
+the displacements during preparation. A shove drag accepts up to 256 directly
+dragged segments. If the board has an authored zone, `pcb.plan_route` keeps vias
+fixed in `shove_vias` mode and `pcb.reshape_tracks` rejects both shove modes. See the
+[route planning and drag contract](route-planning.md#through-vias-and-connected-segment-drags).
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.
