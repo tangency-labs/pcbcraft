@@ -866,10 +866,11 @@ so both shift exactly when the origin moves by a whole micrometre. Mask openings
 pads on the corresponding outer copper layer; paste includes only surface-mount pads,
 not through-hole pads. Neither adds process expansion. Vias receive no automatic mask
 opening, but authored mask artwork can open them. The shape approximations below also
-apply to these openings. Generation needs a board setup, a
-closed Board Outline and a resolvable placement origin, and reports missing prerequisites.
-It does not edit the project. Repeated generation from the same captured inputs and
-exporter build produces the same archive; project names affect filenames and exporter
+apply to these openings. Generation needs a board setup, at least one closed
+Board Outline loop and a resolvable placement origin. Each closed path, including a
+cutout, gets its own loop in the profile file. Export omits open Board Outline paths
+and leaves them in the design. Repeated generation from the same captured inputs and
+exporter build produces the same archive. Project names affect filenames, and exporter
 versions appear in the Gerber header. Saving can be cancelled, busy or fail at the
 destination; generation alone is not a successful save. Run DRC first: outputs do not
 check the design.
@@ -897,10 +898,8 @@ Gerber X2 `.AperFunction` distinguishes copper-defined surface-mount pad flashes
 through-hole pad flashes, via pads and tracks, even when their apertures have the
 same shape and size. Pad regions carry a descriptive aperture attribute but are
 not pad flashes. Copper obrounds emitted as strokes are not tagged as pads. Mask,
-paste and silkscreen artwork use `Material`. Closed Board Outline drawings are
-tagged `Profile`; open outline artwork is still plotted but untagged. Remove stray
-open artwork before sending the profile to fabrication. The aperture attributes do
-not change plotted geometry.
+paste and silkscreen artwork use `Material`. The closed loops in the outline file
+use the `Profile` aperture function.
 
 On copper, X2 `.N` identifies the intended net of pads, tracks and vias. Component pads
 carry `.C` (reference designator) and, on outer copper, `.P` (reference and physical pin
