@@ -264,27 +264,17 @@ when applying other edits.
 
 ## Persistence and limits
 
-The original layer catalog, labels and thicknesses use `pcbcraft-board/2`;
-material-aware setup needs at least `pcbcraft-board/3`. These formats apply when
-no other authored data needs a later format. A canonical version-2 document
-round-trips byte-for-byte through the codec and does not acquire inferred materials,
-reports or construction. Version 3 and compatible later formats embed all selected
-definitions in `board.json`, with no source library needed. Each material revision
-and each dielectric gap has a stable
-record line, with ordered plies nested within their gap. Unknown versions and
-fields, unresolved pins and duplicate JSON keys fail before project adoption.
+Current saves write [board format 42](../formats/native-project-storage.md#current-board-records)
+for all supported stackups, including those with materials, copper roles,
+thickness qualifiers, and thermal or insulation reports. Embedded material
+definitions resolve without the source library. Each material revision and
+dielectric gap has a stable record line, with ordered plies nested within
+their gap. Unknown fields, unresolved pins and duplicate JSON keys fail
+before project adoption.
 
-Copper roles, base copper, copper thickness qualifiers and finished board
-thickness require at least `pcbcraft-board/23` when one of them is present.
-Explicit via assignments require at least board/24. Thermal conductivity,
-thermal expansion, dielectric strength and CTI reports require at least board/25;
-format 25 requires at least one such report. [Circular copper records](circular-copper-records.md)
-require at least board/26, footprint locks require at least board/34, straight-via
-teardrop intents require at least board/37, and named layer groups require
-`pcbcraft-board/41`. Compatible earlier extensions can coexist and keep their usual
-prerequisites. Removing reports or the last named layer group selects the format
-required by the remaining authored data. Older headers refuse unsupported
-extensions, and canonical boards without them retain their earlier format and bytes.
+The historical layer-only and material-aware formats 2 and 3 are still
+readable. Their first save adopts the current header and preserves the
+layer and material identities and existing dimensions.
 
 Version 3 does not introduce a reusable material library,
 manufacturing qualification, rule requirements, flex regions or an impedance
@@ -315,12 +305,12 @@ are refused rather than silently dropped.
 The Physical stackup page stages the selected copper's role and named group
 memberships with every other setup field; `pcb.set_board_setup` remains the only
 stack mutation command, and the Board setup UI sends an explicit `[]` when the user
-removes the last group. Board/41 is written only when named groups are present and
-requires at least one named group; clearing the final group restores the format
-required by the remaining authored data. Authored
-profile groups use `pcbcraft-setup-profile/5` and are rebased onto the destination
-copper layer IDs on import. Importing a profile without groups clears the draft’s
-named groups. Older board and profile headers reject the field even when empty.
+removes the last group. The next format-42 save omits the group array.
+Historical board format 41 and setup profile format 5 require at least one
+named group. The [current profile format](#silkscreen-and-portable-setup-profiles)
+makes groups optional. Import rebases their members onto the destination copper
+layer IDs. Importing a profile without groups clears the draft’s named groups.
+Earlier board and profile headers reject the field even when empty.
 Layer UUIDs and revision-checked candidates are the boundary for future external
 parametric/simulation adapters, not a live SolidCraft or FieldCraft connection.
 No rule-scope selector consumes these groups yet.
@@ -338,17 +328,19 @@ KiCad distinguishes layer defaults from object properties, and Altium distinguis
 clearance checks and preparation actions. PCBcraft currently clips against copper-pad
 bounds; mask-opening, silk-to-silk and board-edge DRC remain outside this slice.
 
-Profiles imports/exports a named `.pcsetup.json` file with format
-`pcbcraft-setup-profile/1`, `/2` when the setup uses the copper and board
-thickness fields above, or `/3` when a material carries a thermal conductivity,
-thermal expansion, dielectric strength or CTI report, or `/5` with user layer groups.
+The Profiles page exports named `.pcsetup.json` snapshots as
+`pcbcraft-setup-profile/6`. Stack extensions, thermal and insulation reports,
+and named layer groups are optional. Clearing those records keeps the same
+format. The reader still accepts historical profiles /1, /2, /3 and /5 under
+their original rules.
+
 Each profile has an independent UUID and positive revision, a complete
-validated `setup`, and physical `silkscreen` settings. Lengths are integer nanometers;
-material definitions, reports and references are embedded. The bounded, strict decoder
-rejects unknown fields, unsupported versions, invalid pins and files over 1 MiB.
-These setup snapshots carry no required electrical/fabrication constraints or project
-paths and do not establish a live link to their source file. Every export creates a
-new snapshot identity. Broader fabrication/process profiles remain planned.
+validated `setup`, and physical `silkscreen` settings. Lengths are integer
+nanometers. Material definitions, reports and revision references are embedded.
+The reader rejects unknown fields, unsupported versions, invalid pins and
+files over 1 MiB. Exporting the current draft creates a new snapshot identity.
+Encoding an existing profile advances its format while preserving its UUID,
+revision and contents. Profiles are self-contained snapshots with no live link.
 
 Import stages a draft for review. The profile's group list replaces the target
 list in the draft; a profile without groups clears it. The Profiles page notes

@@ -4422,7 +4422,7 @@ impl Session {
     /// Exact wire contacts connect; a two-pin placement on a straight run inserts the part.
     /// Explicit native selections reject conflicting pinned content. Calls omitting all
     /// selection qualifiers retain the compatibility behavior of reusing saved definitions.
-    /// Version-5 symbols require current project storage before placement.
+    /// Placing a version-5 symbol adopts current project storage in the same undoable edit.
     fn place_symbol(&mut self, definition: Arc<SymbolDefinition>, params: &Value) -> Result<(), CommandError> {
         self.check_revision(params)?;
         let project = self.open_project()?;
@@ -4443,9 +4443,6 @@ impl Session {
             Some(saved) => saved.clone(),
             None => definition,
         };
-        if definition.format() == library::SYMBOL_FORMAT_V5 && !project.supports_pin_function_storage() {
-            return Err(CommandError::InvalidParams("Version-5 symbols require current project storage.".into()));
-        }
         let unit = params["unit"].as_str().unwrap_or(definition.unit_id()).to_owned();
         let unit_index = definition
             .units
@@ -4494,6 +4491,14 @@ impl Session {
         };
         let component_id = component.ordinal;
         let mut project = project.clone();
+        if definition.format() == library::SYMBOL_FORMAT_V5 && !project.supports_pin_function_storage() {
+            if project.layout.is_none() || project.numeric_id_high_water.is_none() {
+                project = project.with_board_folders(project.layout_root().unwrap_or(".")).map_err(CommandError::InvalidParams)?;
+            }
+            if !project.has_sheet_occurrences() {
+                project = project.with_sheet_occurrences().map_err(CommandError::InvalidParams)?;
+            }
+        }
         Arc::make_mut(&mut project.components).insert(component_id, component);
         Arc::make_mut(&mut project.units).insert((component_id, unit.clone()), ordinal);
         Arc::make_mut(&mut project.sheet_mut().symbols).push(SymbolPlacement {

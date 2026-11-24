@@ -19,7 +19,7 @@ fn project_with_resistor() -> Session {
 /// The paper record inside an encoded sheet document.
 fn stored_page(documents: &crate::persistence::Documents, sheet: uuid::Uuid) -> Value {
     let document: Value = serde_json::from_slice(&documents[&format!("sheets/{sheet}.json")]).unwrap();
-    assert_eq!(document["format"], "pcbcraft-sheet/9");
+    assert_eq!(document["format"], crate::persistence::CURRENT_SHEET_FORMAT);
     document["page"].clone()
 }
 
@@ -81,7 +81,7 @@ fn set_page_is_one_undo_step_and_keeps_the_corner() {
     assert_eq!(inspected["project"]["sheets"][0]["page"]["paper"], "a4");
 }
 
-/// Paper is stored as sheet/9, round-trips byte for byte, and changing one sheet's paper
+/// Paper round-trips byte for byte, and changing one sheet's paper
 /// changes only that sheet's document. Older formats can't carry paper.
 #[test]
 fn paper_is_stored_per_sheet_and_round_trips() {
@@ -105,7 +105,10 @@ fn paper_is_stored_per_sheet_and_round_trips() {
     let path = format!("sheets/{}.json", power.id());
     let edits: [fn(&mut Value); 6] = [
         |doc: &mut Value| doc["format"] = json!("pcbcraft-sheet/8"),
-        |doc: &mut Value| drop(doc.as_object_mut().unwrap().remove("page")),
+        |doc: &mut Value| {
+            doc["format"] = json!("pcbcraft-sheet/9");
+            doc.as_object_mut().unwrap().remove("page");
+        },
         |doc: &mut Value| doc["page"]["paper"] = json!("letter"),
         |doc: &mut Value| doc["page"]["at_nm"] = json!([900_000_000, 0]),
         |doc: &mut Value| doc["page"]["extra"] = json!(1),
@@ -121,7 +124,7 @@ fn paper_is_stored_per_sheet_and_round_trips() {
 }
 
 /// An older sheet opens with the smallest paper around its drawing, without moving anything or
-/// recording history; the raw decode keeps the old bytes until the next save writes sheet/9.
+/// recording history. Raw saves retain absent paper, and opening supplies it for the next save.
 #[test]
 fn opening_an_older_sheet_adopts_paper_around_its_drawing() {
     let mut s = project_with_resistor();
@@ -154,7 +157,10 @@ fn opening_an_older_sheet_adopts_paper_around_its_drawing() {
     assert_eq!(opened.for_sheet(empty).unwrap().page(), Some(Page::new_sheet()));
     let saved = encode_documents(opened).unwrap();
     assert!(
-        saved.iter().filter(|(path, _)| path.starts_with("sheets/")).all(|(_, bytes)| bytes.starts_with(b"{\n  \"format\": \"pcbcraft-sheet/9\""))
+        saved
+            .iter()
+            .filter(|(path, _)| path.starts_with("sheets/"))
+            .all(|(_, bytes)| serde_json::from_slice::<Value>(bytes).unwrap()["format"] == crate::persistence::CURRENT_SHEET_FORMAT)
     );
 }
 

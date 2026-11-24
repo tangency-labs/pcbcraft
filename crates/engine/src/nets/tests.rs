@@ -346,10 +346,16 @@ fn first_board_creation_moves_registry_and_preserves_historical_scope() {
     let merged = id_for(&session, &pins[0]);
     let before = encode_documents(session.snapshot().unwrap()).unwrap();
     let old = session.project().unwrap().net_registry.clone();
+    let occurrence_records = |project: &crate::Project| {
+        let instances = project.sheet_instances();
+        (instances.circuit_uses, instances.sheet_occurrences)
+    };
+    let occurrences = occurrence_records(session.project().unwrap());
     apply(&mut session, crate::board::identity::CREATE_BOARD, json!({}));
     let project = session.project().unwrap();
     let scope = project.net_scope();
     assert_eq!(scope.kind, ScopeKind::Board);
+    assert_eq!(occurrence_records(project), occurrences);
     assert_eq!(id_for(&session, &pins[0]), merged);
     for record in &project.net_registry.records {
         if matches!(record.state, State::Active {}) {
@@ -364,10 +370,12 @@ fn first_board_creation_moves_registry_and_preserves_historical_scope() {
     let entry: Value = serde_json::from_slice(&after[ENTRY_POINT]).unwrap();
     assert!(entry.get("schematic_instances").is_none());
     let path = project.instances_document_path().unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&after[&path]).unwrap()["format"], "pcbcraft-instances/4");
+    assert_eq!(serde_json::from_slice::<Value>(&after[&path]).unwrap()["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
     round_trip(&session);
+    assert_eq!(occurrence_records(&decode_documents(&after).unwrap()), occurrences);
     apply(&mut session, "edit.undo", json!({}));
     assert_eq!(session.project().unwrap().net_registry, old);
+    assert_eq!(occurrence_records(session.project().unwrap()), occurrences);
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), before);
     apply(&mut session, "edit.redo", json!({}));
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), after);

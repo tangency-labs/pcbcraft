@@ -58,15 +58,12 @@ Via inspection retains authored `net_assignment`, `assignment_mode` and registry
 `geometry_error` rather than a false disconnected result. Logical schematic
 inspection remains independent of physical geometry.
 
-Saving, reopening, undo/redo and `pcb.set_arc_tracks` remain available. Native
-folder/archive saves preserve exact records. The diagnostic single-document
-writer refuses arcs. Clearing the last arc restores the format required by the
-remaining board data. Arc-bearing boards use format 26 unless they also have
-an active footprint lock, in which case they use format 35. Both formats retain
-the released profile-adoption (22),
-extended-stack (23), explicit via-intent (24), thermal/insulation material-report
-(25) and earlier board fields without changing those records. Boards without arcs keep the format and bytes
-required by their remaining authored data.
+Saving, reopening, undo/redo and `pcb.set_arc_tracks` remain available.
+Folder and archive saves preserve authored arcs in
+[board format 42](../formats/native-project-storage.md#current-board-records),
+alongside locks, profiles, setup and via intent. Clearing the last arc
+omits the array and keeps the board header. The diagnostic single-document
+writer refuses arcs.
 
 Connectivity, DRC, conservative query bounds, hit testing, snapping, bounded
 render approximations, transforms, clipboard and native Gerber arcs remain

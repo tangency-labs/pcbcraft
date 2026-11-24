@@ -52,20 +52,12 @@ assignment and registry state remain inspectable, but `net` and `connected_to_pa
 are null with a `geometry_error`. Neither a false disconnection nor a partial
 straight-only membership is reported.
 
-**pcbcraft-board/24** stores optional `net_assignment` objects on vias, containing
-`project`, `scope` and `net`. The address is omitted in Automatic mode; explicit
-null and nil identities are rejected. This version requires at least one
-assignment and accepts optional assembly profile adoptions and extended stack
-fields. Circular copper records select board/26 while retaining those assignments
-and optional fields. Earlier headers, including assembly-profile board/22 and stack board/23,
-reject via intent. No derived island membership or duplicate netlist is saved.
-Clearing the last assignment restores the format required by remaining authored
-data. Explicit via intent selects board/24 unless a higher format is required.
-[Thermal and insulation material reports](board-materials.md#thermal-and-insulation-reports)
-require at least board/25, circular copper records at least board/26, and an active
-footprint lock at least board/34. The higher formats preserve explicit via intent.
-The native codecs preserve current canonical bytes on a no-op round trip; accepted
-noncanonical input may be normalized, and opening an older project can require migration.
+Current board files use [format 42](../formats/native-project-storage.md#current-board-records).
+A via's optional `net_assignment` contains `project`, `scope` and `net`.
+Automatic mode omits the address and keeps the same board header. Explicit
+null and nil identities are rejected. Historical format 24 requires at least
+one assignment. Derived island membership is computed from copper and is
+omitted from storage.
 
 **pcbcraft-clipboard/4** carries explicit targets unless a newer [board clipboard
 format](../schematic/clipboard.md#pcb-canvas) is required for other copied content. Copy,
