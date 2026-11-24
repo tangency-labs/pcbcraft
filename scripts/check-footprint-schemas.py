@@ -3,7 +3,7 @@
 
 Requires Python 3.10 or later and jsonschema 4.18 or later, with its referencing
 support. The engine performs the additional semantic checks documented in
-docs/footprint-schema.md.
+docs/libraries/footprint-schema.md.
 """
 
 import argparse

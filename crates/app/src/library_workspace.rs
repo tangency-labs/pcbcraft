@@ -105,6 +105,7 @@ impl PcbApp {
         if let Some(view) = self.views.view_mut(view) {
             view.release_input();
             view.definition = None;
+            view.manufacturing = None;
             view.library.get_or_insert_with(State::default);
         }
         self.library_editors.focus(None)?;

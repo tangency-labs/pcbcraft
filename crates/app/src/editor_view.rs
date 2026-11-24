@@ -222,6 +222,7 @@ pub(super) struct BoardState {
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     /// Only an idle secondary press may open a context menu on release; tool cancellation cannot.
     pub(super) context_menu_allowed: bool,
+    pub(super) vertex_menu: Option<crate::board_drawing::VertexMenu>,
     pub(super) move_requested: bool,
     /// Counterclockwise degrees on screen; the board camera converts this intent to model space.
     pub(super) rotate_requested: u16,
@@ -381,6 +382,8 @@ pub(super) struct EditorView {
     pub(super) definition: Option<u64>,
     /// Library browsing is a view-local service presentation, never a project target.
     pub(super) library: Option<crate::library_workspace::State>,
+    /// The review pane owns a read-only archive and an independent camera.
+    pub(super) manufacturing: Option<crate::manufacturing::State>,
     pub(super) camera: Camera,
     parked_camera: Camera,
     pub(super) schematic: SchematicState,
@@ -403,7 +406,7 @@ impl Default for EditorView {
 impl EditorView {
     /// Service and definition panes own no project edit authority.
     pub(super) fn auxiliary(&self) -> bool {
-        self.definition.is_some() || self.library.is_some()
+        self.definition.is_some() || self.library.is_some() || self.manufacturing.is_some()
     }
 
     /// Return a project target only; definition panes and unavailable placeholders grant no project authority.
@@ -430,6 +433,7 @@ impl EditorView {
     pub(super) fn bind_opened_project(&mut self, session: &Session) {
         let definition = self.definition.take();
         let library = self.library.take();
+        let manufacturing = self.manufacturing.take();
         let workspace = self.workspace;
         let (snap_nm, parked_snap_nm) = (self.camera.snap_nm(), self.parked_camera.snap_nm());
         let filters = (self.filters, self.filters_collapsed, self.filters_open);
@@ -442,6 +446,7 @@ impl EditorView {
         self.sync(session);
         self.definition = definition;
         self.library = library;
+        self.manufacturing = manufacturing;
     }
 
     /// Explicitly retarget a view after the host validates the document's existence.
@@ -596,6 +601,7 @@ impl EditorView {
             panels: crate::workspace_panels::defaults(),
             definition: None,
             library: None,
+            manufacturing: None,
             camera,
             parked_camera,
             schematic: SchematicState::default(),
@@ -623,6 +629,7 @@ impl EditorView {
             panels: self.panels.clone(),
             definition: self.definition,
             library: self.library.clone(),
+            manufacturing: self.manufacturing.as_mut().map(crate::manufacturing::State::fork),
             camera: self.camera.fork_navigation(),
             parked_camera: self.parked_camera.fork_navigation(),
             unavailable: self.unavailable.clone(),
@@ -655,7 +662,8 @@ impl EditorView {
     /// even when switching back without any document edit.
     pub(super) fn switch(&mut self, workspace: Workspace, session: &Session) {
         let library = self.library.take().is_some();
-        if self.definition.take().is_some() || library {
+        let manufacturing = self.manufacturing.take().is_some();
+        if self.definition.take().is_some() || library || manufacturing {
             self.release_input();
             self.inspection.clear();
         }
@@ -725,7 +733,7 @@ impl EditorView {
     /// Permit layout controls for definition and unavailable views without granting project edit
     /// authority. Definition tokens include runtime document identity and the view's input epoch.
     pub(super) fn control_input(&self, session: &Session) -> Option<ViewInput> {
-        if self.library.is_some() {
+        if self.library.is_some() || self.manufacturing.is_some() {
             return Some(ViewInput { view: self.id, target: None, definition: None, input_epoch: self.input_epoch, revision: 0 });
         }
         if let Some(document) = self.definition {

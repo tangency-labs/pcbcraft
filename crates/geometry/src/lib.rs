@@ -15,7 +15,7 @@
 //! on native builds and on WebAssembly with the optional `wasm-kernel` feature. A browser
 //! panic aborts by default, so the host isolates fallible planar calculations.
 //!
-//! `docs/geometry-kernel.md` records the kernel choice, its qualification and its known limits.
+//! `docs/design/geometry-kernel.md` records the kernel choice, its qualification and its known limits.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
