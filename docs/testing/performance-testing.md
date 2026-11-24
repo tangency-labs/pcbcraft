@@ -671,3 +671,10 @@ new joint fixture, run `board_perf shove_joint_fixture SHOVE_FIXTURE GENERATOR_R
 once and retain the resulting native project bytes for later comparisons.
 The [#248 evidence](../../tools/performance/baselines/issue248/README.md) includes
 both saved inputs, raw reports, build hashes and the geometry and history checks.
+
+`board_perf held_drag_fixture JOINT_FIXTURE OUTPUT` reuses the #248 joint board
+with the versioned `held-track-drag-preview-cancel-commit-v1` trace. Run it with
+`board_perf_window` or the browser's rendered replay. The trace holds a segment,
+waits for the displayed validated shove, cancels once, then releases and verifies
+one edit. The final check compares the moved joint and displaced rail against the
+source, checks clearance, and exercises exact Undo/Redo and native reopen.

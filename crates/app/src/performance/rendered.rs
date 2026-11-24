@@ -149,7 +149,10 @@ impl RenderedApp {
             return Err("iterations must be 1..=10000 and screenshot timeout 1..=120 seconds".into());
         }
         let loaded = load_artifact(artifact)?;
-        if !matches!(loaded.trace_id.as_str(), super::replay::STANDARD_TRACE_ID | super::replay::ENVELOPE_TRACE_ID | super::replay::COMMIT_TRACE_ID) {
+        if !matches!(
+            loaded.trace_id.as_str(),
+            super::replay::STANDARD_TRACE_ID | super::replay::ENVELOPE_TRACE_ID | super::replay::COMMIT_TRACE_ID | super::replay::HELD_DRAG_TRACE_ID
+        ) {
             return Err("rendered replay requires a versioned performance trace".into());
         }
         if !loaded.trace.last().is_some_and(|step| step.capture_after()) {

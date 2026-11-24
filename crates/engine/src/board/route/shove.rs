@@ -37,17 +37,24 @@ enum Cascade {
 pub enum Mode {
     #[default]
     Walkaround,
+    /// Show collisions on the preferred path and refuse an obstructed edit.
+    Highlight,
     Shove,
     /// Allow an incoming route to displace through vias and their attached endpoints.
     ShoveVias,
 }
 
 impl Mode {
+    /// Whether the policy may move copper outside the active gesture.
+    pub fn shoves(self) -> bool {
+        matches!(self, Self::Shove | Self::ShoveVias)
+    }
+
     /// A shove can affect many independent runs. Give its cooperatively stepped
     /// search the full allowed budget, with the smaller default for walkaround.
     pub fn default_probe_budget(self) -> usize {
         match self {
-            Self::Walkaround => DEFAULT_BUDGET,
+            Self::Walkaround | Self::Highlight => DEFAULT_BUDGET,
             Self::Shove | Self::ShoveVias => MAX_BUDGET,
         }
     }
@@ -377,6 +384,7 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
             points: vec![request.head],
             outcome,
             blocker: None,
+            collisions: Default::default(),
             probes: progress.load(Ordering::Relaxed),
         });
     }
@@ -392,6 +400,7 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
                 points: vec![request.head],
                 outcome: Outcome::Incomplete,
                 blocker: None,
+                collisions: Default::default(),
                 probes: progress.load(Ordering::Relaxed),
             });
         }
@@ -510,29 +519,6 @@ impl<'a> Search<'a> {
         Ok(Self { query, chains, geometry, incoming, pickup, drag_direction: None, fixed, movable, stats, budget, progress })
     }
 
-    /// Certify the incoming open stroke, including the contiguous fixed prefix on
-    /// this layer. A candidate must preserve spacing to its own earlier legs.
-    async fn legal_incoming(&self, request: &Request, points: &[Point]) -> bool {
-        if points.len() < 2 {
-            return true;
-        }
-        let mut prefix = Vec::new();
-        let mut head = points[0];
-        for piece in request.fixed.iter().rev() {
-            let FixedCopper::Segment { start, end, layer, width_nm } = piece else { continue };
-            if *end != head || *layer != request.layer || *width_nm != request.width_nm {
-                break;
-            }
-            prefix.push(*start);
-            head = *start;
-        }
-        prefix.reverse();
-        prefix.extend_from_slice(points);
-        let nets = &self.pickup.nets;
-        let spacing = request.width_nm as f64 + self.query.membership_clearance(nets, nets) as f64;
-        chains::legal_stroke(&prefix, spacing).await
-    }
-
     /// Try both elbow directions before carrying turns forward from an earlier cursor target.
     /// All approaches use the same exact clearance and contact rules.
     async fn solve(&self, request: &Request) -> Result<Plan, CommandError> {
@@ -545,7 +531,9 @@ impl<'a> Search<'a> {
 
     /// Certify each guide and propagate its collisions under the same gesture budget.
     async fn solve_guides(&self, request: &Request, guides: impl Iterator<Item = Approach>) -> Result<Plan, CommandError> {
-        let reuse_previous = request.previous.last() != Some(&request.target) || self.legal_incoming(request, &request.previous).await;
+        let nets = &self.pickup.nets;
+        let clearance_nm = self.query.membership_clearance(nets, nets);
+        let reuse_previous = request.previous.last() != Some(&request.target) || legal_incoming(request, &request.previous, clearance_nm).await;
         let incoming = RouteObstacles::new(&self.geometry, &self.incoming);
         let fixed_segments = request.fixed.iter().filter(|piece| matches!(piece, FixedCopper::Segment { .. })).count();
         let mut tested = Vec::new();
@@ -593,6 +581,7 @@ impl<'a> Search<'a> {
                     via_moves: Vec::new(),
                     shove: None,
                     blocker: None,
+                    collisions: Default::default(),
                     probes: self.progress.load(Ordering::Relaxed),
                 },
                 Approach::Continue(points) => {
@@ -639,7 +628,7 @@ impl<'a> Search<'a> {
                     incomplete = true;
                     continue;
                 }
-                if !self.legal_incoming(&route, &proposed.points).await {
+                if !legal_incoming(&route, &proposed.points, clearance_nm).await {
                     continue;
                 }
             }
@@ -694,6 +683,7 @@ impl<'a> Search<'a> {
             points: vec![request.head],
             outcome: if incomplete { Outcome::Incomplete } else { Outcome::Blocked { last_legal: request.head } },
             blocker: if incomplete { None } else { blocker },
+            collisions: Default::default(),
             probes,
         })
     }
@@ -734,6 +724,7 @@ impl<'a> Search<'a> {
                         points: vec![request.head],
                         outcome: Outcome::Incomplete,
                         blocker: None,
+                        collisions: Default::default(),
                         probes: walker.probes(),
                     });
                 }
@@ -754,6 +745,7 @@ impl<'a> Search<'a> {
                 points: vec![request.head],
                 outcome: Outcome::Incomplete,
                 blocker: None,
+                collisions: Default::default(),
                 probes: walker.probes(),
             }),
             Err(super::walkaround::Stop::Failed(error)) => Err(error),
