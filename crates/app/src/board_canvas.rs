@@ -498,8 +498,9 @@ pub(super) fn show(
             && filters.footprints
             && let Some(source) = source
         {
+            let drag_origin = footprint_drag.then(|| ui.input(|i| i.pointer.press_origin())).flatten();
             let picked = if footprint_drag {
-                ui.input(|i| i.pointer.press_origin()).and_then(hit)
+                drag_origin.and_then(hit)
             } else if moving || rotating || flipping {
                 hovered.or_else(|| {
                     (state.selection.len() == 1)
@@ -509,14 +510,22 @@ pub(super) fn show(
             } else {
                 None
             };
-            if let Some(footprint) = picked {
+            // Dragging a member of a larger selection keeps it and moves the whole group, as Move does.
+            let group = if let Some(press) = drag_origin
+                && picked.is_some_and(|footprint| state.selection.contains(&footprint.id))
+            {
+                let items = crate::board_clipboard::selection_with_vias(state, project.vias().iter().map(|v| v.id));
+                (items.len() > 1).then_some((press, items))
+            } else {
+                None
+            };
+            if let Some((press, items)) = group {
+                state.movement.request_drag(source, camera.snap(press, rect), items);
+                ui.ctx().request_repaint();
+            } else if let Some(footprint) = picked {
                 state.drawing.select(None);
                 out.selection = Some(BTreeSet::from([footprint.id.clone()]));
-                let anchor = if footprint_drag {
-                    ui.input(|i| i.pointer.press_origin()).map(|p| camera.unsnapped(p, rect)).unwrap_or(footprint.position)
-                } else {
-                    footprint.position
-                };
+                let anchor = drag_origin.map_or(footprint.position, |p| camera.unsnapped(p, rect));
                 let draft = Draft {
                     source,
                     footprint: footprint.id.clone(),
