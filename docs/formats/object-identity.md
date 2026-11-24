@@ -77,6 +77,11 @@ reported.
 | Library item | library definition documents | Name |
 | Arc track, pour, keepout, text, dimension | none yet | Not stored |
 
+Schematic wire appearance is owned content of the Net record
+(`net_registry.records[].appearance`), not a separate object kind: it carries no
+new identifier and follows the net UUID through rename, split/merge and
+undo/redo.
+
 The stackup, its dielectric strata, circuit uses and the project itself also carry
 UUIDs. Copper strata are addressed by their layer. Wire bends, drawing vertices,
 zone vertices and fill settings, no-connect intent on pins and wire ends, package choices, accepted board

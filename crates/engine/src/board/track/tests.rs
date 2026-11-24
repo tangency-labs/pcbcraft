@@ -81,7 +81,7 @@ fn pad(session: &Session, footprint: &str, number: &str) -> (Point, Option<Strin
 }
 
 /// Routing an accepted connection on front copper joins its pads into one island and removes its
-/// airwire. The route saves as board format 12, reopens identically, and undo restores the earlier bytes.
+/// airwire. The saved route reopens identically, and Undo restores the earlier bytes.
 #[test]
 fn routing_a_connection_clears_its_airwire_saves_and_undoes() {
     let mut s = routed_fixture();
@@ -107,7 +107,7 @@ fn routing_a_connection_clears_its_airwire_saves_and_undoes() {
 
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let board = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
-    assert!(board.contains("\"format\": \"pcbcraft-board/12\""), "{board}");
+    assert!(board.contains(crate::persistence::CURRENT_BOARD_FORMAT), "{board}");
     assert_eq!(board.matches("\"width_nm\":250000").count(), 3, "one line per segment");
     let reopened = decode_documents(&saved).unwrap();
     assert_eq!(reopened.board.tracks, s.project().unwrap().board.tracks);
@@ -187,7 +187,7 @@ fn invalid_routes_change_nothing() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Saved files must declare tracks with format 12, and format 12 must carry tracks.
+/// Historical format 12 introduced tracks and requires them. Earlier formats reject tracks.
 #[test]
 fn board_format_12_and_tracks_require_each_other() {
     let mut s = routed_fixture();
@@ -196,12 +196,16 @@ fn board_format_12_and_tracks_require_each_other() {
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
     let mut downgraded = saved.clone();
-    downgraded.insert(crate::persistence::test_board_path(&downgraded), text.replace("pcbcraft-board/12", "pcbcraft-board/10").into_bytes());
+    downgraded.insert(
+        crate::persistence::test_board_path(&downgraded),
+        text.replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/10").into_bytes(),
+    );
     assert!(decode_documents(&downgraded).is_err(), "older formats cannot carry tracks");
     let start = text.find("  \"tracks\": [").unwrap();
     let end = start + text[start..].find("  ],\n").unwrap() + "  ],\n".len();
     let mut untracked = saved.clone();
-    untracked.insert(crate::persistence::test_board_path(&untracked), format!("{}{}", &text[..start], &text[end..]).into_bytes());
+    let missing = format!("{}{}", &text[..start], &text[end..]).replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/12");
+    untracked.insert(crate::persistence::test_board_path(&untracked), missing.into_bytes());
     assert!(decode_documents(&untracked).is_err(), "format 12 requires tracks");
     let mut bad_layer = saved;
     let front = front.to_string();
@@ -266,7 +270,7 @@ fn vias_carry_a_route_between_layers_in_one_edit() {
 
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
-    assert!(text.contains("\"format\": \"pcbcraft-board/13\"") && text.contains("  \"vias\": [\n"), "{text}");
+    assert!(text.contains(crate::persistence::CURRENT_BOARD_FORMAT) && text.contains("  \"vias\": [\n"), "{text}");
     assert_eq!(text.matches("\"drill_nm\":300000").count(), 2, "one line per via");
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     s.apply("edit.undo", &json!({})).unwrap();
@@ -377,7 +381,7 @@ fn an_empty_tracks_field_is_rejected_before_format_12() {
     let s = routed_fixture();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
-    assert!(text.contains("\"format\": \"pcbcraft-board/10\""), "{text}");
+    assert!(text.contains(crate::persistence::CURRENT_BOARD_FORMAT), "{text}");
     let list = if text.contains("  \"assignments\": [\n") { "  \"assignments\": [\n" } else { "  \"footprints\": [\n" };
     let mut with_empty = saved.clone();
     with_empty.insert(crate::persistence::test_board_path(&with_empty), text.replacen(list, &format!("  \"tracks\": [],\n{list}"), 1).into_bytes());
@@ -469,8 +473,8 @@ fn a_track_crossing_a_pad_with_both_ends_outside_joins_its_island() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
 }
 
-/// Format 12 stays tracks-only, as first released, so its readers never meet vias. Boards with
-/// vias save as format 13, with or without tracks; deleting the last via returns to format 12.
+/// Current boards save with or without vias under the same header. Historical format 12 rejects
+/// vias, and format 13 requires them.
 #[test]
 fn vias_use_board_format_13_and_format_12_stays_tracks_only() {
     let mut s = routed_fixture();
@@ -479,15 +483,18 @@ fn vias_use_board_format_13_and_format_12_stays_tracks_only() {
     route(&mut s, front, &[Point { x_nm: 0, y_nm: y }, Point { x_nm: 2_000_000, y_nm: y }]).unwrap();
     let tracks_only = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(tracks_only[&crate::persistence::test_board_path(&tracks_only)].clone()).unwrap();
-    assert!(text.contains("\"format\": \"pcbcraft-board/12\"") && !text.contains("\"vias\""), "{text}");
+    assert!(text.contains(crate::persistence::CURRENT_BOARD_FORMAT) && !text.contains("\"vias\""), "{text}");
 
     route_with_vias(&mut s, front, &[Point { x_nm: 4_000_000, y_nm: y }, Point { x_nm: 6_000_000, y_nm: y }], &[(1, back)]).unwrap();
     let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(saved[&crate::persistence::test_board_path(&saved)].clone()).unwrap();
-    assert!(text.contains("\"format\": \"pcbcraft-board/13\""), "{text}");
+    assert!(text.contains(crate::persistence::CURRENT_BOARD_FORMAT), "{text}");
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     let mut as_12 = saved.clone();
-    as_12.insert(crate::persistence::test_board_path(&as_12), text.replace("pcbcraft-board/13", "pcbcraft-board/12").into_bytes());
+    as_12.insert(
+        crate::persistence::test_board_path(&as_12),
+        text.replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/12").into_bytes(),
+    );
     assert!(decode_documents(&as_12).is_err(), "format 12 rejects vias");
 
     // Format 13 may carry vias alone, and requires at least one.
@@ -495,12 +502,13 @@ fn vias_use_board_format_13_and_format_12_stays_tracks_only() {
     s.apply(DELETE_TRACKS, &json!({"tracks":tracks,"expected_revision":s.revision()})).unwrap();
     let vias_only = encode_documents(s.snapshot().unwrap()).unwrap();
     let text = String::from_utf8(vias_only[&crate::persistence::test_board_path(&vias_only)].clone()).unwrap();
-    assert!(text.contains("\"format\": \"pcbcraft-board/13\"") && !text.contains("\"tracks\""), "{text}");
+    assert!(text.contains(crate::persistence::CURRENT_BOARD_FORMAT) && !text.contains("\"tracks\""), "{text}");
     assert_eq!(encode_documents(decode_documents(&vias_only).unwrap()).unwrap(), vias_only);
     let start = text.find("  \"vias\": [").unwrap();
     let end = start + text[start..].find("  ],\n").unwrap() + "  ],\n".len();
     let mut no_vias = vias_only.clone();
-    no_vias.insert(crate::persistence::test_board_path(&no_vias), format!("{}{}", &text[..start], &text[end..]).into_bytes());
+    let missing = format!("{}{}", &text[..start], &text[end..]).replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/13");
+    no_vias.insert(crate::persistence::test_board_path(&no_vias), missing.into_bytes());
     assert!(decode_documents(&no_vias).is_err(), "format 13 requires vias");
 }
 
@@ -511,7 +519,7 @@ fn place_via(session: &mut Session, at: Point) -> Result<u64, CommandError> {
     )
 }
 
-/// A standalone via is one undoable edit that saves as format 13. A second via on the same spot,
+/// A standalone via is one undoable edit and survives saving. A second via on the same spot,
 /// a via whose pad would join two nets' pads, an invalid size or a stale revision is refused.
 #[test]
 fn standalone_vias_place_undo_and_refuse_shorts() {
@@ -525,7 +533,7 @@ fn standalone_vias_place_undo_and_refuse_shorts() {
     assert!(
         String::from_utf8(encode_documents(s.snapshot().unwrap()).unwrap()[&s.project().unwrap().board_document_path().unwrap()].clone())
             .unwrap()
-            .contains("pcbcraft-board/13")
+            .contains(crate::persistence::CURRENT_BOARD_FORMAT)
     );
     let revision = s.revision();
     assert!(place_via(&mut s, at).is_err(), "one via per position");

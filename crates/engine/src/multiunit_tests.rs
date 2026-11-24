@@ -438,6 +438,8 @@ fn authoring_preserves_non_alphabetic_default_unit_order() {
         editor.execute(editor.revision(), Action::SelectUnit { unit: unit.into() }).unwrap();
         let reopened = Item::decode(&editor.snapshot().encode().unwrap()).unwrap();
         let native = library::parse_symbol(&reopened.export_native().unwrap().to_string()).unwrap();
+        assert_eq!(native.format(), library::SYMBOL_FORMAT_V5);
+        assert_eq!(native.units, definition.units);
         assert_eq!(native.units[0].unit_id(), "z");
         assert_eq!(native.units[1].unit_id(), "a");
     }

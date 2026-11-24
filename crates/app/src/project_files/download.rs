@@ -17,7 +17,7 @@ impl Original {
     }
     /// Raw documents can bypass encoding only for the actual unmodified source snapshot.
     pub(super) fn unchanged(&self, snapshot: &Arc<Project>) -> Option<Arc<Documents>> {
-        (Arc::ptr_eq(&self.snapshot, snapshot) && super::has_current_entry_point(&self.documents)).then(|| self.documents.clone())
+        (Arc::ptr_eq(&self.snapshot, snapshot) && super::has_current_write_formats(&self.documents, snapshot)).then(|| self.documents.clone())
     }
 }
 

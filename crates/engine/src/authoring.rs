@@ -642,7 +642,7 @@ impl Item {
     pub fn native(&self) -> Result<Value, String> {
         self.native_mode(false)
     }
-    /// Include inactive drawings when choosing the lazy editor and symbol formats.
+    /// Check whether the draft requires the alternate-function editor format, including inactive units.
     fn has_alternate_functions(&self) -> bool {
         self.objects
             .values()
@@ -650,7 +650,8 @@ impl Item {
             .any(|p| matches!(p, Primitive::Pin { alternates, .. } if !alternates.is_empty()))
     }
 
-    /// Derive draft/native data through one validator path, preserving unsupported-kind rejection.
+    /// Validate draft and native definitions through the same path. Newly authored symbols
+    /// and footprints use their current native formats regardless of optional records.
     fn native_mode(&self, draft: bool) -> Result<Value, String> {
         let at = |point: Point| json!([point.x_nm, point.y_nm]);
         if self.kind == Kind::Symbol {
@@ -669,7 +670,10 @@ impl Item {
                 for object in objects.values() {
                     drawing.extend(match object {
                         Primitive::Pin { number, name, electrical_type, alternates, at: point, appearance } => {
-                            let mut terminal = json!({"id":number,"name":name,"electrical_type":electrical_type});
+                            let mut terminal = json!({"id":number,"electrical_type":electrical_type});
+                            if let Some(name) = name {
+                                terminal["name"] = json!(name);
+                            }
                             if !alternates.is_empty() {
                                 terminal["alternates"] = json!(alternates);
                             }
@@ -701,7 +705,7 @@ impl Item {
                 units.push(json!({"id":id,"drawing":drawing,"pins":pins}));
             }
             let terminals: Vec<_> = terminal_order.iter().map(|id| &terminal_map[id]).collect();
-            let mut value = json!({"format":if self.format == PIN_FUNCTION_FORMAT { library::SYMBOL_FORMAT_V5 } else if !self.other_units.is_empty() { library::SYMBOL_FORMAT_V4 } else if self.category.is_some() { library::SYMBOL_FORMAT_V3 } else if self.behavior.is_some() || self.defaults.is_some() { library::SYMBOL_FORMAT_V2 } else { library::SYMBOL_FORMAT },"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
+            let mut value = json!({"format":library::SYMBOL_FORMAT_V5,"library":self.library,"id":self.id,"revision":self.revision,"name":self.name,
                 "reference_prefix":self.reference_prefix,"default_value":self.default_value,"terminals":terminals,"units":units});
             if let Some(behavior) = &self.behavior {
                 value["behavior"] = json!(behavior);
@@ -735,7 +739,7 @@ impl Item {
                 }
             }
             let definition = footprint::FootprintDefinition {
-                format: footprint::FootprintDefinition::format_for(!non_plated_holes.is_empty(), &pads).into(),
+                format: footprint::CURRENT_FORMAT.into(),
                 library: self.library.clone(),
                 id: self.id.clone(),
                 revision: self.revision,
@@ -825,7 +829,7 @@ impl Item {
         Ok(bytes)
     }
 
-    /// Export the existing standalone native schema. Editor identities, primitive IDs and
+    /// Export a new standalone native definition. Editor identities, primitive IDs and
     /// symbol provenance remain in the editable item; export never confirms an editor save.
     pub fn export_native(&self) -> Result<Value, String> {
         self.encode()?;

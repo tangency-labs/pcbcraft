@@ -39,6 +39,32 @@ class FootprintSchemaTests(unittest.TestCase):
         for invalid in ([], None, [dict(hole, number="1")], [dict(hole, diameter_nm=0)], [hole] * 129):
             self.assertFalse(validator.is_valid(dict(value, non_plated_holes=invalid)))
 
+    def test_current_footprint_schema_accepts_any_supported_mix(self):
+        """Keep one native format for pads and mechanical holes while retaining format 5's slot rule."""
+        npth, slots, current = [
+            json.loads((ROOT / f"docs/schemas/footprint-v{version}.schema.json").read_text())
+            for version in (4, 5, 6)
+        ]
+        registry = Registry().with_resources(
+            (schema["$id"], Resource.from_contents(schema)) for schema in (self.schema, npth, slots, current)
+        )
+        validator = Draft202012Validator(current, registry=registry)
+        hole = {"center": {"x_nm": 2000000, "y_nm": 0}, "diameter_nm": 500000}
+        plain = dict(self.definition, format="pcbcraft-footprint/6")
+        smd, template = plain["pads"]
+        pth = dict(template, copper="all_copper", drill_nm=300000)
+        slot = dict(template, number="SH", copper="all_copper",
+                    plated_slot={"width_nm": 250000, "length_nm": 400000, "rotation_mdeg": 0})
+        mixed = dict(plain, pads=[smd, pth, slot], non_plated_holes=[hole])
+        for value in (plain, mixed, dict(plain, pads=[], non_plated_holes=[hole])):
+            validator.validate(value)
+        for value in (dict(plain, pads=[]), dict(plain, non_plated_holes=[]),
+                      dict(plain, pads=[dict(slot, drill_nm=300000)])):
+            self.assertFalse(validator.is_valid(value))
+        historical = Draft202012Validator(slots, registry=registry)
+        historical.validate(dict(mixed, format="pcbcraft-footprint/5"))
+        self.assertFalse(historical.is_valid(dict(plain, format="pcbcraft-footprint/5")))
+
     def test_reference_metadata_and_pad_identifiers_reject_control_characters(self):
         """Catch newline suffixes that Python's dollar anchor previously accepted."""
         paths = [
