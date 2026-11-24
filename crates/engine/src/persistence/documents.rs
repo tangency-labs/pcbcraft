@@ -74,6 +74,8 @@ const SCHEMATIC_PACKAGES_PROJECT_FORMAT: &str = "pcbcraft-project/13";
 const GENERATED_SHEET_FORMAT: &str = "pcbcraft-sheet/7";
 const WIRE_END_SHEET_FORMAT: &str = "pcbcraft-sheet/8";
 const PAGE_SHEET_FORMAT: &str = "pcbcraft-sheet/9";
+/// Current sheet write format. Raw snapshots may omit paper until opened for editing.
+pub const CURRENT_SHEET_FORMAT: &str = "pcbcraft-sheet/10";
 const MIRROR_SHEET_FORMAT: &str = "pcbcraft-sheet/6";
 const TEXT_LAYOUT_FORMAT: &str = "pcbcraft-sheet/5";
 const FIELDS_SHEET_FORMAT: &str = "pcbcraft-sheet/4";
@@ -762,6 +764,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // Read all interfaces before resolving parent-side endpoint ownership.
     for reference in &project.sheets {
         let mut sheet: SheetDocument = parse(documents, &reference.file)?;
+        let current = sheet.format == CURRENT_SHEET_FORMAT;
         match (sheet.format.as_str(), sheet.labels.is_some(), sheet.subsheets.is_some(), sheet.net_labels.is_some()) {
             (SHEET_FORMAT, false, false, false)
             | (HIERARCHY_FORMAT, true, true, false)
@@ -771,32 +774,40 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | (MIRROR_SHEET_FORMAT, true, true, true)
             | (GENERATED_SHEET_FORMAT, true, true, true)
             | (WIRE_END_SHEET_FORMAT, true, true, true)
-            | (PAGE_SHEET_FORMAT, true, true, true) => {}
+            | (PAGE_SHEET_FORMAT | CURRENT_SHEET_FORMAT, true, true, true) => {}
             _ => return Err(format!("{}: incompatible sheet format and hierarchy fields", reference.file)),
         }
-        if !matches!(
-            sheet.format.as_str(),
-            FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
-        ) && sheet.symbols.iter().any(|s| s.field_layout.is_some())
+        if !current
+            && !matches!(
+                sheet.format.as_str(),
+                FIELDS_SHEET_FORMAT | TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
+            )
+            && sheet.symbols.iter().any(|s| s.field_layout.is_some())
         {
             return Err(format!("{}: field appearance requires sheet format 4", reference.file));
         }
-        if !matches!(sheet.format.as_str(), MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT)
+        if !current
+            && !matches!(sheet.format.as_str(), MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT)
             && sheet.symbols.iter().any(|s| s.mirrored.is_some())
         {
             return Err(format!("{}: mirrored placements require sheet format 6", reference.file));
         }
-        if !matches!(
-            sheet.format.as_str(),
-            TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
-        ) && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some()))
+        if !current
+            && !matches!(
+                sheet.format.as_str(),
+                TEXT_LAYOUT_FORMAT | MIRROR_SHEET_FORMAT | GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT
+            )
+            && sheet.net_labels.as_ref().is_some_and(|labels| labels.iter().any(|l| l.text.is_some()))
         {
             return Err(format!("{}: net-name appearance requires sheet format 5", reference.file));
         }
         if sheet.format == GENERATED_SHEET_FORMAT && sheet.generated_legs.as_ref().is_none_or(|records| records.is_empty()) {
             return Err(format!("{}: sheet format 7 requires generated contact legs", reference.file));
         }
-        if !matches!(sheet.format.as_str(), GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT) && sheet.generated_legs.is_some() {
+        if !current
+            && !matches!(sheet.format.as_str(), GENERATED_SHEET_FORMAT | WIRE_END_SHEET_FORMAT | PAGE_SHEET_FORMAT)
+            && sheet.generated_legs.is_some()
+        {
             return Err(format!("{}: generated contact legs require sheet format 7", reference.file));
         }
         if let Some(records) = &sheet.generated_legs {
@@ -817,7 +828,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 }
             }
         }
-        if sheet.format == WIRE_END_SHEET_FORMAT || (sheet.format == PAGE_SHEET_FORMAT && sheet.no_connect_ends.is_some()) {
+        if sheet.format == WIRE_END_SHEET_FORMAT || ((current || sheet.format == PAGE_SHEET_FORMAT) && sheet.no_connect_ends.is_some()) {
             let records = sheet.no_connect_ends.as_ref().ok_or("Sheet format 8 requires no-connect wire ends.")?;
             let unique: BTreeSet<_> = records.iter().copied().collect();
             let junctions: BTreeSet<_> = sheet.junctions.iter().map(|junction| junction.id).collect();
@@ -831,15 +842,15 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         } else if sheet.no_connect_ends.is_some() {
             return Err("No-connect wire ends require sheet format 8.".into());
         }
-        if (sheet.format == PAGE_SHEET_FORMAT) != sheet.page.is_some() {
+        if !current && (sheet.format == PAGE_SHEET_FORMAT) != sheet.page.is_some() {
             return Err(format!("{}: sheet format 9 and only sheet format 9 requires paper", reference.file));
         }
         let mut metadata = crate::sheets::SchematicSheet::empty(reference.id, reference.name.clone());
         metadata.page =
             sheet.page.clone().map(crate::sheets::page::Page::try_from).transpose().map_err(|error| format!("{}: {error}", reference.file))?;
         if let Some(parameters) = sheet.parameters.take() {
-            if sheet.format != PAGE_SHEET_FORMAT || parameters.is_empty() {
-                return Err(format!("{}: sheet parameters require sheet format 9 and a nonempty list", reference.file));
+            if metadata.page.is_none() || parameters.is_empty() {
+                return Err(format!("{}: sheet parameters require paper and a nonempty object", reference.file));
             }
             crate::parameters::check(&parameters, crate::parameters::Scope::Sheet).map_err(|error| format!("{}: {error}", reference.file))?;
             metadata.parameters = Arc::new(parameters);
@@ -908,20 +919,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         {
             return Err(format!("{ENTRY_POINT}: invalid or duplicate sheet identity, name or file"));
         }
-        if !matches!(
-            sheet.format.as_str(),
-            SHEET_FORMAT
-                | HIERARCHY_FORMAT
-                | NAMED_FORMAT
-                | FIELDS_SHEET_FORMAT
-                | TEXT_LAYOUT_FORMAT
-                | MIRROR_SHEET_FORMAT
-                | GENERATED_SHEET_FORMAT
-                | WIRE_END_SHEET_FORMAT
-                | PAGE_SHEET_FORMAT
-        ) || sheet.id != reference.id
-        {
-            return Err(format!("{sheet_path}: sheet format or identity does not match {ENTRY_POINT}"));
+        if sheet.id != reference.id {
+            return Err(format!("{sheet_path}: sheet identity does not match {ENTRY_POINT}"));
         }
         let symbols: BTreeSet<_> = sheet.symbols.iter().map(|s| s.id).collect();
         let junctions: BTreeSet<_> = sheet.junctions.iter().map(|j| j.id).collect();
@@ -1753,8 +1752,6 @@ pub struct DocumentsEncoder {
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
     header: ProjectHeaderFacts,
-    sheet_fields: bool,
-    sheet_mirrored: bool,
     sheet_wire_index: BTreeMap<u64, usize>,
     live_generated_legs: Vec<usize>,
     board_checks: BoardChecks,
@@ -1805,8 +1802,6 @@ impl DocumentsEncoder {
             use_compact_memberships,
             size_limit_exceeded: false,
             header: ProjectHeaderFacts::default(),
-            sheet_fields: false,
-            sheet_mirrored: false,
             sheet_wire_index: BTreeMap::new(),
             live_generated_legs: Vec::new(),
             board_checks: BoardChecks::default(),
@@ -2209,21 +2204,6 @@ impl DocumentsEncoder {
                         self.finish_instance_document(InstanceTail::Memberships)?;
                     }
                 }
-                22 => {
-                    let sheet = &self.project.sheets[self.sheet_cursor];
-                    if let Some(symbol) = sheet.symbols.get(self.cursor as usize) {
-                        self.sheet_fields |= !symbol.field_layout.is_empty();
-                        self.sheet_mirrored |= symbol.mirrored;
-                        self.cursor += 1;
-                    } else {
-                        self.cursor = 0;
-                        if sheet.generated_legs.is_empty() {
-                            self.write_sheet_header()?;
-                        } else {
-                            self.phase = 23;
-                        }
-                    }
-                }
                 23 => {
                     let sheet = &self.project.sheets[self.sheet_cursor];
                     if let Some(wire) = sheet.wires.get(self.cursor as usize) {
@@ -2518,7 +2498,7 @@ impl DocumentsEncoder {
             return Ok(());
         }
         self.finish_document(ENTRY_POINT.to_owned())?;
-        self.start_sheet();
+        self.start_sheet()?;
         Ok(())
     }
 
@@ -2570,7 +2550,7 @@ impl DocumentsEncoder {
             return Err("Encoded instance document exceeds its size limit.".into());
         }
         self.documents.insert(path.unwrap_or_else(|| ENTRY_POINT.into()), std::mem::take(&mut self.bytes));
-        self.start_sheet();
+        self.start_sheet()?;
         Ok(())
     }
 
@@ -2580,7 +2560,7 @@ impl DocumentsEncoder {
         self.finish_document(format!("sheets/{}.json", self.project.sheets[self.sheet_cursor].sheet_id))?;
         self.sheet_cursor += 1;
         if self.sheet_cursor < self.project.sheets.len() {
-            self.start_sheet();
+            self.start_sheet()?;
         } else if self.project.board_target().is_some() {
             self.phase = 31;
             self.cursor = 0;
@@ -2593,30 +2573,29 @@ impl DocumentsEncoder {
         Ok(())
     }
 
-    /// Start selecting the sheet envelope without scanning placements or generated legs at once.
-    fn start_sheet(&mut self) {
-        self.phase = 22;
+    /// Start a sheet: match live generated legs in metered steps when there are any, then
+    /// write the current header.
+    fn start_sheet(&mut self) -> Result<(), String> {
         self.cursor = 0;
         self.first = true;
-        self.sheet_fields = false;
-        self.sheet_mirrored = false;
         self.live_generated_legs.clear();
+        if self.project.sheets[self.sheet_cursor].generated_legs.is_empty() {
+            self.write_sheet_header()
+        } else {
+            self.phase = 23;
+            Ok(())
+        }
     }
 
-    /// Write the native header using the flags computed by the preceding metered passes.
+    /// Write the current sheet header and continue with its net labels.
     fn write_sheet_header(&mut self) -> Result<(), String> {
         self.cursor = 0;
-        self.phase = sheet_header(
-            &mut self.bytes,
-            &self.project.sheets[self.sheet_cursor],
-            self.sheet_fields,
-            self.sheet_mirrored,
-            !self.live_generated_legs.is_empty(),
-        )?;
+        sheet_header(&mut self.bytes, &self.project.sheets[self.sheet_cursor])?;
+        self.phase = 12;
         Ok(())
     }
 
-    /// Append the sheet/8 endpoint intent array after wires and optional generated-leg records.
+    /// Append endpoint intent after wires and optional generated-leg records.
     /// Records remain incremental, with the ordinary sheet close shared by all formats.
     fn finish_sheet_routes(&mut self) -> Result<(), String> {
         if self.project.sheets[self.sheet_cursor].no_connect_ends.is_empty() {
@@ -3023,45 +3002,15 @@ fn write_parameters(bytes: &mut Vec<u8>, parameters: &crate::parameters::Paramet
     Ok(())
 }
 
-/// Select the exact native sheet vocabulary from its authored fields and streamed facts.
-fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet, fields: bool, mirrored: bool, generated: bool) -> Result<u8, String> {
-    let hierarchy = !sheet.labels.is_empty() || !sheet.subsheets.is_empty();
-    let text = sheet.net_labels.iter().any(|l| l.text.is_some());
-    let ends = !sheet.no_connect_ends.is_empty();
-    let format = if sheet.page.is_some() {
-        PAGE_SHEET_FORMAT
-    } else if ends {
-        WIRE_END_SHEET_FORMAT
-    } else if generated {
-        GENERATED_SHEET_FORMAT
-    } else if mirrored {
-        MIRROR_SHEET_FORMAT
-    } else if text {
-        TEXT_LAYOUT_FORMAT
-    } else if fields {
-        FIELDS_SHEET_FORMAT
-    } else if !sheet.net_labels.is_empty() {
-        NAMED_FORMAT
-    } else if hierarchy {
-        HIERARCHY_FORMAT
-    } else {
-        SHEET_FORMAT
-    };
-    write!(bytes, "{{\n  \"format\": \"{format}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
+/// Begin a sheet in the current format, retaining any authored paper and its parameters.
+fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet) -> Result<(), String> {
+    write!(bytes, "{{\n  \"format\": \"{CURRENT_SHEET_FORMAT}\",\n  \"id\": \"{}\",\n", sheet.sheet_id).map_err(|e| e.to_string())?;
     if let Some(page) = sheet.page {
         writeln!(bytes, "  \"page\": {},", json(&page.record())?).map_err(|e| e.to_string())?;
         write_parameters(bytes, &sheet.parameters)?;
     } else if !sheet.parameters.is_empty() {
-        return Err("sheet parameters require sheet paper (sheet format 9)".into());
+        return Err("sheet parameters require paper".into());
     }
-    if sheet.page.is_some() || text || fields || mirrored || generated || ends || !sheet.net_labels.is_empty() {
-        bytes.extend_from_slice(b"  \"net_labels\": [\n");
-        Ok(12)
-    } else if hierarchy {
-        bytes.extend_from_slice(b"  \"labels\": [\n");
-        Ok(2)
-    } else {
-        bytes.extend_from_slice(b"  \"symbols\": [\n");
-        Ok(4)
-    }
+    bytes.extend_from_slice(b"  \"net_labels\": [\n");
+    Ok(())
 }
