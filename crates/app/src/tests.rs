@@ -9,11 +9,15 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+mod autosave;
 // The browser build has no Assistant, which both tests expect.
 #[cfg(not(target_arch = "wasm32"))]
 mod app_bar_utilities;
 mod board_colors;
 mod board_drawing;
+mod board_fill;
+pub(crate) use board_fill::board as fill_harness;
 mod board_layers;
 mod board_properties;
 mod board_ratsnest;
@@ -34,6 +38,8 @@ mod grab;
 mod grid_spacing;
 mod hierarchy;
 mod inspection_selection;
+#[cfg(not(target_arch = "wasm32"))]
+mod manufacturing;
 mod mirror;
 mod multiple_sheets;
 mod multiunit;

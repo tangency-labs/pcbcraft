@@ -266,6 +266,36 @@ fn command_reports_the_blocking_outline_drawing() {
     assert_eq!(still_crosses, &json!({"rule":"board_edge_crossing","other_object":crossing,"required_nm":0,"actual_nm":0.}));
 }
 
+/// A teardrop whose copper would lie inside a board cut-out is refused as off the board and
+/// names the cut-out drawing, not the outer outline; a via on solid board still gets its teardrop.
+#[test]
+fn command_refuses_a_teardrop_inside_a_board_cut_out() {
+    use crate::board::{
+        drc::tests::outline_square,
+        teardrop::{EDIT_TEARDROPS, Record},
+    };
+
+    // Vias at (0, 20) mm and (0, 22) mm; the 3 mm cut-out holds only the first via's site.
+    let (mut session, intents, _) = fixture(2, false);
+    let target = view(&session).target;
+    outline_square(&mut session, -5, -5, 50);
+    let cut_out = outline_square(&mut session, -2, 18, 3);
+    let add: Vec<_> = intents.iter().copied().map(Record::from).collect();
+    let revision = session.revision();
+    let report = session
+        .execute(EDIT_TEARDROPS, &json!({"board":target.board,"expected_revision":revision,"edits":{"add":add,"remove":[]},"dry_run":true}))
+        .unwrap();
+    assert_eq!(session.revision(), revision);
+    assert_eq!(report["teardrops"]["added"], json!([add[1]]), "{report:#}");
+    let rejected = report["teardrops"]["rejected"].as_array().unwrap();
+    assert_eq!(rejected.len(), 1, "{report:#}");
+    assert_eq!(rejected[0]["intent"], json!(add[0]));
+    let reason = &rejected[0]["reason"]["detail"];
+    assert_eq!(reason["rule"], "outside_board_outline");
+    assert_eq!(reason["other_object"], cut_out.to_string());
+    assert!(reason["actual_nm"].as_f64().unwrap() > 0., "{reason}");
+}
+
 /// A malformed second report fails the batch even after the first addition was accepted.
 #[test]
 fn refuses_malformed_rule_reports_without_returning_a_partial_plan() {

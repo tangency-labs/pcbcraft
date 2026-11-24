@@ -175,7 +175,7 @@ impl PcbApp {
             return Err("Finish the library folder operation before choosing a definition.".into());
         }
         let doc = self.library_editors.parts.get(&document).ok_or("Unknown part document.")?;
-        if !doc.pending.is_empty() {
+        if doc.has_unapplied() {
             return Err("Apply or reset typed fields before choosing another definition.".into());
         }
         let current = doc.session.record().reference_field(&field)?;
@@ -196,7 +196,7 @@ impl PcbApp {
             return Err("Finish the library folder operation before choosing a definition.".into());
         }
         let doc = self.library_editors.parts.get_mut(&document).ok_or("The part document closed.")?;
-        if !doc.pending.is_empty() {
+        if doc.has_unapplied() {
             return Err("Apply or reset typed fields before choosing another definition.".into());
         }
         let candidate = doc.session.record().select_reference(field, reference, self.session.libraries())?;

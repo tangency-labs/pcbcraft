@@ -1,0 +1,13 @@
+{
+  "format": "pcbcraft-instances/4",
+  "board": "fc2ca1ff-e608-45d1-b626-965698f278e7",
+  "circuit_uses": [{"id":"072e6f55-27ac-4629-b144-23d0b84a4f83"}],
+  "sheet_occurrences": [
+    {"id":"129496d7-e35e-4cf3-a096-728e59f5bff1","definition":"8270969d-1c10-4350-a088-5c3c0a39b9db","circuit_use":"072e6f55-27ac-4629-b144-23d0b84a4f83","parent":null,"parent_slot":null}
+  ],
+  "net_registry": {
+    "records": [
+    {"id":"6f4f14b3-c368-4ead-b01d-9d8c8eabfc52","generated_number":1,"primary":{"kind":"terminal","project":"fbbd78ab-5b6c-4625-b30f-f050d3e572a5","scope":{"kind":"board","id":"fc2ca1ff-e608-45d1-b626-965698f278e7"},"occurrence":"00000000-0000-0000-0000-000000000000","object":2,"terminal":"1"},"fallbacks":[{"kind":"terminal","project":"fbbd78ab-5b6c-4625-b30f-f050d3e572a5","scope":{"kind":"board","id":"fc2ca1ff-e608-45d1-b626-965698f278e7"},"occurrence":"00000000-0000-0000-0000-000000000000","object":3,"terminal":"1"}],"lineage":[],"state":{"kind":"active"}}
+    ]
+  }
+}

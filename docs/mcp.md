@@ -223,17 +223,17 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_workspace` | Project view placement: schematic or PCB layout, here, beside or in a new window |
 | `app.library_new`, `app.library_fork_selected`, `app.library_edit`, `app.library_focus`, `app.library_view`, `app.library_open`, `app.library_save`, `app.library_close` | Definition creation/forking, revision-checked edits, document focus, per-pane authoring ribbon/panels/navigation and open/save/export/close |
 | `app.library_pin_remap` | Library **Remap pins…**: preview explicit numbers/current pinned evidence, then apply/cancel the captured review; definition-only, no placed adoption |
-| `pcb.align_footprints` | Align two or more `footprints` by their physical bounds (`mode` `left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute three or more with equal gaps to nanometer precision (`distribute_x`, `distribute_y`), in one undo step; distribution keeps physical outermost footprints and the span fixed, refusing overlapping selections that cannot retain those anchors. Track ends follow moving pads, as for a transform |
+| `pcb.align_footprints` | Align by bounds (`left`, `right`, `top`, `bottom`, `center_x`, `center_y`) or distribute along X or Y (`distribute_x`, `distribute_y`). Omit `pitch_nm` for equal gaps by bounds; supply it for exact origin spacing. See [set-pitch distribution](pcb-layout-workflow.md#set-pitch-distribution). Track ends follow moving pads in the same undo step |
 | `pcb.set_footprint_transform` | Set a footprint center, whole-degree orientation and optional `side` (`front` or `back`) through the same atomic command used by the PCB canvas; inspection reports each footprint's `side`. Track ends follow the pads that move on their layer. Edits that join two nets are refused |
 | `pcb.set_footprint_reference_offset` | Move the reference of a placed footprint. `offset` is a local `{x_nm, y_nm}` displacement from the library default. A zero offset restores that default |
 | `pcb.set_footprint_reference_text` | Set sparse placement-local `appearance` fields for printed text, font, paired size/stroke, local rotation, alignment and visibility, with an optional `offset`. Null appearance resets inheritance. The component's reference and schematic use the separate shared reference edit |
 | `pcb.delete_footprints` | Delete the addressed board placements atomically; retain schematic components and pinned physical assignments for re-placement |
 | `view.set_grid`, `view.select`, `view.select_footprints` | Status-bar grid spacing, remembered separately for schematic and PCB views; click and box selection in a schematic; footprint and Browser selection in a PCB view; optional `element: "reference"` selects one placement's text and Properties |
-| `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state; selection commands refuse disabled object categories |
+| `view.set_selection_filters` | Per-view Selection filters checkboxes, `collapsed` and `open` card state. On PCB views, optional `include_locked: false` excludes locked footprints, tracks and vias from selection (default: `true`); project inspection is unchanged. Selection commands refuse disabled targets |
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | **File → Layouts**: **Activate**, **New arrangement**, **Duplicate…**, **Rename…** and **Delete…** |
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
-| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
+| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation, recovery snapshot and save-to-project intervals) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
 | `file.save_as`, `file.open` | **File → Save As** and **File → Open** with an absolute `path` instead of the picker. Save As takes `format` `folder` or `archive` (`.pc` is added when missing) and refuses an existing file or project folder, while an empty folder becomes the project folder; an Untitled project takes the destination's name. Open accepts a project folder, its entry point or a `.pc` archive and is refused while the project has unsaved changes. Both run in the background through the editor's file workers: keep the `file.operation.id` the reply reports and follow `inspect_editor` until `file.last.id` is at least that ID. Read `file.last.status` only when the IDs are equal; a greater `file.last.id` means a later job replaced the result, so report it as unavailable rather than taking that job's outcome as yours. A failed or abandoned job keeps the current design, unsaved state and history. An unavailable result says nothing about the outcome: the earlier job may have saved or opened, and that is not undone, so inspect the project and `file.location` before going on |
 | `file.abandon` | **Stop waiting** in the Close Project wait: releases the editor from a running open, such as one stalled on an unresponsive disk. Pass the observed `file.operation.id` as `operation`; a different running job is left alone. Other commands wait while a file job runs, but this one does not. The late result is discarded, the current project is unchanged and `file.last` reports `abandoned`. Saves are refused because they may still be writing; the editor's Close Project wait always offers **Close without waiting**, which warns that unsaved edits are lost and that a first save may leave nothing on disk. At most four abandoned opens may still be running before abandoning is refused |
@@ -241,11 +241,31 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window stays in the editor, which asks about unsaved changes.
 Headless sessions refuse window commands with a reason.
 
-The native live connection also exposes `ui.handles`, `ui.at`, `ui.project` and queued pointer,
-keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
-for named targets, window-local coordinates, completion tickets and cancellation.
+The native live connection also exposes `ui.handles`, `ui.at`, `ui.project`,
+`ui.window`, `ui.resize` and queued pointer, keyboard, text and wheel input
+through `execute`. See [UI automation](ui-automation.md) for named targets,
+window-local coordinates, window sizes, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
+
+To review a PCBcraft fabrication ZIP, use `app.set_workspace` with
+`workspace: "manufacturing"` and the desired pane placement, then call
+`app.open_fabrication_package` with that view ID and an absolute ZIP path.
+The `last_fabrication_export` field in `inspect_editor` reports the last
+successful desktop export path for the current project opening.
+Inspect `views[].manufacturing` for the pending read, verified layer and drill-tool
+details, preflight findings, or an error. A failed read preserves the previous
+package. Use `app.set_fabrication_layer` with the exact member filename to set
+visibility in that pane, and `view.fit` to frame the package.
+
+### Preferences and external updates
+
+`app.set_preferences` changes personal editor settings, including the
+Preferences → Saving intervals `autosave_minutes` and `save_to_project_minutes`;
+it never changes project documents or project Undo, and writes no project file
+during the call. Enabling `save_to_project_minutes` lets the editor later save
+an eligible dirty project to its existing location on that schedule without
+another command.
 
 ## Command API version
 
@@ -358,7 +378,9 @@ still work.
 
 The MCP bridge and raw live clients that need a guarantee across editor versions
 use `engine.execute_versioned` with a required non-null `params.version` beside
-`params.command`. For example:
+`params.command`. Use the `command_api_version` reported by the serving
+editor's command discovery (`list_commands` over MCP, `engine.commands` on the
+raw live endpoint). For example, if the editor reports version 1:
 
 ```json
 {"method":"engine.execute_versioned","params":{"command":"edit.undo","version":1}}
@@ -522,11 +544,12 @@ changes; explicit drills must be smaller than their pads.
 addresses such as `{"footprint":"footprint-7","pad":"2"}`. Pick `from` on the
 arm to remove and `to` on the retained side. `execute` returns `revision`,
 `dry_run`, `removed` (sorted `tracks` and `vias` UUID lists), `requested` (the
-input pair), and `unrouted` (the newly displayed ratsnest edges, as pairs of pad
-addresses), even with project inspection disabled. An edge may end at a different
-pad on the retained side than the requested `to`. Without accepted connectivity,
-there are no display edges to report. Set `dry_run: true` to get the same report
-without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
+input pair), and `unrouted` (new ratsnest edges from the change to authored
+copper, as pairs of pad addresses), even with project inspection disabled. An
+edge may end at a different pad on the retained side than the requested `to`.
+Refilled zones can reconnect the pads and clear those edges. Without accepted
+connectivity there are no edges to report. Set `dry_run: true` to get the same
+report without changing copper, revision or undo. A stale revision returns `stale_revision` with `current_revision` in
 `details`; a missing copper endpoint returns `not_found`. See
 [Unroute one connection](pcb-layout-workflow.md#unroute-one-connection) for the
 behavior and other refusal cases.
@@ -538,7 +561,12 @@ most 1000 findings. Saved board defaults apply unless a request supplies a
 supported hard-limit override; authored minimums can only tighten upward and
 maximums downward. The report includes per-property `sources`. Kinds are `short`,
 `clearance`, `track_width`, `via_diameter`, `via_drill`, `annular_ring`, `unconnected`,
-`no_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`. A
+`no_outline`, `ambiguous_outline`, `outside_board`, `edge_clearance` and `courtyard_overlap`.
+Closed Board Outline drawings whose boundaries cross, touch or share an edge are grouped into one
+union component and reported as `ambiguous_outline` (listing those drawings' UUIDs), while
+disjoint closed outlines still nest by even-odd parity so a cut-out away from an overlap remains
+a cut-out. An `outside_board` finding for a copper item or
+non-plated hole inside a cut-out also lists the cut-out drawing's UUID after that item. A
 `courtyard_overlap` lists both footprints and marks a point inside the overlap; touching
 courtyards pass. When unsupported courtyard geometry (circles, arcs, open paths) decided
 the finding by bounds, its message says the comparison is conservative.
@@ -547,9 +575,10 @@ the finding by bounds, its message says the comparison is conservative.
 editing it; `execute` returns `fabrication.files`, each with a `name` and text `contents`,
 and `fabrication.origin`, the placement origin every coordinate is measured from:
 Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the outline,
-plus one Excellon plated drill file. It needs a board setup, a closed Board Outline and a
-resolvable placement origin. It refuses boards containing placed circular non-plated holes
-until separate non-plated drill export is available; no partial set is returned.
+plus one Excellon plated drill file. Boards with placed circular non-plated holes also get
+a separate non-plated drill file. It needs a board setup, a closed Board Outline and a
+resolvable placement origin. Boards with copper zones or non-plated holes whose
+diameters round to zero in the drill file are refused before any output is returned.
 File names are deterministic and unique after portable-name sanitization,
 including case-insensitive collisions with fixed-purpose output names. `apply`
 validates board and file generation, not ZIP construction; `execute` also returns
@@ -644,8 +673,14 @@ hides the others and cancels unfinished drawing in that view.
 personal board/layer palette across all views. `inspect_editor` reports effective
 `board.layer_colors` per view, including whether each value is overridden.
 The earlier `board.copper_colors` subset remains for compatibility.
-These values persist locally without changing project revision or undo. Physical
-pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
+`view.set_net_color` takes `view`, an active persistent `net` UUID and `color`
+(`#RRGGBB`, or null to use the layer palette). The shared personal color applies
+across layers. `view.set_net_colors_visibility` switches the addressed view
+between net and layer colors. `inspect_editor` exposes the saved overrides in
+`board.net_colors` and the display setting in `board.net_colors_visible`.
+Effective net and layer color changes enter the live editor’s Undo and Redo
+sequence. They persist locally and leave the project revision and files
+unchanged. Physical pad inspection also exposes `pins[].copper_layers`: `resolved` includes the
 binding and stack-ordered layer UUIDs; `unconfigured` retains the explicit library
 binding without invented layers. Marker-only pins omit physical membership.
 `view.navigate_layer` takes `view` and `direction` (`next`, `previous`, `front`,

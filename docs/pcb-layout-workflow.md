@@ -43,8 +43,14 @@ Each edit is one undo step.
 | Route | Tracks with an explicit width and clearance-aware 45° walkaround. Stable snapping to pads, track ends and vias. Through vias with V or PgUp/PgDn mid-route, plus standalone vias | Layout › Route |
 | Modify | Click, box and U (connected) selection. Selection filters for tracks and vias. M/drag moves, D segment drags, width and via size in Properties, per-track/via locks, Delete | Layout › Modify, Properties |
 | Inspect | Net highlight (`), ruler (Ctrl+Shift+M), DRC with a results card and canvas markers, board summary when nothing is selected | Analyze, Properties |
-| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus an Excellon drill file in one archive | Manufacture › Fabrication › Outputs |
+| Output | Gerber X2 copper with net and pin attributes, mask, paste, silkscreen and outline layers, plus separate [Excellon drill files](#fabrication-drill-files) in one archive | Manufacture › Fabrication › Outputs |
 | View | Mirrored bottom view, layer visibility and colors | View › Navigate › Flip view, Layers |
+
+When items overlap, hover over them and press **Shift+Space** to cycle through
+the selectable items at that point. A click on overlapping tracks starts with
+the active copper layer. Layer visibility and selection filters also apply when
+cycling. Tracks and vias in the gaps between footprint pads can be clicked
+directly.
 
 Copper connectivity is derived from overlap on shared layers. Track edits and
 footprint transforms refuse new shorts in the copper they touch. DRC separately
@@ -67,14 +73,35 @@ via anchors the group. An explicitly assigned via on the arm itself is kept
 with the copper beyond it; the cut stops before it. Already isolated copper is
 unchanged.
 
-Use `dry_run` to preview the same removal and newly displayed ratsnest edges
-without making an edit. Applying it
-is one Undo step and changes no storage format. If a locked object would have
+Use `dry_run` to preview the removal and its effect on ratsnest edges from
+authored copper without making an edit. After a commit, zone fill can reconnect
+those pads. Applying the removal is one Undo step and changes no storage format. If a locked object would have
 to be removed, or there is no exclusive arm that safely separates the pads,
 the command refuses the whole request. It also refuses when the pad to detach
 overlaps another pad, or when overlapping pads elsewhere would keep the two
 sides joined. This is a shared command available in
 headless and live MCP, not a canvas tool or a net-wide removal.
+
+## Set-pitch distribution
+
+In MCP, call `pcb.align_footprints` with `distribute_x` or `distribute_y`,
+`pitch_nm` (a positive integer number of nanometers), and at least two distinct
+placed footprint IDs. For example, use `pitch_nm: 5080000` for a 5.08 mm pitch.
+Pitch is measured between footprint origins, not pad centers or physical bounds.
+The smallest X (left) or Y (top) origin stays fixed, and the other origins are
+spaced in increasing coordinate order. Request order breaks ties. The other
+coordinate, rotation and board side do not change. The original span may grow or
+shrink. A locked footprint anywhere in the selection refuses the whole request
+and is named, even if it would be the fixed anchor. An out-of-range destination,
+a new short or a move that would change locked copper also refuses the request.
+A successful move and its attached track changes are one undo step; repeating
+an accepted pitch that already matches creates no history. In a live editor the
+copper checks are prepared before the edit is applied. If the board changes
+in the meantime, retry with the current revision.
+
+Omit `pitch_nm` for the existing equal-gap distribution: it requires at least
+three footprints, uses physical bounds and preserves the outer footprints and
+span. The Modify menu continues to use equal gaps.
 
 ## Gaps, in recommended order
 
@@ -194,10 +221,11 @@ clearance enforcement and gesture integration remain later work.
 
 This is #57.
 
-**Implemented first slice.** [Zone outline authoring](copper-zone-outlines.md)
-(#231) draws and edits single-layer, net-addressed outlines with saved fill intent.
-It creates no conductive fill. The fill, thermal, DRC and output behavior below
-remains the proposal for #232/#233; **Refill zones** is still planned.
+**Implemented authoring and fill.** [Copper zones](copper-zone-outlines.md)
+(#231/#232) draws and edits single-layer, net-addressed outlines and derives their
+conductive material. Automatic and explicit **Pour copper**, thermal connections,
+priority, island filtering, connectivity/ratsnest and zone DRC share that result.
+Fabrication output remains #233; advanced policy remains #304.
 
 **Behavior.**
 - Drawing a zone works like a Board Outline rectangle or polygon on a copper
@@ -207,8 +235,9 @@ remains the proposal for #232/#233; **Refill zones** is still planned.
 - The fill connects same-net pads with thermal spokes or a solid connection.
   Islands smaller than a minimum area are dropped.
 - Overlapping zones fill by priority.
-- A refill runs after edits, or on demand with **Refill zones**. A changed fill
-  updates connectivity and the ratsnest.
+- A refill runs after edits, or on demand with **Pour copper**. After **Remove
+  pours**, edits leave automatic refill suppressed until **Pour copper** resumes
+  it. A changed fill updates connectivity and the ratsnest.
 
 **Model and commands.**
 - **Authored record:** the zone (outline, layer, net, priority, clearance
@@ -280,8 +309,12 @@ ribbon's planned entries and the editor guide have a stated destination.
   authored text records with physical font metrics from the silkscreen settings.
 - **Locking** for tracks and vias is implemented under #249 through per-object
   flags and the shared snapshot publication guard. Existing footprint locks protect
-  direct placement edits as described below. Footprint lock authoring, zone locks
-  and a locked-object selection filter are not available yet.
+  direct placement edits as described below. To skip locked footprints, tracks
+  and vias when selecting, clear **Locked objects** in the view's **Selection
+  filters** card. It is checked by default. Clearing it also drops those objects
+  from the current selection, but leaves them visible and listed in project
+  inspection. Footprint lock authoring and locks for zones and board graphics
+  are not available yet.
 - **Assembly outputs (rest of #59):** placement (centroid) files and a bill of materials,
   added as more files in **Manufacture › Fabrication › Outputs** from the board's footprints and
   sides.
@@ -289,6 +322,29 @@ ribbon's planned entries and the editor guide have a stated destination.
   between the schematic and the board.
 
 Copy and paste of board objects is in progress separately in #197 through #202.
+
+## Fabrication drill files
+
+**Manufacture › Fabrication › Outputs** and `pcb.export_fabrication` keep
+plated pad drills and through vias in `-PTH.drl`. If the board contains circular
+non-plated footprint holes, `-NPTH.drl` contains just those holes and the
+fabrication archive's manifest lists both files. A board without those holes
+has no `-NPTH.drl` member. Non-plated openings do not create copper, mask or
+paste features.
+
+Both files measure from the selected placement origin, with Y reversed from
+board coordinates and lengths written in millimeters to three decimal places.
+The non-plated tool size is the finished diameter, with no plating allowance.
+A non-plated diameter that rounds to zero stops export instead of writing a
+zero-size tool. This is a file precision limit, not a fabrication rule.
+
+Each drill file's header names its content with Gerber X2 file attributes in
+XNC standard comments (`; #@! TF.…`): `FileFunction,Plated,1,N,PTH` or
+`FileFunction,NonPlated,1,N,NPTH`, where N is the board's copper layer count,
+plus `GenerationSoftware` and a deterministic `SameCoordinates` GUID derived
+from the resolved export frame (origin, axis convention and unit), matching the
+Gerber layers of that export. Readers that ignore attributes see ordinary
+comments. Tool and hole attributes, slots and rout paths are not written yet.
 
 ## Placed-footprint locks
 

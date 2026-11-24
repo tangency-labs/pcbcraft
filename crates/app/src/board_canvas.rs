@@ -118,6 +118,30 @@ pub(super) struct Interaction {
     pub(super) placement: Option<Placement>,
 }
 
+/// Keep world-space footprint geometry across camera-only frames. The view input
+/// includes the authored revision, current document, and project-opening epoch.
+#[derive(Default)]
+pub(super) struct FootprintCache {
+    source: Option<ViewInput>,
+    items: std::sync::Arc<[FootprintView<'static>]>,
+}
+
+impl std::fmt::Debug for FootprintCache {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FootprintCache").field("items", &self.items.len()).finish()
+    }
+}
+
+impl FootprintCache {
+    fn resolve(&mut self, project: BoardView<'_>, source: Option<ViewInput>) -> std::sync::Arc<[FootprintView<'static>]> {
+        if source.is_none() || self.source != source {
+            self.source = source;
+            self.items = project.footprints().map(FootprintView::into_owned).collect();
+        }
+        self.items.clone()
+    }
+}
+
 /// Select footprints by click or directional marquee; preview one footprint transform at a time.
 /// Empty-space primary drags and secondary drags box-select visible footprint bounds; Shift adds
 /// and Ctrl/Command toggles against the captured selection. Invalid release cancels the box.
@@ -125,16 +149,16 @@ pub(super) struct Interaction {
 /// to the pointer. R rotates counterclockwise on screen, including in a mirrored view or a move.
 /// Only completion on the canvas emits an edit; secondary click, disabled input or stale
 /// authority discards the draft.
-/// Footprint moves retain placement clicks over edges and win overlapping drag starts unless
-/// an explicit drawing tool or an existing drawing edit already owns the gesture.
+/// Footprint moves retain placement clicks over edges. An existing edit or tool retains its
+/// gesture, and exposed copper takes priority over the footprint envelope on a new drag.
 /// Physical pad color/visibility follow engine-resolved copper membership; the active copper
 /// layer changes display priority for spanning lands without rebinding any geometry.
 /// Selection filters suppress picking and transform shortcuts, without hiding rendered geometry.
 /// Net highlighting shares derived connectivity keyed to the view's board/revision authority.
 /// Pad presses cannot start footprint/track drags; captured reference moves retain their
 /// ordinary source, enabled-input and focus checks while crossing pad copper.
-/// Idle pad presses take priority over owner/track picks, while captured reference moves retain
-/// their input until completion, cancellation or loss of their original source authority.
+/// Eligible pad presses take priority over owner/track picks, and idle Shift+Space cycles
+/// through the visible selectable items at the pointer.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show(
     ui: &mut Ui,
@@ -191,34 +215,78 @@ pub(super) fn show(
     });
     let visible = copper.is_none_or(|layer| layer.is_some());
     let color = board::copper_color(copper.flatten().and_then(|layer| layer.side.map(|side| side == Side::Front)));
-    let footprints: Vec<_> = project.footprints().collect();
+    let footprints = state.footprints.resolve(project, source);
+    let footprints = footprints.as_ref();
     let colors = FootprintColors::new(appearance, project, state.active_layer.as_deref(), &state.hidden_layers);
-    let hit_bounds: Vec<_> = footprints
+    // Picking and painting use the same projected geometry. Only a footprint
+    // whose preview changed its pose needs to be projected again in this frame.
+    let projections: Vec<_> = footprints
         .iter()
         .map(|footprint| {
             let (pads, graphics) = drawing(footprint, camera, rect, visible, &colors);
-            visible_footprint_bounds(footprint, &pads, &graphics, camera, rect)
+            let bounds = visible_footprint_bounds(footprint, &pads, &graphics, camera, rect);
+            (pads, graphics, bounds)
         })
         .collect();
+    let hit_bounds: Vec<_> = projections.iter().map(|(_, _, bounds)| *bounds).collect();
+    let selectable = |footprint: &FootprintView<'_>| filters.footprints && filters.permits_lock(footprint.locked);
     let hit = |pointer: egui::Pos2| {
         footprints.iter().zip(&hit_bounds).rev().find_map(|(footprint, bounds)| {
-            (filters.footprints && footprint_interactive(visible, footprint) && bounds.contains(pointer)).then_some(footprint)
+            (selectable(footprint) && footprint_interactive(visible, footprint) && bounds.contains(pointer)).then_some(footprint)
         })
     };
+    let copper_kinds = crate::board_tracks::Kinds::from(filters);
     let lost_focus = ui.input(|i| i.events.iter().any(|event| matches!(event, egui::Event::WindowFocused(false))));
     if !enabled || lost_focus || state.box_drag.as_ref().is_some_and(|drag| Some(drag.source) != source) {
         state.box_drag = None;
     }
+    state.zones.zone = true;
     let hovered = response.hover_pos().and_then(hit);
     let modifiers = ui.input(|i| i.modifiers);
     let extend_selection = modifiers.shift || modifiers.ctrl || modifiers.command;
-    let pad_at = |pointer| {
-        filters.pads.then(|| crate::inspection_selection::pad_at(project, &footprints, camera, rect, pointer, &state.hidden_layers)).flatten()
-    };
-    let pad_hover = response.hover_pos().and_then(pad_at);
+    let pads_at = |pointer| crate::inspection_selection::pads_at(project, footprints, &hit_bounds, camera, rect, pointer, &state.hidden_layers);
+    let pad_at = |pointer| pads_at(pointer).next();
+    let copper_pick = response.clicked() || state.tracks.connected_requested || state.tracks.drag_segment_requested;
+    let over_pad = response.hover_pos().filter(|_| filters.pads || (copper_pick && hovered.is_some())).and_then(pad_at);
+    let pad_hover = over_pad.filter(|_| filters.pads);
     // Classify the press before its first motion can leave the land and acquire owner authority.
     let primary_drag = response.drag_started_by(PointerButton::Primary);
-    let pad_drag = primary_drag && ui.input(|i| i.pointer.press_origin()).and_then(pad_at).is_some();
+    let press_on_pad =
+        primary_drag && ui.input(|i| i.pointer.press_origin()).filter(|origin| filters.pads || hit(*origin).is_some()).and_then(pad_at).is_some();
+    let pad_drag = filters.pads && press_on_pad;
+    let copper_on_press = primary_drag
+        && ui.input(|i| i.pointer.press_origin()).is_some_and(|point| {
+            crate::board_tracks::copper_at(point, camera, rect, project, &state.hidden_layers, copper_kinds, state.active_layer.as_deref()).is_some()
+        });
+    let cycle_pick = response
+        .hover_pos()
+        .filter(|_| {
+            enabled
+                && idle
+                && source.is_some()
+                && !lost_focus
+                && !ui.input(|i| i.pointer.any_down())
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Space))
+        })
+        .and_then(|pointer| {
+            cycle_selection(
+                project,
+                state,
+                camera,
+                rect,
+                pointer,
+                filters,
+                inspection,
+                footprints
+                    .iter()
+                    .zip(&hit_bounds)
+                    .rev()
+                    .filter(|(footprint, bounds)| selectable(footprint) && footprint_interactive(visible, footprint) && bounds.contains(pointer))
+                    .map(|(footprint, _)| footprint.id.clone()),
+                pads_at(pointer).filter(|_| filters.pads),
+            )
+        });
+    let enabled = enabled && cycle_pick.is_none();
     let drag_start = !pad_drag && primary_drag && !modifiers.shift && !modifiers.ctrl && !modifiers.command;
     let reference_press = response.contains_pointer()
         && ui.input(|i| i.pointer.button_pressed(PointerButton::Primary))
@@ -248,7 +316,8 @@ pub(super) fn show(
                 .zip(&hit_bounds)
                 .rev()
                 .find(|(footprint, bounds)| {
-                    reference_bounds(ui.painter(), camera, rect, project, state, footprint, **bounds, appearance).contains(pointer)
+                    selectable(footprint)
+                        && reference_bounds(ui.painter(), camera, rect, project, state, footprint, **bounds, appearance).contains(pointer)
                 })
                 .map(|(footprint, _)| footprint);
             hovered
@@ -292,14 +361,13 @@ pub(super) fn show(
         && state.drawing.tool.is_none()
         && state.drawing.source().is_none()
         && !state.tracks.busy()
-        && ui.input(|i| i.pointer.press_origin()).and_then(hit).is_some();
+        && ui.input(|i| i.pointer.press_origin()).is_some_and(|origin| hit(origin).is_some() && (press_on_pad || !copper_on_press));
     // M moves selected copper when no footprint is selected; otherwise it stays a footprint move.
     if state.move_requested && state.selection.is_empty() && !state.tracks.selected.is_empty() {
         state.move_requested = false;
         state.tracks.move_requested = true;
     }
-    // The route tool owns its clicks; without it, a plain click on a track selects that track
-    // unless a footprint lies under the pointer, and a drag on copper moves it.
+    // An actual pad can claim its click. The footprint envelope never masks exposed copper.
     let route = crate::board_tracks::interact(
         ui,
         &response,
@@ -317,10 +385,9 @@ pub(super) fn show(
             && state.zones.source().is_none()
             && state.drawing.tool.is_none()
             && state.drawing.source().is_none(),
-        hovered.is_some() || pad_hover.is_some() || pad_drag,
-        crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
+        if primary_drag { press_on_pad } else { over_pad.is_some() },
+        copper_kinds,
     );
-    state.zones.zone = true;
     let zone = crate::board_drawing::interact(
         ui,
         &response,
@@ -414,17 +481,7 @@ pub(super) fn show(
         && !state.tracks.busy()
         && let Some(source) = source
         && let Some(start) = ui.input(|i| i.pointer.press_origin())
-        && (box_with_secondary
-            || (response.drag_started_by(PointerButton::Primary)
-                && hit(start).is_none()
-                && !crate::board_tracks::copper_under(
-                    start,
-                    camera,
-                    rect,
-                    project,
-                    &state.hidden_layers,
-                    crate::board_tracks::Kinds { tracks: filters.tracks, vias: filters.vias },
-                )))
+        && (box_with_secondary || (response.drag_started_by(PointerButton::Primary) && hit(start).is_none() && !copper_on_press))
     {
         state.box_drag = Some(BoxDrag {
             source,
@@ -440,7 +497,7 @@ pub(super) fn show(
             && filters.footprints
             && let Some(source) = source
         {
-            let picked = if drag_start {
+            let picked = if footprint_drag {
                 ui.input(|i| i.pointer.press_origin()).and_then(hit)
             } else if moving || rotating || flipping {
                 hovered.or_else(|| {
@@ -454,7 +511,7 @@ pub(super) fn show(
             if let Some(footprint) = picked {
                 state.drawing.select(None);
                 out.selection = Some(BTreeSet::from([footprint.id.clone()]));
-                let anchor = if drag_start {
+                let anchor = if footprint_drag {
                     ui.input(|i| i.pointer.press_origin()).map(|p| camera.unsnapped(p, rect)).unwrap_or(footprint.position)
                 } else {
                     footprint.position
@@ -467,9 +524,9 @@ pub(super) fn show(
                     anchor,
                     rotation: footprint.rotation,
                     bottom: footprint.bottom,
-                    drag: drag_start,
+                    drag: footprint_drag,
                 };
-                if moving || drag_start {
+                if moving || footprint_drag {
                     state.draft = Some(draft);
                 } else if rotating {
                     out.edit = Some(Draft { rotation: (draft.rotation + rotation) % 360, ..draft });
@@ -521,15 +578,24 @@ pub(super) fn show(
             }
         }
     }
+    if let Some(pick) = cycle_pick {
+        out.extend_inspection = false;
+        match pick {
+            Pick::Pad(pad) => out.inspection = Some((pad, egui::Modifiers::NONE)),
+            Pick::Item(items) => out.items = Some(items),
+        }
+    }
     let p = ui.painter().with_clip_rect(rect);
     board::canvas(&p, rect, camera.screen(Point { x_nm: 0, y_nm: 0 }, rect), camera.snap_step(), opacity, grid_style);
     let ratsnest = state.ratsnest(project, source);
     let requested = std::mem::take(&mut state.net_highlight_requested);
+    let palette = appearance.net_palette(project.target, state.net_colors_visible());
     let connectivity = (!state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY)
         || requested
+        || palette.is_some()
         || state.highlight_net.is_some()
         || state.tracks.route_contact().is_some())
-    .then(|| state.copper_connectivity(project, source))
+    .then(|| state.copper_connectivity(project, source, palette.is_some()))
     .transpose();
     let connectivity = match connectivity {
         Ok(value) => value,
@@ -539,16 +605,19 @@ pub(super) fn show(
         }
     };
     if requested && let Some(connectivity) = &connectivity {
-        state.highlight_net =
-            response.hover_pos().and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, &connectivity.nets));
+        state.highlight_net = response
+            .hover_pos()
+            .and_then(|pointer| net_under(pointer, camera, rect, project, &state.hidden_layers, state.active_layer.as_deref(), &connectivity.nets));
     }
     if route.consumed {
         crate::board_tracks::prepare_preview(&response, camera, project, &mut state.tracks, state.active_layer.as_deref());
     }
+    let net_colors = palette.zip(connectivity.as_deref()).map(|(palette, connectivity)| crate::board_appearance::NetColors { palette, connectivity });
     let focus = connectivity.as_deref().and_then(|data| CopperFocus::new(data, state.tracks.route_contact(), state.highlight_net.as_deref()));
     let context = board::context_painter(&p, focus.is_some());
-    crate::board_drawing::paint(&context, rect, camera, project, &state.zones, state.tracks.width_nm, &state.hidden_layers, appearance);
-    crate::board_drawing::paint(&context, rect, camera, project, &state.drawing, state.tracks.width_nm, &state.hidden_layers, appearance);
+    crate::board_fills::paint(&context, rect, camera, project, &state.hidden_layers, appearance, palette);
+    crate::board_drawing::paint(&context, rect, camera, project, &state.zones, state.tracks.width_nm, &state.hidden_layers, appearance, palette);
+    crate::board_drawing::paint(&context, rect, camera, project, &state.drawing, state.tracks.width_nm, &state.hidden_layers, appearance, None);
     // A transform committed in this frame is painted at its new pose. The engine applies it after
     // this pass, so painting the stored pose here would make the footprint spring back for a frame.
     // Tracks on its pads are painted where the move carries them.
@@ -573,6 +642,7 @@ pub(super) fn show(
         focus,
         &carried,
         connectivity.as_ref().filter(|_| !state.hidden_layers.contains(crate::editor_view::NET_NAMES_KEY)).map(|data| &data.nets),
+        net_colors,
     );
     let selected_reference = out.reference_pick.clone().or_else(|| out.selection.is_none().then(|| state.reference.selected.clone()).flatten());
     if (!state.hidden_layers.contains(crate::editor_view::RATSNEST_KEY) || selected_reference.is_some())
@@ -602,30 +672,57 @@ pub(super) fn show(
     }
     let inspected_pads = crate::inspection_selection::pad_numbers(project.target, inspection);
     let (mut openings, mut slots) = (Vec::new(), Vec::new());
-    for mut footprint in footprints {
-        if let Some(draft) = shown.filter(|d| d.footprint == footprint.id) {
-            preview(&mut footprint, draft);
+    let marquee = state.box_drag.as_ref().zip(ui.input(|i| i.pointer.interact_pos())).map(|(drag, pointer)| {
+        let window = egui::Rect::from_two_pos(drag.start, pointer);
+        let crossing = pointer.x < drag.start.x;
+        let mut hits = geometry_for_box(project, camera, rect, state, filters, window, crossing);
+        hits.footprints = footprints_for_box(footprints, &hit_bounds, window, crossing, filters);
+        (window, crossing, hits)
+    });
+    for (footprint, projection) in footprints.iter().zip(projections) {
+        let pose = shown.filter(|d| d.footprint == footprint.id);
+        let reference = state.reference_drag.as_ref().or(out.reference_edit.as_ref()).filter(|draft| draft.footprint == footprint.id);
+        let mut footprint = std::borrow::Cow::Borrowed(footprint);
+        if let Some(draft) = pose {
+            preview(footprint.to_mut(), draft);
         }
-        if let Some(draft) = state.reference_drag.as_ref().or(out.reference_edit.as_ref()).filter(|draft| draft.footprint == footprint.id) {
+        if let Some(draft) = reference {
+            let footprint = footprint.to_mut();
             footprint.reference_offset = draft.offset;
             footprint.reference_text = draft.appearance.clone();
             if footprint.physical_reference {
-                let reference = project.reference_preview(&footprint, draft.offset);
+                let reference = project.reference_preview(footprint, draft.offset);
                 footprint.graphics.retain(|graphic| !graphic.reference);
                 footprint.graphics.extend(reference);
             }
         }
         let center = camera.screen(footprint.position, rect);
-        let (mut pads, graphics) = drawing(&footprint, camera, rect, visible, &colors);
-        let bounds = visible_footprint_bounds(&footprint, &pads, &graphics, camera, rect);
-        let shift = reference_shift(&footprint, camera, rect);
-        let label_visible = if footprint.physical_reference {
-            graphics.iter().any(|graphic| graphic.reference && rect.intersects(graphic.bounds()))
+        let (mut pads, graphics, bounds) = if pose.is_some() || reference.is_some() {
+            let (pads, graphics) = drawing(&footprint, camera, rect, visible, &colors);
+            let bounds = visible_footprint_bounds(&footprint, &pads, &graphics, camera, rect);
+            (pads, graphics, bounds)
         } else {
-            rect.intersects(board::footprint_reference_bounds(&p, bounds, footprint.reference, shift))
+            projection
         };
-        if (pads.is_empty() && graphics.is_empty() && footprint.non_plated_holes.is_empty()) || !(rect.intersects(bounds) || label_visible) {
+        let shift = reference_shift(&footprint, camera, rect);
+        let label_visible = rect.intersects(bounds)
+            || if footprint.physical_reference {
+                graphics.iter().any(|graphic| graphic.reference && rect.intersects(graphic.bounds()))
+            } else {
+                rect.intersects(board::footprint_reference_bounds(&p, bounds, &footprint.reference, shift))
+            };
+        if (pads.is_empty() && graphics.is_empty() && footprint.non_plated_holes.is_empty()) || !label_visible {
             continue;
+        }
+        if let Some(net_colors) = net_colors {
+            for pad in &mut pads {
+                if pad.copper.is_some()
+                    && !pad.through_hole
+                    && let Some(ink) = net_colors.pad(&footprint.id, &pad.number)
+                {
+                    pad.color = Some(ink);
+                }
+            }
         }
         let inspected = inspected_pads.get(&footprint.id);
         if inspected.is_some() || focus.is_some() {
@@ -645,6 +742,8 @@ pub(super) fn show(
         }
         let reference_bounds = reference_bounds(&p, camera, rect, project, state, &footprint, bounds, appearance);
         let selected = selected_reference.as_ref() == Some(&footprint.id);
+        let selected_footprint = state.selection.contains(&footprint.id) || pose.is_some() || selected;
+        let emphasized = highlighted.contains(&footprint.id);
         let reference_color = graphics
             .iter()
             .find(|graphic| graphic.reference)
@@ -657,24 +756,28 @@ pub(super) fn show(
                 track_labels.cover_rect(Rect::from_points(&corners));
             }
         }
+        let reference_overview = if pose.is_none() && reference.is_none() {
+            overview_reference(&p, &footprint, &graphics, camera, selected_footprint || emphasized)
+        } else {
+            None
+        };
         board::footprint_in_bounds(
             &p,
             &pads,
             &graphics,
-            if footprint.physical_reference { "" } else { footprint.reference },
+            if footprint.physical_reference { "" } else { &footprint.reference },
             center,
             color,
-            state.selection.contains(&footprint.id)
-                || shown.is_some_and(|d| d.footprint == footprint.id)
-                || selected_reference.as_ref() == Some(&footprint.id),
-            highlighted.contains(&footprint.id),
+            selected_footprint,
+            emphasized,
             focus.is_some(),
             shift,
             bounds,
+            reference_overview,
             Some(&mut slots),
         );
         collect_openings(&mut openings, &mut slots, &footprint, camera, rect, state.selection.contains(&footprint.id));
-        if selected || reference_enabled && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
+        if selected || reference_enabled && selectable(&footprint) && response.hover_pos().is_some_and(|pointer| reference_bounds.contains(pointer)) {
             board::reference_outline(&p, reference_bounds, selected, reference_color);
         }
     }
@@ -685,14 +788,9 @@ pub(super) fn show(
             board::drc_marker(&p, at, *focused);
         }
     }
-    if let Some(drag) = &state.box_drag
-        && let Some(pointer) = ui.input(|i| i.pointer.interact_pos())
+    if let Some((window, crossing, hits)) = marquee
+        && let Some(drag) = &state.box_drag
     {
-        let window = egui::Rect::from_two_pos(drag.start, pointer);
-        let crossing = pointer.x < drag.start.x;
-        debug_assert_eq!(hit_bounds.len(), project.footprint_ids().len());
-        let mut hits = geometry_for_box(project, camera, rect, state, filters, window, crossing);
-        hits.footprints = footprints_for_box(project, &hit_bounds, window, crossing, filters.footprints);
         pcbcraft_chrome::selection::board_marquee(&p, window, crossing, hits.len());
         if ui.input(|i| i.pointer.button_released(drag.button)) {
             if enabled && response.contains_pointer() {
@@ -707,7 +805,7 @@ pub(super) fn show(
         crate::board_tracks::paint_draft(&p, &response, camera, project, &mut state.tracks, state.active_layer.as_deref(), appearance);
     }
     crate::board_measure::paint(ui, rect, camera, project, &state.measure, unit);
-    if project.footprints().next().is_none()
+    if footprints.is_empty()
         && project.zones().is_empty()
         && project.drawings().is_empty()
         && project.tracks().is_empty()
@@ -744,6 +842,41 @@ pub(super) fn show(
         response.on_hover_cursor(egui::CursorIcon::Grabbing);
     }
     out
+}
+
+/// At overview scales, draw ordinary references as atlas text at their ink's
+/// center. Detailed, edited and mirrored lettering keeps its physical strokes.
+fn overview_reference(
+    painter: &egui::Painter,
+    footprint: &FootprintView<'_>,
+    graphics: &[board::GraphicDrawing],
+    camera: &Camera,
+    emphasized: bool,
+) -> Option<egui::Shape> {
+    let appearance = &footprint.reference_appearance;
+    let height = camera.unit_step() * appearance.size.height_nm as f32 / pcbcraft_engine::schematic::GRID_NM as f32;
+    if height >= 48.
+        || emphasized
+        || footprint.reference_text.is_some()
+        || footprint.reference_offset != pcbcraft_engine::board::DEFAULT_REFERENCE_OFFSET
+        || footprint.bottom != camera.mirrored()
+    {
+        return None;
+    }
+    let mut lettering = graphics.iter().filter(|graphic| graphic.reference);
+    let first = lettering.next()?;
+    if height < 4. {
+        return Some(egui::Shape::Noop);
+    }
+    let bounds = lettering.fold(first.bounds(), |bounds, graphic| bounds.union(graphic.bounds()));
+    let base = first.color.unwrap_or_else(|| board::graphic_color(first.style));
+    let color = base;
+    let view_rotation = f32::from(footprint.rotation) * if camera.mirrored() { 1. } else { -1. };
+    let angle = (view_rotation - f32::from(appearance.rotation)).to_radians();
+    let font = egui::FontId::monospace(height.round().max(5.));
+    let galley = pcbcraft_chrome::canvas_text::layout_no_wrap(painter, appearance.text.clone(), font, color);
+    let at = bounds.center() - galley.rect.center().to_vec2();
+    Some(egui::epaint::TextShape::new(at, galley, color).with_angle_and_anchor(angle, egui::Align2::CENTER_CENTER).into())
 }
 
 /// Preview a new group using engine-resolved geometry. Until a click commits, cancellation,
@@ -836,7 +969,7 @@ fn place_group(
                 ui.painter(),
                 &pads,
                 &graphics,
-                if footprint.physical_reference { "" } else { footprint.reference },
+                if footprint.physical_reference { "" } else { &footprint.reference },
                 camera.screen(footprint.position, response.rect),
                 color,
                 true,
@@ -844,6 +977,7 @@ fn place_group(
                 false,
                 reference_shift(&footprint, camera, response.rect),
                 bounds,
+                None,
                 Some(&mut slots),
             );
             collect_openings(&mut openings, &mut slots, &footprint, camera, response.rect, true);
@@ -859,14 +993,24 @@ fn place_group(
 
 /// Select only visible footprint bounds, sharing the exact geometry used for click picking.
 /// A window requires full containment; crossing requires overlap. Empty hidden bounds never hit.
-/// `bounds` must contain one entry per `project.footprints()` item in the same iteration order.
-fn footprints_for_box(project: BoardView<'_>, bounds: &[egui::Rect], window: egui::Rect, crossing: bool, enabled: bool) -> BTreeSet<String> {
-    project
-        .footprint_ids()
+/// `bounds` must contain one entry per footprint in the same order.
+fn footprints_for_box(
+    footprints: &[FootprintView<'_>],
+    bounds: &[egui::Rect],
+    window: egui::Rect,
+    crossing: bool,
+    filters: crate::selection_filters::Filters,
+) -> BTreeSet<String> {
+    footprints
+        .iter()
         .zip(bounds)
-        .filter_map(|(id, bounds)| {
-            (enabled && bounds.is_positive() && if crossing { window.intersects(*bounds) } else { window.contains_rect(*bounds) }).then_some(id)
+        .filter(|(footprint, bounds)| {
+            filters.footprints
+                && filters.permits_lock(footprint.locked)
+                && bounds.is_positive()
+                && if crossing { window.intersects(**bounds) } else { window.contains_rect(**bounds) }
         })
+        .map(|(footprint, _)| footprint.id.clone())
         .collect()
 }
 
@@ -889,16 +1033,86 @@ fn net_under(
     rect: egui::Rect,
     view: BoardView<'_>,
     hidden: &BTreeSet<String>,
+    active: Option<&str>,
     nets: &BTreeMap<uuid::Uuid, String>,
 ) -> Option<String> {
+    let at = camera.unsnapped(pointer, rect);
     view.footprints()
         .flat_map(|footprint| footprint.pads)
         .filter(|pad| pad_visible(pad, view, hidden))
-        .find(|pad| pad.copper.is_some_and(|land| egui::Rect::from_points(&land.map(|corner| camera.screen(corner, rect))).contains(pointer)))
+        .find(|pad| pad.net.is_some() && pad.contains_point(at))
         .and_then(|pad| pad.net)
         .or_else(|| {
-            crate::board_tracks::copper_at(pointer, camera, rect, view, hidden, crate::board_tracks::Kinds::ALL).and_then(|id| nets.get(&id).cloned())
+            crate::board_tracks::copper_choices(pointer, camera, rect, view, hidden, crate::board_tracks::Kinds::ALL, active)
+                .find_map(|id| nets.get(&id).cloned())
         })
+}
+
+enum Pick {
+    Pad(pcbcraft_engine::board::Pad),
+    Item(pcbcraft_engine::board::clipboard::BoardSelection),
+}
+
+/// Select the next visible object under the mouse, with a stable order for coincident hits.
+/// The result goes through the ordinary board or pad selection handler after paint.
+#[allow(clippy::too_many_arguments)]
+fn cycle_selection(
+    project: BoardView<'_>,
+    state: &BoardState,
+    camera: &Camera,
+    rect: Rect,
+    pointer: Pos2,
+    filters: crate::selection_filters::Filters,
+    inspection: &[pcbcraft_engine::board::correspondence::Source],
+    footprints: impl Iterator<Item = String>,
+    pads: impl Iterator<Item = pcbcraft_engine::board::Pad>,
+) -> Option<Pick> {
+    use pcbcraft_engine::board::{clipboard::BoardSelection, correspondence::Source};
+    let hidden = &state.hidden_layers;
+    let mut choices: Vec<_> = pads.map(Pick::Pad).collect();
+    for id in crate::board_tracks::copper_choices(
+        pointer,
+        camera,
+        rect,
+        project,
+        hidden,
+        crate::board_tracks::Kinds::from(filters),
+        state.active_layer.as_deref(),
+    ) {
+        let mut items = BoardSelection::default();
+        if project.vias().binary_search_by_key(&id, |via| via.id).is_ok() {
+            items.vias.insert(id);
+        } else {
+            items.tracks.insert(id);
+        }
+        choices.push(Pick::Item(items));
+    }
+    for (drawing, zones, allowed) in [(&state.zones, true, filters.zones), (&state.drawing, false, filters.graphics)] {
+        if allowed {
+            for id in crate::board_drawing::edge_choices(drawing, project, hidden, pointer, camera, rect) {
+                let mut items = BoardSelection::default();
+                if zones {
+                    items.zones.insert(id);
+                } else {
+                    items.drawings.insert(id);
+                }
+                choices.push(Pick::Item(items));
+            }
+        }
+    }
+    for id in footprints {
+        choices.push(Pick::Item(BoardSelection { footprints: BTreeSet::from([id]), ..Default::default() }));
+    }
+    if choices.len() < 2 {
+        return None;
+    }
+    let current = crate::board_clipboard::selection_with_vias(state, project.vias().iter().map(|via| via.id));
+    let selected = choices.iter().position(|choice| match choice {
+        Pick::Pad(pad) => matches!(inspection, [Source::Pad(target)] if target.board==project.target && target.pad==*pad),
+        Pick::Item(items) => *items == current,
+    });
+    let next = selected.map_or(0, |i| (i + 1) % choices.len());
+    Some(choices.swap_remove(next))
 }
 
 /// Resolve the visible reference hit area, excluding pad, body and fixed silkscreen geometry.
@@ -915,7 +1129,7 @@ fn reference_bounds(
 ) -> Rect {
     if !footprint.physical_reference {
         return if bounds.is_finite() {
-            board::footprint_reference_bounds(painter, bounds, footprint.reference, reference_shift(footprint, camera, rect))
+            board::footprint_reference_bounds(painter, bounds, &footprint.reference, reference_shift(footprint, camera, rect))
         } else {
             Rect::NOTHING
         };
@@ -1223,7 +1437,7 @@ fn geometry_for_box(
     let tracks = project
         .tracks()
         .iter()
-        .filter(|t| filters.tracks && !state.hidden_layers.contains(&t.layer.to_string()))
+        .filter(|t| filters.tracks && filters.permits_lock(t.locked) && !state.hidden_layers.contains(&t.layer.to_string()))
         .filter(|t| stroke(vec![camera.screen(t.start, rect), camera.screen(t.end, rect)], false, radius(t.width_nm)))
         .map(|t| t.id)
         .collect();
@@ -1238,7 +1452,7 @@ fn geometry_for_box(
     let vias = project
         .vias()
         .iter()
-        .filter(|_| filters.vias && visible_copper)
+        .filter(|v| filters.vias && filters.permits_lock(v.locked) && visible_copper)
         .filter(|v| {
             let center = camera.screen(v.at, rect);
             let radius = radius(v.diameter_nm / 2);
@@ -1271,6 +1485,7 @@ pub(super) fn all_visible(
         let colors = FootprintColors::new(appearance, project, state.active_layer.as_deref(), &state.hidden_layers);
         selected.footprints = project
             .footprints()
+            .filter(|f| filters.permits_lock(f.locked))
             .filter(|f| {
                 let (pads, graphics) = drawing(f, &camera, rect, visible, &colors);
                 visible_footprint_bounds(f, &pads, &graphics, &camera, rect).is_positive()

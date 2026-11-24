@@ -18,7 +18,7 @@ impl PcbApp {
             return Err("Finish the current library operation first.".into());
         }
         let doc = self.library_editors.parts.get(&id).ok_or("Unknown part document.")?;
-        if !doc.pending.is_empty() {
+        if doc.has_unapplied() {
             return Err("Apply or reset typed fields before publishing.".into());
         }
         if self.library_editors.publisher.unconfirmed() != Some(id) {
@@ -166,7 +166,7 @@ impl PcbApp {
                 return Err("Finish the current library operation first.".into());
             }
             let doc = self.library_editors.parts.get(&id).ok_or("Unknown part document.")?;
-            if doc.session.revision() != revision || !doc.pending.is_empty() {
+            if doc.session.revision() != revision || doc.has_unapplied() {
                 return Err("Part document changed or has unapplied fields; review before publishing.".into());
             }
             if let Some(recovery) = self.library_editors.publisher.recovery.clone() {

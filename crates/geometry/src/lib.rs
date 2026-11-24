@@ -1,22 +1,19 @@
-//! Solid bodies and STEP (ISO 10303-21) exchange for PCBcraft's 3D features.
+//! Planar regions, solid bodies and STEP (ISO 10303-21) exchange behind a kernel-neutral API.
 //!
 //! This crate is the boundary to the B-rep kernel. It is implemented with SolidCraft's
 //! `solidcore` kernel and its `solidcore-ops`, `solidcore-record` and `solidcore-step` crates, at the
 //! SolidCraft revision the workspace already pins, but no kernel type appears in its public API:
-//! callers use kernel-neutral types such as [`Body`], [`BoundingBox`], [`Transform`] and
+//! callers use kernel-neutral types such as [`Body`], [`BoundingBox`], [`Transform`], [`planar::Regions`] and
 //! [`GeometryError`], so the kernel can be replaced without touching them. Lengths are whole nanometres; the kernel's millimetre floats stay inside.
 //!
-//! Every kernel operation this crate calls (making, measuring, reading and writing) runs under a
-//! guard. When panics unwind, the guard turns a panic into [`ErrorCode::KernelInternal`] and leaves
-//! the caller's own data unchanged. A panic that aborts cannot be caught. Dropping a [`Body`] frees
-//! its kernel data outside the guard. Errors carry a stable snake_case code ([`ErrorCode::as_str`])
-//! for MCP and CLI replies.
+//! A guard runs every kernel operation. When a panic unwinds, the guard returns
+//! [`ErrorCode::KernelInternal`] and leaves the caller's data unchanged. Dropping a [`Body`]
+//! frees its kernel data outside the guard. Errors carry a stable snake_case code
+//! ([`ErrorCode::as_str`]) for MCP and CLI replies.
 //!
-//! Native builds always have the kernel. On `wasm32` it is left out unless the `wasm-kernel`
-//! feature is on, because a panic there aborts by default instead of unwinding, and the guard
-//! cannot catch it. Without the kernel the same API compiles, no [`Body`] can be made, and every
-//! operation that reaches the kernel answers [`ErrorCode::KernelUnavailable`]; arguments refused
-//! before the kernel keep their own codes.
+//! [`planar`] works on native and WebAssembly targets. Solid bodies and STEP are available
+//! on native builds and on WebAssembly with the optional `wasm-kernel` feature. A browser
+//! panic aborts by default, so the host isolates fallible planar calculations.
 //!
 //! `docs/geometry-kernel.md` records the kernel choice, its qualification and its known limits.
 #![forbid(unsafe_code)]
@@ -28,6 +25,7 @@ mod kernel;
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm-kernel")))]
 #[path = "kernel_unavailable.rs"]
 mod kernel;
+pub mod planar;
 pub mod substrate;
 
 use std::fmt;
@@ -51,7 +49,7 @@ pub enum ErrorCode {
     /// The kernel could not complete an operation, or the crash test was refused because panics
     /// abort (`operation_failed`).
     OperationFailed,
-    /// This build has no geometry kernel (`kernel_unavailable`).
+    /// The requested 3D/STEP operation is unavailable on this build (`kernel_unavailable`).
     KernelUnavailable,
     /// The kernel panicked; the panic was caught and nothing the caller owns changed
     /// (`kernel_internal`).
