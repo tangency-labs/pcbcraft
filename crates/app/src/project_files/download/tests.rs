@@ -1,7 +1,7 @@
 use super::*;
 use pcbcraft_engine::{
     MOVE_SYMBOL, Session,
-    persistence::{decode, decode_documents, encode_documents, migrate_bundled_libraries},
+    persistence::{CURRENT_PROJECT_FORMAT, ENTRY_POINT, decode, decode_documents, encode_documents, migrate_bundled_libraries},
 };
 use serde_json::json;
 
@@ -14,6 +14,25 @@ fn encode(current: Arc<Project>, original: Option<Original>) -> Documents {
         }
     }
     panic!("bounded fixture download did not complete");
+}
+
+/// An otherwise unchanged archive with a previous entry-point version must go through the
+/// incremental download writer. An unchanged download from the result can reuse its bytes.
+#[test]
+fn unchanged_download_advances_the_project_header() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":true})).unwrap();
+    let current = encode_documents(session.snapshot().unwrap()).unwrap();
+    let mut previous = current.clone();
+    let entry = String::from_utf8(previous[ENTRY_POINT].clone()).unwrap().replacen(CURRENT_PROJECT_FORMAT, "pcbcraft-project/16", 1);
+    previous.insert(ENTRY_POINT.into(), entry.into_bytes());
+    let opened = decode_documents(&previous).unwrap();
+    let baseline = Original::for_project(opened.clone(), Arc::new(previous), &opened).unwrap();
+    assert!(baseline.unchanged(&opened).is_none());
+    assert_eq!(encode(opened, Some(baseline)), current);
+    let reopened = decode_documents(&current).unwrap();
+    let baseline = Original::for_project(reopened.clone(), Arc::new(current.clone()), &reopened).unwrap();
+    assert_eq!(baseline.unchanged(&reopened).unwrap().as_ref(), &current);
 }
 
 /// Migration preserves unrelated formatting but must never restore changed sheet/library addresses.

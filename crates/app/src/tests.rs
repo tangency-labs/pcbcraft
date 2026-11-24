@@ -68,9 +68,6 @@ pub(crate) fn assert_same_content(expected: &Arc<pcbcraft_engine::Project>, actu
     let normalize = |documents: &mut pcbcraft_engine::persistence::Documents| {
         let mut entry: Value = serde_json::from_slice(&documents["project.json"]).unwrap();
         let watermark = entry.as_object_mut().unwrap().remove("numeric_id_high_water").and_then(|value| value.as_u64()).unwrap_or(0);
-        if entry["format"] == "pcbcraft-project/7" {
-            entry["format"] = json!("pcbcraft-project/6");
-        }
         documents.insert("project.json".into(), serde_json::to_vec(&entry).unwrap());
         watermark
     };

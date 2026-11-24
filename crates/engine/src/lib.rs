@@ -180,6 +180,7 @@ enum ParamKind {
     ArcTracks,
     TeardropEdits,
     TrackReplacements,
+    ViaMoves,
     AlignMode,
     FootprintPitch,
     BoardSide,
@@ -223,6 +224,7 @@ enum ParamKind {
     /// A route posture spelling, such as `diagonal`.
     RoutePosture,
     RouteMode,
+    DragMode,
     RouteFixed,
     /// A route planner's probe budget.
     RouteBudget,
@@ -316,6 +318,7 @@ impl ParamKind {
                 schema
             }
             Self::LayerChanges => board::track::layer_changes_schema(),
+            Self::ViaMoves => board::track::replacements::via_moves_schema(),
             Self::TrackReplacements => board::track::replacements::schema(),
             Self::TrackEnds => {
                 json!({"type":"array","minItems":1,"maxItems":board::track::MAX_TRACKS,"items":{"type":"object","properties":{"track":{"type":"string","format":"uuid"},"start":point_schema(),"end":point_schema()},"required":["track","start","end"],"additionalProperties":false}})
@@ -341,7 +344,8 @@ impl ParamKind {
             }
             Self::Closed | Self::Locked => json!({"type":"boolean"}),
             Self::RoutePosture => board::route::posture_schema(),
-            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove"]}),
+            Self::DragMode => json!({"type":"string","enum":["shove","shove_vias","walkaround","highlight"]}),
+            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove","shove_vias","highlight"]}),
             Self::RouteFixed => board::route::fixed_schema(),
             Self::RouteBudget => board::route::budget_schema(),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
@@ -596,11 +600,18 @@ impl ParamKind {
             }
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
             Self::Closed | Self::Locked if value.is_boolean() => Ok(()),
-            Self::RouteMode => {
-                if matches!(value.as_str(), Some("walkaround" | "shove")) {
+            Self::DragMode => {
+                if matches!(value.as_str(), Some("shove" | "shove_vias" | "walkaround" | "highlight")) {
                     Ok(())
                 } else {
-                    Err("must be walkaround or shove")
+                    Err("must be shove, shove_vias, walkaround or highlight")
+                }
+            }
+            Self::RouteMode => {
+                if matches!(value.as_str(), Some("walkaround" | "shove" | "shove_vias" | "highlight")) {
+                    Ok(())
+                } else {
+                    Err("must be walkaround, shove, shove_vias or highlight")
                 }
             }
             Self::RouteFixed => {
@@ -711,6 +722,9 @@ impl ParamKind {
             Self::RuleLength => Err("must be a length from 0 to the board coordinate range"),
             Self::BoardSide if matches!(value.as_str(), Some("front" | "back")) => Ok(()),
             Self::BoardSide => Err("must be front or back"),
+            Self::ViaMoves => {
+                board::track::replacements::via_moves(value).map(drop).map_err(|_| "must list distinct through vias and bounded positions")
+            }
             Self::TrackReplacements => {
                 board::track::replacements::parse(value).map(drop).map_err(|_| "must list unique track UUIDs with bounded replacement paths")
             }
@@ -925,11 +939,16 @@ impl Command {
             params.insert("sheet".to_owned(), json!({"type":"string", "format":"uuid", "description":"Sheet UUID from inspection. Required when the project has multiple sheets; omission is compatible with one-sheet projects."}));
         }
         let required: Vec<&str> = self.params.iter().filter(|p| p.required).map(|p| p.name).collect();
+        let mut schema = json!({"type": "object", "properties": params, "required": required, "additionalProperties": false});
+        if self.id == RESHAPE_TRACKS {
+            schema["if"] = json!({"required":["mode"]});
+            schema["then"] = json!({"properties":{"tracks":{"maxItems":board::track::MAX_PATH_POINTS}}});
+        }
         json!({
             "id": self.id,
             "title": self.title,
             "summary": self.summary,
-            "params": {"type": "object", "properties": params, "required": required, "additionalProperties": false},
+            "params": schema,
         })
     }
 }
@@ -2253,6 +2272,12 @@ const CATALOG: &[Command] = &[
                 kind: ParamKind::Flag,
             },
             Param {
+                name: "via_moves",
+                required: false,
+                summary: "Through via UUIDs and new centers; submit the matching endpoint replacements",
+                kind: ParamKind::ViaMoves,
+            },
+            Param {
                 name: "replacements",
                 required: false,
                 summary: "Existing track UUIDs and replacement paths, validated with the new route in one edit; retained widths/layers and existing connections are enforced",
@@ -2321,6 +2346,12 @@ const CATALOG: &[Command] = &[
         params: &[
             BOARD,
             EXPECTED_REVISION,
+            Param {
+                name: "mode",
+                required: false,
+                summary: "Use highlight, walkaround, shove or shove_vias for a connected drag of up to 256 segments on a board without authored zones",
+                kind: ParamKind::DragMode,
+            },
             Param { name: "tracks", required: true, summary: "Each track UUID with its new start and end", kind: ParamKind::TrackEnds },
         ],
     },
@@ -2472,7 +2503,7 @@ const CATALOG: &[Command] = &[
     Command {
         id: board::route::PLAN_ROUTE,
         title: "Plan Route",
-        summary: "Plan one route on a copper layer with effective width, clearance and board-edge rules, without editing. To commit a fresh reached plan, submit the full route including any fixed prefix and layer changes, replacements, merge_same_net and expected_revision to pcb.add_tracks.",
+        summary: "Plan one route on a copper layer with effective width, clearance and board-edge rules, without editing. To commit a fresh reached plan, submit the full route including any fixed prefix and layer changes, replacements, via_moves, merge_same_net and expected_revision to pcb.add_tracks.",
         params: &[
             BOARD,
             Param {
@@ -2492,7 +2523,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "mode",
                 required: false,
-                summary: "walkaround (default) or shove unlocked tracks; pads, vias and locks stay fixed",
+                summary: "walkaround (default) detours, highlight shows a blocked path at collisions, shove moves eligible tracks, and shove_vias also moves eligible through vias on boards without zones",
                 kind: ParamKind::RouteMode,
             },
             Param {
@@ -2518,7 +2549,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "budget",
                 required: false,
-                summary: "Maximum planning probes (4,096 by default for walkaround, 65,536 for shove)",
+                summary: "Maximum planning probes (4,096 by default for walkaround, 65,536 for shove and shove_vias)",
                 kind: ParamKind::RouteBudget,
             },
             Param {
@@ -2863,6 +2894,10 @@ pub fn command(id: &str) -> Option<&'static Command> {
 pub enum CommandError {
     Unknown(String),
     InvalidParams(String),
+    /// A proposed copper edit violates clearance or would join incompatible nets.
+    CopperCollision {
+        blockers: std::collections::BTreeSet<String>,
+    },
     /// The command is real, but can't run in this state, like undo with nothing to undo.
     Unavailable(String),
     /// The edit was prepared against a revision different from `current`.
@@ -2892,7 +2927,7 @@ impl CommandError {
         use error_codes::ErrorCode;
         match self {
             Self::Unknown(_) => ErrorCode::UnknownCommand,
-            Self::InvalidParams(_) => ErrorCode::InvalidParams,
+            Self::InvalidParams(_) | Self::CopperCollision { .. } => ErrorCode::InvalidParams,
             Self::Unavailable(_) => ErrorCode::Unavailable,
             Self::StaleRevision { .. } => ErrorCode::StaleRevision,
             Self::NotFound(_) => ErrorCode::NotFound,
@@ -2909,6 +2944,7 @@ impl CommandError {
             Self::StaleRevision { current } => json!({"current_revision": current}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
             Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
+            Self::CopperCollision { blockers } => json!({"blockers": blockers}),
             _ => json!({}),
         }
     }
@@ -2920,6 +2956,7 @@ impl std::fmt::Display for CommandError {
         match self {
             Self::Unknown(id) => write!(f, "unknown command `{id}`"),
             Self::InvalidParams(m) | Self::Unavailable(m) | Self::NotFound(m) | Self::CapExceeded(m) => f.write_str(m),
+            Self::CopperCollision { .. } => f.write_str("The compound route violates copper clearance or intended net membership."),
             Self::StaleRevision { current } => write!(f, "project changed, inspect the current revision ({current}) and retry"),
             Self::VersionMismatch { command, stated, current } => write!(
                 f,

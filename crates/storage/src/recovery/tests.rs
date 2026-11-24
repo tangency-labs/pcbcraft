@@ -47,15 +47,18 @@ fn ten_edits(session: &mut Session) {
     session.apply(DRAW_WIRE, &json!({"from":at(-10, -10),"to":at(0, -20),"bends":[at(0, -10)],"expected_revision":revision(session)})).unwrap();
 }
 
-/// Every file under `root` with its bytes.
+/// Every file under `root` with its bytes. Use metadata for empty files so that
+/// Windows can include held lock files without reading their locked range.
 fn tree(root: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     let mut files = BTreeMap::new();
     for entry in fs::read_dir(root).unwrap() {
         let path = entry.unwrap().path();
-        if path.is_dir() {
+        let metadata = fs::metadata(&path).unwrap();
+        if metadata.is_dir() {
             files.extend(tree(&path));
         } else {
-            files.insert(path.clone(), fs::read(path).unwrap());
+            let bytes = if metadata.len() == 0 { Vec::new() } else { fs::read(&path).unwrap() };
+            files.insert(path, bytes);
         }
     }
     files

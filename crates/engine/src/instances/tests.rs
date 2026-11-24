@@ -34,17 +34,17 @@ fn legacy_uuid_vectors_are_domain_separated_and_stable() {
 /// moving board folders or rewriting physical, schematic or pinned-definition payloads.
 #[test]
 fn current_folder_migration_preserves_payloads_and_inspected_legacy_ids() {
-    let before = encode_documents(legacy_folder()).unwrap();
+    let before = crate::persistence::historical_documents(legacy_folder(), "pcbcraft-project/14");
     assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/14");
     let a = decode_documents(&before).unwrap();
     let b = decode_documents(&before).unwrap();
     assert_eq!(a.sheet_instances(), b.sheet_instances());
     assert!(!a.has_sheet_occurrences());
-    assert_eq!(encode_documents(a.clone()).unwrap(), before);
+    assert_eq!(encode_documents(a.clone()).unwrap(), encode_documents(b).unwrap());
     let migrated = Arc::new(a.with_sheet_occurrences().unwrap());
     assert_eq!(migrated.sheet_instances(), a.sheet_instances());
     let after = encode_documents(migrated.clone()).unwrap();
-    assert_eq!(serde_json::from_slice::<Value>(&after[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/16");
+    assert_eq!(serde_json::from_slice::<Value>(&after[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     assert_eq!(migrated.board_document_path(), a.board_document_path());
     for (path, bytes) in &before {
         if path != ENTRY_POINT {
@@ -268,11 +268,11 @@ fn native_multiunit_part_keeps_one_package_across_occurrence_migration() {
     apply(&mut session, crate::PLACE_ASSIGNED_FOOTPRINT, json!({"board":board,"component":component,"x_nm":0,"y_nm":0}));
     apply(&mut session, crate::board::update::INITIALIZE_BASELINE, json!({"board":board}));
     let historical = crate::persistence::diagnostic_snapshot(session.snapshot().unwrap());
-    let before = encode_documents(historical).unwrap();
+    let before = crate::persistence::historical_documents(historical, "pcbcraft-project/15");
     assert_eq!(serde_json::from_slice::<Value>(&before[ENTRY_POINT]).unwrap()["format"], "pcbcraft-project/15");
     let original = decode_documents(&before).unwrap();
     assert!(!original.has_sheet_occurrences());
-    assert_eq!(encode_documents(original.clone()).unwrap(), before);
+    assert_eq!(crate::persistence::historical_documents(original.clone(), "pcbcraft-project/15"), before);
     let migrated = crate::persistence::migrate_board_layout(before.clone(), original.layout_root().unwrap()).unwrap();
     let reopened = decode_documents(&migrated).unwrap();
     assert_eq!(reopened.sheet_instances(), original.sheet_instances());
