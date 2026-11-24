@@ -90,7 +90,6 @@ impl Session {
             catalog.definitions.push(Definition { id, revision, name, rules, authored_intent });
         }
         catalog.definitions.sort_by_key(|class| class.id);
-        catalog.sync_format();
         catalog.validate().map_err(CommandError::InvalidParams)?;
         let mut candidate =
             if original.layout.is_none() { original.with_board_folders(".").map_err(CommandError::InvalidParams)? } else { original.clone() };

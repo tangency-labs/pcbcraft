@@ -2,7 +2,7 @@
 
 ## 0.1.0 (unreleased)
 
-- **Analyze → Rules → Working voltage** lets designers declare and inspect a working-voltage requirement (`DC` or `Peak AC`, referenced to `Earth` or a named net) on a saved net or net class, backed by the shared `electrical_intent.set` and `electrical_intent.inspect` MCP commands. Reports state the authored source, mark the requirement unverified (no ERC, DRC or solver consumes it yet), and flag `needs_review` with the reason when an owning or reference net is split, merged, left ambiguous, or deleted. Declarations save in `pcbcraft-project/49` (or `/54` with active designator locks), `pcbcraft-instances/10`, and `pcbcraft-net-classes/4` only when present; earlier releases cannot open files carrying authored electrical intent, while files without declarations retain their existing formats and canonical bytes.
+- **Analyze → Rules → Working voltage** lets designers declare and inspect a working-voltage requirement (`DC` or `Peak AC`, referenced to `Earth` or a named net) on a saved net or net class, backed by the shared `electrical_intent.set` and `electrical_intent.inspect` MCP commands. Reports state the authored source, mark the requirement unverified (no ERC, DRC or solver consumes it yet), and flag `needs_review` with the reason when an owning or reference net is split, merged, left ambiguous, or deleted. Declarations are optional `authored_intent` fields on saved net records and net-class definitions in the current project, instances and net-class formats; no format number changes. Earlier releases refuse files carrying them as unknown fields, and files without declarations keep their exact bytes.
 
 Pane headers support explicit up/down and left/right splits, with previews and
 saved orientation. Dragging between panes moves the existing view and collapses
@@ -10,7 +10,7 @@ its old slot. Splitting a pane itself opens another view. Separate Split window
 up/down targets move the existing pane across the full window, and live commands
 expose both placement scopes.
 
-- Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/ui-automation.md#size-a-window-for-recording).
+- Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/automation/ui-automation.md#size-a-window-for-recording).
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,
@@ -23,11 +23,11 @@ project edits and reopened documents do not restore stale inspection selections.
 optional protocol features the build offers, so an agent can tell when the
 commands it was written for may no longer work and when its cached discovery
 data is out of date. Existing replies keep their fields; see
-[command API version](docs/mcp.md#command-api-version). MCP `execute` now
+[command API version](docs/automation/command-api.md#command-api-version). MCP `execute` now
 accepts an optional pin to that API version, refusing a different version with
 `version_mismatch`. Discovery can mark deprecated commands and parameters;
 successful calls that use them add warnings without changing the ordinary result.
-See [stating a version](docs/mcp.md#stating-a-version).
+See [stating a version](docs/automation/command-api.md#stating-a-version).
 
 Agents can plan a route before adding it: `pcb.plan_route` returns H/V/45° points
 on one copper layer that go round existing pads, tracks and vias, locked or not,
@@ -45,7 +45,7 @@ rejected before changing layers.
 Failed MCP calls and live editor replies now carry a stable error code, such
 as `stale_revision`, `not_found` or `cap_exceeded`, with machine-readable
 details, so an agent can act on a failure without parsing its message. The
-codes are published in [error codes](docs/mcp.md#error-codes) and are never
+codes are published in [error codes](docs/automation/command-api.md#error-codes) and are never
 renamed or reused. Messages are unchanged, except that `ui.` commands now
 refuse unknown keys, missing required keys and non-null scalar or array
 parameter lists with the same wording as window commands. Omitted or null
@@ -70,11 +70,9 @@ manage the catalog, and `part_instances.set_groups` and
 `part_instances.inspect_groups` set and read a part instance's groups by its
 stable ID, so annotation does not change membership. A group that still has
 members cannot be removed. Projects with part groups use project/24 (expanded
-memberships) or project/39 (compact) unless profiles, pairs, authored electrical
-intent or a designator lock select project/36, /45, /49, /51 or /54. Board
-instance documents use instances/5 or /7 for the two representations,
-instances/8 when pairs are present, or instances/10 when authored electrical
-intent is present. The compact
+memberships) or project/39 (compact) unless profiles, pairs or a designator lock
+select project/36, /45 or /51. Board instance documents use instances/5 or /7
+for the two representations, or instances/8 when pairs are present. The compact
 UUID dictionary keeps dense memberships within the existing size limits without
 dropping supported membership. Earlier files
 keep the expanded representation while it fits, and compact files keep their

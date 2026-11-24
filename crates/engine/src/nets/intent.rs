@@ -418,7 +418,6 @@ impl Target {
                     .ok_or_else(|| CommandError::InvalidParams("Unknown net class.".into()))?;
                 class.revision = class.revision.checked_add(1).ok_or_else(|| CommandError::Unavailable("Class revision exhausted.".into()))?;
                 class.authored_intent = intent;
-                catalog.sync_format();
             }
         }
         Ok(candidate)
@@ -494,8 +493,8 @@ impl Project {
     }
 }
 
-/// Decode only a nonempty canonical payload with named fields. Older native envelopes
-/// additionally refuse its presence, regardless of whether a newer reader knows its vocabulary.
+/// Decode only a nonempty canonical payload with named fields. Older project headers
+/// additionally refuse its presence, and older builds refuse it as an unknown field.
 pub(crate) fn stored<'de, D: serde::Deserializer<'de>>(de: D) -> Result<IntentV1, D::Error> {
     let intent: IntentV1 = named(de)?;
     if intent.is_empty() || intent.voltage.as_ref().is_some_and(|v| !v.magnitude_volts.valid(v.basis == VoltageBasis::Dc)) {

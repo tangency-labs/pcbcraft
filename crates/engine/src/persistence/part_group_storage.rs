@@ -161,13 +161,11 @@ fn value<'de, D: serde::Deserializer<'de>>(de: D) -> Result<Option<crate::nets::
 
 impl StoredInstances {
     /// Select exactly the encoding promised by the project/instance headers, expanding UUIDs
-    /// only for a compact envelope, including project/49 (authored electrical intent),
-    /// project/51 (designator locks), project/54 (both), project/48 and /56 (alternate pin
-    /// functions, the latter with designator locks), and project/59 (intent with pin functions).
+    /// only for a compact envelope, including project/51 and /56 containing designator locks.
     /// The normal instance installer validates foreign identities.
     pub(super) fn into_records(self, compact: bool) -> Result<Instances, String> {
         if compact != self.compact_part_group_memberships.is_some() || (compact && self.part_group_memberships.is_some()) {
-            return Err("Compact part-group memberships require project format 36, 39, 45, 48, 49, 51, 54, 56 or 59. When board-owned, use instances format 7 without pairs, 8 with pairs or 10 with authored electrical intent, and exactly one membership encoding.".into());
+            return Err("Compact part-group memberships require project format 39, 36, 45, 48, 51 or 56. When board-owned, use instances format 7 without pairs or 8 with pairs, and exactly one membership encoding.".into());
         }
         let part_group_memberships = match self.compact_part_group_memberships {
             Some(memberships) => Some(memberships.expand()?),

@@ -19,12 +19,14 @@ mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
 pub(crate) use documents::check_board_document_size;
+#[cfg(test)]
+pub(crate) use documents::historical_documents;
 pub mod layout;
 mod part_group_storage;
 pub use documents::{
-    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
-    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
-    project_registered_board_id,
+    CURRENT_PROJECT_FORMAT, Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES,
+    convert_legacy_documents, decode_documents, encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path,
+    project_layout_root, project_registered_board_id,
 };
 mod packed;
 mod power_migration;
@@ -864,7 +866,7 @@ fn validate_with_hierarchy(
     let mut components = BTreeMap::new();
     for record in records {
         if record.pin_functions.is_some() {
-            return Err("Alternate pin functions require native project format 48, 56 or 59.".into());
+            return Err("Alternate pin functions require native project format 48 or 56.".into());
         }
         if record.designator_locked.is_some() {
             return Err("Designator locks require split project format 51 or 56.".into());

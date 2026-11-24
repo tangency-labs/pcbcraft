@@ -184,12 +184,9 @@ pub struct Catalog {
     pub definitions: Vec<Definition>,
 }
 
-const LEGACY_FORMAT: &str = "pcbcraft-net-classes/1";
-const INTENT_FORMAT: &str = "pcbcraft-net-classes/4";
-
 impl Default for Catalog {
     fn default() -> Self {
-        Self { format: LEGACY_FORMAT.into(), definitions: Vec::new() }
+        Self { format: "pcbcraft-net-classes/1".into(), definitions: Vec::new() }
     }
 }
 
@@ -232,27 +229,14 @@ pub fn validate_draft(name: &str, rules: &Rules) -> Result<(), String> {
 }
 
 impl Catalog {
-    /// Only classes with actual authored values require a newer catalog vocabulary.
+    /// Authored values are optional class fields of the one current catalog vocabulary.
     pub(crate) fn has_authored_intent(&self) -> bool {
         self.definitions.iter().any(|class| !class.authored_intent.is_empty())
     }
 
-    /// Determine the catalog version from the fields it must represent.
-    fn required_format(&self) -> &'static str {
-        if self.has_authored_intent() { INTENT_FORMAT } else { LEGACY_FORMAT }
-    }
-
-    /// Keep the version coherent after editing or removing the last class with authored intent.
-    pub(crate) fn sync_format(&mut self) {
-        let format = self.required_format();
-        if self.format != format {
-            self.format = format.into();
-        }
-    }
-
     /// Validate the complete bounded catalog before adoption. Duplicate IDs never overwrite records.
     pub fn validate(&self) -> Result<(), String> {
-        crate::named_catalog::validate(&self.format, self.required_format(), "net-class", "class", &self.definitions)?;
+        crate::named_catalog::validate(&self.format, "pcbcraft-net-classes/1", "net-class", "class", &self.definitions)?;
         self.definitions.iter().try_for_each(|class| validate_rules(&class.rules))
     }
 

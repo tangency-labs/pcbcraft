@@ -10,7 +10,7 @@
 //! part instances of 16 pins, runs in a few seconds in a debug build. SolidCraft's size, 500
 //! part instances of 16 pins, runs on request with `PCBCRAFT_STEP_BOARD_PART_INSTANCES=500`; it takes
 //! minutes in a debug build, almost all of it the kernel building bodies, and
-//! docs/geometry-kernel.md records its figures. A child process builds the file and hands it over
+//! docs/design/geometry-kernel.md records its figures. A child process builds the file and hands it over
 //! on its standard output, so the reader's peak memory is measured in a process that held no
 //! kernel bodies before; nothing is written to disk.
 

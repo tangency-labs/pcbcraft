@@ -162,6 +162,9 @@ impl PcbApp {
     }
     /// Native titles and pane headers resolve the actual document instead of its parked project target.
     pub(crate) fn view_title(&self, view: ViewId) -> String {
+        if self.views.view(view).is_some_and(|view| view.manufacturing.is_some()) {
+            return "Manufacturing".into();
+        }
         if self.views.view(view).is_some_and(|view| view.library.is_some()) {
             return "Parts Library".into();
         }
@@ -280,6 +283,7 @@ impl PcbApp {
             target.release_input();
             target.definition = Some(document);
             target.library = None;
+            target.manufacturing = None;
         }
         self.home = false;
         if host == self.views.host {

@@ -131,7 +131,7 @@ fn pair_list_empty(pairs: &std::sync::Arc<Vec<std::sync::Arc<Pair>>>) -> bool {
 }
 
 impl Registry {
-    /// Select the intent-aware envelope only for records with actual authored values.
+    /// Whether any record carries authored values; older project headers refuse them.
     pub(crate) fn has_authored_intent(&self) -> bool {
         self.records.iter().any(|record| !record.authored_intent.is_empty())
     }

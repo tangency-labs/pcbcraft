@@ -86,6 +86,7 @@ pub(super) struct Walker<'a> {
     layers: [Uuid; 1],
     half: f64,
     posture: Posture,
+    highlight: bool,
     head: Point,
     target: Point,
     /// An original gesture contact with resolved membership, lending it to every probe.
@@ -126,7 +127,7 @@ impl<'a> Walker<'a> {
         let at_head = Contour::capsule(request.head, request.head, half);
         let objects = query;
         let head_candidates = query.candidates(&at_head, &layers)?;
-        let (origin, origin_layer, origin_width) = if request.mode == super::Mode::Shove {
+        let (origin, origin_layer, origin_width) = if request.mode != super::Mode::Walkaround {
             super::shove::pickup_geometry(request)
         } else {
             let (origin, layer) = request.origin.unwrap_or((request.head, request.layer));
@@ -147,6 +148,7 @@ impl<'a> Walker<'a> {
             layers,
             half,
             posture: request.posture,
+            highlight: request.mode == super::Mode::Highlight,
             head: request.head,
             target: request.target,
             intended_from: contacts.iter().copied().find(|i| !objects[*i].intended_nets.is_empty()),
@@ -197,6 +199,35 @@ impl<'a> Walker<'a> {
     /// Probes charged so far; never more than the budget.
     pub(super) fn probes(&self) -> usize {
         self.probes
+    }
+
+    /// Test the preferred elbow without changing it or displacing copper. Keep the full
+    /// obstructed path for display and withhold placement authority until every leg passes.
+    pub(super) async fn highlight(&mut self, request: &Request) -> Result<Plan, Stop> {
+        let points = super::posture::elbow(request.head, request.target, request.posture, request.flipped);
+        let head = self.check(self.head, self.head).await?;
+        let mut legal = head.legal;
+        let mut blockers = head.blockers;
+        for pair in points.windows(2) {
+            let leg = self.check(pair[0], pair[1]).await?;
+            legal &= leg.legal;
+            blockers.extend(leg.blockers);
+        }
+        let clearance_nm = self.query.membership_clearance(&self.route_nets, &self.route_nets);
+        let outcome = if legal && super::legal_incoming(request, &points, clearance_nm).await {
+            Outcome::Reached
+        } else {
+            Outcome::Blocked { last_legal: self.head }
+        };
+        let mut plan = self.plan(points, outcome, blockers.first().map(|b| b.0));
+        plan.start_blocked = !head.legal;
+        plan.collisions = blockers.into_iter().map(|(index, _)| self.query[index].name.clone()).collect();
+        Ok(plan)
+    }
+
+    /// Preserve an existing drag leg's angle when it clears all captured obstacles.
+    pub(super) async fn clear_drag_leg(&mut self, start: Point, end: Point) -> Result<bool, Stop> {
+        Ok(self.check(start, end).await?.legal)
     }
 
     /// Plan the route, yielding between work units. Errors are budget exhaustion or a refused probe; the owner cancels by dropping the continuation.
@@ -251,7 +282,7 @@ impl<'a> Walker<'a> {
             return first.map(|mut plan| {
                 // Shove can try a board-edge prefix on its overlay. Placement still
                 // requires successful propagation, and a copper blocker stays blocked.
-                if request.mode == super::Mode::Shove
+                if request.mode != super::Mode::Walkaround
                     && goal.edge_blocked
                     && plan.blocker.is_none()
                     && plan.points.len() >= 2
@@ -331,7 +362,18 @@ impl<'a> Walker<'a> {
     /// Assemble a result, naming the blocking copper by its query address.
     fn plan(&self, points: Vec<Point>, outcome: Outcome, blocker: Option<usize>) -> Plan {
         let blocker = blocker.filter(|_| matches!(outcome, Outcome::Blocked { .. })).and_then(|i| self.query.get(i)).map(|o| o.name.clone());
-        Plan { adjusted_target: None, start_blocked: false, replacements: Vec::new(), shove: None, points, outcome, blocker, probes: self.probes }
+        Plan {
+            adjusted_target: None,
+            start_blocked: false,
+            via_moves: Vec::new(),
+            replacements: Vec::new(),
+            shove: None,
+            points,
+            outcome,
+            blocker,
+            collisions: Default::default(),
+            probes: self.probes,
+        }
     }
 
     /// Certify an incoming shove candidate against the same geometry and membership as
@@ -403,7 +445,7 @@ impl<'a> Walker<'a> {
                 continue;
             }
             legal = false;
-            if !same_net {
+            if !same_net || self.highlight {
                 blockers.push((decision.second, decision.clearance_nm));
             }
         }

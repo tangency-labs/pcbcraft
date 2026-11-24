@@ -1,17 +1,17 @@
 # Try PCBCraft
 
 This guide starts with schematic editing and continues through the supported
-PCB tools and shared MCP commands. The [capability table](capabilities.md)
+PCB tools and shared MCP commands. The [capability inventory](capabilities.md)
 records current limits, while the [documentation map](README.md) links focused
 guides and format references. Before replacing an existing board setup through
 MCP, use `pcb.preview_board_setup` with the candidate setup and current revision
 to review affected objects, consent and refusals without changing the project.
-[Setup review](board-materials.md#review-a-setup-edit) explains token-based Apply
+[Setup review](pcb/board-materials.md#review-a-setup-edit) explains token-based Apply
 and cancellation. The two-resistor example below is an original
 development fixture; the polished MVP demo and its end-to-end acceptance remain
 separate work.
 
-Boards with [existing footprint locks](pcb-layout-workflow.md#placed-footprint-locks)
+Boards with [existing footprint locks](pcb/locks.md#placed-footprint-locks)
 refuse move, rotate, flip, align and delete edits on those footprints. Track/via
 locks remain the supported way to lock and unlock objects interactively.
 
@@ -41,16 +41,16 @@ opening it or showing its recent-project preview leaves its files unchanged.
 To create a separate converted copy instead, use
 `./target/debug/pcbcraft-cli convert /path/to/old-project /path/to/new-project`.
 The destination must not exist; a `.pc` destination creates a portable package.
-The [conversion guide](native-project-storage.md#convert-a-previous-split-project)
+The [conversion guide](formats/native-project-storage.md#convert-a-previous-split-project)
 explains supported old inputs and failure behavior. Converted copies and new
 projects store each board under its registered `boards/<folder>/board.json` path.
 Supported flat `project.json` projects open unchanged and migrate on their first
 Save, even without design edits; later unchanged saves produce no diff.
 The current format also retains one stable occurrence ID per sheet, stored beside
 the board in `instances.json` or in `project.json` for a schematic-only project.
-First Save adds these [occurrence records](sheet-occurrence-storage.md) to older
+First Save adds these [occurrence records](formats/sheet-occurrence-storage.md) to older
 board-folder projects while preserving their existing board paths.
-Named nets and explicitly promoted nets use a [sparse persistent registry](net-registry-storage.md)
+Named nets and explicitly promoted nets use a [sparse persistent registry](formats/net-registry-storage.md)
 in those same instance homes. Its first record selects project/17, with
 instances/2 for a board; opening or inspecting an older project does not promote nets.
 
@@ -114,7 +114,7 @@ name. Hover a symbol and press **E** to edit, **G** to move with wires attached,
 **M** to disconnect and move, or **Delete** to remove it. Held dragging also
 retains wire contacts, including contacts made by placing onto an existing wire;
 Undo reverses the complete edit. Local/global labels retain their label properties.
-See [named nets](net-labels.md) for contact rules and current limits.
+See [named nets](schematic/net-labels.md) for contact rules and current limits.
 
 **VCC (bar)** uses the flat-bar drawing; **VCC** keeps the arrow. Both default to
 the same `VCC` net name, which can be changed before placement.
@@ -151,7 +151,7 @@ the same `VCC` net name, which can be changed before placement.
    to choose a hidden symbol before moving it.
    **Manage libraries…** in the catalog or **Libraries → Sources** adds native
    library folders on desktop or uploads a portable library bundle on either
-   platform. Try the original [Workshop source example](native-library-sources.md),
+   platform. Try the original [Workshop source example](libraries/native-library-sources.md),
    then select Workshop in the catalog. Placed symbols keep their pinned
    definition and license attribution after the source is removed. The
    [native part example](../examples/native-parts/README.md) also offers a generic
@@ -195,7 +195,7 @@ the same `VCC` net name, which can be changed before placement.
    **Ctrl+C**, **Ctrl+X** and **Ctrl+V** copy/cut/paste through the system
    clipboard, including between split panes, windows and running instances.
    Paste previews at the pointer; **R** rotates, a click places, and **Esc** cancels.
-   **Ctrl+Shift+V** opens [Paste Options](clipboard.md) for references, named-net
+   **Ctrl+Shift+V** opens [Paste Options](schematic/clipboard.md) for references, named-net
    isolation or original-position placement. Use **⌘** instead of Ctrl on macOS.
    Copying a sheet body includes its child subtree. For a same-project Cut,
    Paste Options requires **Reuse original unparented sheets** to be enabled
@@ -255,9 +255,13 @@ the active layer. Copper shapes are conductive linework; technical-layer graphic
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
 For exact spacing between footprint origins, use [set-pitch distribution through MCP](pcb-layout-workflow.md#set-pitch-distribution).
-The route preview walks around fixed copper, keeping its starting net through
-vertices and vias. An unconnected pad cannot acquire a named net by crossing it;
-blocked or incomplete searches keep the last legal preview and refuse that target.
+The router defaults to Walkaround and keeps its starting net through vertices
+and vias. Open **Layout → Route → Router Settings** to choose Walkaround, Shove,
+or Highlight collisions for new routes, **D**, and held drags on a single track.
+The settings card can float or dock through its **⋯** menu while you work. In
+Highlight collisions, existing blockers turn green and placement waits for a
+clear path. Release a held drag on the validated preview to commit one undoable
+edit. [Router policies and limitations](pcb/route-planning.md#track-shove)
 
 The PCB grid is hidden by default. **Preferences → Appearance → PCB grid** offers
 **Off**, **Dots** and **Lines**, remembered across sessions and shared by all PCB
@@ -327,8 +331,8 @@ Place a hierarchical label with **H** or **Sheets → Hierarchical label**, ente
 connect its pointed anchor with **W**. A matching sheet pin appears automatically
 on the parent symbol. Names and directions stay synchronized when you edit the
 label with **E** or its context menu. The Browser shows the same nesting in
-schematic and PCB workspaces. See [hierarchical sheets](hierarchical-sheets.md).
-See [arrangements](board-workspace-plan.md#named-arrangements-and-reopening-a-project)
+schematic and PCB workspaces. See [hierarchical sheets](schematic/hierarchical-sheets.md).
+See [arrangements](design/board-workspace-plan.md#named-arrangements-and-reopening-a-project)
 for storage and monitor-restoration limits.
 
 Close the original window while another editor remains: the surviving window
@@ -347,7 +351,7 @@ Wayland and X11; Windows and macOS still need platform qualification.
 ## Inspect and edit component properties
 
 Typed part values accept engineering prefixes from atto through exa, such as
-`1 fF` or `1 PHz`, within the [documented precision limits](part-schema.md).
+`1 fF` or `1 PHz`, within the [documented precision limits](libraries/part-schema.md).
 
 Select a symbol to use the compact **Properties** card. Edit reference, value,
 rotation or its **X/Y** position and choose **Apply changes**, or open **More properties** for the
@@ -387,7 +391,7 @@ texts `before` and `after` (null for an absent document). An unchanged preview
 returns an empty list when both snapshots are encodable. Encoding can refuse a
 preview at the native size limits; ordinary Apply does not perform those full
 encodes, so successful Apply does not guarantee a later Save fits. See the
-[storage limits and refusal behavior](native-project-storage.md#designator-locks).
+[storage limits and refusal behavior](formats/native-project-storage.md#designator-locks).
 New net and lineage-capture UUIDs from topology edits are provisional: Apply
 can allocate different UUIDs even at the same revision. Adopting legacy storage
 persists the deterministic circuit-use and sheet-occurrence compatibility UUIDs
@@ -404,12 +408,12 @@ Inspection reports `designator_locked` even when false. Automatic annotation and
 its skipped-item report are not implemented yet; the engine's
 `PartInstance::can_annotate_designator()` predicate exposes this lock policy for
 that implementation. There is no separate unit-letter lock. See the
-[storage contract](native-project-storage.md#designator-locks).
+[storage contract](formats/native-project-storage.md#designator-locks).
 
 ### Complete loose packages
 
 To group equivalent loose units, opt in through the headless or live MCP
-[`schematic.complete_packages`](mcp.md#native-part-definitions-and-quantities)
+[`schematic.complete_packages`](automation/part-commands.md#native-part-definitions-and-quantities)
 command. Preview with `dry_run: true` before applying. Locked owners stay as
 placed; ordinary placement does not complete packages automatically.
 
@@ -555,7 +559,7 @@ save/reopen retains the package and mapping offline. The chooser also supports
 assigning an unassigned component directly from PCB layout. On a board with
 recorded accepted state, changing a placed package records a proposal for the
 next reviewed update. See the
-[footprint contract](footprint-library.md#assigning-and-placing-a-package) for
+[footprint contract](libraries/footprint-library.md#assigning-and-placing-a-package) for
 mapping constraints and source limits.
 
 Click a placed reference designator to select its text and open **Properties**.
@@ -611,7 +615,7 @@ replaces the board's complete list of exact circular records in the open project
 Save the project separately to write those changes to disk. Boards containing
 arcs display an unsupported-geometry explanation instead of an incomplete PCB
 view; DRC, queries, clipboard and fabrication refuse them.
-See [circular copper records](circular-copper-records.md) before trying that
+See [circular copper records](pcb/circular-copper-records.md) before trying that
 storage command. Undo or remove the records to resume ordinary PCB editing.
 
 To route a track, activate a copper layer and press **X**. The crosshair follows
@@ -629,13 +633,13 @@ it unchecked to inherit defaults. Save class commits one undoable edit. Classes
 can be authored in a schematic-only project; they do not create a board.
 
 To declare a net's or class's working voltage, use the **Working voltage** page in
-**Analyze → Rules** or the [electrical intent commands](electrical-intent.md).
+**Analyze → Rules** or the [electrical intent commands](formats/electrical-intent.md).
 
 Select a schematic wire, net label or PCB track/via and choose **Net rules…** in
 Properties, or use the **Effective net rules** page in Rules to search for a current net.
 Check the classes to assign and choose **Assign classes**. The page shows effective
 hard limits, routing preferences, conflicts, rule IDs/revisions and assignment
-origins. Naming a net does not classify it. See the [editor workflow](net-class-editor.md)
+origins. Naming a net does not classify it. See the [editor workflow](pcb/net-class-editor.md)
 for supported targets and the shared MCP commands.
 
 **Board Setup → Design rules** embeds **Board defaults** and **Net classes** as
@@ -648,12 +652,12 @@ window.
 dimension drawings as the class editor. Clear **Use built-in
 defaults** to author values, then Apply; checking it restores built-in values.
 New routes use those preferences while existing copper keeps its dimensions.
-See [board rules](board-rules.md) for overrides and sources. Starting a route on classified copper adopts that
+See [board rules](pcb/board-rules.md) for overrides and sources. Starting a route on classified copper adopts that
 net's preferred width unless you selected an explicit ribbon width, and uses its
 clearance halo. Explicit changed widths/vias must meet
 applicable hard limits, and unresolved defaults report an error without creating
 copper. `pcb.route_rules` inspects a contact's dimensions, sources and conflicts;
-see the [consumer contract](net-class-consumers.md).
+see the [consumer contract](formats/net-class-consumers.md).
 
 Run **Analyze → DRC** to check the board. The check shows its current stage while
 pan and zoom remain available. **Cancel check**, **Esc** or leaving the view stops
@@ -677,14 +681,14 @@ Share the entire project folder or its `.pc` archive, rather than the entry
 point alone. Used symbol definitions are pinned so the recipient does not need
 your source library. The folder is the Git-friendly working form; opening and
 saving a current project without edits preserves its document bytes. The
-[storage guide](native-project-storage.md) explains the compatibility break and failed
+[storage guide](formats/native-project-storage.md) explains the compatibility break and failed
 or interrupted saves.
 
 Selected tracks and vias brighten in their copper colors, like footprint pads,
 and have a **Lock** choice in Properties. **Locked** keeps
 them selectable while protecting geometry and sizes from edits; unlock them
 before moving, reshaping or deleting them. Copy/duplicate retain locks, and Cut
-refuses protected copper. See the [lock policy](pcb-layout-workflow.md#fixed-tracks-and-vias)
+refuses protected copper. See the [lock policy](pcb/locks.md#fixed-tracks-and-vias)
 for mixed selections and indirect footprint/segment changes.
 
 To remove one arm from a routed connection without deleting the rest of the net,
@@ -694,7 +698,7 @@ to see which tracks and vias would be removed.
 ## Try the same project through MCP
 
 For repeatable UI demonstrations in the native app, the live connection can
-[locate controls and send ordinary input](ui-automation.md). Start with
+[locate controls and send ordinary input](automation/ui-automation.md). Start with
 `ui.handles` for the intended window, send a named `ui.click`, and wait for its
 completion ticket through `ui.inspect` before continuing.
 
@@ -712,14 +716,14 @@ in a terminal waits for MCP input; it is not an interactive command prompt.
 Headless edits change only that process's in-memory session. They do not edit an
 open GUI window or save back to the file. For a review that must not edit even
 that snapshot, add `--read-only` to the headless arguments. See
-[headless MCP](mcp.md#headless-mcp) for scope discovery and refusal details.
+[headless MCP](automation/headless-mcp.md#headless-mcp) for scope discovery and refusal details.
 
 To read back a connectivity export, call `execute` with
 `{"command":"project.export_netlist","params":{}}`. Take the text from
 `netlist.files[0].contents` in the reply, then call `execute` with
 `command: "project.compare_netlist"` and that text as `params.netlist`.
 The comparison returns counts, connectivity differences and annotation notes
-without changing the revision or Undo history. See the [JSON netlist guide](netlist-format.md#comparing-a-file-with-the-design)
+without changing the revision or Undo history. See the [JSON netlist guide](formats/netlist-format.md#comparing-a-file-with-the-design)
 for accepted-board files, net identity and input limits.
 
 For the new layer/stackup foundation, use `describe_command` with
@@ -732,11 +736,11 @@ copy with the current revision to rename layers or specify `thickness_nm`.
 Unspecified thickness stays unknown, and undo restores the previous setup.
 The same command accepts project-local custom material definitions, sourced Tg
 and Dk/Df reports, and core or ordered prepreg construction. Use the discovered
-schema and [material contract](board-materials.md) for the exact fields and units;
+schema and [material contract](pcb/board-materials.md) for the exact fields and units;
 material references pin both ID and revision. Updating a retained material
 definition requires a new revision and explicit reference changes.
 The Board setup dialog uses these same commands; live and headless MCP share them.
-The [representation plan](pcb-representation.md) describes the remaining work.
+The [representation plan](design/pcb-representation.md) describes the remaining work.
 
 For the open desktop window instead, choose **Help → Connect AI assistants… →
 Enable local connection** and copy its configuration into your MCP client. If
@@ -780,10 +784,10 @@ and latest addresses, source status and diagnostics. This is read-only: it does
 not refresh a library, change geometry or adopt a revision. Missing sources are
 unknown, and available does not imply compatible. Native parts compare the owning
 part rather than separately updating its drawing dependencies. See
-[query available revisions](native-library-sources.md#query-available-revisions)
+[query available revisions](libraries/native-library-sources.md#query-available-revisions)
 for the result contract. For one placed instance, pass the reported `board`
 and `part_instance` to `library.preview_footprint_revision`. The
-[pad preview](native-library-sources.md#preview-footprint-pad-changes) shows what
+[pad preview](libraries/native-library-sources.md#preview-footprint-pad-changes) shows what
 would change and which straight track ends or through vias would lose contact;
 standalone circular track ends are not checked. Nothing is applied; pad map
 resolution and adoption remain future work.
@@ -796,7 +800,7 @@ address (replace these example values with your library item's address):
 {"command":"library.where_used","params":{"library":"parts-demo","kind":"footprint","definition":"resistor-0603","definition_revision":1},"inspect":false}
 ```
 
-See [where-used](native-library-sources.md#find-where-a-revision-is-used) for
+See [where-used](libraries/native-library-sources.md#find-where-a-revision-is-used) for
 what counts as a use and how to distinguish assignments from board placements.
 
 For multiple-sheet projects, take the desired sheet UUID from `inspect_project`
@@ -869,7 +873,7 @@ means missing association or evidence (for example, no open project or no matchi
 placed copy), not a known no-net/no-package result. Only the library draft
 changes, in one Undo step. Cancel leaves both documents alone. To associate nets,
 edit the same published identity/revision used by the project; **Edit copy** does
-not infer that association. See [pin renumbering](properties-and-library-editors.md#review-pin-renumbering).
+not infer that association. See [pin renumbering](libraries/properties-and-library-editors.md#review-pin-renumbering).
 
 On desktop, **Parts Library → New → Library** creates a writable native folder.
 Create a symbol or footprint and publish it to that collection first, or choose an
@@ -894,7 +898,7 @@ a placed item, return to the project, select one symbol or footprint and use
 **Libraries → Edit copy**. To create another definition, use **Library → New**
 inside its editor. Forking and authoring leave the source and placed copies unchanged. Applying the resulting
 definition to a project is follow-up work; see the
-[editor notes](properties-and-library-editors.md#authoring-basics) for scope.
+[editor notes](libraries/properties-and-library-editors.md#authoring-basics) for scope.
 
 ## Inspect accepted board connections
 
@@ -909,7 +913,7 @@ that view, and the status bar reports airwires and missing endpoints. Schematic
 changes affect those connections after a reviewed board update accepts them;
 footprint moves and rotations update the displayed geometry immediately. These
 lines show logical connections and do not establish routed copper or fabrication
-readiness; see [accepted board connections](board-ratsnest.md).
+readiness; see [accepted board connections](pcb/board-ratsnest.md).
 
 ### Copying PCB groups
 
@@ -919,17 +923,18 @@ Copy, Cut, Paste and Duplicate; keyboard shortcuts match the schematic. Copied
 footprints duplicate their schematic counterparts too, so PCB Paste Options
 shows the destination sheet and schematic anchor for each source circuit.
 Same-project Cut/Paste can reuse the original unplaced components. Review the
-[clipboard guide](clipboard.md) for layer mapping, named nets and relocation.
+[clipboard guide](schematic/clipboard.md) for layer mapping, named nets and relocation.
 
 Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
-With a configured board, a closed Board Outline and a resolvable placement origin,
-**Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
-The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
-If the board has circular non-plated holes, the ZIP includes `-NPTH.drl`
-separately from the plated `-PTH.drl` file.
+With a configured board, at least one closed Board Outline loop and a resolvable
+placement origin, **Manufacture → Fabrication → Outputs** generates one ZIP without
+editing the design. The Gerber profile uses only the closed outline loops. The embedded
+`manifest.json` lists Gerber and drill member byte sizes and SHA-256. If the board has
+circular non-plated holes, the ZIP includes `-NPTH.drl` separately from the plated
+`-PTH.drl` file.
 Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
 destination errors can prevent a successful save. In the browser, Outputs requests
 one download; check that your browser saved it.
@@ -957,7 +962,7 @@ library and Type in Browser, search its items, and select a row for Preview.
 folder. Remove leaves files intact, while Delete moves an eligible folder to
 system trash after confirmation. In the browser, added libraries need reopening
 after a reload. Projects keep their pinned copies. See the
-[native source guide](native-library-sources.md) for limits and source diagnostics.
+[native source guide](libraries/native-library-sources.md) for limits and source diagnostics.
 
 ## Create a reusable part
 
@@ -968,7 +973,7 @@ record in the Parts Catalog to place it. A published generic part with a package
 can also receive an orderable manufacturer/MPN record through **Add orderable
 part**. These forms live in the Library workspace; drawing changes still use the
 Symbol and Footprint Editors. Unpublished part documents last for the current
-session, so publish finished work before closing. The [source guide](native-library-sources.md#generic-and-orderable-part-documents)
+session, so publish finished work before closing. The [source guide](libraries/native-library-sources.md#generic-and-orderable-part-documents)
 covers exact revisions, typed values and recovery.
 
 Generic library parts do not require a symbol. In Parts Library, use **Add
@@ -980,7 +985,7 @@ create board-owned symbol-less instances.
 For standalone vias, choose **Via** and click its ribbon **Via net** to search for
 a current board net and confirm **Use net** before placing, or keep **Automatic**.
 Selected-via Properties uses the same search form to change or clear
-that assignment; [via net assignments](via-net-assignments.md) explains how intent
+that assignment; [via net assignments](pcb/via-net-assignments.md) explains how intent
 remains distinct from physical copper connections.
 
 ## Try copper-zone fill
@@ -997,7 +1002,7 @@ and choose **Fit board**. The front-copper zone connects three resistor pads wit
 thermal spokes while clearing their other pads. Move a footprint or zone and
 wait for automatic refill; **Layout → Board → Pour copper** requests another
 calculation. Change the selected zone's Connection to Solid or None in Properties
-to compare pad contact and airwires. See the [zone guide](copper-zone-outlines.md)
+to compare pad contact and airwires. See the [zone guide](pcb/copper-zone-outlines.md)
 for checking, worker failures and current output limits.
 
 **Layout → Board → Remove pours** (Ctrl+B, or Command+B on macOS) removes the
