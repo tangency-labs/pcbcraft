@@ -62,8 +62,9 @@
 - Slice, Heal and Delete in the ribbon.
 - Contextual Break releases one or both attached ends, with free movement of detached straight
   pieces, guarded departure and reconnection on return.
-- A selected wire’s **Net appearance…** sets the color and screen-space stroke width for all
-  wires on that logical net, with reset and Undo. The same commands are available through MCP.
+- A selected wire’s **Net appearance** in Properties sets the color and width for all wires on
+  that logical net, with width shown as a percentage of the default stroke. The same commands
+  are available through MCP.
 - Shared undo and headless MCP commands.
 
 ### Remaining scope

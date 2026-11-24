@@ -42,14 +42,14 @@ applied atomically; typing in a draft does not change the project. Expanding the
 form does not create another draft or undo history. Invalid input stays editable,
 Cancel leaves the document unchanged and stale view/project revisions are refused.
 
-A schematic wire selection also offers **Net rules…** and **Net appearance…**.
+A schematic wire selection offers **Net rules…** and inline **Net appearance** fields.
 Appearance follows the whole logical net across supported sheets: wires joined
 into one net by matching global labels all repaint, while same-named local labels
-on different sheets remain separate nets. The form edits an optional RGB color
-and drawn stroke width in hundredths of a point, with a reset to the theme
-default. The shared `nets.set_appearance` and `nets.inspect_appearance` commands
-back the form, so MCP sees the same fields, bounds, revision refusal and one-step
-undo. Stroke width is a screen-space width and stays readable at every zoom. Color is
+on different sheets remain separate nets. The fields edit optional RGB color
+and stroke width, with `100%` representing the default stroke. The shared
+`nets.set_appearance` and `nets.inspect_appearance` commands
+back the fields, so MCP uses the same edit path with width in hundredths of a
+point. Stroke width is a screen-space width and stays readable at every zoom. Color is
 presentation only; selection, hover and error indicators keep their own colors and
 a contrasting screen-space underlay, so a selected wire stays readable even when its
 net color matches the active theme's selection accent or its stroke is at the maximum

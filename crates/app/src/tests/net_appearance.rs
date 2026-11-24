@@ -1,4 +1,4 @@
-//! Wire Properties opens one revision-bound form that authors a net-wide drawing override.
+//! Wire Properties authors a net-wide drawing override through the inline inspector.
 use super::*;
 use pcbcraft_chrome::theme;
 use pcbcraft_engine::{CONNECT_PINS, PLACE_RESISTOR, SheetTarget, nets, schematic::Terminal, selection::Selection, sheets};
@@ -20,25 +20,22 @@ fn harness() -> Harness<'static, PcbApp> {
     Harness::builder().with_size(egui::vec2(1200., 900.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app)
 }
 
-/// A color chosen in the form is stored against the promoted net identity, not the wire, and
-/// Cancel leaves the document and its revision untouched.
+/// Reset changes discards the inline draft, while Apply stores the color on the logical net.
 #[test]
 fn wire_properties_author_net_appearance_through_one_form() {
     let mut h = harness();
     h.run();
     let before = pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap();
-    click(&mut h, "Net appearance…");
+    let revision = h.state().session.revision();
+    assert!(matches!(h.state().dialog, Dialog::None));
+    click(&mut h, "Set wire color");
+    click(&mut h, "Reset changes");
     h.run();
-    assert!(matches!(h.state().dialog, Dialog::NetAppearance(_)));
-    click(&mut h, "Cancel");
-    h.run();
+    assert_eq!(h.state().session.revision(), revision);
     assert_eq!(pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 
-    click(&mut h, "Net appearance…");
-    h.run();
     click(&mut h, "Set wire color");
-    h.run();
-    click(&mut h, "Apply");
+    click(&mut h, "Apply changes");
     h.run();
     assert!(matches!(h.state().dialog, Dialog::None));
     let project = h.state().session.project().unwrap();
@@ -54,14 +51,19 @@ fn wire_properties_author_net_appearance_through_one_form() {
         serde_json::from_slice::<Value>(&saved[pcbcraft_engine::persistence::ENTRY_POINT]).unwrap()["format"],
         pcbcraft_engine::persistence::CURRENT_PROJECT_FORMAT
     );
+
+    click(&mut h, "Use theme defaults");
+    assert_eq!(h.state().session.revision(), revision + 2);
+    assert!(h.state().session.project().unwrap().wire_appearances().unwrap().is_empty());
+    h.state_mut().run("edit.undo", &Value::Null);
+    assert_eq!(pcbcraft_engine::persistence::encode_documents(h.state().session.snapshot().unwrap()).unwrap(), saved);
 }
 
 /// Save both channels through the form, which makes both checkboxes start checked next time.
 fn seed_both_channels(h: &mut Harness<'_, PcbApp>) {
-    click(h, "Net appearance…");
     click(h, "Set wire color");
-    click(h, "Set drawn width");
-    click(h, "Apply");
+    click(h, "Set wire width");
+    click(h, "Apply changes");
 }
 
 /// Unchecking one independent channel clears only that saved override, the checked channel keeps
@@ -79,13 +81,12 @@ fn unchecking_a_channel_clears_only_that_override_and_one_undo_restores_both() {
     assert_eq!(h.state().session.project().unwrap().wire_appearances().unwrap().values().next(), Some(&both));
 
     for (uncheck, expected) in [
-        ("Set drawn width", nets::Appearance { color: Some(theme), width_cp: None }),
+        ("Set wire width", nets::Appearance { color: Some(theme), width_cp: None }),
         ("Set wire color", nets::Appearance { color: None, width_cp: Some(nets::DEFAULT_WIDTH_CP) }),
     ] {
         let revision = h.state().session.revision();
-        click(&mut h, "Net appearance…");
         click(&mut h, uncheck);
-        click(&mut h, "Apply");
+        click(&mut h, "Apply changes");
         assert_eq!(h.state().session.revision(), revision + 1, "one form apply is one shared command");
         assert_eq!(h.state().session.project().unwrap().wire_appearances().unwrap().values().next(), Some(&expected));
 
@@ -176,9 +177,7 @@ fn net_appearance_edit_in_one_pane_repaints_the_other_pane() {
         assert_eq!(wire_stroke(&h, id, &wire).map(|stroke| stroke.0), Some(theme::SCHEMATIC_SYMBOL_STROKE), "pane {id} before");
     }
 
-    click(&mut h, "Net appearance…");
-    h.run();
-    assert!(matches!(h.state().dialog, Dialog::NetAppearance(_)), "the form opens for the focused pane's wire");
+    assert!(matches!(h.state().dialog, Dialog::None));
     click(&mut h, "Set wire color");
     h.get_by_role_and_label(egui::Role::ColorWell, "Wire color").click();
     h.run();
@@ -188,15 +187,15 @@ fn net_appearance_edit_in_one_pane_repaints_the_other_pane() {
     }
     h.key_press(Key::Escape);
     h.run();
-    click(&mut h, "Set drawn width");
-    set_spin(&mut h, "Wire stroke width", "300");
-    click(&mut h, "Apply");
+    click(&mut h, "Set wire width");
+    set_spin(&mut h, "Wire stroke width", "50");
+    click(&mut h, "Apply changes");
     h.run();
     assert!(matches!(h.state().dialog, Dialog::None));
     assert_eq!(h.state().session.revision(), revision + 1, "one form apply is one shared command");
     let chosen = [200, 50, 100];
     let appearances = h.state().session.project().unwrap().wire_appearances().unwrap();
-    assert_eq!(appearances.get(&wire), Some(&nets::Appearance { color: Some(chosen), width_cp: Some(300) }));
+    assert_eq!(appearances.get(&wire), Some(&nets::Appearance { color: Some(chosen), width_cp: Some(80) }));
     // Clear the local selection so both panes paint the net color rather than the selection ink.
     for view in h.state_mut().views.all_mut() {
         view.schematic.selection = Default::default();
@@ -204,7 +203,7 @@ fn net_appearance_edit_in_one_pane_repaints_the_other_pane() {
     h.run();
     let ink = egui::epaint::ColorMode::Solid(egui::Color32::from_rgb(chosen[0], chosen[1], chosen[2]));
     for id in [0, 1] {
-        assert_eq!(wire_stroke(&h, id, &wire), Some((3.0, ink.clone())), "pane {id} repainted");
+        assert_eq!(wire_stroke(&h, id, &wire), Some((0.8, ink.clone())), "pane {id} repainted");
     }
 
     focus_tab(&mut h, 1);

@@ -265,7 +265,6 @@ enum Dialog {
     BoardRules(Box<board_rules::Edit>),
     Rules(Box<net_class_editor::Edit>),
     /// Sparse schematic wire appearance owned by one captured net identity and revision.
-    NetAppearance(Box<net_appearance::Edit>),
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
@@ -2469,7 +2468,6 @@ impl PcbApp {
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
             Dialog::Rules(edit) => self.rules_dialog(ctx, edit),
-            Dialog::NetAppearance(edit) => self.net_appearance_dialog(ctx, edit),
             Dialog::Sheet(edit) => self.sheet_dialog(ctx, edit),
             Dialog::Hierarchy(edit) => self.hierarchy_dialog(ctx, edit),
             Dialog::NetLabel(edit) => self.net_label_dialog(ctx, *edit),
