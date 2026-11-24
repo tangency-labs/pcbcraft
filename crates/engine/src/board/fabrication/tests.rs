@@ -2831,7 +2831,13 @@ fn outline_view_dimensions_equal_the_profile_bounding_box() {
     let frame = fabrication.origin.frame();
     let cut_out = [(5_000_000, 15_000_000), (15_000_000, 15_000_000), (15_000_000, 25_000_000), (5_000_000, 25_000_000)]
         .map(|(x_nm, y_nm)| frame.to_output(Point { x_nm, y_nm }));
-    assert_eq!(outline.contours, vec![edge.map(|point| frame.to_output(point)).to_vec(), cut_out.to_vec()]);
+    // Contours follow drawing-id order, and fresh drawing ids are random, so compare them as a set.
+    let points = |contour: &Vec<Point>| contour.iter().map(|point| (point.x_nm, point.y_nm)).collect::<Vec<_>>();
+    let mut contours = outline.contours.clone();
+    let mut expected = vec![edge.map(|point| frame.to_output(point)).to_vec(), cut_out.to_vec()];
+    contours.sort_by_key(points);
+    expected.sort_by_key(points);
+    assert_eq!(contours, expected);
 
     let revision = s.revision();
     let reported = s.execute(EXPORT_FABRICATION, &json!({})).unwrap();
