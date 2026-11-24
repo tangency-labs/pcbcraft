@@ -1514,6 +1514,50 @@ fn library_tool_keys_and_rotate_use_the_pressed_event_modifiers() {
     }
 }
 
+/// Click extend reads the release event's own modifiers too: a shift held at the
+/// click still extends the selection even if released before batch end, and a
+/// shift arriving after the release cannot fake an extend.
+#[test]
+fn library_click_extend_uses_the_release_event_modifiers() {
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        // Click extend: release carries shift, the batch ends without it.
+        let click = |release_shift: bool, end_shift: bool| {
+            let mut app = PcbApp::default();
+            app.new_library_item(kind);
+            let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+            h.run();
+            let id = h.state().library_editors.active.unwrap();
+            let first = *h.state().library_editors.documents[&id].session.snapshot().objects.keys().next().unwrap();
+            h.state_mut().library_editors.documents.get_mut(&id).unwrap().selection = [first].into_iter().collect();
+            // Center on empty model space so the click hits no primitive or panel.
+            h.state_mut()
+                .library_editors
+                .documents
+                .get_mut(&id)
+                .unwrap()
+                .camera
+                .center_on(pcbcraft_engine::schematic::Point { x_nm: 30_000_000, y_nm: 30_000_000 });
+            h.run();
+            let empty = h.get_by_label("Library canvas").rect().center();
+            h.hover_at(empty);
+            h.run();
+            let modifiers = |shift| egui::Modifiers { shift, ..Default::default() };
+            h.input_mut().events.extend([
+                egui::Event::ModifiersChanged(modifiers(release_shift)),
+                egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: true, modifiers: modifiers(release_shift) },
+                egui::Event::PointerButton { pos: empty, button: egui::PointerButton::Primary, pressed: false, modifiers: modifiers(release_shift) },
+                egui::Event::ModifiersChanged(modifiers(end_shift)),
+            ]);
+            h.run();
+            h.state().library_editors.documents[&id].selection.clone()
+        };
+        assert_eq!(click(true, false), click(true, true), "{kind:?}: shift-click must extend when the release carries shift");
+        assert_eq!(click(false, true), click(false, false), "{kind:?}: a shift arriving after the release must not extend");
+        assert_eq!(click(true, true).len(), 1, "{kind:?}: extend keeps the selected object on empty space");
+        assert!(click(false, false).is_empty(), "{kind:?}: a plain click on empty space clears the selection");
+    }
+}
+
 /// Native keyboard→clipboard translation drives the library paste op for every OS
 /// clipboard state: `egui-winit` emits `Paste("")` on an empty or unsupported read
 /// and `PasteImage` on an image-only read. Both arm the same internal preview —
