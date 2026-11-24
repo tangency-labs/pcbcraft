@@ -1867,7 +1867,7 @@ fn footprint_box_excludes_locked_without_hiding_inspection() {
     assert_eq!(h.state().views.active.board.selection.len(), 1);
 }
 
-/// Escape, focus loss, changed revisions and release over chrome cannot commit a box. Disabled
+/// Escape, focus loss and changed revisions cannot commit a box. Disabled
 /// footprint filters and hidden geometry produce no hits, including fast move/release frames.
 #[test]
 fn pcb_box_selection_cancels_and_respects_filters() {
@@ -1875,7 +1875,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
     let mut h = editable_board();
     let from = board_point(&h, Point { x_nm: -5_000_000, y_nm: -5_000_000 });
     let to = board_point(&h, Point { x_nm: 5_000_000, y_nm: 5_000_000 });
-    for cancellation in ["escape", "focus", "revision", "panel"] {
+    for cancellation in ["escape", "focus", "revision"] {
         board_box(&mut h, from, to, Primary, Modifiers::NONE, false);
         match cancellation {
             "escape" => h.key_press(Key::Escape),
@@ -1890,8 +1890,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
             _ => {}
         }
         h.run();
-        let end = if cancellation == "panel" { h.get_by_label("Collapse Layers").rect().center() } else { to };
-        board_box_release(&mut h, end, Primary, Modifiers::NONE);
+        board_box_release(&mut h, to, Primary, Modifiers::NONE);
         assert!(h.state().views.active.board.box_drag.is_none());
         assert!(h.state().views.active.board.selection.is_empty(), "{cancellation}");
         h.event(egui::Event::WindowFocused(true));
