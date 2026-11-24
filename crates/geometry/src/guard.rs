@@ -13,7 +13,6 @@ use crate::{ErrorCode, GeometryError, Result};
 ///
 /// The kernel's state after a caught panic belongs to the kernel: solidcore's session replaces its
 /// kernel when one of its calls panics, and `f` must not hand out partly built bodies.
-#[cfg_attr(all(target_arch = "wasm32", not(feature = "wasm-kernel")), allow(dead_code))]
 pub(crate) fn guard<T>(what: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(result) => result,

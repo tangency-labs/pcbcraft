@@ -241,12 +241,13 @@ fn purpose_name(purpose: LayerPurpose) -> &'static str {
 mod pages;
 
 impl PcbApp {
-    /// Rule/setup dialogs stay in the window containing their captured source view.
+    /// Rule, setup and color dialogs stay in the window containing their captured source view.
     pub(super) fn rule_dialog_source(&self) -> Option<ViewInput> {
         match &self.dialog {
             Dialog::BoardSetup(edit) => Some(edit.source()),
             Dialog::BoardRules(edit) => Some(edit.source()),
             Dialog::Rules(edit) => Some(edit.source()),
+            Dialog::BoardColor(edit) => Some(edit.source()),
             _ => None,
         }
     }
@@ -407,7 +408,7 @@ impl PcbApp {
                             }
                         }
                         if let Some(classes) = &mut edit.classes {
-                            class_actions = Some(classes.show(ui, valid));
+                            class_actions = Some(classes.show(ui, valid, None));
                         }
                     }
                 }

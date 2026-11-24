@@ -75,15 +75,17 @@ area, not covered by a panel or floating layer.
 
 | Keys | Action |
 | --- | --- |
-| **Esc** | Resets the tool to Select — cancels Draw, Polyline, Move, MoveGroup and Paste previews without committing. Does not require the pointer over the canvas and does not clear the selection. |
+| **Esc** | Resets the tool to Select — cancels Draw, Polyline, Courtyard, Move, MoveGroup and Paste previews without committing. Does not require the pointer over the canvas and does not clear the selection. |
 | **P** | Places a pin (Symbol Editor) or a pad (Footprint Editor). Ignored while Ctrl is held. |
 | **L** | Starts the line tool. Ignored while Ctrl is held. |
 | **T** | Starts the text tool. Ignored while Ctrl is held. |
+| **C** | Starts the Draw Courtyard outline tool and shows the Courtyard layer (Footprint Editor only). Requires window focus and no held modifiers; refuses while property fields are pending. |
 | **M** | Starts a move: single selection → Move; multiple → MoveGroup anchored on the first object. Refuses with "Apply or reset the property fields before moving." while property input is unapplied. Fires regardless of held modifiers. |
 | **R** / **Shift+R** | Rotates a quarter turn, in opposite directions. Applies to the Move, MoveGroup or Paste preview when one is armed, to the Draw-tool placement prototype otherwise — or to the current selection when neither applies. |
 | **E** | Opens the selected object's details — only when exactly one object is selected. Fires regardless of held modifiers. |
 | **Delete** | Deletes the selected objects. Fires regardless of held modifiers. |
-| **Enter** | Commits the in-progress polyline as a graphic object; does nothing under any other tool. |
+| **Backspace** | In Select, deletes the selected objects in one undoable edit. If a courtyard vertex is explicitly selected, removes only that vertex and refuses if the layer is hidden, property edits are pending, or only 3 vertices remain. Requires window focus and no held modifiers. |
+| **Enter** | Commits the in-progress polyline or courtyard outline as a graphic object (closing a courtyard polygon and returning to Select); does nothing under any other tool. |
 | **Ctrl+A** | Selects all objects in the definition. |
 | **Ctrl+D** | Duplicates the selection into a cancellable Paste preview. Refuses while property fields are pending. |
 | **Ctrl+C** | Copies the selection to the internal library clipboard via the normalized Copy event; the raw key is also accepted when another modifier bypasses native translation. |
@@ -128,9 +130,9 @@ not the batch's ending modifiers.
 ## Pending fields gate
 
 Property fields (name, number, orientation, dimensions) apply atomically.
-While unapplied input exists, **M**, **Ctrl+D**, **Ctrl+X**, paste and tool
-changes via **P**/**L**/**T** are refused with "Apply or reset the property
-fields …"
+While unapplied input exists, **M**, **Ctrl+D**, **Ctrl+X**, paste, tool
+changes via **P**/**L**/**T**/**C**, and courtyard vertex removal via
+**Backspace** are refused with "Apply or reset the property fields …"
 rather than silently dropping the draft. Typing in a field owns keyboard input,
 so canvas keys do not fire while a field is focused.
 
@@ -149,7 +151,9 @@ so canvas keys do not fire while a field is focused.
 | R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (direction follows the press event) |
 | E | `canvas` → `details_requested` (single selection) | — |
 | Delete | `canvas` → `delete` → `Action::Delete` | — |
-| Enter | `canvas` → `Action::Insert` for `Tool::Polyline` only | — |
+| Backspace | `canvas` in Select → `with_removed_vertex` + `Action::Replace` when a courtyard vertex on the visible layer is selected, otherwise `delete` → `Action::Delete` when no vertex is selected (unmodified, focused) | `courtyard_backspace_during_drawing_keeps_existing_outline_and_draft`, `courtyard_backspace_with_hidden_selected_vertex_keeps_outline`, `courtyard_backspace_with_selected_vertex_and_pending_edits_keeps_outline`, `courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers`, `symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes` |
+| C | `canvas` → `start_tool(Place::Courtyard)` + `set_show_courtyard(true)` (Footprint Editor, unmodified, focused) | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions`, `courtyard_c_shortcut_ignores_copy_chord_and_shift_c` |
+| Enter | `canvas` → `Action::Insert` for `Tool::Polyline` and `Tool::Courtyard` | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions` (courtyard commit) |
 | Ctrl+A | `canvas` → `select_many(all)` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss) |
 | Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss), `normalized_clipboard_events_drive_library_copy_and_paste` (same-frame Escape ordering) |
 | Ctrl+C / Ctrl+X / Ctrl+V | `canvas` → `copy` / `cut` (copy + one `Action::Delete`) / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Cut`/`Event::Paste`/`Event::PasteImage`, or the raw key matched at its own modifiers when another modifier bypasses translation) | `native_paste_translation_reaches_the_internal_library_paste` (empty + image-only clipboards, both kinds, single undoable commit), `native_paste_chord_only_arms_the_focused_library_view` (detached-view ownership), `normalized_clipboard_events_drive_library_copy_and_paste` (gates, same-frame Escape ordering, cut + undo, pending refusal), `library_cut_uses_the_pressed_event_modifiers` + `library_copy_uses_the_pressed_event_modifiers` (batched modifier changes, focus loss), `clipboard_translation_tests` in `vendor/egui-winit` (emission) |

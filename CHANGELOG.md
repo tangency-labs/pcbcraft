@@ -10,6 +10,7 @@ expose both placement scopes.
 
 - The Net Inspector's **Across sheets** section and the read-only `nets.sheet_overview` command list every net that reaches more than one sheet, with each sheet's page, name and how the net arrives: global label, power symbol, hierarchical label, sheet pin or a shared part terminal. Drawing this flow on the root sheet remains a follow-up.
 
+- Live MCP can size a native window for a recording: `ui.resize` requests a client size in logical points and `ui.window` reports the measured size, scale and maximized/fullscreen state, with the request shown as applied, pending or constrained. See [UI automation](docs/ui-automation.md#size-a-window-for-recording).
 - Resolve complete pin/pad counterpart sets through the engine and the read-only `resolve_counterparts` MCP tool, including shared symbol-unit appearances, multiple lands per terminal and explicit unavailable states. Existing singular `cross_probe` responses are unchanged; exact cross-view pin/pad highlighting remains a follow-up.
 
 Pins and Pads can now be selected for inspection through their per-view filters,

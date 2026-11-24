@@ -1,0 +1,41 @@
+{
+  "browser": "156.0.8078.79",
+  "wasm": [
+    "pcbcraft-web-4553b269667adf08_bg.wasm"
+  ],
+  "source_revision": "89c1ac0 plus local pour/remove controls",
+  "workers": {
+    "started": 2,
+    "completed": [
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      },
+      {
+        "ok": true,
+        "zones": 1,
+        "islands": 1
+      }
+    ]
+  },
+  "errors": [],
+  "pixel_oracle": {
+    "at": [
+      1200,
+      550
+    ],
+    "unfilled_rgba": [
+      0,
+      16,
+      32
+    ],
+    "repoured_rgba": [
+      82,
+      26,
+      37
+    ],
+    "pass": true
+  },
+  "scope": "Actual packaged Chrome upload, initial pour, explicit Remove pours, explicit Pour copper and complete canvas publication after worker completion; no timing/presentation qualification."
+}

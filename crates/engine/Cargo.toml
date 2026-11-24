@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 pcbcraft-units = { workspace = true }
+pcbcraft-geometry = { workspace = true }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true, features = ["raw_value"] }
 sha2 = "=0.10.9"

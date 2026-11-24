@@ -103,9 +103,11 @@ Choose **Capture → Ground** to start placing GND directly. Press **P** to open
 the **Parts Catalog** at its Power library. Choose GND, VCC, **VCC (bar)** or
 another drawing, edit its **Value** in the preview
 if needed, then choose **Place** and click a pin, wire or grid point for its
-anchor, or drag the chosen power entry directly onto the sheet. **L** opens a local label form; **Ctrl+L** opens a global label form,
-where **Scope** selects either scope. **R** rotates a placement preview and
-**Esc** cancels it. Local names join within a sheet, while global labels and
+anchor, or drag the chosen power entry directly onto the sheet. **L** opens the
+local label form and **Ctrl+L** opens the global label form. When **Rotation**
+is set to **Auto (follow pin)**, the preview faces away from the pin it snaps to.
+Choose a fixed angle in the form or press **R** to rotate the preview manually.
+Press **Esc** to cancel placement. Local names join within a sheet, while global labels and
 power rails join matching names across sheets. Power symbols use the same
 properties and field tools as other components; their Value supplies the net
 name. Hover a symbol and press **E** to edit, **G** to move with wires attached,
@@ -231,6 +233,9 @@ the same `VCC` net name, which can be changed before placement.
    and **Open** ask **Save**, **Don't Save** or **Cancel**. **Save** carries on
    only once the save succeeds. In the browser, leaving or reloading the page
    shows the browser's own warning while the project is unsaved.
+   On the desktop, **Preferences → Saving** sets how often unsaved work is
+   copied to your recovery folder and whether a project that already has a
+   folder or file is saved on a timer. Both are off by default.
 
 The status bar shows the grid point under the pointer; click its unit, or press
 **Ctrl+U**, to read coordinates and the grid in mm instead of mil. The wheel zooms
@@ -249,6 +254,7 @@ PCB routing is under **Layout → Route**, and **Draw → Line / Rectangle** use
 the active layer. Copper shapes are conductive linework; technical-layer graphics
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
+For exact spacing between footprint origins, use [set-pitch distribution through MCP](pcb-layout-workflow.md#set-pitch-distribution).
 The route preview walks around fixed copper, keeping its starting net through
 vertices and vias. An unconnected pad cannot acquire a named net by crossing it;
 blocked or incomplete searches keep the last legal preview and refuse that target.
@@ -973,3 +979,27 @@ a current board net and confirm **Use net** before placing, or keep **Automatic*
 Selected-via Properties uses the same search form to change or clear
 that assignment; [via net assignments](via-net-assignments.md) explains how intent
 remains distinct from physical copper connections.
+
+## Try copper-zone fill
+
+Generate a command-built demonstration into a new directory:
+
+```sh
+cargo run --locked -p pcbcraft-engine --example zone_fill_fixture -- /tmp/pcbcraft-zone-demo
+```
+
+Open `/tmp/pcbcraft-zone-demo/project/project.json` on desktop, or upload
+`/tmp/pcbcraft-zone-demo/zone-fill.pc` in the browser. Switch to **PCB Layout**
+and choose **Fit board**. The front-copper zone connects three resistor pads with
+thermal spokes while clearing their other pads. Move a footprint or zone and
+wait for automatic refill; **Layout → Board → Pour copper** requests another
+calculation. Change the selected zone's Connection to Solid or None in Properties
+to compare pad contact and airwires. See the [zone guide](copper-zone-outlines.md)
+for checking, worker failures and current output limits.
+
+**Layout → Board → Remove pours** (Ctrl+B, or Command+B on macOS) removes the
+copper while retaining zone outlines and settings; affected airwires return.
+**Pour copper** (B) restores the fill and resumes automatic refill after edits.
+Fabrication export is unavailable on boards with copper zones. Each zone belongs
+to a chosen net and copper layer. Full-board zone generation from a layer's
+assigned default net is planned in #263.

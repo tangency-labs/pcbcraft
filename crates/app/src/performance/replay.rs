@@ -1,7 +1,7 @@
 //! Deterministic input frames through PcbApp, with state assertions to reject missed gestures.
 use super::{Artifact, Result, fixture, timed};
 use crate::{PcbApp, editor_view::Workspace};
-use egui::{Event, Key, Modifiers, PointerButton, RawInput, Rect, pos2, vec2};
+use egui::{Event, Key, Modifiers, PointerButton, Pos2, RawInput, Rect, Vec2, pos2, vec2};
 use pcbcraft_engine::{
     board::{
         setup::{LayerPurpose, Side},
@@ -21,6 +21,9 @@ pub(super) const STANDARD_TRACE_ID: &str = "route-reverse-layer-cancel-edit-v1";
 pub(super) const ENVELOPE_TRACE_ID: &str = "route-reverse-capacity-cancel-edit-v1";
 pub(super) const SHOVE_TRACE_ID: &str = "route-shove-preview-cancel-commit-v1";
 pub(super) const COMMIT_TRACE_ID: &str = "route-contact-commit-history-v1";
+/// Pooled UI frame samples from runtime-validated active-route pointer moves that reverse direction.
+/// Kept outside the `replay.{id}.*` per-step namespace so no trace step ID can collide with it.
+pub(super) const ROUTE_REVERSAL_METRIC: &str = "aggregate.route_reversal.ui";
 
 /// One 60 Hz logical input frame; wall-clock measurements do not sleep to simulate pacing.
 #[derive(Serialize, Deserialize)]
@@ -192,7 +195,7 @@ impl Step {
 
 /// Paint and tessellate a real editor frame. These CPU boundaries exclude event-loop waits,
 /// renderer submission, compositor presentation and physical visibility.
-fn frame(app: &mut PcbApp, ctx: &egui::Context, events: Vec<Event>, number: usize, samples: &mut BTreeMap<String, Vec<f64>>, id: &str) {
+fn frame(app: &mut PcbApp, ctx: &egui::Context, events: Vec<Event>, number: usize, samples: &mut BTreeMap<String, Vec<f64>>, id: &str) -> f64 {
     let input = RawInput {
         screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1400.0, 900.0))),
         time: Some(number as f64 / 60.0),
@@ -200,9 +203,68 @@ fn frame(app: &mut PcbApp, ctx: &egui::Context, events: Vec<Event>, number: usiz
         events,
         ..Default::default()
     };
-    let mut output = timed(samples, &format!("replay.{id}.ui"), || ctx.run_ui(input, |ui| app.frame(ui)));
+    let start = super::clock_ms();
+    let mut output = ctx.run_ui(input, |ui| app.frame(ui));
+    let ui_ms = super::clock_ms() - start;
+    samples.entry(format!("replay.{id}.ui")).or_default().push(ui_ms);
     output.textures_delta.clear();
     timed(samples, &format!("replay.{id}.tessellate"), || std::hint::black_box(ctx.tessellate(output.shapes, output.pixels_per_point)));
+    ui_ms
+}
+
+/// Track contiguous active-route pointer moves in the screen coordinates delivered to egui.
+/// Emit their UI frame samples only when the pointer reverses direction.
+#[derive(Default)]
+struct RouteReversalTracker {
+    prev_point: Option<Pos2>,
+    prev_delta: Option<Vec2>,
+    reversed: bool,
+    ui_samples: Vec<f64>,
+}
+
+impl RouteReversalTracker {
+    fn flush(&mut self, samples: &mut BTreeMap<String, Vec<f64>>) {
+        if self.reversed && !self.ui_samples.is_empty() {
+            samples.entry(ROUTE_REVERSAL_METRIC.into()).or_default().append(&mut self.ui_samples);
+        } else {
+            self.ui_samples.clear();
+        }
+        self.prev_point = None;
+        self.prev_delta = None;
+        self.reversed = false;
+    }
+
+    fn observe(
+        &mut self,
+        was_routing: bool,
+        now_routing: bool,
+        pointer: Option<(Pos2, Option<bool>)>,
+        ui_ms: f64,
+        samples: &mut BTreeMap<String, Vec<f64>>,
+    ) {
+        match (was_routing, now_routing, pointer) {
+            (false, true, Some((position, _))) => {
+                self.flush(samples);
+                self.prev_point = Some(position);
+            }
+            (true, true, Some((position, None))) => {
+                if let Some(prev) = self.prev_point {
+                    let delta = position - prev;
+                    if delta != Vec2::ZERO {
+                        if let Some(previous) = self.prev_delta
+                            && delta.dot(previous) < 0.0
+                        {
+                            self.reversed = true;
+                        }
+                        self.prev_delta = Some(delta);
+                        self.ui_samples.push(ui_ms);
+                    }
+                }
+                self.prev_point = Some(position);
+            }
+            _ => self.flush(samples),
+        }
+    }
 }
 
 /// Physical contacts and publication baseline, captured only for contact-dependent traces.
@@ -550,13 +612,21 @@ pub(super) fn run(artifact: &Artifact, samples: &mut BTreeMap<String, Vec<f64>>)
         frame(&mut app, &ctx, Vec::new(), i, &mut warmup, "warmup");
     }
     let mut frame_id = WARMUP;
+    let mut reversal = RouteReversalTracker::default();
     for (index, step) in artifact.trace.iter().enumerate() {
+        let was_routing = app.views.active.board.tracks.routing();
         let events = driver.input(&mut app, artifact, index, samples)?;
-        frame(&mut app, &ctx, events, frame_id, samples, &step.id);
+        let pointer = match (&step.action, events.first()) {
+            (Action::Pointer { pressed, .. }, Some(Event::PointerMoved(position))) => Some((*position, *pressed)),
+            _ => None,
+        };
+        let ui_ms = frame(&mut app, &ctx, events, frame_id, samples, &step.id);
         frame_id += 1;
         driver.settle(&mut app, &ctx, artifact, index, &mut frame_id, samples)?;
         driver.verify(&app, artifact, index)?;
+        reversal.observe(was_routing, app.views.active.board.tracks.routing(), pointer, ui_ms, samples);
     }
+    reversal.flush(samples);
     driver.finish(&app)
 }
 
@@ -665,5 +735,58 @@ mod tests {
         reference.trace_id = ENVELOPE_TRACE_ID.into();
         reference.trace = Step::envelope();
         assert!(run(&reference, &mut BTreeMap::new()).is_err());
+    }
+
+    /// Repeating a pointer position during an active route must not record a route-reversal
+    /// sample, even when the segment later reverses.
+    #[test]
+    fn route_reversal_tracker_excludes_stationary_pointer_frames() {
+        let mut tracker = RouteReversalTracker::default();
+        let mut samples = BTreeMap::new();
+        let start = Some((pos2(0.0, 0.0), Some(false)));
+        let move_to = |x| Some((pos2(x, 0.0), None));
+
+        // Start route, repeat start position, move forward, repeat mid-segment, move forward,
+        // reverse, repeat after reversal, then cancel.
+        tracker.observe(false, true, start, 1.0, &mut samples);
+        tracker.observe(true, true, move_to(0.0), 2.0, &mut samples);
+        tracker.observe(true, true, move_to(20.0), 3.0, &mut samples);
+        tracker.observe(true, true, move_to(20.0), 4.0, &mut samples);
+        tracker.observe(true, true, move_to(40.0), 5.0, &mut samples);
+        tracker.observe(true, true, move_to(20.0), 6.0, &mut samples);
+        tracker.observe(true, true, move_to(20.0), 7.0, &mut samples);
+        tracker.observe(true, false, None, 8.0, &mut samples);
+
+        assert_eq!(samples.get(ROUTE_REVERSAL_METRIC).map(Vec::as_slice), Some([3.0, 5.0, 6.0].as_slice()));
+
+        // A route with only stationary pointer frames never records any routing sample.
+        tracker.observe(false, true, start, 9.0, &mut samples);
+        tracker.observe(true, true, move_to(0.0), 10.0, &mut samples);
+        tracker.observe(true, false, None, 11.0, &mut samples);
+
+        assert_eq!(samples.get(ROUTE_REVERSAL_METRIC).map(Vec::as_slice), Some([3.0, 5.0, 6.0].as_slice()));
+    }
+
+    #[test]
+    fn routing_budget_excludes_moves_that_project_to_the_same_position() {
+        let mut artifact = super::super::load_artifact(&super::super::generate("reference-v1", "test").unwrap()).unwrap();
+        artifact.trace_id = "custom-stationary-pointer-v1".into();
+        artifact.trace.retain(|step| matches!(step.id.split_once('.'), Some(("arm" | "start" | "reverse" | "cancel" | "exit", _))));
+
+        // At this coordinate the camera projects both adjacent nanometre values to the same point.
+        const START_X: i64 = 20_320_000;
+        assert_eq!(START_X as f32, (START_X + 1) as f32);
+        let mut positions = [START_X + 1, START_X].into_iter().cycle();
+        for step in &mut artifact.trace {
+            match &mut step.action {
+                Action::Pointer { at, pressed: None } => at.x_nm = positions.next().unwrap(),
+                Action::Pointer { at, .. } => at.x_nm = START_X,
+                _ => {}
+            }
+        }
+
+        let mut samples = BTreeMap::new();
+        run(&artifact, &mut samples).unwrap();
+        assert!(!samples.contains_key(ROUTE_REVERSAL_METRIC));
     }
 }
