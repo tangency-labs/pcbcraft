@@ -326,7 +326,7 @@ impl crate::board_drc::jobs::Work for RemoteEditJob {
 }
 
 impl PreparedRemoteEdit {
-    /// Footprint revisions always publish a change; copper preparation can return only a report.
+    /// Prepared footprint revisions always require a commit grant; copper preparation can return a report without publishing.
     fn is_effectful(&self) -> bool {
         match self {
             Self::Copper(edit) => edit.is_effectful(),
