@@ -1,6 +1,6 @@
 //! Project-independent object-query syntax. Parsing neither resolves objects nor edits a session.
 //!
-//! The grammar and byte-offset diagnostic contract are documented in `docs/object-queries.md`.
+//! The grammar and byte-offset diagnostic contract are documented in `docs/design/object-queries.md`.
 
 use std::{fmt, ops::Range};
 

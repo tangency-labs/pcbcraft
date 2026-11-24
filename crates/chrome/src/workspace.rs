@@ -101,6 +101,7 @@ pub enum ToolIcon {
     Measure,
     FlipView,
     Outputs,
+    Factory,
     Refill,
 }
 
@@ -272,6 +273,7 @@ pub enum WorkspaceIcon {
     Library,
     Schematic,
     Layout,
+    Factory,
     Render,
     Simulate,
 }
@@ -597,8 +599,8 @@ pub fn ribbon_with_controls(
 
 /// Draw the workspace tile: the accent rule, icon, workspace name and a "Workspace" caption with
 /// a caret that points up while the picker is open. Its width is fixed; `height` follows
-/// the measured ribbon card, including wrapped control rows. Long titles wrap within
-/// the tile while the caption retains its own line.
+/// the measured ribbon card, including wrapped control rows. Titles wrap between
+/// words. An oversized word uses the title's side margins and scales down if needed.
 fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32) -> Response {
     let t = Tokens::get();
     let inset = t.space_8 + 1.0;
@@ -612,7 +614,13 @@ fn workspace_tile(ui: &mut Ui, workspace: &str, icon: WorkspaceIcon, height: f32
     }
     p.hline(rect.x_range(), rect.top() - t.space_6, Stroke::new(t.space_2, t.accent));
     paint_workspace_glyph(p, icon, center - vec2(0.0, t.space_24), t.control_height + t.space_2, t, true);
-    let mut title = egui::text::LayoutJob::simple(workspace.to_owned(), fonts::interface_heading(ui, t.font_button), t.text, rect.width());
+    let mut font = fonts::interface_heading(ui, t.font_button);
+    let widest_word = workspace.split_whitespace().map(|word| p.layout_no_wrap(word.to_owned(), font.clone(), t.text).size().x).fold(0.0, f32::max);
+    let title_width = widest_word.clamp(rect.width(), WORKSPACE_WIDTH - 2.0 * t.space_4);
+    if widest_word > title_width {
+        font.size *= (title_width - 1.0) / widest_word;
+    }
+    let mut title = egui::text::LayoutJob::simple(workspace.to_owned(), font, t.text, title_width);
     title.halign = Align::Center;
     let title = p.layout_job(title);
     p.galley(pos2(center.x, center.y + t.space_12 - t.space_2 - title.size().y / 2.0), title, t.text);
@@ -1530,6 +1538,7 @@ fn paint_workspace_glyph(p: &egui::Painter, icon: WorkspaceIcon, center: Pos2, s
                 p.circle(at(x, y), 3.0 * scale, face_1, stroke(1.5, ink));
             }
         }
+        WorkspaceIcon::Factory => paint_factory(p, center, size, ink, active_2),
         WorkspaceIcon::Render => {
             // Shaded faces stacked toward the light, inside the sphere's outline.
             p.circle_filled(at(28.0, 38.0), 21.0 * scale, face_3);
@@ -1790,6 +1799,7 @@ pub(crate) fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: 
             line(&[(26.0, 16.0), (8.0, 46.0), (26.0, 46.0), (26.0, 16.0)], stroke(4.0, ink));
             line(&[(38.0, 16.0), (56.0, 46.0), (38.0, 46.0), (38.0, 16.0)], stroke(4.0, accent));
         }
+        ToolIcon::Factory => paint_factory(p, center, size, ink, accent),
         ToolIcon::Outputs => {
             line(&[(14.0, 6.0), (40.0, 6.0), (50.0, 16.0), (50.0, 58.0), (14.0, 58.0), (14.0, 6.0)], stroke(4.0, ink));
             line(&[(32.0, 20.0), (32.0, 46.0)], stroke(4.0, accent));
@@ -1800,6 +1810,36 @@ pub(crate) fn paint_icon(p: &egui::Painter, icon: ToolIcon, center: Pos2, size: 
             p.rect_filled(Rect::from_min_max(at(18.0, 22.0), at(46.0, 44.0)), (size / 32.0) as u8, accent);
         }
     }
+}
+
+/// Paint an original factory glyph with a sawtooth roof, chimney and rising smoke.
+fn paint_factory(p: &egui::Painter, center: Pos2, size: f32, ink: Color32, accent: Color32) {
+    let scale = size / 64.0;
+    let at = |x: f32, y: f32| center + vec2(x - 32.0, y - 32.0) * scale;
+    let line = |points: &[(f32, f32)], color| {
+        p.add(Shape::line(points.iter().map(|&(x, y)| at(x, y)).collect(), Stroke::new(3.0 * scale, color)));
+    };
+    line(
+        &[
+            (7.0, 56.0),
+            (7.0, 36.0),
+            (22.0, 27.0),
+            (22.0, 36.0),
+            (38.0, 27.0),
+            (38.0, 36.0),
+            (44.0, 36.0),
+            (46.0, 19.0),
+            (54.0, 19.0),
+            (57.0, 36.0),
+            (57.0, 56.0),
+            (7.0, 56.0),
+        ],
+        ink,
+    );
+    for x in [14.0, 26.0, 38.0] {
+        p.rect_filled(Rect::from_min_max(at(x, 42.0), at(x + 6.0, 48.0)), 1, accent);
+    }
+    line(&[(50.0, 13.0), (46.0, 10.0), (46.0, 7.0), (54.0, 4.0)], accent);
 }
 
 /// Show the retained license texts for the embedded toolbar artwork inside About.

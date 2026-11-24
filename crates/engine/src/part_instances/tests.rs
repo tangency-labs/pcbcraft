@@ -9,6 +9,7 @@ use crate::{
 use serde_json::json;
 
 mod capacity;
+mod metadata;
 mod retained;
 mod supply_range;
 mod voltage_rating;
