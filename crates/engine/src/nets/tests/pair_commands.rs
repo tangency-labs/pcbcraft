@@ -406,6 +406,43 @@ fn large_pair_draft_respects_the_poll_budget() {
     assert_eq!(session.snapshot().unwrap().differential_pairs(), snapshot.differential_pairs());
 }
 
+/// The pair capacity probe never saves, so it takes record validity from the retained proof
+/// and never rebuilds the graph inside a browser work unit. Without a proof it refuses before
+/// any graph work, and an ordinary save of the same candidate still validates every record.
+#[test]
+fn pair_capacity_probe_uses_records_proof_and_saves_still_validate() {
+    let validations = || super::super::validation::RECORD_VALIDATIONS.with(std::cell::Cell::get);
+    let finish = |project: Arc<Project>| {
+        let mut probe = crate::persistence::PairDocumentProbe::new(project, 0);
+        loop {
+            match probe.step(256) {
+                Ok(None) => {}
+                Ok(Some(budget)) => break Ok(budget),
+                Err(error) => break Err(error),
+            }
+        }
+    };
+    for board in [false, true] {
+        let (mut session, [p, n, _]) = pair_fixture(board);
+        session.open_snapshot(decode_documents(&bytes(&session)).unwrap());
+        apply(&mut session, CREATE_PAIR, json!({"pair":new_pair_id().unwrap(),"name":"New","positive":p,"negative":n}));
+        let candidate = session.snapshot().unwrap();
+        assert!(candidate.net_registry.has_records_proof(&candidate));
+        let before = validations();
+        assert!(finish(candidate.clone()).unwrap().has_pairs);
+        assert_eq!(validations(), before, "the probe rebuilt the graph");
+
+        let mut unproven = Project::clone(&candidate);
+        Arc::make_mut(&mut unproven.sheets)[0].sheet_name.push_str(" B");
+        assert!(!unproven.net_registry.has_records_proof(&unproven));
+        assert!(finish(Arc::new(unproven)).unwrap_err().to_string().contains("validated source"));
+        assert_eq!(validations(), before, "the unproven probe rebuilt the graph");
+
+        crate::persistence::encode_documents(candidate).unwrap();
+        assert!(validations() > before, "an ordinary save skipped record validation");
+    }
+}
+
 /// A proof covers only the exact authored inputs to ordinary registry validation, not an
 /// arbitrary project Arc with the same IDs. A changed net record is checked anew on a miss.
 #[test]

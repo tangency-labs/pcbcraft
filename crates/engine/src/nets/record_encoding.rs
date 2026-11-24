@@ -4,8 +4,8 @@ use super::{Record, State};
 use serde::Serialize;
 use std::io::Write;
 
-/// Cursor shared by the compact byte meter and native document writer. Both use
-/// the ordinary Serde form for small rows and for each item of a large row.
+/// Cursor of the compact byte meter (`RegistrySizeProbe`). It uses the ordinary Serde
+/// form for small rows and for each item of a large row.
 #[derive(Default)]
 pub(crate) struct RecordEncoding {
     phase: u8,

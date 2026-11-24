@@ -1864,7 +1864,14 @@ impl DocumentsEncoder {
                     p.validate_no_connects()?;
                     crate::part_instances::storage::validate_project(p)?;
                     let records = p.sheet_instances();
-                    Project::clone(p).install_sheet_instances(records.clone())?;
+                    if self.pair_capacity_only {
+                        // The probe never saves. Its registry must carry the records proof of this
+                        // exact input, which stands in for the graph rebuild of an ordinary save.
+                        p.net_registry.require_records_proof(p)?;
+                        Project::clone(p).install_proven_sheet_instances(records.clone())?;
+                    } else {
+                        Project::clone(p).install_sheet_instances(records.clone())?;
+                    }
                     self.instance_records = Some(records);
                     if self.use_compact_memberships {
                         self.compact_memberships = Some(CompactMemberships::from_memberships(&p.part_group_memberships)?);
@@ -1886,10 +1893,6 @@ impl DocumentsEncoder {
                     if p.net_registry.has_class_bindings() && !has_classes {
                         return Err("Net class assignments require their class catalog.".into());
                     }
-                    // A pair capacity probe needs evidence that this exact registry input was validated.
-                    if self.pair_capacity_only && p.net_registry.has_class_bindings() {
-                        p.net_registry.require_records_proof(p)?;
-                    }
                     p.part_groups.validate()?;
                     let has_part_groups = !p.part_groups.groups.is_empty();
                     if !p.part_group_memberships.is_empty() {
@@ -1900,12 +1903,6 @@ impl DocumentsEncoder {
                     }
                     if p.net_registry.has_generated_numbers() && p.net_registry.records.iter().any(|record| record.generated_number.is_none()) {
                         return Err("Numbered net registries require a number on every record.".into());
-                    }
-                    if self.pair_capacity_only
-                        && (p.net_registry.has_generated_numbers() || p.net_registry.has_pairs())
-                        && !p.net_registry.has_class_bindings()
-                    {
-                        p.net_registry.require_records_proof(p)?;
                     }
                     p.assembly_profiles.validate(&p.board.assembly_profiles)?;
                     let has_profiles = !p.assembly_profiles.is_empty();

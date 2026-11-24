@@ -8,6 +8,13 @@ use std::{
 };
 use uuid::Uuid;
 
+/// Full record/graph validations on this thread, so tests can prove a path never rebuilds
+/// the graph.
+#[cfg(test)]
+thread_local! {
+    pub(super) static RECORD_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Evidence from a successful ordinary validation of the immutable, non-pair registry
 /// inputs. Keeping weak identities prevents a proof from retaining obsolete project data.
 #[derive(Clone, Debug)]
@@ -117,6 +124,12 @@ impl Registry {
         Err("Pair edits require a validated source net registry.".into())
     }
 
+    /// Validate only what a proven pair-only candidate can change: the bounds and the pair
+    /// relationships. The caller has already required the records proof for this registry.
+    pub(crate) fn validate_proven_pairs(&self) -> Result<(), String> {
+        self.validate_pairs()
+    }
+
     /// Check for evidence that this exact non-pair graph/registry input was validated.
     pub(super) fn has_records_proof(&self, project: &Project) -> bool {
         project.net_records_proof.contains(&RecordsProof::new(self, project))
@@ -140,6 +153,8 @@ impl Registry {
 
     /// Retain exact validation from a graph already built by a transaction on this snapshot.
     pub(super) fn validate_records_against(&self, project: &Project, graph: Option<&Graph>) -> Result<(), String> {
+        #[cfg(test)]
+        RECORD_VALIDATIONS.with(|count| count.set(count.get() + 1));
         let ids: BTreeSet<_> = self.records.iter().map(|r| r.id).collect();
         if ids.len() != self.records.len() || ids.contains(&uuid::Uuid::nil()) || self.records.windows(2).any(|p| p[0].id >= p[1].id) {
             return Err("Net records require unique non-nil UUIDs in canonical order.".into());
