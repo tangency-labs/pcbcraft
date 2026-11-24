@@ -31,7 +31,7 @@ describes one geometry file and nothing about where that geometry is placed.
 
 | Field | Meaning |
 | --- | --- |
-| `format`, `library`, `id`, `revision`, `name`, `license` | Common identity fields with the [existing rules](part-schema.md#exact-references) |
+| `format`, `library`, `id`, `revision`, `name`, `license` | Common identity fields with the [existing rules](part-schema.md#exact-references); as for footprints, the codec enforces trimmed, nonblank `name` and `license`, which the schema does not check |
 | `source` | Required provenance (`kind`, `reference`, `locator`); descriptive, never fetched on load |
 | `redistribution` | `allowed`, `not_allowed` or `unknown`; decides which operations may copy the bytes into a new file ([Redistribution](#redistribution)) |
 | `geometry` | `kind` (`step`), `sha256` of the exact file bytes as 64 lowercase hex digits, and `size_bytes` |
@@ -278,15 +278,18 @@ the open. The storage slice adds asset support in a new container format,
 - **Model assets are optional.** A listed asset whose file is missing gives its
   components `geometry_unavailable`. One whose size or SHA-256 differs from the
   manifest or the record gives `hash_mismatch`, and that record does not use the
-  bytes. The
-  project opens and stays editable, and the open notice names each failed asset.
-  A mismatch is judged per record: an asset that matches its manifest entry is
-  kept while any record verifies against it. Only a record that disagrees
+  bytes. The project opens and stays editable, and the open notice names each
+  failed asset. A mismatch is judged per record: only a record that disagrees
   reports `hash_mismatch`, and the other records keep the geometry.
-- **Saving.** Bytes that no record verifies against are never written back. The
-  record and the binding stay, the asset and its manifest entry are left out,
-  and the save notice names them, so the model stays `geometry_unavailable`
-  until it is embedded again.
+- **Saving.** A newly written archive carries an asset only while at least one
+  record that verifies against it is still embedded and marked `allowed`. A
+  `not_allowed` or `unknown` record that shares the hash never keeps the asset
+  by itself: when the last embedded `allowed` record for that hash is unbound,
+  removed or becomes unreadable, the asset and its manifest entry are left out
+  and the restricted model becomes linked. Bytes that no record verifies
+  against are never written back.
+  Records and bindings always stay, and the save notice names each asset it
+  left out.
 
 How embedded assets count against the packed-project size limits is settled by
 the storage slice.
@@ -315,7 +318,7 @@ A partial read is never used: if any solid is refused, the model is
 | Consumer | Behaviour |
 | --- | --- |
 | 3D view | Draws `bound` bodies only. Every other component is listed in the coverage report with its state and drawn without a body |
-| STEP export, `board/1` | Write `bound` bodies, subject to [redistribution](#redistribution). Every other component is listed with its pose and state and gets no body. A `hash_mismatch` refuses the whole output, as RFC #444 section 6.7 describes for `board/1`, and leaves any previous file in place |
+| STEP export, `board/1` | Check [redistribution](#redistribution) first: a `not_allowed` or `unknown` model is listed with its pose and that reason, and its bytes are neither read nor verified, so a mismatch in them never affects the output. For the remaining models, `bound` bodies are written and every other component is listed with its pose and state without a body. A `hash_mismatch` in a model that would be written refuses the whole output, as RFC #444 section 6.7 describes for `board/1`, and leaves any previous file in place |
 | Without a kernel | STEP export and `board/1` refuse the whole output with `kernel_unavailable` rather than write a file without bodies |
 
 An embedded project reopens offline with all its models. A linked project reopens
@@ -348,7 +351,13 @@ height stands in for a missing model in a mechanical output.
   reports `unreadable`.
 - **Redistribution.** Embed and `board/1` copy an `allowed` model, and leave out
   a `not_allowed` and an `unknown` model with the reason, even when their bytes
-  are cached.
+  are cached. A restricted model whose cached bytes fail verification is still
+  left out with its redistribution reason, and the output completes.
+- **Shared assets.** In a `.pc`, an asset shared by two embedded `allowed`
+  records is kept when one of them is unbound. An asset shared by an `allowed`
+  and a `not_allowed` record is kept while the `allowed` model is embedded; once
+  its last binding is removed, or its record becomes unreadable, the next save
+  leaves the asset out and the `not_allowed` model is linked.
 
 ## Delivery order
 
