@@ -345,11 +345,7 @@ fn publish(path: &Path, expected: Option<&[u8]>, bytes: &[u8], after_staging: im
         return verify();
     }
     let parent = path.parent().ok_or("Project file has no parent directory")?;
-    let name = path.file_name().ok_or("Project file has no name")?;
-    let mut lock_name = std::ffi::OsString::from(".");
-    lock_name.push(name);
-    lock_name.push(".pcbcraft-lock");
-    let lock = pcbcraft_storage::open_lock_file(&parent.join(lock_name)).map_err(|error| format!("Could not open save lock: {error}"))?;
+    let lock = pcbcraft_storage::open_archive_save_lock(path).map_err(|error| format!("Could not open save lock: {error}"))?;
     lock.try_lock().map_err(|error| format!("Could not lock project for saving: {error}"))?;
 
     let mut staged = tempfile::NamedTempFile::new_in(parent).map_err(|error| error.to_string())?;

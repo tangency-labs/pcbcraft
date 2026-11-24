@@ -32,9 +32,11 @@ python3 -B scripts/parametric-outline-bridge.py watch \
 ```
 
 In SolidCraft, use **Insert Design** to place `board.sc` in an assembly.
-From another terminal, resize the fixture from the worktree:
+In a second terminal, use the same worktree, target directory and demo path:
 
 ```sh
+outline_tool="${CARGO_TARGET_DIR:-target}/ci/examples/parametric_outline"
+demo=/absolute/path/to/a/new/demo-directory
 "$outline_tool" resize "$demo/board.pc" '85 mm' '50 mm'
 ```
 

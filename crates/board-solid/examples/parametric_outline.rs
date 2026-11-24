@@ -161,12 +161,14 @@ fn edit(session: &mut Session, command: &str, mut params: Value) -> Result<()> {
     Ok(())
 }
 
-/// Stage a complete native archive before replacing the prototype's saved board.
+/// Stage a complete archive and hold the editor's sibling lock across the stale check and publish.
 fn save(path: &Path, bytes: &[u8], prior: Option<&[u8]>) -> Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let mut staged = tempfile::NamedTempFile::new_in(dir)?;
     staged.write_all(bytes)?;
     staged.as_file().sync_all()?;
+    let lock = pcbcraft_storage::open_archive_save_lock(path)?;
+    lock.try_lock().map_err(|error| format!("Could not lock project for saving: {error}"))?;
     if let Some(prior) = prior {
         if prior != read_bytes(File::open(path)?)? {
             return Err("The saved board changed while preparing the resize.".into());
@@ -189,4 +191,22 @@ fn corners(left: i64, top: i64, right: i64, bottom: i64) -> [Point; 4] {
 
 fn mm(nm: i64) -> f64 {
     nm as f64 / NM_PER_MM as f64
+}
+
+#[test]
+fn archive_save_rejects_a_held_lock_and_a_stale_baseline() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("board.pc");
+    save(&path, b"original", None)?;
+
+    let editor_lock = pcbcraft_storage::open_archive_save_lock(&path)?;
+    editor_lock.try_lock()?;
+    assert!(save(&path, b"contender", Some(b"original")).is_err());
+    assert_eq!(fs::read(&path)?, b"original");
+    drop(editor_lock);
+
+    save(&path, b"winner", Some(b"original"))?;
+    assert!(save(&path, b"contender", Some(b"original")).is_err());
+    assert_eq!(fs::read(&path)?, b"winner");
+    Ok(())
 }

@@ -122,6 +122,8 @@ def publish(source, exchange, outline_tool, solidcraft_cli):
         if changed:
             os.replace(archive_path, exchange)
         if refresh_link:
+            # A missing stamp forces regeneration if publishing stops before the new stamp lands.
+            stamp.unlink(missing_ok=True)
             os.replace(staged_design, linked_design)
             os.replace(staged_stamp, stamp)
         return manifest, changed
