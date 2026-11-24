@@ -270,6 +270,7 @@ mod tests {
         let at = point(x, y);
         Object {
             name: String::new(),
+            kind: crate::board::clearance::ObjectKind::Pad,
             contour: Contour::capsule(at, at, 180_000.5),
             layers: Vec::new(),
             intended_nets: Vec::new(),

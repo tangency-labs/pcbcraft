@@ -233,6 +233,9 @@ the same `VCC` net name, which can be changed before placement.
    and **Open** ask **Save**, **Don't Save** or **Cancel**. **Save** carries on
    only once the save succeeds. In the browser, leaving or reloading the page
    shows the browser's own warning while the project is unsaved.
+   On the desktop, **Preferences → Saving** sets how often unsaved work is
+   copied to your recovery folder and whether a project that already has a
+   folder or file is saved on a timer. Both are off by default.
 
 The status bar shows the grid point under the pointer; click its unit, or press
 **Ctrl+U**, to read coordinates and the grid in mm instead of mil. The wheel zooms
@@ -919,11 +922,12 @@ Ctrl+Shift+X (macOS: Command+Shift+X) starts the standalone via tool. On native
 non-Latin layouts, it uses physical X when the logical character has no key
 mapping; Windows Shift+Delete remains Cut.
 
-With a configured board, a closed Board Outline and a resolvable placement origin,
-**Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
-The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
-If the board has circular non-plated holes, the ZIP includes `-NPTH.drl`
-separately from the plated `-PTH.drl` file.
+With a configured board, at least one closed Board Outline loop and a resolvable
+placement origin, **Manufacture → Fabrication → Outputs** generates one ZIP without
+editing the design. The Gerber profile uses only the closed outline loops. The embedded
+`manifest.json` lists Gerber and drill member byte sizes and SHA-256. If the board has
+circular non-plated holes, the ZIP includes `-NPTH.drl` separately from the plated
+`-PTH.drl` file.
 Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
 destination errors can prevent a successful save. In the browser, Outputs requests
 one download; check that your browser saved it.

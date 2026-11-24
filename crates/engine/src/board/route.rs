@@ -1,4 +1,4 @@
-//! Clearance-aware walkaround and optional track-shove planning over captured copper.
+//! Clearance-aware walkaround and shove planning over captured copper.
 //!
 //! [`walkaround`] plans one single-layer route from a head point toward a target over a captured
 //! [`ClearanceQuery`]: horizontal, vertical and 45° legs (or horizontal and vertical only) that
@@ -7,8 +7,9 @@
 //! `pcb.add_tracks` command or copper preparation job, which revalidate and publish them in one
 //! undo step. Every kept leg is confirmed by the same exact probe and outline predicates that
 //! DRC uses. The search is deterministic and bounded by a probe budget and a cancellation flag.
-//! Shove mode returns disposable track replacements for one atomic add/replace command.
-//! Pads, vias and locked copper remain fixed; arcs, zones and multilayer search are not planned.
+//! Both shove modes return track replacements for atomic placement. The via-enabled mode can
+//! also move a through via and its attached track endpoints when the incoming copper hits it.
+//! Pads and locked copper stay fixed. Each through-via move is checked on every copper layer.
 use super::clearance::ClearanceQuery;
 use crate::{CommandError, Session, schematic::Point};
 use serde::Serialize;
@@ -19,7 +20,9 @@ mod hull;
 mod posture;
 mod preparation;
 mod search;
+pub(in crate::board) use search::Search;
 mod shove;
+pub use super::track::replacements::ViaMove;
 pub use shove::{FixedCopper, Mode, ShoveStats};
 pub(crate) use shove::{fixed_schema, valid_fixed};
 #[cfg(test)]
@@ -41,7 +44,7 @@ pub const MAX_BUDGET: usize = 65_536;
 /// prefers going round on the same side, so nearly equivalent routes do not alternate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Request {
-    /// Walk around fixed copper or displace unlocked tracks on a disposable overlay.
+    /// Walk around existing copper, shove unlocked tracks, or also move through vias and their attached ends.
     pub mode: Mode,
     /// Opt into joining displaced copper elsewhere on its resolved net/physical island.
     /// False preserves spacing between source objects that were not directly touching.
@@ -92,6 +95,9 @@ pub struct Plan {
     /// Source track paths to replace atomically with this route; empty for walkaround.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub replacements: Vec<super::track::replacements::Replacement>,
+    /// Through vias translated together with their endpoint tracks.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub via_moves: Vec<ViaMove>,
     /// Bounded shove work, absent for walkaround.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shove: Option<ShoveStats>,
@@ -147,6 +153,7 @@ impl Session {
             return Ok(Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: None,
                 points: Vec::new(),
@@ -189,6 +196,7 @@ impl Session {
             Plan {
                 adjusted_target: None,
                 start_blocked: false,
+                via_moves: Vec::new(),
                 replacements: Vec::new(),
                 shove: None,
                 points: Vec::new(),
@@ -203,7 +211,7 @@ impl Session {
         let mut result = json!({"revision":self.revision(),"route_plan":{
             "board":target.board,"layer":layer,"mode":mode,"merge_same_net":merge_same_net,"width_nm":width_nm,"posture":posture,"flipped":flipped,"budget":budget,
             "points":plan.points,"outcome":plan.outcome,"blocker":plan.blocker,"probes":plan.probes,
-            "replacements":plan.replacements,"shove":plan.shove,"start_blocked":plan.start_blocked
+            "replacements":plan.replacements,"via_moves":plan.via_moves,"shove":plan.shove,"start_blocked":plan.start_blocked
         }});
         if let Some(point) = plan.adjusted_target {
             result["route_plan"]["adjusted_target"] = json!(point);

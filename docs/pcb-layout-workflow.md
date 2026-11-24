@@ -52,6 +52,12 @@ the active copper layer. Layer visibility and selection filters also apply when
 cycling. Tracks and vias in the gaps between footprint pads can be clicked
 directly.
 
+For closed Board Outline graphics, select an edge, then drag the edge to move
+that side parallel to itself. Drag inside the selected outline to move the whole
+shape or drag a corner to reshape it. Right-click a selected edge or corner to
+add or remove a vertex. The [zone editing guide](copper-zone-outlines.md#drawing-and-editing)
+describes the shared axis alignment and vertex controls.
+
 Copper connectivity is derived from overlap on shared layers. Track edits and
 footprint transforms refuse new shorts in the copper they touch. DRC separately
 reports existing islands that contain conflicting intended nets, including direct
@@ -277,6 +283,8 @@ license review before it is added.
 
 ### 5. Push-and-shove
 
+The current [route and connected-drag guide](route-planning.md#through-vias-and-connected-segment-drags) describes the delivered stages and their limits. The stages below record the original plan.
+
 The interactive-routing part of #56, after #95's basic editing. It comes after clearance-aware routing because it
 needs the same clearance query and spatial index.
 
@@ -337,6 +345,14 @@ board coordinates and lengths written in millimeters to three decimal places.
 The non-plated tool size is the finished diameter, with no plating allowance.
 A non-plated diameter that rounds to zero stops export instead of writing a
 zero-size tool. This is a file precision limit, not a fabrication rule.
+
+Each drill file's header names its content with Gerber X2 file attributes in
+XNC standard comments (`; #@! TF.…`): `FileFunction,Plated,1,N,PTH` or
+`FileFunction,NonPlated,1,N,NPTH`, where N is the board's copper layer count,
+plus `GenerationSoftware` and a deterministic `SameCoordinates` GUID derived
+from the resolved export frame (origin, axis convention and unit), matching the
+Gerber layers of that export. Readers that ignore attributes see ordinary
+comments. Tool and hole attributes, slots and rout paths are not written yet.
 
 ## Placed-footprint locks
 
