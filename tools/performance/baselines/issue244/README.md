@@ -94,7 +94,7 @@ recorded explicitly. Physical presentation, endurance and full large-net routing
 remain unqualified.
 
 Reproduce with the engine examples and simulator commands in
-[the performance guide](../../../../docs/performance-testing.md). Reuse the saved
+[the performance guide](../../../../docs/testing/performance-testing.md). Reuse the saved
 native fixture bytes and the retained synthetic inputs rather than regenerating
 identities for a comparison. See [failure review](failure-review.md) for ownership
 and cancellation boundaries. The initial packaging collected no new benchmarks;

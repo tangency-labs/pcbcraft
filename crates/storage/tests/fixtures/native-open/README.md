@@ -31,7 +31,7 @@ counts for the same demo: six two-pin parts and one three-pin transistor, with
 four connected groups. The transistor's three unwired pins count as pins but
 not as nets. This fixture is not a decoded third-party board.
 
-[independent reader comparison]: ../../../../../docs/reading-native-projects.md#worked-example-one-flat-sheet
+[independent reader comparison]: ../../../../../docs/formats/reading-native-projects.md#worked-example-one-flat-sheet
 
 The [compatibility tests] also check object counts and the exported terminal
 inventory, net membership, authored names and unconnected terminals. They
@@ -45,6 +45,6 @@ source revisions above, with the flasher's power-symbol terminals from the
 contemporaneous `crates/engine/tests/indicator_demo.rs` circuit test. These are
 synthetic checks; no imported production board is in this corpus.
 
-[native Open compatibility boundary]: ../../../../../docs/native-project-storage.md#compatibility-and-fixtures
+[native Open compatibility boundary]: ../../../../../docs/formats/native-project-storage.md#compatibility-and-fixtures
 [Open test]: ../../native_open_corpus.rs
 [compatibility tests]: ../../native_open_corpus.rs
