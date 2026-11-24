@@ -353,6 +353,13 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         let native_packed = encode_packed(s.snapshot().unwrap()).unwrap();
         assert_eq!(encode_packed(decode_packed(&native_packed).unwrap().project).unwrap(), native_packed);
         assert_eq!(encode_documents(decode_documents(&native).unwrap()).unwrap(), native);
+        // The arc cases clear their arcs before the final delete, so the end state is the same
+        // board without arcs and keeps the format that board selects.
+        s.open_snapshot(untouched.clone());
+        if lock {
+            s.open_snapshot(with_lock(&s.snapshot().unwrap(), true));
+        }
+        let without_arcs = bytes(&s);
         s.open_snapshot(untouched);
         let reference = pick(&mut s, 0, "fp.origin", None);
         let id = add(&mut s, "horizontal", origin(), reference);
@@ -392,7 +399,8 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
         let final_docs = bytes(&s);
         let final_board: Value = serde_json::from_slice(&final_docs[&test_board_path(&final_docs)]).unwrap();
-        assert_eq!(final_board["format"], native_board["format"]);
+        let end_board: Value = serde_json::from_slice(&without_arcs[&test_board_path(&without_arcs)]).unwrap();
+        assert_eq!(final_board["format"], end_board["format"]);
         assert!(final_board.get("relations").is_none());
         assert_eq!(final_board["footprints"][0].get("locked").is_some(), lock);
     }

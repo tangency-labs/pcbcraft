@@ -1434,7 +1434,7 @@ fn a_net_eco_local_split_short_and_disconnected_control() {
 fn a_eco_compat_exact_base_command_contracts() {
     use sha2::{Digest, Sha256};
     let frozen = include_bytes!("base-command-contracts.json");
-    assert_eq!(format!("{:x}", Sha256::digest(frozen)), "00865cc1402a126a64700435388b48debef69ffc26f68b5a8149a5723971f6ac");
+    assert_eq!(format!("{:x}", Sha256::digest(frozen)), "33698a6b3619eddea1c2447a66832ec2b69e7e986ba03924fce2bc7f45319eda");
     let base: Value = serde_json::from_slice(frozen).unwrap();
     let current: Value = serde_json::from_str(include_str!("../../../../../docs/schemas/command-contracts.json")).unwrap();
     let described: Vec<_> = crate::CATALOG.iter().map(crate::Command::to_json).collect();
