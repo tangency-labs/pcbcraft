@@ -3,8 +3,8 @@
 November 23, 2026. A proposal for
 [#94](https://github.com/tangency-labs/pcbcraft/issues/94). It builds on the
 [library sources model](library-sources.md) and the
-[native library sources](../libraries/native-library-sources.md) guide. Nothing on this page
-is implemented yet.
+[native library sources](../libraries/native-library-sources.md) guide. The team catalog
+and its provider records are not implemented yet.
 
 The first remote source should be one controlled, read-only team catalog. It is
 small enough to review end to end, and it shows how search, details,
