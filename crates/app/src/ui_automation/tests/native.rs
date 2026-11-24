@@ -6,7 +6,7 @@ use pcbcraft_mcp::{Backend, live::Remote};
 use std::sync::{Arc, Mutex, mpsc};
 
 /// Execute one accepted input exactly once, then poll its completion with a bounded deadline.
-fn input(remote: &mut Remote, id: &str, params: Value) -> Result<(), String> {
+pub(super) fn input(remote: &mut Remote, id: &str, params: Value) -> Result<(), String> {
     let accepted = remote.call("engine.execute", json!({"command":id,"params":params})).map_err(|failure| failure.to_string())?;
     let deadline = Instant::now() + Duration::from_secs(8);
     while Instant::now() < deadline {
@@ -25,7 +25,7 @@ fn input(remote: &mut Remote, id: &str, params: Value) -> Result<(), String> {
 }
 
 /// Capture only this isolated test display when an evidence destination was explicitly supplied.
-fn capture(name: &str) -> Result<(), String> {
+pub(super) fn capture(name: &str) -> Result<(), String> {
     if let Some(root) = std::env::var_os("PCBCRAFT_UI_EVIDENCE") {
         // A completed ticket acknowledges UI processing, not compositor presentation.
         std::thread::sleep(Duration::from_millis(500));
@@ -201,11 +201,11 @@ fn resize(remote: &mut Remote, width: f64, height: f64) -> Result<Value, String>
     Err(format!("Resize to {width}×{height} did not settle"))
 }
 
-struct Sized {
-    app: PcbApp,
-    done: mpsc::Receiver<Result<(), String>>,
-    result: Arc<Mutex<Option<Result<(), String>>>>,
-    closing: bool,
+pub(super) struct Sized {
+    pub(super) app: PcbApp,
+    pub(super) done: mpsc::Receiver<Result<(), String>>,
+    pub(super) result: Arc<Mutex<Option<Result<(), String>>>>,
+    pub(super) closing: bool,
 }
 
 impl eframe::App for Sized {

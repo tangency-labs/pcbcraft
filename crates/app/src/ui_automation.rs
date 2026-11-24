@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 
 use crate::{PcbApp, ViewId, editor_layout::HostId, editor_windows::viewport};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod detached;
 #[cfg(test)]
 mod tests;
 mod window;
@@ -59,6 +61,8 @@ struct Snapshot {
     rect: Rect,
     focused: bool,
     modifiers: Modifiers,
+    /// A pointer button was held when this window last painted.
+    pointer_down: bool,
     scale: f32,
     targets: Vec<Target>,
     authority: Authority,
@@ -466,6 +470,7 @@ impl PcbApp {
                 rect,
                 focused: ctx.input(|i| i.focused),
                 modifiers: ctx.input(|i| i.modifiers),
+                pointer_down: ctx.input(|i| i.pointer.any_down()),
                 scale: ctx.pixels_per_point(),
                 targets,
                 authority: authority.clone(),
@@ -497,6 +502,10 @@ impl PcbApp {
             }
         }
         self.automation.snapshots.retain(|host, _| self.views.hosts.contains_key(host));
+        // A closed window cannot receive its off-window release; its gestures were already cancelled.
+        if self.automation.release.is_some_and(|(host, _, _)| !self.views.hosts.contains_key(&host)) {
+            self.automation.release = None;
+        }
     }
 
     /// Dispatch live-only UI commands. Querying opts into target collection on subsequent paints.
@@ -557,8 +566,8 @@ impl PcbApp {
         let name = id.strip_prefix("ui.").ok_or("Unknown UI command")?;
         let mut object = params.as_object().ok_or("UI input takes an object")?.clone();
         let host = HostId(object.remove("window").and_then(|v| v.as_u64()).ok_or("UI input needs an integer window ID")?);
-        if host != HostId::ROOT {
-            return Err("UI input currently supports the original native window (window 0), including split panes; detached windows support named lookup only".into());
+        if host != HostId::ROOT && ctx.embed_viewports() {
+            return Err("Detached editors are embedded in the main window on this platform; send input to window 0".into());
         }
         let layout = object.remove("layout").map(|v| v.as_u64().ok_or("layout must be an integer")).transpose()?;
         if object.contains_key("action") {
@@ -569,17 +578,17 @@ impl PcbApp {
         if self.automation.job.is_some() || self.automation.release.is_some() {
             return Err("UI input is busy; wait for ui.inspect or cancel the pending operation".into());
         }
-        let snapshot = self.automation.snapshots.get(&host).ok_or("UI geometry is unavailable; call ui.handles and wait for a paint")?;
         if !self.views.hosts.contains_key(&host) {
             return Err("Unknown editor window".into());
         }
+        let snapshot = self.automation.snapshots.get(&host).ok_or("UI geometry is unavailable; call ui.handles and wait for a paint")?;
         if !self.automation_current(host, snapshot) || layout.is_some_and(|layout| layout != snapshot.layout) {
             return Err("UI geometry is stale; inspect handles again".into());
         }
         if !snapshot.focused {
             return Err("Focus the addressed editor window before sending UI input".into());
         }
-        if ctx.input(|input| input.pointer.any_down()) {
+        if snapshot.pointer_down || ctx.input(|input| input.pointer.any_down()) {
             return Err("Release held pointer buttons before sending UI input".into());
         }
         if self.files.busy() {
@@ -613,6 +622,7 @@ impl PcbApp {
 
     /// Inject one bounded frame before egui processes input. Keep it across logic-only callbacks;
     /// only an accepted host paint advances the queue. Physical input always takes precedence.
+    /// This is eframe's hook for window 0; detached windows use the plugin in `detached`.
     pub(super) fn automation_input(&mut self, ctx: &egui::Context, input: &mut RawInput) {
         pcbcraft_chrome::automation::mark_synthetic_input(ctx, false);
         if let Some((id, events, _)) = &self.automation.injected
@@ -623,96 +633,146 @@ impl PcbApp {
             }
             self.automation.injected = None;
         }
-        if let Some(job) = &self.automation.job {
-            let owner_valid = job.owner.as_ref().is_some_and(|owner| {
-                if owner.stopped.load(std::sync::atomic::Ordering::Acquire) {
-                    return false;
-                }
-                if owner.chat {
-                    self.assistant.turn_open() && self.assistant.generation() == Some(owner.generation)
-                } else {
-                    self.live_control.as_ref().is_some_and(|live| live.port() == owner.port && live.current() == owner.generation)
-                }
-            });
-            let invalid = if !owner_valid {
-                Some("Automation connection or Assistant turn ended")
-            } else if Instant::now() >= job.deadline {
-                Some("UI input timed out before completion")
-            } else if self.automation_authority(job.host).as_ref() != Some(&job.authority) {
-                Some("Project or input destination changed")
-            } else if self.files.busy() {
-                Some("A file operation owns the editor")
-            } else if input.viewport_id == viewport(job.host)
-                && (!input.focused || input.viewport().minimized == Some(true) || input.viewport().occluded == Some(true))
-            {
-                Some("Editor window lost focus or visibility")
-            } else if input.viewport_id == viewport(job.host)
-                && (input.screen_rect.is_some_and(|rect| rect != job.rect) || ctx.pixels_per_point() != job.scale)
-            {
-                Some("Window size or scale changed")
-            } else if job.frames.front().is_some_and(|events| events.iter().any(|e| matches!(e, Event::PointerButton { .. })))
-                && self.automation.snapshots.get(&job.host).is_none_or(|snapshot| {
-                    job.guards.iter().any(|(name, point)| snapshot.point(Point::Named(Named { handle: name.clone() })).ok() != Some(*point))
-                })
-            {
-                Some("Named input target moved, became disabled or was covered")
-            } else if let Some(guard) = &job.coordinates
-                && let Some(at) = job.frames.front().and_then(|events| {
-                    events.iter().find_map(|event| match event {
-                        Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
-                        _ => None,
-                    })
-                })
-                && (guard.canvases != self.automation_canvases(job.host)
-                    || self.automation.snapshots.get(&job.host).is_none_or(|snapshot| guard.overlay_changed_at(snapshot, at)))
-            {
-                Some("Canvas mapping or overlay changed under a coordinate target")
-            } else if input.viewport_id == viewport(job.host) && input.events.iter().any(physical_input) {
-                Some("Physical input interrupted automation")
-            } else if input.viewport_id == viewport(job.host) && job.held.is_none() && ctx.input(|input| input.pointer.any_down()) {
-                Some("A held physical pointer button interrupted automation")
-            } else {
-                None
-            };
-            if let Some(reason) = invalid {
-                let owned = self.automation.owns_pointer_gesture();
-                self.automation.cancel(reason);
-                if owned {
-                    self.views.cancel_gestures();
-                }
-            }
+        let checks = self.automation.job.as_ref().filter(|job| input.viewport_id == viewport(job.host)).map(|job| Checks {
+            rect: job.rect,
+            scale: job.scale,
+            held: job.held.is_some(),
+            pointer_down: ctx.input(|input| input.pointer.any_down()),
+        });
+        if let Some(reason) = self.automation_invalid().or_else(|| checks.and_then(|checks| interrupted(input, ctx.pixels_per_point(), checks))) {
+            self.automation_stop(reason);
         }
+        let (release, frame) = self.automation_events(input.viewport_id);
+        if release.is_empty() && frame.is_empty() {
+            return;
+        }
+        pcbcraft_chrome::automation::mark_synthetic_input(ctx, true);
+        input.events.splice(0..0, release.iter().cloned());
+        input.events.extend_from_slice(&frame);
+        self.automation_issued(ctx, input.viewport_id, release, frame);
+    }
+
+    /// Application-state reasons that end the queued job before its next frame, in any window:
+    /// a revoked connection, the deadline, a changed destination, a file job, or a moved target.
+    fn automation_invalid(&self) -> Option<&'static str> {
+        let job = self.automation.job.as_ref()?;
+        let owner_valid = job.owner.as_ref().is_some_and(|owner| {
+            if owner.stopped.load(std::sync::atomic::Ordering::Acquire) {
+                return false;
+            }
+            if owner.chat {
+                self.assistant.turn_open() && self.assistant.generation() == Some(owner.generation)
+            } else {
+                self.live_control.as_ref().is_some_and(|live| live.port() == owner.port && live.current() == owner.generation)
+            }
+        });
+        let press = job.frames.front().and_then(|events| {
+            events.iter().find_map(|event| match event {
+                Event::PointerButton { pos, pressed: true, .. } => Some(*pos),
+                _ => None,
+            })
+        });
+        if !owner_valid {
+            Some("Automation connection or Assistant turn ended")
+        } else if Instant::now() >= job.deadline {
+            Some("UI input timed out before completion")
+        } else if self.automation_authority(job.host).as_ref() != Some(&job.authority) {
+            Some("Project or input destination changed")
+        } else if self.files.busy() {
+            Some("A file operation owns the editor")
+        } else if job.frames.front().is_some_and(|events| events.iter().any(|e| matches!(e, Event::PointerButton { .. })))
+            && self.automation.snapshots.get(&job.host).is_none_or(|snapshot| {
+                job.guards.iter().any(|(name, point)| snapshot.point(Point::Named(Named { handle: name.clone() })).ok() != Some(*point))
+            })
+        {
+            Some("Named input target moved, became disabled or was covered")
+        } else if let Some(guard) = &job.coordinates
+            && let Some(at) = press
+            && (guard.canvases != self.automation_canvases(job.host)
+                || self.automation.snapshots.get(&job.host).is_none_or(|snapshot| guard.overlay_changed_at(snapshot, at)))
+        {
+            Some("Canvas mapping or overlay changed under a coordinate target")
+        } else {
+            None
+        }
+    }
+
+    /// Cancel the queued job now, ending any gesture its injected press started.
+    fn automation_stop(&mut self, reason: &str) {
+        let owned = self.automation.owns_pointer_gesture();
+        self.automation.cancel(reason);
+        if owned {
+            self.views.cancel_gestures();
+        }
+    }
+
+    /// The events one pass of `viewport` receives: an off-window release ahead of physical
+    /// input after a cancellation, or the queued job's next frame after it.
+    fn automation_events(&self, viewport_id: egui::ViewportId) -> (Vec<Event>, Vec<Event>) {
+        let mut release = Vec::new();
         if let Some((host, button, modifiers)) = self.automation.release
-            && input.viewport_id == viewport(host)
+            && viewport_id == viewport(host)
         {
             let pos = egui::pos2(-1000.0, -1000.0);
-            let mut release = vec![Event::ModifiersChanged(modifiers)];
+            release.push(Event::ModifiersChanged(modifiers));
             if let Some(button) = button {
                 release.extend([Event::PointerMoved(pos), Event::PointerButton { pos, button, pressed: false, modifiers }, Event::PointerGone]);
             }
-            self.automation.injected = Some((input.viewport_id, release.clone(), true));
-            pcbcraft_chrome::automation::mark_synthetic_input(ctx, true);
-            release.append(&mut input.events);
-            input.events = release;
-            ctx.request_repaint_of(viewport(host));
         }
-        if let Some(job) = &mut self.automation.job
-            && input.viewport_id == viewport(job.host)
+        let mut frame = Vec::new();
+        if let Some(job) = &self.automation.job
+            && viewport_id == viewport(job.host)
             && let Some(events) = job.frames.front()
         {
-            let start = input.events.len();
-            input.events.push(Event::ModifiersChanged(job.modifiers));
-            input.events.extend_from_slice(events);
-            self.automation.injected = Some((input.viewport_id, input.events[start..].to_vec(), false));
-            pcbcraft_chrome::automation::mark_synthetic_input(ctx, true);
-            for event in events {
+            frame.push(Event::ModifiersChanged(job.modifiers));
+            frame.extend_from_slice(events);
+        }
+        (release, frame)
+    }
+
+    /// Record events that entered `viewport`'s pass: the accepted paint retires a release or
+    /// advances the job, and a press keeps its button owned until that paint.
+    fn automation_issued(&mut self, ctx: &egui::Context, viewport_id: egui::ViewportId, release: Vec<Event>, frame: Vec<Event>) {
+        if !release.is_empty() {
+            self.automation.injected = Some((viewport_id, release, true));
+            ctx.request_repaint_of(viewport_id);
+        }
+        if let Some(job) = self.automation.job.as_mut().filter(|_| !frame.is_empty()) {
+            for event in &frame {
                 if let Event::PointerButton { pos, button, pressed: true, .. } = event {
                     // Retain ownership across an unconsumed release; the accepted paint clears it.
                     job.held = Some((*button, *pos));
                 }
             }
             job.issued = true;
+            self.automation.injected = Some((viewport_id, frame, false));
         }
+    }
+}
+
+/// Facts about a queued job that its own window's raw input is checked against.
+#[derive(Clone, Copy, Debug)]
+struct Checks {
+    rect: Rect,
+    scale: f32,
+    held: bool,
+    /// A physical button is down in that window.
+    pointer_down: bool,
+}
+
+/// Raw-input reasons that end a queued job in its own window's pass: lost focus or
+/// visibility, a size or scale change, physical input, or a physically held button.
+fn interrupted(input: &RawInput, scale: f32, checks: Checks) -> Option<&'static str> {
+    if !input.focused || input.viewport().minimized == Some(true) || input.viewport().occluded == Some(true) {
+        Some("Editor window lost focus or visibility")
+    } else if input.screen_rect.is_some_and(|rect| rect != checks.rect) || scale != checks.scale {
+        Some("Window size or scale changed")
+    } else if input.events.iter().any(physical_input) {
+        Some("Physical input interrupted automation")
+    } else if !checks.held && checks.pointer_down {
+        Some("A held physical pointer button interrupted automation")
+    } else {
+        None
     }
 }
 
