@@ -1086,4 +1086,6 @@ hard bounds. Apply creates one undo step; Cancel leaves the board untouched, and
 **Use built-in defaults** removes the saved record. DRC reports the effective rules
 and any violations in existing copper. Rule edits make previous checks and route
 drafts out of date. See [board-rules.md](pcb/board-rules.md) for units, local size
-choices, provenance and file compatibility.
+choices, provenance and file compatibility. **Analyze → Rules → Differential pairs…**
+[authors pair intent](pcb/net-class-editor.md#differential-pairs) independently of board
+rules and does not change routing.

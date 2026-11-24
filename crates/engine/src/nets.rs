@@ -8,14 +8,19 @@ pub use classes::{BoundResolution, ClassBinding, ClassTarget, INSPECT_CLASSES, N
 pub mod display;
 mod graph;
 mod numbering;
+mod pair_commands;
 mod pairs;
+pub use pair_commands::{CREATE_PAIR, PairEditJob, PairEditSource, PreparedPairEdit, REMOVE_PAIR, UPDATE_PAIR, is_pair_edit, new_pair_id};
 pub use pairs::{MAX_PAIR_NAME_CHARS, MAX_PAIRS, Pair, PairState};
 mod reconcile;
+mod record_encoding;
+pub(crate) use record_encoding::RecordEncoding;
 mod selection;
 mod validation;
 pub(crate) use anchor::schema as anchor_schema;
 pub use anchor::{Anchor, AnchorKind, Scope, ScopeKind};
 pub use commands::{PROMOTE, RESOLVE_AMBIGUITY};
+pub(crate) use validation::RecordsProofCache;
 
 use crate::board::update::SourceCapture;
 use serde::{Deserialize, Serialize};
@@ -114,8 +119,8 @@ impl Record {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Registry {
-    /// Active records and retained ambiguous/retired identities in canonical UUID order.
-    pub records: Vec<Record>,
+    /// Active and historical identities in UUID order, shared across pair-only edits.
+    pub records: std::sync::Arc<Vec<Record>>,
     /// UUID-sorted relationships share their list and individual records across history snapshots.
     #[serde(default, skip_serializing_if = "pair_list_empty", deserialize_with = "pairs::stored_pairs")]
     pub pairs: std::sync::Arc<Vec<std::sync::Arc<Pair>>>,

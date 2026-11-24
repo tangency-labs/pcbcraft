@@ -654,7 +654,9 @@ impl PcbApp {
         let primary = edit.primary();
         let valid = edit.can_apply();
         let mut actions = None;
+        let mut pairs = false;
         let action = pcbcraft_chrome::catalog::settings_form_width(ctx, "Rules", 800., primary, current && valid, |ui| {
+            pairs = ui.add_enabled_ui(current && !edit.changed(), |ui| controls::button(ui, "Differential pairs…")).inner.clicked();
             form::body(ui, |ui| {
                 egui::ScrollArea::vertical().id_salt("class_rule_body").auto_shrink([false, false]).show(ui, |ui| {
                     pcbcraft_chrome::workspace::describe_scroll_viewport(ui);
@@ -664,6 +666,12 @@ impl PcbApp {
         });
         if action.close {
             return;
+        }
+        if pairs && current && !edit.changed() {
+            match self.begin_pairs_from(edit.source) {
+                Ok(()) => return,
+                Err(error) => edit.error = Some(error),
+            }
         }
         if let Some(mut actions) = actions {
             if actions.board_defaults && current {

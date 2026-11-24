@@ -249,18 +249,16 @@ impl Session {
             let graph = Graph::build(original).map_err(CommandError::InvalidParams)?;
             let mut ids = registry.reserved_ids();
             let id = allocate(registry.records.len(), &mut ids)?;
-            registry.records.push(
+            Arc::make_mut(&mut registry.records).push(
                 graph.networks[index.ok_or_else(|| CommandError::InvalidParams("Missing derived network.".into()))?]
                     .record(id, Some(&anchor))
                     .map_err(CommandError::InvalidParams)?,
             );
             id
         };
-        let record = registry
-            .records
-            .iter_mut()
-            .find(|record| record.id == id)
-            .ok_or_else(|| CommandError::InvalidParams("Missing assignment identity.".into()))?;
+        let records = Arc::make_mut(&mut registry.records);
+        let record =
+            records.iter_mut().find(|record| record.id == id).ok_or_else(|| CommandError::InvalidParams("Missing assignment identity.".into()))?;
         let wanted: BTreeSet<_> = classes.into_iter().collect();
         record.class_bindings.retain(|binding| wanted.contains(&binding.class));
         for class in wanted {
@@ -269,7 +267,7 @@ impl Session {
             }
         }
         record.class_bindings.sort();
-        registry.records.sort_by_key(|record| record.id);
+        records.sort_by_key(|record| record.id);
         candidate.net_registry = Arc::new(registry);
         candidate.net_registry.validate(&candidate).map_err(CommandError::InvalidParams)?;
         self.change(candidate)

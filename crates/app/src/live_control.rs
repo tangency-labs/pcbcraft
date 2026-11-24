@@ -12,14 +12,14 @@ use std::{
 };
 
 use craft_control::loopback::{AcceptedPeer, Listener, Token};
-use pcbcraft_engine::{Session, error_codes::ErrorCode};
+use pcbcraft_engine::{Session, error_codes::ErrorCode, nets};
 use pcbcraft_mcp::{
     Failure,
     live::{Editor, TOKEN_ENV, call_editor_with_package_commit, check_deferred_version, normalize_request, success_reply},
 };
 use serde_json::{Value, json};
 
-use crate::{Dialog, PcbApp, window_commands};
+use crate::{Dialog, PcbApp, board_drc::jobs, ui_automation::Owner, window_commands};
 
 const IO_TIMEOUT: Duration = Duration::from_secs(2);
 const EDITOR_TIMEOUT: Duration = Duration::from_secs(2);
@@ -262,6 +262,13 @@ pub(super) struct RemoteCheck {
 pub(super) struct RemoteCopper {
     queue: crate::board_drc::jobs::Queue<pcbcraft_engine::board::track::preparation::CopperEditJob>,
     request: Option<(Request, bool, u16)>,
+}
+
+/// One pair preparation retains the original endpoint identity and request lease until commit.
+#[derive(Debug, Default)]
+pub(super) struct RemotePair {
+    queue: jobs::Queue<nets::PairEditJob>,
+    request: Option<(Request, Owner)>,
 }
 
 struct CancelOnDrop(Arc<AtomicBool>);
@@ -516,6 +523,103 @@ impl PcbApp {
         }
     }
 
+    /// Pair commands, including read-only previews, must not drain the Save encoder inline.
+    pub(super) fn defer_pair(&self, body: &Value) -> bool {
+        body["method"] == "engine.execute" && body["params"]["command"].as_str().is_some_and(nets::is_pair_edit)
+    }
+
+    /// Capture the same stop flag used for ordinary queued UI input, not just the port number.
+    fn pair_owner(&self, chat: bool, generation: u64) -> Option<Owner> {
+        if chat {
+            if !self.assistant.turn_open() || self.assistant.generation() != Some(generation) {
+                return None;
+            }
+            self.assistant.automation_owner(generation)
+        } else {
+            let live = self.live_control.as_ref()?;
+            (live.current() == generation).then(|| live.automation_owner(false, generation))
+        }
+    }
+
+    /// Reject endpoint replacement, turn rollover and peer expiration even after a job completed.
+    fn pair_lease_current(&self, request: &Request, owner: &Owner) -> bool {
+        self.pair_owner(owner.chat, request.generation()).is_some_and(|current| Arc::ptr_eq(&current.stopped, &owner.stopped))
+            && !owner.stopped.load(Ordering::Acquire)
+            && !request.expired()
+    }
+
+    /// Run policy and version checks before retaining a snapshot; never execute the edit here.
+    pub(super) fn start_remote_pair(&mut self, ctx: &egui::Context, request: Request, chat: bool) {
+        let Some(owner) = self.pair_owner(chat, request.generation()).filter(|owner| self.pair_lease_current(&request, owner)) else {
+            request.answer(Err(Failure::new(ErrorCode::Cancelled, "Pair request expired or lost its endpoint")));
+            return;
+        };
+        let command = request.body()["params"]["command"].as_str().unwrap_or_default();
+        let result = if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(command) {
+            Err(Failure::new(ErrorCode::Unavailable, reason))
+        } else if let Err(failure) = check_deferred_version(command, &request.body()["params"]) {
+            Err(failure)
+        } else if self.remote_pair.queue.busy() {
+            Err(Failure::new(ErrorCode::Busy, "A pair edit is already preparing; retry after it completes"))
+        } else {
+            self.session.prepare_pair_edit(command, &request.body()["params"]["params"]).map_err(Failure::from)
+        };
+        match result {
+            Ok(job) => {
+                self.remote_pair.queue.submit(jobs::Request { id: 0, job });
+                self.remote_pair.request = Some((request, owner));
+                ctx.request_repaint();
+            }
+            Err(failure) => request.answer(Err(failure)),
+        }
+    }
+
+    /// Retire obsolete work before polling and recheck the live lease at the publication boundary.
+    pub(super) fn poll_remote_pair(&mut self, ctx: &egui::Context) {
+        const OBSOLETE: &str = "Pair preparation canceled, disconnected or project changed";
+        let valid = self.remote_pair.request.as_ref().is_some_and(|(request, owner)| self.pair_lease_current(request, owner));
+        if !valid || !self.remote_pair.queue.source().is_some_and(|source| source.is_current(&self.session)) {
+            self.remote_pair.queue.cancel();
+            if let Some((request, _)) = self.remote_pair.request.take() {
+                request.answer(Err(obsolete(valid, OBSOLETE, self.session.revision())));
+            }
+        }
+        if let Some(completion) = self.remote_pair.queue.poll()
+            && let Some((request, owner)) = self.remote_pair.request.take()
+        {
+            let revision = self.session.revision();
+            let command = request.body()["params"]["command"].as_str().unwrap_or_default();
+            let result = if let Some(reason) = (LiveEditor { app: self, ctx }).refusal(command) {
+                Err(Failure::new(ErrorCode::Unavailable, reason))
+            } else if !completion.source.is_current(&self.session) {
+                Err(obsolete(self.pair_lease_current(&request, &owner), OBSOLETE, revision))
+            } else {
+                completion.report.map_err(|message| snapshot_worker_failure(completion.schedule_failure, message)).and_then(|edit| {
+                    let edit = edit.ok_or_else(|| Failure::new(ErrorCode::Cancelled, OBSOLETE))??;
+                    let inspect = request.body()["params"]["inspect"].as_bool() != Some(false);
+                    if !self.pair_lease_current(&request, &owner) {
+                        return Err(Failure::new(ErrorCode::Cancelled, OBSOLETE));
+                    }
+                    self.session.complete_pair_edit(edit, inspect).map_err(Failure::from)
+                })
+            };
+            if revision != self.session.revision() {
+                self.views.sync(&self.session);
+                let title = pcbcraft_engine::command(command).map_or("Edit", |c| c.title);
+                self.message = None;
+                self.file_notice = Some(format!("{title} {}", if owner.chat { "by the Assistant" } else { "through MCP" }));
+                if owner.chat {
+                    self.assistant.note(format!("Edited: {title}. Undo reverts it."));
+                }
+                self.repaint_editors(ctx);
+            }
+            request.answer(result);
+        }
+        if self.remote_pair.queue.busy() {
+            ctx.request_repaint_after(Duration::from_millis(8));
+        }
+    }
+
     /// Recognize package completion so planning and net reconciliation run off the editor thread.
     pub(super) fn defer_package_completion(&self, body: &Value) -> bool {
         body["method"] == "engine.execute" && body["params"]["command"] == pcbcraft_engine::COMPLETE_PACKAGES
@@ -698,6 +802,10 @@ impl PcbApp {
         }
         if self.defer_copper(request.body()) {
             self.start_remote_copper(ctx, request, true);
+            return;
+        }
+        if self.defer_pair(request.body()) {
+            self.start_remote_pair(ctx, request, true);
             return;
         }
         if self.defer_package_completion(request.body()) {
@@ -1074,6 +1182,21 @@ mod tests {
         h.run_steps(4);
         assert!(!h.state().automation.busy());
         assert!(h.state().views.active.schematic.tool.is_none());
+    }
+}
+
+#[cfg(test)]
+impl PcbApp {
+    /// Deliver a synthetic, still-connected peer through the production native dispatcher.
+    /// The returned closure disconnects that peer the way the socket worker does.
+    pub(super) fn begin_test_live_request(&mut self, ctx: &egui::Context, body: Value) -> (Receiver<Value>, impl Fn() + use<>) {
+        let live = self.live_control.get_or_insert_with(|| LiveControl::start(ctx).unwrap());
+        let (reply, replies) = mpsc::sync_channel(1);
+        let authority = Arc::new(RequestAuthority::default());
+        let request =
+            Request { body, deadline: Instant::now() + Duration::from_secs(10), reply, generation: live.current(), authority: authority.clone() };
+        self.run_live_request(ctx, request);
+        (replies, move || authority.cancel())
     }
 }
 

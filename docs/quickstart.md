@@ -631,6 +631,8 @@ Use **Analyze → Rules** in either editor to create or edit net classes. **New 
 opens a sparse definition: check a dimension to give the class an opinion, or leave
 it unchecked to inherit defaults. Save class commits one undoable edit. Classes
 can be authored in a schematic-only project; they do not create a board.
+Choose **Differential pairs…** in Rules to record positive and negative nets.
+See the [pair editor guide](pcb/net-class-editor.md#differential-pairs).
 
 Select a schematic wire, net label or PCB track/via and choose **Net rules…** in
 Properties, or use the **Effective net rules** page in Rules to search for a current net.

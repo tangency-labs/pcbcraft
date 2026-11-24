@@ -89,7 +89,7 @@ fn legacy_unnumbered_identities_adopt_without_renumbering_other_nets() {
         connect(&mut session, &pins[a], &pins[b]);
     }
     let mut legacy = session.snapshot().unwrap().as_ref().clone();
-    for record in &mut Arc::make_mut(&mut legacy.net_registry).records {
+    for record in Arc::make_mut(&mut Arc::make_mut(&mut legacy.net_registry).records) {
         record.generated_number = None;
     }
     legacy.named_graph = Arc::default();
@@ -167,7 +167,7 @@ fn number_exhaustion_is_atomic() {
     let (mut session, pins) = circuit(4, false);
     connect(&mut session, &pins[0], &pins[1]);
     let mut project = session.snapshot().unwrap().as_ref().clone();
-    Arc::make_mut(&mut project.net_registry).records[0].generated_number = Some(u32::MAX);
+    Arc::make_mut(&mut Arc::make_mut(&mut project.net_registry).records)[0].generated_number = Some(u32::MAX);
     project.named_graph = Arc::default();
     for sheet in Arc::make_mut(&mut project.sheets) {
         sheet.connectivity = Arc::default();

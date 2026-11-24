@@ -1,8 +1,86 @@
 //! Validate bounded persisted identity authority against the complete current electrical graph.
 
 use super::{Anchor, AnchorKind, MAX_RECORDS, MAX_REGISTRY_BYTES, Registry, Retirement, ScopeKind, State, graph::Graph};
-use crate::Project;
-use std::collections::BTreeSet;
+use crate::{CommandError, Project};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::{Arc, Mutex, Weak},
+};
+use uuid::Uuid;
+
+// Full record/graph validations on this thread, so tests can prove a path never rebuilds
+// the graph.
+#[cfg(test)]
+thread_local! {
+    pub(super) static RECORD_VALIDATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Evidence from a successful ordinary validation of the immutable, non-pair registry
+/// inputs. Keeping weak identities prevents a proof from retaining obsolete project data.
+#[derive(Clone, Debug)]
+struct RecordsProof {
+    records: Weak<Vec<super::Record>>,
+    sheets: Weak<Vec<crate::sheets::SchematicSheet>>,
+    units: Weak<BTreeMap<(u64, String), u64>>,
+    components: Weak<BTreeMap<u64, crate::schematic::PartInstance>>,
+    classes: Weak<crate::net_classes::Catalog>,
+    project: Uuid,
+    scope: super::Scope,
+    circuit_use: Option<Uuid>,
+}
+
+impl RecordsProof {
+    /// Pair rows, project names and storage paths are not inputs to record/graph validation.
+    fn new(registry: &Registry, project: &Project) -> Self {
+        Self {
+            records: Arc::downgrade(&registry.records),
+            sheets: Arc::downgrade(&project.sheets),
+            units: Arc::downgrade(&project.units),
+            components: Arc::downgrade(&project.components),
+            classes: Arc::downgrade(&project.net_classes),
+            project: project.id,
+            scope: project.net_scope(),
+            circuit_use: project.circuit_use,
+        }
+    }
+
+    /// Compare the exact validation inputs; no graph traversal or content hashing.
+    fn matches(&self, next: &Self) -> bool {
+        self.records.ptr_eq(&next.records)
+            && self.sheets.ptr_eq(&next.sheets)
+            && self.units.ptr_eq(&next.units)
+            && self.components.ptr_eq(&next.components)
+            && self.classes.ptr_eq(&next.classes)
+            && self.project == next.project
+            && self.scope == next.scope
+            && self.circuit_use == next.circuit_use
+    }
+}
+
+/// A disposable proof, independently owned by each snapshot so history or background Save
+/// cannot overwrite another snapshot's evidence. Access never holds the lock during graph work.
+#[derive(Debug, Default)]
+pub(crate) struct RecordsProofCache(Mutex<Option<RecordsProof>>);
+
+impl Clone for RecordsProofCache {
+    fn clone(&self) -> Self {
+        Self(Mutex::new(self.0.lock().ok().and_then(|proof| proof.clone())))
+    }
+}
+
+impl RecordsProofCache {
+    /// Check if the retained proof applies to the exact immutable record/graph ingredients.
+    fn contains(&self, proof: &RecordsProof) -> bool {
+        self.0.lock().is_ok_and(|stored| stored.as_ref().is_some_and(|stored| stored.matches(proof)))
+    }
+
+    /// Remember only a successful full validation.
+    fn remember(&self, proof: RecordsProof) {
+        if let Ok(mut stored) = self.0.lock() {
+            *stored = Some(proof);
+        }
+    }
+}
 
 /// Live/storage anchors use the sole owner; historical lineage may additionally retain the
 /// schematic scope preceding first-board creation. Unsupported system/junction keys are refused.
@@ -29,6 +107,54 @@ impl Registry {
         if self.records.is_empty() {
             return Ok(());
         }
+        self.validate_records(project)?;
+        self.validate_byte_limit().map_err(|error| error.to_string())
+    }
+
+    /// Pair-only work can neither alter nor re-prove this graph on the browser input loop.
+    /// Every admitted snapshot gets its proof from decoding or normal edit publication.
+    /// An unsupported source without proof is refused, not silently rubber-stamped.
+    pub(crate) fn require_records_proof(&self, project: &Project) -> Result<(), String> {
+        if self.records.len() > MAX_RECORDS || (!self.records.is_empty() && !project.has_sheet_occurrences()) {
+            return Err("Net registry requires adopted occurrences and a bounded record count.".into());
+        }
+        if self.records.is_empty() || self.has_records_proof(project) {
+            return Ok(());
+        }
+        Err("Pair edits require a validated source net registry.".into())
+    }
+
+    /// Validate only what a proven pair-only candidate can change: the bounds and the pair
+    /// relationships. The caller has already required the records proof for this registry.
+    pub(crate) fn validate_proven_pairs(&self) -> Result<(), String> {
+        self.validate_pairs()
+    }
+
+    /// Check for evidence that this exact non-pair graph/registry input was validated.
+    pub(super) fn has_records_proof(&self, project: &Project) -> bool {
+        project.net_records_proof.contains(&RecordsProof::new(self, project))
+    }
+
+    /// Re-verify only class bindings when the net-class catalog changed without altering
+    /// topology or net records, avoiding an O(project) graph rebuild on catalog edits.
+    pub(super) fn revalidate_class_bindings(&self, project: &Project) -> Result<(), String> {
+        if self.records.iter().any(|record| record.class_bindings.iter().any(|binding| project.net_classes.get(binding.class).is_none())) {
+            return Err("Invalid, dangling, duplicate or excessive net class bindings.".into());
+        }
+        project.net_records_proof.remember(RecordsProof::new(self, project));
+        Ok(())
+    }
+
+    /// Validate the complete graph and every non-pair record against it. Pair relationships
+    /// cannot change the record anchors, number allocation, scope or owning catalogs.
+    fn validate_records(&self, project: &Project) -> Result<(), String> {
+        self.validate_records_against(project, None)
+    }
+
+    /// Retain exact validation from a graph already built by a transaction on this snapshot.
+    pub(super) fn validate_records_against(&self, project: &Project, graph: Option<&Graph>) -> Result<(), String> {
+        #[cfg(test)]
+        RECORD_VALIDATIONS.with(|count| count.set(count.get() + 1));
         let ids: BTreeSet<_> = self.records.iter().map(|r| r.id).collect();
         if ids.len() != self.records.len() || ids.contains(&uuid::Uuid::nil()) || self.records.windows(2).any(|p| p[0].id >= p[1].id) {
             return Err("Net records require unique non-nil UUIDs in canonical order.".into());
@@ -37,9 +163,15 @@ impl Registry {
         if self.records.iter().filter_map(|record| record.generated_number).any(|number| number == 0 || !numbers.insert(number)) {
             return Err("Generated net numbers must be positive and unique, including historical records.".into());
         }
-        let graph = Graph::build(project)?;
+        let owned_graph;
+        let graph = if let Some(graph) = graph {
+            graph
+        } else {
+            owned_graph = Graph::build(project)?;
+            &owned_graph
+        };
         let mut assigned = BTreeSet::new();
-        for record in &self.records {
+        for record in self.records.as_slice() {
             if record.fallbacks.len() > 3
                 || record.lineage.len() > MAX_RECORDS
                 || record.anchors().collect::<BTreeSet<_>>().len() != record.fallbacks.len() + 1
@@ -102,14 +234,32 @@ impl Registry {
             }
         }
         super::numbering::plan(self, &graph.networks)?;
-        if serde_json::to_vec(self).map_err(|e| e.to_string())?.len() > MAX_REGISTRY_BYTES {
-            return Err("Net registry exceeds its byte limit.".into());
+        project.net_records_proof.remember(RecordsProof::new(self, project));
+        Ok(())
+    }
+
+    /// Check the native serialized limit without rebuilding the graph, distinguishing a
+    /// fixed cap from other serialization failures for pair-only command callers.
+    pub(super) fn validate_byte_limit(&self) -> Result<(), CommandError> {
+        if serde_json::to_vec(self).map_err(|error| CommandError::InvalidParams(error.to_string()))?.len() > MAX_REGISTRY_BYTES {
+            return Err(CommandError::CapExceeded("Net registry exceeds its byte limit.".into()));
         }
         Ok(())
     }
 }
 
 impl Project {
+    /// Paper adoption changes only sheet page fields, never electrical inputs. Re-key an
+    /// already validated registry after that specific transformation, not after geometry edits.
+    pub(crate) fn carry_net_proof_after_paper_adoption(&self, before: &Self) {
+        let mut proof = RecordsProof::new(&self.net_registry, self);
+        let sheets = std::mem::replace(&mut proof.sheets, Arc::downgrade(&before.sheets));
+        if before.net_records_proof.contains(&proof) {
+            proof.sheets = sheets;
+            self.net_records_proof.remember(proof);
+        }
+    }
+
     /// Inspect persistent and revision-derived addresses without promotion, allocation or edits.
     /// Derived membership remains in the ordinary netlist; each row here supplies a typed key.
     /// Explicit differential relationships appear only when stored.
@@ -117,7 +267,7 @@ impl Project {
         let graph = Graph::build(self)?;
         let electrical = self.electrical_connectivity();
         let mut active_ids = vec![None; graph.networks.len()];
-        for record in &self.net_registry.records {
+        for record in self.net_registry.records.as_slice() {
             if matches!(record.state, State::Active {})
                 && let Some(index) = graph.network(&record.primary)
             {
@@ -155,7 +305,7 @@ impl Project {
             return Ok(ids);
         }
         let graph = Graph::build(self)?;
-        for record in &self.net_registry.records {
+        for record in self.net_registry.records.as_slice() {
             if !matches!(record.state, State::Active {}) {
                 continue;
             }

@@ -4,7 +4,10 @@ use pcbcraft_engine::board::drc::{CheckJob, CheckProgress, CheckSource, Report};
 /// Engine work shared by checker and routing queues; hosts retain publication authority.
 pub(crate) trait Work: Send + 'static {
     type Output: Send + 'static;
-    fn source(&self) -> &CheckSource;
+    type Source: Clone + Send + 'static;
+    #[cfg(any(target_arch = "wasm32", test))]
+    const BROWSER_BATCH: usize = 256;
+    fn source(&self) -> &Self::Source;
     fn progress(&self) -> CheckProgress;
     fn step(&mut self, budget: usize) -> bool;
     /// Report after a batch by default. Indivisible batches may also report within the step.
@@ -41,6 +44,7 @@ pub(crate) trait Work: Send + 'static {
 }
 impl Work for pcbcraft_engine::board::fill::FillJob {
     type Output = std::sync::Arc<pcbcraft_engine::board::fill::Fill>;
+    type Source = CheckSource;
     fn source(&self) -> &CheckSource {
         self.source()
     }
@@ -75,6 +79,7 @@ impl Work for pcbcraft_engine::board::fill::FillJob {
 }
 impl Work for CheckJob {
     type Output = Report;
+    type Source = CheckSource;
     #[cfg(target_arch = "wasm32")]
     fn browser_request(&mut self) -> Option<Result<String, String>> {
         self.browser_zone_request()
@@ -103,6 +108,7 @@ impl Work for CheckJob {
 }
 impl Work for pcbcraft_engine::board::track::preparation::CopperEditJob {
     type Output = Result<pcbcraft_engine::board::track::preparation::PreparedCopperEdit, pcbcraft_engine::CommandError>;
+    type Source = CheckSource;
     fn source(&self) -> &CheckSource {
         self.source()
     }
@@ -120,6 +126,7 @@ impl Work for pcbcraft_engine::board::track::preparation::CopperEditJob {
 
 impl Work for pcbcraft_engine::board::route::PlanningJob {
     type Output = pcbcraft_engine::board::route::Plan;
+    type Source = CheckSource;
     fn source(&self) -> &CheckSource {
         self.source()
     }
@@ -131,6 +138,29 @@ impl Work for pcbcraft_engine::board::route::PlanningJob {
     }
     fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
         self.take_result().map_err(|e| e.to_string())
+    }
+}
+
+impl Work for pcbcraft_engine::nets::PairEditJob {
+    type Output = Result<pcbcraft_engine::nets::PreparedPairEdit, pcbcraft_engine::CommandError>;
+    type Source = pcbcraft_engine::nets::PairEditSource;
+    #[cfg(any(target_arch = "wasm32", test))]
+    const BROWSER_BATCH: usize = 8;
+    fn source(&self) -> &Self::Source {
+        self.source()
+    }
+    fn progress(&self) -> CheckProgress {
+        if let Some(completed) = self.document_work_done() {
+            CheckProgress { stage: "Encoding native pair documents", completed, total: completed + 1 }
+        } else {
+            CheckProgress { stage: "Checking pair registry capacity", completed: 0, total: 1 }
+        }
+    }
+    fn step(&mut self, budget: usize) -> bool {
+        self.step(budget)
+    }
+    fn take_output(&mut self) -> Result<Option<Self::Output>, String> {
+        Ok(self.take_result().transpose())
     }
 }
 
@@ -148,13 +178,13 @@ pub(crate) enum ScheduleFailure {
 }
 
 /// A terminal completion carries its source; canceled work contains no report.
-pub(crate) struct Completion<T = Report> {
+pub(crate) struct Completion<T = Report, S = CheckSource> {
     pub id: u64,
-    pub source: CheckSource,
+    pub source: S,
     pub report: Result<Option<T>, String>,
     pub schedule_failure: Option<ScheduleFailure>,
 }
-impl<T> Completion<T> {
+impl<T, S> Completion<T, S> {
     /// Only scheduling failures may be retried by the owner without changing the command.
     pub fn retryable(&self) -> bool {
         self.schedule_failure.is_some()
@@ -199,7 +229,7 @@ impl<J: Work> Queue<J> {
         }
     }
     /// Return at most one completion, then start the latest queued request.
-    pub fn poll(&mut self) -> Option<Completion<J::Output>> {
+    pub fn poll(&mut self) -> Option<Completion<J::Output, J::Source>> {
         let result = self.active.as_mut().and_then(Running::poll);
         if result.is_some() {
             self.active = None;
@@ -221,23 +251,24 @@ impl<J: Work> Queue<J> {
         }
         self.active.as_ref().filter(|running| running.id() == Some(id)).and_then(Running::progress)
     }
-    /// Reject edits/reopen independently of which view currently has focus.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn authority_current(&self, session: &pcbcraft_engine::Session) -> bool {
-        self.pending
-            .as_ref()
-            .map(|r| r.job.source())
-            .or_else(|| self.active.as_ref().and_then(Running::source))
-            .is_some_and(|s| s.is_current(session))
-    }
-    /// Only current captured work may continue against the displayed board.
-    pub fn current(&self, session: &pcbcraft_engine::Session, target: Option<pcbcraft_engine::board::view::BoardTarget>) -> bool {
-        let source = self.pending.as_ref().map(|r| r.job.source()).or_else(|| self.active.as_ref().and_then(Running::source));
-        source.is_some_and(|s| Some(s.target()) == target && s.is_current(session))
+    /// Authority for the latest request, whether executing or queued.
+    pub fn source(&self) -> Option<&J::Source> {
+        self.pending.as_ref().map(|r| r.job.source()).or_else(|| self.active.as_ref().and_then(Running::source))
     }
     /// The retained queue has capacity two, including the executing request.
     pub fn busy(&self) -> bool {
         self.active.is_some() || self.pending.is_some()
+    }
+}
+impl<J: Work<Source = CheckSource>> Queue<J> {
+    /// Reject edits/reopen independently of which view currently has focus.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn authority_current(&self, session: &pcbcraft_engine::Session) -> bool {
+        self.source().is_some_and(|s| s.is_current(session))
+    }
+    /// Only current captured work may continue against the displayed board.
+    pub fn current(&self, session: &pcbcraft_engine::Session, target: Option<pcbcraft_engine::board::view::BoardTarget>) -> bool {
+        self.source().is_some_and(|s| Some(s.target()) == target && s.is_current(session))
     }
 }
 #[cfg(any(target_arch = "wasm32", test))]
@@ -285,7 +316,7 @@ mod incremental {
             }
         }
         /// Captured source, absent after an incremental request has been consumed.
-        pub fn source(&self) -> Option<&CheckSource> {
+        pub fn source(&self) -> Option<&J::Source> {
             self.request.as_ref().map(|r| r.job.source())
         }
         /// Identify the request whose progress can still be copied.
@@ -313,7 +344,7 @@ mod incremental {
             Some(request.job.progress())
         }
         /// Advance one engine batch, publishing only a complete report or cancellation.
-        fn poll_batch(&mut self) -> Option<Completion<J::Output>> {
+        fn poll_batch(&mut self) -> Option<Completion<J::Output, J::Source>> {
             #[cfg(target_arch = "wasm32")]
             if !self.canceled && (self.worker.is_some() || self.failure.is_some()) {
                 let response = if let Some(error) = self.failure.take() {
@@ -334,7 +365,7 @@ mod incremental {
                 }
             }
             let request = self.request.as_mut()?;
-            if !self.canceled && !request.job.step_reporting(256, &mut |_| {}) {
+            if !self.canceled && !request.job.step_reporting(J::BROWSER_BATCH, &mut |_| {}) {
                 return None;
             }
             let mut request = self.request.take()?;
@@ -347,7 +378,7 @@ mod incremental {
         }
 
         /// Yield after two browser milliseconds; tests use one deterministic batch per poll.
-        pub fn poll(&mut self) -> Option<Completion<J::Output>> {
+        pub fn poll(&mut self) -> Option<Completion<J::Output, J::Source>> {
             #[cfg(target_arch = "wasm32")]
             {
                 let began = checker_now();
@@ -413,7 +444,7 @@ mod native {
     }
     pub(super) struct Running<J: Work> {
         id: u64,
-        source: CheckSource,
+        source: J::Source,
         cancel: Arc<AtomicBool>,
         progress: Arc<Mutex<CheckProgress>>,
         result: Receiver<Result<Option<J::Output>, String>>,
@@ -459,7 +490,7 @@ mod native {
             Self { id, source, cancel, progress, result, schedule_failure }
         }
         /// Captured source, absent after an incremental request has been consumed.
-        pub fn source(&self) -> Option<&CheckSource> {
+        pub fn source(&self) -> Option<&J::Source> {
             Some(&self.source)
         }
         /// Identify the request whose progress this worker owns.
@@ -475,7 +506,7 @@ mod native {
             self.progress.try_lock().ok().map(|p| *p)
         }
         /// A stopped/panicked worker is a terminal failure, never an empty passing report.
-        pub fn poll(&mut self) -> Option<Completion<J::Output>> {
+        pub fn poll(&mut self) -> Option<Completion<J::Output, J::Source>> {
             let report = match self.result.try_recv() {
                 Ok(result) => result,
                 Err(TryRecvError::Empty) => return None,

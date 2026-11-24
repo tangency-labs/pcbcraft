@@ -219,8 +219,9 @@ UUIDs and neutral numbers for meaningful nets, with bounded anchors, split/merge
 lineage and explicit ambiguity resolution through shared headless/live MCP
 commands. It survives undo, save/reopen and first-board creation without storing
 a second connectivity graph. [Differential pair records](../formats/net-registry-storage.md#differential-pair-records)
-retain explicit positive and negative net UUIDs and stored review intent. This
-is storage and inspection only, not pair authoring or routing.
+retain explicit positive and negative net UUIDs and stored review intent.
+[Rules](../pcb/net-class-editor.md#differential-pairs) and shared MCP commands can create,
+edit and remove them, with one Undo per change. Pairs do not affect routing yet.
 [Net-class assignments](../formats/net-class-assignments.md)
 can be authored through shared commands, with retained origins, split inheritance,
 merge conflicts and protected class removal. [Class-aware routing, clearance

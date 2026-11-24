@@ -606,6 +606,43 @@
         "type": "object"
       }
     },
+    "nets.create_pair": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "negative": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "pair": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "positive": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "pair",
+          "name",
+          "positive",
+          "negative"
+        ],
+        "type": "object"
+      }
+    },
     "nets.inspect_classes": {
       "params": {
         "additionalProperties": false,
@@ -876,6 +913,29 @@
         "required": [
           "expected_revision",
           "anchor"
+        ],
+        "type": "object"
+      }
+    },
+    "nets.remove_pair": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "pair": {
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "pair"
         ],
         "type": "object"
       }
@@ -1172,6 +1232,46 @@
           "expected_revision",
           "target",
           "classes"
+        ],
+        "type": "object"
+      }
+    },
+    "nets.update_pair": {
+      "params": {
+        "additionalProperties": false,
+        "properties": {
+          "dry_run": {
+            "type": "boolean"
+          },
+          "expected_revision": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "negative": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "pair": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "positive": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "reviewed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "pair",
+          "name",
+          "positive",
+          "negative"
         ],
         "type": "object"
       }

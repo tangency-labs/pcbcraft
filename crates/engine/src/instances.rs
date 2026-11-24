@@ -154,6 +154,17 @@ impl Project {
     /// An optional net registry is validated against the installed occurrences before adoption,
     /// and optional part-group memberships against the project's part instances and groups.
     pub(crate) fn install_sheet_instances(&mut self, records: Instances) -> Result<(), String> {
+        self.install_sheet_instances_checked(records, true)
+    }
+
+    /// Install records whose net registry already carries a records proof for this project,
+    /// checking only its pair relationships. The pair capacity probe uses this, since it never
+    /// saves and must not rebuild the graph inside one browser work unit.
+    pub(crate) fn install_proven_sheet_instances(&mut self, records: Instances) -> Result<(), String> {
+        self.install_sheet_instances_checked(records, false)
+    }
+
+    fn install_sheet_instances_checked(&mut self, records: Instances, validate_records: bool) -> Result<(), String> {
         if records.circuit_uses.len() != 1 || records.sheet_occurrences.len() != self.sheets.len() {
             return Err("Instance records require one circuit use and one occurrence per sheet.".into());
         }
@@ -196,7 +207,11 @@ impl Project {
                 return Err("An empty net registry must be omitted.".into());
             }
             self.net_registry = Arc::new(registry);
-            self.net_registry.validate(self)?;
+            if validate_records {
+                self.net_registry.validate(self)?;
+            } else {
+                self.net_registry.validate_proven_pairs()?;
+            }
         }
         if let Some(memberships) = records.part_group_memberships {
             self.validate_part_group_memberships(memberships.iter().copied())?;

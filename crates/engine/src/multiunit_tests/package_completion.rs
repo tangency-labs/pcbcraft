@@ -199,7 +199,7 @@ fn package_completion_packs_three_loose_quad_units_and_keeps_nets() {
         assert_eq!(graph.net_name(net), old_names[index]);
     }
     assert_eq!(after.net_registry.records.len(), old_registry.records.len());
-    for (new, old) in after.net_registry.records.iter().zip(&old_registry.records) {
+    for (new, old) in after.net_registry.records.iter().zip(old_registry.records.iter()) {
         assert_eq!(
             (new.id, new.generated_number, &new.state, &new.lineage, &new.class_bindings),
             (old.id, old.generated_number, &old.state, &old.lineage, &old.class_bindings)
@@ -383,7 +383,7 @@ fn package_completion_refuses_unnumbered_net_on_another_sheet() {
 
     // Keep the remote label but omit its record from an otherwise valid current project.
     let mut sparse = session.project().unwrap().clone();
-    Arc::make_mut(&mut sparse.net_registry).records.retain(|record| record.id == numbered.records[0].id);
+    Arc::make_mut(&mut Arc::make_mut(&mut sparse.net_registry).records).retain(|record| record.id == numbered.records[0].id);
     assert_eq!(sparse.net_registry, numbered);
     let documents = encode_documents(Arc::new(sparse)).unwrap();
     session.open_snapshot(decode_documents(&documents).unwrap());

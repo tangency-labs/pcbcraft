@@ -199,9 +199,9 @@ DRC: no new violations, and connectivity is unchanged except for the routed net.
 These need their own design before implementation. They are listed so the
 ribbon's planned entries and the editor guide have a stated destination.
 
-- **Differential pairs and length tuning** (Layout › Route › Pair, Layout › Route › Tune) need
-  net-registry pairs and length rules from slice 2. Pairs reference two net IDs,
-  never name suffixes.
+- **Differential routing and length tuning** (Layout › Route › Pair, Layout › Route › Tune)
+  are still planned. [Authored pair records](../pcb/net-class-editor.md#differential-pairs)
+  identify members by persistent net IDs and do not enforce routing or length rules.
 - **Circular tracks and teardrops:** native [circular track records](../pcb/circular-copper-records.md)
   and [straight via teardrop intents](../pcb/teardrop-records.md) are available through
   shared commands. Rendering and manufacturing support, DRC and automatic

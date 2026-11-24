@@ -65,9 +65,11 @@ Omitted `state` means active intent. The reader accepts `{"kind":"active"}`
 and the writer omits it. `{"kind":"needs_review","reason":"Member endpoints require review"}`
 retains review context, with the same text bounds as `name`. Unknown fields and
 states, explicit nulls and missing required fields are refused. Active intent
-is not an electrical or routing qualification. A member may become retired or
-ambiguous; the stored relationship keeps that exact UUID and does not follow
-successors or set a review state automatically.
+is not an electrical or routing qualification. When a topology change retires,
+merges, splits, or alters the endpoint membership of a member net, the stored
+relationship keeps its original pair and member UUIDs without following
+successors and transitions to `needs_review` with a review reason. Creating a
+pair or changing its endpoints requires active (live) member nets.
 
 The current project format accepts an optional pair list, and board-owned pairs
 use instances/8. Legacy project/45 and instances/8 require pairs. A present
@@ -83,9 +85,13 @@ records.
 At most 2,048 pairs fit alongside 4,096 net records. Pair content counts toward
 the registry's existing 8 MiB serialized limit. Incremental writing charges one
 record per pair, and history snapshots share the pair list and individual values.
-Read-only registry inspection includes `pairs` only when present. There is no
-pair authoring command, editor, class, inference, reconciliation or router in
-this storage change.
+Read-only registry inspection includes `pairs` only when present. The
+[editor](../pcb/net-class-editor.md#differential-pairs) and [shared commands](../automation/board-commands.md#differential-pairs)
+author this same relationship without changing the format or the member records:
+name-only edits preserve stored review context (`NeedsReview`), while passing
+`reviewed: true` (which requires both resulting members to be active) or
+changing a member net when both resulting members are active clears
+`NeedsReview` back to `Active`. There is no pair class, inference or router.
 
 ## Transactions and reconciliation
 

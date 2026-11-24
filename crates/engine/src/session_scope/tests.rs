@@ -361,3 +361,55 @@ fn prepared_copper_uses_the_same_scope() {
     assert_eq!(reader.commit_copper_edit(job.take_result().unwrap().unwrap()).unwrap_err().code(), ErrorCode::OutOfScope);
     assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
 }
+
+/// Prepared differential pair edits enforce the same read-only session scope as `Session::apply`,
+/// leaving read-only state, revision, encoded documents and history completely intact.
+#[test]
+fn prepared_pair_edits_use_the_same_scope() {
+    let mut editor = fixture();
+    for (index, name) in ["DP_P", "DP_N"].iter().enumerate() {
+        editor
+            .apply(
+                crate::net_labels::ADD,
+                &json!({"name":name,"style":"local","x_nm":index as i64 * 25_400_000,"y_nm":25_400_000,"expected_revision":editor.revision()}),
+            )
+            .unwrap();
+    }
+    let project = editor.snapshot().unwrap();
+    let positive = project.net_registry.records[0].id;
+    let negative = project.net_registry.records[1].id;
+    let pair = nets::new_pair_id().unwrap();
+    let params =
+        |revision, dry_run| json!({"pair":pair,"name":"DP","positive":positive,"negative":negative,"expected_revision":revision,"dry_run":dry_run});
+
+    let mut reader = Session::with_scope(SessionScope::ReadOnly);
+    reader.open_snapshot(project.clone());
+    let before_revision = reader.revision();
+    let before_inspect = reader.inspect();
+    let before_docs = encode_documents(project.clone()).unwrap();
+    let before_undo = reader.undo.len();
+    let before_redo = reader.redo.len();
+
+    for dry_run in [false, true] {
+        let refused = reader.prepare_pair_edit(nets::CREATE_PAIR, &params(reader.revision(), dry_run)).err().unwrap();
+        assert_eq!(refused.code(), ErrorCode::OutOfScope);
+        let refused = reader.prepare_pair_edit(nets::UPDATE_PAIR, &params(reader.revision(), dry_run)).err().unwrap();
+        assert_eq!(refused.code(), ErrorCode::OutOfScope);
+        let refused =
+            reader.prepare_pair_edit(nets::REMOVE_PAIR, &json!({"pair":pair,"expected_revision":reader.revision(),"dry_run":dry_run})).err().unwrap();
+        assert_eq!(refused.code(), ErrorCode::OutOfScope);
+    }
+
+    for (dry_run, inspect) in [(false, false), (false, true), (true, false)] {
+        let mut job = editor.prepare_pair_edit(nets::CREATE_PAIR, &params(editor.revision(), dry_run)).unwrap();
+        assert!((0..256).any(|_| job.step(128)), "small pair fixture must finish");
+        let prepared = job.take_result().unwrap().unwrap();
+        assert_eq!(reader.complete_pair_edit(prepared, inspect).unwrap_err().code(), ErrorCode::OutOfScope);
+    }
+
+    assert_eq!(reader.revision(), before_revision);
+    assert_eq!(reader.inspect(), before_inspect);
+    assert_eq!((reader.undo.len(), reader.redo.len()), (before_undo, before_redo));
+    assert!(Arc::ptr_eq(&project, &reader.snapshot().unwrap()));
+    assert_eq!(encode_documents(reader.snapshot().unwrap()).unwrap(), before_docs);
+}

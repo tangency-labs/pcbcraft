@@ -879,6 +879,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         layout: None,
         circuit_use: None,
         net_registry: Arc::default(),
+        net_records_proof: Default::default(),
         net_classes: Arc::default(),
         parameters: Arc::default(),
         assembly_profiles: Arc::default(),
@@ -1655,6 +1656,73 @@ pub fn encode_documents(project: Arc<Project>) -> Result<Documents, String> {
     }
 }
 
+/// Native capacity available to pair rows in one already encodable folder representation.
+/// Changing whether there are pairs changes the native headers and requires a fresh probe.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PairDocumentBudget {
+    pub(crate) has_pairs: bool,
+    pub(crate) pair_rows: usize,
+}
+
+/// Additional bytes around a compact JSON row in the native folder writer.
+pub(crate) fn document_row_framing_bytes(first: bool) -> usize {
+    RECORD_INDENT.len() + RECORD_END.len() + if first { 0 } else { RECORD_SEPARATOR.len() }
+}
+
+/// Reuse the ordinary folder writer and its compact-membership fallback incrementally.
+/// The encoded documents are temporary and never enter project history or the session cache.
+pub(crate) struct PairDocumentProbe {
+    home: String,
+    has_pairs: bool,
+    row_bytes: usize,
+    encoder: DocumentsEncoder,
+    finished: Option<(PairDocumentBudget, Documents)>,
+}
+
+impl PairDocumentProbe {
+    /// Retain an exact pair-only candidate after the registry row and compact size checks.
+    pub(crate) fn new(project: Arc<Project>, row_bytes: usize) -> Self {
+        let home = project.instances_document_path().unwrap_or_else(|| ENTRY_POINT.into());
+        let has_pairs = project.net_registry.has_pairs();
+        let mut encoder = DocumentsEncoder::new(project);
+        encoder.pair_capacity_only = true;
+        Self { home, has_pairs, row_bytes, encoder, finished: None }
+    }
+
+    /// Completed native writer units, including work in a discarded legacy envelope.
+    pub(crate) fn work_done(&self) -> usize {
+        self.encoder.work_done
+    }
+
+    /// Count headroom after the native writer completes and release temporary document buffers
+    /// piecemeal, rather than dropping the entire project's output in a single successful poll.
+    pub(crate) fn step(&mut self, records: usize) -> Result<Option<PairDocumentBudget>, crate::CommandError> {
+        if let Some((budget, documents)) = &mut self.finished {
+            for _ in 0..records {
+                self.encoder.work_done += 1;
+                if documents.pop_first().is_none() {
+                    return Ok(Some(*budget));
+                }
+            }
+            return Ok(None);
+        }
+        match self.encoder.step(records) {
+            Ok(None) => Ok(None),
+            Ok(Some(documents)) => {
+                let bytes = documents.get(&self.home).ok_or_else(|| crate::CommandError::InvalidParams("Missing encoded pair document.".into()))?;
+                let folder_bytes: usize = documents.values().map(Vec::len).sum();
+                let file_headroom = MAX_DOCUMENT_BYTES - bytes.len();
+                let folder_headroom = MAX_DOCUMENTS_BYTES - folder_bytes;
+                let budget = PairDocumentBudget { has_pairs: self.has_pairs, pair_rows: self.row_bytes + file_headroom.min(folder_headroom) };
+                self.finished = Some((budget, documents));
+                Ok(None)
+            }
+            Err(error) if self.encoder.size_limit_exceeded => Err(crate::CommandError::CapExceeded(error)),
+            Err(error) => Err(crate::CommandError::InvalidParams(error)),
+        }
+    }
+}
+
 /// Build historical test input from a current encoding and the requested legacy header.
 /// Only fields that the source snapshot has not adopted are removed. Tests that supply
 /// a mismatched feature/header combination still exercise the real reader's refusals.
@@ -1703,6 +1771,7 @@ pub struct DocumentsEncoder {
     project: Arc<Project>,
     documents: Documents,
     bytes: Vec<u8>,
+    work_done: usize,
     phase: u8,
     sheet_cursor: usize,
     cursor: u64,
@@ -1713,6 +1782,7 @@ pub struct DocumentsEncoder {
     compact_memberships: Option<CompactMemberships>,
     use_compact_memberships: bool,
     size_limit_exceeded: bool,
+    pair_capacity_only: bool,
     generated_legs: Vec<GeneratedLegRecord<'static>>,
 }
 
@@ -1738,6 +1808,7 @@ impl DocumentsEncoder {
             project,
             documents: Documents::new(),
             bytes: Vec::new(),
+            work_done: 0,
             phase: 0,
             sheet_cursor: 0,
             cursor: 0,
@@ -1748,6 +1819,7 @@ impl DocumentsEncoder {
             compact_memberships: None,
             use_compact_memberships,
             size_limit_exceeded: false,
+            pair_capacity_only: false,
             generated_legs: Vec::new(),
         }
     }
@@ -1763,7 +1835,11 @@ impl DocumentsEncoder {
         match self.step_records(records) {
             Err(_) if self.size_limit_exceeded && !self.use_compact_memberships && !self.project.part_group_memberships.is_empty() => {
                 let project = self.project.clone();
+                let pair_capacity_only = self.pair_capacity_only;
+                let work_done = self.work_done;
                 *self = Self::new(project);
+                self.work_done = work_done;
+                self.pair_capacity_only = pair_capacity_only;
                 self.use_compact_memberships = true;
                 Ok(None)
             }
@@ -1774,6 +1850,7 @@ impl DocumentsEncoder {
     /// Advance the current representation within the caller's incremental record budget.
     fn step_records(&mut self, records: usize) -> Result<Option<Documents>, String> {
         for _ in 0..records {
+            self.work_done += 1;
             match self.phase {
                 0 => {
                     if self.project.layout.is_none() || self.project.numeric_id_high_water.is_none() {
@@ -1787,7 +1864,14 @@ impl DocumentsEncoder {
                     p.validate_no_connects()?;
                     crate::part_instances::storage::validate_project(p)?;
                     let records = p.sheet_instances();
-                    Project::clone(p).install_sheet_instances(records.clone())?;
+                    if self.pair_capacity_only {
+                        // The probe never saves. Its registry must carry the records proof of this
+                        // exact input, which stands in for the graph rebuild of an ordinary save.
+                        p.net_registry.require_records_proof(p)?;
+                        Project::clone(p).install_proven_sheet_instances(records.clone())?;
+                    } else {
+                        Project::clone(p).install_sheet_instances(records.clone())?;
+                    }
                     self.instance_records = Some(records);
                     if self.use_compact_memberships {
                         self.compact_memberships = Some(CompactMemberships::from_memberships(&p.part_group_memberships)?);
@@ -2646,15 +2730,19 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
     Ok(())
 }
 
+const RECORD_INDENT: &[u8] = b"    ";
+const RECORD_END: &[u8] = b"\n";
+const RECORD_SEPARATOR: &[u8] = b"\n    ,\n";
+
 /// Keep commas on their own lines so adding a record never rewrites the previous record.
 fn record(bytes: &mut impl Write, first: &mut bool, value: &impl Serialize) -> Result<(), String> {
     if !*first {
-        bytes.write_all(b"\n    ,\n").map_err(|error| error.to_string())?;
+        bytes.write_all(RECORD_SEPARATOR).map_err(|error| error.to_string())?;
     }
     *first = false;
-    bytes.write_all(b"    ").map_err(|error| error.to_string())?;
+    bytes.write_all(RECORD_INDENT).map_err(|error| error.to_string())?;
     serde_json::to_writer(&mut *bytes, value).map_err(|e| e.to_string())?;
-    bytes.write_all(b"\n").map_err(|error| error.to_string())
+    bytes.write_all(RECORD_END).map_err(|error| error.to_string())
 }
 
 /// Serialize a small header field without introducing unstable object ordering.
