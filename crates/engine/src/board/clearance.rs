@@ -15,6 +15,8 @@ use uuid::Uuid;
 
 pub(super) mod index;
 mod overlay;
+mod routing;
+pub(super) use routing::{RouteFragments, RouteObstacles};
 pub(crate) mod preparation;
 pub use overlay::{ObstacleId, Overlay, OverlayDecision, OverlayResults};
 
@@ -38,6 +40,7 @@ impl std::fmt::Debug for Cached {
 #[derive(Clone, Debug)]
 pub struct Authority {
     snapshot: Arc<Project>,
+    fill_authority: Arc<()>,
     session: Arc<()>,
     target: BoardTarget,
     opening: u64,
@@ -74,10 +77,11 @@ impl Authority {
     pub(crate) fn view(&self) -> Option<BoardView<'_>> {
         self.snapshot.board_view(self.target)
     }
-    /// Reject another session, reopen, Undo/Redo, geometry/connectivity edit or replaced snapshot.
+    /// Reject another session, reopen, Undo/Redo, authored edits or explicit pour changes.
     /// Rule overrides are immutable inputs: a different override requires a new query.
     pub fn is_current(&self, session: &Session) -> bool {
-        Arc::ptr_eq(&self.session, &session.clearance_identity)
+        Arc::ptr_eq(&self.fill_authority, &self.snapshot.fill_authority())
+            && Arc::ptr_eq(&self.session, &session.clearance_identity)
             && self.opening == session.history_root_revision()
             && self.revision == session.revision()
             && session.snapshot().is_some_and(|current| Arc::ptr_eq(&self.snapshot, &current))
@@ -132,6 +136,7 @@ pub struct ClearanceQuery {
     geometry: Arc<BoardGeometry>,
     copper_layers: Vec<Uuid>,
     net_rules: Option<super::class_rules::NetRules>,
+    pub(super) trace_chains: std::sync::Mutex<super::track::chains::Cache>,
 }
 
 impl Session {
@@ -179,6 +184,7 @@ impl Session {
         });
         ClearanceQuery::from_geometry(
             &super::work::Source {
+                fill_authority: snapshot.fill_authority(),
                 snapshot,
                 session: self.clearance_identity.clone(),
                 target,
@@ -204,6 +210,7 @@ impl ClearanceQuery {
         Ok(Self {
             authority: Authority {
                 snapshot: source.snapshot.clone(),
+                fill_authority: source.fill_authority.clone(),
                 session: source.session.clone(),
                 target: source.target,
                 opening: source.opening,
@@ -213,9 +220,38 @@ impl ClearanceQuery {
                 class_rules,
             },
             geometry,
+            trace_chains: std::sync::Mutex::new(super::track::chains::Cache::default()),
             copper_layers,
             net_rules,
         })
+    }
+
+    /// Build a disposable contour projection with caller-preserved source intent/islands.
+    /// The source authority stays unchanged; this grants no transaction or connectivity proof.
+    /// Routing overlays and final compound validation share ordinary exact query predicates.
+    pub(super) fn with_objects(&self, items: Vec<Object>) -> Result<Self, CommandError> {
+        let source = super::work::Source {
+            snapshot: self.authority.snapshot.clone(),
+            fill_authority: self.authority.fill_authority.clone(),
+            session: self.authority.session.clone(),
+            target: self.authority.target,
+            opening: self.authority.opening,
+            revision: self.authority.revision,
+            effective: self.authority.rules.clone(),
+        };
+        Self::from_geometry(&source, Arc::new(BoardGeometry { items, lands: Vec::new(), members: Vec::new(), index: OnceLock::new() }))
+    }
+
+    /// Share immutable inputs with a topology continuation without retaining the
+    /// cache that owns it. This avoids a query/future reference cycle on cancellation.
+    pub(super) fn chain_source(&self) -> Self {
+        Self {
+            authority: self.authority.clone(),
+            geometry: self.geometry.clone(),
+            copper_layers: self.copper_layers.clone(),
+            net_rules: self.net_rules.clone(),
+            trace_chains: std::sync::Mutex::new(super::track::chains::Cache::default()),
+        }
     }
 
     /// Captured source, opening, board, revision and effective rule.
@@ -253,6 +289,33 @@ impl ClearanceQuery {
         }
         Results { authority: self.authority.clone(), decisions, probe_rules: None }
     }
+    /// Exhaustively evaluate all shared-layer pairs involving the supplied object indices,
+    /// retaining only contact or clearance findings. Bounds memory for large boards where
+    /// `exhaustive_pairs` would materialize O(n^2) non-violating decisions.
+    pub fn exhaustive_findings_for(&self, indices: &[usize]) -> Results {
+        let mut selected = BTreeSet::new();
+        for &index in indices {
+            if index < self.geometry.items.len() {
+                selected.insert(index);
+            }
+        }
+        let mut decisions = Vec::new();
+        for &index in &selected {
+            for other in 0..self.geometry.items.len() {
+                if other == index || (other < index && selected.contains(&other)) {
+                    continue;
+                }
+                let (first, second) = if index < other { (index, other) } else { (other, index) };
+                if let Some(decision) = self.geometry.evaluate(first, second, self.pair_clearance(first, second))
+                    && (decision.touches || decision.clearance_violation)
+                {
+                    decisions.push(decision);
+                }
+            }
+        }
+        decisions.sort_by_key(|d| (d.first, d.second));
+        Results { authority: self.authority.clone(), decisions, probe_rules: None }
+    }
     /// Use independent object requirements for the narrow phase, retaining baseline behavior
     /// without constructing class metadata when the snapshot has no physical assignments.
     fn pair_clearance(&self, left: usize, right: usize) -> i64 {
@@ -266,7 +329,7 @@ impl ClearanceQuery {
         self.net_rules.as_ref().map(|rules| rules.resolve(&self.authority.snapshot, members)).transpose().map(Option::flatten)
     }
     /// Probe and obstacle keep separate class preferences; only their spacing requirements combine.
-    fn membership_clearance(&self, left: &[usize], right: &[usize]) -> i64 {
+    pub(super) fn membership_clearance(&self, left: &[usize], right: &[usize]) -> i64 {
         self.net_rules.as_ref().map_or(self.authority.rules.values.clearance_nm, |rules| {
             crate::net_classes::pair_clearance(rules.clearance(left), rules.clearance(right))
         })
@@ -280,7 +343,7 @@ impl ClearanceQuery {
         Ok(ids)
     }
     /// Reject absent, technical or foreign layers before any overlay/query state changes.
-    fn validate_layers(&self, layers: &[Uuid]) -> Result<(), CommandError> {
+    pub(super) fn validate_layers(&self, layers: &[Uuid]) -> Result<(), CommandError> {
         if layers.is_empty() || layers.iter().any(|id| !self.copper_layers.contains(id)) {
             return Err(CommandError::InvalidParams("explicit copper layers of the query board are required".into()));
         }
@@ -312,23 +375,39 @@ impl ClearanceQuery {
         nets: &[usize],
         replaced: Option<usize>,
     ) -> Result<Results, CommandError> {
-        let candidates = self.candidates(contour, layers)?;
-        let gaps: Vec<_> = candidates
-            .into_iter()
-            .filter(|index| Some(*index) != replaced)
-            .map(|index| (index, contour.gap(&self.geometry.items[index].contour)))
-            .collect();
+        self.probe_membership_excluding(contour, layers, nets, |index| Some(index) == replaced)
+    }
+
+    /// Remove absent originals before collecting contacted nets as well as before testing gaps.
+    pub(super) fn probe_membership_excluding(
+        &self,
+        contour: &Contour,
+        layers: &[Uuid],
+        nets: &[usize],
+        excluded: impl Fn(usize) -> bool,
+    ) -> Result<Results, CommandError> {
+        let objects = self.candidates(contour, layers)?.into_iter().filter(|i| !excluded(*i)).map(|i| (i, &self.objects()[i]));
+        self.evaluate_probe(contour, nets, objects)
+    }
+
+    /// Evaluate stable candidate identities against the same exact rules for base and route overlays.
+    fn evaluate_probe<'a>(
+        &self,
+        contour: &Contour,
+        nets: &[usize],
+        objects: impl Iterator<Item = (usize, &'a Object)>,
+    ) -> Result<Results, CommandError> {
+        let gaps: Vec<_> = objects.map(|(i, object)| (i, object, contour.gap(&object.contour))).collect();
         let connected: Vec<_> = nets
             .iter()
             .copied()
-            .chain(gaps.iter().filter(|(_, gap)| *gap <= 0.).flat_map(|(index, _)| self.geometry.items[*index].intended_nets.iter().copied()))
+            .chain(gaps.iter().filter(|(_, _, gap)| *gap <= 0.).flat_map(|(_, object, _)| object.intended_nets.iter().copied()))
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect();
         let decisions = gaps
             .into_iter()
-            .map(|(index, gap)| {
-                let item = &self.geometry.items[index];
+            .map(|(index, item, gap)| {
                 let decision =
                     decision(None, index, gap, &connected, &item.intended_nets, false, self.membership_clearance(&connected, &item.intended_nets));
                 if item.mechanical { decision.mechanical_clearance() } else { decision }

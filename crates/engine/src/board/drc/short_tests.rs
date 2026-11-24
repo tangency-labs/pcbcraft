@@ -107,7 +107,7 @@ pub(crate) fn shorts(s: &Session, clearance_nm: i64) -> Vec<Violation> {
 
 /// Preserve exact history snapshot identities rather than checking only whether undo is possible.
 fn history(s: &Session) -> [Vec<Option<*const crate::Project>>; 2] {
-    [&s.undo, &s.redo].map(|stack| stack.iter().map(|entry| entry.as_ref().map(std::sync::Arc::as_ptr)).collect())
+    [&s.undo, &s.redo].map(|stack| stack.iter().map(|entry| entry.project().map(std::sync::Arc::as_ptr)).collect())
 }
 
 /// Connected copper must not hide the distinct intended nets joined by an existing bridge.

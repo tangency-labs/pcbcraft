@@ -51,8 +51,8 @@ fn coordinates(output: &Output) -> Vec<(i64, i64, String)> {
 }
 
 /// Moving the origin 10 mm right and 10 mm up (Y up, seen from the top) moves every Gerber and
-/// Excellon coordinate by exactly -10.0000 mm on both axes and changes nothing else. The result
-/// names the origin it used.
+/// Excellon coordinate by exactly -10.0000 mm on both axes and updates `.SameCoordinates`,
+/// changing nothing else. The result names the origin it used.
 #[test]
 fn moving_the_origin_shifts_every_output_coordinate_exactly() {
     let mut s = board();
@@ -63,9 +63,31 @@ fn moving_the_origin_shifts_every_output_coordinate_exactly() {
     set(&mut s, json!({"kind":"point","x_nm":10 * MM,"y_nm":-10 * MM})).unwrap();
     let after = view(&s).fabrication().unwrap();
     assert_eq!(before.files.len(), after.files.len());
+    let same_coordinates = |output: &Output| -> String {
+        if output.name.ends_with(".drl") {
+            output
+                .contents
+                .lines()
+                .find_map(|line| line.strip_prefix("; #@! TF.SameCoordinates,"))
+                .unwrap_or_else(|| panic!("{}: missing XNC TF.SameCoordinates", output.name))
+                .to_owned()
+        } else {
+            output
+                .contents
+                .lines()
+                .find_map(|line| line.strip_prefix("%TF.SameCoordinates,")?.strip_suffix("*%"))
+                .unwrap_or_else(|| panic!("{}: missing TF.SameCoordinates", output.name))
+                .to_owned()
+        }
+    };
+    let before_id = same_coordinates(&before.files[0]);
+    let after_id = same_coordinates(&after.files[0]);
+    assert_ne!(before_id, after_id, "moving the origin must change TF.SameCoordinates");
     let mut checked = 0;
     for (old, new) in before.files.iter().zip(&after.files) {
         assert_eq!(old.name, new.name);
+        assert_eq!(same_coordinates(old), before_id, "{}: same export shares one TF.SameCoordinates", old.name);
+        assert_eq!(same_coordinates(new), after_id, "{}: same export shares one TF.SameCoordinates", new.name);
         let (old_xy, new_xy) = (coordinates(old), coordinates(new));
         assert_eq!(old_xy.len(), new_xy.len(), "{}", old.name);
         let step = if old.name.ends_with(".drl") { 10_000 } else { 10 * MM };
@@ -73,8 +95,13 @@ fn moving_the_origin_shifts_every_output_coordinate_exactly() {
             assert_eq!((b.0, b.1, &b.2), (a.0 - step, a.1 - step, &a.2), "{}", old.name);
             checked += 1;
         }
-        let strip = |text: &str| text.lines().filter(|line| !line.starts_with('X')).map(str::to_owned).collect::<Vec<_>>();
-        assert_eq!(strip(&old.contents), strip(&new.contents), "{}: only coordinates change", old.name);
+        let strip = |text: &str| {
+            text.lines()
+                .filter(|line| !line.starts_with('X') && !line.starts_with("%TF.SameCoordinates,") && !line.starts_with("; #@! TF.SameCoordinates,"))
+                .map(str::to_owned)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(strip(&old.contents), strip(&new.contents), "{}: only coordinates and SameCoordinates change", old.name);
     }
     assert!(checked > 20, "the fixture exercises pads, tracks, vias, silk, outline and holes");
     assert!(coordinates(after.files.iter().find(|f| f.name.ends_with("-PTH.drl")).unwrap()).iter().any(|(x, _, _)| *x == -3_000));

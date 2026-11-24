@@ -40,8 +40,8 @@ save the schematic and board together with shared undo/redo.
   overlap, using saved board rules and supported dimensional net-class rules.
 - **Outputs:** export supported board geometry as Gerber X2 copper, mask, paste,
   silkscreen and outline layers with aperture functions, plus net and pin attributes
-  on copper. Circular plated holes are included as an Excellon drill file
-  in the same archive.
+  on copper. Circular plated holes are included as an Excellon drill file, and
+  circular non-plated footprint holes go in a separate drill file, in the same archive.
 - **Views:** work with schematic and PCB panes side by side, or use multiple
   desktop windows with independent cameras and a shared project session.
 - **Libraries:** browse built-in, project-pinned and registered native libraries
@@ -55,8 +55,8 @@ save the schematic and board together with shared undo/redo.
   endpoint, connect an MCP client to the open editor, or run a headless session.
 
 Full ERC, broader DRC coverage, advanced routing, copper-zone fill
-and 3D/STEP workflows remain in development. Footprint slots, separate non-plated
-drill output and independent footprint mask/paste controls are not yet supported.
+and 3D/STEP workflows remain in development. Footprint slots and independent
+footprint mask/paste controls are not yet supported.
 The current checks and exporters do not establish manufacturing readiness.
 
 The [capability table](docs/capabilities.md) separates available features from

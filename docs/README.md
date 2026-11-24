@@ -36,6 +36,7 @@ before treating an older plan as implemented behavior.
 | Schematic-to-board review and airwires | [Single-board updates](single-board-update.md) · [Accepted board connections](board-ratsnest.md) |
 | Inspect individual pins and pads | [Per-view inspection selection](pin-pad-selection.md) |
 | Explicit via nets | [Placement, Properties and storage](via-net-assignments.md) |
+| Remove one routed arm | [Unroute one connection](pcb-layout-workflow.md#unroute-one-connection) |
 | Copper-zone outline authoring | [Zone drawing, editing and storage](copper-zone-outlines.md) |
 | Board rules and materials | [Board rules](board-rules.md) · [Materials and dielectric construction](board-materials.md) |
 | Create classes, assign nets and inspect effective rules | [Shared net-class editor](net-class-editor.md) |
@@ -49,10 +50,12 @@ supported versions and deferred work before extending a format or consumer.
 
 | Area | References |
 | --- | --- |
-| Native files and compatibility | [Project storage](native-project-storage.md) · [Optional single-board foundation](single-board-storage.md) · [Single-use sheet occurrences](sheet-occurrence-storage.md) |
+| Native files and compatibility | [Project storage](native-project-storage.md) · [Reading a saved project](reading-native-projects.md) · [Optional single-board foundation](single-board-storage.md) · [Single-use sheet occurrences](sheet-occurrence-storage.md) |
 | Persistent net records and differential pairs | [Sparse net registry](net-registry-storage.md) |
 | Netlist export | [JSON netlist format](netlist-format.md) · [Schema, format 1](schemas/netlist-v1.schema.json) · [Schema, format 2 (board)](schemas/netlist-v2.schema.json) |
+| Schematic document output | [Single-sheet PDF writer](schematic-pdf.md) |
 | Object identities | [Identity inventory](object-identity.md) |
+| Object-query parsing | [Syntax, trees and byte-offset diagnostics](object-queries.md), without evaluation or UI |
 | Pin/pad correspondence | [Complete counterparts and unavailable states](pin-pad-correspondence.md) |
 | Dimensional net classes | [Catalog and resolver](net-classes.md) · [Assignments and topology reconciliation](net-class-assignments.md) · [Routing and checking consumers](net-class-consumers.md) |
 | Part groups | [Catalog, membership and storage](part-groups.md) |
@@ -60,7 +63,7 @@ supported versions and deferred work before extending a format or consumer.
 | Typed quantities | [Quantities and units](quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](hierarchical-clipboard-contract.md) |
 | Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Exact circular copper records](circular-copper-records.md) · [Straight via teardrop records](teardrop-records.md) · [Walkaround route planning](route-planning.md) |
-| Solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) |
+| Planar regions, solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) |
 | Shared interface toolkit | [Craft UI migration and current pin](shared-ui-migration.md) |
 | Local transport | [Craft control protocol](../crates/craft-control/README.md) |
 
@@ -80,6 +83,7 @@ availability by themselves.
 | Net identity policy | [Persistent net identity](net-identity.md), including broader multiboard requirements |
 | Earlier net-registry rollout | [Path to the registry](net-registry-path.md), retained as a planning record; implemented slices are linked under Reference and formats |
 | Sheet paper, title blocks and parameters | [Sheet frames, parameters and templates](sheet-frames-and-parameters.md), a proposal for [#46](https://github.com/tangency-labs/pcbcraft/issues/46) |
+| Parametric board (RFC, proposal) | [Parametric board RFC](RFC/parametric-board.md): first the board published to SolidCraft and refreshed in place in an assembly, then outlines linked over the Craft bridge, board parameters, parts held to edges and the update that carries their copper, for [#70](https://github.com/tangency-labs/pcbcraft/issues/70), [#86](https://github.com/tangency-labs/pcbcraft/issues/86) and [#153](https://github.com/tangency-labs/pcbcraft/issues/153) |
 | Future multiboard and reusable circuits | [Overview](multiboard-and-sheet-instances.md) · [Circuit definitions and instances](circuit-instances.md) · [Storage and migration](multiboard-storage.md) · [Assembly and outputs](multiboard-assembly-and-outputs.md) |
 
 ## Verification and history
