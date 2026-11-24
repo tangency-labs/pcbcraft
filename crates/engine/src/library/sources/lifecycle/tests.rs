@@ -287,9 +287,12 @@ fn lifecycle_file_is_optional_under_the_current_header_and_refused_under_older_o
     assert!(decode_documents(&empty).unwrap_err().contains("assessment or policy count"));
     let overlay = edit_project_header(&after, |header| header["content_format"] = json!("pcbcraft-project/16"));
     assert!(decode_documents(&overlay).unwrap_err().contains("unknown field `content_format`"));
-    for unshipped in ["pcbcraft-project/47", "pcbcraft-project/52", "pcbcraft-project/58"] {
+    // Unshipped numbers are not board-folder formats, so the board-folder registry refuses
+    // this project's layout_root before the envelope check names the format.
+    for unshipped in ["pcbcraft-project/47", "pcbcraft-project/52", "pcbcraft-project/58", "pcbcraft-project/64"] {
         let header = edit_project_header(&before, |header| header["format"] = json!(unshipped));
-        assert!(decode_documents(&header).unwrap_err().contains(&format!("unsupported project format {unshipped}")));
+        let error = decode_documents(&header).unwrap_err();
+        assert!(error.contains("layout_root requires a supported board-folder project format"), "{unshipped}: {error}");
     }
     // Clearing the last adopted assessment from a reopened project restores the exact prior bytes.
     let mut cleared = (*decode_documents(&after).unwrap()).clone();
