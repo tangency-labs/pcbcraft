@@ -171,9 +171,9 @@ optional in version control and should not advance electrical history or mark
 the authored design dirty merely because they were generated.
 
 The engine's Gerber X3 assembly-layer writer reads one addressed board snapshot.
-It produces a file per populated side with one flash per placed footprint, in
-the generic placement frame (Y up, viewed from the top on both sides). A flash
-uses the transformed centroid offset when the board's adopted assembly profiles
+It produces a file per populated side with one main flash per placed footprint,
+in the generic placement frame (Y up, viewed from the top on both sides). A main
+flash uses the transformed centroid offset when the board's adopted assembly profiles
 supply one and agree. If absent or conflicting, it uses the footprint's placed
 reference point. The writer does not estimate a centroid from the pads.
 An ambiguous reference anywhere on the board prevents export, including when
@@ -181,9 +181,22 @@ an accepted footprint remains pending removal. Orderable metadata appears
 only when the pinned selection still meets the part requirements. The writer
 omits angles without an IPC zero and does not infer a mounting process from
 holes. It does not declare registration with separately exported layers.
+
+Pinned footprints contribute one pin flash per numbered land at its placed
+center. `.P` carries the part reference and the physical pad identifier, not
+the schematic terminal ID. Pad `1`, or `A1` when `1` is absent, uses the key-pin
+diamond. Closed, non-self-intersecting fabrication and courtyard contours are
+written as Body and Courtyard centerlines, respectively, with `.C` linking
+them to the part. Rectangles, polylines closed by their flag or endpoints,
+and circles (including full-turn arcs) are supported. Open paths, individually
+drawn segments and lettering are not stitched or guessed into outlines. Legacy
+placements without pinned footprints have only the main
+flash. See the [Ucamco Gerber Layer Format Specification](https://www.ucamco.com/en/gerber/downloads/),
+revision 2026.05, §§4.2.2, 4.7.2, 5.6.10, 5.6.14–15 and 6.9.
+
 This writer is not yet called by the fabrication archive or placement export;
-it does not apply variants or write pins, outlines, or manifest entries.
-Bare-board fabrication is unchanged.
+it does not apply variants or write manifest entries. Bare-board fabrication
+is unchanged.
 
 Use a new export destination or a deliberate replace operation, with failures
 leaving the previous complete output intact. Deleting a board must separately

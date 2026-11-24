@@ -1,6 +1,7 @@
 //! Native library-item documents own validation and history independently of projects.
 #[cfg(test)]
 mod basics_tests;
+pub mod courtyard;
 mod operations;
 pub mod publishing;
 #[cfg(test)]
@@ -352,6 +353,16 @@ pub enum Action {
         symbol_settings: Option<SymbolSettings>,
         #[serde(default)]
         footprint_reference: Option<FootprintReferenceSettings>,
+    },
+    /// Generate a closed courtyard polygon enclosing pads and optional body graphics.
+    GenerateCourtyard {
+        clearance_nm: i64,
+        #[serde(default)]
+        source: courtyard::CourtyardSource,
+        #[serde(default = "courtyard::default_stroke_nm")]
+        stroke_nm: i64,
+        #[serde(default = "courtyard::default_replace_existing")]
+        replace_existing: bool,
     },
     Undo,
     Redo,
@@ -1014,6 +1025,17 @@ impl Session {
                             }
                         }
                     }
+                    Action::GenerateCourtyard { clearance_nm, source, stroke_nm, replace_existing } => {
+                        if next.kind != Kind::Footprint {
+                            return Err("Courtyard generation is only available for footprint definitions.".into());
+                        }
+                        let primitive = courtyard::generate(&next, clearance_nm, source, stroke_nm)?;
+                        if replace_existing {
+                            next.objects.retain(|_, existing| !courtyard::is_courtyard_primitive(existing));
+                        }
+                        next.objects.insert(cursor, primitive);
+                        cursor = cursor.checked_add(1).ok_or("Primitive ID limit reached.")?;
+                    }
                     Action::Undo | Action::Redo => return Err("History operation cannot be nested.".into()),
                 }
                 if next.kind == Kind::Footprint {
@@ -1047,6 +1069,34 @@ impl Session {
                 next.revision = self.next_content_revision;
                 next.allocation = Allocation { object: cursor - 1, revision: self.next_content_revision };
                 next.validate()?;
+                // Every action that adds courtyard artwork, changes a primitive into courtyard
+                // artwork, or changes a courtyard's stroke must satisfy the minimum courtyard
+                // stroke; geometry-only edits preserve a stroke that was valid when saved. Any
+                // added or changed closed courtyard polyline must also stay a simple polygon.
+                // This runs after the bounds check above, so the polygon arithmetic only sees
+                // bounded coordinates. Unchanged outlines are not rechecked, so a loaded
+                // definition stays editable.
+                for (id, primitive) in &next.objects {
+                    let previous = self.item.objects.get(id);
+                    if previous != Some(primitive) {
+                        if let Primitive::Artwork { artwork } = primitive
+                            && courtyard::is_courtyard_primitive(primitive)
+                        {
+                            let preserved_stroke = matches!(
+                                previous,
+                                Some(prev @ Primitive::Artwork { artwork: prev_art })
+                                    if courtyard::is_courtyard_primitive(prev)
+                                        && prev_art.graphic.stroke_nm == artwork.graphic.stroke_nm
+                            );
+                            if !preserved_stroke {
+                                courtyard::validate_stroke(artwork.graphic.stroke_nm)?;
+                            }
+                        }
+                        if let Some((points, _)) = courtyard::courtyard_polygon(primitive) {
+                            courtyard::validate_polygon(points)?;
+                        }
+                    }
+                }
                 let next_content_revision = self.next_content_revision.checked_add(1).ok_or("Content revision limit reached.")?;
                 let next_id = cursor;
                 self.undo.push(std::mem::replace(&mut self.item, Arc::new(next)));

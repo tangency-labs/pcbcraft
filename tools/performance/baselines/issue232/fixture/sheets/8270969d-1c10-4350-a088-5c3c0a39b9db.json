@@ -1,0 +1,22 @@
+{
+  "format": "pcbcraft-sheet/9",
+  "id": "8270969d-1c10-4350-a088-5c3c0a39b9db",
+  "page": {"paper":"a4","orientation":"landscape","at_nm":[-148590000,-105410000],"template":{"library":"basic-frames","name":"default","revision":1}},
+  "net_labels": [
+  ],
+  "labels": [
+  ],
+  "subsheets": [
+  ],
+  "symbols": [
+    {"id":2,"component":2,"unit":"main","x_nm":-2540000,"y_nm":0,"rotation":0,"mirrored":true}
+
+    ,
+    {"id":3,"component":3,"unit":"main","x_nm":25400000,"y_nm":0,"rotation":0}
+  ],
+  "junctions": [
+  ],
+  "wires": [
+    {"id":4,"from":{"symbol":2,"pin":"1"},"to":{"symbol":3,"pin":"1"}}
+  ]
+}

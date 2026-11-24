@@ -22,7 +22,7 @@ pub(super) fn build(d: &mut Demo) -> Result<(), Box<dyn Error>> {
         .board_view(target)
         .ok_or("missing board view")?
         .footprints()
-        .flat_map(|f| f.pads.into_iter().map(move |p| ((f.reference.to_owned(), p.number), p.center)))
+        .flat_map(|f| f.pads.into_iter().map(move |p| ((f.reference.to_string(), p.number), p.center)))
         .collect();
     let p = |r: &str, n: &str| pads.get(&(r.to_owned(), n.to_owned())).copied().ok_or_else(|| format!("missing pad {r}.{n}"));
     let s = &mut d.session;

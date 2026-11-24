@@ -29,6 +29,7 @@ pub(super) struct Edit {
     pub(super) source: ViewInput,
     sheet: SheetTarget,
     label: Label,
+    orient_to_pin: bool,
     error: Option<String>,
     focused: bool,
     x: String,
@@ -41,7 +42,8 @@ impl Edit {
     fn new(source: ViewInput, sheet: SheetTarget, label: Label, units: pcbcraft_chrome::units::Unit) -> Self {
         let x = pcbcraft_chrome::units::edit_label(label.at.x_nm, units);
         let y = pcbcraft_chrome::units::edit_label(label.at.y_nm, units);
-        Self { source, sheet, label, error: None, focused: false, x, y, units }
+        let orient_to_pin = label.id == 0;
+        Self { source, sheet, label, orient_to_pin, error: None, focused: false, x, y, units }
     }
 
     /// Parse both axes and text together so invalid appearance cannot partially rename a net.
@@ -57,10 +59,15 @@ impl Edit {
 
 /// Map physical name appearance into chrome without importing engine types into the UI crate.
 pub(crate) fn visual_text(label: &Label, step: f32) -> Option<chrome::Text> {
+    visual_text_at(label, step, label.rotation)
+}
+
+/// Use the same placement angle for a custom name offset and its preview glyph.
+fn visual_text_at(label: &Label, step: f32, rotation: u16) -> Option<chrome::Text> {
     let text = label.text.as_ref()?;
     let offset = text.offset.map(|p| {
         let v = egui::vec2(p.x_nm as f32, p.y_nm as f32) * (step / pcbcraft_engine::schematic::GRID_NM as f32);
-        match label.rotation {
+        match rotation {
             90 => egui::vec2(v.y, -v.x),
             180 => -v,
             270 => egui::vec2(-v.y, v.x),
@@ -79,6 +86,20 @@ pub(crate) fn visual_text(label: &Label, step: f32) -> Option<chrome::Text> {
         visible: text.visible,
         show_name: text.show_name,
     })
+}
+
+/// The snapped geometry shared by preview painting and the placement command.
+#[derive(Clone, Copy)]
+pub(super) struct Placement {
+    pub at: Point,
+    pub rotation: u16,
+}
+
+impl Placement {
+    /// Put the label at the displayed pose without changing its name or text layout.
+    fn apply(self, label: &Label) -> Label {
+        Label { at: self.at, rotation: self.rotation, ..label.clone() }
+    }
 }
 
 /// Map electrical styles into presentation without making chrome depend on the engine.
@@ -176,7 +197,7 @@ pub(super) fn paint(
     camera: &Camera,
     project: &Project,
     tool: Option<&Tool>,
-    pointer: Option<Point>,
+    placement: Option<Placement>,
     selected: &pcbcraft_engine::selection::Selection,
     editing: Option<&crate::inline_text::Target>,
 ) {
@@ -206,18 +227,18 @@ pub(super) fn paint(
         );
     }
     if let Some(label) = moving
-        && let Some(at) = pointer
+        && let Some(Placement { at, rotation }) = placement
     {
         chrome::paint_with_text(
             &painter,
             camera.screen(at, rect),
             &label.name,
             visual(label.style),
-            label.rotation,
+            rotation,
             camera.unit_step(),
             Tokens::get().accent,
             attached.contains(&label.id),
-            visual_text(label, camera.unit_step()).as_ref(),
+            visual_text_at(label, camera.unit_step(), rotation).as_ref(),
         );
     }
 }
@@ -235,7 +256,7 @@ pub(super) fn input(
     tool: Option<&Tool>,
     enabled: bool,
     selection: &pcbcraft_engine::selection::Selection,
-    placement: Option<Point>,
+    placement: Option<Placement>,
     filters: crate::selection_filters::Filters,
 ) -> Option<Option<Click>> {
     if let Some(Tool::NetLabel { label, drag, .. }) = tool {
@@ -246,28 +267,20 @@ pub(super) fn input(
             return Some(Some(Click::NetLabelCancel));
         }
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::R)) {
-            return Some(Some(Click::NetLabelRotate));
+            return Some(Some(Click::NetLabelRotate(placement.map_or(label.rotation, |pose| pose.rotation))));
         }
         if drag.is_some() && ui.input(|i| i.pointer.button_released(egui::PointerButton::Primary)) {
             return Some(Some(if response.contains_pointer() {
-                placement
-                    .map(|at| {
-                        let mut label = label.clone();
-                        label.at = at;
-                        Click::NetLabelCommit(label)
-                    })
-                    .unwrap_or(Click::NetLabelCancel)
+                placement.map(|pose| Click::NetLabelCommit(pose.apply(label))).unwrap_or(Click::NetLabelCancel)
             } else {
                 Click::NetLabelCancel
             }));
         }
         if drag.is_none()
             && response.clicked()
-            && let Some(at) = placement
+            && let Some(pose) = placement
         {
-            let mut label = label.clone();
-            label.at = at;
-            return Some(Some(Click::NetLabelCommit(label)));
+            return Some(Some(Click::NetLabelCommit(pose.apply(label))));
         }
         return Some(None);
     }
@@ -397,7 +410,9 @@ impl PcbApp {
                 let edit = Edit::new(source, project.sheet_target(), label, self.preferences.units);
                 self.dialog = Dialog::NetLabel(Box::new(edit));
             }
-            Action::Move => self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None }),
+            Action::Move => {
+                self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: source.revision, drag: None, orient_to_pin: false });
+            }
             Action::Rotate => {
                 label.rotation = (label.rotation + 90) % 360;
                 self.commit_net_label(source, label);
@@ -410,7 +425,11 @@ impl PcbApp {
     /// edits leave the electrical anchor fixed, and failures publish no partial state.
     pub(super) fn commit_net_label(&mut self, source: ViewInput, label: Label) {
         let repeat = label.id == 0 && self.parts.repeats();
-        let next = label.clone();
+        let orient_to_pin = matches!(&self.views.active.schematic.tool, Some(Tool::NetLabel { orient_to_pin: true, .. }));
+        let mut next = label.clone();
+        if orient_to_pin {
+            next.rotation = 0;
+        }
         let mut params = json!({"name":label.name,"style":label.style,"x_nm":label.at.x_nm,"y_nm":label.at.y_nm,"rotation":label.rotation,"expected_revision":source.revision});
         if let Some(text) = &label.text {
             params["text"] = json!(text);
@@ -422,7 +441,7 @@ impl PcbApp {
         self.run(if label.id == 0 { engine::ADD } else { engine::SET }, &params);
         self.views.active.schematic.tool = None;
         if repeat && self.message.is_none() && self.session.revision() > source.revision {
-            self.views.active.schematic.tool = Some(Tool::NetLabel { label: next, revision: self.session.revision(), drag: None });
+            self.views.active.schematic.tool = Some(Tool::NetLabel { label: next, revision: self.session.revision(), drag: None, orient_to_pin });
         }
     }
     /// Place starts a new marker preview; Apply commits an existing marker edit once.
@@ -470,7 +489,8 @@ impl PcbApp {
                     edit.error = engine::bus::members(&label.name).err().map(|reason| format!("Enter a bus name such as D[0..7]: {reason}."));
                 }
                 Ok(label) if label.id == 0 => {
-                    self.views.active.schematic.tool = Some(Tool::NetLabel { label, revision: edit.source.revision, drag: None });
+                    self.views.active.schematic.tool =
+                        Some(Tool::NetLabel { label, revision: edit.source.revision, drag: None, orient_to_pin: edit.orient_to_pin });
                     return;
                 }
                 Ok(label) => match self.apply_label_edit(&edit, label) {
@@ -624,7 +644,20 @@ fn label_fields(ui: &mut Ui, edit: &mut Edit, focus: bool) -> bool {
         "bus" => Style::Bus,
         _ => Style::Local,
     };
-    form::rotation(ui, &mut edit.label.rotation);
+    if edit.label.id == 0 {
+        let mut rotation = if edit.orient_to_pin { "auto".into() } else { edit.label.rotation.to_string() };
+        form::choice(
+            ui,
+            "Rotation",
+            ui.scope_id().with("label_rotation"),
+            &mut rotation,
+            &[("auto", "Auto (follow pin)".into()), ("0", "0°".into()), ("90", "90°".into()), ("180", "180°".into()), ("270", "270°".into())],
+        );
+        edit.orient_to_pin = rotation == "auto";
+        edit.label.rotation = rotation.parse().unwrap_or(0);
+    } else {
+        form::rotation(ui, &mut edit.label.rotation);
+    }
     let position_enter = if edit.label.id != 0 {
         let x = form::text(ui, "X", &mut edit.x);
         let y = form::text(ui, "Y", &mut edit.y);

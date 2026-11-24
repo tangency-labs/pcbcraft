@@ -16,8 +16,11 @@ editable instance defaults. See [bundled libraries](builtin-symbol-libraries.md)
 ## Text labels
 
 **L** creates a local text label; **Ctrl+L** (⌘L on macOS) creates a global label.
-Set the name, scope and rotation, choose Place and click its electrical anchor.
-R rotates a preview and Escape cancels. E opens an existing label's properties;
+Set the name and scope, choose Place and click its electrical anchor. **Auto
+(follow pin)** faces the preview away from a snapped pin. Choose a fixed angle
+in the form or press **R** to turn the preview and keep that angle for placement.
+Default global-label text stays upright on horizontal labels. Escape cancels
+the preview. E opens an existing label's properties.
 M picks up the complete label, R rotates it and Delete removes it. A held drag
 moves the complete label; cancellation leaves the document unchanged.
 

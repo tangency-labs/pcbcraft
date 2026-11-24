@@ -571,9 +571,9 @@ fn nearest_node(endpoints: &[(WireEndpoint, Pos2)], at: Pos2) -> Result<Option<W
     if ambiguous { Err(()) } else { Ok(nearest) }
 }
 
-/// Place a named anchor at an existing contact before falling back to the snap grid. This
-/// preserves off-grid pins and wire contacts, reusing the revision-bound target cache.
-pub(super) fn label_position(
+/// Keep the snapped contact identity so new labels can follow a terminal's lead direction.
+/// Free placement still falls back to the grid when no unambiguous contact was found.
+pub(super) fn label_anchor(
     project: &Project,
     camera: &Camera,
     rect: Rect,
@@ -581,14 +581,13 @@ pub(super) fn label_position(
     draft: &Draft,
     revision: u64,
     ignore: Option<WireEndpoint>,
-) -> Point {
+) -> Anchor {
     draft
         .target_cache
         .borrow_mut()
         .get(project, revision, camera, rect)
         .anchor(camera, rect, pointer, ignore, true)
-        .and_then(|anchor| anchor.position(project))
-        .unwrap_or_else(|| camera.snap(pointer, rect))
+        .unwrap_or_else(|| Anchor::Free(camera.snap(pointer, rect)))
 }
 
 /// Align the closest pin of any placement template with an explicit contact. Ambiguous

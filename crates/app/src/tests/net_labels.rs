@@ -1,7 +1,7 @@
 use super::*;
 use pcbcraft_engine::{
     net_labels::{self as engine, Style},
-    persistence::encode_documents,
+    persistence::{decode_packed, encode_documents, encode_packed},
     schematic::Point,
 };
 
@@ -30,6 +30,143 @@ fn name(h: &mut Harness<'_, PcbApp>, name: &str) {
 /// Pick a model-derived label anchor so canvas and toolbar dimensions may evolve independently.
 fn at(h: &Harness<'_, PcbApp>, p: Point) -> egui::Pos2 {
     h.state().views.active.camera.screen(p, h.get_by_label("Schematic canvas").rect())
+}
+
+/// Place a resistor in the test canvas and return its placed symbol ID.
+fn resistor(h: &mut Harness<'_, PcbApp>, definition: &str) -> String {
+    let rect = h.get_by_label("Schematic canvas").rect();
+    let center = h.state().views.active.camera.snap(rect.center(), rect);
+    let revision = h.state().session.revision();
+    h.state_mut()
+        .run(pcbcraft_engine::PLACE_SYMBOL, &json!({"definition":definition,"x_nm":center.x_nm,"y_nm":center.y_nm,"expected_revision":revision}));
+    h.run();
+    h.state().session.project().unwrap().symbols()[0].id()
+}
+
+/// Read the canvas text's measured center and rendered angle without relying on a screenshot.
+fn label_ink(h: &Harness<'_, PcbApp>, name: &str) -> (egui::Pos2, f32) {
+    h.output()
+        .shapes
+        .iter()
+        .find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.job.text == name => Some((text.visual_bounding_rect().center(), text.angle)),
+            _ => None,
+        })
+        .unwrap()
+}
+
+/// The preview and commit use the same pose on both ends of a horizontal resistor and on
+/// transformed pins. History and the native archive keep that pose and the electrical contact.
+#[test]
+fn new_net_labels_face_away_from_snapped_pins() {
+    for (definition, pin_index, turned, mirrored, rotation, outward) in [
+        ("resistor", 0, false, false, 180, egui::vec2(-1., 0.)),
+        ("resistor", 1, false, false, 0, egui::vec2(1., 0.)),
+        ("resistor-iec", 0, true, false, 270, egui::vec2(0., 1.)),
+        ("resistor", 0, false, true, 0, egui::vec2(1., 0.)),
+    ] {
+        let mut h = editor(1400.);
+        h.state_mut().parts.set_repeat(false);
+        let symbol = resistor(&mut h, definition);
+        if turned {
+            let revision = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::ROTATE_SYMBOL, &json!({"symbol":symbol,"expected_revision":revision}));
+        }
+        if mirrored {
+            let revision = h.state().session.revision();
+            h.state_mut().run(pcbcraft_engine::MIRROR_SYMBOL, &json!({"symbol":symbol,"axis":"horizontal","expected_revision":revision}));
+        }
+        h.run();
+        let placed = &h.state().session.project().unwrap().symbols()[0];
+        let pin = placed.pins()[pin_index];
+        let terminal = placed.terminals()[pin_index];
+        let revision = h.state().session.revision();
+        h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+        h.run();
+        name(&mut h, "CAN_H");
+        click(&mut h, "Place");
+        let pointer = at(&h, pin);
+        h.hover_at(pointer);
+        h.run();
+        let preview = label_ink(&h, "CAN_H");
+        assert!((preview.0 - pointer).dot(outward) > 0., "{definition}, rotation {rotation}: {preview:?}");
+        assert_eq!(preview.1, -(f32::from(rotation % 180)).to_radians());
+        assert_eq!(h.state().session.revision(), revision);
+
+        click_canvas_at(&mut h, pointer);
+        assert_eq!(label_ink(&h, "CAN_H"), preview);
+        let after = h.state().session.snapshot().unwrap();
+        let label = &after.net_labels()[0];
+        assert_eq!((label.at, label.rotation), (pin, rotation));
+        assert!(label.text.is_none());
+        let graph = after.connectivity();
+        assert_eq!(graph.net_name(graph.net_index_for(terminal).unwrap()), "CAN_H");
+        click(&mut h, "Undo");
+        assert!(h.state().session.project().unwrap().net_labels().is_empty());
+        click(&mut h, "Redo");
+        assert_eq!(h.state().session.project().unwrap().net_labels(), after.net_labels());
+        let reopened = decode_packed(&encode_packed(after.clone()).unwrap()).unwrap().project;
+        assert_eq!(reopened.net_labels(), after.net_labels());
+        let graph = reopened.connectivity();
+        assert_eq!(graph.net_name(graph.net_index_for(terminal).unwrap()), "CAN_H");
+    }
+}
+
+/// The form, keyboard and pointer menu can all override pin orientation. Explicit name text
+/// still renders at its own angle when the glyph is rotated.
+#[test]
+fn manual_net_label_rotation_overrides_the_pin() {
+    enum Control {
+        Form,
+        Keyboard,
+        Menu,
+    }
+    for (control, rotation) in [(Control::Form, 0), (Control::Keyboard, 270), (Control::Menu, 270)] {
+        let mut h = editor(1400.);
+        h.state_mut().parts.set_repeat(false);
+        resistor(&mut h, "resistor");
+        let pin = h.state().session.project().unwrap().symbols()[0].pins()[0];
+        h.key_press_modifiers(Modifiers::COMMAND, Key::L);
+        h.run();
+        name(&mut h, "MANUAL");
+        if matches!(control, Control::Form) {
+            h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Rotation").click();
+            h.run();
+            click(&mut h, "0°");
+        }
+        click(&mut h, "Place");
+        let pointer = at(&h, pin);
+        h.hover_at(pointer);
+        h.run();
+        match control {
+            Control::Form => {}
+            Control::Keyboard => {
+                h.key_press(Key::R);
+                h.run();
+            }
+            Control::Menu => {
+                super::tool_modes::right_click(&mut h, pointer);
+                click(&mut h, "Rotate");
+            }
+        }
+        click_canvas_at(&mut h, pointer);
+        let label = h.state().session.project().unwrap().net_labels()[0].clone();
+        assert_eq!(label.rotation, rotation);
+        let revision = h.state().session.revision();
+        let text = pcbcraft_engine::schematic::fields::Layout { rotation: 180, ..Default::default() };
+        h.state_mut()
+            .session
+            .apply(
+                engine::SET,
+                &json!({"id":label.object_id(),"name":label.name,"style":label.style,"x_nm":label.at.x_nm,"y_nm":label.at.y_nm,
+                    "rotation":label.rotation,"text":text,"expected_revision":revision}),
+            )
+            .unwrap();
+        h.run();
+        assert_eq!(label_ink(&h, "MANUAL").1, -std::f32::consts::PI);
+        let edited = &h.state().session.project().unwrap().net_labels()[0];
+        assert_eq!((edited.at, edited.rotation), (label.at, label.rotation));
+    }
 }
 
 /// Ordinary local/global labels keep style-owned text in both property presentations;
