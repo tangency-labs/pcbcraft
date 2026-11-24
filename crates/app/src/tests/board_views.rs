@@ -673,7 +673,7 @@ fn board_canvas_and_ribbon_remain_distinct_from_schematic() {
 }
 
 /// Keyboard navigation reaches available workspaces and placement actions without leaking keys
-/// into the canvas. Planned workspaces are skipped when moving between rows.
+/// into the canvas. From Manufacturing, the picker skips planned workspaces and wraps to Schematic.
 #[test]
 fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     let mut h = board_harness();
@@ -707,7 +707,14 @@ fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     h.run();
     h.key_press(Key::Enter);
     h.run();
+    assert_eq!(h.state().workspace_key(), "manufacturing");
+    click(&mut h, "Choose workspace");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
     assert!(h.state().library_editors.active.is_none());
+    assert_eq!(h.state().workspace_key(), "schematic");
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
     click(&mut h, "Choose workspace");
     let card = h.get_by_label("PCB Layout").rect();
