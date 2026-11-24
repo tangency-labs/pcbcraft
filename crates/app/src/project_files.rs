@@ -191,6 +191,21 @@ impl ProjectFiles {
         }
     }
 
+    /// Folder containing this opening's project files, or the parent of its packed archive.
+    /// No directory lookup is needed on the editor thread.
+    pub(super) fn project_directory(&self, session: &Session) -> Option<&std::path::Path> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let saved = self.saved.as_ref().filter(|saved| session.project().is_some_and(|project| saved.snapshot.same_document(project)))?;
+            saved.target.project_directory()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = session;
+            None
+        }
+    }
+
     /// Restore desktop history from app storage without reading any project files at startup.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn with_recent(text: Option<&str>) -> Self {
@@ -259,6 +274,18 @@ impl ProjectFiles {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn has_location(&self, session: &Session) -> bool {
         session.snapshot().is_some_and(|project| self.saved.as_ref().is_some_and(|saved| saved.snapshot.same_document(&project)))
+    }
+
+    /// Whether the next Save to the current location would perform a first-time format,
+    /// manifest, layout or compatibility upgrade. Timed Save holds back for these targets so
+    /// only an explicit Save upgrades legacy files in place.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn needs_upgrade(&self, session: &Session) -> bool {
+        session.snapshot().is_some_and(|project| {
+            self.saved
+                .as_ref()
+                .is_some_and(|saved| saved.snapshot.same_document(&project) && (saved.opened.is_some() || saved.target.needs_upgrade()))
+        })
     }
 
     /// Start opening a file. The completed result is ignored if the editor changes in the meantime.

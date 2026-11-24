@@ -4,7 +4,9 @@
 //! Each copper layer, the top and bottom solder mask, paste and silkscreen, and the
 //! Board Outline get one Gerber file in millimeters with nanometer resolution (format 4.6).
 //! Plated holes (vias and through-hole pads) go in one Excellon file. Circular non-plated
-//! footprint holes, when present, go in a separate non-plated Excellon file. Every coordinate
+//! footprint holes, when present, go in a separate non-plated Excellon file. Each drill file
+//! names its content in XNC standard-comment file attributes (`Plated,1,N,PTH` or
+//! `NonPlated,1,N,NPTH` over all N copper layers). Every coordinate
 //! is written in the board's output frame: measured from its placement origin with Y up, seen
 //! from the top.
 //! Openings use the pad exporter without process expansion: mask includes pads on the outer
@@ -26,7 +28,7 @@ use super::{
     view::{BoardView, CopperLayers, PadView},
 };
 use crate::{CommandError, Session, schematic::Point};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
@@ -36,6 +38,7 @@ use std::{
 };
 
 mod part_layers;
+pub mod review;
 
 /// Generate the board's fabrication files; returns them without editing anything.
 pub const EXPORT_FABRICATION: &str = "pcb.export_fabrication";
@@ -69,7 +72,7 @@ pub struct Fabrication {
 }
 
 /// Integrity of the exact bytes of one generated artifact, not a design-state identity.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Artifact {
     pub name: String,
     pub size_bytes: u64,
@@ -84,7 +87,7 @@ impl Artifact {
 }
 
 /// Integrity records for the generated files, not the ZIP itself or the design state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub struct Manifest {
     pub generator_version: String,
     pub files: Vec<Artifact>,
@@ -359,8 +362,8 @@ impl Gerber {
     }
 
     /// Finish a layer in the existing bare-board export, which writes all layers in one frame.
-    fn finish(self, function: &str, polarity: &str) -> String {
-        self.finish_in_frame(function, polarity, Some("Original"))
+    fn finish(self, function: &str, polarity: &str, same_coordinates: &str) -> String {
+        self.finish_in_frame(function, polarity, Some(same_coordinates))
     }
 
     /// Wrap one layer in a Gerber header and footer. Only a coordinated export supplies a frame
@@ -622,7 +625,7 @@ impl BoardView<'_> {
     /// closed Board Outline; returns why when either is missing or the origin cannot be resolved.
     /// Refuses circular copper and copper zones before generating any output files.
     /// Outputs include an independent non-plated drill file only when the board has such holes.
-    /// Refuses a non-plated diameter that rounds to zero at the drill output's resolution.
+    /// Returns an error if a plated or non-plated drill diameter rounds to zero at the output resolution.
     /// Sanitized layer names are disambiguated against all outputs, preserving fixed file names.
     /// X2 attributes describe pad, track and via functions and intended copper membership.
     /// Ambiguous routed copper does not acquire an arbitrary net name.
@@ -656,6 +659,8 @@ impl BoardView<'_> {
         }
         let origin = self.placement_origin()?;
         let frame = origin.frame();
+        let plated = self.plated_drill_hits()?;
+        let frame_id = same_coordinates_id(origin);
         let non_plated = self.non_plated_drill_hits()?;
         let base = file_part(&self.project().name);
         let routed_nets = RoutedNets::new(self);
@@ -716,7 +721,7 @@ impl BoardView<'_> {
             };
             files.push(Output {
                 name: format!("{base}-{}.gbr", file_part(&layer.name)),
-                contents: gerber.finish(&format!("Copper,L{},{position}", index + 1), "Positive"),
+                contents: gerber.finish(&format!("Copper,L{},{position}", index + 1), "Positive", &frame_id),
             });
         }
 
@@ -729,7 +734,7 @@ impl BoardView<'_> {
                 gerber.pad(pad, *cardinal, ApertureFunction::Material)?;
             }
             board_graphics(&mut gerber, self, LayerPurpose::Mask, Some(if side == "Top" { Side::Front } else { Side::Back }));
-            files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Soldermask,{side}"), "Negative") });
+            files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Soldermask,{side}"), "Negative", &frame_id) });
         }
         for (side, label, layer) in [("Top", "Paste_Top", front), ("Bot", "Paste_Bottom", back)] {
             let mut gerber = Gerber::new(frame);
@@ -737,7 +742,7 @@ impl BoardView<'_> {
                 gerber.pad(pad, *cardinal, ApertureFunction::Material)?;
             }
             board_graphics(&mut gerber, self, LayerPurpose::Paste, Some(if side == "Top" { Side::Front } else { Side::Back }));
-            files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Paste,{side}"), "Positive") });
+            files.push(Output { name: format!("{base}-{label}.gbr"), contents: gerber.finish(&format!("Paste,{side}"), "Positive", &frame_id) });
         }
 
         for (side, position, label) in [(Side::Front, "Top", "Silkscreen_Top"), (Side::Back, "Bot", "Silkscreen_Bottom")] {
@@ -752,7 +757,7 @@ impl BoardView<'_> {
                 }
             }
             board_graphics(&mut silk, self, LayerPurpose::Silkscreen, Some(side));
-            files.push(Output { name: format!("{base}-{label}.gbr"), contents: silk.finish(&format!("Legend,{position}"), "Positive") });
+            files.push(Output { name: format!("{base}-{label}.gbr"), contents: silk.finish(&format!("Legend,{position}"), "Positive", &frame_id) });
         }
 
         let mut profile = Gerber::new(frame);
@@ -766,28 +771,34 @@ impl BoardView<'_> {
             let function = drawing.closed.then_some(ApertureFunction::Profile);
             profile.stroke(&points, drawing.stroke_nm.unwrap_or(OUTLINE_NM), function);
         }
-        files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive") });
+        files.push(Output { name: format!("{base}-Outline.gbr"), contents: profile.finish("Profile,NP", "Positive", &frame_id) });
 
-        files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, DrillPlating::Plated, self.plated_drill_hits()) });
+        let span = order.len();
+        files.push(Output { name: format!("{base}-PTH.drl"), contents: drill_file(frame, &frame_id, DrillPlating::Plated, span, plated) });
         if !non_plated.is_empty() {
-            files.push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, DrillPlating::NonPlated, non_plated) });
+            files
+                .push(Output { name: format!("{base}-NPTH.drl"), contents: drill_file(frame, &frame_id, DrillPlating::NonPlated, span, non_plated) });
         }
         unique_file_names(&mut files, copper_count);
         Ok(Fabrication { origin, files })
     }
 
-    /// Group via and plated pad drill hits by diameter for the plated drill file.
-    fn plated_drill_hits(self) -> BTreeMap<i64, Vec<Point>> {
+    /// Group via and plated pad drill hits by diameter.
+    /// A plated pad drill below half the output unit returns an error because its tool size would round to zero.
+    fn plated_drill_hits(self) -> Result<BTreeMap<i64, Vec<Point>>, String> {
         let mut holes: BTreeMap<i64, Vec<Point>> = BTreeMap::new();
         for via in self.vias() {
             holes.entry(via.drill_nm).or_default().push(via.at);
         }
         for pad in self.footprints().flat_map(|footprint| footprint.pads) {
             if let Some(drill) = pad.drill_nm {
+                if drill < DRILL_UNIT_NM / 2 {
+                    return Err(format!("Plated drill diameter {drill} nm rounds to zero at the 0.001 mm output resolution."));
+                }
                 holes.entry(drill).or_default().push(pad.center);
             }
         }
-        holes
+        Ok(holes)
     }
 
     /// Resolve mechanical openings from the pinned footprint with no copper or pad projection.
@@ -819,14 +830,41 @@ enum DrillPlating {
     NonPlated,
 }
 
+/// Deterministic Gerber X2 `.SameCoordinates` GUID (§5.6.5) for one resolved export frame.
+/// Derived from the resolved origin coordinates, axis convention and output unit so every
+/// Gerber, PTH and NPTH file in an export shares one identifier, repeated exports in the same
+/// frame stay identical, and moving the origin produces a distinct identifier.
+fn same_coordinates_id(origin: Resolved) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"pcbcraft-same-coordinates/1\n");
+    hasher.update(origin.axes.as_bytes());
+    hasher.update(b"\nmm\n");
+    hasher.update(origin.at.x_nm.to_le_bytes());
+    hasher.update(origin.at.y_nm.to_le_bytes());
+    let digest = hasher.finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    // Set RFC 9562 version 8 (custom deterministic) and RFC 4122 variant bits.
+    bytes[6] = (bytes[6] & 0x0f) | 0x80;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    uuid::Uuid::from_bytes(bytes).hyphenated().to_string()
+}
+
 /// Write one Excellon file from resolved through hits using absolute metric coordinates.
 /// Tools are sorted by diameter and hits in board coordinates, independent of the output origin.
-fn drill_file(frame: Frame, plating: DrillPlating, mut holes: BTreeMap<i64, Vec<Point>>) -> String {
-    let (description, kind) = match plating {
-        DrillPlating::Plated => ("plated", "PLATED"),
-        DrillPlating::NonPlated => ("non-plated", "NON_PLATED"),
+/// The header carries X2 file attributes as XNC standard comments (`; #@! `, XNC 2021.11 §4.1):
+/// the generating software, the shared coordinate frame of this export's Gerber layers (Gerber
+/// §5.6.5) and the file function spanning copper layers 1 to `copper_layers` (§5.6.3).
+fn drill_file(frame: Frame, same_coordinates: &str, plating: DrillPlating, copper_layers: usize, mut holes: BTreeMap<i64, Vec<Point>>) -> String {
+    let (description, kind, function) = match plating {
+        DrillPlating::Plated => ("plated", "PLATED", format!("Plated,1,{copper_layers},PTH")),
+        DrillPlating::NonPlated => ("non-plated", "NON_PLATED", format!("NonPlated,1,{copper_layers},NPTH")),
     };
-    let mut text = format!("M48\n; PCBcraft {description} drill file\n; TYPE={kind}\nFMAT,2\nMETRIC\n");
+    let mut text = format!("M48\n; PCBcraft {description} drill file\n; TYPE={kind}\n");
+    let _ = writeln!(text, "; #@! TF.GenerationSoftware,PCBcraft,PCBcraft,{}", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(text, "; #@! TF.SameCoordinates,{same_coordinates}");
+    let _ = writeln!(text, "; #@! TF.FileFunction,{function}");
+    text.push_str("FMAT,2\nMETRIC\n");
     for (index, diameter) in holes.keys().enumerate() {
         let _ = writeln!(text, "T{}C{}", index + 1, mm(*diameter, DRILL_DECIMALS));
     }

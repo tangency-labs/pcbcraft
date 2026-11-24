@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:pcbcraft:schema:part:5",
+  "title": "PCBcraft reusable part definition with search metadata, format 5",
+  "description": "Strict superset of part/4: bounded human-facing description, keywords and links may accompany terminal supply ranges. The engine checks terminal membership and electrical type; loading never fetches a link URL.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "library",
+    "id",
+    "revision",
+    "name",
+    "license",
+    "source",
+    "packages"
+  ],
+  "properties": {
+    "format": {
+      "const": "pcbcraft-part/5"
+    },
+    "library": { "$ref": "urn:pcbcraft:schema:part:2#/properties/library" },
+    "id": { "$ref": "urn:pcbcraft:schema:part:2#/properties/id" },
+    "revision": { "$ref": "urn:pcbcraft:schema:part:2#/properties/revision" },
+    "name": { "$ref": "urn:pcbcraft:schema:part:2#/properties/name" },
+    "license": { "$ref": "urn:pcbcraft:schema:part:2#/properties/license" },
+    "source": { "$ref": "urn:pcbcraft:schema:part:2#/properties/source" },
+    "symbol": { "$ref": "urn:pcbcraft:schema:part:2#/properties/symbol" },
+    "category": { "$ref": "urn:pcbcraft:schema:part:2#/properties/category" },
+    "fixed_parameters": { "$ref": "urn:pcbcraft:schema:part:2#/properties/fixed_parameters" },
+    "packages": { "$ref": "urn:pcbcraft:schema:part:2#/properties/packages" },
+    "terminal_ratings": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 128,
+      "propertyNames": { "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/terminal_id" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "anyOf": [{ "required": ["supply_min"] }, { "required": ["supply_max"] }],
+        "properties": {
+          "supply_min": { "$ref": "#/$defs/voltage" },
+          "supply_max": { "$ref": "#/$defs/voltage" }
+        }
+      }
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+    },
+    "keywords": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64,
+        "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+      }
+    },
+    "links": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "url"],
+        "properties": {
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*(?![\\s\\S])"
+          },
+          "url": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "^https?://[^\\s/?#]+[^\\s]*$"
+          }
+        }
+      }
+    }
+  },
+  "dependentRequired": {
+    "fixed_parameters": ["category"],
+    "terminal_ratings": ["symbol"]
+  },
+  "anyOf": [
+    { "required": ["description"] },
+    { "required": ["keywords"] },
+    { "required": ["links"] }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "required": ["symbol"]
+      },
+      "then": {
+        "properties": {
+          "packages": {
+            "additionalProperties": {
+              "properties": {
+                "mapping": { "minProperties": 1 }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "packages": {
+            "additionalProperties": {
+              "properties": {
+                "mapping": { "maxProperties": 0 },
+                "unconnected_pads": { "maxItems": 0 }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "voltage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value", "unit"],
+      "properties": {
+        "type": { "const": "quantity" },
+        "value": { "$ref": "urn:pcbcraft:schema:library-common:1#/$defs/decimal" },
+        "unit": { "const": "V" }
+      }
+    }
+  }
+}

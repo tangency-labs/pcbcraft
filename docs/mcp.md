@@ -233,7 +233,7 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 | `view.set_panel_position` | `panel`: `layers`, `properties` or `selection_filters`; `position`: `left`, `right` or `floating`, with optional logical `x`/`y` offsets when floating. `inspect_editor` reports each view's `panel_positions`. Properties also supports definition panes. |
 | `arrangement.select`, `arrangement.create`, `arrangement.rename`, `arrangement.delete` | **File → Layouts**: **Activate**, **New arrangement**, **Duplicate…**, **Rename…** and **Delete…** |
 | `window.set_panel`, `window.set_ribbon_tab`, `window.close` | Browser/Parts/Nets toggles, ribbon tabs (Capture, Sheets, Analyze, Libraries and View for schematics; Layout, Draw, Analyze, Manufacture, Libraries and View for PCB; `manage` remains an alias for `sheets`, and PCB `route` remains an alias for `layout`), closing a non-last window |
-| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
+| `app.set_preferences`, `app.set_home` | **Preferences** (theme, scale, units, panel style, grid opacity, PCB grid style, schematic grid outside paper, paper background mode, per-theme sheet/canvas colours, selection following, navigation, recovery snapshot and save-to-project intervals) and **Home**. Explicit grid visibility takes precedence over an accompanying Off style or zero opacity |
 | `file.save` | **File → Save** for a project that already has a location |
 | `file.save_as`, `file.open` | **File → Save As** and **File → Open** with an absolute `path` instead of the picker. Save As takes `format` `folder` or `archive` (`.pc` is added when missing) and refuses an existing file or project folder, while an empty folder becomes the project folder; an Untitled project takes the destination's name. Open accepts a project folder, its entry point or a `.pc` archive and is refused while the project has unsaved changes. Both run in the background through the editor's file workers: keep the `file.operation.id` the reply reports and follow `inspect_editor` until `file.last.id` is at least that ID. Read `file.last.status` only when the IDs are equal; a greater `file.last.id` means a later job replaced the result, so report it as unavailable rather than taking that job's outcome as yours. A failed or abandoned job keeps the current design, unsaved state and history. An unavailable result says nothing about the outcome: the earlier job may have saved or opened, and that is not undone, so inspect the project and `file.location` before going on |
 | `file.abandon` | **Stop waiting** in the Close Project wait: releases the editor from a running open, such as one stalled on an unresponsive disk. Pass the observed `file.operation.id` as `operation`; a different running job is left alone. Other commands wait while a file job runs, but this one does not. The late result is discarded, the current project is unchanged and `file.last` reports `abandoned`. Saves are refused because they may still be writing; the editor's Close Project wait always offers **Close without waiting**, which warns that unsaved edits are lost and that a first save may leave nothing on disk. At most four abandoned opens may still be running before abandoning is refused |
@@ -241,11 +241,31 @@ view and arrangement IDs they take, with each view's workspace, selection, zoom,
 Closing the last window stays in the editor, which asks about unsaved changes.
 Headless sessions refuse window commands with a reason.
 
-The native live connection also exposes `ui.handles`, `ui.at`, `ui.project` and queued pointer,
-keyboard, text and wheel input through `execute`. See [UI automation](ui-automation.md)
-for named targets, window-local coordinates, completion tickets and cancellation.
+The native live connection also exposes `ui.handles`, `ui.at`, `ui.project`,
+`ui.window`, `ui.resize` and queued pointer, keyboard, text and wheel input
+through `execute`. See [UI automation](ui-automation.md) for named targets,
+window-local coordinates, window sizes, completion tickets and cancellation.
 These calls interact with ordinary controls, including dialogs, and may author
 edits or reach file controls. Headless sessions cannot run them.
+
+To review a PCBcraft fabrication ZIP, use `app.set_workspace` with
+`workspace: "manufacturing"` and the desired pane placement, then call
+`app.open_fabrication_package` with that view ID and an absolute ZIP path.
+The `last_fabrication_export` field in `inspect_editor` reports the last
+successful desktop export path for the current project opening.
+Inspect `views[].manufacturing` for the pending read, verified layer and drill-tool
+details, preflight findings, or an error. A failed read preserves the previous
+package. Use `app.set_fabrication_layer` with the exact member filename to set
+visibility in that pane, and `view.fit` to frame the package.
+
+### Preferences and external updates
+
+`app.set_preferences` changes personal editor settings, including the
+Preferences → Saving intervals `autosave_minutes` and `save_to_project_minutes`;
+it never changes project documents or project Undo, and writes no project file
+during the call. Enabling `save_to_project_minutes` lets the editor later save
+an eligible dirty project to its existing location on that schedule without
+another command.
 
 ## Command API version
 
@@ -638,7 +658,14 @@ width, `points`, an `outcome` (`reached`, `blocked` with `last_legal`, `incomple
 pair clearances and board-edge clearance. Check that there are at least two points
 before passing them to `pcb.add_tracks` with the same `layer` and `width_nm`;
 `from` equal to `to` produces a one-point `reached` plan with nothing to add.
-See [walkaround route planning](route-planning.md).
+For track-only shove use `mode: "shove"`. Use `"shove_vias"` to move through
+vias and their attached track ends. Submit the reached plan's `replacements`
+and `via_moves` together with the route and its captured revision. For a
+connected drag, `pcb.reshape_tracks` accepts the same shove modes and computes
+the displacements during preparation. A shove drag accepts up to 256 directly
+dragged segments. If the board has an authored zone, `pcb.plan_route` keeps vias
+fixed in `shove_vias` mode and `pcb.reshape_tracks` rejects both shove modes. See the
+[route planning and drag contract](route-planning.md#through-vias-and-connected-segment-drags).
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those
 presentation changes do not alter project revision or undo.
