@@ -114,7 +114,7 @@ fn marker_storage_roundtrips_and_rejects_incompatible_headers() {
 }
 
 /// Both mirror axes preserve logical intent at every quarter turn, including undo/redo and
-/// reopening project/19 together with sheet/6 before returning to the original pose.
+/// reopening the native documents before returning to the original pose.
 #[test]
 fn no_connect_intent_follows_mirrors_and_reopens_with_its_placement() {
     for board in [false, true] {
@@ -155,7 +155,7 @@ fn no_connect_intent_follows_mirrors_and_reopens_with_its_placement() {
                 assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
                 let sheet = docs.iter().find(|(path, _)| path.starts_with("sheets/")).unwrap().1;
                 let sheet: Value = serde_json::from_slice(sheet).unwrap();
-                assert_eq!(sheet["format"], "pcbcraft-sheet/9");
+                assert_eq!(sheet["format"], crate::persistence::CURRENT_SHEET_FORMAT);
                 let folder = persistence::decode_documents(&docs).unwrap();
                 let packed = persistence::encode_packed(mirrored).unwrap();
                 let archive = persistence::decode_packed(&packed).unwrap().project;

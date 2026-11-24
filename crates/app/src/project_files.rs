@@ -13,7 +13,7 @@ use inspection::Finished;
 use pcbcraft_engine::persistence::Encoding;
 use pcbcraft_engine::{
     Project, Session,
-    persistence::{CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, Documents, ENTRY_POINT, project_board_path},
+    persistence::{CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, Documents, ENTRY_POINT, project_board_path},
 };
 
 /// Desktop working folders and portable archives use the same split documents.
@@ -44,15 +44,16 @@ fn has_document_format(documents: &Documents, path: &str, expected: &str) -> boo
     documents.get(path).and_then(|bytes| serde_json::from_slice::<Header>(bytes).ok()).is_some_and(|header| header.format == expected)
 }
 
-/// A save may reuse the entire source only when both write formats are current.
+/// Reuse the full source only when its project, board and sheets use current write formats.
 fn has_current_write_formats(documents: &Documents, snapshot: &Project) -> bool {
     has_document_format(documents, ENTRY_POINT, CURRENT_PROJECT_FORMAT)
         && snapshot.board_document_path().is_none_or(|path| has_document_format(documents, &path, CURRENT_BOARD_FORMAT))
+        && snapshot.sheets().all(|sheet| has_document_format(documents, &format!("sheets/{}.json", sheet.target.id()), CURRENT_SHEET_FORMAT))
 }
 
 /// Keep exact unaffected bytes by comparing the snapshots' current encodings and looking up
-/// the corresponding source path. Entry points and board documents use current write formats
-/// on Save even when their authored data is unchanged.
+/// the corresponding source path. Upgrade older entry points, boards and sheets on Save
+/// even when their authored data is unchanged.
 fn retain_unchanged_documents(
     documents: &mut Documents,
     canonical: &Documents,
@@ -77,6 +78,7 @@ fn retain_unchanged_documents(
         };
         if canonical.get(comparison) == Some(bytes)
             && let Some(retained) = original.get(source)
+            && (!path.starts_with("sheets/") || has_document_format(original, source, CURRENT_SHEET_FORMAT))
         {
             bytes.clone_from(retained);
         }
@@ -183,7 +185,7 @@ impl Saved {
 struct Upgrades {
     /// Bundled library references moved to their current addresses.
     libraries: bool,
-    /// Sheets from before paper got paper around their drawing.
+    /// Sheets without paper got paper around their drawing.
     paper: bool,
 }
 
