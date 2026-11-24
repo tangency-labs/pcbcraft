@@ -450,6 +450,127 @@ fn a_format_f1_composes_with_assigned_via_and_material_report() {
     }
 }
 
+/// F1 carries named layer groups (format 41) and refuses an empty group list; deleting the last
+/// relation returns the exact native /41 bytes.
+#[test]
+fn a_format_f1_composes_with_named_layer_groups() {
+    use crate::board::relations::tests::{add, bytes, origin, pick, run};
+    let mut s = track::tests::routed_fixture();
+    let layer = track::tests::copper_layers(&s)[0];
+    let group = json!({"id":crate::fresh_id().unwrap(),"name":"Return","layers":[layer]});
+    let mut setup = json!(s.project().unwrap().board_setup().unwrap());
+    setup["stackup"]["layer_groups"] = json!([group]);
+    run(&mut s, crate::SET_BOARD_SETUP, json!({"setup":setup})).unwrap();
+    let native = bytes(&s);
+    let path = test_board_path(&native);
+    let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
+    assert_eq!(native_board["format"], "pcbcraft-board/41");
+    let reference = pick(&mut s, 0, "fp.origin", None);
+    let id = add(&mut s, "horizontal", origin(), reference);
+    let composed = bytes(&s);
+    let board: Value = serde_json::from_slice(&composed[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/58");
+    assert_eq!(board["setup"]["stackup"]["layer_groups"], json!([group]));
+    assert_eq!(board["relations"]["relations"][0]["id"], id);
+    let mut stripped = board.clone();
+    stripped.as_object_mut().unwrap().remove("relations");
+    stripped["format"] = native_board["format"].clone();
+    assert_eq!(stripped, native_board);
+    for (file, data) in &native {
+        if *file != path {
+            assert_eq!(data, &composed[file]);
+        }
+    }
+    assert_eq!(encode_documents(decode_documents(&composed).unwrap()).unwrap(), composed);
+    let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+    s.open_snapshot(decode_packed(&packed).unwrap().project);
+    assert_eq!(bytes(&s), composed);
+    let mut empty = board.clone();
+    empty["setup"]["stackup"]["layer_groups"] = json!([]);
+    assert_invalid_board_record(&composed, &empty, "board.json: the layer_groups field requires board format 41 (or 58).");
+    run(&mut s, crate::board::relations::commands::DELETE, json!({"ids":[id]})).unwrap();
+    assert_eq!(bytes(&s), native);
+}
+
+/// F1 stores teardrops beside relations. Relation edits on a teardrop board are refused like every
+/// other non-teardrop board edit, so the exact /37 control is reached by removing the teardrop.
+#[test]
+fn a_format_f1_composes_with_teardrops() {
+    use crate::CommandError;
+    use crate::board::{
+        relations::{
+            commands::{ADD, DELETE, LIST},
+            tests::{add, bytes, origin, pick, run, unchanged},
+        },
+        rules::Values,
+        setup::LayerPurpose,
+        teardrop::{EDIT_TEARDROPS, Length, Parameters, Record, UNSUPPORTED},
+    };
+    let mut s = track::tests::routed_fixture();
+    let layer = track::tests::copper_layers(&s)[0];
+    let target = s.project().unwrap().board_target().unwrap().board;
+    let (center, end) = (json!({"x_nm":0,"y_nm":20_000_000}), json!({"x_nm":600_000,"y_nm":20_000_000}));
+    run(&mut s, crate::ADD_VIA, json!({"at":center,"via_diameter_nm":500_000,"via_drill_nm":300_000})).unwrap();
+    run(&mut s, crate::ADD_TRACKS, json!({"layer":layer,"width_nm":100_000,"points":[center,end]})).unwrap();
+    let outline = track::tests::view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let corners: Vec<_> = [(-5_000_000, -5_000_000), (25_000_000, -5_000_000), (25_000_000, 45_000_000), (-5_000_000, 45_000_000)]
+        .into_iter()
+        .map(|(x_nm, y_nm)| json!({"x_nm":x_nm,"y_nm":y_nm}))
+        .collect();
+    run(&mut s, crate::ADD_DRAWING, json!({"board":target,"layer":outline,"points":corners,"closed":true})).unwrap();
+    let values = Values { clearance_nm: 35_000, ..Values::default() };
+    run(&mut s, crate::SET_RULES, json!({"board":target,"rules":values})).unwrap();
+    let board = track::tests::view(&s);
+    let record = Record {
+        id: uuid::Uuid::from_u128(1),
+        via: board.vias().iter().find(|via| via.at.y_nm == 20_000_000).unwrap().id,
+        track: board.tracks().iter().find(|track| track.start.y_nm == 20_000_000).unwrap().id,
+        parameters: Parameters { length: Length::Percent(20), max_length_nm: None, width_pct: 80, max_width_nm: None },
+    };
+    let teardrop = |s: &mut Session, add: &[Record], remove: &[uuid::Uuid]| {
+        let result = run(s, EDIT_TEARDROPS, json!({"board":target,"edits":{"add":add,"remove":remove}})).unwrap();
+        assert_eq!(result["teardrops"]["rejected"], json!([]));
+    };
+    let native = bytes(&s);
+    let path = test_board_path(&native);
+    // Native /37 control: the same teardrop on the same board without relations.
+    let untouched = s.snapshot().unwrap();
+    teardrop(&mut s, &[record], &[]);
+    let control = bytes(&s);
+    let control_board: Value = serde_json::from_slice(&control[&path]).unwrap();
+    assert_eq!(control_board["format"], "pcbcraft-board/37");
+    let reference = pick(&mut s, 0, "fp.origin", None);
+    let e = unchanged(&mut s, |s| run(s, ADD, json!({"relation":{"kind":"horizontal","refs":[origin(), reference.clone()]}})));
+    assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
+    assert_eq!(bytes(&s), control);
+    teardrop(&mut s, &[], &[record.id]);
+    assert_eq!(bytes(&s), native);
+    // F1: the relation first, then the teardrop.
+    s.open_snapshot(untouched);
+    let id = add(&mut s, "horizontal", origin(), reference);
+    let related = bytes(&s);
+    teardrop(&mut s, &[record], &[]);
+    let saved = bytes(&s);
+    let mut f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(f1["format"], "pcbcraft-board/58");
+    assert_eq!(f1["teardrops"], control_board["teardrops"]);
+    assert_eq!(f1.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
+    f1["format"] = control_board["format"].clone();
+    assert_eq!(f1, control_board);
+    assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
+    let packed = encode_packed(s.snapshot().unwrap()).unwrap();
+    s.open_snapshot(decode_packed(&packed).unwrap().project);
+    assert_eq!(bytes(&s), saved);
+    assert_eq!(run(&mut s, LIST, json!({})).unwrap()["relations"][0]["status"], "reference");
+    let e = unchanged(&mut s, |s| run(s, DELETE, json!({"ids":[id]})));
+    assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
+    assert_eq!(bytes(&s), saved);
+    teardrop(&mut s, &[], &[record.id]);
+    assert_eq!(bytes(&s), related);
+    run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
+    assert_eq!(bytes(&s), native);
+}
+
 /// Named groups, circular copper and active footprint locks coexist under board format 41.
 #[test]
 fn current_board_round_trips_named_groups_with_arcs_and_locks() {
