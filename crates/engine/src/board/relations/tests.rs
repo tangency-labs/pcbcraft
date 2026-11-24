@@ -277,7 +277,11 @@ fn a_format_board_58_saves_and_reopens_relations() {
         changed["format"] = json!(format);
         let mut doc = docs.clone();
         doc.insert(path.clone(), serde_json::to_vec(&changed).unwrap());
-        assert!(decode_documents(&doc).is_err(), "{format}");
+        assert_eq!(
+            decode_documents(&doc).unwrap_err(),
+            "board.json: board/58 requires a nonempty relations record, which is not supported by earlier formats",
+            "{format}"
+        );
     }
 }
 
