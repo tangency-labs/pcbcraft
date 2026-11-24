@@ -50,6 +50,7 @@ impl PcbApp {
             if let Some(view) = self.views.view_mut(source) {
                 view.definition = None;
                 view.library = None;
+                view.manufacturing = None;
                 view.release_input();
             }
             if let Some(project) = self.session.project() {
@@ -461,8 +462,19 @@ impl PcbApp {
             active: self.fabrication_exports.busy(),
             menu_check: None,
         }];
-        if workspace::ribbon_group(ui, "Fabrication", &outputs).is_some() {
-            self.export_fabrication(ui.ctx());
+        let review = RibbonTool {
+            icon: ToolIcon::Factory,
+            label: "Manufacturing",
+            description: "Open the Manufacturing workspace",
+            shortcut: "",
+            enabled: true,
+            active: false,
+            menu_check: None,
+        };
+        match workspace::ribbon_group(ui, "Fabrication", &[outputs[0], review]) {
+            Some(0) => self.export_fabrication(ui.ctx()),
+            Some(1) => self.message = self.enter_workspace(ui.ctx(), "manufacturing", Placement::Here).err(),
+            _ => {}
         }
     }
 
@@ -523,7 +535,9 @@ impl PcbApp {
             .map_err(|error| error.to_string())
             .and_then(|archive| {
                 let name = pcbcraft_engine::board::fabrication::archive_name(self.session.project().map_or("board", |project| project.name.as_str()));
-                self.fabrication_exports.start(ctx, name, archive)
+                let source = crate::board_outputs::Source { board: target, opening: self.session.history_root_revision() };
+                let directory = self.files.project_directory(&self.session).map(std::path::Path::to_owned);
+                self.fabrication_exports.start(ctx, source, name, archive, directory)
             });
         self.message = result.err();
     }
@@ -662,7 +676,7 @@ impl PcbApp {
             || pick.drawing_edit.is_some()
             || pick.track_edit.is_some()
             || pick.placement.is_some())
-            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some()))
+            && (enabled || owner_enabled && (pick.clipboard.is_some() || pick.track_edit.is_some() || pick.vertex_menu_edit))
             && source.is_some_and(|source| self.views.active.accepts(source, &self.session))
         {
             if let Some((source, error)) = pick.error

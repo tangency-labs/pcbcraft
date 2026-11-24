@@ -126,6 +126,7 @@ impl PcbApp {
         if let Some(view) = self.views.view_mut(view) {
             view.release_input();
             view.definition = None;
+            view.manufacturing = None;
             view.library.get_or_insert_with(State::default);
         }
         self.library_editors.focus(None)?;
@@ -878,10 +879,11 @@ impl PcbApp {
                 let kind = kind_index(item.key.kind);
                 (state.kind == 0 || state.kind == kind)
                     && format!(
-                        "{} {} {}",
+                        "{} {} {} {}",
                         item.name,
                         item.key.id,
-                        item.manufacturer_part().map(|m| format!("{} {}", m.manufacturer, m.mpn)).unwrap_or_default()
+                        item.manufacturer_part().map(|m| format!("{} {}", m.manufacturer, m.mpn)).unwrap_or_default(),
+                        item.part().map_or_else(String::new, |part| part.search_text())
                     )
                     .to_lowercase()
                     .contains(&query)
@@ -1077,8 +1079,9 @@ impl PcbApp {
             }
         });
     }
-    /// Resolve geometry without placements. Orderable records choose their exact package;
-    /// generic browsing uses the first package. Missing selections never fall back silently.
+    /// Show authored search metadata and HTTP(S) references alongside geometry. Orderable records
+    /// choose their exact package; generic browsing uses the first package. Missing selections
+    /// never fall back silently.
     fn generic_preview(&self, ui: &mut egui::Ui, part: &PartDefinition, package: Option<&str>, references: &mut Vec<Reference>, state: &mut State) {
         references.extend(part.symbol.clone());
         if let Some(category) = &part.category {
@@ -1086,6 +1089,24 @@ impl PcbApp {
             chrome::detail(ui, "Category", &category.definition.id);
         }
         chrome::detail(ui, "Source", &part.source.reference);
+        if let Some(description) = &part.description {
+            chrome::detail(ui, "Description", description);
+        }
+        if !part.keywords.is_empty() {
+            chrome::detail(ui, "Keywords", &part.keywords.join(", "));
+        }
+        for link in &part.links {
+            // Native validation already restricts references to HTTP(S); recheck before
+            // turning one into a clickable action in case a pinned record was hand-edited.
+            if let Some(url) = pcbcraft_chrome::properties::web_link(&link.url) {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}:", link.label));
+                    ui.hyperlink_to(url, url);
+                });
+            } else {
+                chrome::detail(ui, &link.label, &link.url);
+            }
+        }
         match self.library_preview_part(state, &part.reference()) {
             Ok(resolved) => {
                 if let Some(symbol) = &resolved.symbol {

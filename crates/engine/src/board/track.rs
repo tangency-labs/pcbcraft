@@ -45,6 +45,15 @@ pub(crate) mod chains;
 mod locks;
 pub mod preparation;
 pub mod replacements;
+/// A directly dragged segment retains its source UUID, layer and width.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Ends {
+    pub(crate) track: Uuid,
+    pub(crate) start: Point,
+    pub(crate) end: Point,
+}
+
 pub(crate) use locks::protect_locked;
 #[cfg(test)]
 mod capacity_tests;
@@ -1124,7 +1133,7 @@ fn route_addition(project: &Project, params: &Value) -> Result<RouteAddition, Co
 /// Edit a private candidate without publishing. Refuse inevitable count overflow before
 /// resolving source-contact defaults (which may build connectivity) or allocating identities.
 /// Preparation validates final membership and explicit hard limits before publication.
-fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<CandidateEdit, CommandError> {
+fn edit_candidate(project: &Project, command: &str, params: &Value, changes: Option<&replacements::Changes>) -> Result<CandidateEdit, CommandError> {
     let route = (command == ADD_TRACKS).then(|| route_addition(project, params)).transpose()?;
     let via_at = if command == ADD_VIA {
         let at: Point = param(params, "at")?;
@@ -1272,13 +1281,6 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<Ca
         }
         added.extend(moved_tracks.into_iter().chain(moved_vias));
     } else if command == RESHAPE_TRACKS {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Ends {
-            track: Uuid,
-            start: Point,
-            end: Point,
-        }
         let ends: Vec<Ends> = param(params, "tracks")?;
         let unique: BTreeSet<_> = ends.iter().map(|ends| ends.track).collect();
         if ends.is_empty() || unique.len() != ends.len() {
@@ -1319,8 +1321,20 @@ fn edit_candidate(project: &Project, command: &str, params: &Value) -> Result<Ca
         tracks.retain(|track| !gone_tracks.contains(&track.id));
         vias.retain(|via| !gone_vias.contains(&via.id));
     }
-    let replacements = if command == ADD_TRACKS {
-        params.get("replacements").map(|value| replacements::apply(&mut tracks, value, &mut added)).transpose()?
+    let replacements = if let Some(changes) = changes {
+        for movement in &changes.vias {
+            let index = project
+                .board
+                .vias
+                .binary_search_by_key(&movement.via, |v| v.id)
+                .map_err(|_| CommandError::InvalidParams("Unknown source via.".into()))?;
+            if vias[index].locked || vias[index].at == movement.at {
+                return Err(CommandError::InvalidParams("A via displacement must move an unlocked source via.".into()));
+            }
+            vias[index].at = movement.at;
+            added.insert(movement.via);
+        }
+        Some(replacements::apply(&mut tracks, &changes.tracks, &mut added)?)
     } else {
         None
     };

@@ -80,7 +80,7 @@ shared focus gates still apply.
 | Key | Action | Conditions |
 | --- | --- | --- |
 | Ctrl+A | Select all | Selects visible board items enabled by the selection filters; hidden-layer items are excluded. Suppressed while a tool or clipboard preview owns input |
-| Delete | Delete selection | Removes the selection. While a track, zone or drawing tool owns a selection, Delete routes to that tool instead |
+| Delete / Backspace | Delete selection | Removes the selection. Delete routes to the track, zone or drawing tool when it owns a selection. While routing or drawing a line outline, Backspace removes the last draft point |
 | M | Move | Hovered or single-selected footprint (or a selected reference designator): picks it up for click placement. A multi-item selection containing footprints, zones or drawings: picks the group up. A copper-only selection: the track module's own move. A selected item also responds when the pointer is elsewhere |
 | R / Shift+R | Rotate 90° | Rotates the hovered or single-selected footprint, or the active move/placement preview, counterclockwise and clockwise. The board has no mirror keys |
 | F | Flip side | Moves the hovered or single-selected footprint (or move draft) to the opposite board side |
@@ -122,7 +122,7 @@ it.
 | U | `tracks.connected_requested` → `board_tracks.rs` connected-copper selection | `tests/board_tracks.rs` (`u_selects_connected_copper`) |
 | D | `tracks.drag_segment_requested` → `board_tracks.rs` `SegmentDrag` | — |
 | ` (backtick) | `board.net_highlight_requested` → `board_canvas.rs` `highlight_net` | `tests/board_tracks.rs` (`backtick_highlights_the_net_under_the_pointer`) |
-| Delete | `PcbApp::shortcuts` → `delete_board_items`, or the owning tool's `delete_requested` | `tests/board_tracks.rs` (`clicking_a_track_selects_it_and_delete_removes_it`, `a_delete_pressed_while_track_input_is_disabled_never_deletes_later`) |
+| Delete / Backspace | `PcbApp::shortcuts` → `delete_board_items`, or the owning tool's `delete_requested`. Active route and line tools retain Backspace for draft editing | `tests/board_views.rs` (`backspace_deletes_the_board_selection_like_delete`), `tests/board_tracks.rs` (`backspace_keeps_removing_the_last_vertex_while_items_are_selected`, `a_delete_pressed_while_track_input_is_disabled_never_deletes_later`) |
 | Esc layers | `PcbApp::shortcuts` → `drc.cancel` → `movement`/`measure`/`tracks`/`zones`/`drawing` `escape()` → draft and gesture `take()` → `select_board_items` clear; armed clipboard previews consume it in `board_clipboard.rs` | `tests/board_tracks.rs` (`unfinished_routes_cancel_and_finish_from_the_keyboard`) |
 | Route Enter/Backspace/Slash/V | `tracks.finish_requested`/`backspace_requested`/`posture_requested`/`via_requested` → `board_tracks.rs` (`diagonal_first`, `Draft`) | `tests/board_tracks.rs` (`unfinished_routes_cancel_and_finish_from_the_keyboard`, `v_places_vias_and_switches_layers_mid_route`, `backspace_undoes_a_via_and_vias_select_and_delete`) |
 | Zone/drawing Enter/Backspace | `zones.finish_requested`/`backspace_requested`, `drawing.finish_requested`/`backspace_requested` → `board_zones.rs`, `board_drawing.rs` | `tests/board_zones.rs` (`real_zone_rectangle_and_polygon_are_single_edits`), `tests/board_drawing.rs` (`rectangle_canvas_create_cancel_delete_and_undo`) |

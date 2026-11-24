@@ -1,0 +1,442 @@
+{
+  "artifact_sha256": "83608fa0220b318af2b890a75add337a979a35cd66cf35854fd1c77354a2fedc",
+  "budget": 4096,
+  "cases": [
+    {
+      "case": "single",
+      "outcome": {
+        "kind": "reached"
+      },
+      "probes": 65,
+      "replacements": 1,
+      "work": {
+        "attempts": 1,
+        "candidate_hits": 1,
+        "displaced_tracks": 1,
+        "fixed_anchor_objects": 3618,
+        "maximum_queue": 1,
+        "overlay_geometry_bytes": 319000,
+        "overlay_objects": 7,
+        "queued_tracks": 1,
+        "used_walkaround": false
+      }
+    },
+    {
+      "case": "cascade",
+      "outcome": {
+        "kind": "reached"
+      },
+      "probes": 140,
+      "replacements": 2,
+      "work": {
+        "attempts": 1,
+        "candidate_hits": 4,
+        "displaced_tracks": 2,
+        "fixed_anchor_objects": 3618,
+        "maximum_queue": 1,
+        "overlay_geometry_bytes": 319440,
+        "overlay_objects": 12,
+        "queued_tracks": 2,
+        "used_walkaround": false
+      }
+    },
+    {
+      "case": "branch",
+      "outcome": {
+        "kind": "reached"
+      },
+      "probes": 67,
+      "replacements": 1,
+      "work": {
+        "attempts": 1,
+        "candidate_hits": 3,
+        "displaced_tracks": 1,
+        "fixed_anchor_objects": 3618,
+        "maximum_queue": 1,
+        "overlay_geometry_bytes": 319088,
+        "overlay_objects": 8,
+        "queued_tracks": 1,
+        "used_walkaround": false
+      }
+    },
+    {
+      "case": "lock",
+      "outcome": {
+        "kind": "blocked",
+        "last_legal": {
+          "x_nm": -58000000,
+          "y_nm": -48000000
+        }
+      },
+      "probes": 89,
+      "replacements": 0,
+      "work": {
+        "attempts": 0,
+        "candidate_hits": 0,
+        "displaced_tracks": 0,
+        "fixed_anchor_objects": 3618,
+        "maximum_queue": 0,
+        "overlay_geometry_bytes": 318384,
+        "overlay_objects": 0,
+        "queued_tracks": 0,
+        "used_walkaround": false
+      }
+    }
+  ],
+  "correctness": "deterministic synchronous/batched plans; single/cascade/branch displacement and fixed lock; complete compound validation; exhaustive changed-copper decisions; one-step exact Undo/Redo and native reopen; canceled queues retire",
+  "environment": {
+    "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: aarch64-apple-darwin\nrelease: 1.100.0\nLLVM version: 23.1.5",
+    "hardware": "Apple M5 Max, 128 GiB",
+    "notes": "Three samples of the existing single, cascade, branch and lock cases from a saved channels-v1 derivative. Service costs only.",
+    "os": "macOS 27.2.1 (Darwin 27.2.0)",
+    "power": "Shared development host under load. Power and thermal state uncontrolled.",
+    "profile": "ci",
+    "revision": "d017f16914363bf6efde66b0b679f7d475c45d77",
+    "runtime": "native CPU replay"
+  },
+  "iterations": 3,
+  "metrics": [
+    {
+      "id": "shove.cancel_acknowledgement",
+      "max_ms": 0.43733300000002373,
+      "p50_ms": 0.07608300000003965,
+      "p95_ms": 0.43733300000002373,
+      "p99_ms": 0.43733300000002373,
+      "samples_ms": [
+        0.43733300000002373,
+        0.023042000000032203,
+        0.07608300000003965
+      ]
+    },
+    {
+      "id": "shove.capture.branch",
+      "max_ms": 0.002417000000008329,
+      "p50_ms": 0.0017500000000154614,
+      "p95_ms": 0.002417000000008329,
+      "p99_ms": 0.002417000000008329,
+      "samples_ms": [
+        0.002417000000008329,
+        0.0012499999999704414,
+        0.0017500000000154614
+      ]
+    },
+    {
+      "id": "shove.capture.cascade",
+      "max_ms": 0.002125000000006594,
+      "p50_ms": 0.0015000000000782165,
+      "p95_ms": 0.002125000000006594,
+      "p99_ms": 0.002125000000006594,
+      "samples_ms": [
+        0.002125000000006594,
+        0.0012919999999780885,
+        0.0015000000000782165
+      ]
+    },
+    {
+      "id": "shove.capture.lock",
+      "max_ms": 0.0018749999999840838,
+      "p50_ms": 0.0017090000000052896,
+      "p95_ms": 0.0018749999999840838,
+      "p99_ms": 0.0018749999999840838,
+      "samples_ms": [
+        0.0018749999999840838,
+        0.0017090000000052896,
+        0.0011660000000688342
+      ]
+    },
+    {
+      "id": "shove.capture.single",
+      "max_ms": 0.10574999999999996,
+      "p50_ms": 0.0009159999999610591,
+      "p95_ms": 0.10574999999999996,
+      "p99_ms": 0.10574999999999996,
+      "samples_ms": [
+        0.10574999999999996,
+        0.0006250000000136424,
+        0.0009159999999610591
+      ]
+    },
+    {
+      "id": "shove.context_capture",
+      "max_ms": 0.16825,
+      "p50_ms": 0.006332999999983713,
+      "p95_ms": 0.16825,
+      "p99_ms": 0.16825,
+      "samples_ms": [
+        0.16825,
+        0.005625000000009095,
+        0.006332999999983713
+      ]
+    },
+    {
+      "id": "shove.plan.branch.batch_max",
+      "max_ms": 0.22091700000001424,
+      "p50_ms": 0.1817090000000121,
+      "p95_ms": 0.22091700000001424,
+      "p99_ms": 0.22091700000001424,
+      "samples_ms": [
+        0.22091700000001424,
+        0.17979099999996606,
+        0.1817090000000121
+      ]
+    },
+    {
+      "id": "shove.plan.branch.total",
+      "max_ms": 0.6169159999999749,
+      "p50_ms": 0.542665999999997,
+      "p95_ms": 0.6169159999999749,
+      "p99_ms": 0.6169159999999749,
+      "samples_ms": [
+        0.6169159999999749,
+        0.542665999999997,
+        0.5357500000000073
+      ]
+    },
+    {
+      "id": "shove.plan.cascade.batch_max",
+      "max_ms": 0.22258399999998346,
+      "p50_ms": 0.19445800000002578,
+      "p95_ms": 0.22258399999998346,
+      "p99_ms": 0.22258399999998346,
+      "samples_ms": [
+        0.18445800000002066,
+        0.19445800000002578,
+        0.22258399999998346
+      ]
+    },
+    {
+      "id": "shove.plan.cascade.total",
+      "max_ms": 0.7768750000000182,
+      "p50_ms": 0.7665000000000077,
+      "p95_ms": 0.7768750000000182,
+      "p99_ms": 0.7768750000000182,
+      "samples_ms": [
+        0.6765419999999978,
+        0.7768750000000182,
+        0.7665000000000077
+      ]
+    },
+    {
+      "id": "shove.plan.lock.batch_max",
+      "max_ms": 0.24208299999997962,
+      "p50_ms": 0.2293750000000614,
+      "p95_ms": 0.24208299999997962,
+      "p99_ms": 0.24208299999997962,
+      "samples_ms": [
+        0.19658400000000142,
+        0.24208299999997962,
+        0.2293750000000614
+      ]
+    },
+    {
+      "id": "shove.plan.lock.total",
+      "max_ms": 0.5974580000000174,
+      "p50_ms": 0.5809580000000096,
+      "p95_ms": 0.5974580000000174,
+      "p99_ms": 0.5974580000000174,
+      "samples_ms": [
+        0.538958000000008,
+        0.5809580000000096,
+        0.5974580000000174
+      ]
+    },
+    {
+      "id": "shove.plan.single.batch_max",
+      "max_ms": 2.600417,
+      "p50_ms": 1.1534169999999904,
+      "p95_ms": 2.600417,
+      "p99_ms": 2.600417,
+      "samples_ms": [
+        2.600417,
+        1.1534169999999904,
+        1.1272920000000113
+      ]
+    },
+    {
+      "id": "shove.plan.single.total",
+      "max_ms": 20.549625000000002,
+      "p50_ms": 14.958665999999965,
+      "p95_ms": 20.549625000000002,
+      "p99_ms": 20.549625000000002,
+      "samples_ms": [
+        20.549625000000002,
+        14.958665999999965,
+        13.530832999999973
+      ]
+    },
+    {
+      "id": "shove.publish.branch",
+      "max_ms": 0.2733750000000441,
+      "p50_ms": 0.2706250000000239,
+      "p95_ms": 0.2733750000000441,
+      "p99_ms": 0.2733750000000441,
+      "samples_ms": [
+        0.2706250000000239,
+        0.2733750000000441,
+        0.2682500000000232
+      ]
+    },
+    {
+      "id": "shove.publish.cascade",
+      "max_ms": 0.2689579999999978,
+      "p50_ms": 0.26229200000005903,
+      "p95_ms": 0.2689579999999978,
+      "p99_ms": 0.2689579999999978,
+      "samples_ms": [
+        0.25712500000000205,
+        0.2689579999999978,
+        0.26229200000005903
+      ]
+    },
+    {
+      "id": "shove.publish.single",
+      "max_ms": 0.5650830000000013,
+      "p50_ms": 0.27983299999999645,
+      "p95_ms": 0.5650830000000013,
+      "p99_ms": 0.5650830000000013,
+      "samples_ms": [
+        0.5650830000000013,
+        0.27983299999999645,
+        0.27270799999990913
+      ]
+    },
+    {
+      "id": "shove.queue_replace",
+      "max_ms": 6.945958999999988,
+      "p50_ms": 0.00016599999997879422,
+      "p95_ms": 0.14558399999998528,
+      "p99_ms": 6.945958999999988,
+      "samples_ms": [
+        6.945958999999988,
+        0.00004099999995332837,
+        0.14558399999998528,
+        0.0002920000000017353,
+        0.00016600000000721593,
+        0.00016600000000721593,
+        0.00016599999997879422,
+        0.00012499999996862243,
+        0.03674999999998363,
+        0.00004200000006449045,
+        0.0008750000000077307,
+        0.00016699999997626946,
+        0.00012500000002546585,
+        0.00016700000003311288,
+        0.00016599999997879422,
+        0.00012500000002546585,
+        0.03312500000004093,
+        0.00004200000000764703,
+        0.000624999999956799,
+        0.00016599999997879422,
+        0.00012499999996862243,
+        0.00012500000002546585,
+        0.0002500000000509317,
+        0.00012499999996862243
+      ]
+    },
+    {
+      "id": "shove.validation.branch.batch_max",
+      "max_ms": 1.3078749999999673,
+      "p50_ms": 1.271916000000033,
+      "p95_ms": 1.3078749999999673,
+      "p99_ms": 1.3078749999999673,
+      "samples_ms": [
+        1.2087080000000014,
+        1.271916000000033,
+        1.3078749999999673
+      ]
+    },
+    {
+      "id": "shove.validation.branch.total",
+      "max_ms": 16.552084000000008,
+      "p50_ms": 16.245167000000038,
+      "p95_ms": 16.552084000000008,
+      "p99_ms": 16.552084000000008,
+      "samples_ms": [
+        16.552084000000008,
+        15.763749999999959,
+        16.245167000000038
+      ]
+    },
+    {
+      "id": "shove.validation.cascade.batch_max",
+      "max_ms": 1.3076249999999732,
+      "p50_ms": 1.2808330000000012,
+      "p95_ms": 1.3076249999999732,
+      "p99_ms": 1.3076249999999732,
+      "samples_ms": [
+        1.2808330000000012,
+        1.2185840000000212,
+        1.3076249999999732
+      ]
+    },
+    {
+      "id": "shove.validation.cascade.total",
+      "max_ms": 16.816125,
+      "p50_ms": 16.664,
+      "p95_ms": 16.816125,
+      "p99_ms": 16.816125,
+      "samples_ms": [
+        16.664,
+        16.012291000000005,
+        16.816125
+      ]
+    },
+    {
+      "id": "shove.validation.single.batch_max",
+      "max_ms": 1.305833000000007,
+      "p50_ms": 1.2993749999999977,
+      "p95_ms": 1.305833000000007,
+      "p99_ms": 1.305833000000007,
+      "samples_ms": [
+        1.2993749999999977,
+        1.261166000000003,
+        1.305833000000007
+      ]
+    },
+    {
+      "id": "shove.validation.single.total",
+      "max_ms": 17.591333,
+      "p50_ms": 16.676292000000018,
+      "p95_ms": 17.591333,
+      "p99_ms": 17.591333,
+      "samples_ms": [
+        17.591333,
+        16.676292000000018,
+        16.438625000000002
+      ]
+    }
+  ],
+  "project_sha256": "1b0cb64e2f1897aab0aac24361f1b3fd7dcdf62627aea2d239953c7740d0878b",
+  "queues": [
+    {
+      "canceled": 1,
+      "completed": 1,
+      "pending_capacity": 1,
+      "replaced": 6,
+      "running_capacity": 1
+    },
+    {
+      "canceled": 1,
+      "completed": 1,
+      "pending_capacity": 1,
+      "replaced": 6,
+      "running_capacity": 1
+    },
+    {
+      "canceled": 1,
+      "completed": 1,
+      "pending_capacity": 1,
+      "replaced": 6,
+      "running_capacity": 1
+    }
+  ],
+  "recipe": "shove-v1-channels-v1",
+  "schema": "pcbcraft-shove-performance/1",
+  "unmeasured": [
+    "OS input receipt and scheduling",
+    "physical input-to-visible preview latency",
+    "compositor presentation",
+    "isolated allocator/index overhead",
+    "endurance"
+  ]
+}

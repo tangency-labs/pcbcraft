@@ -4,7 +4,7 @@ use egui_kittest::{
     Harness,
     kittest::{NodeT, Queryable},
 };
-use pcbcraft_engine::library::sources;
+use pcbcraft_engine::library::{parts::PartLink, sources};
 use std::sync::Arc;
 mod browser;
 mod project;
@@ -398,6 +398,61 @@ fn review_orderable_preview_uses_selected_package() {
     assert_eq!(h.state().session.inspect(), before);
 }
 
+/// Reuse the native-parts example with engine-encoded format-5 metadata instead of editing
+/// JSON text by hand, so browser and preview see a real validated part record.
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+fn metadata_documents() -> sources::Documents {
+    let mut documents = sources::Documents::from([
+        ("library.json".into(), include_str!("../../../../examples/native-parts/library.json").into()),
+        ("symbols/resistor.json".into(), include_str!("../../../../examples/native-parts/symbols/resistor.json").into()),
+        ("categories/resistor.json".into(), include_str!("../../../../examples/native-parts/categories/resistor.json").into()),
+        ("footprints/resistor.json".into(), include_str!("../../../../examples/native-parts/footprints/resistor-0603.json").into()),
+    ]);
+    let mut part: PartDefinition =
+        serde_json::from_str(include_str!("../../../../examples/native-parts/parts/resistor.json")).expect("example part fixture");
+    part.format = pcbcraft_engine::library::parts::METADATA_PART_FORMAT.into();
+    part.description = Some("Low ESR ceramic resistor".into());
+    part.keywords = vec!["low-esr".into(), "ceramic".into()];
+    part.links = vec![PartLink { label: "Datasheet".into(), url: "https://example.com/resistor.pdf".into() }];
+    documents.insert("parts/resistor.json".into(), part.encode().expect("valid metadata part"));
+    documents
+}
+
+/// The preview shows authored metadata with labeled links, and the browse filter uses the
+/// engine's search text while deliberately ignoring link labels and URLs.
+#[test]
+fn part_metadata_preview_and_browse_filter_use_engine_search_text() {
+    let mut app = PcbApp::default();
+    app.run("project.new", &json!({}));
+    let source = Arc::new(sources::NativeSource::load(&metadata_documents()).unwrap());
+    assert!(source.problems().is_empty(), "{:?}", source.problems());
+    app.session.install_library_source("metadata-parts", source).unwrap();
+    app.place_library_workspace(&egui::Context::default(), Placement::Here).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(1800., 950.)).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+    h.run();
+    let ctx = h.ctx.clone();
+    let view = h.state().views.active.id().0;
+    h.state_mut().run_window_command(&ctx, "app.library_browse", &json!({"view":view,"source":"metadata-parts","type":3,"item":"resistor"})).unwrap();
+    h.run();
+    h.get_by_label("Low ESR ceramic resistor");
+    h.get_by_label("low-esr, ceramic");
+    h.get_by_label("https://example.com/resistor.pdf");
+
+    let row = "Generic part parts-demo/resistor r1";
+    let state = h.state_mut().views.active.library.as_mut().unwrap();
+    state.query = "low-esr".into();
+    h.run();
+    assert!(h.query_all_by_label(row).next().is_some());
+    let state = h.state_mut().views.active.library.as_mut().unwrap();
+    state.query = "ceramic resistor".into();
+    h.run();
+    assert!(h.query_all_by_label(row).next().is_some());
+    let state = h.state_mut().views.active.library.as_mut().unwrap();
+    state.query = "example.com".into();
+    h.run();
+    assert!(h.query_all_by_label(row).next().is_none());
+}
+
 /// Invalid native files and quarantined revisions remain visible beside the selected source.
 #[test]
 fn source_diagnostics_and_browser_collapse_use_real_source_state() {
@@ -785,10 +840,23 @@ fn workspace_names_order_and_consistent_tile_widths() {
         let mut h = fixture(width);
         let ctx = h.ctx.clone();
         let mut expected: Option<egui::Vec2> = None;
-        for key in ["schematic", "board", "library", "symbol_editor", "footprint_editor"] {
+        for key in ["schematic", "board", "library", "symbol_editor", "footprint_editor", "manufacturing"] {
             h.state_mut().enter_workspace(&ctx, key, Placement::Here).unwrap();
             h.run();
-            let size = h.get_by_label("Choose workspace").rect().size();
+            let tile = h.get_by_label("Choose workspace").rect();
+            let size = tile.size();
+            if key == "manufacturing" {
+                let title = h
+                    .output()
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.job.text == "Manufacturing" && tile.contains(text.pos) => Some(text),
+                        _ => None,
+                    })
+                    .expect("the workspace tile paints its Manufacturing label");
+                assert_eq!(title.galley.rows.len(), 1, "width={width}");
+            }
             if let Some(expected) = expected {
                 assert_eq!(size.x, expected.x, "{key}, width={width}");
                 if width < 600. {

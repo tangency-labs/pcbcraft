@@ -59,7 +59,7 @@ supported versions and deferred work before extending a format or consumer.
 | Pin/pad correspondence | [Complete counterparts and unavailable states](pin-pad-correspondence.md) |
 | Dimensional net classes | [Catalog and resolver](net-classes.md) · [Assignments and topology reconciliation](net-class-assignments.md) · [Routing and checking consumers](net-class-consumers.md) |
 | Part groups | [Catalog, membership and storage](part-groups.md) |
-| Library records | [Symbol schema](symbol-schema.md) · [Footprint and placement schema](footprint-schema.md) · [Parts, categories and manufacturer records](part-schema.md) · [Machine-readable schemas](schemas/) |
+| Library records | [Symbol schema](symbol-schema.md) · [Footprint and placement schema](footprint-schema.md) · [Parts, categories and manufacturer records](part-schema.md), with [format-5 descriptive metadata](part-schema.md#descriptive-metadata-and-search) · [Machine-readable schemas](schemas/) |
 | Typed quantities | [Quantities and units](quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](hierarchical-clipboard-contract.md) |
 | Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Exact circular copper records](circular-copper-records.md) · [Straight via teardrop records](teardrop-records.md) · [Walkaround route planning](route-planning.md) |
@@ -93,6 +93,7 @@ availability by themselves.
 | Schematic-to-board regression | [Single-board forward-update acceptance](single-board-forward-acceptance.md); automated coverage, separate from owner-manual acceptance |
 | Measurement method and limits | [Performance testing](performance-testing.md) · [Coverage record](performance-coverage.md) |
 | Recorded baseline | [Initial performance baseline](performance-baseline.md), with its original environment and revision |
+| Via displacement and connected drag measurements | [Saved #248 fixtures, matched native replay and results](../tools/performance/baselines/issue248/README.md) |
 | Releases and attribution | [Changelog](../CHANGELOG.md) · [Third-party notices](../ATTRIBUTION.md) |
 | Source-boundary history | [November 7 layer-shortcut search](source-boundaries/2026-11-07-layer-shortcut-search.md); apply the current [source rules](../AGENTS.md#license-and-sources-the-rule-that-cant-be-undone) and task-specific resolution records |
 

@@ -56,11 +56,7 @@ impl ManufacturerPart {
             crate::library::check_text(name, text, limit)?;
         }
         if let Some(url) = &self.datasheet {
-            crate::library::check_text("datasheet", url, 2048)?;
-            let host = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
-            if host.is_empty() || url.chars().any(char::is_whitespace) {
-                return Err("Datasheet must be an HTTP(S) URL; loading performs no fetch.".into());
-            }
+            crate::library::check_http_url("Datasheet", url, 2048)?;
         }
         if self.specifications.len() > 64 {
             return Err("A manufacturer record supports at most 64 specifications.".into());
