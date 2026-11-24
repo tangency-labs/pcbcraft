@@ -470,15 +470,19 @@ fn recipe_layer_ids_have_one_spelling_in_schema_and_runtime() {
     assert_eq!(layer, layer.to_lowercase());
     let upper = layer.to_uppercase();
     let revision = session.revision();
+    let initial = session.snapshot().unwrap();
     for spelled in [json!([layer, upper]), json!([upper]), json!([layer.replace('-', "")]), json!([format!("{{{layer}}}")])] {
         let mut invalid = content.clone();
         invalid["gerber_layers"] = spelled.clone();
+        // Parameter checking refuses the content before the edit, with the generic content message.
         assert!(
-            matches!(set(&mut session, ID, &invalid), Err(CommandError::InvalidParams(message)) if message.contains("lowercase hyphenated")),
+            matches!(set(&mut session, ID, &invalid), Err(CommandError::InvalidParams(message)) if message.contains("must be valid output recipe content")),
             "command should reject {spelled}"
         );
+        assert!(parse(&invalid).is_err_and(|message| message.contains("lowercase hyphenated")), "parse should name the spelling for {spelled}");
     }
     assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&initial, &session.snapshot().unwrap()));
     set(&mut session, ID, &content).unwrap();
     assert_eq!(session.project().unwrap().output_recipes()[0].content.gerber_layers[0].to_string(), layer);
 }
