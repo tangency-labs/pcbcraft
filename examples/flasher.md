@@ -25,7 +25,7 @@ The board contains 82 track segments and 11 through vias, using front copper for
 local connections and back copper for the timing and probe links. References
 and original package silkscreen remain visible alongside the copper. The current
 board checker reports no clearance, short, unrouted, outline or courtyard findings
-with its default rules. [Footprint sources and dimensions](../docs/footprint-library.md)
+with its default rules. [Footprint sources and dimensions](../docs/libraries/footprint-library.md)
 record the package definitions and their qualification scope.
 
 ## Open a copy

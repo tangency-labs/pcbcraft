@@ -4,24 +4,44 @@
 //! destination; browser builds request one download instead. The editor allows one active
 //! export request; it does not lock destinations or track browser downloads. Dropping the
 //! application never joins the worker, and a worker that stops reports a disconnect.
-use pcbcraft_engine::board::fabrication::Archive;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use pcbcraft_engine::{
+    Session,
+    board::{fabrication::Archive, view::BoardTarget},
+};
+use std::{
+    path::{Path, PathBuf},
+    sync::mpsc::{self, Receiver, TryRecvError},
+};
 
 /// How an export request ended. `Saved` means desktop publication completed. A browser
 /// request gets no completion or cancellation signal, and UI tests inject the outcome.
 #[derive(Debug)]
 #[cfg_attr(any(test, target_arch = "wasm32"), allow(dead_code))]
 pub(super) enum Outcome {
-    Saved,
+    Saved(PathBuf),
     #[cfg(any(test, target_arch = "wasm32"))]
     DownloadRequested,
     Cancelled,
 }
 
-/// The single export slot.
+/// Address the captured output to the physical board and the current project opening.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Source {
+    pub board: BoardTarget,
+    pub opening: u64,
+}
+
+#[derive(Debug)]
+struct Pending {
+    source: Source,
+    result: Receiver<Result<Outcome, String>>,
+}
+
+/// The single export slot and the most recent successful desktop destination.
 #[derive(Debug, Default)]
 pub(crate) struct Exports {
-    pending: Option<Receiver<Result<Outcome, String>>>,
+    pending: Option<Pending>,
+    latest: Option<(Source, PathBuf)>,
     /// Tests capture the archive instead of opening a save dialog.
     #[cfg(test)]
     pub(super) captured: Option<(String, Archive)>,
@@ -38,25 +58,44 @@ impl Exports {
     /// Take a finished export's result without waiting. A worker that stopped without reporting
     /// is an error, and the slot is released either way.
     pub(super) fn poll(&mut self) -> Option<Result<Outcome, String>> {
-        let result = match self.pending.as_ref()?.try_recv() {
+        let pending = self.pending.as_ref()?;
+        let result = match pending.result.try_recv() {
             Ok(result) => result,
             Err(TryRecvError::Empty) => return None,
             Err(TryRecvError::Disconnected) => Err("The fabrication export stopped before reporting its result.".into()),
         };
+        if let Ok(Outcome::Saved(path)) = &result {
+            self.latest = Some((pending.source, path.clone()));
+        }
         self.pending = None;
         Some(result)
     }
 
+    /// Successful saves are discoverable while their captured board belongs to this opening.
+    /// A later failed or cancelled save leaves the previous destination usable.
+    pub(super) fn latest(&self, session: &Session) -> Option<&Path> {
+        let (source, path) = self.latest.as_ref()?;
+        let project = session.project()?;
+        (source.opening == session.history_root_revision() && project.board_view(source.board).is_some()).then_some(path.as_path())
+    }
+
     /// Start desktop publication or request a browser download from the capture. Refuses while
     /// this editor's export slot is busy; neither path rereads the design.
-    pub(super) fn start(&mut self, ctx: &egui::Context, name: String, archive: Archive) -> Result<(), String> {
+    pub(super) fn start(
+        &mut self,
+        ctx: &egui::Context,
+        source: Source,
+        name: String,
+        archive: Archive,
+        directory: Option<PathBuf>,
+    ) -> Result<(), String> {
         if self.busy() {
             return Err("Finish the current fabrication export first.".into());
         }
         let (send, receive) = mpsc::sync_channel(1);
         #[cfg(test)]
         {
-            let _ = ctx;
+            let _ = (ctx, directory);
             self.captured = Some((name, archive));
             self.completion = Some(send);
         }
@@ -67,17 +106,18 @@ impl Exports {
             std::thread::Builder::new()
                 .name("fabrication-export".into())
                 .spawn(move || {
-                    let _ = send.send(native(&name, &archive));
+                    let _ = send.send(native(&name, &archive, directory.as_deref()));
                     ctx.request_repaint();
                 })
                 .map_err(|e| e.to_string())?;
             #[cfg(target_arch = "wasm32")]
             {
+                let _ = directory;
                 let _ = send.send(download_archive(&name, &archive));
                 ctx.request_repaint();
             }
         }
-        self.pending = Some(receive);
+        self.pending = Some(Pending { source, result: receive });
         Ok(())
     }
 
@@ -92,13 +132,16 @@ impl Exports {
 /// Ask where to save, then publish the captured ZIP at the selected path.
 /// Cancellation writes nothing; publication errors are reported rather than success.
 #[cfg(all(not(target_arch = "wasm32"), not(test)))]
-fn native(name: &str, archive: &Archive) -> Result<Outcome, String> {
-    let Some(path) = rfd::FileDialog::new().set_title("Save fabrication outputs").set_file_name(name).add_filter("Zip archive", &["zip"]).save_file()
-    else {
+fn native(name: &str, archive: &Archive, directory: Option<&Path>) -> Result<Outcome, String> {
+    let mut dialog = rfd::FileDialog::new().set_title("Save fabrication outputs").set_file_name(name).add_filter("Zip archive", &["zip"]);
+    if let Some(directory) = directory {
+        dialog = dialog.set_directory(directory);
+    }
+    let Some(path) = dialog.save_file() else {
         return Ok(Outcome::Cancelled);
     };
     publish_archive_with_sync(&path, archive.bytes(), sync_directory)?;
-    Ok(Outcome::Saved)
+    Ok(Outcome::Saved(path))
 }
 
 /// Stage, flush and rename before invoking the directory-sync boundary. Any earlier failure

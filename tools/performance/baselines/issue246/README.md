@@ -2,7 +2,7 @@
 
 The implementation is `343e04a`, based on `b19753b`. It adds the engine walkaround
 solver and the read-only `pcb.plan_route` command described in
-[walkaround route planning](../../../../docs/route-planning.md). The editor route tool
+[walkaround route planning](../../../../docs/pcb/route-planning.md). The editor route tool
 is unchanged, so no rendered replay or presentation measurement applies to this slice.
 The [failure review](failure-review.md) lists the cases checked and how.
 

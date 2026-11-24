@@ -61,6 +61,9 @@ pub(super) enum Action {
 /// A short human label for each finding kind.
 fn label(kind: Kind) -> &'static str {
     match kind {
+        Kind::ZoneNetUnavailable => "Zone net unavailable",
+        Kind::ZoneDisconnected => "Disconnected zone island",
+        Kind::ZoneFillUnavailable => "Zone fill unavailable",
         Kind::NetClassConflict => "Conflicting net-class rules",
         Kind::ViaNetUnresolved => "Unresolved via net",
         Kind::UnsupportedNetClasses => "Unsupported net-class rules",
@@ -73,6 +76,7 @@ fn label(kind: Kind) -> &'static str {
         Kind::AnnularRing => "Annular ring",
         Kind::Unconnected => "Unconnected",
         Kind::NoOutline => "No outline",
+        Kind::AmbiguousOutline => "Ambiguous outline",
         Kind::OutsideBoard => "Outside board",
         Kind::EdgeClearance => "Edge clearance",
         Kind::CourtyardOverlap => "Courtyard overlap",

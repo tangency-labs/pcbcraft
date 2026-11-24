@@ -25,7 +25,17 @@ impl RouteFragments {
         let name = source.map_or_else(|| format!("overlay-added-{}", Uuid::from_u128(self.objects.len() as u128 + 1)), |source| source.name.clone());
         let intended_nets = source.map_or_else(Vec::new, |source| source.intended_nets.clone());
         let island = source.map_or(usize::MAX, |source| source.island);
-        self.objects.push(Object { name, at: contour.core[0], contour, layers, intended_nets, island, net: None, mechanical: false });
+        self.objects.push(Object {
+            name,
+            kind: ObjectKind::Other,
+            at: contour.core[0],
+            contour,
+            layers,
+            intended_nets,
+            island,
+            net: None,
+            mechanical: false,
+        });
         let len = self.objects.len();
         if len.is_multiple_of(BLOCK_SIZE) {
             self.blocks.push(index::Index::new(&self.objects[len - BLOCK_SIZE..]));

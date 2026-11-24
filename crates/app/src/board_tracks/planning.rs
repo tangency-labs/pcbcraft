@@ -27,6 +27,7 @@ struct Key {
 pub(super) struct Adoption {
     pub points: Vec<Point>,
     pub replacements: Vec<Replacement>,
+    pub via_moves: Vec<ViaMove>,
     pub action: Action,
 }
 struct Wanted {
@@ -102,7 +103,7 @@ impl Planning {
         let request = Request {
             mode: draft.mode,
             merge_same_net: draft.merge_same_net,
-            fixed: if draft.mode == pcbcraft_engine::board::route::Mode::Shove {
+            fixed: if draft.mode != Mode::Walkaround {
                 let mut pieces: Vec<_> = draft
                     .points
                     .windows(2)
@@ -235,8 +236,8 @@ impl Planning {
     }
     /// Validate the same replacements the current result will adopt, including a
     /// reached plan at the fixed head whose old visible preview is still on screen.
-    pub(super) fn current_replacements(&self) -> Option<&[Replacement]> {
-        self.ready.as_ref().filter(|_| self.current_ready()).map(|ready| ready.plan.replacements.as_slice())
+    pub(super) fn current_plan(&self) -> Option<&Plan> {
+        self.ready.as_ref().filter(|_| self.current_ready()).map(|ready| &ready.plan)
     }
     /// Status distinguishes a solved route from blocked/exhausted work without certifying DRC.
     pub(super) fn status(&self) -> Option<String> {
@@ -271,7 +272,7 @@ impl Planning {
     }
     /// Return displacement geometry only for the displayed route's source, prefix and sizes.
     /// Retained geometry cannot authorize placement without current full-path validation.
-    pub(super) fn replacements<'a>(&'a self, draft: &'a Draft, width: i64) -> &'a [Replacement] {
+    fn displayed(&self, draft: &Draft, width: i64) -> Option<&Plan> {
         self.visible
             .as_ref()
             .filter(|ready| {
@@ -283,7 +284,11 @@ impl Planning {
                     && ready.key.request.mode == draft.mode
                     && ready.key.request.merge_same_net == draft.merge_same_net
             })
-            .map_or(draft.replacements.as_slice(), |ready| ready.plan.replacements.as_slice())
+            .map(|ready| &ready.plan)
+    }
+    /// Track and via previews share the same source and gesture eligibility.
+    pub(super) fn displacements<'a>(&'a self, draft: &'a Draft, width: i64) -> (&'a [Replacement], &'a [ViaMove]) {
+        self.displayed(draft, width).map_or((&draft.replacements, &draft.via_moves), |plan| (&plan.replacements, &plan.via_moves))
     }
     /// Consume only completed read-only results before paint, preserving input cancellation
     /// priority over placement. No candidate is adopted and no project mutation occurs here.
@@ -373,7 +378,7 @@ impl Planning {
                 action = Action::Vertex { finish: true };
             }
             self.wanted = None;
-            return Some(Ok(Adoption { points, replacements: ready.plan.replacements.clone(), action }));
+            return Some(Ok(Adoption { points, replacements: ready.plan.replacements.clone(), via_moves: ready.plan.via_moves.clone(), action }));
         }
         if !self.submitted && !self.queue.busy() {
             let result = (|| {
@@ -407,6 +412,11 @@ impl Planning {
     pub(super) fn busy(&self) -> bool {
         self.queue.busy() || (self.wanted.is_some() && !self.submitted && self.error.is_none())
     }
+    /// Whether an incremental or background planning job is currently queued or running.
+    #[cfg(all(test, feature = "performance-harness"))]
+    pub(super) fn queue_busy(&self) -> bool {
+        self.queue.busy()
+    }
 }
 
 #[cfg(test)]
@@ -439,6 +449,7 @@ mod tests {
             mode: Default::default(),
             shove_prefix_dirty: false,
             merge_same_net: false,
+            via_moves: Vec::new(),
             replacements: Vec::new(),
             contact: None,
             start: layer.clone(),
@@ -672,8 +683,8 @@ mod tests {
         assert_eq!(p.ready.as_ref().unwrap().plan.points, vec![head]);
         assert_eq!(p.preview(&draft, sizes.0), visible);
         assert_eq!(p.current_path(), Some(draft.points.clone()));
-        assert_eq!(p.replacements(&draft, sizes.0).len(), 1);
-        let validation_replacements = p.current_replacements().unwrap().to_vec();
+        assert_eq!(p.displacements(&draft, sizes.0).0.len(), 1);
+        let validation_replacements = p.current_plan().unwrap().replacements.clone();
         assert!(validation_replacements.is_empty());
         p.mark_preparation_requested();
         let adopted = p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().unwrap();

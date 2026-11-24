@@ -56,6 +56,9 @@ rfd = "=0.17.2"
 tempfile = "=3.27.0"
 pcbcraft-storage = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.6", features = ["fs"] }
+
 [dev-dependencies]
 winit = { version = "=0.30.13", default-features = false, features = ["wayland", "rwh_06"] }
 egui_kittest = { workspace = true, features = ["eframe"] }

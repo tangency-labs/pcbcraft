@@ -30,9 +30,12 @@ FORMATS = {
     "pcbcraft-symbol/3": "urn:pcbcraft:schema:symbol:3",
     "pcbcraft-footprint/1": "urn:pcbcraft:schema:footprint:1",
     "pcbcraft-footprint/4": "urn:pcbcraft:schema:footprint:4",
+    "pcbcraft-footprint/5": "urn:pcbcraft:schema:footprint:5",
     "pcbcraft-category/1": "urn:pcbcraft:schema:category:1",
     "pcbcraft-part/1": "urn:pcbcraft:schema:part:1",
     "pcbcraft-part/2": "urn:pcbcraft:schema:part:2",
+    "pcbcraft-part/4": "urn:pcbcraft:schema:part:4",
+    "pcbcraft-part/5": "urn:pcbcraft:schema:part:5",
     "pcbcraft-manufacturer-part/1": "urn:pcbcraft:schema:manufacturer-part:1",
 }
 

@@ -90,6 +90,13 @@ impl Preparation {
     pub(super) fn committing(&self) -> bool {
         self.wanted.as_ref().is_some_and(|w| w.commit)
     }
+    /// Only a prepared result for the current request may contribute drag geometry.
+    pub(super) fn drag_displacements(&self) -> (&[Replacement], &[ViaMove]) {
+        self.ready
+            .as_ref()
+            .filter(|ready| self.wanted.as_ref().is_some_and(|w| w.key == ready.key))
+            .map_or((&[], &[]), |ready| (ready.edit.drag_replacements(), ready.edit.drag_vias()))
+    }
     /// Whether the latest pointer's candidate has completed the ordinary command validation.
     pub(super) fn ready(&self) -> bool {
         self.ready.is_some() && self.wanted.is_some()
@@ -210,6 +217,11 @@ impl Preparation {
     fn busy(&self) -> bool {
         self.queue.busy() || (self.wanted.is_some() && self.ready.is_none() && !self.failed)
     }
+    /// Whether an incremental or background preparation job is currently queued or running.
+    #[cfg(all(test, feature = "performance-harness"))]
+    pub(super) fn queue_busy(&self) -> bool {
+        self.queue.busy()
+    }
 }
 impl PcbApp {
     /// Consume completed read-only plans before a new pointer target can supersede them,
@@ -244,7 +256,11 @@ impl PcbApp {
     /// Polling never waits on a worker, and a source change invalidates other views' pending edits.
     pub(crate) fn poll_copper_preparations(&mut self, ctx: &egui::Context) {
         let mut changed = false;
-        let blocked = !matches!(self.dialog, crate::Dialog::None) || self.files.busy() || self.project_action_pending() || self.parts.is_modal();
+        let blocked = self.close_allowed
+            || !matches!(self.dialog, crate::Dialog::None)
+            || self.files.busy()
+            || self.project_action_pending()
+            || self.parts.is_modal();
         for view in self.views.all_mut() {
             let source = view.input(&self.session);
             let target = view.board.target;
@@ -260,10 +276,11 @@ impl PcbApp {
             let validation = tracks.planning.validation_current().then(|| tracks.preparation.validation()).flatten();
             if let Some(result) = tracks.planning.poll(&self.session, source, layer.as_deref(), sizes, validation) {
                 match result {
-                    Ok(planning::Adoption { points, replacements, action }) => {
+                    Ok(planning::Adoption { points, replacements, via_moves, action }) => {
                         if let Some(mut draft) = tracks.draft.take().filter(|draft| Some(draft.source) == source) {
                             draft.points = points;
                             draft.replacements = replacements;
+                            draft.via_moves = via_moves;
                             draft.shove_prefix_dirty = false;
                             match action {
                                 planning::Action::Vertex { finish: true } => {
@@ -297,6 +314,7 @@ impl PcbApp {
                 self.message = Some("Track start is blocked; choose another point.".into());
                 ctx.request_repaint();
             }
+            let waiting_for_drag = tracks.segment.is_some() && !tracks.preparation.ready();
             let completion = tracks.preparation.poll(&self.session, source, target, layer.as_deref(), sizes);
             if let Some(completion) = completion {
                 let result = completion.and_then(|(input, edit)| {
@@ -323,7 +341,7 @@ impl PcbApp {
                 }
                 ctx.request_repaint();
             }
-            if tracks.preparation.busy() || tracks.planning.busy() {
+            if tracks.preparation.busy() || tracks.planning.busy() || waiting_for_drag && tracks.preparation.ready() {
                 ctx.request_repaint();
             }
         }

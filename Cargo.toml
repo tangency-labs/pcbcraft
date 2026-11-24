@@ -23,7 +23,10 @@ solidcraft-ui-registry = { git = "https://github.com/tangency-labs/solidcraft.gi
 solidcraft-theme = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 solidcraft-look = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 # SolidCraft's B-rep kernel and STEP crates, at the same revision as the UI crates above.
-# Only pcbcraft-geometry depends on them (docs/geometry-kernel.md).
+# Only pcbcraft-geometry depends on them (docs/design/geometry-kernel.md).
+pcbcraft-geometry = { path = "crates/geometry" }
+solidcore = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
+solidcore-convert = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 solidcore-ops = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 solidcore-record = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }
 solidcore-step = { git = "https://github.com/tangency-labs/solidcraft.git", rev = "73bdb6cdd39efc3899fb54e7217289a630a89efe" }

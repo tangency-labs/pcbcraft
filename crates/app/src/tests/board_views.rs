@@ -250,6 +250,296 @@ fn mixed_panes_highlight_both_ways_without_granting_schematic_edit_authority() {
     assert!(h.state().views.highlight_for(ViewId(0), &h.state().session).is_empty());
 }
 
+/// Where the Power child sheet places U3, outside Main's initial view.
+const POWER_U3: Point = Point { x_nm: 127_000_000, y_nm: 63_500_000 };
+
+/// Main holds R1 at the origin; its Power child holds U3 at `POWER_U3`, linked to a footprint.
+/// Return the two sheets, U3's symbol ID and its footprint ID.
+fn power_child_harness<'a>() -> (Harness<'a, PcbApp>, pcbcraft_engine::SheetTarget, pcbcraft_engine::SheetTarget, String, String) {
+    use pcbcraft_engine::{PLACE_FOOTPRINT, SET_SYMBOL_FIELDS, hierarchy::CREATE_CHILD};
+
+    let mut h = harness();
+    h.set_size(egui::vec2(1400., 900.));
+    resistor_with_board_at_origin(&mut h);
+    let at = POWER_U3;
+    let (main, child, symbol, footprint) = {
+        let app = h.state_mut();
+        app.browser.open = false;
+        let main = app.session.project().unwrap().sheet_target();
+        let mut edit = |command, mut params: Value| {
+            params["expected_revision"] = json!(app.session.revision());
+            app.session.apply(command, &params).unwrap();
+            app.session.snapshot().unwrap()
+        };
+        let project = edit(CREATE_CHILD, json!({"sheet":main.id(),"name":"Power","x_nm":12_700_000,"y_nm":12_700_000}));
+        let child = project.child_sheet(project.sheet_symbols()[0].id).unwrap();
+        let project = edit(PLACE_SYMBOL, json!({"sheet":child.id(),"definition":"resistor","x_nm":at.x_nm,"y_nm":at.y_nm}));
+        let symbol = project.for_sheet(child).unwrap().symbols()[0].id();
+        edit(SET_SYMBOL_FIELDS, json!({"sheet":child.id(),"symbol":symbol,"reference":"U3","value":"R"}));
+        let project =
+            edit(PLACE_FOOTPRINT, json!({"sheet":child.id(),"symbol":symbol,"definition":"generic-through-hole-2","pin_1_pad":2,"x_nm":0,"y_nm":0}));
+        let footprint = project.board_view(project.board_target().unwrap()).unwrap().footprints().next().unwrap().id;
+        (main, child, symbol, footprint)
+    };
+    h.run();
+    (h, main, child, symbol, footprint)
+}
+
+/// Selecting U3 on the board reveals its child sheet only when the schematic is allowed to
+/// follow. The pane shows a new document for that sheet and keeps the old one cached with its
+/// edit selection, which never carries across. Follow does not recur on idle.
+#[test]
+fn board_selection_reveals_the_owning_child_sheet_once() {
+    use crate::editor_view::DocumentTarget;
+
+    for policy in [SelectionFollow::Off, SelectionFollow::Both] {
+        let (mut h, main, child, symbol, footprint) = power_child_harness();
+        let at = POWER_U3;
+        click(&mut h, "Choose workspace");
+        click(&mut h, "Open PCB Layout beside current view");
+        let schematic = ViewId(0);
+        let pcb = ViewId(2);
+        let rect = h.get_by_label("Schematic canvas 1").rect();
+        let origin = Point { x_nm: 0, y_nm: 0 };
+        let origin_on_screen = h.state().views.view(schematic).unwrap().camera.screen(origin, rect);
+        click_canvas_at(&mut h, origin_on_screen);
+        let board_point = h.state().views.view(pcb).unwrap().camera.screen(origin, h.get_by_label("PCB canvas 3").rect());
+        h.state_mut().preferences.selection_follow = policy;
+        let view = h.state().views.view(schematic).unwrap();
+        assert_eq!(view.schematic.selection.single_symbol(), Some("symbol-2"));
+        let zoom = view.camera.zoom();
+        assert!(!rect.contains(view.camera.screen(at, rect)));
+        let before = h.state().session.inspect();
+        let bytes = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+
+        click_canvas_at(&mut h, board_point);
+        h.run();
+        let app = h.state();
+        let (cached, shown) = app.views.pane(schematic);
+        let view = app.views.view(shown).unwrap();
+        let highlight = app.views.highlight_for(shown, &app.session);
+        assert_eq!(app.views.active.id(), pcb);
+        assert!(app.views.active.board.selection.contains(&footprint));
+        assert_eq!(view.camera.zoom(), zoom);
+        assert_eq!(app.views.pending_reveals(), 0);
+        let old = app.views.view(schematic).unwrap();
+        assert_eq!(old.target(), Some(DocumentTarget::Sheet(main)));
+        assert_eq!(old.schematic.selection.single_symbol(), Some("symbol-2"));
+        if policy == SelectionFollow::Both {
+            assert_eq!(cached, [schematic, shown]);
+            assert_eq!(view.target(), Some(DocumentTarget::Sheet(child)));
+            assert_eq!(highlight.single_symbol(), Some(symbol.as_str()));
+            assert!(view.schematic.selection.is_empty());
+            assert!(rect.contains(view.camera.screen(at, rect)));
+            assert!(h.output().shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.job.text == "U3" && rect.contains(text.pos) && text.fallback_color == Tokens::get().schematic_highlight)));
+        } else {
+            assert_eq!(cached, [schematic]);
+            assert!(highlight.is_empty());
+            assert!(!rect.contains(view.camera.screen(at, rect)));
+        }
+        assert_eq!(app.session.inspect(), before);
+        assert_eq!(encode_documents(app.session.snapshot().unwrap()).unwrap(), bytes);
+        let camera = &mut h.state_mut().views.view_mut(shown).unwrap().camera;
+        camera.center_on(origin);
+        let panned = camera.screen(at, rect);
+        h.run();
+        assert_eq!(h.state().views.view(shown).unwrap().camera.screen(at, rect), panned);
+    }
+}
+
+/// A pane that showed Power and then returned to Main keeps one cached view per sheet. Following
+/// a footprint linked to Power displays the cached Power view at its own zoom, Main keeps its
+/// navigation for the return, the PCB keeps focus, and the hidden view queues no reveal.
+#[test]
+fn board_follow_reuses_cached_sheet_views_and_settles() {
+    use crate::editor_view::DocumentTarget;
+
+    let (mut h, main, child, symbol, footprint) = power_child_harness();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let schematic = ViewId(0);
+    let pcb = ViewId(2);
+    let rect = h.get_by_label("Schematic canvas 1").rect();
+    let board_point = h.state().views.view(pcb).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, h.get_by_label("PCB canvas 3").rect());
+    let app = h.state_mut();
+    let power = app.views.open_document(schematic, DocumentTarget::Sheet(child), &app.session).unwrap();
+    assert_ne!(power, schematic);
+    h.run();
+    let app = h.state_mut();
+    // Power was forked from Main's camera; give it its own zoom so a follow that copied Main's
+    // camera would be caught.
+    let power_camera = &mut app.views.view_mut(power).unwrap().camera;
+    power_camera.set_zoom(power_camera.zoom() * 2.0);
+    assert_eq!(app.views.open_document(power, DocumentTarget::Sheet(main), &app.session), Some(schematic));
+    app.views.view_mut(schematic).unwrap().camera.center_on(Point { x_nm: -25_400_000, y_nm: 12_700_000 });
+    app.preferences.selection_follow = SelectionFollow::Both;
+    h.run();
+    let views = &h.state().views;
+    assert_eq!(views.pane(schematic), (vec![schematic, power], schematic));
+    let origin = Point { x_nm: 0, y_nm: 0 };
+    let (main_origin, main_zoom) = {
+        let camera = &views.view(schematic).unwrap().camera;
+        (camera.screen(origin, rect), camera.zoom())
+    };
+    let power_zoom = views.view(power).unwrap().camera.zoom();
+    assert_ne!(power_zoom, main_zoom);
+    assert!(!rect.contains(views.view(power).unwrap().camera.screen(POWER_U3, rect)));
+    let before = h.state().session.inspect();
+
+    click_canvas_at(&mut h, board_point);
+    let app = h.state();
+    assert_eq!(app.views.active.id(), pcb);
+    assert!(app.views.active.board.selection.contains(&footprint));
+    assert_eq!(app.views.pane(schematic), (vec![schematic, power], power));
+    let shown = app.views.view(power).unwrap();
+    assert_eq!(shown.target(), Some(DocumentTarget::Sheet(child)));
+    assert_eq!(shown.camera.zoom(), power_zoom);
+    let revealed = shown.camera.screen(POWER_U3, rect);
+    assert!(rect.contains(revealed));
+    assert_eq!(app.views.highlight_for(power, &app.session).single_symbol(), Some(symbol.as_str()));
+    let kept = app.views.view(schematic).unwrap();
+    assert_eq!(kept.target(), Some(DocumentTarget::Sheet(main)));
+    assert_eq!((kept.camera.screen(origin, rect), kept.camera.zoom()), (main_origin, main_zoom));
+    assert_eq!(app.views.pending_reveals(), 0);
+    assert_eq!(app.session.inspect(), before);
+
+    // Settled: further frames queue nothing and leave the revealed camera where it is.
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(app.views.pending_reveals(), 0);
+    assert_eq!(app.views.view(power).unwrap().camera.screen(POWER_U3, rect), revealed);
+    assert_eq!(app.views.active.id(), pcb);
+
+    let app = h.state_mut();
+    assert_eq!(app.views.open_document(power, DocumentTarget::Sheet(main), &app.session), Some(schematic));
+    h.run();
+    let views = &h.state().views;
+    assert_eq!(views.pane(schematic), (vec![schematic, power], schematic));
+    let camera = &views.view(schematic).unwrap().camera;
+    assert_eq!((camera.screen(origin, rect), camera.zoom()), (main_origin, main_zoom));
+}
+
+/// When only the primary follows, its pane keeps that role after Follow displays another cached
+/// sheet there, so a second PCB pick on a different sheet still moves the primary pane.
+#[test]
+fn directed_follow_keeps_the_primary_pane_across_sheet_changes() {
+    use crate::editor_view::DocumentTarget;
+
+    let policy = SelectionFollow::PrimaryFollowsSecondary;
+    let (mut h, main, child, symbol, footprint) = power_child_harness();
+    let r1 = {
+        let app = h.state_mut();
+        let params = json!({"sheet":main.id(),"symbol":"symbol-2","definition":"generic-through-hole-2","pin_1_pad":2,
+            "x_nm":25_400_000,"y_nm":0,"expected_revision":app.session.revision()});
+        app.session.apply(pcbcraft_engine::PLACE_FOOTPRINT, &params).unwrap();
+        let project = app.session.snapshot().unwrap();
+        let board = project.board_view(project.board_target().unwrap()).unwrap();
+        board.footprints().map(|placed| placed.id.clone()).find(|id| *id != footprint).unwrap()
+    };
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let schematic = ViewId(0);
+    let pcb = ViewId(2);
+    h.state_mut().preferences.selection_follow = policy;
+    let board_point = h.state().views.view(pcb).unwrap().camera.screen(Point { x_nm: 0, y_nm: 0 }, h.get_by_label("PCB canvas 3").rect());
+
+    click_canvas_at(&mut h, board_point);
+    let app = h.state();
+    assert_eq!(app.views.active.id(), pcb);
+    let (_, power) = app.views.pane(schematic);
+    assert_ne!(power, schematic);
+    assert_eq!(app.views.view(power).unwrap().target(), Some(DocumentTarget::Sheet(child)));
+    assert_eq!(app.views.highlight_for(power, &app.session).single_symbol(), Some(symbol.as_str()));
+
+    let app = h.state_mut();
+    app.views.select_board([r1].into(), &app.session, policy);
+    assert_eq!(app.views.pending_reveals(), 1);
+    h.run();
+    let app = h.state();
+    assert_eq!(app.views.pane(schematic), (vec![schematic, power], schematic));
+    assert_eq!(app.views.view(schematic).unwrap().target(), Some(DocumentTarget::Sheet(main)));
+    assert_eq!(app.views.highlight_for(schematic, &app.session).single_symbol(), Some("symbol-2"));
+    assert_eq!(app.views.pending_reveals(), 0);
+    assert_eq!(app.views.active.id(), pcb);
+}
+
+/// Shared part units give a PCB footprint two possible sheet destinations. Keep a matching
+/// current sheet; otherwise use project order, not the most recently placed or displayed unit.
+#[test]
+fn board_follow_prefers_current_match_then_project_sheet_order() {
+    use crate::editor_view::DocumentTarget;
+    use pcbcraft_engine::{ASSIGN_FOOTPRINT, PLACE_ASSIGNED_FOOTPRINT, PLACE_UNIT, sheets::CREATE_SHEET};
+
+    let mut h = harness();
+    h.set_size(egui::vec2(1400., 900.));
+    let (first, later, empty, first_symbol, later_symbol, footprint) = {
+        let app = h.state_mut();
+        app.start_new_project_in(Workspace::Board);
+        app.views.active.switch(Workspace::Schematic, &app.session);
+        assert!(!app.home);
+        app.run(
+            pcbcraft_engine::library::sources::LOAD,
+            &json!({"source":"units","documents":{
+                "library.json":include_str!("../../../../examples/native-parts/library.json"),
+                "symbols/dual.json":include_str!("../../../../examples/native-parts/symbols/dual-amplifier.json")}}),
+        );
+        let definition = app.session.libraries().latest_symbol("parts-demo", "dual-amplifier").unwrap();
+        let first = app.session.project().unwrap().sheet_target();
+        for name in ["Later", "Empty"] {
+            let revision = app.session.revision();
+            app.run(CREATE_SHEET, &json!({"name":name,"expected_revision":revision}));
+        }
+        let project = app.session.snapshot().unwrap();
+        let later = project.sheets().nth(1).unwrap().target;
+        let empty = project.sheets().nth(2).unwrap().target;
+        // Allocate the lower symbol ID on the later sheet so ID order can't pass this test.
+        let revision = app.session.revision();
+        app.place_catalog_symbol(&definition, json!({"sheet":later.id(),"x_nm":0,"y_nm":0,"expected_revision":revision}));
+        let project = app.session.project().unwrap().for_sheet(later).unwrap();
+        let later_symbol = project.symbols()[0].id();
+        let component = project.symbols()[0].component_id();
+        let package = project.footprint_catalog().into_iter().find(|package| package.id == "soic8").unwrap();
+        let mut edit = |command, mut params: Value| {
+            params["expected_revision"] = json!(app.session.revision());
+            app.session.apply(command, &params).unwrap();
+            app.session.snapshot().unwrap()
+        };
+        let project = edit(PLACE_UNIT, json!({"sheet":first.id(),"component":component,"unit":"b","x_nm":0,"y_nm":0}));
+        let first_symbol = project.symbols()[0].id();
+        edit(
+            ASSIGN_FOOTPRINT,
+            json!({"component":component,"library":package.library,"definition":package.id,"definition_revision":package.revision,
+                "mapping":{"1":"1","2":"2","3":"3","4":"4","5":"5","6":"6"},"unconnected_pads":["7","8"]}),
+        );
+        let project = edit(PLACE_ASSIGNED_FOOTPRINT, json!({"component":component,"x_nm":0,"y_nm":0}));
+        let footprint = project.boards().next().unwrap().footprints().next().unwrap().id;
+        (first, later, empty, first_symbol, later_symbol, footprint)
+    };
+    h.run();
+    click(&mut h, "Choose workspace");
+    click(&mut h, "Open PCB Layout beside current view");
+    let schematic = ViewId(0);
+    let pcb = ViewId(2);
+    let app = h.state_mut();
+    app.views.bind(pcb);
+    assert_eq!(app.views.active.workspace, Workspace::Board);
+    let before = app.session.inspect();
+    for (shown, expected, symbol) in [(later, later, later_symbol), (empty, first, first_symbol)] {
+        app.views.view_mut(schematic).unwrap().open_document(DocumentTarget::Sheet(shown), &app.session);
+        app.views.select_board([footprint.clone()].into(), &app.session, SelectionFollow::Both);
+        assert_eq!(app.views.reveal_highlight(schematic, &app.session, SelectionFollow::Both), shown != expected);
+        let (_, displayed) = app.views.pane(schematic);
+        assert_eq!(displayed == schematic, shown == expected);
+        let view = app.views.view(displayed).unwrap();
+        assert_eq!(view.target(), Some(DocumentTarget::Sheet(expected)));
+        assert!(view.schematic.selection.is_empty());
+        assert_eq!(app.views.highlight_for(displayed, &app.session).single_symbol(), Some(symbol.as_str()));
+        assert_eq!(app.views.active.id(), pcb);
+        assert_eq!(app.session.inspect(), before);
+    }
+}
+
 /// Following a schematic selection pans using board coordinates and preserves zoom. The default
 /// leaves the board camera alone, and a consumed reveal does not undo subsequent manual navigation.
 #[test]
@@ -383,7 +673,7 @@ fn board_canvas_and_ribbon_remain_distinct_from_schematic() {
 }
 
 /// Keyboard navigation reaches available workspaces and placement actions without leaking keys
-/// into the canvas. Planned workspaces are skipped when moving between rows.
+/// into the canvas. From Manufacturing, the picker skips planned workspaces and wraps to Schematic.
 #[test]
 fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     let mut h = board_harness();
@@ -417,7 +707,14 @@ fn workspace_keyboard_navigation_reaches_board_and_placement_actions() {
     h.run();
     h.key_press(Key::Enter);
     h.run();
+    assert_eq!(h.state().workspace_key(), "manufacturing");
+    click(&mut h, "Choose workspace");
+    h.key_press(Key::ArrowDown);
+    h.run();
+    h.key_press(Key::Enter);
+    h.run();
     assert!(h.state().library_editors.active.is_none());
+    assert_eq!(h.state().workspace_key(), "schematic");
     assert_eq!(h.state().views.active.workspace, Workspace::Schematic);
     click(&mut h, "Choose workspace");
     let card = h.get_by_label("PCB Layout").rect();
@@ -1141,19 +1438,23 @@ fn physical_demo_labels_drills_and_detail_visibility() {
     };
     let lands = copper_bounds(&h, Tokens::get().board_front);
     assert_eq!(lands.len(), 30, "surface and plated lands use their front copper layer color");
+    // Each plated label groups its foreground and its outline in one paint item.
     let labels: Vec<_> = h
         .output()
         .shapes
         .iter()
-        .filter_map(|shape| {
-            if shape.clip_rect == canvas
-                && let egui::Shape::Text(text) = &shape.shape
-                && text.galley.job.text.lines().next().is_some_and(|line| line.parse::<u8>().is_ok())
+        .filter(|shape| shape.clip_rect == canvas)
+        .flat_map(|shape| match &shape.shape {
+            egui::Shape::Vec(group) => group.as_slice(),
+            shape => std::slice::from_ref(shape),
+        })
+        .filter_map(|shape| match shape {
+            egui::Shape::Text(text)
+                if text.override_text_color.is_none() && text.galley.job.text.lines().next().is_some_and(|line| line.parse::<u8>().is_ok()) =>
             {
                 Some(text)
-            } else {
-                None
             }
+            _ => None,
         })
         .collect();
     assert_eq!(labels.len(), 30);
@@ -1336,6 +1637,26 @@ fn footprint_deletion_uses_selected_placements_and_shared_undo() {
     }
 }
 
+/// Backspace, which is the delete key on Mac keyboards, deletes an explicit board selection
+/// exactly as Delete does, in one undo step.
+#[test]
+fn backspace_deletes_the_board_selection_like_delete() {
+    let mut h = editable_board();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+    click_canvas_at(&mut h, origin);
+    assert!(!h.state().views.active.board.selection.is_empty());
+    let revision = h.state().session.revision();
+    h.key_press(Key::Backspace);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    assert!(h.state().views.active.board.selection.is_empty());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Live clients use the same deletion command and stale gate, and can undo from the GUI.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
@@ -1514,7 +1835,59 @@ fn pcb_box_selection_direction_modifiers_and_delete() {
     }
 }
 
-/// Escape, focus loss, changed revisions and release over chrome cannot commit a box. Disabled
+/// Locked placements are selectable by default, then excluded from real boxes without changing inspection or the board.
+#[test]
+fn footprint_box_excludes_locked_without_hiding_inspection() {
+    use egui::PointerButton::Primary;
+    let mut h = editable_board();
+    let path = h.state().session.project().unwrap().board_document_path().unwrap();
+    let mut documents = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let mut board: Value = serde_json::from_slice(&documents[&path]).unwrap();
+    // The placement is authored through commands; seed the existing native flag because there is no footprint lock command.
+    board["format"] = json!("pcbcraft-board/34");
+    board["footprints"][0]["locked"] = json!(true);
+    documents.insert(path, serde_json::to_vec(&board).unwrap());
+    h.state_mut().session.open_snapshot(pcbcraft_engine::persistence::decode_documents(&documents).unwrap());
+    h.run();
+    let before = h.state().session.inspect();
+    let snapshot = h.state().session.snapshot().unwrap();
+    assert_eq!(placement(&h)["locked"], true);
+    let view = h.state().views.active.id();
+    let from = board_point(&h, Point { x_nm: -5_000_000, y_nm: -5_000_000 });
+    let to = board_point(&h, Point { x_nm: 5_000_000, y_nm: 5_000_000 });
+    board_box(&mut h, from, to, Primary, Modifiers::NONE, true);
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    let wrong_type = h.state_mut().set_selection_filters(view, &json!({"include_locked":"false"})).unwrap_err();
+    assert!(wrong_type.contains("must be true or false"));
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let ctx = h.ctx.clone();
+        h.state_mut().run_window_command(&ctx, "view.set_selection_filters", &json!({"view":view.0,"include_locked":false})).unwrap();
+        let result = h.state_mut().run_window_command(&ctx, "view.select_footprints", &json!({"view":view.0,"footprints":["footprint-3"]}));
+        assert!(result.unwrap_err().contains("Locked footprint selection"));
+        let editor = crate::window_commands::inspect_editor(h.state());
+        let addressed = editor["views"].as_array().unwrap().iter().find(|state| state["id"] == json!(view.0)).unwrap();
+        assert_eq!(addressed["selection_filters"]["include_locked"], false);
+    }
+    #[cfg(target_arch = "wasm32")]
+    h.state_mut().set_selection_filters(view, &json!({"include_locked":false})).unwrap();
+    assert!(h.state().views.active.board.selection.is_empty());
+    for (start, end) in [(from, to), (to, from)] {
+        board_box(&mut h, start, end, Primary, Modifiers::NONE, true);
+        assert!(h.state().views.active.board.selection.is_empty());
+    }
+    let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+    click_canvas_at(&mut h, origin);
+    assert!(h.state().views.active.board.selection.is_empty());
+    assert_eq!(h.state().session.inspect(), before);
+    assert!(std::sync::Arc::ptr_eq(&snapshot, &h.state().session.snapshot().unwrap()));
+    h.state_mut().set_selection_filters(view, &json!({"include_locked":true})).unwrap();
+    board_box(&mut h, from, to, Primary, Modifiers::NONE, true);
+    assert_eq!(h.state().views.active.board.selection.len(), 1);
+}
+
+/// Escape, focus loss and changed revisions cannot commit a box. Disabled
 /// footprint filters and hidden geometry produce no hits, including fast move/release frames.
 #[test]
 fn pcb_box_selection_cancels_and_respects_filters() {
@@ -1522,7 +1895,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
     let mut h = editable_board();
     let from = board_point(&h, Point { x_nm: -5_000_000, y_nm: -5_000_000 });
     let to = board_point(&h, Point { x_nm: 5_000_000, y_nm: 5_000_000 });
-    for cancellation in ["escape", "focus", "revision", "panel"] {
+    for cancellation in ["escape", "focus", "revision"] {
         board_box(&mut h, from, to, Primary, Modifiers::NONE, false);
         match cancellation {
             "escape" => h.key_press(Key::Escape),
@@ -1537,8 +1910,7 @@ fn pcb_box_selection_cancels_and_respects_filters() {
             _ => {}
         }
         h.run();
-        let end = if cancellation == "panel" { h.get_by_label("Collapse Layers").rect().center() } else { to };
-        board_box_release(&mut h, end, Primary, Modifiers::NONE);
+        board_box_release(&mut h, to, Primary, Modifiers::NONE);
         assert!(h.state().views.active.board.box_drag.is_none());
         assert!(h.state().views.active.board.selection.is_empty(), "{cancellation}");
         h.event(egui::Event::WindowFocused(true));

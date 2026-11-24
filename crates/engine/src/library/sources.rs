@@ -393,11 +393,13 @@ impl Item {
             _ => None,
         }
     }
-    /// Search stable identity, display name and symbol prefix, without interpreting names as IDs.
+    /// Search stable identity, display name, symbol prefix and a part's authored description and
+    /// keywords, without interpreting names as IDs. Link labels and URLs are not searchable.
     fn matches(&self, query: &str) -> bool {
         self.name.to_lowercase().contains(query)
             || self.key.id.contains(query)
             || self.key.library.contains(query)
+            || self.part().is_some_and(|part| part.search_text().contains(query))
             || self
                 .manufacturer_part()
                 .is_some_and(|part| part.manufacturer.to_lowercase().contains(query) || part.mpn.to_lowercase().contains(query))
@@ -739,6 +741,7 @@ impl Catalog {
             .transpose()?;
         let category = part.category.as_ref().map(|binding| self.category(&binding.definition)).transpose()?;
         part.validate_category(category.as_deref())?;
+        part.validate_rating_terminals(symbol.as_deref())?;
         let mut footprints = BTreeMap::new();
         for (id, package) in &part.packages {
             let footprint = self.exact(&package.footprint, Kind::Footprint)?.footprint().ok_or("Expected a footprint record.")?;

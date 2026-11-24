@@ -1,0 +1,187 @@
+{
+  "artifact_sha256": "a11a4d5689872b4840871fbcb0f120c336302e8d4204f60f7ecc557f4a9d1283",
+  "budget": 65536,
+  "correctness": "source-addressed via center and two layer endpoints; connected D drag and previewed rail path; exhaustive changed copper, native reopen, exact Undo/Redo",
+  "environment": {
+    "compiler": "rustc 1.100.0 (0ef1bc386 2026-11-09)\nbinary: rustc\ncommit-hash: 0ef1bc386059596dada8fb65b50425aab2ea637a\ncommit-date: 2026-11-09\nhost: aarch64-apple-darwin\nrelease: 1.100.0\nLLVM version: 23.1.5",
+    "hardware": "Apple M5 Max, 128 GiB",
+    "notes": "Three samples of the through via with followers on both sides and connected shove drag. Service costs only.",
+    "os": "macOS 27.2.1 (Darwin 27.2.0)",
+    "power": "Shared development host under load. Power and thermal state uncontrolled.",
+    "profile": "ci",
+    "revision": "d017f16914363bf6efde66b0b679f7d475c45d77",
+    "runtime": "native CPU replay"
+  },
+  "iterations": 3,
+  "metrics": [
+    {
+      "id": "drag.prepare.batch_max",
+      "max_ms": 1.2975000000000136,
+      "p50_ms": 1.204792000000026,
+      "p95_ms": 1.2975000000000136,
+      "p99_ms": 1.2975000000000136,
+      "samples_ms": [
+        1.2975000000000136,
+        1.204792000000026,
+        1.188791000000009
+      ]
+    },
+    {
+      "id": "drag.prepare.total",
+      "max_ms": 29.579791999999998,
+      "p50_ms": 28.55000000000001,
+      "p95_ms": 29.579791999999998,
+      "p99_ms": 29.579791999999998,
+      "samples_ms": [
+        29.579791999999998,
+        28.496916000000027,
+        28.55000000000001
+      ]
+    },
+    {
+      "id": "drag.publish",
+      "max_ms": 0.28216699999998696,
+      "p50_ms": 0.2809170000000023,
+      "p95_ms": 0.28216699999998696,
+      "p99_ms": 0.28216699999998696,
+      "samples_ms": [
+        0.2809170000000023,
+        0.26891699999998764,
+        0.28216699999998696
+      ]
+    },
+    {
+      "id": "via.plan.batch_max",
+      "max_ms": 1.239167,
+      "p50_ms": 1.2016670000000147,
+      "p95_ms": 1.239167,
+      "p99_ms": 1.239167,
+      "samples_ms": [
+        1.239167,
+        1.1428750000000036,
+        1.2016670000000147
+      ]
+    },
+    {
+      "id": "via.plan.total",
+      "max_ms": 17.569834,
+      "p50_ms": 14.799166000000014,
+      "p95_ms": 17.569834,
+      "p99_ms": 17.569834,
+      "samples_ms": [
+        17.569834,
+        14.559374999999989,
+        14.799166000000014
+      ]
+    },
+    {
+      "id": "via.prepare.batch_max",
+      "max_ms": 0.22091700000000358,
+      "p50_ms": 0.21870799999999235,
+      "p95_ms": 0.22091700000000358,
+      "p99_ms": 0.22091700000000358,
+      "samples_ms": [
+        0.22091700000000358,
+        0.20245800000000713,
+        0.21870799999999235
+      ]
+    },
+    {
+      "id": "via.prepare.total",
+      "max_ms": 4.280666999999994,
+      "p50_ms": 4.076291999999999,
+      "p95_ms": 4.280666999999994,
+      "p99_ms": 4.280666999999994,
+      "samples_ms": [
+        4.076291999999999,
+        3.8531659999999874,
+        4.280666999999994
+      ]
+    },
+    {
+      "id": "via.publish",
+      "max_ms": 0.28745899999998414,
+      "p50_ms": 0.2750409999999981,
+      "p95_ms": 0.28745899999998414,
+      "p99_ms": 0.28745899999998414,
+      "samples_ms": [
+        0.2750409999999981,
+        0.28745899999998414,
+        0.26379199999999514
+      ]
+    }
+  ],
+  "project_sha256": "a502c54a2db3efae1976fab80a33b50beb8edf185a4083bfb963624e5ccc2c07",
+  "recipe": "shove-joints-v1-shove-v1-channels-v1",
+  "schema": "pcbcraft-shove-joints/1",
+  "unmeasured": [
+    "visible latency",
+    "allocator overhead"
+  ],
+  "via_plan": {
+    "blocker": null,
+    "outcome": {
+      "kind": "reached"
+    },
+    "points": [
+      {
+        "x_nm": -58000000,
+        "y_nm": -59700000
+      },
+      {
+        "x_nm": -52000000,
+        "y_nm": -59700000
+      }
+    ],
+    "probes": 7,
+    "replacements": [
+      {
+        "points": [
+          {
+            "x_nm": -55000000,
+            "y_nm": -63000000
+          },
+          {
+            "x_nm": -55000000,
+            "y_nm": -60325002
+          }
+        ],
+        "track": "aa608073-c6e8-4dbf-ab61-a8264945b557"
+      },
+      {
+        "points": [
+          {
+            "x_nm": -55000000,
+            "y_nm": -63000000
+          },
+          {
+            "x_nm": -55000000,
+            "y_nm": -60325002
+          }
+        ],
+        "track": "ebaae092-e2d7-4b2c-a108-d5ce7cce64f8"
+      }
+    ],
+    "shove": {
+      "attempts": 1,
+      "candidate_hits": 0,
+      "displaced_tracks": 2,
+      "fixed_anchor_objects": 3621,
+      "maximum_queue": 0,
+      "overlay_geometry_bytes": 318736,
+      "overlay_objects": 1,
+      "queued_tracks": 0,
+      "used_walkaround": false
+    },
+    "start_blocked": false,
+    "via_moves": [
+      {
+        "at": {
+          "x_nm": -55000000,
+          "y_nm": -60325002
+        },
+        "via": "f4bcde68-f63a-488e-8a93-1791aea62a49"
+      }
+    ]
+  }
+}
