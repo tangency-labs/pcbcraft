@@ -496,11 +496,13 @@ impl<R: BufRead> Iterator for Records<R> {
 
     /// Returns the next complete record, then any error that stopped framing, then `None`.
     fn next(&mut self) -> Option<Self::Item> {
-        if self.ready.is_empty() && !self.finished && self.error.is_none() {
-            if let Err(error) = self.advance() {
-                self.error = Some(error);
-                self.finished = true;
-            }
+        if self.ready.is_empty()
+            && !self.finished
+            && self.error.is_none()
+            && let Err(error) = self.advance()
+        {
+            self.error = Some(error);
+            self.finished = true;
         }
         if let Some(record) = self.ready.pop_front() {
             return Some(Ok(record));
