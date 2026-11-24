@@ -343,8 +343,8 @@ impl ParamKind {
             }
             Self::Closed | Self::Locked => json!({"type":"boolean"}),
             Self::RoutePosture => board::route::posture_schema(),
-            Self::DragMode => json!({"type":"string","enum":["shove","shove_vias"]}),
-            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove","shove_vias"]}),
+            Self::DragMode => json!({"type":"string","enum":["shove","shove_vias","walkaround","highlight"]}),
+            Self::RouteMode => json!({"type":"string","enum":["walkaround","shove","shove_vias","highlight"]}),
             Self::RouteFixed => board::route::fixed_schema(),
             Self::RouteBudget => board::route::budget_schema(),
             Self::SheetExtent => json!({"type":"integer","minimum":1,"maximum":2*MAX_CENTER_NM}),
@@ -600,17 +600,17 @@ impl ParamKind {
             Self::DrawingId if value.as_str().is_some_and(|v| uuid::Uuid::parse_str(v).is_ok_and(|id| !id.is_nil())) => Ok(()),
             Self::Closed | Self::Locked if value.is_boolean() => Ok(()),
             Self::DragMode => {
-                if matches!(value.as_str(), Some("shove" | "shove_vias")) {
+                if matches!(value.as_str(), Some("shove" | "shove_vias" | "walkaround" | "highlight")) {
                     Ok(())
                 } else {
-                    Err("must be shove or shove_vias")
+                    Err("must be shove, shove_vias, walkaround or highlight")
                 }
             }
             Self::RouteMode => {
-                if matches!(value.as_str(), Some("walkaround" | "shove" | "shove_vias")) {
+                if matches!(value.as_str(), Some("walkaround" | "shove" | "shove_vias" | "highlight")) {
                     Ok(())
                 } else {
-                    Err("must be walkaround, shove or shove_vias")
+                    Err("must be walkaround, shove, shove_vias or highlight")
                 }
             }
             Self::RouteFixed => {
@@ -2336,7 +2336,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "mode",
                 required: false,
-                summary: "Shove tracks or tracks and vias around a connected drag of up to 256 segments on a board without authored zones",
+                summary: "Use highlight, walkaround, shove or shove_vias for a connected drag of up to 256 segments on a board without authored zones",
                 kind: ParamKind::DragMode,
             },
             Param { name: "tracks", required: true, summary: "Each track UUID with its new start and end", kind: ParamKind::TrackEnds },
@@ -2510,7 +2510,7 @@ const CATALOG: &[Command] = &[
             Param {
                 name: "mode",
                 required: false,
-                summary: "walkaround (default) detours around copper, shove moves unlocked tracks, and shove_vias also moves eligible through vias hit by the incoming path on boards without zones",
+                summary: "walkaround (default) detours, highlight shows a blocked path at collisions, shove moves eligible tracks, and shove_vias also moves eligible through vias on boards without zones",
                 kind: ParamKind::RouteMode,
             },
             Param {

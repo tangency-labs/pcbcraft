@@ -37,17 +37,24 @@ enum Cascade {
 pub enum Mode {
     #[default]
     Walkaround,
+    /// Show collisions on the preferred path and refuse an obstructed edit.
+    Highlight,
     Shove,
     /// Allow an incoming route to displace through vias and their attached endpoints.
     ShoveVias,
 }
 
 impl Mode {
+    /// Whether the policy may move copper outside the active gesture.
+    pub fn shoves(self) -> bool {
+        matches!(self, Self::Shove | Self::ShoveVias)
+    }
+
     /// A shove can affect many independent runs. Give its cooperatively stepped
     /// search the full allowed budget, with the smaller default for walkaround.
     pub fn default_probe_budget(self) -> usize {
         match self {
-            Self::Walkaround => DEFAULT_BUDGET,
+            Self::Walkaround | Self::Highlight => DEFAULT_BUDGET,
             Self::Shove | Self::ShoveVias => MAX_BUDGET,
         }
     }

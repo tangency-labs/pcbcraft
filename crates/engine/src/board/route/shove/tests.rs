@@ -1206,6 +1206,82 @@ fn connected_drag_pushes_a_neighbor() {
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after);
 }
 
+/// A direct collision is visible to highlight mode. Walkaround moves the proposed track
+/// around the fixed via and its followers, keeping the reshaped branch attached.
+#[test]
+fn fixed_drag_modes_keep_the_via_and_its_followers_fixed() {
+    let mut s = board();
+    let a = add(&mut s, vec![p(20, 20), p(80, 20)], 250_000)[0];
+    let b = add(&mut s, vec![p(20, 40), p(20, 20)], 300_000)[0];
+    let via = p(50, 0);
+    s.apply(crate::ADD_VIA, &json!({"at":via,"expected_revision":s.revision()})).unwrap();
+    let layers = copper_layers(&s);
+    for layer in layers {
+        s.apply(ADD_TRACKS, &json!({"layer":layer,"width_nm":250_000,"points":[p(50,-28),via],"expected_revision":s.revision()})).unwrap();
+    }
+    let fixed: Vec<_> = view(&s).tracks().iter().filter(|track| track.id != a && track.id != b).cloned().collect();
+    let before = encode_documents(s.snapshot().unwrap()).unwrap();
+    let revision = s.revision();
+    let params = |mode| {
+        json!({"tracks":[{"track":a,"start":p(20,0),"end":p(80,0)},{"track":b,"start":p(20,40),"end":p(20,0)}],
+               "mode":mode,"expected_revision":revision})
+    };
+    let error = s.apply(crate::RESHAPE_TRACKS, &params("highlight")).unwrap_err().to_string();
+    assert!(error.contains("clearance"), "{error}");
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+
+    s.apply(crate::RESHAPE_TRACKS, &params("walkaround")).unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    assert_eq!(view(&s).vias()[0].at, via);
+    assert!(fixed.iter().all(|original| view(&s).tracks().contains(original)));
+    assert!(view(&s).tracks().iter().any(|track| track.id == b && track.end == p(20, 0)));
+    assert!(view(&s).tracks().len() > fixed.len() + 2);
+    assert!(!query(&s).exhaustive_pairs().decisions.iter().any(|hit| hit.clearance_violation || hit.conflicting_nets));
+    let after = encode_documents(s.snapshot().unwrap()).unwrap();
+    assert_eq!(encode_documents(decode_documents(&after).unwrap()).unwrap(), after);
+    s.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+    s.apply("edit.redo", &Value::Null).unwrap();
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after);
+}
+
+/// Highlight plans expose a blocked preferred path while walkaround detours and can be placed.
+#[test]
+fn highlight_route_keeps_the_preferred_path_on_collision() {
+    let mut s = board();
+    let via = p(50, 0);
+    s.apply(crate::ADD_VIA, &json!({"at":via,"expected_revision":s.revision()})).unwrap();
+    let request = Request { head: p(20, 0), target: p(80, 0), mode: Mode::Highlight, ..request(&s) };
+    let snapshot = query(&s);
+    let plan = s.plan_route(&snapshot, &request, DEFAULT_BUDGET, &|| false).unwrap();
+    assert!(matches!(plan.outcome, Outcome::Blocked { .. }));
+    assert_eq!(plan.points, [request.head, request.target]);
+    assert!(plan.blocker.is_some() && plan.adjusted_target.is_none() && plan.replacements.is_empty() && plan.via_moves.is_empty());
+    let route = s.plan_route(&snapshot, &Request { mode: Mode::Walkaround, ..request }, DEFAULT_BUDGET, &|| false).unwrap();
+    assert_eq!(route.outcome, Outcome::Reached);
+    assert!(route.points.len() > 2);
+}
+
+/// The mouse-drag fixture can walk around the rail while retaining its perpendicular follower.
+#[test]
+fn walkaround_drag_clears_a_parallel_rail() {
+    let mut s = board();
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    let start = p(2_540_000, -5_080_000);
+    let fixed = p(2_540_000, -2_540_000);
+    let a = add(&mut s, vec![start, p(7_620_000, -5_080_000)], 250_000)[0];
+    let b = add(&mut s, vec![fixed, start], 250_000)[0];
+    add(&mut s, vec![p(4_200_000, -7_720_000), p(6_300_000, -7_720_000)], 250_000);
+    let joint = p(2_540_000, -7_620_000);
+    s.apply(
+        crate::RESHAPE_TRACKS,
+        &json!({"tracks":[{"track":a,"start":joint,"end":p(7_620_000,-7_620_000)},{"track":b,"start":fixed,"end":joint}],
+               "mode":"walkaround","expected_revision":s.revision()}),
+    )
+    .unwrap();
+}
+
 /// A manual compound commit cannot omit or move a locked follower, including one on inner copper.
 #[test]
 fn a_locked_inner_layer_endpoint_pins_its_via() {

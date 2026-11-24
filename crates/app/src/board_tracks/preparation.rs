@@ -101,6 +101,10 @@ impl Preparation {
     pub(super) fn ready(&self) -> bool {
         self.ready.is_some() && self.wanted.is_some()
     }
+    /// The current proposed geometry failed validation and cannot be placed.
+    pub(super) fn refusal(&self) -> Option<&str> {
+        self.notice.as_deref().filter(|_| self.failed)
+    }
     /// Expose only the latest command's validation verdict, never a partial candidate.
     fn validation(&self) -> Option<Result<(), String>> {
         if self.failed { Some(Err(self.notice.clone().unwrap_or_else(|| "Route validation failed".into()))) } else { self.ready().then_some(Ok(())) }

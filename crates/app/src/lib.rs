@@ -258,6 +258,8 @@ enum Dialog {
     ViaNet(Box<board_net_choice::Edit>),
     /// Custom tool dimensions and optional reusable presets, independent of board setup.
     RoutingSize(board_presets::Edit),
+    /// View-local interactive route and drag policy.
+    RouterSettings(board_tracks::RouterSettings),
     /// Disposable layer/stackup edits retain their originating board and revision.
     BoardSetup(Box<board_setup::Edit>),
     BoardRules(Box<board_rules::Edit>),
@@ -2456,6 +2458,7 @@ impl PcbApp {
             Dialog::BoardUpdate(edit) => self.board_update_dialog(ctx, edit),
             Dialog::BoardColor(edit) => self.board_color_dialog(ctx, edit),
             Dialog::RoutingSize(edit) => self.routing_size_dialog(ctx, edit),
+            Dialog::RouterSettings(edit) => self.router_settings_dialog(ctx, edit),
             Dialog::BoardSetup(edit) => self.board_setup_dialog(ctx, edit),
             Dialog::BoardRules(edit) => self.board_rules_dialog(ctx, edit),
             Dialog::Rules(edit) => self.rules_dialog(ctx, edit),

@@ -658,13 +658,16 @@ width, `points`, an `outcome` (`reached`, `blocked` with `last_legal`, `incomple
 pair clearances and board-edge clearance. Check that there are at least two points
 before passing them to `pcb.add_tracks` with the same `layer` and `width_nm`;
 `from` equal to `to` produces a one-point `reached` plan with nothing to add.
-For track-only shove use `mode: "shove"`. Use `"shove_vias"` to move through
+Use `mode: "highlight"` to inspect the preferred path without detouring. A
+blocked highlight result includes display geometry and cannot authorize placement.
+For track-only shove use `"shove"`. Use `"shove_vias"` to move eligible through
 vias and their attached track ends. Submit the reached plan's `replacements`
-and `via_moves` together with the route and its captured revision. For a
-connected drag, `pcb.reshape_tracks` accepts the same shove modes and computes
-the displacements during preparation. A shove drag accepts up to 256 directly
-dragged segments. If the board has an authored zone, `pcb.plan_route` keeps vias
-fixed in `shove_vias` mode and `pcb.reshape_tracks` rejects both shove modes. See the
+and `via_moves` together with the route and its captured revision.
+`pcb.reshape_tracks` accepts the same explicit modes and `expected_revision`
+for a connected drag of up to 256 directly dragged segments. Highlight validates
+the requested geometry, walkaround can add detour legs, and shove can also
+displace eligible neighboring copper. If the board has an authored zone,
+`pcb.plan_route` keeps vias fixed and `pcb.reshape_tracks` refuses policy-driven drags. See the
 [route planning and drag contract](route-planning.md#through-vias-and-connected-segment-drags).
 
 Live `view.set_layer` uses the same Layers handler for `active` and `visible` changes on an addressed view; those

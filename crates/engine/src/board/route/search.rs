@@ -20,7 +20,8 @@ pub(super) async fn walk(
     progress: Arc<AtomicUsize>,
 ) -> Result<Plan, CommandError> {
     let mut walker = walkaround::Walker::new(query, request, budget, progress)?;
-    match walker.run_target(request).await {
+    let result = if request.mode == Mode::Highlight { walker.highlight(request).await } else { walker.run_target(request).await };
+    match result {
         Ok(mut plan) => {
             if request.mode == Mode::Walkaround
                 && !plan.start_blocked
@@ -51,7 +52,7 @@ pub(super) async fn walk(
 /// Select a read-only solver for inputs already validated by the caller.
 async fn run(query: &ClearanceQuery, request: &Request, budget: usize, progress: Arc<AtomicUsize>) -> Result<Plan, CommandError> {
     match request.mode {
-        Mode::Walkaround => walk(query.into(), request, budget, progress).await,
+        Mode::Walkaround | Mode::Highlight => walk(query.into(), request, budget, progress).await,
         Mode::Shove | Mode::ShoveVias => shove::run(query, request, budget, progress).await,
     }
 }
@@ -102,7 +103,7 @@ impl Search {
     pub(in crate::board) fn drag(query: Arc<ClearanceQuery>, ends: Vec<crate::board::track::Ends>, mode: Mode) -> Self {
         let progress = Arc::new(AtomicUsize::new(0));
         let counter = progress.clone();
-        let future = Box::pin(async move { shove::drag(&query, ends, mode, MAX_BUDGET, counter).await });
+        let future = Box::pin(async move { shove::drag(&query, ends, mode, mode.default_probe_budget(), counter).await });
         Self { future, progress }
     }
     /// Exact probes completed so far, independent of host scheduling frequency.

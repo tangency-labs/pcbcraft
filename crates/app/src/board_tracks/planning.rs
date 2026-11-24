@@ -239,6 +239,11 @@ impl Planning {
     pub(super) fn current_plan(&self) -> Option<&Plan> {
         self.ready.as_ref().filter(|_| self.current_ready()).map(|ready| &ready.plan)
     }
+
+    /// A blocked display path has no placement authority.
+    pub(super) fn preview_blocked(&self) -> bool {
+        self.visible.as_ref().is_some_and(|ready| matches!(ready.plan.outcome, Outcome::Blocked { .. }))
+    }
     /// Status distinguishes a solved route from blocked/exhausted work without certifying DRC.
     pub(super) fn status(&self) -> Option<String> {
         if let Some(error) = &self.error {

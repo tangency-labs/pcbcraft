@@ -316,12 +316,79 @@ impl PcbApp {
                 menu_check: None,
             },
         ];
-        let planned =
-            [planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"), planned(ToolIcon::Tune, "Tune", "Tune track length (planned)")];
-        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &planned) {
+        let menu = [
+            RibbonTool {
+                icon: ToolIcon::Settings,
+                label: "Router Settings",
+                description: "Interactive Router Settings",
+                shortcut: "",
+                enabled: enabled && !editing && self.views.active.board.tracks.can_change_policy(),
+                active: false,
+                menu_check: None,
+            },
+            planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
+            planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
+        ];
+        match workspace::ribbon_group_with_menu(ui, "Route", &tools, &menu) {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
+            Some(2) => {
+                if let Some(source) = self.views.active.input(&self.session) {
+                    let (mode, merge_same_net) = self.views.active.board.tracks.policy();
+                    self.dialog = Dialog::RouterSettings(crate::board_tracks::RouterSettings { source, mode, merge_same_net });
+                }
+            }
             _ => {}
+        }
+    }
+
+    /// Apply a proposed policy only to the pane and revision that opened the modal.
+    pub(super) fn router_settings_dialog(&mut self, ctx: &egui::Context, mut edit: crate::board_tracks::RouterSettings) {
+        use pcbcraft_chrome::{controls, settings};
+        use pcbcraft_engine::board::route::Mode;
+        let (mut apply, mut cancel) = (false, false);
+        let closing = shell::dialog_width(ctx, "router_settings", "Interactive Router Settings", 390.0, |ui| {
+            let mut policy = if edit.mode == Mode::ShoveVias { Mode::Shove } else { edit.mode };
+            ui.label("Policy");
+            if settings::choice(
+                ui,
+                "Router policy",
+                &mut policy,
+                &[(Mode::Walkaround, "Walkaround"), (Mode::Shove, "Shove"), (Mode::Highlight, "Highlight collisions")],
+            ) {
+                edit.mode = policy;
+            }
+            match policy {
+                Mode::Walkaround => ui.label("Route and drag around fixed copper."),
+                Mode::Highlight => ui.label("Conflicting copper is highlighted. Placement requires a clear path."),
+                _ => {
+                    let mut vias = edit.mode == Mode::ShoveVias;
+                    if settings::checkbox(ui, "Shove through vias", "Shove through vias", &mut vias).changed() {
+                        edit.mode = if vias { Mode::ShoveVias } else { Mode::Shove };
+                    }
+                    settings::checkbox(ui, "Merge same-net copper while routing", "Merge same-net copper while routing", &mut edit.merge_same_net)
+                }
+            };
+            ui.separator();
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                apply = controls::button(ui, "Apply").clicked();
+                cancel = controls::button(ui, "Cancel").clicked();
+            });
+        });
+        if closing || cancel {
+            return;
+        }
+        if apply {
+            if let Some(view) = self.views.view_mut(edit.source.view())
+                && view.accepts(edit.source, &self.session)
+                && view.board.tracks.select_mode(edit.mode)
+            {
+                view.board.tracks.select_same_net_merge(edit.merge_same_net);
+            } else {
+                self.message = Some("The board changed; reopen Router Settings to apply a policy.".into());
+            }
+        } else {
+            self.dialog = Dialog::RouterSettings(edit);
         }
     }
 

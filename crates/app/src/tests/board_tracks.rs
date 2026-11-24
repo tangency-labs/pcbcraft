@@ -1299,8 +1299,7 @@ fn u_selects_connected_copper() {
     assert_eq!(h.state().views.active.board.tracks.selected, joined);
 }
 
-/// With copper selected and no footprint selected, M then a click moves it by the snapped offset
-/// in one edit; dragging a track moves it too, and Esc cancels a move without editing.
+/// M moves selected copper in one edit; a held segment drag waits for validation before release.
 #[test]
 fn m_and_drag_move_selected_copper() {
     let mut h = routable();
@@ -1336,9 +1335,9 @@ fn m_and_drag_move_selected_copper() {
     h.drag_at(grab);
     h.run();
     h.hover_at(drop);
-    h.run();
+    h.run_steps(100);
     h.drop_at(drop);
-    h.run();
+    h.run_steps(100);
     assert_eq!(h.state().session.revision(), revision + 2, "a drag is one more edit");
     assert_ne!(tracks(&h).into_iter().find(|t| t.id == track).unwrap().start, after_m, "the drag moved the track");
 }
@@ -2620,6 +2619,7 @@ fn d_drags_a_segment_and_keeps_neighbors_attached() {
     let lifted = Point { x_nm: 5_080_000, y_nm: 1_270_000 };
     let target = at(&h, lifted);
     click_canvas_at(&mut h, target);
+    h.run_steps(100);
     assert_eq!(h.state().message, None);
     assert_eq!(h.state().session.revision(), revision + 1, "one edit for the segment and its neighbors");
     let up = |x: i64| Point { x_nm: x, y_nm: 1_270_000 };
@@ -3514,6 +3514,148 @@ fn shove_drag_previews_connected_ends_and_publishes_the_neighbor() {
             h.run();
         }
         assert_eq!(before, encode_documents(h.state().session.snapshot().unwrap()).unwrap());
+    }
+}
+
+/// Router Settings applies to held input, previews changes without editing, and either
+/// refuses a highlighted collision or publishes the selected policy's validated result.
+#[test]
+fn router_settings_govern_held_track_drags() {
+    use pcbcraft_engine::board::route::Mode;
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    for (policy, mode) in [("Highlight collisions", Mode::Highlight), ("Walkaround", Mode::Walkaround), ("Shove", Mode::Shove)] {
+        let mut h = routable();
+        let joint = p(2_540_000, -5_080_000);
+        let far = p(7_620_000, -5_080_000);
+        let fixed = p(2_540_000, -2_540_000);
+        let segment = add_track(&mut h, joint, far);
+        let follower = add_track(&mut h, fixed, joint);
+        // A shove needs space past the dragged ends to return to the rail's fixed ends.
+        let (left, right) = if mode == Mode::Shove { (0, 10_160_000) } else { (4_200_000, 6_300_000) };
+        let obstacle = add_track(&mut h, p(left, -7_720_000), p(right, -7_720_000));
+        let originals = tracks(&h);
+        let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+        let revision = h.state().session.revision();
+
+        click(&mut h, "Route menu");
+        click(&mut h, "Router Settings");
+        assert!(matches!(h.state().dialog, Dialog::RouterSettings(_)));
+        if mode != Mode::Walkaround {
+            click(&mut h, "Router policy");
+            click(&mut h, policy);
+        }
+        click(&mut h, "Apply");
+        assert_eq!(h.state().views.active.board.tracks.policy().0, mode);
+        assert_eq!(h.state().session.revision(), revision);
+
+        let pickup = at(&h, p(5_080_000, -5_080_000));
+        let target = at(&h, p(5_080_000, -7_620_000));
+        h.hover_at(pickup);
+        h.run();
+        h.drag_at(pickup);
+        h.run();
+        h.hover_at(target);
+        h.run_steps(240);
+        let paths = h.state().views.active.board.tracks.replacements().to_vec();
+        assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        if mode == Mode::Highlight {
+            let status = h.state().views.active.board.tracks.preparation_status().unwrap();
+            assert!(status.contains("clearance"), "{status}");
+            assert!(paths.is_empty());
+        } else {
+            let replaced = if mode == Mode::Walkaround { segment } else { obstacle };
+            assert!(paths.iter().any(|path| path.track == replaced), "{policy}: {:?}", h.state().views.active.board.tracks.preparation_status());
+        }
+        h.drop_at(target);
+        h.run_steps(240);
+        if mode == Mode::Highlight {
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+            assert_eq!(h.state().session.revision(), revision);
+        } else {
+            assert_eq!(h.state().message, None, "{policy}");
+            assert_eq!(h.state().session.revision(), revision + 1);
+            let laid = tracks(&h);
+            assert!(laid.iter().any(|t| t.id == follower && t.start == fixed && t.end == p(joint.x_nm, -7_620_000)));
+            if mode == Mode::Walkaround {
+                assert_eq!(laid.iter().find(|t| t.id == obstacle), originals.iter().find(|t| t.id == obstacle));
+                let path = paths.iter().find(|path| path.track == segment).unwrap();
+                assert_eq!((path.points[0], *path.points.last().unwrap()), (p(joint.x_nm, -7_620_000), p(far.x_nm, -7_620_000)));
+                assert!(path.points.windows(2).all(|pair| laid.iter().any(|t| t.start == pair[0] && t.end == pair[1])));
+            } else {
+                assert_published_replacements(&originals, &laid, &paths);
+            }
+            h.state_mut().run("edit.undo", &json!({}));
+            h.run();
+            assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+        }
+    }
+}
+
+/// A prepared held drag cannot publish after Escape or after another command changes the board.
+#[test]
+fn canceled_and_stale_held_track_drags_preserve_copper() {
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    for stale in [false, true] {
+        let mut h = routable();
+        let start = p(2_540_000, -5_080_000);
+        let end = p(7_620_000, -5_080_000);
+        let id = add_track(&mut h, start, end);
+        let revision = h.state().session.revision();
+        let pickup = at(&h, p(5_080_000, -5_080_000));
+        let target = at(&h, p(5_080_000, -7_620_000));
+        h.hover_at(pickup);
+        h.run();
+        h.drag_at(pickup);
+        h.run();
+        h.hover_at(target);
+        h.run_steps(100);
+        assert_eq!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route prepared"));
+        if stale {
+            let board = h.state().session.project().unwrap().board_target().unwrap().board;
+            h.state_mut()
+                .session
+                .apply(pcbcraft_engine::SET_COPPER_LOCKED, &json!({"board":board,"tracks":[id],"locked":true,"expected_revision":revision}))
+                .unwrap();
+        } else {
+            h.key_press(Key::Escape);
+        }
+        h.run();
+        h.drop_at(target);
+        h.run_steps(100);
+        let copper = tracks(&h);
+        assert_eq!((copper[0].start, copper[0].end, copper[0].locked), (start, end, stale));
+        assert_eq!(h.state().session.revision(), revision + u64::from(stale));
+    }
+}
+
+/// A later pointer move in the same frame cannot choose which prepared drag is released.
+#[test]
+fn held_track_drag_validates_the_release_position() {
+    let p = |x_nm, y_nm| Point { x_nm, y_nm };
+    for validated in [false, true] {
+        let mut h = routable();
+        let start = p(2_540_000, -5_080_000);
+        let end = p(7_620_000, -5_080_000);
+        add_track(&mut h, start, end);
+        let revision = h.state().session.revision();
+        let pickup = at(&h, p(5_080_000, -5_080_000));
+        let preview = at(&h, p(5_080_000, -7_620_000));
+        let other = at(&h, p(5_080_000, -10_160_000));
+        h.hover_at(pickup);
+        h.run();
+        h.drag_at(pickup);
+        h.run();
+        h.hover_at(preview);
+        h.run_steps(100);
+        assert_eq!(h.state().views.active.board.tracks.preparation_status().as_deref(), Some("Route prepared"));
+        let (release, later) = if validated { (preview, other) } else { (other, preview) };
+        h.event(egui::Event::PointerButton { pos: release, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.event(egui::Event::PointerMoved(later));
+        h.run_steps(100);
+        let y = if validated { -7_620_000 } else { start.y_nm };
+        let copper = tracks(&h);
+        assert_eq!((copper[0].start, copper[0].end), (p(start.x_nm, y), p(end.x_nm, y)));
+        assert_eq!(h.state().session.revision(), revision + u64::from(validated));
     }
 }
 

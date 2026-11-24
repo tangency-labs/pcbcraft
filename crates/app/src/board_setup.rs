@@ -248,6 +248,7 @@ impl PcbApp {
             Dialog::BoardRules(edit) => Some(edit.source()),
             Dialog::Rules(edit) => Some(edit.source()),
             Dialog::BoardColor(edit) => Some(edit.source()),
+            Dialog::RouterSettings(edit) => Some(edit.source),
             _ => None,
         }
     }

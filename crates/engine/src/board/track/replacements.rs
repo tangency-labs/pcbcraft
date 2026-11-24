@@ -100,6 +100,7 @@ pub(super) struct Validation {
     changed: BTreeSet<Uuid>,
     origin: Option<(Point, Uuid, i64)>,
     joints: BTreeSet<Uuid>,
+    drag_ends: BTreeMap<String, [Point; 2]>,
     query: Option<Arc<ClearanceQuery>>,
     final_query: Option<ClearanceQuery>,
     final_positions: BTreeMap<String, usize>,
@@ -129,6 +130,7 @@ impl Validation {
         let view = source.snapshot.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Missing board.".into()))?;
         let moves = &changes.vias;
         let dragged: Vec<Ends> = params.get("tracks").map(|_| param(params, "tracks")).transpose()?.unwrap_or_default();
+        let drag_ends = dragged.iter().map(|row| (row.track.to_string(), [row.start, row.end])).collect();
         let mut joints: BTreeSet<_> = dragged.iter().map(|row| row.track).chain(moves.iter().map(|m| m.via)).collect();
         if !joints.is_empty() && !view.zones().is_empty() {
             return Err(CommandError::Unavailable("Moving routing joints on boards with zones is not supported.".into()));
@@ -200,6 +202,7 @@ impl Validation {
             changed,
             origin,
             joints,
+            drag_ends,
             query: None,
             final_query: None,
             groups: BTreeMap::new(),
@@ -250,12 +253,13 @@ impl Validation {
                             continue;
                         }
                         let items = &self.final_geometry.items;
-                        let kept = self
-                            .final_positions
-                            .get(&other.name)
-                            .into_iter()
-                            .chain(self.split_fragments.get(&other.name).into_iter().flatten())
-                            .any(|&j| self.retains_joint(object, other, &items[position], &items[j], 0.));
+                        let others =
+                            self.final_positions.get(&other.name).into_iter().chain(self.split_fragments.get(&other.name).into_iter().flatten());
+                        let kept = std::iter::once(&position).chain(self.split_fragments.get(&object.name).into_iter().flatten()).any(|&i| {
+                            others
+                                .clone()
+                                .any(|&j| items[i].contour.touches(&items[j].contour) && self.retains_joint(object, other, &items[i], &items[j], 0.))
+                        });
                         if !kept {
                             return Err(CommandError::InvalidParams("Moving this joint would lose a protected copper contact.".into()));
                         }
@@ -338,6 +342,11 @@ impl Validation {
             (None, Some(original)) => return self.preserves_pickup(source, original, shape_b, shape_a, clearance),
             (None, None) => return false,
         };
+        if old_a == old_b && self.drag_ends.contains_key(&source.objects()[old_a].name) {
+            // The planner checked the complete detour's self-spacing. Its bends
+            // are local joins of one source track.
+            return true;
+        }
         if !self.joints.is_empty()
             && [old_a, old_b].iter().any(|i| Uuid::parse_str(&source.objects()[*i].name).is_ok_and(|id| self.joints.contains(&id)))
         {
@@ -368,6 +377,26 @@ impl Validation {
     /// Check the same source contact during topology and final clearance validation. A split
     /// support retains the chain's fixed contact, so a fragment has no whole-track station.
     fn retains_joint(&self, old_a: &Object, old_b: &Object, a: &Object, b: &Object, clearance: f64) -> bool {
+        let split_drag = |object: &Object| self.drag_ends.contains_key(&object.name) && self.split_fragments.contains_key(&object.name);
+        if split_drag(old_a) || split_drag(old_b) {
+            if let (Some(first), Some(second), Some(leg_a), Some(leg_b)) =
+                (old_a.contour.track_centerline(), old_b.contour.track_centerline(), a.contour.track_centerline(), b.contour.track_centerline())
+            {
+                let requested_a = self.drag_ends.get(&old_a.name).copied().unwrap_or(leg_a);
+                let requested_b = self.drag_ends.get(&old_b.name).copied().unwrap_or(leg_b);
+                let station =
+                    follows_station(first, second, requested_a, requested_b).or_else(|| follows_station(second, first, requested_b, requested_a));
+                return station.is_some_and(|p| {
+                    let joint = PadContour::capsule(p, p, 0.);
+                    // A nearby continuation can depart within the junction's clearance
+                    // envelope. Actual contact still has to occur at the protected station.
+                    (!a.contour.touches(&b.contour) || (super::chains::on_leg(p, leg_a[0], leg_a[1]) && super::chains::on_leg(p, leg_b[0], leg_b[1])))
+                        && local_departure(&a.contour, &b.contour, &joint, clearance)
+                        && local_departure(&b.contour, &a.contour, &joint, clearance)
+                });
+            }
+            return retained_joint(old_a, old_b, &a.contour, &b.contour, clearance);
+        }
         if self.split_fragments.contains_key(&old_b.name) {
             return retained_split_joint(&old_a.contour, &old_b.contour, &a.contour, &b.contour, clearance);
         }
