@@ -41,6 +41,7 @@ impl Registry {
         let mut assigned = BTreeSet::new();
         for record in &self.records {
             record.authored_intent.validate_reference(Some(record.id), |id| ids.contains(&id))?;
+            record.authored_intent.validate_split_baselines(Some(record.id), &self.records)?;
             if record.fallbacks.len() > 3
                 || record.lineage.len() > MAX_RECORDS
                 || record.anchors().collect::<BTreeSet<_>>().len() != record.fallbacks.len() + 1

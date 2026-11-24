@@ -1591,6 +1591,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             class
                 .authored_intent
                 .validate_reference(None, |id| project_data.net_registry.records.binary_search_by_key(&id, |record| record.id).is_ok())?;
+            class.authored_intent.validate_split_baselines(None, &project_data.net_registry.records)?;
         }
     }
     let mut zones = board.zones.unwrap_or_default();

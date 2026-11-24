@@ -2,7 +2,7 @@
 //! policy stay separate from future rule resolution; neither class membership nor connectivity
 //! derives values here, and no checker verifies them yet.
 
-use super::{NetAddress, Retirement, State, graph::Graph};
+use super::{NetAddress, Record, Retirement, Scope, State, graph::Graph};
 use crate::{CommandError, Project, Session};
 use pcbcraft_units::quantity::{Quantity, decimal};
 use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
@@ -63,7 +63,12 @@ fn is_zero(value: &u32) -> bool {
 /// Count registry records whose split or merge lineage names this net. Records are never
 /// removed and lineage is immutable, so the count only grows as the net is split again.
 fn splits_of(project: &Project, net: Uuid) -> u32 {
-    let count = project.net_registry.records.iter().filter(|record| record.lineage.iter().any(|source| source.net == Some(net))).count();
+    splits_in(&project.net_registry.records, net)
+}
+
+/// Count the records whose lineage names this net, for a registry that is not yet installed.
+fn splits_in(records: &[Record], net: Uuid) -> u32 {
+    let count = records.iter().filter(|record| record.lineage.iter().any(|source| source.net == Some(net))).count();
     u32::try_from(count).unwrap_or(u32::MAX)
 }
 
@@ -87,8 +92,14 @@ enum Reference {
 #[derive(Clone, Copy, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum Target {
-    Net { address: NetAddress },
-    NetClass { project: Uuid, class: Uuid },
+    Net {
+        #[serde(deserialize_with = "named_address")]
+        address: NetAddress,
+    },
+    NetClass {
+        project: Uuid,
+        class: Uuid,
+    },
 }
 
 /// Earth is an empty struct variant, so a leftover address is refused rather than ignored.
@@ -96,7 +107,20 @@ enum Target {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum ReferenceInput {
     Earth {},
-    Net { address: NetAddress },
+    Net {
+        #[serde(deserialize_with = "named_address")]
+        address: NetAddress,
+    },
+}
+
+/// A command's net address, decoded only through [`named_address`]. The shared saved type
+/// would also read the address or its scope from a positional array.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AddressInput {
+    project: Uuid,
+    scope: Named<Scope>,
+    net: Uuid,
 }
 
 /// Decoded only through [`named`]; positional arrays are refused.
@@ -178,6 +202,12 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Named<T> {
     fn deserialize<D: serde::Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
         named(de).map(Named)
     }
+}
+
+/// Decode a command net address and its scope from objects only; positional arrays are refused.
+fn named_address<'de, D: serde::Deserializer<'de>>(de: D) -> Result<NetAddress, D::Error> {
+    let AddressInput { project, scope: Named(scope), net } = named(de)?;
+    Ok(NetAddress { project, scope, net })
 }
 
 /// Decode an optional input record: null means unset, and any other value must be an object.
@@ -274,6 +304,23 @@ impl IntentV1 {
             && (net.is_nil() || owner == Some(net) || !contains(net))
         {
             return Err("Authored voltage requires a distinct reference in the local net registry.".into());
+        }
+        Ok(())
+    }
+
+    /// Refuse saved split baselines above the lineage counts in `records`. Lineage only grows,
+    /// so a save never records more branches than exist, and a larger baseline would hide a later
+    /// split. A smaller one is a pending review and stays valid across reopening. A class owner
+    /// has no lineage of its own.
+    pub(crate) fn validate_split_baselines(&self, owner: Option<Uuid>, records: &[Record]) -> Result<(), String> {
+        let Some(voltage) = &self.voltage else { return Ok(()) };
+        let owner_splits = owner.map_or(0, |net| splits_in(records, net));
+        let reference_splits = match voltage.reference {
+            Reference::Net { net } => splits_in(records, net),
+            Reference::Earth {} => 0,
+        };
+        if voltage.net_splits_seen > owner_splits || voltage.reference_splits_seen > reference_splits {
+            return Err("Authored voltage records more net splits than the local net registry.".into());
         }
         Ok(())
     }

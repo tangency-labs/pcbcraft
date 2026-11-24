@@ -838,3 +838,77 @@ fn working_voltage_review_flags_split_ambiguous_split_and_merge() {
     assert_eq!(ambiguous["intent"], volts("12"));
     assert_eq!(ambiguous["requirement"], review(json!(["net_ambiguous"])));
 }
+
+/// Command net addresses and their scopes are objects: a positional address or scope for the
+/// target or the reference is refused without changing the declaration, revision or history.
+#[test]
+fn set_intent_refuses_positional_net_addresses_and_scopes() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"create_board":false})).unwrap();
+    let (address, _) = named_net(&mut session, "TEST_SOURCE", 0);
+    let (reference, _) = named_net(&mut session, "TEST_REFERENCE", 25_400_000);
+    let target = json!({"kind":"net","address":address});
+    let voltage = |reference: Value| json!({"working_voltage":{"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":reference}});
+    let declared = voltage(json!({"kind":"net","address":reference}));
+    let args = request(&session, &target, &declared);
+    session.apply(SET, &args).unwrap();
+    let before = session.snapshot().unwrap();
+    let history = (session.revision(), session.undo.len(), session.redo.len());
+    let positional =
+        |a: NetAddress| [json!([a.project, a.scope, a.net]), json!({"project":a.project,"scope":[a.scope.kind, a.scope.id],"net":a.net})];
+    for address in positional(address) {
+        let positional_target = json!({"kind":"net","address":address});
+        let args = request(&session, &positional_target, &declared);
+        assert!(matches!(session.apply(SET, &args), Err(CommandError::InvalidParams(_))), "{address}");
+        let query = json!({"version":1,"target":positional_target});
+        assert!(matches!(session.execute(INSPECT, &query), Err(CommandError::InvalidParams(_))), "{address}");
+    }
+    for address in positional(reference) {
+        let args = request(&session, &target, &voltage(json!({"kind":"net","address":address})));
+        assert!(matches!(session.apply(SET, &args), Err(CommandError::InvalidParams(_))), "{address}");
+        assert!(matches!(session.execute(SET, &args), Err(CommandError::InvalidParams(_))), "{address}");
+    }
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert_eq!((session.revision(), session.undo.len(), session.redo.len()), history);
+    assert_eq!(inspect(&mut session, &target), declared);
+}
+
+/// A saved split baseline can lag the registry, which reopens as a pending review, but it can
+/// never exceed the branches the registry's lineage records: a larger count would hide a later
+/// split. Class owners have no lineage, and an Earth reference has none either.
+#[test]
+fn saved_split_baselines_cannot_exceed_registry_lineage() {
+    let report = |session: &mut Session, target: &Value| session.execute(INSPECT, &json!({"version":1,"target":target})).unwrap();
+    let (mut session, pins) = pin_circuit(4);
+    wire(&mut session, &pins[0], &pins[1]);
+    let middle = wire(&mut session, &pins[1], &pins[2]);
+    wire(&mut session, &pins[2], &pins[3]);
+    let target = promoted(&mut session, &pins[0]);
+    let net: Uuid = serde_json::from_value(target["address"]["net"].clone()).unwrap();
+    let args = request(&session, &target, &volts("48"));
+    session.apply(SET, &args).unwrap();
+    let baseline = |docs: &Documents, splits: u32| {
+        altered(docs, ENTRY_POINT, |v| {
+            let records = v["schematic_instances"]["net_registry"]["records"].as_array_mut().unwrap();
+            let record = records.iter_mut().find(|record| record["id"] == json!(net)).unwrap();
+            record["authored_intent"]["voltage"]["net_splits_seen"] = json!(splits);
+        })
+    };
+    let reason = "more net splits than the local net registry";
+    let unsplit = encode_documents(session.snapshot().unwrap()).unwrap();
+    refused(&baseline(&unsplit, 1), reason);
+
+    apply(&mut session, crate::DELETE_WIRE, json!({"wire":middle}));
+    let split = encode_documents(session.snapshot().unwrap()).unwrap();
+    for (splits, review) in [(0, "needs_review"), (1, "current")] {
+        let mut reader = Session::default();
+        reader.open_snapshot(decode_documents(&baseline(&split, splits)).unwrap());
+        assert_eq!(report(&mut reader, &target)["requirement"]["review"], review, "{splits}");
+    }
+    refused(&baseline(&split, 2), reason);
+
+    let (_, _, saved) = class_with_intent(&volts("5"));
+    for field in ["net_splits_seen", "reference_splits_seen"] {
+        refused(&saved_intent(&saved, |intent| intent["voltage"][field] = json!(1)), reason);
+    }
+}

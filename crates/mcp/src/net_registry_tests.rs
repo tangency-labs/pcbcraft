@@ -566,3 +566,58 @@ fn via_net_assignment_is_shared_by_live_and_headless_clients() {
         assert!(stale.is_err());
     }
 }
+
+/// The wire keeps every member of an electrical intent edit: a repeated member, at the top of the
+/// intent or inside a voltage, is refused as one tool error, alone or in a batch, before
+/// normalization can keep only its last copy. The declaration and revision stay unchanged, and a
+/// single null still clears.
+#[test]
+fn electrical_intent_wire_refuses_repeated_members() {
+    use pcbcraft_engine::{net_classes, nets::intent};
+    let mut setup = circuit(2);
+    apply(&mut setup, net_classes::CREATE, json!({"name":"Supply","rules":{}}));
+    let project = setup.snapshot().unwrap();
+    let target = json!({"kind":"net_class","project":project.id(),"class":project.net_classes().definitions[0].id});
+    let mut opened = Session::default();
+    opened.open_snapshot(project.clone());
+    let mut revision = opened.revision();
+    let mut server = crate::Server::new(Box::new(Headless::with_project(project)));
+    let reply = |server: &mut crate::Server, line: &str| serde_json::from_str::<Value>(&server.handle_line(line).unwrap()).unwrap();
+    let call = |command: &str, params: Value| {
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute","arguments":{"command":command,"inspect":false,"params":params}}})
+            .to_string()
+    };
+    let set = |revision: u64, voltage: Value| {
+        call(intent::SET, json!({"version":1,"expected_revision":revision,"target":target,"intent":{"working_voltage":voltage}}))
+    };
+    let body = |reply: &Value| serde_json::from_str::<Value>(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    let inspect = call(intent::INSPECT, json!({"version":1,"target":target}));
+    let voltage = json!({"magnitude":{"value":"5","unit":"V"},"basis":"dc","reference":{"kind":"earth"}});
+
+    let edited = reply(&mut server, &set(revision, voltage.clone()));
+    assert_ne!(edited["result"]["isError"], true, "{edited}");
+    revision = serde_json::from_value(body(&edited)["revision"].clone()).unwrap();
+    let declared = body(&reply(&mut server, &inspect));
+    assert_eq!(declared["intent"]["working_voltage"], voltage);
+
+    let clear = set(revision, Value::Null);
+    let replaced = clear.replacen("\"intent\":{", &format!("\"intent\":{{\"working_voltage\":{voltage},"), 1);
+    let nested = set(revision, voltage.clone()).replacen("\"basis\":\"dc\"", "\"basis\":\"peak_ac\",\"basis\":\"dc\"", 1);
+    for duplicate in [replaced, nested] {
+        assert_ne!(duplicate, clear);
+        let refused = reply(&mut server, &duplicate);
+        assert_eq!(refused["id"], 1);
+        assert!(refused.get("error").is_none(), "{refused}");
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        assert_eq!(refused["result"]["content"][0]["text"], "Duplicate member in the electrical intent request.");
+        assert_eq!(refused["result"]["structuredContent"]["error"]["code"], "invalid_params");
+        let batch = reply(&mut server, &format!(r#"[{duplicate},{{"jsonrpc":"2.0","id":2,"method":"ping"}}]"#));
+        assert_eq!(batch, json!([refused,{"jsonrpc":"2.0","id":2,"result":{}}]));
+        assert_eq!(body(&reply(&mut server, &inspect)), declared);
+    }
+
+    let cleared = reply(&mut server, &clear);
+    assert_ne!(cleared["result"]["isError"], true, "{cleared}");
+    assert_eq!(body(&cleared)["revision"], json!(revision + 1), "the refusals published nothing");
+    assert_eq!(body(&reply(&mut server, &inspect))["intent"]["working_voltage"], Value::Null);
+}
