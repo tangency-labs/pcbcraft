@@ -634,7 +634,7 @@ fn assigned_via_only_net_joins_its_zone_and_survives_report_worker_transport() {
     setup.as_object_mut().unwrap().entry("materials").or_insert_with(|| json!([])).as_array_mut().unwrap().push(material);
     s.apply(crate::SET_BOARD_SETUP, &json!({"setup":setup,"expected_revision":s.revision()})).unwrap();
     let bytes = crate::persistence::encode_documents(s.snapshot().unwrap()).unwrap();
-    assert!(bytes.values().any(|b| String::from_utf8_lossy(b).contains("pcbcraft-board/25")));
+    assert!(bytes.values().any(|b| String::from_utf8_lossy(b).contains(crate::persistence::CURRENT_BOARD_FORMAT)));
     let mut job = s.prepare_zone_fill(view(&s).target, true).unwrap();
     let request = job.worker_request().unwrap();
     let fill = job.accept_worker_response(&super::worker::execute(&request)).unwrap().unwrap();

@@ -254,10 +254,25 @@ fn symbol_category_binding_round_trips_without_reinterpreting_older_formats() {
     let mut symbol = crate::library::parse_symbol(&docs["symbols/resistor.json"]).unwrap();
     symbol.library = "parts-demo".into();
     symbol.provenance = Some(crate::library::sources::Provenance { library_name: "Native Parts Demo".into(), license: "MIT OR Apache-2.0".into() });
-    let item = crate::authoring::Item::from_symbol(&symbol).unwrap();
+    let mut item = crate::authoring::Item::from_symbol(&symbol).unwrap();
+    item.behavior = Some(crate::library::Behavior::Power { terminal: "1".into() });
+    item.defaults = Some(crate::library::Defaults::default());
     let exported = item.export_native().unwrap();
-    assert_eq!(exported["format"], "pcbcraft-symbol/3");
+    assert_eq!(exported["format"], crate::library::SYMBOL_FORMAT_V5);
     assert_eq!(exported["category"], json!(symbol.category));
+    assert!(exported["terminals"][0].get("name").is_none());
+    let reopened = crate::library::parse_symbol(&exported.to_string()).unwrap();
+    assert_eq!(reopened.power_terminal(), Some("1"));
+    assert_eq!(reopened.defaults, item.defaults);
+
+    item.behavior = None;
+    item.defaults = None;
+    item.category = None;
+    let exported = item.export_native().unwrap();
+    assert_eq!(exported["format"], crate::library::SYMBOL_FORMAT_V5);
+    for field in ["behavior", "defaults", "category"] {
+        assert!(exported.get(field).is_none());
+    }
     let saved = serde_json::to_value(crate::library::saved_copy(&symbol)).unwrap();
     assert_eq!(*crate::library::read_saved_copy(saved).unwrap(), symbol);
     let mut old: serde_json::Value = serde_json::from_str(&docs["symbols/resistor.json"]).unwrap();
@@ -419,11 +434,6 @@ fn plain_part() -> PartDefinition {
     part.format = PART_FORMAT.into();
     part
 }
-fn describe(part: &mut PartDefinition) {
-    part.description = Some("Precision thin-film resistor".into());
-    part.keywords = vec!["precision".into(), "thin film".into()];
-    part.links = vec![PartLink { label: "Datasheet".into(), url: "https://example.invalid/ds.pdf".into() }];
-}
 fn metadata_json() -> serde_json::Value {
     let mut value: serde_json::Value = serde_json::from_str(legacy_bytes()).unwrap();
     value["format"] = json!(METADATA_PART_FORMAT);
@@ -452,17 +462,17 @@ fn older_part_formats_stay_byte_for_byte_stable() {
 
     let mut rated = plain.clone();
     rated.set_supply_range("1", "4.5 V", "36 V").unwrap();
-    assert_eq!(rated.format, RATED_PART_FORMAT);
+    rated.format = RATED_PART_FORMAT.into();
     let rated_text = rated.encode().unwrap();
     assert_eq!(PartDefinition::read(&rated_text).unwrap().encode().unwrap(), rated_text);
     let rated_value: serde_json::Value = serde_json::from_str(&rated_text).unwrap();
     assert_eq!(rated_value["terminal_ratings"]["1"]["supply_min"]["value"], "4.5");
     assert!(rated_value.get("description").is_none());
 
-    // Removing the last rating returns an authored /4 draft to exactly the /2 record.
     rated.set_supply_range("1", "", "").unwrap();
-    assert_eq!(rated.format, PART_FORMAT);
-    assert_eq!(rated.encode().unwrap(), plain_text);
+    assert_eq!(rated.format, CURRENT_PART_FORMAT);
+    assert!(rated.terminal_ratings.is_empty());
+    assert_eq!(PartDefinition::read(&rated.encode().unwrap()).unwrap(), rated);
 
     let mut sentinel = plain;
     sentinel.format = "pcbcraft-part/3".into();
@@ -470,49 +480,6 @@ fn older_part_formats_stay_byte_for_byte_stable() {
     let mut forged = metadata_json();
     forged["format"] = json!("pcbcraft-part/3");
     assert!(read_json(&forged).is_err());
-}
-
-/// Every upgrade and downgrade edge of the format state machine selects the minimal envelope.
-#[test]
-fn part_format_state_machine_covers_all_transitions() {
-    for (initial, rating, metadata, expected) in [
-        (LEGACY_PART_FORMAT, false, false, LEGACY_PART_FORMAT),
-        (LEGACY_PART_FORMAT, true, false, RATED_PART_FORMAT),
-        (LEGACY_PART_FORMAT, false, true, METADATA_PART_FORMAT),
-        (LEGACY_PART_FORMAT, true, true, METADATA_PART_FORMAT),
-        (PART_FORMAT, false, false, PART_FORMAT),
-        (PART_FORMAT, true, false, RATED_PART_FORMAT),
-        (PART_FORMAT, false, true, METADATA_PART_FORMAT),
-        (RATED_PART_FORMAT, false, false, PART_FORMAT),
-        (RATED_PART_FORMAT, true, false, RATED_PART_FORMAT),
-        (RATED_PART_FORMAT, true, true, METADATA_PART_FORMAT),
-        (METADATA_PART_FORMAT, false, true, METADATA_PART_FORMAT),
-        (METADATA_PART_FORMAT, true, true, METADATA_PART_FORMAT),
-        (METADATA_PART_FORMAT, false, false, PART_FORMAT),
-        (METADATA_PART_FORMAT, true, false, RATED_PART_FORMAT),
-        ("pcbcraft-part/3", false, true, METADATA_PART_FORMAT),
-    ] {
-        let mut part = plain_part();
-        if rating {
-            part.set_supply_range("1", "4.5 V", "36 V").unwrap();
-        }
-        if metadata {
-            describe(&mut part);
-        }
-        part.format = initial.into();
-        part.select_format();
-        assert_eq!(part.format, expected, "from {initial} with rating={rating} metadata={metadata}");
-        part.validate().unwrap_or_else(|error| panic!("{initial} -> {expected}: {error}"));
-    }
-    // A legacy record without its symbol is an authored /2, not a broken /1.
-    let mut physical = PartDefinition::read(legacy_bytes()).unwrap();
-    physical.symbol = None;
-    for package in physical.packages.values_mut() {
-        package.mapping.clear();
-    }
-    physical.select_format();
-    assert_eq!(physical.format, PART_FORMAT);
-    physical.validate().unwrap();
 }
 
 /// Description, keyword and link fields accept exact bounds and reject malformed or ambiguous input.

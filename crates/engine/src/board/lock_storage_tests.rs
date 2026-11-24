@@ -179,7 +179,6 @@ fn footprint_lock_round_trips_without_changing_unlocked_encoding() {
         assert!(footprints.iter().all(|footprint| footprint.get("locked").is_none()));
         assert_eq!(footprints[0]["id"] == locked_id, lock_index == 0);
         footprints.iter_mut().find(|footprint| footprint["id"] == locked_id).unwrap()["locked"] = json!(true);
-        expected["format"] = json!("pcbcraft-board/34");
         let locked = with_placement_lock(&original, locked_id, true);
         let saved = encode_documents(locked.clone()).unwrap();
         assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
@@ -212,8 +211,8 @@ fn footprint_lock_round_trips_without_changing_unlocked_encoding() {
     }
 }
 
-/// A non-first lock requires format 34 even without setup; omitted and false-only flags
-/// cannot satisfy that envelope. This exercises the current reader, not an older executable.
+/// Historical format 34 requires an active lock even without setup. Omitted and
+/// false-only flags do not satisfy that header.
 #[test]
 fn footprint_locks_require_their_own_nonempty_format() {
     for session in [ratsnest::tests::fixture(), track::tests::routed_fixture()] {
@@ -223,7 +222,7 @@ fn footprint_locks_require_their_own_nonempty_format() {
         let locked_id = project.board.footprints[1].id;
         let mut saved = encode_documents(with_placement_lock(&project, locked_id, true)).unwrap();
         let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-        assert_eq!(board["format"], "pcbcraft-board/34");
+        assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
         assert!(board["footprints"][0].get("locked").is_none());
         assert_eq!(board["footprints"][1]["id"], locked_id);
         assert_eq!(board["footprints"][1]["locked"], true);
@@ -250,7 +249,7 @@ fn footprint_locks_require_their_own_nonempty_format() {
     let mut incomplete = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
     let marker_path = test_board_path(&incomplete);
     let mut marker: Value = serde_json::from_slice(&incomplete[&marker_path]).unwrap();
-    assert_eq!(marker["format"], "pcbcraft-board/1");
+    assert_eq!(marker["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     let mut noncanonical = incomplete.clone();
     marker["footprints"][0]["locked"] = json!(false);
     noncanonical.insert(marker_path.clone(), serde_json::to_vec(&marker).unwrap());
@@ -290,9 +289,9 @@ fn add_arc(session: &mut Session) -> Value {
     arc
 }
 
-/// Round-trip each header and return to the exact lower-format bytes when either feature is removed.
+/// Round-trip both features in the current format and restore exact bytes when either is removed.
 #[test]
-fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
+fn arc_and_footprint_lock_edits_keep_current_format_and_bytes() {
     let mut session = track::tests::routed_fixture();
     let neither = session.snapshot().unwrap();
     let lock_only = with_lock(&neither, true);
@@ -306,7 +305,7 @@ fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
     let both_docs = encode_documents(both.clone()).unwrap();
     let path = test_board_path(&neither_docs);
     let baseline: Value = serde_json::from_slice(&neither_docs[&path]).unwrap();
-    assert!(!["pcbcraft-board/26", "pcbcraft-board/34", "pcbcraft-board/35"].contains(&baseline["format"].as_str().unwrap()));
+    assert_eq!(baseline["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(baseline.get("arcs").is_none());
     assert!(baseline["footprints"][0].get("locked").is_none());
     for (snapshot, docs) in [(neither, &neither_docs), (arc_only, &arc_docs), (lock_only, &lock_docs), (both, &both_docs)] {
@@ -316,11 +315,9 @@ fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
         assert_eq!(encode_documents(reopened.clone()).unwrap(), *docs);
         assert_eq!(encode_packed(reopened).unwrap(), packed);
     }
-    for (docs, header, has_arc, has_lock) in
-        [(&arc_docs, "pcbcraft-board/26", true, false), (&lock_docs, "pcbcraft-board/34", false, true), (&both_docs, "pcbcraft-board/35", true, true)]
-    {
+    for (docs, has_arc, has_lock) in [(&arc_docs, true, false), (&lock_docs, false, true), (&both_docs, true, true)] {
         let board: Value = serde_json::from_slice(&docs[&path]).unwrap();
-        assert_eq!(board["format"], header);
+        assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
         assert_eq!(board.get("arcs"), has_arc.then(|| json!([arc.clone()])).as_ref());
         assert_eq!(board["footprints"][0].get("locked"), has_lock.then_some(Value::Bool(true)).as_ref());
     }
@@ -331,8 +328,8 @@ fn arc_and_footprint_lock_formats_keep_their_own_bytes() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), lock_docs);
 }
 
-/// Relations are an optional record on the native arc/lock ladder: the board keeps the format its
-/// other content selects, and relations are not an edit permission.
+/// Relations are an optional record beside arcs and footprint locks: the board keeps the current
+/// format, and relations are not an edit permission.
 #[test]
 fn a_format_f1_composes_with_native_arc_lock_corpus() {
     use crate::board::relations::{
@@ -354,7 +351,7 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         assert_eq!(encode_packed(decode_packed(&native_packed).unwrap().project).unwrap(), native_packed);
         assert_eq!(encode_documents(decode_documents(&native).unwrap()).unwrap(), native);
         // The arc cases clear their arcs before the final delete, so the end state is the same
-        // board without arcs and keeps the format that board selects.
+        // board without arcs, in the same current format.
         s.open_snapshot(untouched.clone());
         if lock {
             s.open_snapshot(with_lock(&s.snapshot().unwrap(), true));
@@ -375,6 +372,7 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         let f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
         let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
         assert_eq!(f1["format"], native_board["format"]);
+        assert_eq!(f1["format"], crate::persistence::CURRENT_BOARD_FORMAT);
         assert_eq!(f1.get("arcs").is_some(), arcs);
         assert_eq!(f1["footprints"][0].get("locked").is_some(), lock);
         // The unreleased board/58 label is not a format.
@@ -406,7 +404,8 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
     }
 }
 
-/// Check dedicated native /24 and /25 independently of the arc/lock corpus.
+/// Check via net assignments and material reports independently of the arc/lock corpus; both
+/// save in the current format.
 #[test]
 fn a_format_f1_composes_with_assigned_via_and_material_report() {
     use crate::board::relations::{
@@ -427,7 +426,7 @@ fn a_format_f1_composes_with_assigned_via_and_material_report() {
         assert_eq!(encode_packed(decode_packed(&packed).unwrap().project).unwrap(), packed);
         let path = test_board_path(&native);
         let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
-        assert_eq!(native_board["format"], if report { "pcbcraft-board/25" } else { "pcbcraft-board/24" });
+        assert_eq!(native_board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
         if report {
             assert!(native_board["setup"]["materials"][0]["thermal_conductivity"].is_array());
         } else {
@@ -460,9 +459,8 @@ fn a_format_f1_composes_with_assigned_via_and_material_report() {
     }
 }
 
-/// Relations ride on board format 41 (named layer groups, the highest current board format) without
-/// changing it; an empty group list is still refused, and deleting the last relation returns the
-/// exact native /41 bytes.
+/// Relations ride beside named layer groups in the current format without changing it; an empty
+/// group list is still refused, and deleting the last relation returns the exact native bytes.
 #[test]
 fn a_format_f1_composes_with_named_layer_groups() {
     use crate::board::relations::tests::{add, bytes, origin, pick, run};
@@ -475,12 +473,12 @@ fn a_format_f1_composes_with_named_layer_groups() {
     let native = bytes(&s);
     let path = test_board_path(&native);
     let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
-    assert_eq!(native_board["format"], "pcbcraft-board/41");
+    assert_eq!(native_board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     let reference = pick(&mut s, 0, "fp.origin", None);
     let id = add(&mut s, "horizontal", origin(), reference);
     let composed = bytes(&s);
     let board: Value = serde_json::from_slice(&composed[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/41");
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(board["setup"]["stackup"]["layer_groups"], json!([group]));
     assert_eq!(board["relations"]["relations"][0]["id"], id);
     let mut stripped = board.clone();
@@ -497,13 +495,13 @@ fn a_format_f1_composes_with_named_layer_groups() {
     assert_eq!(bytes(&s), composed);
     let mut empty = board.clone();
     empty["setup"]["stackup"]["layer_groups"] = json!([]);
-    assert_invalid_board_record(&composed, &empty, "requires at least one group");
+    assert_invalid_board_record(&composed, &empty, "layer_groups must be omitted when empty");
     run(&mut s, crate::board::relations::commands::DELETE, json!({"ids":[id]})).unwrap();
     assert_eq!(bytes(&s), native);
 }
 
-/// Relations ride beside teardrops under board format 37. Relation edits on a teardrop board are refused like every
-/// other non-teardrop board edit, so the exact /37 control is reached by removing the teardrop.
+/// Relations ride beside teardrops in the current format. Relation edits on a teardrop board are refused like every
+/// other non-teardrop board edit, so the exact teardrop control is reached by removing the teardrop.
 #[test]
 fn a_format_f1_composes_with_teardrops() {
     use crate::CommandError;
@@ -543,26 +541,26 @@ fn a_format_f1_composes_with_teardrops() {
     };
     let native = bytes(&s);
     let path = test_board_path(&native);
-    // Native /37 control: the same teardrop on the same board without relations.
+    // Native teardrop control: the same teardrop on the same board without relations.
     let untouched = s.snapshot().unwrap();
     teardrop(&mut s, &[record], &[]);
     let control = bytes(&s);
     let control_board: Value = serde_json::from_slice(&control[&path]).unwrap();
-    assert_eq!(control_board["format"], "pcbcraft-board/37");
+    assert_eq!(control_board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     let reference = pick(&mut s, 0, "fp.origin", None);
     let e = unchanged(&mut s, |s| run(s, ADD, json!({"relation":{"kind":"horizontal","refs":[origin(), reference.clone()]}})));
     assert!(matches!(&e, CommandError::Unavailable(message) if message == UNSUPPORTED), "{e:?}");
     assert_eq!(bytes(&s), control);
     teardrop(&mut s, &[], &[record.id]);
     assert_eq!(bytes(&s), native);
-    // The relation first, then the teardrop, under the same /37 header.
+    // The relation first, then the teardrop, under the same current header.
     s.open_snapshot(untouched);
     let id = add(&mut s, "horizontal", origin(), reference);
     let related = bytes(&s);
     teardrop(&mut s, &[record], &[]);
     let saved = bytes(&s);
     let mut f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(f1["format"], "pcbcraft-board/37");
+    assert_eq!(f1["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(f1["teardrops"], control_board["teardrops"]);
     assert_eq!(f1.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
     assert_eq!(f1, control_board);
@@ -580,7 +578,7 @@ fn a_format_f1_composes_with_teardrops() {
     assert_eq!(bytes(&s), native);
 }
 
-/// Named groups, circular copper and active footprint locks coexist under board format 41.
+/// Named groups, circular copper and active footprint locks coexist in the current format.
 #[test]
 fn current_board_round_trips_named_groups_with_arcs_and_locks() {
     let mut session = track::tests::routed_fixture();
@@ -594,7 +592,7 @@ fn current_board_round_trips_named_groups_with_arcs_and_locks() {
     let saved = encode_documents(with_lock(&session.snapshot().unwrap(), true)).unwrap();
     let path = test_board_path(&saved);
     let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/41");
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(board["arcs"], json!([arc]));
     assert_eq!(board["footprints"][0]["locked"], true);
     assert_eq!(board["setup"]["stackup"]["layer_groups"], json!([group]));
@@ -610,8 +608,12 @@ fn combined_format_requires_both_features() {
     add_arc(&mut session);
     let saved = encode_documents(with_lock(&session.snapshot().unwrap(), true)).unwrap();
     let path = test_board_path(&saved);
-    let board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/35");
+    let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
+    board["format"] = json!("pcbcraft-board/35");
+    let mut legacy = saved.clone();
+    legacy.insert(path, serde_json::to_vec(&board).unwrap());
+    assert_eq!(encode_documents(decode_documents(&legacy).unwrap()).unwrap(), saved);
     for (header, reason) in [("pcbcraft-board/26", "footprint locks require"), ("pcbcraft-board/34", "arcs require")] {
         let mut mislabeled = board.clone();
         mislabeled["format"] = json!(header);
@@ -631,7 +633,7 @@ fn board_format_36_is_unsupported() {
     let saved = encode_documents(marker_fixture().snapshot().unwrap()).unwrap();
     let path = test_board_path(&saved);
     let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/1");
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(board["footprints"][0].get("locked").is_none());
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     board["format"] = json!("pcbcraft-board/36");
@@ -661,9 +663,10 @@ fn configured_format_headers_require_their_own_content() {
     let locked_id = project.board.footprints[1].id;
     let reported = encode_documents(project.clone()).unwrap();
     let mut report: Value = serde_json::from_slice(&reported[&path]).unwrap();
-    assert_eq!(report["format"], "pcbcraft-board/25");
+    assert_eq!(report["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(encode_documents(decode_documents(&reported).unwrap()).unwrap(), reported);
     assert_eq!(report["footprints"][1]["id"], locked_id);
+    report["format"] = json!("pcbcraft-board/25");
     report["footprints"][1]["locked"] = json!(true);
     trial = reported;
     trial.insert(path.clone(), serde_json::to_vec(&report).unwrap());
@@ -721,12 +724,13 @@ fn locked_board_requires_valid_placement_records() {
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
     let path = test_board_path(&documents);
     let good: Value = serde_json::from_slice(&documents[&path]).unwrap();
-    assert_eq!(good["format"], "pcbcraft-board/34");
+    assert_eq!(good["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(good.get("setup").is_none() && good.get("tracks").is_none() && good.get("vias").is_none());
 
     let mut invalid = good.clone();
     invalid.as_object_mut().unwrap().remove("footprints");
     assert_invalid_board_record(&documents, &invalid, "missing field `footprints`");
+    invalid["format"] = json!("pcbcraft-board/34");
     invalid["footprints"] = json!([]);
     assert_invalid_board_record(&documents, &invalid, "requires an authored footprint lock");
     invalid = good.clone();
@@ -738,7 +742,7 @@ fn locked_board_requires_valid_placement_records() {
     assert_invalid_board_record(&documents, &invalid, "unknown field `unexpected_lock_field`");
 }
 
-/// Format 34 retains earlier physical records, but still validates origin, zones, rules and copper setup.
+/// A current board with a footprint lock still validates origin, zones, rules and setup.
 #[test]
 fn footprint_lock_format_composes_with_preexisting_board_extensions() {
     for reports in [false, true] {
@@ -781,7 +785,6 @@ fn footprint_lock_format_composes_with_preexisting_board_extensions() {
         let saved = encode_documents(with_lock(&original, true)).unwrap();
         let path = test_board_path(&saved);
         let mut expected: Value = serde_json::from_slice(&before[&path]).unwrap();
-        expected["format"] = json!("pcbcraft-board/34");
         expected["footprints"][0]["locked"] = json!(true);
         assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
         let loaded = decode_documents(&saved).unwrap();
@@ -821,7 +824,7 @@ fn locked_board_retains_valid_authored_silkscreen() {
     let saved = encode_documents(with_lock(&original, true)).unwrap();
     let path = test_board_path(&saved);
     let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/34");
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(board["silkscreen"], style);
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     board["silkscreen"]["text_height_nm"] = json!(0);
@@ -845,7 +848,7 @@ fn locked_via_only_board_requires_copper_setup() {
     let saved = encode_documents(with_lock(&session.snapshot().unwrap(), true)).unwrap();
     let path = test_board_path(&saved);
     let mut board: Value = serde_json::from_slice(&saved[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/34");
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(board.get("tracks").is_none());
     assert_eq!(board["vias"].as_array().unwrap().len(), 1);
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
@@ -876,7 +879,7 @@ fn add_material_report(session: &mut Session) {
 }
 
 /// Every combination of published report, profile, stack and via-intent fields remains optional
-/// in format 34. Report-only stays 25 and active locks use 34; clearing the stored flag in
+/// in the current format. Clearing the stored flag in
 /// the test fixture restores the original bytes. The reader still rejects a bad profile pin,
 /// a report missing its source and a via assignment containing a nil net address.
 #[test]
@@ -926,29 +929,12 @@ fn footprint_lock_retains_published_profile_stack_and_via_extensions() {
                     let saved = encode_documents(with_lock(&original, true)).unwrap();
                     let path = test_board_path(&saved);
                     let mut expected: Value = serde_json::from_slice(&before[&path]).unwrap();
-                    if reports || via_intent || stack || profiles {
-                        assert_eq!(
-                            expected["format"],
-                            format!(
-                                "pcbcraft-board/{}",
-                                if reports {
-                                    25
-                                } else if via_intent {
-                                    24
-                                } else if stack {
-                                    23
-                                } else {
-                                    22
-                                }
-                            )
-                        );
-                    }
+                    assert_eq!(expected["format"], crate::persistence::CURRENT_BOARD_FORMAT);
                     let mut explicit_false = before.clone();
                     let mut false_board = expected.clone();
                     false_board["footprints"][0]["locked"] = json!(false);
                     explicit_false.insert(path.clone(), serde_json::to_vec(&false_board).unwrap());
                     assert_eq!(encode_documents(decode_documents(&explicit_false).unwrap()).unwrap(), before, "explicit false canonicalizes");
-                    expected["format"] = json!("pcbcraft-board/34");
                     expected["footprints"][0]["locked"] = json!(true);
                     assert_eq!(serde_json::from_slice::<Value>(&saved[&path]).unwrap(), expected);
                     for (name, bytes) in &before {

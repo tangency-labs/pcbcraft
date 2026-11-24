@@ -27,7 +27,7 @@ vertices back as authored data. This is an additive copper outline, not a drill
 outline or a checked routing decision. The isolated construction does not query
 other copper or need a curved track representation.
 
-The native board stores only intent in [format 37](../formats/native-project-storage.md#straight-via-teardrop-intents).
+The native board stores intent in [format 42](../formats/native-project-storage.md#current-board-records).
 PCB rendering, routing, connectivity, board DRC, and fabrication do not consume
 these polygons yet and refuse boards with active intents rather than omitting them.
 Other board edits are blocked while intents exist; remove the intents before

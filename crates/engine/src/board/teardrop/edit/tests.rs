@@ -160,7 +160,7 @@ fn command_adds_eight_reports_two_and_round_trips_intent() {
     assert!(matches!(encode_documents(std::sync::Arc::new(missing_setup)), Err(error) if error.contains("teardrops require a copper board setup")));
     let saved = encode_documents(current).unwrap();
     let mut board_json: serde_json::Value = serde_json::from_slice(saved.get(&path).unwrap()).unwrap();
-    assert_eq!(board_json["format"], "pcbcraft-board/37");
+    assert_eq!(board_json["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(board_json["teardrops"], json!(expected));
     let mut without_setup = saved.clone();
     let mut unconfigured = board_json.clone();

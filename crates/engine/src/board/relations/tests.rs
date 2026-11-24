@@ -594,8 +594,8 @@ fn sliced_track_ids(n: u128) -> Vec<Uuid> {
 
 /// This exact bundle is the source witness for the separate #443 reader. Here we only
 /// qualify the current reader on the lowest current board format (board/1 with an optional
-/// relations record). Saving adopts the current project format; the board keeps its board/1
-/// header and its relation, and re-encoding is byte-stable.
+/// relations record). Saving adopts the current project and board formats; the board keeps its
+/// relation, and re-encoding is byte-stable.
 #[test]
 fn a_format_intact_f1_fixture_for_baseline_reader_qualification() {
     const ROOT: &str = "sheets/00000000-0000-4000-8000-000000000003.json";
@@ -614,7 +614,7 @@ fn a_format_intact_f1_fixture_for_baseline_reader_qualification() {
     let saved_board: Value = serde_json::from_slice(&saved[&test_board_path(&saved)]).unwrap();
     let fixture_board: Value = serde_json::from_slice(&docs["board.json"]).unwrap();
     assert_eq!(fixture_board["format"], "pcbcraft-board/1");
-    assert_eq!(saved_board["format"], fixture_board["format"]);
+    assert_eq!(saved_board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(saved_board["relations"], fixture_board["relations"]);
     assert_eq!(encode_documents(decode_documents(&saved).unwrap()).unwrap(), saved);
     let list = run(&mut s, LIST, json!({})).unwrap();

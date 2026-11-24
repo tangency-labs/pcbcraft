@@ -394,10 +394,10 @@ fn multipad_and_nc_packages_are_versioned_and_preserved_offline() {
     let text = fragment.to_text().unwrap();
     assert_eq!(crate::board::clipboard::BoardFragment::from_text(&text).unwrap().to_text().unwrap(), text);
     let docs = encode_documents(project.clone()).unwrap();
-    let board_path = docs.iter().find(|(_, bytes)| String::from_utf8_lossy(bytes).contains("pcbcraft-board/17")).unwrap().0;
+    let board_path = docs.iter().find(|(_, bytes)| String::from_utf8_lossy(bytes).contains(crate::persistence::CURRENT_BOARD_FORMAT)).unwrap().0;
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
     let mut old = docs.clone();
-    let text = String::from_utf8(old[board_path].clone()).unwrap().replace("pcbcraft-board/17", "pcbcraft-board/16");
+    let text = String::from_utf8(old[board_path].clone()).unwrap().replace(crate::persistence::CURRENT_BOARD_FORMAT, "pcbcraft-board/16");
     old.insert(board_path.clone(), text.into_bytes());
     assert!(decode_documents(&old).is_err());
     let mut old_baseline = baseline.as_ref().clone();

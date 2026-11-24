@@ -340,10 +340,9 @@ fn pin_function_storage_writes_current_format_and_refuses_invalid_records() {
     }
 }
 
-/// A primary-only version-5 placement can be copied in the current layout, but cannot
-/// add an unencodable pin to an open marker-free flat split project.
+/// Version-5 placement upgrades an open flat project atomically and saves the pinned definition.
 #[test]
-fn pin_function_symbol_placement_requires_current_project_storage() {
+fn pin_function_symbol_placement_adopts_current_project_storage() {
     let mut session = fixture(false);
     let placed = &session.project().unwrap().symbols()[0];
     let definition = placed.definition.clone();
@@ -366,12 +365,24 @@ fn pin_function_symbol_placement_requires_current_project_storage() {
     let digest = library::sources::symbol_digest(&definition).unwrap();
     let request = json!({"library":definition.library,"definition":definition.id,"definition_revision":definition.revision(),
         "definition_digest":digest,"x_nm":0,"y_nm":0,"expected_revision":revision});
-    assert!(matches!(session.apply(crate::PLACE_SYMBOL, &request), Err(CommandError::InvalidParams(message))
-        if message == "Version-5 symbols require current project storage."));
-    let after = session.snapshot().unwrap();
-    assert!(Arc::ptr_eq(&before, &after));
+    let mut invalid = request.clone();
+    invalid["unit"] = json!("unknown");
+    assert!(session.apply(crate::PLACE_SYMBOL, &invalid).is_err());
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
     assert_eq!(session.revision(), revision);
-    assert_eq!(crate::persistence::historical_documents(after, "pcbcraft-project/9"), documents);
+
+    session.apply(crate::PLACE_SYMBOL, &request).unwrap();
+    assert!(session.project().unwrap().supports_pin_function_storage());
+    session.apply(SET, &params(&session, json!("ADC_IN"))).unwrap();
+    let saved = encode_documents(session.snapshot().unwrap()).unwrap();
+    let reopened = decode_documents(&saved).unwrap();
+    assert_eq!(reopened.symbols()[0].definition, definition);
+    assert!(ink(&reopened).contains(&"ADC_IN".to_owned()));
+    session.apply("edit.undo", &json!({})).unwrap();
+    session.apply("edit.undo", &json!({})).unwrap();
+    let undone = session.snapshot().unwrap();
+    assert!(!undone.supports_pin_function_storage());
+    crate::assert_same_content(&before, &undone);
 }
 
 /// Preview and apply both refuse missing current storage without modifying the project.
@@ -557,5 +568,5 @@ fn alternate_definition_validates_and_keeps_current_formats() {
     for _ in 0..3 {
         editor.execute(editor.revision(), Action::Undo).unwrap();
     }
-    assert_eq!(editor.snapshot().native().unwrap()["format"], library::SYMBOL_FORMAT);
+    assert_eq!(editor.snapshot().native().unwrap()["format"], library::SYMBOL_FORMAT_V5);
 }
