@@ -36,7 +36,7 @@ pub struct Budget {
 /// Basis for actions without an agreed target; they report quantiles only.
 const NO_TARGET: &str = "no target yet";
 
-/// The proposed #237 gates (`docs/performance-testing.md`, "Agent acceptance instructions"):
+/// The proposed #237 gates (`docs/testing/performance-testing.md`, "Agent acceptance instructions"):
 /// routing input p95 < 4 ms and commit p95 < 100 ms. Both boundaries here are CPU proxies,
 /// so a pass is evidence about service cost, not about the window or a future shove commit.
 /// Open, save, DRC and connectivity have no agreed target and report quantiles only.

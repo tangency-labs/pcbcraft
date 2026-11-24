@@ -20,13 +20,13 @@ pub use archive::ArchiveEncoder;
 mod documents;
 pub(crate) use documents::{BoardSizeCheck, check_board_document_size};
 #[cfg(test)]
-pub(crate) use documents::{count_board_record_write, take_board_record_writes};
+pub(crate) use documents::{count_board_record_write, historical_documents, take_board_record_writes};
 pub mod layout;
 mod part_group_storage;
 pub use documents::{
-    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
-    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
-    project_registered_board_id,
+    CURRENT_PROJECT_FORMAT, Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES,
+    convert_legacy_documents, decode_documents, encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path,
+    project_layout_root, project_registered_board_id,
 };
 mod packed;
 mod power_migration;

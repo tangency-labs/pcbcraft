@@ -4,10 +4,10 @@
 //! separate generations.
 //!
 //! Envelope counts come from the engine's documented limits on `main`:
-//! - `MAX_TRACKS = 65_536` (`crates/engine/src/board/track.rs:59`, `docs/native-project-storage.md:924`)
-//! - `MAX_VIAS = 16_384` (`crates/engine/src/board/track.rs:61`, `docs/native-project-storage.md:932`)
-//! - `MAX_PADS = 1,024`, `MAX_ARTWORK = 256` (`crates/engine/src/board/definition.rs:10,12`, `docs/native-project-storage.md:854`)
-//! - `MAX_TERMINALS = 1,024` (`crates/engine/src/library.rs:92`, `docs/native-project-storage.md:855`)
+//! - `MAX_TRACKS = 65_536` (`crates/engine/src/board/track.rs:59`, `docs/formats/native-project-storage.md`)
+//! - `MAX_VIAS = 16_384` (`crates/engine/src/board/track.rs:61`, `docs/formats/native-project-storage.md`)
+//! - `MAX_PADS = 1,024`, `MAX_ARTWORK = 256` (`crates/engine/src/board/definition.rs:10,12`, `docs/formats/native-project-storage.md`)
+//! - `MAX_TERMINALS = 1,024` (`crates/engine/src/library.rs:92`, `docs/formats/native-project-storage.md`)
 //! - 512 footprints (chosen to match `board-limits-v1`, not a limit: 511 discrete resistors plus
 //!   one 32 x 32 BGA, within `MAX_SYMBOLS = 4,096` at `crates/engine/src/schematic.rs:24`)
 //! - Storage bounds: `MAX_DOCUMENT_BYTES = 16 MiB` (`crates/engine/src/persistence/documents.rs:41`),

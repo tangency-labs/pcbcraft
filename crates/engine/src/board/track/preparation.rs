@@ -26,6 +26,17 @@ pub fn is_copper_edit(command: &str) -> bool {
     )
 }
 
+/// Keep the first short refusal for later when `defer` is set (compound diagnostic mode),
+/// so compound validation can still name the stationary blockers; otherwise refuse now.
+fn reject_short(defer: bool, deferred: &mut Option<CommandError>, error: CommandError) -> Result<(), CommandError> {
+    if defer {
+        deferred.get_or_insert(error);
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
 /// Pitch changes pad locations as well as copper. Keep other alignment modes on their existing path.
 fn is_pitch_edit(command: &str, params: &Value) -> bool {
     command == ALIGN_FOOTPRINTS && params.get("pitch_nm").is_some()
@@ -151,6 +162,8 @@ pub struct CopperEditJob {
     drag: Option<crate::board::route::Search>,
     displacements: Option<replacements::Changes>,
     check_route_vias: bool,
+    collect_collisions: bool,
+    deferred_short: Option<CommandError>,
     replacement_origins: Option<BTreeMap<Uuid, Uuid>>,
     replacement_geometry: Option<Arc<crate::board::clearance::BoardGeometry>>,
     replacement_validation: Option<replacements::Validation>,
@@ -209,6 +222,7 @@ impl Session {
     /// Direct authored commands retain their ordinary validation, including for DRC fixtures.
     pub fn prepare_interactive_route_with(&self, context: &CopperPreparation, params: &Value) -> Result<CopperEditJob, CommandError> {
         let mut job = self.prepare_copper_edit_with(context, ADD_TRACKS, params)?;
+        job.collect_collisions = params.get("replacements").is_some();
         job.check_route_vias = params.get("layer_changes").and_then(Value::as_array).is_some_and(|changes| !changes.is_empty())
             && context.source.snapshot.board.definitions.values().any(|definition| !definition.non_plated_holes.is_empty());
         Ok(job)
@@ -257,6 +271,8 @@ impl Session {
             drag: None,
             displacements: None,
             check_route_vias: false,
+            collect_collisions: command == RESHAPE_TRACKS && params.get("mode").and_then(Value::as_str) == Some("highlight"),
+            deferred_short: None,
             replacement_origins: None,
             replacement_geometry: None,
             replacement_validation: None,
@@ -407,8 +423,16 @@ impl CopperEditJob {
         self.result.take().transpose()
     }
     /// Capture and enforce class dimensions using the same candidate contacts as regeneration.
-    fn candidate_class_rules(&self, view: BoardView<'_>, geometry: &BoardGeometry) -> Result<Option<Context>, CommandError> {
+    /// With `defer_short`, a distinct-intended-nets refusal is returned beside the rules, so
+    /// compound validation can still identify the stationary blockers.
+    fn candidate_class_rules(
+        &self,
+        view: BoardView<'_>,
+        geometry: &BoardGeometry,
+        defer_short: bool,
+    ) -> Result<(Option<Context>, Option<CommandError>), CommandError> {
         let context = NetRules::new(view, self.context.source.effective.clone())?.map(|rules| rules.capture(view, geometry)).transpose()?;
+        let mut deferred = None;
         if let Some(context) = &context {
             for item in &geometry.items {
                 let Ok(id) = Uuid::parse_str(&item.name) else { continue };
@@ -416,7 +440,11 @@ impl CopperEditJob {
                     continue;
                 }
                 if item.intended_nets.len() > 1 {
-                    return Err(CommandError::InvalidParams("This copper would connect distinct intended nets.".into()));
+                    reject_short(
+                        defer_short,
+                        &mut deferred,
+                        CommandError::InvalidParams("This copper would connect distinct intended nets.".into()),
+                    )?;
                 }
                 if let Some(policy) = context.rules_for(&item.name).filter(|policy| policy.has_dimensions()) {
                     if let Ok(index) = view.tracks().binary_search_by_key(&id, |track| track.id) {
@@ -429,7 +457,7 @@ impl CopperEditJob {
                 }
             }
         }
-        Ok(context)
+        Ok((context, deferred))
     }
 
     /// For an interactive route with layer changes, refuse an added via land too close to a
@@ -504,6 +532,9 @@ impl CopperEditJob {
         if self.phase == 0 && self.command == RESHAPE_TRACKS && self.params.get("mode").is_some() && self.displacements.is_none() {
             return self.advance_drag(budget);
         }
+        // Let compound validation identify the stationary blockers of a short in diagnostic mode.
+        // Keep the original refusal for shorts that have no attributable pair.
+        let defer_short = self.collect_collisions && self.replacement_origins.is_some();
         match self.phase {
             0 if is_pitch_edit(self.command, &self.params) => {
                 if self.carry.is_none() {
@@ -603,7 +634,11 @@ impl CopperEditJob {
                     if let Some((a, b)) =
                         short_from_members(candidate, lands, &candidate.board.tracks, &candidate.board.vias, &members, &self.added, &BTreeSet::new())
                     {
-                        return Err(CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")));
+                        reject_short(
+                            defer_short,
+                            &mut self.deferred_short,
+                            CommandError::InvalidParams(format!("this track would connect nets {a} and {b}")),
+                        )?;
                     }
                     if self.check_route_vias
                         || self.replacement_origins.is_some()
@@ -651,11 +686,19 @@ impl CopperEditJob {
                     let view = project.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Board unavailable.".into()))?;
                     let (_, merged) = builder.finish(lands, view.tracks(), view.vias());
                     if let Some((a, b)) = short_from_members(project, lands, view.tracks(), view.vias(), &merged, &self.added, &BTreeSet::new()) {
-                        return Err(CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")));
+                        reject_short(
+                            defer_short,
+                            &mut self.deferred_short,
+                            CommandError::InvalidParams(format!("This copper would connect nets {a} and {b}.")),
+                        )?;
                     }
                     if view.teardrops().is_empty() {
                         let geometry = BoardGeometry::from_contacts(view, lands.as_ref().clone(), copper, members, merged);
-                        class_rules = self.candidate_class_rules(view, &geometry)?;
+                        let deferred;
+                        (class_rules, deferred) = self.candidate_class_rules(view, &geometry, defer_short)?;
+                        if let Some(error) = deferred {
+                            self.deferred_short.get_or_insert(error);
+                        }
                         self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
                         if self.replacement_origins.is_some() {
                             self.replacement_geometry = Some(Arc::new(geometry));
@@ -676,7 +719,11 @@ impl CopperEditJob {
                             || next.has_dimensional_net_classes()
                             || view.vias().iter().any(|via| via.net_assignment.is_some())
                         {
-                            class_rules = self.candidate_class_rules(view, &geometry)?;
+                            let deferred;
+                            (class_rules, deferred) = self.candidate_class_rules(view, &geometry, defer_short)?;
+                            if let Some(error) = deferred {
+                                self.deferred_short.get_or_insert(error);
+                            }
                         }
                         self.check_route_via_holes(lands.len(), view, &geometry, class_rules.as_ref())?;
                         if self.replacement_origins.is_some() {
@@ -702,7 +749,7 @@ impl CopperEditJob {
                 {
                     let geometry =
                         self.replacement_geometry.take().ok_or_else(|| CommandError::Unavailable("Missing final copper geometry.".into()))?;
-                    self.replacement_validation = Some(replacements::Validation::new(
+                    let validation = replacements::Validation::new(
                         self.context.source.clone(),
                         self.context.replacement_source.clone(),
                         geometry,
@@ -710,12 +757,16 @@ impl CopperEditJob {
                         self.added.clone(),
                         &self.params,
                         self.displacements.as_ref().ok_or_else(|| CommandError::Unavailable("Missing compound displacements.".into()))?,
-                    )?);
+                    )?;
+                    self.replacement_validation = Some(validation.collect_collisions(self.collect_collisions));
                 }
                 if let Some(validation) = &mut self.replacement_validation
                     && !validation.step(budget)?
                 {
                     return Ok(false);
+                }
+                if let Some(error) = self.deferred_short.take() {
+                    return Err(error);
                 }
                 self.replacement_validation = None;
                 if self.regeneration.is_some() {

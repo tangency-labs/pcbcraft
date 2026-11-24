@@ -508,3 +508,26 @@ fn a_retained_joint_cannot_fold_onto_the_support() {
     assert!(retained_track_joint(&support, &branch, &support, &pivoted, 150_000.));
     assert!(!retained_track_joint(&support, &branch, &support, &folded, 150_000.));
 }
+
+/// Report the stationary via responsible for a Highlight drag's short and refuse the edit.
+#[test]
+fn highlight_reports_foreign_via_causing_short() {
+    let mut session = routed_fixture();
+    let registry = session.project().unwrap().inspect_net_registry().unwrap();
+    let nets = registry["nets"].as_array().unwrap();
+    assert!(nets.len() >= 2);
+    let (start, foreign, original_end, end) = (p(-30, -30), p(-25, -31), p(-20, -30), p(-20, -32));
+    for (at, net) in [(start, &nets[0]), (foreign, &nets[1])] {
+        let target = json!({"kind":"derived","anchor":net["anchor"]});
+        session.apply(ADD_VIA, &json!({"at":at,"target":target,"expected_revision":session.revision()})).unwrap();
+    }
+    let track = add(&mut session, vec![start, original_end], 250_000)[0];
+    let via = view(&session).vias().iter().find(|via| via.at == foreign).unwrap().id;
+    let revision = session.revision();
+    let before = session.snapshot().unwrap();
+    let command = json!({"tracks":[{"track":track,"start":start,"end":end}],"mode":"highlight","expected_revision":revision});
+    let error = session.apply(crate::RESHAPE_TRACKS, &command).unwrap_err();
+    assert_eq!(session.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    assert!(matches!(&error, CommandError::CopperCollision { blockers } if blockers.contains(&via.to_string())), "{error:?}");
+}
