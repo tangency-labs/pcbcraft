@@ -1602,6 +1602,41 @@ fn group_drag_cancels_if_revision_changes_before_pickup() {
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 }
 
+/// Swapping one selected copper item before pickup cancels the held drag.
+#[test]
+fn group_drag_cancels_if_selection_changes_before_pickup() {
+    let (mut h, end) = pending_group_drag();
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let mut items = crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap());
+    items.tracks.clear();
+    items.vias.insert(vias(&h)[0].id);
+    h.state_mut().select_board_items(items.clone());
+    h.run();
+    h.drop_at(end);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+    assert_eq!(crate::board_clipboard::selection(&h.state().views.active.board, h.state().session.project().unwrap()), items);
+}
+
+/// A held Secondary button cancels the group drag before the later Primary release can place it.
+#[test]
+fn secondary_press_cancels_group_drag_before_primary_release() {
+    let (mut h, end) = pending_group_drag();
+    h.run();
+    let revision = h.state().session.revision();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.drop_at(end);
+    h.run();
+    assert!(!h.state().views.active.board.movement.active());
+    assert_eq!(h.state().session.revision(), revision);
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Properties shows a selected track's width in the display units (millimeters here); typing a
 /// new width and pressing Enter sets it through the shared command in one edit.
 #[test]

@@ -510,11 +510,16 @@ pub(super) fn show(
                 None
             };
             // Dragging a member of a larger selection keeps it and moves the whole group, as Move does.
-            if let Some(press) = drag_origin
+            let group = if let Some(press) = drag_origin
                 && picked.is_some_and(|footprint| state.selection.contains(&footprint.id))
-                && crate::board_clipboard::selection_with_vias(state, project.vias().iter().map(|v| v.id)).len() > 1
             {
-                state.movement.request_drag(source, camera.snap(press, rect));
+                let items = crate::board_clipboard::selection_with_vias(state, project.vias().iter().map(|v| v.id));
+                (items.len() > 1).then_some((press, items))
+            } else {
+                None
+            };
+            if let Some((press, items)) = group {
+                state.movement.request_drag(source, camera.snap(press, rect), items);
                 ui.ctx().request_repaint();
             } else if let Some(footprint) = picked {
                 state.drawing.select(None);

@@ -23,11 +23,12 @@ pub(super) struct State {
     pending_drag: Option<DragPickup>,
 }
 
-/// The board view and snapped press location that granted this drag its input.
+/// The input, snapped press location and selection captured when the drag starts.
 #[derive(Debug)]
 struct DragPickup {
     source: ViewInput,
     anchor: Point,
+    items: BoardSelection,
 }
 #[derive(Debug)]
 struct Draft {
@@ -54,9 +55,9 @@ impl State {
         let requested = self.pending_drag.take().is_some();
         self.cancelled |= self.draft.take().is_some() || requested;
     }
-    /// Keep the press anchor and authority until the group takes over on the next pass.
-    pub(super) fn request_drag(&mut self, source: ViewInput, anchor: Point) {
-        self.pending_drag = Some(DragPickup { source, anchor });
+    /// Keep the press anchor, input and selection until the group takes over on the next pass.
+    pub(super) fn request_drag(&mut self, source: ViewInput, anchor: Point, items: BoardSelection) {
+        self.pending_drag = Some(DragPickup { source, anchor, items });
     }
     /// Escape leaves the complete selection intact for another pickup.
     pub(super) fn escape(&mut self) -> bool {
@@ -75,7 +76,7 @@ fn subset(a: &BoardSelection, b: &BoardSelection) -> bool {
 }
 impl PcbApp {
     /// Start Move or a held drag for an explicit group before category-specific handlers can consume it.
-    /// Existing gestures, modal/file input, changed authority, filters or layers cancel the whole group.
+    /// Cancel if input expires or the selection changes before pickup or while moving.
     pub(super) fn board_move_ready(&mut self, ctx: &Context, id: ViewId, enabled: bool) -> bool {
         let Some(project) = self.session.snapshot() else { return false };
         let Some(view) = self.views.view_mut(id) else { return false };
@@ -109,6 +110,11 @@ impl PcbApp {
             return false;
         }
         let items = crate::board_clipboard::selection(&view.board, &project);
+        if drag.as_ref().is_some_and(|drag| drag.items != items) {
+            view.board.movement.cancelled = true;
+            view.board.move_requested = false;
+            return true;
+        }
         if items.len() < 2 {
             return false;
         }
@@ -160,12 +166,17 @@ impl PcbApp {
         true
     }
     /// Paint disposable geometry from the captured source. A valid click or drag release
-    /// dispatches one revision-checked command. Equal offsets reuse the preview.
+    /// dispatches one revision-checked command. A secondary press discards the preview and owns the release.
     pub(super) fn board_move_canvas(&mut self, ui: &mut Ui, id: ViewId, label: &str) {
         let Some(original) = self.session.snapshot() else { return };
         let Some(view) = self.views.view_mut(id) else { return };
         let rect = ui.available_rect_before_wrap();
         let mut draft = view.board.movement.draft.take();
+        if draft.is_some() && ui.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) {
+            draft = None;
+            view.board.movement.cancelled = true;
+            view.board.context_menu_allowed = false;
+        }
         let release = if draft.as_ref().is_some_and(|d| d.drag) && ui.input(|i| i.pointer.primary_released()) {
             pointer_release(&ui.response(), PointerButton::Primary)
         } else {
@@ -239,9 +250,6 @@ impl PcbApp {
         }
         if let Some(d) = draft {
             ui.ctx().set_cursor_icon(if d.error.is_some() { egui::CursorIcon::NotAllowed } else { egui::CursorIcon::Grabbing });
-            if ui.input(|i| i.pointer.secondary_clicked()) {
-                return;
-            }
             // A drag places on release over the canvas; a lost release, an off-canvas release or
             // an unchanged offset ends it without an edit.
             let place = if d.drag {
