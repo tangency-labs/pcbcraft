@@ -1637,6 +1637,26 @@ fn footprint_deletion_uses_selected_placements_and_shared_undo() {
     }
 }
 
+/// Backspace, which is the delete key on Mac keyboards, deletes an explicit board selection
+/// exactly as Delete does, in one undo step.
+#[test]
+fn backspace_deletes_the_board_selection_like_delete() {
+    let mut h = editable_board();
+    let before = encode_documents(h.state().session.snapshot().unwrap()).unwrap();
+    let origin = board_point(&h, Point { x_nm: 0, y_nm: 0 });
+    click_canvas_at(&mut h, origin);
+    assert!(!h.state().views.active.board.selection.is_empty());
+    let revision = h.state().session.revision();
+    h.key_press(Key::Backspace);
+    h.run();
+    assert_eq!(h.state().session.revision(), revision + 1);
+    assert!(h.state().session.project().unwrap().boards().next().unwrap().footprints().next().is_none());
+    assert!(h.state().views.active.board.selection.is_empty());
+    h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    h.run();
+    assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
+}
+
 /// Live clients use the same deletion command and stale gate, and can undo from the GUI.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]

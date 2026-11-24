@@ -747,16 +747,11 @@ fn validate_snapshot(snapshot: &Value, label: &str) -> Result<u32, String> {
     Ok(version)
 }
 
-/// The snapshot section for `described` commands: one line per command, sorted by id, mapping
-/// the id to its [`contract_of`], so a change shows as a one-line diff.
+/// Format the sorted command contracts for pasting into the snapshot. Indent nested fields
+/// separately so changes to different parameters can merge within the same command.
 pub fn snapshot_section(described: &[Value]) -> String {
-    let entries: BTreeMap<&str, String> =
-        described.iter().map(|command| (command["id"].as_str().unwrap_or_default(), contract_of(command).to_string())).collect();
-    if entries.is_empty() {
-        return "{}".to_owned();
-    }
-    let lines: Vec<String> = entries.iter().map(|(id, contract)| format!("    {}: {contract}", Value::String((*id).to_owned()))).collect();
-    format!("{{\n{}\n  }}", lines.join(",\n"))
+    let entries: BTreeMap<&str, Value> = described.iter().map(|command| (command["id"].as_str().unwrap_or_default(), contract_of(command))).collect();
+    serde_json::to_string_pretty(&entries).expect("command contracts are JSON values").replace('\n', "\n  ")
 }
 
 #[cfg(test)]
