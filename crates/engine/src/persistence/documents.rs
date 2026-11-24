@@ -3225,8 +3225,8 @@ mod board_facts_tests {
 
     use super::{BoardFacts, Project};
     use crate::{
-        ADD_TRACKS, ADD_VIA, ASSIGN_FOOTPRINT, INITIALIZE_BOARD_SETUP, INITIALIZE_UPDATE_BASELINE, PLACE_RESISTOR, Session,
-        board::setup::LayerPurpose,
+        ADD_TRACKS, ADD_VIA, APPLY_UPDATE, ASSIGN_FOOTPRINT, INITIALIZE_BOARD_SETUP, INITIALIZE_UPDATE_BASELINE, PLACE_ASSIGNED_FOOTPRINT,
+        PLACE_RESISTOR, PREVIEW_UPDATE, Session, board::setup::LayerPurpose,
     };
 
     fn apply(session: &mut Session, command: &str, mut params: Value) {
@@ -3311,43 +3311,117 @@ mod board_facts_tests {
         assert_eq!(via_facts.pending_checks, 0);
     }
 
+    /// Two accepted and placed parts, then two newer parts whose assignments are still pending.
+    fn accepted_footprints_and_pending_assignments() -> (Project, Vec<u64>) {
+        let mut session = Session::default();
+        session.apply("project.new", &json!({"name": "BoardFacts extended scan", "create_board": true})).unwrap();
+        apply(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers": 2}));
+        let definition = crate::board::definition::basic_components("resistor-0402").unwrap();
+        let place_and_assign = |session: &mut Session, x_nm: i64| {
+            apply(session, PLACE_RESISTOR, json!({"x_nm": x_nm, "y_nm": 0}));
+            let id = *session.project().unwrap().components.keys().next_back().unwrap();
+            apply(
+                session,
+                ASSIGN_FOOTPRINT,
+                json!({
+                    "component": format!("component-{id}"),
+                    "library": definition.library,
+                    "definition": definition.id,
+                    "definition_revision": definition.revision,
+                    "mapping": {"1": "1", "2": "2"},
+                }),
+            );
+            id
+        };
+        let accepted = [place_and_assign(&mut session, 0), place_and_assign(&mut session, 10_000_000)];
+        let preview = session.execute(PREVIEW_UPDATE, &json!({"expected_revision": session.revision()})).unwrap()["board_update_preview"].clone();
+        apply(&mut session, APPLY_UPDATE, json!({"plan_token": preview["plan_token"]}));
+        for (index, id) in accepted.into_iter().enumerate() {
+            apply(
+                &mut session,
+                PLACE_ASSIGNED_FOOTPRINT,
+                json!({"component": format!("component-{id}"), "x_nm": index as i64 * 10_000_000, "y_nm": 0}),
+            );
+        }
+        let pending = vec![place_and_assign(&mut session, 20_000_000), place_and_assign(&mut session, 30_000_000)];
+        ((*session.snapshot().unwrap()).clone(), pending)
+    }
+
     /// Once one footprint, assignment or accepted package needs the multipad format, the scan
     /// stops checking the remaining rows for it; the selected facts are unchanged.
     #[test]
     fn board_facts_stops_extended_mapping_checks_after_first_extended_row() {
-        let (session, first_id, second_id) = two_pending_assignments();
-        let plain = (*session.snapshot().unwrap()).clone();
-        let with_unconnected = |ids: &[u64]| {
+        let (plain, pending) = accepted_footprints_and_pending_assignments();
+        let footprints = plain.board.footprints().len();
+        let assignments = plain.board.assignments.len();
+        let accepted = plain.board.baseline.as_ref().map_or(0, |baseline| baseline.components.len());
+        assert_eq!(footprints, 2);
+        assert_eq!(accepted, 2);
+        assert!(pending.iter().all(|id| plain.board.assignments.contains_key(id)));
+        assert!(assignments >= 2);
+
+        let edit = |change: &dyn Fn(&mut crate::board::Board)| {
             let mut project = plain.clone();
-            let board = std::sync::Arc::make_mut(&mut project.board);
-            for id in ids {
-                board.assignments.get_mut(id).unwrap().unconnected_pads.push("NC".to_owned());
-            }
+            change(std::sync::Arc::make_mut(&mut project.board));
             project
         };
-        let footprints = plain.board.footprints().len();
-        let accepted = plain.board.baseline.as_ref().map_or(0, |baseline| baseline.components.len());
-        assert!(first_id < second_id);
+        let mark_assignments = |count: usize, skip: usize| {
+            edit(&|board| {
+                for assignment in board.assignments.values_mut().skip(skip).take(count) {
+                    assignment.unconnected_pads.push("NC".to_owned());
+                }
+            })
+        };
 
         // Nothing extended: every footprint, assignment and accepted package is checked.
         let none = scan(&plain);
         assert!(!none.extended);
-        assert_eq!(none.extended_checks, footprints + 2 + accepted);
+        assert_eq!(none.extended_checks, footprints + assignments + accepted);
 
-        // The first assignment is extended: the second assignment and accepted packages are not checked.
-        let first = scan(&with_unconnected(&[first_id]));
+        // The first footprint is extended: nothing after it is checked.
+        let footprint_first = edit(&|board| {
+            let mut placed = board.footprints().to_vec();
+            let (baseline, saved_assignments, definitions) = (board.baseline.take(), board.assignments.clone(), board.definitions.clone());
+            for footprint in &placed {
+                board.remove_component(footprint.component, None);
+            }
+            board.definitions = definitions;
+            placed[0].unconnected_pads.push("NC".to_owned());
+            for footprint in placed {
+                board.append(footprint).unwrap();
+            }
+            board.assignments = saved_assignments;
+            board.baseline = baseline;
+        });
+        assert_eq!(footprint_first.board.footprints().len(), footprints);
+        assert!(!footprint_first.board.footprints()[0].unconnected_pads.is_empty());
+        let footprint_facts = scan(&footprint_first);
+        assert!(footprint_facts.extended);
+        assert_eq!(footprint_facts.extended_checks, 1);
+
+        // The first assignment is extended: later assignments and accepted packages are not checked.
+        let first = scan(&mark_assignments(1, 0));
         assert!(first.extended);
         assert_eq!(first.extended_checks, footprints + 1);
 
-        // Both extended: still one assignment check, with the same facts.
-        let both = scan(&with_unconnected(&[first_id, second_id]));
-        assert!(both.extended);
-        assert_eq!(both.extended_checks, footprints + 1);
-        assert_eq!((both.pending, both.pending_checks), (first.pending, first.pending_checks));
+        // Every assignment extended: still one assignment check, with the same facts.
+        let all = scan(&mark_assignments(assignments, 0));
+        assert!(all.extended);
+        assert_eq!(all.extended_checks, footprints + 1);
+        assert_eq!((all.pending, all.pending_checks), (first.pending, first.pending_checks));
 
-        // Only the second is extended: both assignments are checked, and accepted packages are not.
-        let second = scan(&with_unconnected(&[second_id]));
+        // Only the second assignment is extended: two assignment checks, and accepted packages are not checked.
+        let second = scan(&mark_assignments(1, 1));
         assert!(second.extended);
         assert_eq!(second.extended_checks, footprints + 2);
+
+        // The first accepted package is extended: the second accepted package is not checked.
+        let accepted_first = edit(&|board| {
+            let baseline = std::sync::Arc::make_mut(board.baseline.as_mut().unwrap());
+            baseline.components.values_mut().next().unwrap().package.as_mut().unwrap().unconnected_pads.push("NC".to_owned());
+        });
+        let accepted_facts = scan(&accepted_first);
+        assert!(accepted_facts.extended);
+        assert_eq!(accepted_facts.extended_checks, footprints + assignments + 1);
     }
 }
