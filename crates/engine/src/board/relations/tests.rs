@@ -195,8 +195,8 @@ fn a_cat_ref_ordered_measurement_and_refusal() {
     assert!(matches!(catalog::measure(&resolver, Kind::Gap, &[right,left]), Some(Measure::Projection {signed_nm,..}) if signed_nm == -gap));
 }
 
-/// F1 round-trips the original closed tags, adds no clipboard bytes, keeps the board format its
-/// other content selects, and drops the record once the final row has gone. Known driving rows,
+/// F1 round-trips the original closed tags, adds no clipboard bytes, keeps the current board
+/// format, and drops the record once the final row has gone. Known driving rows,
 /// unsupported headers and a null record are refused intact.
 #[test]
 fn a_format_p1_clipboard_and_driving_row_reader() {
@@ -262,8 +262,8 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
     assert!(board.get("relations").is_none());
 }
 
-/// Relations are an optional board record, not a format: a board with relations keeps the header
-/// its other content selects and reopens with the same relation and bytes. The pre-release
+/// Relations are an optional board record, not a format: a board with relations keeps the current
+/// board format and reopens with the same relation and bytes. The pre-release
 /// board/39 and board/58 labels are unsupported, and deleting the last relation restores the
 /// plain bytes.
 #[test]

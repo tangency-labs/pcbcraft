@@ -2446,7 +2446,7 @@ fn board_header(bytes: &mut impl Write, project: &Project) -> Result<(), String>
         }
         bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
     }
-    // Relations are optional data under the selected format and are omitted when none exist.
+    // Relations are optional data under the current board format and are omitted when none exist.
     if let Some(relations) = &board.relations {
         bytes.write_all(b"  \"relations\": {\n    \"relations\": [\n").map_err(|error| error.to_string())?;
         let mut first = true;
