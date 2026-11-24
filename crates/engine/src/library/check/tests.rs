@@ -190,6 +190,11 @@ fn repeated_pad_three_and_unmapped_terminal_give_two_findings() {
     assert_eq!(report["findings"][1]["rule"], "package.terminal.unmapped");
     assert_eq!(report["findings"][0]["severity"], "error");
     assert_eq!(report["findings"][1]["severity"], "error");
+    // The default run is the edit stage; its errors come from rules that also run at publish.
+    assert_eq!(direct.stage(), Stage::Edit);
+    assert!(direct.blocks_publish());
+    assert_eq!(report["stage"], "edit");
+    assert_eq!(report["blocks_publish"], true);
     assert_eq!(fixture.session.apply(CHECK, &params).unwrap(), revision);
     assert_eq!((editors(&fixture), fixture.session.inspect(), fixture.session.revision(), params), before);
 }
@@ -647,8 +652,10 @@ fn check_stage_filter() {
     let publish = check_with(&capture, &Options { stage: Stage::Publish, ..Options::default() }, &publish_only).unwrap();
     assert_eq!(rules(&publish), [RuleId::PadNumberRepeated]);
     assert!(publish.blocks_publish());
-    // The built-in rule runs at every stage.
-    assert_eq!(rules(&check_with(&capture, &Options::default(), RULES).unwrap()), [RuleId::PadNumberRepeated]);
+    // The built-in rule runs at every stage, and its error at the edit stage blocks publication.
+    let built_in = check_with(&capture, &Options::default(), RULES).unwrap();
+    assert_eq!(rules(&built_in), [RuleId::PadNumberRepeated]);
+    assert!(built_in.blocks_publish());
 }
 
 /// Lowering `package.pad.repeated` to a warning keeps its finding but no longer blocks
@@ -709,4 +716,108 @@ fn check_override_required_floor() {
     let params = json!({"documents":fixture.documents,"severity":{"pad.number.repeated":"info"}});
     let refused = fixture.session.execute(CHECK, &params).unwrap_err();
     assert!(matches!(&refused, crate::CommandError::InvalidParams(message) if message.contains("pad.number.repeated")), "{refused}");
+}
+
+/// `blocks_publish` follows the rule's stages, not the stage that ran: the built-in errors block
+/// publication at edit, place and publish, while an error from a rule that never runs at publish
+/// is counted but blocks nothing.
+#[test]
+fn check_blocks_publish_follows_the_rule_stages() {
+    let mut fixture = fixture();
+    let documents = edited(&fixture, |text| repeat_pad(text, 2, 2_000_000));
+    let capture = Capture::from_documents(&documents, &Catalog::default()).unwrap();
+    for (stage, name) in [(Stage::Edit, "edit"), (Stage::Place, "place"), (Stage::Publish, "publish")] {
+        let report = check_with(&capture, &Options { stage, ..Options::default() }, RULES).unwrap();
+        assert_eq!(rules(&report), [RuleId::PadNumberRepeated], "{name}");
+        assert_eq!(report.counts(), Counts { error: 1, warning: 0, info: 0 }, "{name}");
+        assert!(report.blocks_publish(), "{name}");
+        let value = fixture.session.execute(CHECK, &json!({"documents":documents,"stage":name})).unwrap();
+        assert_eq!(value, serde_json::to_value(&report).unwrap(), "{name}");
+        assert_eq!((&value["stage"], &value["blocks_publish"]), (&json!(name), &json!(true)));
+    }
+    let edit_only = [Rule { stages: &[Stage::Edit], ..RULES[0] }];
+    let report = check_with(&capture, &Options::default(), &edit_only).unwrap();
+    assert_eq!(rules(&report), [RuleId::PadNumberRepeated]);
+    assert_eq!(report.findings()[0].severity, Severity::Error);
+    assert_eq!(report.counts(), Counts { error: 1, warning: 0, info: 0 });
+    assert!(!report.blocks_publish(), "an edit-only error does not block publication");
+}
+
+/// A rule registered only for placement reports at the place stage and nowhere else; an optional
+/// rule at `info`, by default or by override, is counted as info and blocks nothing.
+#[test]
+fn check_place_stage_and_info_findings() {
+    let fixture = fixture();
+    let capture = Capture::from_documents(&edited(&fixture, |text| repeat_pad(text, 2, 2_000_000)), &Catalog::default()).unwrap();
+    let place_only = [Rule { stages: &[Stage::Place], ..RULES[0] }];
+    for stage in [Stage::Edit, Stage::Publish] {
+        assert!(check_with(&capture, &Options { stage, ..Options::default() }, &place_only).unwrap().is_clean(), "{stage:?}");
+    }
+    let place = check_with(&capture, &Options { stage: Stage::Place, ..Options::default() }, &place_only).unwrap();
+    assert_eq!((place.stage(), rules(&place)), (Stage::Place, vec![RuleId::PadNumberRepeated]));
+    assert!(!place.blocks_publish(), "a place-only rule does not block publication");
+    assert_eq!(serde_json::to_value(&place).unwrap()["stage"], "place");
+
+    let note = [Rule { severity: Severity::Info, required: false, ..RULES[0] }];
+    let lowered = Options { severity: BTreeMap::from([("pad.number.repeated".to_owned(), Severity::Info)]), ..Options::default() };
+    let optional = [Rule { required: false, ..RULES[0] }];
+    for report in [check_with(&capture, &Options::default(), &note).unwrap(), check_with(&capture, &lowered, &optional).unwrap()] {
+        assert_eq!(rules(&report), [RuleId::PadNumberRepeated]);
+        assert_eq!(report.findings()[0].severity, Severity::Info);
+        assert_eq!(report.counts(), Counts { error: 0, warning: 0, info: 1 });
+        assert!(!report.is_clean());
+        assert!(!report.blocks_publish());
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["findings"][0]["severity"], "info");
+        assert_eq!(value["counts"], json!({"error":0,"warning":0,"info":1}));
+    }
+}
+
+const SLOT_FORMAT: &str = "pcbcraft-footprint/5";
+
+/// Turn the pad at `index` into a through-hole land with a plated slot and set `format`, the
+/// way a published plated-slot footprint is written.
+fn slotted(text: &str, index: usize, format: &str) -> String {
+    let mut value: Value = serde_json::from_str(text).unwrap();
+    value["format"] = json!(format);
+    let pad = value["pads"][index].as_object_mut().unwrap();
+    pad.remove("corner_radius_nm");
+    pad.remove("drill_nm");
+    pad.insert("shape".into(), json!("circle"));
+    pad.insert("width_nm".into(), json!(1_800_000));
+    pad.insert("height_nm".into(), json!(1_800_000));
+    pad.insert("copper".into(), json!("all_copper"));
+    pad.insert("plated_slot".into(), json!({"width_nm":600_000,"length_nm":1_200_000,"rotation_mdeg":0}));
+    serde_json::to_string_pretty(&value).unwrap() + "\n"
+}
+
+/// A plated-slot footprint is checked like any other: its slotted pad is a pad, a repeated
+/// slotted pad number is one finding, and the slot format must match the authored holes.
+#[test]
+fn plated_slot_footprints_are_checked() {
+    let mut fixture = fixture();
+    let slot = edited(&fixture, |text| slotted(text, 2, SLOT_FORMAT));
+    assert!(NativeSource::load(&slot).unwrap().problems().is_empty(), "the slotted fixture is a valid footprint");
+    let capture = Capture::from_documents(&slot, &Catalog::default()).unwrap();
+    let pads = &capture.footprints()[0].pads;
+    let numbers: Vec<_> = pads.iter().map(|pad| pad.number.as_str()).collect();
+    assert_eq!(numbers, ["1", "2", "3"]);
+    assert!(pads[2].pad.plated_slot.is_some());
+    assert!(check(&capture).is_clean());
+    let value = fixture.session.execute(CHECK, &json!({"documents":slot})).unwrap();
+    assert_eq!(value["findings"], json!([]));
+
+    let repeated = edited(&fixture, |text| repeat_pad(&slotted(text, 2, SLOT_FORMAT), 2, 2_000_000));
+    let report = check(&Capture::from_documents(&repeated, &Catalog::default()).unwrap());
+    assert_eq!(rules(&report), [RuleId::PadNumberRepeated]);
+    assert_eq!(report.findings()[0].measured.value, 2);
+    assert_eq!(report.findings()[0].occurrences, [PadOccurrenceRef { index: 2, ordinal: 1 }, PadOccurrenceRef { index: 3, ordinal: 2 }]);
+
+    // The slot format without a slot, and a slot under an older format, are mismatches.
+    let unslotted = edited(&fixture, |text| text.replacen(FootprintDefinition::format_for(false, &[]), SLOT_FORMAT, 1));
+    let older = edited(&fixture, |text| slotted(text, 2, FootprintDefinition::format_for(true, &[])));
+    for (documents, format) in [(unslotted, SLOT_FORMAT), (older, FootprintDefinition::format_for(true, &[]))] {
+        let error = Capture::from_documents(&documents, &Catalog::default()).unwrap_err();
+        assert_eq!(error, CheckError::UnsupportedFormat { file: fixture.footprint_path.clone(), format: format.into() });
+    }
 }

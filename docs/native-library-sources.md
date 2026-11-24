@@ -271,8 +271,10 @@ read-only sessions and through MCP with `inspect: false`.
 
 The check decodes footprint, symbol and part documents structurally, so a
 document that strict loading rejects for a semantic defect can still be
-explained. Every authored pad is kept in its authored order, with no
-deduplication; non-plated holes are not pads. Exact symbol and footprint
+explained. Every footprint format this build reads is accepted, including
+footprints with plated slots, and the format must match the authored holes.
+Every authored pad is kept in its authored order, with no
+deduplication; slotted pads are pads, and non-plated holes are not. Exact symbol and footprint
 references resolve in the transported documents first and then in the loaded
 catalog. Invalid JSON, unknown fields, repeated keys, an unsupported or
 mismatched format, an unresolved reference, more than 1024 pads in one footprint,
