@@ -278,6 +278,13 @@ fn pad_inspection_takes_priority_over_tracks_without_footprint_filter() {
     assert_eq!(document(&h), before, "a pad-origin drag must not move the underlying track");
     click_at(&mut h, at, Modifiers::NONE);
     assert_eq!(h.state().views.active.inspection, vec![target]);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run();
+    assert!(h.state().views.active.inspection.is_empty());
+    assert_eq!(h.state().views.active.board.tracks.selected.len(), 1);
+    h.key_press_modifiers(Modifiers::SHIFT, Key::Space);
+    h.run();
+    assert_eq!(h.state().views.active.inspection, vec![target]);
     assert!(h.state().views.active.board.tracks.selected.is_empty());
     h.state_mut().set_selection_filters(id, &json!({"pads":false})).unwrap();
     h.run();

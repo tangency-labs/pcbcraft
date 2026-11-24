@@ -50,18 +50,20 @@ supported versions and deferred work before extending a format or consumer.
 
 | Area | References |
 | --- | --- |
-| Native files and compatibility | [Project storage](native-project-storage.md) · [Optional single-board foundation](single-board-storage.md) · [Single-use sheet occurrences](sheet-occurrence-storage.md) |
+| Native files and compatibility | [Project storage](native-project-storage.md) · [Reading a saved project](reading-native-projects.md) · [Optional single-board foundation](single-board-storage.md) · [Single-use sheet occurrences](sheet-occurrence-storage.md) |
 | Persistent net records and differential pairs | [Sparse net registry](net-registry-storage.md) |
 | Netlist export | [JSON netlist format](netlist-format.md) · [Schema, format 1](schemas/netlist-v1.schema.json) · [Schema, format 2 (board)](schemas/netlist-v2.schema.json) |
+| Schematic document output | [Schematic PDF writer](schematic-pdf.md) |
 | Object identities | [Identity inventory](object-identity.md) |
+| Object-query parsing | [Syntax, trees and byte-offset diagnostics](object-queries.md), without evaluation or UI |
 | Pin/pad correspondence | [Complete counterparts and unavailable states](pin-pad-correspondence.md) |
 | Dimensional net classes | [Catalog and resolver](net-classes.md) · [Assignments and topology reconciliation](net-class-assignments.md) · [Routing and checking consumers](net-class-consumers.md) |
 | Part groups | [Catalog, membership and storage](part-groups.md) |
-| Library records | [Symbol schema](symbol-schema.md) · [Footprint and placement schema](footprint-schema.md) · [Parts, categories and manufacturer records](part-schema.md) · [Machine-readable schemas](schemas/) |
+| Library records | [Symbol schema](symbol-schema.md) · [Footprint and placement schema](footprint-schema.md) · [Parts, categories and manufacturer records](part-schema.md), with [format-5 descriptive metadata](part-schema.md#descriptive-metadata-and-search) · [Machine-readable schemas](schemas/) |
 | Typed quantities | [Quantities and units](quantity-units.md) |
 | Cross-sheet clipboard | [Hierarchical clipboard contract](hierarchical-clipboard-contract.md) |
 | Shared geometry | [Snapshot copper queries](copper-clearance-query.md) · [Exact circular copper records](circular-copper-records.md) · [Straight via teardrop records](teardrop-records.md) · [Walkaround route planning](route-planning.md) |
-| Solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) |
+| Planar regions, solid bodies and STEP | [Geometry kernel and STEP library](geometry-kernel.md) |
 | Shared interface toolkit | [Craft UI migration and current pin](shared-ui-migration.md) |
 | Local transport | [Craft control protocol](../crates/craft-control/README.md) |
 

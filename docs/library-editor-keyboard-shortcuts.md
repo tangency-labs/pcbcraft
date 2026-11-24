@@ -75,15 +75,17 @@ area, not covered by a panel or floating layer.
 
 | Keys | Action |
 | --- | --- |
-| **Esc** | Resets the tool to Select — cancels Draw, Polyline, Move, MoveGroup and Paste previews without committing. Does not require the pointer over the canvas and does not clear the selection. |
+| **Esc** | Resets the tool to Select — cancels Draw, Polyline, Courtyard, Move, MoveGroup and Paste previews without committing. Does not require the pointer over the canvas and does not clear the selection. |
 | **P** | Places a pin (Symbol Editor) or a pad (Footprint Editor). Ignored while Ctrl is held. |
 | **L** | Starts the line tool. Ignored while Ctrl is held. |
 | **T** | Starts the text tool. Ignored while Ctrl is held. |
+| **C** | Starts the Draw Courtyard outline tool and shows the Courtyard layer (Footprint Editor only). Requires window focus and no held modifiers; refuses while property fields are pending. |
 | **M** | Starts a move: single selection → Move; multiple → MoveGroup anchored on the first object. Refuses with "Apply or reset the property fields before moving." while property input is unapplied. Fires regardless of held modifiers. |
 | **R** / **Shift+R** | Rotates a quarter turn, in opposite directions. Applies to the Move, MoveGroup or Paste preview when one is armed, to the Draw-tool placement prototype otherwise — or to the current selection when neither applies. |
 | **E** | Opens the selected object's details — only when exactly one object is selected. Fires regardless of held modifiers. |
 | **Delete** | Deletes the selected objects. Fires regardless of held modifiers. |
-| **Enter** | Commits the in-progress polyline as a graphic object; does nothing under any other tool. |
+| **Backspace** | In Select, deletes the selected objects in one undoable edit. If a courtyard vertex is explicitly selected, removes only that vertex and refuses if the layer is hidden, property edits are pending, or only 3 vertices remain. Requires window focus and no held modifiers. |
+| **Enter** | Commits the in-progress polyline or courtyard outline as a graphic object (closing a courtyard polygon and returning to Select); does nothing under any other tool. |
 | **Ctrl+A** | Selects all objects in the definition. |
 | **Ctrl+D** | Duplicates the selection into a cancellable Paste preview. Refuses while property fields are pending. |
 | **Ctrl+C** | Copies the selection to the internal library clipboard via the normalized Copy event; the raw key is also accepted when another modifier bypasses native translation. |
@@ -115,20 +117,22 @@ a chord runs copy, cut or paste once. Copy and paste are gated to a selection
 of the same document kind: pasting a symbol's objects into a footprint
 document reports "Paste into a definition of the same kind."
 
-For **Ctrl+A**, **Ctrl+D**, and raw clipboard key events, the canvas reads the
-modifiers from the pressed `Event::Key`. A chord still fires if the modifier is
-released later in the batch. Pressing the modifier after the letter is too
-late. Plain desktop clipboard shortcuts use the normalized events described
-above. All of these shortcuts require window focus. **Ctrl+D** arms the same
-preview as paste. A later **Escape** in the same input batch cancels the
-preview, and a duplicate chord after **Escape** can still arm it.
+For **Ctrl+A**, **Ctrl+D**, raw clipboard key events, and the tool letters
+**P**/**L**/**T**, the canvas reads the modifiers from the pressed `Event::Key`.
+A chord still fires if the modifier is released later in the batch. Pressing the
+modifier after the letter is too late. Plain desktop clipboard shortcuts use the
+normalized events described above. All of these shortcuts require window focus.
+**Ctrl+D** arms the same preview as paste. A later **Escape** in the same input
+batch cancels the preview, and a duplicate chord after **Escape** can still arm
+it. **R**'s rotation direction likewise follows the shift held at the press,
+not the batch's ending modifiers.
 
 ## Pending fields gate
 
 Property fields (name, number, orientation, dimensions) apply atomically.
-While unapplied input exists, **M**, **Ctrl+D**, **Ctrl+X**, paste and tool
-changes via **P**/**L**/**T** are refused with "Apply or reset the property
-fields …"
+While unapplied input exists, **M**, **Ctrl+D**, **Ctrl+X**, paste, tool
+changes via **P**/**L**/**T**/**C**, and courtyard vertex removal via
+**Backspace** are refused with "Apply or reset the property fields …"
 rather than silently dropping the draft. Typing in a field owns keyboard input,
 so canvas keys do not fire while a field is focused.
 
@@ -142,12 +146,14 @@ so canvas keys do not fire while a field is focused.
 | Ctrl+Q | `library_frame` → `begin_project_close` | `native_library_close_preserves_unsaved_authoring` (close path) |
 | Ctrl+Shift+A | `library_frame` → `assistant_shortcuts` → `toggle_assistant` | `assistant.rs` toggle tests |
 | Esc | `canvas` → `Tool::Select` | `canvas_selection_move_and_cancel_use_library_history` (draw-tool cancel), `unfocused_host_does_not_cancel_another_windows_definition_tool` (focus scoping) |
-| P / L / T | `canvas` → `start_tool(Place::Pin\|Pad\|Line\|Text)` | — (ribbon clicks exercise `start_tool`) |
+| P / L / T | `canvas` → `start_tool(Place::Pin\|Pad\|Line\|Text)` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss), ribbon clicks exercise `start_tool` |
 | M | `canvas` → `begin_move` | `canvas_selection_move_and_cancel_use_library_history` (move + cancel), `library_group_selection_and_stale_array_do_not_overwrite_edits` (group path) |
-| R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | — |
+| R / Shift+R | `canvas` → `rotate_by(-1\|+1)` → preview/prototype/`transform_selection` | `library_tool_keys_and_rotate_use_the_pressed_event_modifiers` (direction follows the press event) |
 | E | `canvas` → `details_requested` (single selection) | — |
 | Delete | `canvas` → `delete` → `Action::Delete` | — |
-| Enter | `canvas` → `Action::Insert` for `Tool::Polyline` only | — |
+| Backspace | `canvas` in Select → `with_removed_vertex` + `Action::Replace` when a courtyard vertex on the visible layer is selected, otherwise `delete` → `Action::Delete` when no vertex is selected (unmodified, focused) | `courtyard_backspace_during_drawing_keeps_existing_outline_and_draft`, `courtyard_backspace_with_hidden_selected_vertex_keeps_outline`, `courtyard_backspace_with_selected_vertex_and_pending_edits_keeps_outline`, `courtyard_backspace_without_selected_vertex_deletes_object_and_ignores_modifiers`, `symbol_release_after_cancelled_move_keeps_selection_and_backspace_deletes` |
+| C | `canvas` → `start_tool(Place::Courtyard)` + `set_show_courtyard(true)` (Footprint Editor, unmodified, focused) | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions`, `courtyard_c_shortcut_ignores_copy_chord_and_shift_c` |
+| Enter | `canvas` → `Action::Insert` for `Tool::Polyline` and `Tool::Courtyard` | `courtyard_canvas_draw_drag_midpoint_and_backspace_interactions` (courtyard commit) |
 | Ctrl+A | `canvas` → `select_many(all)` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss) |
 | Ctrl+D | `canvas` → `duplicate` → `start_copy` → `Tool::Paste` | `library_command_chords_use_the_pressed_event_modifiers` (pressed-event modifiers, focus loss), `normalized_clipboard_events_drive_library_copy_and_paste` (same-frame Escape ordering) |
 | Ctrl+C / Ctrl+X / Ctrl+V | `canvas` → `copy` / `cut` (copy + one `Action::Delete`) / `paste` → `Tool::Paste` (normalized `Event::Copy`/`Event::Cut`/`Event::Paste`/`Event::PasteImage`, or the raw key matched at its own modifiers when another modifier bypasses translation) | `native_paste_translation_reaches_the_internal_library_paste` (empty + image-only clipboards, both kinds, single undoable commit), `native_paste_chord_only_arms_the_focused_library_view` (detached-view ownership), `normalized_clipboard_events_drive_library_copy_and_paste` (gates, same-frame Escape ordering, cut + undo, pending refusal), `library_cut_uses_the_pressed_event_modifiers` + `library_copy_uses_the_pressed_event_modifiers` (batched modifier changes, focus loss), `clipboard_translation_tests` in `vendor/egui-winit` (emission) |
