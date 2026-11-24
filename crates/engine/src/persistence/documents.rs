@@ -44,8 +44,10 @@ pub const MAX_DOCUMENTS_BYTES: usize = 48 * 1024 * 1024;
 /// Bound directory metadata as well as payload allocation.
 pub const MAX_DOCUMENTS: usize = 4096;
 /// The sole project entry-point version emitted by the native writer.
-pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/62";
+pub const CURRENT_PROJECT_FORMAT: &str = "pcbcraft-project/63";
 const PRE_RECIPE_PROJECT_FORMAT: &str = "pcbcraft-project/61";
+const PRE_APPEARANCE_PROJECT_FORMAT: &str = "pcbcraft-project/62";
+const LEGACY_APPEARANCE_PROJECT_FORMAT: &str = "pcbcraft-project/52";
 const FOLDER_PROJECT_FORMAT: &str = "pcbcraft-project/14";
 const OCCURRENCE_PROJECT_FORMAT: &str = "pcbcraft-project/16";
 const NET_PROJECT_FORMAT: &str = "pcbcraft-project/17";
@@ -72,8 +74,9 @@ const GENERATED_NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/4";
 const PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/5";
 const COMPACT_PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/7";
 const PAIR_INSTANCES_FORMAT: &str = "pcbcraft-instances/8";
-/// Current board-owned instance format, with optional registry and membership records.
-pub const CURRENT_INSTANCES_FORMAT: &str = "pcbcraft-instances/9";
+const PRE_APPEARANCE_INSTANCES_FORMAT: &str = "pcbcraft-instances/9";
+/// Current board-owned instance format, including optional net wire appearance.
+pub const CURRENT_INSTANCES_FORMAT: &str = "pcbcraft-instances/10";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -207,7 +210,9 @@ impl ProjectDocument {
     fn layout_format(&self) -> &str {
         match self.format.as_str() {
             COMPACT_PART_GROUP_PROJECT_FORMAT => PART_GROUP_PROJECT_FORMAT,
-            PRE_RECIPE_PROJECT_FORMAT | CURRENT_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
+            PRE_RECIPE_PROJECT_FORMAT | PRE_APPEARANCE_PROJECT_FORMAT | LEGACY_APPEARANCE_PROJECT_FORMAT | CURRENT_PROJECT_FORMAT => {
+                PIN_FUNCTION_LOCK_PROJECT_FORMAT
+            }
             OUTPUT_RECIPE_PROJECT_FORMAT => ASSEMBLY_PROFILE_PROJECT_FORMAT,
             RECIPE_LOCK_PROJECT_FORMAT => DESIGNATOR_LOCK_PROJECT_FORMAT,
             RECIPE_PIN_FUNCTION_PROJECT_FORMAT => PIN_FUNCTION_LOCK_PROJECT_FORMAT,
@@ -467,17 +472,24 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     let mut project: ProjectDocument = parse(documents, ENTRY_POINT)?;
     let mut compact_part_groups = project.format == COMPACT_PART_GROUP_PROJECT_FORMAT;
     let current_format = project.format == CURRENT_PROJECT_FORMAT;
-    let supports_current_instances = current_format || project.format == PRE_RECIPE_PROJECT_FORMAT;
+    let legacy_appearance = project.format == LEGACY_APPEARANCE_PROJECT_FORMAT;
+    let supports_appearance = current_format || legacy_appearance;
+    let canonical_instances = match project.format.as_str() {
+        CURRENT_PROJECT_FORMAT => Some(CURRENT_INSTANCES_FORMAT),
+        PRE_RECIPE_PROJECT_FORMAT | PRE_APPEARANCE_PROJECT_FORMAT | LEGACY_APPEARANCE_PROJECT_FORMAT => Some(PRE_APPEARANCE_INSTANCES_FORMAT),
+        _ => None,
+    };
+    let supports_optional_recipes = current_format || project.format == PRE_APPEARANCE_PROJECT_FORMAT;
     let recipe_format =
         matches!(project.format.as_str(), OUTPUT_RECIPE_PROJECT_FORMAT | RECIPE_LOCK_PROJECT_FORMAT | RECIPE_PIN_FUNCTION_PROJECT_FORMAT);
-    // Project/60 and the two newer envelopes make designator locks optional.
-    let optional_locks = supports_current_instances || project.format == RECIPE_PIN_FUNCTION_PROJECT_FORMAT;
-    // Output recipes are optional in the current envelope and required in the older recipe envelopes.
-    if (if recipe_format { project.output_recipes.is_none() } else { !current_format && project.output_recipes.is_some() })
+    let optional_locks = canonical_instances.is_some() || project.format == RECIPE_PIN_FUNCTION_PROJECT_FORMAT;
+    // Recipes were required in the three feature-selected envelopes and optional from /62 onward.
+    if (if recipe_format { project.output_recipes.is_none() } else { !supports_optional_recipes && project.output_recipes.is_some() })
         || project.output_recipes.as_ref().is_some_and(Vec::is_empty)
     {
         return Err(
-            "project.json: output_recipes requires project format 47, 57, 60 or 62 and a nonempty array; formats 47, 57 and 60 require it.".into()
+            "project.json: output_recipes requires project format 47, 57, 60, 62 or 63 and a nonempty array; formats 47, 57 and 60 require it."
+                .into(),
         );
     }
     let mut output_recipes = project.output_recipes.take().unwrap_or_default();
@@ -711,9 +723,16 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let expected = if supports_current_instances && instance.format == CURRENT_INSTANCES_FORMAT {
+                let canonical_header = canonical_instances == Some(instance.format.as_str());
+                if (legacy_appearance && !canonical_header)
+                    || (instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_appearance)
+                        && !(supports_appearance && canonical_header))
+                {
+                    return Err(format!("{path}: net wire appearance requires project/63 with instances/10, or legacy project/52 with instances/9"));
+                }
+                let expected = if canonical_header {
                     compact_part_groups = instance.compact_part_group_memberships.is_some();
-                    CURRENT_INSTANCES_FORMAT
+                    instance.format.as_str()
                 } else {
                     let optional_bindings = (parameter_format || superset_format)
                         && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
@@ -781,6 +800,9 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 with a net-class catalog and a compatible instance format when board-owned; project format 21 requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
+    if !supports_appearance && stored_registry.is_some_and(crate::nets::Registry::has_appearance) {
+        return Err("Net wire appearance requires project format 63 or legacy format 52.".into());
+    }
     if !lock_format && !recipe_format && !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
         return Err(
             "Differential pairs require project format 45, 48, 51 or 56 and a compatible instance format when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
