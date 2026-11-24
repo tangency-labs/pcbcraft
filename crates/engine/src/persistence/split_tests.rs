@@ -548,6 +548,7 @@ fn generated_leg_matching_is_bounded_cancellable_and_byte_exact() {
                         assert_eq!(indexed, wire_count, "entering the drain must not remove entries");
                     }
                     drain_steps += 1;
+                    assert!(drain_steps <= wire_count + 1, "the wire index drain must end within one step per entry");
                     draining = Some(indexed);
                     budget = 1;
                 }
