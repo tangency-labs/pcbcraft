@@ -47,6 +47,7 @@ pub use board::drc::CHECK_DESIGN;
 pub use board::fabrication::EXPORT_FABRICATION;
 pub use board::fill::{REFILL_ZONES, UNFILL_ZONES};
 pub use board::origin::SET_PLACEMENT_ORIGIN;
+pub use board::output_recipe::SET_OUTPUT_RECIPE;
 pub use board::rules::SET_RULES;
 pub use board::test_points::SET_TEST_POINT;
 pub use board::track::{
@@ -197,6 +198,10 @@ enum ParamKind {
     AssemblyProfile,
     /// Positive content revision or null to clear a board adoption.
     AssemblyProfileRevision,
+    /// Stable non-nil UUID chosen when authoring an output recipe.
+    OutputRecipeId,
+    /// Complete authored output recipe content, or null to remove it.
+    OutputRecipeContent,
     ClassRules,
     ClassSet,
     ClassId,
@@ -336,6 +341,8 @@ impl ParamKind {
             Self::TestPointPurpose => json!({"type":"string","enum":["assembly","fabrication"]}),
             Self::TestPointSides => json!({"enum":["top","bottom","both",null]}),
             Self::AssemblyProfileId => json!({"type":"string","format":"uuid"}),
+            Self::OutputRecipeId => non_nil_uuid_schema(),
+            Self::OutputRecipeContent => board::output_recipe::schema(),
             Self::AssemblyProfile => board::assembly_profile::schema(),
             Self::AssemblyProfileRevision => json!({"type":["integer","null"],"minimum":1,"maximum":u32::MAX}),
             Self::ClassRules => net_classes::rules_schema(),
@@ -719,6 +726,10 @@ impl ParamKind {
             Self::TestPointPurpose => Err("must be assembly or fabrication"),
             Self::TestPointSides if serde_json::from_value::<Option<board::test_points::Sides>>(value.clone()).is_ok() => Ok(()),
             Self::TestPointSides => Err("must be top, bottom, both or null"),
+            Self::OutputRecipeId if serde_json::from_value::<uuid::Uuid>(value.clone()).is_ok_and(|id| !id.is_nil()) => Ok(()),
+            Self::OutputRecipeId => Err("must identify an output recipe by non-nil UUID"),
+            Self::OutputRecipeContent if board::output_recipe::valid_content(value) => Ok(()),
+            Self::OutputRecipeContent => Err("must be valid output recipe content or null"),
             Self::AssemblyProfileId if serde_json::from_value::<uuid::Uuid>(value.clone()).is_ok_and(|id| !id.is_nil()) => Ok(()),
             Self::AssemblyProfileId => Err("must identify an assembly profile by non-nil UUID"),
             Self::AssemblyProfile if board::assembly_profile::valid_profile(value) => Ok(()),
@@ -900,6 +911,11 @@ impl ParamKind {
             Self::Terminal => Err("must identify a symbol and one of its terminal numbers"),
         }
     }
+}
+
+/// Canonical RFC 4122 UUID schema that rejects the all-zero nil UUID.
+pub(crate) fn non_nil_uuid_schema() -> Value {
+    json!({"type":"string","format":"uuid","not":{"const":uuid::Uuid::nil()}})
 }
 
 /// Publish the strict bounded point representation used by free wire endpoints and bends.
@@ -2455,6 +2471,21 @@ const CATALOG: &[Command] = &[
         ],
     },
     Command {
+        id: SET_OUTPUT_RECIPE,
+        title: "Set Output Recipe",
+        summary: "Save or remove the addressed board output recipe in one undo step. Does not generate files.",
+        params: &[
+            Param { required: true, ..EXPECTED_REVISION },
+            Param { name: "recipe", required: true, summary: "Stable recipe UUID; a new UUID creates a recipe", kind: ParamKind::OutputRecipeId },
+            Param {
+                name: "content",
+                required: true,
+                summary: "Complete recipe configuration, or null to remove it",
+                kind: ParamKind::OutputRecipeContent,
+            },
+        ],
+    },
+    Command {
         id: SET_ASSEMBLY_PROFILE,
         title: "Set Assembly Profile",
         summary: "Pin immutable assembly output profile content in the project, or retire a profile without invalidating board adoptions.",
@@ -3047,6 +3078,8 @@ pub struct Project {
     parameters: Arc<parameters::Parameters>,
     /// Immutable profile payloads are shared across project snapshots and history.
     assembly_profiles: Arc<board::assembly_profile::Catalog>,
+    /// Authored fabrication selections, sorted by stable recipe ID and shared by Undo.
+    output_recipes: Arc<Vec<board::output_recipe::Recipe>>,
     /// Authored part groups, independent of membership.
     part_groups: Arc<part_groups::Catalog>,
     /// Explicit part-group memberships, sorted by part instance and group; stored with the instances.
@@ -3631,6 +3664,7 @@ impl Session {
             | board::arc::SET_ARCS
             | board::teardrop::EDIT_TEARDROPS
             | SET_ASSEMBLY_PROFILE
+            | SET_OUTPUT_RECIPE
             | PREVIEW_ASSEMBLY_PROFILE
             | ADOPT_ASSEMBLY_PROFILE
             | SET_SILKSCREEN
@@ -3715,7 +3749,7 @@ impl Session {
     /// Each board's `placement_origin` reports the saved origin and the resolved one outputs
     /// use, or null when an outline-attached origin has no outline to attach to.
     /// Project inspection includes its UUID for qualified queries and pinned profiles;
-    /// each board lists its exact adopted revisions.
+    /// each board lists its exact adopted revisions. Authored recipes appear only when present.
     pub fn inspect(&self) -> Value {
         let project = self.project.as_ref().map(|p| {
             let mut inspected = json!({
@@ -3736,6 +3770,7 @@ impl Session {
             });
             if !p.net_classes.definitions.is_empty() { inspected["net_classes"] = json!(p.net_classes()); }
             if !p.part_groups.groups.is_empty() { inspected["part_groups"] = json!(p.part_groups()); }
+            if !p.output_recipes().is_empty() { inspected["output_recipes"] = json!(p.output_recipes()); }
             if !p.net_registry.records.is_empty() {
                 inspected["net_registry"]=match p.inspect_net_registry() {
                     Ok(registry)=>registry,
@@ -4008,12 +4043,13 @@ impl Session {
     }
 
     /// Check catalog parameters, board identity and availability without generating query data
-    /// or changing the session. Layer-group inspection reads only stackup metadata, so it can
-    /// run regardless of copper geometry. State-specific setup diagnostics remain with handlers.
+    /// or changing the session. Layer-group inspection and output-recipe edits read or store only
+    /// metadata, so they can run regardless of copper geometry. State-specific setup diagnostics
+    /// remain with handlers.
     fn validate_project_command(&self, id: &str, params: &Value) -> Result<(), CommandError> {
         let command = command(id).ok_or_else(|| CommandError::Unknown(id.to_owned()))?;
         check_params(command, params)?;
-        let check_copper_geometry = id.starts_with("pcb.") && id != INSPECT_LAYER_GROUPS;
+        let check_copper_geometry = id.starts_with("pcb.") && !matches!(id, INSPECT_LAYER_GROUPS | SET_OUTPUT_RECIPE);
         if check_copper_geometry
             && id != board::arc::SET_ARCS
             && let Some(project) = self.project().filter(|p| !p.board.arcs.is_empty())
@@ -4213,6 +4249,7 @@ impl Session {
                 net_classes: Arc::default(),
                 parameters: Arc::default(),
                 assembly_profiles: Arc::default(),
+                output_recipes: Arc::default(),
                 part_groups: Arc::default(),
                 part_group_memberships: Arc::default(),
                 prefer_compact_part_groups: false,
@@ -4372,6 +4409,7 @@ impl Session {
             SET_RULES => self.set_rules(params)?,
             SET_PLACEMENT_ORIGIN => self.set_placement_origin(params)?,
             SET_ASSEMBLY_PROFILE => self.set_assembly_profile(params)?,
+            SET_OUTPUT_RECIPE => self.set_output_recipe(params)?,
             ADOPT_ASSEMBLY_PROFILE => self.adopt_assembly_profile(params)?,
             PREVIEW_ASSEMBLY_PROFILE => return Err(CommandError::Unavailable("Use execute for an assembly profile preview.".into())),
             SET_SILKSCREEN => self.set_silkscreen(params)?,
