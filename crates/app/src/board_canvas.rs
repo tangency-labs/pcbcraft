@@ -107,6 +107,8 @@ pub(super) struct Interaction {
     pub(super) clipboard: Option<crate::board_clipboard::Action>,
     pub(super) drawing_edit: Option<crate::board_drawing::Command>,
     pub(super) zone_edit: Option<crate::board_drawing::Command>,
+    /// A validated outline command from the canvas's own open context menu.
+    pub(super) vertex_menu_edit: bool,
     pub(super) track_edit: Option<crate::board_drawing::Command>,
     pub(super) selection: Option<BTreeSet<String>>,
     pub(super) inspection: Option<(pcbcraft_engine::board::Pad, egui::Modifiers)>,
@@ -844,10 +846,30 @@ pub(super) fn show(
         board::empty(&p, rect);
     }
     out.placement = place_group(ui, &response, project, camera, state, source, appearance, placement_enabled, visible, color, rotation);
-    if source.is_some() && idle && state.context_menu_allowed && !crate::board_clipboard::busy(state) {
-        response.context_menu(|ui| {
+    if let Some(source) = source.filter(|_| idle && state.context_menu_allowed && !crate::board_clipboard::busy(state)) {
+        if response.secondary_clicked() {
+            state.vertex_menu = response.interact_pointer_pos().and_then(|pointer| {
+                [(&state.zones, filters.zones), (&state.drawing, filters.graphics)]
+                    .into_iter()
+                    .filter(|(_, selectable)| *selectable)
+                    .find_map(|(outline, _)| crate::board_drawing::vertex_menu(outline, project, &state.hidden_layers, pointer, camera, rect, source))
+            });
+        }
+        pcbcraft_chrome::menu::context(&response, |ui| {
             use crate::board_clipboard::Action;
             use pcbcraft_chrome::menu::MenuItem;
+            if let Some(menu) = &state.vertex_menu {
+                let (outline, selectable, edit) = if menu.zone() {
+                    (&state.zones, filters.zones, &mut out.zone_edit)
+                } else {
+                    (&state.drawing, filters.graphics, &mut out.drawing_edit)
+                };
+                if let Some(command) = menu.show(ui, source, outline, &state.hidden_layers, selectable) {
+                    *edit = Some(command);
+                    out.vertex_menu_edit = true;
+                    return;
+                }
+            }
             let zones = !state.zones.selection().is_empty();
             let portable = !zones && (!state.selection.is_empty() || !state.tracks.selected.is_empty() || !state.drawing.selection().is_empty());
             out.clipboard = [

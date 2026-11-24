@@ -59,6 +59,7 @@ mod net_labels;
 mod no_connect;
 mod part_documents;
 mod parts_browser;
+mod path_edit;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
 mod placement_filters;

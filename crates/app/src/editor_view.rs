@@ -224,6 +224,7 @@ pub(super) struct BoardState {
     pub(super) box_drag: Option<crate::board_canvas::BoxDrag>,
     /// Only an idle secondary press may open a context menu on release; tool cancellation cannot.
     pub(super) context_menu_allowed: bool,
+    pub(super) vertex_menu: Option<crate::board_drawing::VertexMenu>,
     pub(super) move_requested: bool,
     /// Counterclockwise degrees on screen; the board camera converts this intent to model space.
     pub(super) rotate_requested: u16,
