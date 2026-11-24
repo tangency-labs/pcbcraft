@@ -67,6 +67,8 @@ const GENERATED_NET_INSTANCES_FORMAT: &str = "pcbcraft-instances/4";
 const PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/5";
 const COMPACT_PART_GROUP_INSTANCES_FORMAT: &str = "pcbcraft-instances/7";
 const PAIR_INSTANCES_FORMAT: &str = "pcbcraft-instances/8";
+/// Current board-owned instance format, with optional registry and membership records.
+pub const CURRENT_INSTANCES_FORMAT: &str = "pcbcraft-instances/9";
 const FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/11";
 const OPTIONAL_BOARD_FIELDS_PROJECT_FORMAT: &str = "pcbcraft-project/12";
 const PART_PROJECT_FORMAT: &str = "pcbcraft-project/15";
@@ -434,7 +436,8 @@ pub fn is_document_path(path: &str) -> bool {
 /// either group membership encoding remain optional under those headers.
 /// Project/51 requires an active designator lock. Differential pairs are optional;
 /// board-owned pairs still use instances/8 with either group membership encoding.
-/// Project/61 uses the project/56 vocabulary with optional designator locks.
+/// Project/61 uses the project/56 vocabulary with optional designator locks and accepts
+/// instances/9, where the registry, pairs and either membership encoding are optional.
 /// Board format 24 requires explicit via intent and accepts optional extended stack fields
 /// and assembly profile adoptions. Earlier headers refuse via intent.
 /// Board format 25 requires a thermal/insulation material report and accepts assigned vias,
@@ -669,32 +672,37 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             (Some(path), None) => {
                 let instance: InstancesDocument = parse(documents, &path)?;
                 let registered = registrations.as_ref().and_then(|records| records.first()).map(|record| record.id);
-                let optional_bindings =
-                    (parameter_format || superset_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
-                let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
-                let pair_instances = pair_format
-                    || ((lock_format || pin_function_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
-                if pair_instances {
-                    // Instances/8 keeps its header for either membership encoding.
+                let expected = if current_format && instance.format == CURRENT_INSTANCES_FORMAT {
                     compact_part_groups = instance.compact_part_group_memberships.is_some();
-                } else if optional_part_groups {
-                    // Without pairs, the instance header distinguishes the two encodings.
-                    compact_part_groups = instance.format == COMPACT_PART_GROUP_INSTANCES_FORMAT;
-                }
-                let expected = if pair_instances {
-                    PAIR_INSTANCES_FORMAT
-                } else if compact_part_groups {
-                    COMPACT_PART_GROUP_INSTANCES_FORMAT
-                } else if supports_part_groups && instance.part_group_memberships.is_some() {
-                    PART_GROUP_INSTANCES_FORMAT
-                } else if generated_net_format || numbered {
-                    GENERATED_NET_INSTANCES_FORMAT
-                } else if binding_format || optional_bindings {
-                    BINDING_INSTANCES_FORMAT
-                } else if net_format || (no_connect_format && instance.net_registry.is_some()) {
-                    NET_INSTANCES_FORMAT
+                    CURRENT_INSTANCES_FORMAT
                 } else {
-                    INSTANCES_FORMAT
+                    let optional_bindings = (parameter_format || superset_format)
+                        && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_class_bindings);
+                    let numbered = supports_part_groups && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_generated_numbers);
+                    let pair_instances = pair_format
+                        || ((lock_format || pin_function_format) && instance.net_registry.as_ref().is_some_and(crate::nets::Registry::has_pairs));
+                    if pair_instances {
+                        // Instances/8 keeps its header for either membership encoding.
+                        compact_part_groups = instance.compact_part_group_memberships.is_some();
+                    } else if optional_part_groups {
+                        // Without pairs, the instance header distinguishes the two encodings.
+                        compact_part_groups = instance.format == COMPACT_PART_GROUP_INSTANCES_FORMAT;
+                    }
+                    if pair_instances {
+                        PAIR_INSTANCES_FORMAT
+                    } else if compact_part_groups {
+                        COMPACT_PART_GROUP_INSTANCES_FORMAT
+                    } else if supports_part_groups && instance.part_group_memberships.is_some() {
+                        PART_GROUP_INSTANCES_FORMAT
+                    } else if generated_net_format || numbered {
+                        GENERATED_NET_INSTANCES_FORMAT
+                    } else if binding_format || optional_bindings {
+                        BINDING_INSTANCES_FORMAT
+                    } else if net_format || (no_connect_format && instance.net_registry.is_some()) {
+                        NET_INSTANCES_FORMAT
+                    } else {
+                        INSTANCES_FORMAT
+                    }
                 };
                 if instance.format != expected || Some(instance.board) != registered {
                     return Err(format!("{path}: unsupported instances format or foreign board header"));
@@ -730,12 +738,12 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     if (!parameter_format && !superset_format && binding_format != has_bindings)
         || ((parameter_format || superset_format) && has_bindings && net_classes.is_none())
     {
-        return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 with a net-class catalog and the content-selected instance format when board-owned; project format 21 requires nonempty assignments.".into());
+        return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 with a net-class catalog and a compatible instance format when board-owned; project format 21 requires nonempty assignments.".into());
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
     if !lock_format && !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
         return Err(
-            "Differential pairs require project format 45, 48, 51 or 56 and instances format 8 when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
+            "Differential pairs require project format 45, 48, 51 or 56 and a compatible instance format when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
                 .into(),
         );
     }
@@ -746,7 +754,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
     {
         return Err(
-            "Generated net numbers require project format 23, 24, 36, 39, 45, 48, 51 or 56 and instances format 4, 5, 7 or 8 when board-owned, with a number on every record."
+            "Generated net numbers require project format 23, 24, 36, 39, 45, 48, 51 or 56 and a compatible instance format when board-owned, with a number on every record."
                 .into(),
         );
     }
@@ -1768,8 +1776,8 @@ impl DocumentsEncoder {
     /// writes its bounded setup (at most 64 material revisions, 128 layers, 127 strata and
     /// 256 nested prepreg plies) and an enabled baseline within its 16 MiB bound.
     /// Net and pair records each consume one record budget in their shared instance home.
-    /// A legacy membership home that exceeds a byte limit restarts once in the compact
-    /// envelope. Only disposable encoding state changes; no project edit or Save refusal is
+    /// An expanded membership home that exceeds a byte limit restarts once using
+    /// compact membership records. Only disposable encoding state changes; no project edit or Save refusal is
     /// introduced. Legacy layout metadata is adopted on the save snapshot before writing.
     pub fn step(&mut self, records: usize) -> Result<Option<Documents>, String> {
         match self.step_records(records) {
@@ -2197,28 +2205,14 @@ impl DocumentsEncoder {
 
     /// Finish components/package choices, writing adopted instances in their single storage home
     /// before starting sheets. Instance records consume the ordinary incremental record budget.
-    /// A board-owned home takes the header required by the registry and membership vocabulary.
+    /// Board-owned instances always use the current header, including after a compact retry.
     fn finish_project_document(&mut self) -> Result<(), String> {
         if self.instance_records.is_some() {
             if self.project.board_target().is_some() {
                 self.finish_document(ENTRY_POINT.to_owned())?;
                 let board = self.project.board_target().ok_or("missing registered board")?.board;
-                let format = if self.project.net_registry.has_pairs() {
-                    PAIR_INSTANCES_FORMAT
-                } else if self.use_compact_memberships {
-                    COMPACT_PART_GROUP_INSTANCES_FORMAT
-                } else if !self.project.part_group_memberships.is_empty() {
-                    PART_GROUP_INSTANCES_FORMAT
-                } else if self.project.net_registry.has_generated_numbers() {
-                    GENERATED_NET_INSTANCES_FORMAT
-                } else if self.project.net_registry.has_class_bindings() {
-                    BINDING_INSTANCES_FORMAT
-                } else if self.project.net_registry.records.is_empty() {
-                    INSTANCES_FORMAT
-                } else {
-                    NET_INSTANCES_FORMAT
-                };
-                write!(self.bytes, "{{\n  \"format\": \"{format}\",\n  \"board\": \"{board}\",\n").map_err(|error| error.to_string())?;
+                write!(self.bytes, "{{\n  \"format\": \"{CURRENT_INSTANCES_FORMAT}\",\n  \"board\": \"{board}\",\n")
+                    .map_err(|error| error.to_string())?;
             } else {
                 self.bytes.extend_from_slice(b"  ],\n  \"schematic_instances\": {\n");
             }
