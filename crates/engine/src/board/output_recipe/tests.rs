@@ -509,7 +509,9 @@ fn recipe_integer_fields_accept_integer_valued_numbers_like_schema() {
     let (mut session, content) = fixture();
     let revision = session.revision();
     let initial = session.snapshot().unwrap();
-    let edits: [(&str, fn(&mut Value, Value)); 3] = [
+    /// Set one integer field of the recipe content to the given JSON number.
+    type Edit = fn(&mut Value, Value);
+    let edits: [(&str, Edit); 3] = [
         ("origin.x_nm", |content, number| content["origin"]["x_nm"] = number),
         ("origin.y_nm", |content, number| content["origin"]["y_nm"] = number),
         ("assembly_profile.revision", |content, number| content["assembly_profile"]["revision"] = number),
