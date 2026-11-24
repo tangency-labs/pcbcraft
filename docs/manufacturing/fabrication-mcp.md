@@ -20,7 +20,13 @@ Its `rows` list every tool of each returned drill file, plated file first, in
 declaration order: `plating` (`plated` or `non_plated`), the file's `tool` number,
 `diameter_nm`, `size_mm` as the tool declaration writes it and the hole `count`.
 The rows are built from the same holes as the drill files, so their counts always
-match the files' hits. Neither operation writes files
+match the files' hits. `fabrication.outline` describes the board edge the outline
+file draws, in the same output frame: `contours` lists every closed Board Outline
+drawing (cut-outs included; open outline lines are not the edge and are left out)
+as its vertices, `min` and `max` are the lower-left and upper-right corners of
+the box enclosing them, `width_nm` and `height_nm` are the overall dimensions,
+and `width_mm` and `height_mm` give them in millimeters rounded to 0.01 mm.
+Neither operation writes files
 or changes the project or revision; `execute` does not build or return a ZIP.
 
 The manifest matches the `manifest.json` embedded in the fabrication ZIP for the
