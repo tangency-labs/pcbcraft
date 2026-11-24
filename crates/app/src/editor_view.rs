@@ -211,6 +211,8 @@ pub(super) struct BoardState {
     pub(super) drawing: crate::board_drawing::State,
     pub(super) zones: crate::board_drawing::State,
     pub(super) tracks: crate::board_tracks::State,
+    pub(super) router_settings_open: bool,
+    pub(super) router_settings_collapsed: bool,
     /// The last design rules check run from this view, with its card and focused finding.
     pub(super) drc: crate::board_drc::Drc,
     /// The view-only ruler and whether its tool is armed.
@@ -376,7 +378,7 @@ pub(super) struct EditorView {
     inspection_layers: std::collections::BTreeSet<String>,
     pub(super) filters_collapsed: bool,
     pub(super) filters_open: bool,
-    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; 3],
+    pub(super) panels: [pcbcraft_chrome::workspace::panels::Panel; crate::workspace_panels::PANEL_COUNT],
     /// Runtime definition document, independent of the parked project workspace/target.
     pub(super) definition: Option<u64>,
     /// Library browsing is a view-local service presentation, never a project target.

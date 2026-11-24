@@ -191,7 +191,9 @@ straight-only copper.
 
 Open **Layout › Route › Router Settings** to choose the policy for new routes,
 holding and dragging a track, or pressing **D** over a track. The setting belongs
-to the current PCB pane.
+to the current PCB pane and takes effect as soon as it changes. Router Settings
+can stay open while working on the board. Use its position menu to float it or
+dock it on either side. Finish or cancel a captured edit before changing policy.
 
 - **Highlight collisions** marks existing tracks, pads and vias that block the
   proposal. The proposed trace keeps its layer color. A conflicted proposal

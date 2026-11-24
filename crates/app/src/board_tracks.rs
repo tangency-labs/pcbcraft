@@ -113,14 +113,6 @@ struct SegmentDrag {
     ends: Vec<(Uuid, Point, Point)>,
 }
 
-/// A view-owned copy of the router settings for the modal.
-#[derive(Debug)]
-pub(super) struct RouterSettings {
-    pub source: ViewInput,
-    pub mode: Mode,
-    pub merge_same_net: bool,
-}
-
 /// Independent route tool, sizes and track/via selection for one board view, never saved in files.
 #[derive(Debug)]
 pub(super) struct State {

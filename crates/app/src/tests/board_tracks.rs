@@ -3598,26 +3598,27 @@ fn router_settings_govern_held_track_drags() {
 
         click(&mut h, "Route menu");
         click(&mut h, "Router Settings");
-        assert!(matches!(h.state().dialog, Dialog::RouterSettings(_)));
+        assert!(h.state().views.active.board.router_settings_open);
+        assert!(matches!(h.state().dialog, Dialog::None));
         if mode != Mode::Walkaround {
             click(&mut h, "Router policy");
             click(&mut h, policy);
         }
-        let dialog = h.ctx.memory(|mem| mem.area_rect(egui::Id::unique("router_settings"))).unwrap();
-        let apply = h.get_by_label("Apply").rect();
-        assert!(dialog.height() < 240. && dialog.contains_rect(apply), "oversized or clipped router settings: {dialog:?}, Apply: {apply:?}");
-        click(&mut h, "Apply");
+        click(&mut h, "Router Settings position");
+        click(&mut h, "Dock left");
         assert_eq!(h.state().views.active.board.tracks.policy().0, mode);
         assert_eq!(h.state().session.revision(), revision);
 
         let pickup = at(&h, p(5_080_000, -5_080_000));
         let target = at(&h, p(5_080_000, -7_620_000));
+        assert!(h.state().views.active.canvas_cards.iter().all(|card| !card.contains(pickup) && !card.contains(target)));
         h.hover_at(pickup);
         h.run();
         h.drag_at(pickup);
         h.run();
         h.hover_at(target);
         h.run_steps(240);
+        assert!(h.state().views.active.board.router_settings_open);
         let paths = h.state().views.active.board.tracks.replacements().to_vec();
         assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         if mode == Mode::Highlight {
@@ -3637,7 +3638,7 @@ fn router_settings_govern_held_track_drags() {
             assert_eq!(h.state().session.revision(), revision);
         } else {
             assert_eq!(h.state().message, None, "{policy}");
-            assert_eq!(h.state().session.revision(), revision + 1);
+            assert_eq!(h.state().session.revision(), revision + 1, "{policy}");
             let laid = tracks(&h);
             assert!(laid.iter().any(|t| t.id == follower && t.start == fixed && t.end == p(joint.x_nm, -7_620_000)));
             if mode == Mode::Walkaround {
@@ -3653,6 +3654,31 @@ fn router_settings_govern_held_track_drags() {
             assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
         }
     }
+}
+
+/// Router Settings uses the common panel controls and remembers both dock and float placement.
+#[test]
+fn router_settings_can_dock_float_and_close() {
+    use crate::workspace_panels::{ROUTER, SavedPanels};
+    use pcbcraft_chrome::workspace::panels::Position;
+    let mut h = routable();
+    let revision = h.state().session.revision();
+    click(&mut h, "Route menu");
+    click(&mut h, "Router Settings");
+    assert_eq!(h.state().views.active.panels[ROUTER].position(), Position::Floating);
+    for (label, position) in [("Dock left", Position::Left), ("Dock right", Position::Right), ("Float", Position::Floating)] {
+        click(&mut h, "Router Settings position");
+        click(&mut h, label);
+        let panels = &h.state().views.active.panels;
+        assert_eq!(panels[ROUTER].position(), position);
+        let encoded = serde_json::to_string(&SavedPanels::capture(panels)).unwrap();
+        let restored: SavedPanels = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(restored.restore()[ROUTER].saved_state(), panels[ROUTER].saved_state());
+    }
+    click(&mut h, "Close Router Settings");
+    assert!(!h.state().views.active.board.router_settings_open);
+    assert!(matches!(h.state().dialog, Dialog::None));
+    assert_eq!(h.state().session.revision(), revision);
 }
 
 /// A prepared held drag cannot publish after Escape or after another command changes the board.

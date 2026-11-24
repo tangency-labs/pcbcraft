@@ -322,9 +322,9 @@ impl PcbApp {
                 label: "Router Settings",
                 description: "Interactive Router Settings",
                 shortcut: "",
-                enabled: enabled && !editing && self.views.active.board.tracks.can_change_policy(),
-                active: false,
-                menu_check: None,
+                enabled,
+                active: self.views.active.board.router_settings_open,
+                menu_check: Some(pcbcraft_chrome::menu::CheckKind::Toggle),
             },
             planned(ToolIcon::Pair, "Pair", "Route differential pairs (planned)"),
             planned(ToolIcon::Tune, "Tune", "Tune track length (planned)"),
@@ -333,64 +333,78 @@ impl PcbApp {
             Some(0) => self.start_route(),
             Some(1) => self.start_via(),
             Some(2) => {
-                if let Some(source) = self.views.active.input(&self.session) {
-                    let (mode, merge_same_net) = self.views.active.board.tracks.policy();
-                    self.dialog = Dialog::RouterSettings(crate::board_tracks::RouterSettings { source, mode, merge_same_net });
+                let view = &mut self.views.active;
+                view.board.router_settings_open = !view.board.router_settings_open;
+                if !view.board.router_settings_open {
+                    view.panels[crate::workspace_panels::ROUTER].cancel_drag();
                 }
             }
             _ => {}
         }
     }
 
-    /// Apply a proposed policy only to the pane and revision that opened the modal.
-    pub(super) fn router_settings_dialog(&mut self, ctx: &egui::Context, mut edit: crate::board_tracks::RouterSettings) {
-        use pcbcraft_chrome::{controls, settings};
+    /// Draw live, view-local controls in the same movable shell as Layers and Properties.
+    /// An in-progress edit keeps its captured policy and may continue outside the card.
+    pub(super) fn router_settings_panel(&mut self, ui: &Ui, area: egui::Rect, dock: egui::Rect) -> egui::Rect {
+        use pcbcraft_chrome::{controls, settings, workspace::panels::Position};
         use pcbcraft_engine::board::route::Mode;
-        let (mut apply, mut cancel) = (false, false);
-        let closing = shell::dialog_width(ctx, "router_settings", "Interactive Router Settings", 390.0, |ui| {
-            let mut policy = if edit.mode == Mode::ShoveVias { Mode::Shove } else { edit.mode };
-            ui.label("Policy");
-            if settings::choice(
-                ui,
-                "Router policy",
-                &mut policy,
-                &[(Mode::Walkaround, "Walkaround"), (Mode::Shove, "Shove"), (Mode::Highlight, "Highlight collisions")],
-            ) {
-                edit.mode = policy;
-            }
-            match policy {
-                Mode::Walkaround => ui.label("Route and drag around fixed copper."),
-                Mode::Highlight => ui.label("Conflicting copper is highlighted. Placement requires a clear path."),
-                _ => {
-                    let mut vias = edit.mode == Mode::ShoveVias;
-                    if settings::checkbox(ui, "Shove through vias", "Shove through vias", &mut vias).changed() {
-                        edit.mode = if vias { Mode::ShoveVias } else { Mode::Shove };
-                    }
-                    settings::checkbox(ui, "Merge same-net copper while routing", "Merge same-net copper while routing", &mut edit.merge_same_net)
+
+        let enabled = matches!(self.dialog, Dialog::None) && !self.files.busy() && !self.project_action_pending();
+        let view = &mut self.views.active;
+        if !view.board.router_settings_open {
+            return egui::Rect::NOTHING;
+        }
+        let id = egui::Id::unique(("router_settings", self.views.host, view.id()));
+        let state = &mut view.board;
+        let panel = &mut view.panels[crate::workspace_panels::ROUTER];
+        let width = workspace::panels::card_width(area, false);
+        if panel.position() == Position::Floating && panel.saved_state().at.is_none() {
+            panel.set_position(Position::Floating, Some([(area.width() - width) / 2.0, 20.0]));
+        }
+        let available = enabled && !state.editing_footprint() && state.tracks.can_change_policy();
+        let (original, original_merge) = state.tracks.policy();
+        let (mut mode, mut merge) = (original, original_merge);
+        let mut close = false;
+        let (rect, toggle) = panel.show(ui, id, "Router Settings", area, dock, state.router_settings_collapsed, width, |ui| {
+            ui.add_enabled_ui(available, |ui| {
+                let mut policy = if mode == Mode::ShoveVias { Mode::Shove } else { mode };
+                ui.label("Policy");
+                if settings::choice(
+                    ui,
+                    "Router policy",
+                    &mut policy,
+                    &[(Mode::Walkaround, "Walkaround"), (Mode::Shove, "Shove"), (Mode::Highlight, "Highlight collisions")],
+                ) {
+                    mode = policy;
                 }
-            };
-            ui.separator();
-            let actions = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
-            ui.allocate_ui_with_layout(actions, egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                apply = controls::button(ui, "Apply").clicked();
-                cancel = controls::button(ui, "Cancel").clicked();
-            });
+                if policy == Mode::Shove {
+                    let mut vias = mode == Mode::ShoveVias;
+                    if settings::checkbox(ui, "Shove through vias", "Shove through vias", &mut vias).changed() {
+                        mode = if vias { Mode::ShoveVias } else { Mode::Shove };
+                    }
+                    settings::checkbox(ui, "Merge same-net copper", "Merge same-net copper", &mut merge);
+                }
+            })
+            .response
+            .on_disabled_hover_text("Finish or cancel the current edit to change router policy.");
+            let dismiss = controls::button(ui, "Close");
+            dismiss.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Close Router Settings"));
+            close = dismiss.clicked();
         });
-        if closing || cancel {
-            return;
-        }
-        if apply {
-            if let Some(view) = self.views.view_mut(edit.source.view())
-                && view.accepts(edit.source, &self.session)
-                && view.board.tracks.select_mode(edit.mode)
-            {
-                view.board.tracks.select_same_net_merge(edit.merge_same_net);
-            } else {
-                self.message = Some("The board changed; reopen Router Settings to apply a policy.".into());
+        if available {
+            if mode != original {
+                state.tracks.select_mode(mode);
             }
-        } else {
-            self.dialog = Dialog::RouterSettings(edit);
+            if merge != original_merge {
+                state.tracks.select_same_net_merge(merge);
+            }
         }
+        state.router_settings_collapsed ^= toggle;
+        if close {
+            state.router_settings_open = false;
+            panel.cancel_drag();
+        }
+        rect
     }
 
     /// Draw graphic paths on the active layer; routing and editing remain in Layout.
