@@ -220,6 +220,46 @@ fn package_completion_packs_three_loose_quad_units_and_keeps_nets() {
     assert_eq!(encode_documents(session.snapshot().unwrap()).unwrap(), saved);
 }
 
+/// A relation on a pad of a retired donor's footprint survives completion: the transfer keeps the
+/// placement, its pad map and pinned definition, so the reference still reads the same land and
+/// binding. The relations record is byte-identical and Undo restores the exact saved files.
+#[test]
+fn package_completion_keeps_relation_on_retired_donor_pad() {
+    use crate::board::relations::{
+        commands::LIST,
+        tests::{add, bytes, origin, pick},
+    };
+    let mut session = quad();
+    place_loose(&mut session, 1, None);
+    let symbols = session.project().unwrap().symbols().to_vec();
+    place_quad_footprints(&mut session, &symbols);
+    apply(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
+    let donor = session.project().unwrap().board.footprints().iter().position(|fp| fp.component == symbols[1].component).unwrap();
+    let reference = pick(&mut session, donor, "pad.center", Some("5"));
+    let id = add(&mut session, "horizontal", origin(), reference.clone());
+    let before = session.snapshot().unwrap();
+    let saved = bytes(&session);
+    let revision = session.revision();
+    let preview = complete(&mut session, Some("project"), true).unwrap();
+    assert_eq!(preview["changes"].as_array().unwrap().len(), 1);
+    assert!(Arc::ptr_eq(&before, &session.snapshot().unwrap()));
+    let result = complete(&mut session, Some("project"), false).unwrap();
+    assert_eq!(result["changes"], preview["changes"]);
+    assert_eq!(session.revision(), revision + 1);
+    let after = session.snapshot().unwrap();
+    assert!(!after.components.contains_key(&symbols[1].component));
+    assert_eq!(after.board.footprints(), before.board.footprints());
+    assert_eq!(after.board.relations, before.board.relations);
+    let listed = session.execute(LIST, &json!({})).unwrap();
+    assert_eq!(listed["relations"][0]["id"], id);
+    assert_eq!(listed["relations"][0]["status"], "reference");
+    assert_eq!(listed["relations"][0]["refs"][1], reference);
+    let completed = bytes(&session);
+    assert_eq!(encode_documents(decode_documents(&completed).unwrap()).unwrap(), completed);
+    session.apply("edit.undo", &Value::Null).unwrap();
+    assert_eq!(bytes(&session), saved);
+}
+
 /// Completion keeps the last visible donor fields without accepting a board update.
 #[test]
 fn package_completion_retains_donor_footprint_display_on_reopen() {
