@@ -66,11 +66,8 @@ numbers.
 
 ## Storage
 
-A nonempty catalog selects `pcbcraft-project/24` for expanded memberships, or
-`pcbcraft-project/39` for compact memberships, when no other content needs a
-higher format. Pinned assembly profiles select project/36, differential pairs
-project/45, and active designator locks project/51. These envelopes permit either
-membership representation. Board-owned [differential pairs](net-registry-storage.md#differential-pair-records)
+The current project format accepts either expanded or compact membership
+records alongside the catalog. Board-owned [differential pairs](net-registry-storage.md#differential-pair-records)
 use instances/8 even alongside a lock. The catalog
 is stored in `project.json` directly after any net-class catalog, with groups
 sorted by UUID and one per line. Readers accept the groups in any order and sort
@@ -118,9 +115,8 @@ the entry point to the version its other content needs.
 Every supported part instance may belong to all 256 groups: up to 4,096 instances
 and 1,048,576 memberships. If the expanded representation exceeds the existing
 16 MiB document or 48 MiB total-document bound, the disposable encoder restarts
-once with compact memberships. The entry selects project/39 if no other feature
-requires a higher format. Project/36, /45 and /51 keep their headers. A board-owned
-instance document uses instances/7 for compact memberships without pairs, or
+once with compact memberships. The project entry point keeps the current format.
+A board-owned instance document uses instances/7 for compact memberships without pairs, or
 keeps instances/8 when pairs are present.
 This is a representation choice inside encoding, not a refused edit or a Save
 precondition. The model capacity and file-size limits do not change.

@@ -15,10 +15,9 @@ absent and the board registration owns an `instances.json` beside `board.json`.
 The instance document's format is `pcbcraft-instances/1`, and its `board` header
 must match the registered board UUID. A second storage home is rejected.
 Container, sheet, board and pinned-definition versions do not change.
-When a sparse net registry is authored, project/17 and instances/2 add it beside
-these records. Without another feature selecting a later project format,
-registry-free projects retain project/16. Active designator locks select
-project/51 even without a registry; board-owned instances retain the header their
+Project/17 and instances/2 introduced the sparse net registry. Current
+`project.json` saves use the [current project format](native-project-storage.md#native-write-policy),
+and board-owned instances retain the header their
 content requires: instances/1–4, /5 with expanded memberships, /7 with compact
 memberships or /8 with differential pairs. A lock alone does not change that
 instance header.
@@ -101,7 +100,7 @@ Recovery retains the existing old-before-commit/new-after-commit contract and
 platform durability limits.
 
 Project/15 remains readable with or without native part selections and its prior
-flat or board-folder layout. Migration to project/16 preserves its pinned parts,
+flat or board-folder layout. Migration to the current format preserves its pinned parts,
 manufacturer records, typed requirements and physical maps. Multi-unit drawings
 across flat sheets retain one component/reference/package in the shared circuit
 use; sheet occurrences do not introduce independent part instances.
