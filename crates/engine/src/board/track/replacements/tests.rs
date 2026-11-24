@@ -76,6 +76,47 @@ fn compound_route_preserves_branch_width_layer_identity_and_one_history_entry() 
     assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after);
 }
 
+/// A moved via's follower may keep its far contact on a later fragment of a displaced track.
+#[test]
+fn a_via_follower_keeps_its_contact_on_a_later_replacement_fragment() {
+    let contact = p(20, 0);
+    let old_center = p(20, 10);
+    let new_center = p(21, 10);
+    for support_end in [contact, p(30, 0)] {
+        let mut s = board();
+        let support = add(&mut s, vec![p(0, 0), support_end], 500_000)[0];
+        let follower = add(&mut s, vec![contact, old_center], 250_000)[0];
+        s.apply(ADD_VIA, &json!({"at":old_center,"expected_revision":s.revision()})).unwrap();
+        let via = view(&s).vias()[0].id;
+        let before = encode_documents(s.snapshot().unwrap()).unwrap();
+        let revision = s.revision();
+        let mut points = vec![p(0, 0), p(5, 0), p(6, -1), p(19, -1), contact];
+        if support_end != contact {
+            points.push(support_end);
+        }
+        let mut command = params(
+            &s,
+            json!([
+                {"track":support,"points":points},
+                {"track":follower,"points":[contact,new_center]},
+            ]),
+        );
+        command["via_moves"] = json!([{"via":via,"at":new_center}]);
+        s.apply(ADD_TRACKS, &command).unwrap();
+        assert_eq!(s.revision(), revision + 1);
+        assert_eq!(view(&s).vias()[0].at, new_center);
+        let tracks = view(&s).tracks();
+        assert_eq!(tracks.iter().find(|t| t.id == support).unwrap().end, p(5, 0));
+        assert!(tracks.iter().any(|t| t.id != support && t.end == contact));
+        assert!(tracks.iter().any(|t| t.id == follower && t.start == contact && t.end == new_center));
+        let after = encode_documents(s.snapshot().unwrap()).unwrap();
+        s.apply("edit.undo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), before);
+        s.apply("edit.redo", &Value::Null).unwrap();
+        assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), after);
+    }
+}
+
 /// Disconnected branches, fixed vias and pad-interior contacts cannot be lost, even when the
 /// replacement has no short and retains both of its original endpoints.
 #[test]
@@ -206,6 +247,31 @@ fn same_net_merge_option_still_refuses_a_short_atomically() {
     assert!(s.apply(ADD_TRACKS, &command).is_err());
     assert_eq!(s.revision(), revision);
     assert_eq!(before, encode_documents(s.snapshot().unwrap()).unwrap());
+}
+
+/// Even explicitly assigned same-net vias cannot acquire a new contact through displacement.
+#[test]
+fn same_net_merge_does_not_allow_coincident_displaced_vias() {
+    let mut s = routed_fixture();
+    let net = s.project().unwrap().inspect_net_registry().unwrap()["nets"][0]["anchor"].clone();
+    let target = json!({"kind":"derived","anchor":net});
+    let (start, occupied) = (p(-30, -30), p(-27, -30));
+    for at in [start, occupied] {
+        s.apply(ADD_VIA, &json!({"at":at,"target":target,"expected_revision":s.revision()})).unwrap();
+    }
+    let moved = view(&s).vias().iter().find(|via| via.at == start).unwrap().id;
+    let before = s.snapshot().unwrap();
+    let revision = s.revision();
+    let mut command = params(&s, json!([]));
+    command["merge_same_net"] = json!(true);
+    command["via_moves"] = json!([{"via":moved,"at":occupied}]);
+    assert!(s.apply(ADD_TRACKS, &command).is_err());
+    assert_eq!(s.revision(), revision);
+    assert!(Arc::ptr_eq(&before, &s.snapshot().unwrap()));
+
+    command["via_moves"] = json!([{"via":moved,"at":p(-29,-30)}]);
+    s.apply(ADD_TRACKS, &command).unwrap();
+    assert_eq!(s.revision(), revision + 1);
 }
 
 /// Uniform degree-two joins may move together; branching, vias, locks and width
@@ -428,4 +494,17 @@ fn compound_edit_enforces_spacing_on_nearly_parallel_return() {
     assert!(s.apply(ADD_TRACKS, &command(&s, 300_000)).is_err());
     assert_eq!(s.revision(), revision);
     s.apply(ADD_TRACKS, &command(&s, 600_000)).expect("a separated return is legal");
+}
+
+/// A branch may pivot at its original joint, but its new leg must clear the support
+/// outside that joint. A slightly angled return can overlap even without exact backtracking.
+#[test]
+fn a_retained_joint_cannot_fold_onto_the_support() {
+    let trace = |a, b| PadContour::capsule(a, b, 125_000.);
+    let support = trace(p(0, 0), p(20, 0));
+    let branch = trace(p(0, 0), p(0, 10));
+    let pivoted = trace(p(0, 0), p(10, 10));
+    let folded = trace(p(0, 0), p(10, 1));
+    assert!(retained_track_joint(&support, &branch, &support, &pivoted, 150_000.));
+    assert!(!retained_track_joint(&support, &branch, &support, &folded, 150_000.));
 }

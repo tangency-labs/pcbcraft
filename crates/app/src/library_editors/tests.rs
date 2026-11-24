@@ -346,6 +346,101 @@ fn canvas_selection_move_and_cancel_use_library_history() {
     assert_eq!(h.state().session.revision(), 0);
 }
 
+/// Both definition editors use the shared path handles, while their transactions preserve
+/// the library object's style, identity and independent undo history.
+#[test]
+fn symbol_and_footprint_polygons_share_the_canvas_path_editor() {
+    use pcbcraft_engine::{
+        authoring::Primitive,
+        board::definition::{Artwork, GraphicPurpose},
+        library_graphics::{Fill, Geometry, Graphic},
+        schematic::Point,
+    };
+    for kind in [Kind::Symbol, Kind::Footprint] {
+        let point = |x_nm, y_nm| Point { x_nm, y_nm };
+        let original = [point(5_080_000, -10_160_000), point(10_160_000, -10_160_000), point(10_160_000, -5_080_000), point(5_080_000, -5_080_000)];
+        let graphic = |points: Vec<Point>| Graphic {
+            geometry: Geometry::Polyline { points, closed: true },
+            stroke_nm: 180_000,
+            fill: if kind == Kind::Symbol { Fill::Solid } else { Fill::None },
+        };
+        let primitive = |points: Vec<Point>| {
+            if kind == Kind::Symbol {
+                Primitive::Graphic { graphic: graphic(points) }
+            } else {
+                Primitive::Artwork { artwork: Artwork { purpose: GraphicPurpose::Silkscreen, graphic: graphic(points) } }
+            }
+        };
+        let mut app = PcbApp::default();
+        app.new_library_item(kind);
+        let doc_id = app.library_editors.active.unwrap();
+        let doc = app.library_editors.documents.get_mut(&doc_id).unwrap();
+        doc.execute(0, Action::Insert { primitive: primitive(original.to_vec()) }).unwrap();
+        let object = doc.selected.unwrap();
+        let mut h =
+            Harness::builder().with_size(egui::vec2(1500., 950.)).with_max_steps(64).build_ui_state(|ui, app: &mut PcbApp| app.frame(ui), app);
+        h.run();
+        let doc = h.state_mut().library_editors.documents.get_mut(&doc_id).unwrap();
+        assert!(doc.camera.set_snap_nm(10_000));
+        doc.camera.set_zoom(3.);
+        doc.camera.center_on(point(7_620_000, -7_620_000));
+        h.run();
+        let at = |h: &Harness<'_, PcbApp>, model| {
+            let rect = h.get_by_label("Library canvas").rect();
+            h.state().library_editors.documents[&doc_id].camera.screen(model, rect)
+        };
+        let edge = at(&h, point(7_620_000, -10_160_000));
+        let resize = at(&h, point(8_890_000, -11_430_000));
+        h.hover_at(edge);
+        h.run();
+        h.drag_at(edge);
+        h.run();
+        h.hover_at(resize);
+        h.run();
+        assert_eq!(h.state().library_editors.documents[&doc_id].session.revision(), 1);
+        h.drop_at(resize);
+        h.run();
+        let mut resized = original.to_vec();
+        resized[0].y_nm = -11_430_000;
+        resized[1].y_nm = -11_430_000;
+        let snapshot = |h: &Harness<'_, PcbApp>| h.state().library_editors.documents[&doc_id].session.snapshot();
+        assert_eq!(snapshot(&h).objects[&object], primitive(resized.clone()));
+
+        let vertex = point(7_620_000, -11_430_000);
+        let edge = at(&h, vertex);
+        for label in ["Add vertex", "Remove vertex"] {
+            h.hover_at(edge);
+            h.run();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: edge, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE });
+                h.run();
+            }
+            crate::tests::click(&mut h, label);
+            let current = snapshot(&h);
+            let authored = &current.objects[&object];
+            let mut expected = resized.clone();
+            if label == "Add vertex" {
+                let geometry = match authored {
+                    Primitive::Graphic { graphic } => &graphic.geometry,
+                    Primitive::Artwork { artwork } => &artwork.graphic.geometry,
+                    other => panic!("expected the original graphic type, got {other:?}"),
+                };
+                let Geometry::Polyline { points, .. } = geometry else { panic!("expected a vertex path") };
+                assert!(points[1].x_nm.abs_diff(vertex.x_nm) <= 4);
+                assert_eq!(points[1].y_nm, vertex.y_nm);
+                expected.insert(1, points[1]);
+            }
+            assert_eq!(authored, &primitive(expected));
+        }
+        assert_eq!(h.state().library_editors.documents[&doc_id].session.revision(), 4);
+        for _ in 0..3 {
+            crate::tests::click(&mut h, "Undo Library Edit");
+        }
+        assert_eq!(snapshot(&h).objects[&object], primitive(original.to_vec()));
+        assert_eq!(h.state().session.revision(), 0);
+    }
+}
+
 /// A completed old save cannot clear newer edits, a busy owner's close is refused, and a lost
 /// worker releases the slot so file handling remains usable after failure.
 #[cfg(not(target_arch = "wasm32"))]
