@@ -100,7 +100,7 @@ use pcbcraft_engine::{
 };
 use serde_json::{Value, json};
 
-pub use editor_windows::APP_TITLE;
+pub use editor_windows::{APP_TITLE, MAIN_WINDOW_MIN_SIZE};
 pub use pcbcraft_chrome::i18n::LanguageChoice;
 pub use preferences::{Navigation, Preferences, ScrollAction, ThemeChoice, ZoomAround};
 use project_files::SaveFormat;

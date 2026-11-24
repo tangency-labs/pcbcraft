@@ -131,7 +131,7 @@ pub(crate) fn gate(mode: Mode, method: &str, command: Option<&str>, always: impl
     let Some(command) = command.filter(|_| method == "engine.execute") else {
         return Verdict::Run;
     };
-    if matches!(command, "ui.inspect" | "ui.handles" | "ui.at" | "ui.project" | "ui.cancel") {
+    if matches!(command, "ui.inspect" | "ui.handles" | "ui.at" | "ui.project" | "ui.window" | "ui.cancel") {
         return Verdict::Run;
     }
     if always(command) {
@@ -879,14 +879,24 @@ mod tests {
             assert_eq!(run(Mode::Edits, command), Verdict::Run, "{command}");
             assert_eq!(run(Mode::Ask, command), Verdict::Ask, "{command}");
         }
-        for command in
-            ["file.save", "project.new", "window.close", "arrangement.delete", "ui.click", "ui.key", "ui.text", "ui.drag", "ui.move", "ui.scroll"]
-        {
+        for command in [
+            "file.save",
+            "project.new",
+            "window.close",
+            "arrangement.delete",
+            "ui.click",
+            "ui.key",
+            "ui.text",
+            "ui.drag",
+            "ui.move",
+            "ui.scroll",
+            "ui.resize",
+        ] {
             assert_eq!(run(Mode::Edits, command), Verdict::Ask, "{command}");
             assert_eq!(run(Mode::All, command), Verdict::Run, "{command}");
         }
         assert_eq!(gate(Mode::Ask, "engine.execute", Some("file.save"), |command| command == "file.save"), Verdict::Run);
-        for command in ["ui.inspect", "ui.handles", "ui.at", "ui.project", "ui.cancel"] {
+        for command in ["ui.inspect", "ui.handles", "ui.at", "ui.project", "ui.window", "ui.cancel"] {
             assert_eq!(run(Mode::Ask, command), Verdict::Run);
         }
     }
