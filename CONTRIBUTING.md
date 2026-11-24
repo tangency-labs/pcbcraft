@@ -64,13 +64,18 @@ command path MCP uses. Adding a catalog command exposes it to headless discovery
 the live adapter has an explicit allowlist, so a new command is not automatically
 available in an open window. View-only actions must leave electrical revision,
 dirty state, saved bytes and document undo unchanged. The
-[board workspace plan](docs/board-workspace-plan.md) describes how these ownership
+[board workspace plan](docs/design/board-workspace-plan.md) describes how these ownership
 boundaries extend to multiple views.
 
-Use the [native storage contract](docs/native-project-storage.md) before changing
-saved data and the [symbol format guide](docs/symbol-library.md) before changing
+Use the [native storage contract](docs/formats/native-project-storage.md) before changing
+saved data and the [symbol format guide](docs/libraries/symbol-library.md) before changing
 library definitions. Preserve stable IDs/order, no-op saves and migrations from
-every supported old format. Generate fixtures through shared commands and the
+every supported old format. Give each native writer one current schema and keep
+older schemas readable. Store optional features as optional records so removing
+a feature never downgrades the file. Publish changes to library items as new
+revisions, preserving existing pinned revisions. See the
+[native write policy](docs/formats/native-project-storage.md#native-write-policy).
+Generate fixtures through shared commands and the
 production encoder instead of hand-editing project documents. To generate an
 original fixture set, use a destination that does not already exist:
 
@@ -79,12 +84,12 @@ cargo run --locked -p pcbcraft-engine --example storage_fixtures -- /tmp/pcbcraf
 ```
 
 For changes affecting routing/checking, geometry queries, connectivity, live MCP edits or editor
-interaction/rendering performance, use the [performance-testing guide](docs/performance-testing.md)
+interaction/rendering performance, use the [performance-testing guide](docs/testing/performance-testing.md)
 before implementation. Its runner-selection table links the CPU, native/browser
 rendered and process-resource commands, saved workloads and comparison tools.
 Collect matched before/after evidence for the affected paths and include the raw
 reports, environment, correctness results and any regressions in the PR; the
-[coverage record](docs/performance-coverage.md) explains existing observations and
+[coverage record](docs/testing/performance-coverage.md) explains existing observations and
 measurement limits.
 
 Routine CI verifies the harness and saved reports with short tests. Full rendered
@@ -201,7 +206,7 @@ cargo check --locked --profile ci -p pcbcraft-web --target wasm32-unknown-unknow
 
 The `ci` profile keeps debug assertions and overflow checks, uses line-table debug
 information for workspace code and optimizes dependencies. It leaves ordinary
-development/debugger builds unchanged. [Continuous integration](docs/continuous-integration.md)
+development/debugger builds unchanged. [Continuous integration](docs/testing/continuous-integration.md)
 describes the PR stages, Windows coverage, cache ownership and optional runner
 labels. Draft PRs skip CI. Ordinary code PR pushes receive repository checks and
 a quick compile; after review, `approved-for-ci` enables affected native packages
@@ -234,8 +239,11 @@ Temporary rendering modules, dependency features and generated screenshots must
 not accidentally enter the implementation diff. Native window behavior needs
 native-window verification in addition to headless UI tests.
 
-Update the quickstart and [capability table](docs/capabilities.md) when user-visible
-behavior changes. Verify documentation commands and local links, and distinguish
+Document user-visible changes in the guide or capability page for the affected
+area. Update the [quickstart](docs/quickstart.md) when the first-session workflow
+changes. Link to the guide or contract for details. Keep independent features in
+separate paragraphs or list entries so unrelated edits can merge. Verify
+documentation commands and local links, and distinguish
 an automated smoke test from an independent person's onboarding run. Describe
 the concrete behavior, issue scope, tests, visual evidence and remaining limits
 in the PR. For the failure-path review, separate cases exercised by tests from

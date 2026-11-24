@@ -3,7 +3,7 @@
 //!
 //! The audit reads the production documents of a command-built project rather than a list of
 //! types, so a newly persisted record without a classification fails here. The record and kind
-//! tables below are the inventory described in `docs/object-identity.md`.
+//! tables below are the inventory described in `docs/formats/object-identity.md`.
 use super::*;
 use crate::{
     board::{setup::LayerPurpose, track::tests as tracks},

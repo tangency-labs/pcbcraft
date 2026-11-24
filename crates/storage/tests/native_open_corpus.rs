@@ -3,7 +3,7 @@
 use pcbcraft_engine::{
     Session,
     netlist::{EXPORT_NETLIST, Netlist, TerminalRef},
-    persistence::{Encoding, decode_packed},
+    persistence::{CURRENT_PROJECT_FORMAT, ENTRY_POINT, Encoding, decode_packed, encode_documents, encode_packed},
 };
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -157,6 +157,45 @@ fn archived_netlist_and_object_counts_are_preserved() -> Result<(), String> {
         let path = root.path().join(fixture.file);
         fs::write(&path, fixture.bytes).map_err(|error| format!("{}: staging archive: {error}", fixture.file))?;
         verify_board(&path, fixture, expected)?;
+    }
+    Ok(())
+}
+
+/// The same frozen inputs migrate through folder and archive output without changing the circuit
+/// or rewriting the source. A second save of either result reproduces the first precisely.
+#[test]
+fn frozen_native_archives_save_in_current_format() -> Result<(), String> {
+    let root = tempfile::tempdir().map_err(|error| error.to_string())?;
+    for fixture in CORPUS {
+        let expected = match fixture.file {
+            "two-resistors-v2.pc.zip" | "two-resistors-previous-no-manifest.pc.zip" => &RESISTOR_REFERENCE,
+            "dual-led-editing-demo-v3.pc" => &EDITING_REFERENCE,
+            "dual-led-flasher-v3.pc" => &FLASHER_REFERENCE,
+            file => return Err(format!("{file}: missing source reference for the migration test")),
+        };
+        let source = root.path().join(fixture.file);
+        fs::write(&source, fixture.bytes).map_err(|error| error.to_string())?;
+        let project = pcbcraft_storage::open(&source)?;
+        let folder = root.path().join(format!("{}.folder", fixture.file));
+        let prepared = pcbcraft_storage::layout::prepare(project.clone(), Some(&folder), None)?;
+        let documents = encode_documents(prepared)?;
+        let entry: serde_json::Value = serde_json::from_slice(&documents[ENTRY_POINT]).map_err(|error| error.to_string())?;
+        assert_eq!(entry["format"], CURRENT_PROJECT_FORMAT);
+        pcbcraft_storage::save(&folder, None, &documents, &mut |_| Ok(()))?;
+        verify_board(&folder, fixture, expected)?;
+        let reopened = pcbcraft_storage::open(&folder)?;
+        let unchanged = encode_documents(reopened)?;
+        assert_eq!(unchanged, documents);
+        pcbcraft_storage::save(&folder, Some(&documents), &unchanged, &mut |_| Ok(()))?;
+        assert_eq!(pcbcraft_storage::load(&folder)?, documents);
+
+        let archive = root.path().join(format!("{}.current.pc", fixture.file));
+        let packed = encode_packed(project)?;
+        fs::write(&archive, &packed).map_err(|error| error.to_string())?;
+        verify_board(&archive, fixture, expected)?;
+        assert_eq!(decode_packed(&packed)?.documents, documents);
+        assert_eq!(encode_packed(pcbcraft_storage::open(&archive)?)?, packed);
+        assert_eq!(fs::read(&source).map_err(|error| error.to_string())?, fixture.bytes);
     }
     Ok(())
 }

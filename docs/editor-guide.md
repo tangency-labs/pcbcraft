@@ -2,7 +2,7 @@
 
 For a first session, start with the [quickstart](quickstart.md). This guide
 covers the desktop and browser controls in more detail; the
-[capability table](capabilities.md) records current limits.
+[capability inventory](capabilities.md) records current limits.
 
 ## Home and recent projects
 
@@ -37,7 +37,7 @@ ordinary component fields and terminal identities throughout the editor.
 Names are case-sensitive. Local labels join matching names on the same sheet;
 global labels and power/ground symbols join project-wide. A marker anchored
 exactly on a pin or wire contacts it. The Browser, Net Inspector and PCB pad
-annotations show the resolved name. [Named nets](net-labels.md) explains scope,
+annotations show the resolved name. [Named nets](schematic/net-labels.md) explains scope,
 aliases, shared commands and limits.
 
 ## Overlapping symbols
@@ -69,11 +69,11 @@ browser). The gear (or **Ctrl+,**) opens **Preferences**, with
 pages for Appearance (theme, interface scale, panel style, PCB grid, grid opacity, schematic grid outside paper, units), Navigation (whether the wheel
 zooms or pans, zoom direction, speed and anchor, and how middle- and right-button drag behave), Views (selection following),
 a list of Shortcuts and, on the desktop, the AI page for the Assistant. The
-[schematic keyboard shortcuts](keyboard-shortcuts.md) page inventories the
+[schematic keyboard shortcuts](schematic/keyboard-shortcuts.md) page inventories the
 schematic bindings with their focus and selection conditions; the
-[board keyboard shortcuts](board-keyboard-shortcuts.md) page does the same for
+[board keyboard shortcuts](pcb/board-keyboard-shortcuts.md) page does the same for
 the PCB editor, whose keys deliberately reuse several letters differently. The
-[library editor keyboard shortcuts](library-editor-keyboard-shortcuts.md) page
+[library editor keyboard shortcuts](libraries/library-editor-keyboard-shortcuts.md) page
 covers the Symbol Editor, Footprint Editor and Parts Library workspaces, which
 dispatch their own small set of chords rather than the project-workspace
 bindings.
@@ -146,8 +146,8 @@ capacitor, two-pin connector, four-pin header and NPN transistor from
 [`libraries/basic-components`](../libraries/basic-components); registered sources appear as
 additional libraries. **Power** contains the built-in power and ground drawings.
 **Manage libraries…** opens the existing source manager. See the
-[native source guide](native-library-sources.md) for loading a library and
-[symbol library format](symbol-library.md) for native definitions.
+[native source guide](libraries/native-library-sources.md) for loading a library and
+[symbol library format](libraries/symbol-library.md) for native definitions.
 
 Click a result to inspect its drawing, value and source, then choose **Place**.
 Double-clicking a result or pressing **Enter** also starts placement. In the large
@@ -197,7 +197,7 @@ windows, projects and running instances. **Ctrl+C**, **Ctrl+X** and **Ctrl+V**
 Paste previews at the pointer, **R** rotates the group, a click places it and
 **Esc** cancels. **Ctrl+D** duplicates without replacing the clipboard, while
 **Ctrl+Shift+V** opens reference, named-net and original-position options.
-The [clipboard guide](clipboard.md) describes preserved definitions and wiring,
+The [clipboard guide](schematic/clipboard.md) describes preserved definitions and wiring,
 cut behavior, browser gestures, shared commands and supported limits.
 
 ## Moving symbols
@@ -254,7 +254,7 @@ The check is a snapshot of one revision: after any project edit, including Undo,
 dialog hides its rows and says the schematic changed until you choose **Run again**.
 MCP reads the same report. The no-connect rule is the only ERC rule so far; it
 does not implement type-conflict or power-driver checks.
-See the [identity and storage contract](no-connect-markers.md).
+See the [identity and storage contract](schematic/no-connect-markers.md).
 
 ### Wires
 
@@ -354,7 +354,7 @@ local cleanup does not route around obstacles or resolve conflicting net names
 ## Symbol properties and selection
 
 The **Selection filters** card sits below Properties in schematic and PCB views.
-[Pins and Pads](pin-pad-selection.md) enable individual inspection selection and start off to preserve existing picking defaults.
+[Pins and Pads](schematic/pin-pad-selection.md) enable individual inspection selection and start off to preserve existing picking defaults.
 Its checkboxes also control symbols (including power/ground), wires, no-connect
 markers, local/global and hierarchical labels, and sheets in the schematic, and footprints and board graphics in PCB layout. **All items** toggles
 the supported categories together; **Reset** enables them all. Categories without
@@ -522,7 +522,7 @@ handle to resize. Attached wires follow, and each gesture is one undo step. **H*
 appears on the parent symbol automatically, with the same name and direction;
 **W** connects wires to either end. The Browser nests child sheets beneath their
 parent. Each child has one parent, and repeated names on different sheets do not
-connect them. See [hierarchical sheets](hierarchical-sheets.md) for editing
+connect them. See [hierarchical sheets](schematic/hierarchical-sheets.md) for editing
 and deletion behavior.
 
 ## Views and windows
@@ -618,7 +618,7 @@ Saved arrangements of the project's panes and windows are available under
 offers **Activate**, **Rename…**, **Duplicate…** and **Delete…**. Arrangements restore when a saved project is reopened on the same computer;
 they live in user-local app settings and do not change or travel with project
 files. Unsaved projects keep arrangements only for the session until their first
-successful save. See the [arrangement persistence details](board-workspace-plan.md#named-arrangements-and-reopening-a-project).
+successful save. See the [arrangement persistence details](design/board-workspace-plan.md#named-arrangements-and-reopening-a-project).
 
 ## PCB layout
 
@@ -682,7 +682,7 @@ the footprint's pads stays on that pad while the rest of the track stretches, in
 preview and in the same undo step. A flip leaves an end behind when its SMD pad moves to
 the other side, and its airwire returns. A move, rotation, flip or alignment that would put
 a pad or a carried track onto another net's copper is refused, leaving the board unchanged. A conflicting edit, focus/workspace change
-or project reopen cancels the draft. The [starter footprints](footprint-library.md) include 0402/0603
+or project reopen cancels the draft. The [starter footprints](libraries/footprint-library.md) include 0402/0603
 resistors and capacitors, 0402 LEDs, SOT-23 and a two-pin plated header, pinned
 into projects with explicit terminal mappings. New views hide fabrication and
 courtyard graphics by default; Layers can show them. **Board setup → Silkscreen**
@@ -769,10 +769,11 @@ On copper, these tools create conductive linework: a rectangle outline becomes
 four connected segments. It participates in connectivity, short checks, DRC and
 fabrication and uses the ordinary copper selection/editing tools. Filled copper
 zones use **Layout → Place → Zone** to draw
-[editable zone outlines](copper-zone-outlines.md). **Pour copper** and **Remove
-pours** are in the **Board** group on the same ribbon. Non-copper shapes remain independent
-editable graphics: select a line, drag a vertex or segment, use M to move it, or
-Delete to remove it. Silkscreen, mask and paste artwork reaches its matching
+[editable zone outlines](pcb/copper-zone-outlines.md). **Pour copper** and **Remove
+pours** are in the **Board** group on the same ribbon. Non-copper paths share
+the [zone outline editing gestures](pcb/copper-zone-outlines.md#drawing-and-editing).
+Drag an edge of a closed path to resize that side, or press M to move the whole
+path. Silkscreen, mask and paste artwork reaches its matching
 fabrication surface. Mechanical, fabrication, courtyard and user-layer graphics
 remain documentation in the native board.
 
@@ -802,7 +803,7 @@ Click to start a route or fix the current target. The preview uses clearance-awa
 Clicked targets wait for full-path validation; blocked or incomplete searches fix no
 new vertex. Use **/**
 to flip whether the diagonal comes first. Click a copper connection, double-click
-or press **Enter** to finish.
+or press **Enter** to finish at the last clicked vertex.
 
 The route preview uses a lighter shade of each segment's copper layer color. A
 halo shows the default copper clearance (0.2 mm) around the draft tracks and vias.
@@ -813,7 +814,8 @@ copper, adding a via only when the layer changes. Hold **Ctrl** with either page
 key to place the via off-grid in free space. The **Via pad / drill** field beside the
 width field sets the pad diameter and drill (0.6 mm and 0.3 mm by default).
 **Backspace** removes the last via, returning to the previous layer, or else the
-last vertex. Right-click opens the route menu with Finish track, Remove last
+last vertex. Right-click a point on the board and choose **Finish track** to
+validate and finish the route at that target. The menu also offers Remove last
 vertex, Place through via, Flip track posture, and Cancel. **Esc** or **Cancel**
 drops the unfinished route, and a second **Esc** exits the tool. The whole route
 is one Undo step. When copper
@@ -858,19 +860,20 @@ not a manufacturing sign-off.
 copper layer, the top and bottom solder mask, paste and silkscreen,
 and the Board Outline, plus an Excellon drill file for every plated hole (vias and
 through-hole pads). Circular non-plated footprint holes, when present, go in a separate
-`-NPTH.drl` file (see [Fabrication drill files](pcb-layout-workflow.md#fabrication-drill-files)).
+`-NPTH.drl` file (see [Fabrication drill files](manufacturing/drill-files.md#fabrication-drill-files)).
 Coordinates are in millimeters with Y up, as seen from the top,
 measured from the board's placement origin: board zero unless an origin has been set
-with `pcb.set_placement_origin` (see [MCP](mcp.md#placement-origin)). Gerber coordinates
+with `pcb.set_placement_origin` (see [MCP](automation/board-commands.md#placement-origin)). Gerber coordinates
 are exact nanometres; Excellon coordinates are rounded to 0.001 mm with halves going up,
 so both shift exactly when the origin moves by a whole micrometre. Mask openings use
 pads on the corresponding outer copper layer; paste includes only surface-mount pads,
 not through-hole pads. Neither adds process expansion. Vias receive no automatic mask
 opening, but authored mask artwork can open them. The shape approximations below also
-apply to these openings. Generation needs a board setup, a
-closed Board Outline and a resolvable placement origin, and reports missing prerequisites.
-It does not edit the project. Repeated generation from the same captured inputs and
-exporter build produces the same archive; project names affect filenames and exporter
+apply to these openings. Generation needs a board setup, at least one closed
+Board Outline loop and a resolvable placement origin. Each closed path, including a
+cutout, gets its own loop in the profile file. Export omits open Board Outline paths
+and leaves them in the design. Repeated generation from the same captured inputs and
+exporter build produces the same archive. Project names affect filenames, and exporter
 versions appear in the Gerber header. Saving can be cancelled, busy or fail at the
 destination; generation alone is not a successful save. Run DRC first: outputs do not
 check the design.
@@ -898,10 +901,8 @@ Gerber X2 `.AperFunction` distinguishes copper-defined surface-mount pad flashes
 through-hole pad flashes, via pads and tracks, even when their apertures have the
 same shape and size. Pad regions carry a descriptive aperture attribute but are
 not pad flashes. Copper obrounds emitted as strokes are not tagged as pads. Mask,
-paste and silkscreen artwork use `Material`. Closed Board Outline drawings are
-tagged `Profile`; open outline artwork is still plotted but untagged. Remove stray
-open artwork before sending the profile to fabrication. The aperture attributes do
-not change plotted geometry.
+paste and silkscreen artwork use `Material`. The closed loops in the outline file
+use the `Profile` aperture function.
 
 On copper, X2 `.N` identifies the intended net of pads, tracks and vias. Component pads
 carry `.C` (reference designator) and, on outer copper, `.P` (reference and physical pin
@@ -1039,6 +1040,14 @@ selection. Closing a pane retains the definition and any unapplied fields.
 Definition placements currently last for the session, with the last saved project
 arrangement retained while definition panes are open.
 
+In either library canvas, select a polyline or polygon to show its vertices.
+Right-click an edge to add a vertex or right-click a corner to remove one.
+Drag a corner to reshape it or a closed edge to resize that side. Drag inside
+a selected closed outline to move the entire shape. The same axis guides and
+Alt override apply as in PCB Layout. Completed edits use the definition's
+undo history and retain its original fill, stroke and artwork purpose.
+Use the Footprint Editor's **Courtyard** controls for courtyard outlines.
+
 ## Opening and saving projects
 
 Open `project.json`, its project folder, or a `.pc` archive from **File → Open…**.
@@ -1060,7 +1069,7 @@ Commit the folder to Git; use the archive to share the complete project.
 Ordinary hand-zipped project folders open too, including those without a manifest.
 The browser uploads and downloads current `.pc` archives. Version 0.1.0 breaks
 older project layouts; see the [release notes](../CHANGELOG.md).
-The [native storage notes](native-project-storage.md) describe the formats,
+The [native storage notes](formats/native-project-storage.md) describe the formats,
 file safety and performance checks.
 
 ### Bundled Power instances
@@ -1079,5 +1088,5 @@ sizes through the same revision-checked command as MCP. Preferences must fit the
 hard bounds. Apply creates one undo step; Cancel leaves the board untouched, and
 **Use built-in defaults** removes the saved record. DRC reports the effective rules
 and any violations in existing copper. Rule edits make previous checks and route
-drafts out of date. See [board-rules.md](board-rules.md) for units, local size
+drafts out of date. See [board-rules.md](pcb/board-rules.md) for units, local size
 choices, provenance and file compatibility.

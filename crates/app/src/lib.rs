@@ -59,6 +59,7 @@ mod net_labels;
 mod no_connect;
 mod part_documents;
 mod parts_browser;
+mod path_edit;
 #[cfg(feature = "performance-harness")]
 pub mod performance;
 mod placement_filters;
@@ -1632,6 +1633,11 @@ impl PcbApp {
             && matches!(self.dialog, Dialog::None)
             && !self.parts.is_modal()
             && !egui::Popup::is_any_open(ui.ctx());
+        // Disabled input on any frame cancels a box and keeps the selection it started from, so a
+        // later enabled release cannot commit it. Canvas clicks are dropped while a dialog is open.
+        if !input_enabled && matches!(self.views.active.schematic.tool, Some(Tool::BoxSelect { .. })) {
+            self.views.active.schematic.tool = None;
+        }
         let click = ui
             .push_id(self.views.active.widget_id(), |ui| {
                 shell::canvas(ui, |ui| {
@@ -2176,7 +2182,13 @@ impl PcbApp {
             {
                 self.select_board_items(Default::default());
             }
-            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete)) {
+            // Backspace deletes like Delete (it is the delete key on Mac keyboards), except while a
+            // route or line tool owns it for removing the last vertex below.
+            let board = &self.views.active.board;
+            let backspace_deletes =
+                !board.tracks.tool && board.zones.tool != Some(board_drawing::Tool::Lines) && board.drawing.tool != Some(board_drawing::Tool::Lines);
+            if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Delete) || (backspace_deletes && i.consume_key(Modifiers::NONE, Key::Backspace)))
+            {
                 if !board_clipboard::busy(&self.views.active.board) {
                     self.delete_board_items();
                 } else if !self.views.active.board.tracks.selected.is_empty() {
@@ -2936,6 +2948,7 @@ fn shortcut_list(ctx: &egui::Context, navigation: Navigation) -> Vec<(&'static s
     list.push(("Schematic", "Edit the selected symbol's fields", key(&EDIT_FIELDS)));
     list.push(("Schematic", "Delete selected items or segment", "Del".to_owned()));
     list.push(("Schematic", "Cancel the current tool", "Esc".to_owned()));
+    list.push(("PCB Layout", "Delete selected items", "Del or Backspace".to_owned()));
     list.push(("PCB Layout", "Move footprint", "M or left drag".to_owned()));
     list.push(("PCB Layout", "Move reference designator", "M or left drag over the reference".to_owned()));
     list.push(("PCB Layout", "Rotate footprint counterclockwise", "R".to_owned()));

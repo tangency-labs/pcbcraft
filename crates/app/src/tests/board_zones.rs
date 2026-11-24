@@ -496,6 +496,45 @@ fn zone_context_menu_deletes_the_complete_selection() {
     }
 }
 
+/// The shared context menu can split and remove vertices after drawing a zone. Both writes
+/// retain its identity and fill options, and removing a fourth vertex is independently undoable.
+#[test]
+fn zone_vertex_menu_splits_and_removes_an_edge_point_in_both_themes() {
+    for theme in [ThemeChoice::Dark, ThemeChoice::Light] {
+        let mut h = fixture();
+        h.state_mut().preferences.theme = theme;
+        h.run();
+        draw(&mut h, true);
+        let edge = at(&h, 5_080_000, 0);
+        click_canvas_at(&mut h, edge);
+        let zones = |h: &Harness<'_, PcbApp>| h.state().session.project().unwrap().boards().next().unwrap().zones().to_vec();
+        let original = zones(&h)[0].clone();
+        let revision = h.state().session.revision();
+        for label in ["Add vertex", "Remove vertex"] {
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: edge, button: egui::PointerButton::Secondary, pressed, modifiers: Modifiers::NONE });
+                h.run();
+            }
+            assert!(!h.get_by_label(label).accesskit_node().is_disabled());
+            assert!(!h.get_by_label("Delete").accesskit_node().is_disabled());
+            click(&mut h, label);
+            let changed = zones(&h).remove(0);
+            assert_eq!(changed.id, original.id);
+            assert_eq!(changed.options, original.options);
+            if label == "Add vertex" {
+                assert_eq!(changed.points.len(), original.points.len() + 1);
+                assert!(changed.points.contains(&Point { x_nm: 5_080_000, y_nm: 0 }));
+            } else {
+                assert_eq!(changed, original);
+            }
+        }
+        assert_eq!(h.state().session.revision(), revision + 2);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+        h.run();
+        assert_eq!(zones(&h)[0].points.len(), original.points.len() + 1);
+    }
+}
+
 /// Modifier clicks preserve other categories in either order; a shared mixed Delete is one edit.
 #[test]
 fn zones_join_mixed_selection_without_losing_footprints() {
