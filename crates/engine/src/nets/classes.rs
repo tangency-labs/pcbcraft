@@ -126,7 +126,7 @@ impl Project {
 
     /// Resolve a scoped target without allocating identities. Historical targets may be inspected
     /// but must not be assigned or consumed as current dimensional authority.
-    fn class_target(&self, target: &ClassTarget) -> Result<(Option<Uuid>, Option<usize>), CommandError> {
+    pub(super) fn class_target(&self, target: &ClassTarget) -> Result<(Option<Uuid>, Option<usize>), CommandError> {
         match target {
             ClassTarget::Persistent { project, scope, net } => {
                 if *project != self.id || *scope != self.net_scope() || self.net_registry.record(*net).is_none() {

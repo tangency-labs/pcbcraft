@@ -53,6 +53,7 @@ mod live_control;
 mod manufacturing;
 mod native_part_properties;
 mod native_sources;
+mod net_appearance;
 mod net_class_editor;
 mod net_inspector;
 mod net_labels;
@@ -266,6 +267,7 @@ enum Dialog {
     BoardSetup(Box<board_setup::Edit>),
     BoardRules(Box<board_rules::Edit>),
     Rules(Box<net_class_editor::Edit>),
+    /// Sparse schematic wire appearance owned by one captured net identity and revision.
     /// Expanded selection properties retain their originating view and revision.
     EditFields(Box<properties::Edit>),
     /// Closing a definition or quitting protects authoring documents separately from the project.
