@@ -1295,13 +1295,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     {
         return Err("board.json: layer graphics require board format 9".into());
     }
-    if !grouped
-        && !with_test_points
-        && let Some(raw) = &board.setup
-    {
+    // Format 41 requires a group; format 56 may omit the field, but like its other arrays it never
+    // stores an empty one, which a later save would drop.
+    if !grouped && let Some(raw) = &board.setup {
         let value: serde_json::Value = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
-        if value["stackup"].get("layer_groups").is_some() {
-            return Err("board.json: the layer_groups field requires board format 41 or 56.".into());
+        if let Some(groups) = value["stackup"].get("layer_groups") {
+            if !with_test_points {
+                return Err("board.json: the layer_groups field requires board format 41 or 56.".into());
+            }
+            if groups.as_array().is_some_and(Vec::is_empty) {
+                return Err("board.json: layer_groups in board format 56 must be a nonempty array when present.".into());
+            }
         }
     }
     let setup = match (board.format.as_str(), board.setup) {

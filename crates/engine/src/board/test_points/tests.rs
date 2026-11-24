@@ -318,23 +318,35 @@ fn raw_text_test_points_reject_positional_arrays_and_unknown_fields() {
 }
 
 /// Format 56 carries test-point marks together with named layer groups, so a board with both
-/// saves as 56 and reopens with both. Without marks the groups select 41, which refuses marks, and
-/// the retired format 40 refuses them too. Removing the groups restores the ungrouped format 56 bytes.
+/// saves as 56 and reopens with both. Without marks the groups select 41 and its exact bytes, and
+/// 41 refuses marks, as does the retired format 40; 56 refuses an empty `layer_groups` array.
+/// Removing the groups restores the ungrouped format 56 bytes.
 #[test]
 fn marks_and_named_layer_groups_save_as_56_and_reopen() {
     let (mut session, pad, via) = fixture();
-    set(&mut session, &pad, "assembly", json!("top")).unwrap();
-    set(&mut session, &via, "fabrication", json!("bottom")).unwrap();
+    let mark = |session: &mut Session, on: bool| {
+        set(session, &pad, "assembly", if on { json!("top") } else { Value::Null }).unwrap();
+        set(session, &via, "fabrication", if on { json!("bottom") } else { Value::Null }).unwrap();
+    };
+    mark(&mut session, true);
     let marked = save(&session);
     let path = test_board_path(&marked);
     let marked_board: Value = serde_json::from_slice(&marked[&path]).unwrap();
     assert_eq!(marked_board["format"], "pcbcraft-board/56");
     assert!(marked_board["setup"]["stackup"].get("layer_groups").is_none());
+    mark(&mut session, false);
+
     let setup = session.project().unwrap().board_setup().unwrap();
     let copper: Vec<_> = setup.copper_stack().map(|facts| facts.layer).collect();
     let mut grouped_setup = json!(setup);
     grouped_setup["stackup"]["layer_groups"] = json!([{"id":crate::fresh_id().unwrap(),"name":"Probe sides","layers":copper}]);
     session.apply(crate::SET_BOARD_SETUP, &json!({"setup":grouped_setup,"expected_revision":session.revision()})).unwrap();
+    let grouped_only = save(&session);
+    let board: Value = serde_json::from_slice(&grouped_only[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/41");
+    assert!(board.get("test_points").is_none());
+
+    mark(&mut session, true);
     let both = save(&session);
     let board: Value = serde_json::from_slice(&both[&path]).unwrap();
     assert_eq!(board["format"], "pcbcraft-board/56");
@@ -346,24 +358,25 @@ fn marks_and_named_layer_groups_save_as_56_and_reopen() {
     assert_eq!(encode_documents(reopened).unwrap(), both);
 
     let mut candidate = both.clone();
-    for (format, expected) in [("pcbcraft-board/41", "require format 56"), ("pcbcraft-board/40", "require format 56")] {
-        let mut wrong = board.clone();
-        wrong["format"] = json!(format);
-        candidate.insert(path.clone(), serde_json::to_vec(&wrong).unwrap());
+    let mut empty_groups = board["setup"].clone();
+    empty_groups["stackup"]["layer_groups"] = json!([]);
+    for (wrong, expected) in [
+        (json!({"format":"pcbcraft-board/41"}), "require format 56"),
+        (json!({"format":"pcbcraft-board/40"}), "require format 56"),
+        (json!({"setup":empty_groups}), "must be a nonempty array"),
+    ] {
+        let mut changed = board.clone();
+        for (field, value) in wrong.as_object().unwrap() {
+            changed[field] = value.clone();
+        }
+        candidate.insert(path.clone(), serde_json::to_vec(&changed).unwrap());
         let error = decode_documents(&candidate).unwrap_err();
-        assert!(error.contains(expected), "{format}: {error}");
+        assert!(error.contains(expected), "{wrong}: {error}");
     }
 
-    set(&mut session, &pad, "assembly", Value::Null).unwrap();
-    set(&mut session, &via, "fabrication", Value::Null).unwrap();
-    let grouped = save(&session);
-    let board: Value = serde_json::from_slice(&grouped[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/41");
-    assert!(board.get("test_points").is_none());
-    assert_eq!(encode_documents(decode_documents(&grouped).unwrap()).unwrap(), grouped);
-
-    set(&mut session, &pad, "assembly", json!("top")).unwrap();
-    set(&mut session, &via, "fabrication", json!("bottom")).unwrap();
+    mark(&mut session, false);
+    assert_eq!(save(&session), grouped_only);
+    mark(&mut session, true);
     assert_eq!(save(&session), both);
     let mut ungrouped_setup = json!(session.project().unwrap().board_setup().unwrap());
     ungrouped_setup["stackup"]["layer_groups"] = json!([]);

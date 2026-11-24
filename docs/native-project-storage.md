@@ -305,7 +305,7 @@ circular copper and footprint locks, but not test-point marks: a grouped board w
 marks uses format 56, which carries the same `layer_groups`. Within `setup.stackup`, `layer_groups` stores
 only authored named groups (group UUID, name and copper-layer UUIDs); derived
 groups are computed and never stored. Earlier headers reject `layer_groups`, even
-when empty; format 56 also accepts them. Removing the last named group restores the format required by the
+when empty; format 56 also accepts them but refuses an empty array. Removing the last named group restores the format required by the
 remaining authored data, and unchanged group-free boards keep their existing format
 and bytes across Save, Save As and browser Download. Formats 27–33, 36 and 38–40
 remain unsupported.
