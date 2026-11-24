@@ -1,7 +1,10 @@
 use super::*;
 use pcbcraft_engine::{
     MOVE_SYMBOL, Session,
-    persistence::{CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, ENTRY_POINT, decode, decode_documents, encode_documents, migrate_bundled_libraries},
+    persistence::{
+        CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, ENTRY_POINT, decode, decode_documents, encode_documents,
+        migrate_bundled_libraries,
+    },
 };
 use serde_json::json;
 
@@ -91,6 +94,28 @@ fn edited_download_keeps_unaffected_bytes_and_new_geometry() {
     assert_eq!(changed.len(), 1);
     assert!(changed[0].starts_with("sheets/"));
     assert_eq!(encode_documents(decode_documents(&downloaded).unwrap()).unwrap(), encode_documents(current).unwrap());
+}
+
+/// A papered legacy sheet is rewritten by the incremental browser download even when
+/// no in-memory edits or paper adoption were needed.
+#[test]
+fn unchanged_download_advances_the_sheet_header() {
+    let mut session = Session::default();
+    session.apply("project.new", &json!({})).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let path = format!("sheets/{}.json", snapshot.sheet_target().id());
+    let current = encode_documents(snapshot).unwrap();
+    let mut previous = current.clone();
+    let historical = String::from_utf8(current[&path].clone()).unwrap().replacen(CURRENT_SHEET_FORMAT, "pcbcraft-sheet/9", 1);
+    previous.insert(path, historical.into_bytes());
+    let opened = decode_documents(&previous).unwrap();
+    let baseline = Original::for_project(opened.clone(), Arc::new(previous), &opened).unwrap();
+    assert!(baseline.unchanged(&opened).is_none());
+    let migrated = encode(opened, Some(baseline));
+    assert_eq!(migrated, current);
+    let reopened = decode_documents(&migrated).unwrap();
+    let baseline = Original::for_project(reopened.clone(), Arc::new(migrated), &reopened).unwrap();
+    assert_eq!(baseline.unchanged(&reopened).as_deref(), Some(&current));
 }
 
 /// Browser downloads migrate a historical board with or without an unrelated edit,
