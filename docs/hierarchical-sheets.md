@@ -77,7 +77,8 @@ on their own. The reply lists:
   alphabetical order when it has several), without the sheet path that may be
   shown when another sheet uses the same name. An unnamed net uses its generated
   `Net-NNNN` name and is marked `generated`. The proposed direction follows the
-  pin types: driven only from inside is output (tri-state when every inside
+  pin types, using a part's selected alternate pin function where it has one,
+  as the netlist does: driven only from inside is output (tri-state when every inside
   driver is tri-state), driven only from outside is input, driven from both
   sides or carrying a bidirectional pin is bidirectional, otherwise passive;
 - the `global_nets` that need no port because the same global label or power

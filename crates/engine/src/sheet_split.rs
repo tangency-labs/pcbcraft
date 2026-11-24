@@ -156,11 +156,16 @@ fn direction(inside: &[ElectricalType], outside: &[ElectricalType]) -> Direction
     }
 }
 
-/// The electrical type of every terminal in the project, keyed by its project-unique address.
+/// The effective electrical type of every terminal in the project, keyed by its project-unique
+/// address. A selected alternate pin function replaces the primary type, as in the netlist.
 fn terminal_types(project: &Project) -> BTreeMap<Terminal, ElectricalType> {
     project
         .all_symbols()
-        .flat_map(|symbol| symbol.terminals().into_iter().zip(symbol.unit_definition().pins().iter().map(|pin| pin.electrical_type)))
+        .flat_map(|symbol| {
+            let choices = project.pin_functions.owner(symbol.component);
+            let types = symbol.unit_definition().pins().iter().map(move |pin| crate::pin_functions::effective(choices, pin).1);
+            symbol.terminals().into_iter().zip(types)
+        })
         .collect()
 }
 

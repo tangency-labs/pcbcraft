@@ -653,3 +653,74 @@ fn board_update_after_a_split_changes_only_unnamed_boundary_nets() {
         }
     }
 }
+
+/// Place a one-pin part whose primary function is an input and whose alternate `TX` is an
+/// output, published through the shared symbol-edit transaction, and return its symbol ID.
+fn uart_part(s: &mut Session) -> String {
+    use crate::authoring::{Action, Item, Kind, Primitive};
+    let item = Item::new(Kind::Symbol).unwrap();
+    let mut primitive = item.objects[&1].clone();
+    let Primitive::Pin { name, electrical_type, alternates, .. } = &mut primitive else { panic!("expected starter pin") };
+    *name = Some("RX".into());
+    *electrical_type = ElectricalType::Input;
+    *alternates = vec![crate::schematic::AlternatePinFunction { name: "TX".into(), electrical_type: ElectricalType::Output }];
+    let mut editor = crate::authoring::Session::new(item, false).unwrap();
+    editor.execute(0, Action::Replace { object: 1, primitive }).unwrap();
+    let manifest = crate::authoring::publishing::new_library("synthetic", "Synthetic", "MIT OR Apache-2.0").unwrap();
+    let published = crate::authoring::publishing::prepare_copy(editor.snapshot(), &manifest).unwrap();
+    let item = published.item();
+    let mut documents = published.documents().clone();
+    documents.insert("library.json".into(), manifest);
+    s.execute("library.load_source", &json!({"source":"uart","documents":documents})).unwrap();
+    let definition = s.libraries.symbol(&item.library, &item.id, item.revision).unwrap();
+    let digest = symbol_digest(&definition).unwrap();
+    apply(
+        s,
+        PLACE_SYMBOL,
+        json!({"library":item.library,"definition":item.id,"definition_revision":item.revision,"definition_digest":digest,"x_nm":0,"y_nm":0}),
+    );
+    s.project().unwrap().symbols().last().unwrap().id()
+}
+
+/// The selected alternate pin function of the part's terminal, if any.
+fn selected_function(s: &Session) -> Option<String> {
+    let project = s.project().unwrap();
+    let part = project.components().find(|part| part.definition.pins().iter().any(|pin| !pin.alternates.is_empty())).unwrap();
+    project.pin_function(part, "1").map(str::to_owned)
+}
+
+/// A selected alternate pin function sets the port direction as the netlist sees it. A part
+/// whose input pin meets a passive resistor proposes a passive port; with its output
+/// alternate selected, the preview and the saved child label are outputs, and the selection
+/// survives the split and its undo.
+#[test]
+fn port_direction_uses_the_selected_alternate_pin_function() {
+    let mut s = Session::default();
+    s.apply("project.new", &json!({})).unwrap();
+    let uart = uart_part(&mut s);
+    let outside = resistor(&mut s, 40 * GRID_NM, 0);
+    connect(&mut s, pin(&uart, "1"), pin(&outside, "1"));
+    let items = json!({"symbols":[uart],"wires":[]});
+    let port_direction = |s: &mut Session| {
+        let preview = s.execute(PREVIEW, &json!({"items":items,"name":"Uart"})).unwrap()["split_preview"].clone();
+        let [port] = preview["ports"].as_array().unwrap().as_slice() else { panic!("one port: {preview}") };
+        port["direction"].clone()
+    };
+    assert_eq!(port_direction(&mut s), json!("passive"));
+
+    let part = s.project().unwrap().symbols().iter().find(|symbol| symbol.id() == uart).unwrap().component_id();
+    apply(&mut s, crate::pin_functions::SET, json!({"target":{"part":part,"terminal":"1"},"function":"TX"}));
+    assert_eq!(selected_function(&s).as_deref(), Some("TX"));
+    assert_eq!(port_direction(&mut s), json!("output"));
+
+    apply(&mut s, SPLIT, json!({"items":items,"name":"Uart"}));
+    let child = sheet_named(&s, "Uart");
+    let directions: Vec<_> = s.project().unwrap().for_sheet(child).unwrap().hierarchical_labels().iter().map(|label| label.direction).collect();
+    assert_eq!(directions, [Direction::Output]);
+    assert_eq!(selected_function(&s).as_deref(), Some("TX"));
+
+    s.execute("edit.undo", &Value::Null).unwrap();
+    assert!(s.project().unwrap().sheets().all(|sheet| sheet.name != "Uart"));
+    assert_eq!(selected_function(&s).as_deref(), Some("TX"));
+    assert_eq!(port_direction(&mut s), json!("output"));
+}
