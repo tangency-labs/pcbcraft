@@ -1,5 +1,5 @@
 use super::*;
-use crate::library::parts::{MAX_KEYWORDS, MAX_LINKS, METADATA_PART_FORMAT, Package, PartLink, RATED_PART_FORMAT};
+use crate::library::parts::{MAX_KEYWORDS, MAX_LINKS, Package, PartLink};
 
 /// Original bundled connector and header geometry supplies an independent native assembly.
 fn fixture() -> (Catalog, Record, String) {
@@ -132,6 +132,64 @@ fn publish_generic_and_orderable_place_and_reopen_offline() {
     assert_eq!(crate::persistence::encode_documents(folder).unwrap(), documents);
     assert_eq!(crate::persistence::encode_documents(archive.project).unwrap(), documents);
 }
+/// An old placed revision retains its exact dependency closure when a new revision is published.
+#[test]
+fn publishing_historical_part_preserves_the_offline_project_pin() {
+    use crate::{
+        library::sources::part_digest,
+        part_instances::PLACE_PART,
+        persistence::{decode_documents, encode_documents},
+    };
+    let mut documents = Documents::from([
+        ("library.json".into(), include_str!("../../../../examples/native-parts/library.json").into()),
+        ("parts/resistor.json".into(), include_str!("../../../../examples/native-parts/parts/resistor.json").into()),
+        ("categories/resistor.json".into(), include_str!("../../../../examples/native-parts/categories/resistor.json").into()),
+        ("symbols/resistor.json".into(), include_str!("../../../../examples/native-parts/symbols/resistor.json").into()),
+        ("footprints/resistor-0603.json".into(), include_str!("../../../../examples/native-parts/footprints/resistor-0603.json").into()),
+    ]);
+    let mut project = crate::Session::default();
+    project.apply("project.new", &json!({"create_board":false})).unwrap();
+    project.install_library_source("parts-demo", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    let old_bytes = documents["parts/resistor.json"].clone();
+    let old = PartDefinition::read(&old_bytes).unwrap();
+    let reference = old.reference();
+    let resolved = project.libraries().resolve_part(&reference).unwrap();
+    project.apply(PLACE_PART, &json!({"library":reference.library,"definition":reference.id,"definition_revision":reference.revision,
+        "definition_digest":part_digest(resolved),"package":old.packages.keys().next().unwrap(),"expected_revision":project.revision(),"x_nm":0,"y_nm":0})).unwrap();
+    let before = encode_documents(project.snapshot().unwrap()).unwrap();
+
+    let mut editor = Session::new(Record::Part(old.clone()), true).unwrap();
+    let mut changed = editor.record().clone();
+    let Record::Part(part) = &mut changed else { panic!() };
+    part.name = "Updated resistor".into();
+    editor.replace(editor.revision(), changed).unwrap();
+    let prepared = editor.prepare(project.libraries(), &documents["library.json"], reference.revision, false, false).unwrap();
+    documents.extend(prepared.documents().clone());
+    project.install_library_source("parts-demo", Arc::new(NativeSource::load(&documents).unwrap())).unwrap();
+    let new = project.libraries().resolve_part(&prepared.reference()).unwrap().definition.clone();
+    assert_eq!(new.format, CURRENT_PART_FORMAT);
+    assert_eq!(new.revision, old.revision + 1);
+    assert_eq!(new.symbol, old.symbol);
+    assert_eq!(new.category, old.category);
+    assert_eq!(new.packages, old.packages);
+    assert_eq!(documents["parts/resistor.json"], old_bytes);
+    assert_eq!(*project.libraries().resolve_part(&reference).unwrap().definition, old);
+
+    let saved = encode_documents(project.snapshot().unwrap()).unwrap();
+    assert_eq!(saved, before);
+    let reopened = decode_documents(&saved).unwrap();
+    let selection = reopened.components().next().unwrap().part.as_ref().unwrap();
+    assert_eq!(*selection.resolved.definition, old);
+    assert_eq!(encode_documents(reopened).unwrap(), saved);
+
+    editor.confirm(&prepared);
+    editor.history(editor.revision(), false).unwrap();
+    let Record::Part(undone) = editor.record() else { panic!() };
+    assert_eq!(undone.reference(), new.reference());
+    assert_eq!(undone.format, CURRENT_PART_FORMAT);
+    assert_eq!(undone.name, old.name);
+}
+
 /// Publication preparation through MCP has no destination paths or project/history mutation.
 #[test]
 fn headless_preparation_returns_native_bytes_without_project_changes() {
@@ -142,6 +200,7 @@ fn headless_preparation_returns_native_bytes_without_project_changes() {
     let prepared =
         project.execute(crate::library::sources::PREPARE_PART_PUBLICATION, &json!({"record":record,"documents":{"library.json":manifest}})).unwrap();
     assert_eq!(prepared["saved"], false);
+    assert_eq!(prepared["record"]["format"], CURRENT_PART_FORMAT);
     assert!(prepared["documents"].as_object().unwrap().keys().all(|path| path.starts_with("parts/")));
     assert_eq!(project.inspect(), before);
 }
@@ -210,10 +269,10 @@ fn footprint_only_publication_resolution_and_schematic_rejection_are_atomic() {
     orderable.validate(&catalog).unwrap();
 }
 
-/// Old envelopes stay old until a symbol is explicitly removed. Undo restores the complete
-/// electrical map; adding a symbol to a physical part requires explicit terminal assignments.
+/// A published historical record keeps its bytes on open. Editing uses the current format,
+/// and Undo restores the original symbol and complete terminal map.
 #[test]
-fn optional_symbol_transition_preserves_legacy_encoding_and_undo() {
+fn optional_symbol_transition_keeps_published_baseline_and_undo() {
     let (catalog, mut record, _) = fixture();
     let Record::Part(part) = &mut record else { panic!() };
     part.format = crate::library::parts::LEGACY_PART_FORMAT.into();
@@ -221,11 +280,14 @@ fn optional_symbol_transition_preserves_legacy_encoding_and_undo() {
     assert_eq!(PartDefinition::read(&original_bytes).unwrap().encode().unwrap(), original_bytes);
     let physical = record.select_reference(&ReferenceField::Symbol, None, &catalog).unwrap();
     let Record::Part(part) = &physical else { panic!() };
-    assert_eq!(part.format, crate::library::parts::PART_FORMAT);
+    assert_eq!(part.format, CURRENT_PART_FORMAT);
     assert!(part.symbol.is_none());
     assert!(part.packages["header"].mapping.is_empty());
     physical.validate(&catalog).unwrap();
-    let mut session = Session::new(record.clone(), false).unwrap();
+    let mut session = Session::new(record.clone(), true).unwrap();
+    assert!(!session.dirty());
+    session.replace(1, record.clone()).unwrap();
+    assert_eq!(session.revision(), 1);
     session.replace(1, physical.clone()).unwrap();
     session.history(2, false).unwrap();
     assert_eq!(session.record(), &record);
@@ -247,23 +309,23 @@ fn with_metadata(record: &mut Record, description: &str) {
     part.links = vec![PartLink { label: "Datasheet".into(), url: "https://example.invalid/ds.pdf".into() }];
 }
 
-/// Draft metadata selects /5, and publication writes the same envelope with a fixed summary.
+/// Publication uses the current envelope with and without descriptive metadata.
 #[test]
-fn metadata_draft_upgrades_to_part5_and_publishes_the_same_bytes() {
+fn metadata_edits_and_publication_keep_the_current_format() {
     let (mut catalog, record, manifest) = fixture();
     let mut session = Session::new(record, false).unwrap();
     let mut edited = session.record().clone();
     with_metadata(&mut edited, "Precision connector");
     let Record::Part(part) = &edited else { panic!() };
-    assert_eq!(part.format, crate::library::parts::PART_FORMAT);
+    assert_eq!(part.format, CURRENT_PART_FORMAT);
     session.replace(1, edited).unwrap();
     let Record::Part(part) = session.record() else { panic!() };
-    assert_eq!(part.format, METADATA_PART_FORMAT);
+    assert_eq!(part.format, CURRENT_PART_FORMAT);
     assert_eq!(part.search_text(), "precision connector precision low-noise");
 
     let prepared = session.prepare(&catalog, &manifest, 0, false, false).unwrap();
     let Record::Part(published) = prepared.record() else { panic!() };
-    assert_eq!(published.format, METADATA_PART_FORMAT);
+    assert_eq!(published.format, CURRENT_PART_FORMAT);
     assert_eq!(published.description.as_deref(), Some("Precision connector"));
     let mut documents = prepared.documents().clone();
     let text = documents.iter().find(|(path, _)| path.starts_with("parts/")).unwrap().1;
@@ -273,6 +335,21 @@ fn metadata_draft_upgrades_to_part5_and_publishes_the_same_bytes() {
     let resolved = catalog.resolve_part(&prepared.reference()).unwrap();
     assert_eq!(resolved.definition.description.as_deref(), Some("Precision connector"));
     assert_eq!(resolved.definition.links.len(), 1);
+
+    session.confirm(&prepared);
+    let mut cleared = session.record().clone();
+    let Record::Part(part) = &mut cleared else { panic!() };
+    part.description = None;
+    part.keywords.clear();
+    part.links.clear();
+    session.replace(session.revision(), cleared).unwrap();
+    let next = session.prepare(&catalog, &manifest, 1, false, false).unwrap();
+    let bytes = next.documents().values().next().unwrap();
+    let reopened = PartDefinition::read(bytes).unwrap();
+    assert_eq!(reopened.format, CURRENT_PART_FORMAT);
+    assert_eq!(reopened.revision, 2);
+    assert_eq!(reopened.packages, published.packages);
+    assert!(reopened.description.is_none() && reopened.keywords.is_empty() && reopened.links.is_empty());
 }
 
 /// Bounded metadata is edited atomically with one revision, undo/redo and stale-capture checks.
@@ -282,7 +359,6 @@ fn metadata_edits_are_bounded_and_join_the_draft_history() {
     let mut session = Session::new(original.clone(), false).unwrap();
     let mut valid = original.clone();
     with_metadata(&mut valid, "Revised connector");
-    valid.select_format();
     session.replace(1, valid.clone()).unwrap();
     assert_eq!(session.revision(), 2);
     assert_eq!(session.record(), &valid);
@@ -315,22 +391,22 @@ fn metadata_edits_are_bounded_and_join_the_draft_history() {
     }
 }
 
-/// Ratings and metadata share /5; removing the symbol drops ratings but keeps searchable metadata.
+/// Removing ratings or metadata leaves the native format current and preserves the other content.
 #[test]
-fn metadata_and_ratings_share_part5_until_the_symbol_is_removed() {
+fn removing_ratings_and_metadata_keeps_the_current_format() {
     let (catalog, record, _) = fixture();
     let mut session = Session::new(record.clone(), false).unwrap();
     let mut both = record.clone();
     with_metadata(&mut both, "Rated connector");
     let Record::Part(part) = &mut both else { panic!() };
     part.set_supply_range("1", "4.5 V", "36 V").unwrap();
-    assert_eq!(part.format, METADATA_PART_FORMAT);
+    assert_eq!(part.format, CURRENT_PART_FORMAT);
     session.replace(1, both.clone()).unwrap();
     assert_eq!(session.record(), &both);
 
     let physical = session.record().select_reference(&ReferenceField::Symbol, None, &catalog).unwrap();
     let Record::Part(part) = &physical else { panic!() };
-    assert_eq!(part.format, METADATA_PART_FORMAT, "metadata keeps /5 after the rating is cleared");
+    assert_eq!(part.format, CURRENT_PART_FORMAT);
     assert!(part.terminal_ratings.is_empty());
     assert!(part.symbol.is_none());
     assert_eq!(part.description.as_deref(), Some("Rated connector"));
@@ -340,7 +416,10 @@ fn metadata_and_ratings_share_part5_until_the_symbol_is_removed() {
     part.description = None;
     part.keywords.clear();
     part.links.clear();
-    part.select_format();
-    assert_eq!(part.format, RATED_PART_FORMAT);
-    let _ = physical;
+    assert_eq!(part.format, CURRENT_PART_FORMAT);
+    part.set_supply_range("1", "", "").unwrap();
+    let plain = PartDefinition::read(&part.encode().unwrap()).unwrap();
+    assert_eq!(plain.format, CURRENT_PART_FORMAT);
+    assert!(plain.terminal_ratings.is_empty());
+    assert!(plain.description.is_none() && plain.keywords.is_empty() && plain.links.is_empty());
 }
