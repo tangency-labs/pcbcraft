@@ -100,8 +100,10 @@ same way when it is placed or added.
 - A no-op save keeps the same bytes, whether or not the catalog is reachable.
 - A local cache of fetched items may speed up browsing. The cache never changes
   the project, never marks it dirty and is never needed to open it.
-- A newer catalog revision never replaces a pinned one by itself. Updating uses
-  the existing preview-and-apply step as one undoable command.
+- A newer catalog revision never replaces a pinned one by itself. Updating
+  should use the preview-and-apply step described in
+  [Pinning into a project](library-sources.md#pinning-into-a-project), as one
+  undoable command. That step is a design and is not built yet.
 
 ## Pinned engineering definitions
 
@@ -115,6 +117,11 @@ changes what a saved project means.
 Price, stock, lead time, packaging, minimum order quantity and lifecycle status
 are provider records, not library definitions. A provider record can come from
 the team catalog or from a separate provider; the rules are the same.
+
+Lifecycle status here is the provider's dated report, such as active or end of
+life. It is distinct from a lifecycle assessment that a project or library
+publisher deliberately adopts. An adopted assessment is not a provider record,
+and a provider refresh never changes it.
 
 - **Dated.** Each record names its provider, the manufacturer part it describes
   and when it was retrieved. Prices carry their currency.
