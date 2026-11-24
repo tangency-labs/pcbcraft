@@ -1,7 +1,7 @@
 //! Atomic route replacements, preserving source identities, intent and physical connections.
 use super::*;
 use crate::board::{
-    clearance::{self, BoardGeometry, ClearanceQuery},
+    clearance::{self, BoardGeometry, ClearanceQuery, Object, ObjectKind},
     work::Source,
 };
 use std::sync::{Arc, Mutex, TryLockError};
@@ -35,16 +35,36 @@ pub(crate) fn parse(value: &Value) -> Result<Vec<Replacement>, CommandError> {
     Ok(replacements)
 }
 
+/// Displacements submitted with a new route or derived by the connected drag planner.
+/// Keeping the accepted geometry typed lets preview and validation share the candidate.
+#[derive(Default)]
+pub(super) struct Changes {
+    pub tracks: Vec<Replacement>,
+    pub vias: Vec<ViaMove>,
+}
+
+impl Changes {
+    /// An explicit empty replacement list still requests full compound clearance validation.
+    pub(super) fn from_params(params: &Value) -> Result<Option<Self>, CommandError> {
+        let paths = params.get("replacements").map(parse).transpose()?;
+        let vias = params.get("via_moves").map(via_moves).transpose()?.unwrap_or_default();
+        Ok((paths.is_some() || !vias.is_empty()).then(|| Self { tracks: paths.unwrap_or_default(), vias }))
+    }
+}
+
 /// Apply paths to a private candidate and retain every fragment's original source for validation.
 /// Locked/unknown originals fail before their geometry is changed; source dimensions are retained.
-pub(super) fn apply(tracks: &mut Vec<Track>, value: &Value, changed: &mut BTreeSet<Uuid>) -> Result<BTreeMap<Uuid, Uuid>, CommandError> {
-    let replacements = parse(value)?;
+pub(super) fn apply(
+    tracks: &mut Vec<Track>,
+    replacements: &[Replacement],
+    changed: &mut BTreeSet<Uuid>,
+) -> Result<BTreeMap<Uuid, Uuid>, CommandError> {
     let positions: BTreeMap<_, _> = tracks.iter().enumerate().map(|(i, t)| (t.id, i)).collect();
     let count = tracks.len() + replacements.iter().map(|r| r.points.len() - 2).sum::<usize>();
     if count > MAX_TRACKS {
         return Err(CommandError::InvalidParams("The replacement paths exceed the board track limit.".into()));
     }
-    for replacement in &replacements {
+    for replacement in replacements {
         let index = positions.get(&replacement.track).ok_or_else(|| CommandError::InvalidParams("Unknown replacement track.".into()))?;
         if tracks[*index].locked {
             return Err(CommandError::InvalidParams("Locked tracks cannot be replaced.".into()));
@@ -78,12 +98,17 @@ pub(super) struct Validation {
     final_geometry: Arc<BoardGeometry>,
     origins: BTreeMap<Uuid, Uuid>,
     changed: BTreeSet<Uuid>,
-    origin: (Point, Uuid, i64),
+    origin: Option<(Point, Uuid, i64)>,
+    joints: BTreeSet<Uuid>,
+    drag_ends: BTreeMap<String, [Point; 2]>,
     query: Option<Arc<ClearanceQuery>>,
     final_query: Option<ClearanceQuery>,
     final_positions: BTreeMap<String, usize>,
+    split_fragments: BTreeMap<String, Vec<usize>>,
     final_origins: Vec<Option<usize>>,
     final_displaced: Vec<bool>,
+    collisions: Option<BTreeSet<String>>,
+    blocked_candidate: bool,
     merge_same_net: bool,
     groups: BTreeMap<usize, usize>,
     cursor: usize,
@@ -102,19 +127,66 @@ impl Validation {
         origins: BTreeMap<Uuid, Uuid>,
         changed: BTreeSet<Uuid>,
         params: &Value,
+        changes: &Changes,
     ) -> Result<Self, CommandError> {
-        let points: Vec<Point> = param(params, "points")?;
-        let width_nm = match params.get("width_nm") {
-            Some(_) => param(params, "width_nm")?,
-            None => final_geometry
-                .items
-                .iter()
-                .find(|item| Uuid::parse_str(&item.name).is_ok_and(|id| changed.contains(&id) && !origins.contains_key(&id)))
-                .map(|item| (item.contour.radius * 2.) as i64)
-                .ok_or_else(|| CommandError::Unavailable("Missing new route copper.".into()))?,
+        let view = source.snapshot.board_view(source.target).ok_or_else(|| CommandError::Unavailable("Missing board.".into()))?;
+        let moves = &changes.vias;
+        let dragged: Vec<Ends> = params.get("tracks").map(|_| param(params, "tracks")).transpose()?.unwrap_or_default();
+        let drag_ends = dragged.iter().map(|row| (row.track.to_string(), [row.start, row.end])).collect();
+        let mut joints: BTreeSet<_> = dragged.iter().map(|row| row.track).chain(moves.iter().map(|m| m.via)).collect();
+        if !joints.is_empty() && !view.zones().is_empty() {
+            return Err(CommandError::Unavailable("Moving routing joints on boards with zones is not supported.".into()));
+        }
+        let mut chain_paths = changes.tracks.clone();
+        let mut centers = BTreeMap::new();
+        for movement in moves {
+            let index =
+                view.vias().binary_search_by_key(&movement.via, |v| v.id).map_err(|_| CommandError::InvalidParams("Unknown source via.".into()))?;
+            let old = view.vias()[index].at;
+            centers.insert((old.x_nm, old.y_nm), movement.at);
+        }
+        if !centers.is_empty() {
+            let paths: BTreeMap<_, _> = chain_paths.iter().map(|r| (r.track, &r.points)).collect();
+            for track in view.tracks() {
+                let ends = [track.start, track.end].map(|p| centers.get(&(p.x_nm, p.y_nm)).copied().unwrap_or(p));
+                if ends != [track.start, track.end] {
+                    if paths.get(&track.id).is_none_or(|points| points.as_slice() != ends) {
+                        return Err(CommandError::InvalidParams("All tracks ending on a moved via must follow its center.".into()));
+                    }
+                    joints.insert(track.id);
+                }
+            }
+        }
+        chain_paths.retain(|r| !joints.contains(&r.track));
+        let origin = if params.get("points").is_some() {
+            let points: Vec<Point> = param(params, "points")?;
+            let width = match params.get("width_nm") {
+                Some(_) => param(params, "width_nm")?,
+                None => final_geometry
+                    .items
+                    .iter()
+                    .find(|item| {
+                        Uuid::parse_str(&item.name).is_ok_and(|id| changed.contains(&id) && !origins.contains_key(&id) && !joints.contains(&id))
+                    })
+                    .map(|item| (item.contour.radius * 2.) as i64)
+                    .ok_or_else(|| CommandError::Unavailable("Missing new route copper.".into()))?,
+            };
+            Some((points[0], param(params, "layer")?, width))
+        } else {
+            None
         };
-        let chain_paths = params.get("replacements").map(parse).transpose()?.unwrap_or_default();
         let chain_checked = chain_paths.is_empty();
+        let final_positions: BTreeMap<_, _> = final_geometry.items.iter().enumerate().map(|(i, o)| (o.name.clone(), i)).collect();
+        let mut split_fragments: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        if !joints.is_empty() {
+            for (fragment, original) in &origins {
+                if fragment != original
+                    && let Some(&index) = final_positions.get(&fragment.to_string())
+                {
+                    split_fragments.entry(original.to_string()).or_default().push(index);
+                }
+            }
+        }
         Ok(Self {
             chain_paths,
             chain_checked,
@@ -122,20 +194,31 @@ impl Validation {
             chains: None,
             preparation,
             source,
-            final_positions: final_geometry.items.iter().enumerate().map(|(i, o)| (o.name.clone(), i)).collect(),
+            final_positions,
+            split_fragments,
             final_geometry,
             final_origins: Vec::new(),
             final_displaced: Vec::new(),
+            collisions: None,
+            blocked_candidate: false,
             merge_same_net: params.get("merge_same_net").and_then(Value::as_bool).unwrap_or(false),
             origins,
             changed,
-            origin: (points[0], param(params, "layer")?, width_nm),
+            origin,
+            joints,
+            drag_ends,
             query: None,
             final_query: None,
             groups: BTreeMap::new(),
             cursor: 0,
             phase: 0,
         })
+    }
+
+    /// Retain all stationary source obstacles when an interactive caller needs visual feedback.
+    pub(super) fn collect_collisions(mut self, enabled: bool) -> Self {
+        self.collisions = enabled.then(BTreeSet::new);
+        self
     }
 
     /// Preserve each source island as one final physical island, including interior pad and
@@ -173,6 +256,25 @@ impl Validation {
                     .final_positions
                     .get(&object.name)
                     .ok_or_else(|| CommandError::InvalidParams("A route replacement removed existing copper.".into()))?;
+                if !self.joints.is_empty() && Uuid::parse_str(&object.name).is_ok_and(|id| self.joints.contains(&id)) {
+                    for i in source.candidates(&object.contour, &object.layers)? {
+                        let other = &source.objects()[i];
+                        if other.name == object.name || !object.contour.touches(&other.contour) {
+                            continue;
+                        }
+                        let items = &self.final_geometry.items;
+                        let others =
+                            self.final_positions.get(&other.name).into_iter().chain(self.split_fragments.get(&other.name).into_iter().flatten());
+                        let kept = std::iter::once(&position).chain(self.split_fragments.get(&object.name).into_iter().flatten()).any(|&i| {
+                            others
+                                .clone()
+                                .any(|&j| items[i].contour.touches(&items[j].contour) && self.retains_joint(object, other, &items[i], &items[j], 0.))
+                        });
+                        if !kept {
+                            return Err(CommandError::InvalidParams("Moving this joint would lose a protected copper contact.".into()));
+                        }
+                    }
+                }
                 let island = self.final_geometry.items[position].island;
                 if self.groups.insert(object.island, island).is_some_and(|old| old != island) {
                     return Err(CommandError::InvalidParams("A route replacement would disconnect existing copper.".into()));
@@ -200,21 +302,44 @@ impl Validation {
                 let other = &query.objects()[decision.second];
                 let same_net = object.intended_nets.len() == 1 && object.intended_nets == other.intended_nets;
                 let same_island = object.island == other.island;
-                let exempt = if !self.merge_same_net && (self.final_displaced[index] || self.final_displaced[decision.second]) {
-                    decision.gap_nm < decision.clearance_nm as f64
-                        && self.preserves_local_contact(&source, query, index, decision.second, decision.clearance_nm as f64)
+                let joint_contact = decision.touches
+                    && !self.joints.is_empty()
+                    && [index, decision.second].iter().any(|&i| {
+                        self.final_origins[i]
+                            .is_some_and(|original| Uuid::parse_str(&source.objects()[original].name).is_ok_and(|id| self.joints.contains(&id)))
+                    });
+                let needs_clearance = decision.gap_nm < decision.clearance_nm as f64 || joint_contact;
+                let moved_via = (object.kind == ObjectKind::Via && self.final_displaced[index])
+                    || (other.kind == ObjectKind::Via && self.final_displaced[decision.second]);
+                let retained_only = moved_via || !self.merge_same_net && (self.final_displaced[index] || self.final_displaced[decision.second]);
+                let exempt = if retained_only {
+                    needs_clearance && self.preserves_local_contact(&source, query, index, decision.second, decision.clearance_nm as f64)
                 } else {
                     same_net || same_island
                 };
-                if decision.conflicting_nets
-                    || (other.mechanical && decision.clearance_violation)
-                    || (!exempt && decision.gap_nm < decision.clearance_nm as f64)
+                if decision.conflicting_nets || (other.mechanical && (decision.clearance_violation || joint_contact)) || (!exempt && needs_clearance)
                 {
-                    return Err(CommandError::InvalidParams("The compound route violates copper clearance or intended net membership.".into()));
+                    let Some(collisions) = &mut self.collisions else {
+                        return Err(CommandError::InvalidParams("The compound route violates copper clearance or intended net membership.".into()));
+                    };
+                    if !self.final_displaced[decision.second]
+                        && let Some(original) = self.final_origins[decision.second]
+                    {
+                        collisions.insert(source.objects()[original].name.clone());
+                    } else {
+                        // Candidate-only geometry still invalidates the edit but has no source address.
+                        self.blocked_candidate = true;
+                    }
                 }
             }
             let baseline = self.source.effective.values;
             let rules = result.probe_rules.as_ref().map_or(baseline, |p| p.hard_values(baseline));
+            if let Ok(id) = Uuid::parse_str(&object.name)
+                && self.joints.contains(&id)
+                && !joint_sizes(view, id, &object.contour, rules)
+            {
+                return Err(CommandError::InvalidParams("The moved copper violates its dimensional rules.".into()));
+            }
             if object.contour.track_centerline().is_some() && object.contour.radius * 2. < rules.min_track_width_nm as f64 {
                 return Err(CommandError::InvalidParams("The compound route violates a minimum track width.".into()));
             }
@@ -223,7 +348,15 @@ impl Validation {
             }
         }
         self.cursor = self.cursor.saturating_add(budget.min(8));
-        Ok(self.cursor >= query.objects().len())
+        if self.cursor < query.objects().len() {
+            return Ok(false);
+        }
+        if let Some(blockers) = self.collisions.take()
+            && (!blockers.is_empty() || self.blocked_candidate)
+        {
+            return Err(CommandError::CopperCollision { blockers });
+        }
+        Ok(true)
     }
 
     /// Within a source run, the complete stroke validator checks bends and
@@ -237,6 +370,22 @@ impl Validation {
             (None, Some(original)) => return self.preserves_pickup(source, original, shape_b, shape_a, clearance),
             (None, None) => return false,
         };
+        if old_a == old_b && self.drag_ends.contains_key(&source.objects()[old_a].name) {
+            // The planner checked the complete detour's self-spacing. Its bends
+            // are local joins of one source track.
+            return true;
+        }
+        if !self.joints.is_empty()
+            && [old_a, old_b].iter().any(|i| Uuid::parse_str(&source.objects()[*i].name).is_ok_and(|id| self.joints.contains(&id)))
+        {
+            return self.retains_joint(
+                &source.objects()[old_a],
+                &source.objects()[old_b],
+                &final_query.objects()[a],
+                &final_query.objects()[b],
+                clearance,
+            );
+        }
         let Some(chains) = &self.chains else { return false };
         if chains.same_run(old_a, old_b) {
             return true;
@@ -253,11 +402,43 @@ impl Validation {
                 && within_contact(shape_b, shape_a, original_b, original_a, clearance))
     }
 
+    /// Check the same source contact during topology and final clearance validation. A split
+    /// support retains the chain's fixed contact, so a fragment has no whole-track station.
+    fn retains_joint(&self, old_a: &Object, old_b: &Object, a: &Object, b: &Object, clearance: f64) -> bool {
+        let split_drag = |object: &Object| self.drag_ends.contains_key(&object.name) && self.split_fragments.contains_key(&object.name);
+        if split_drag(old_a) || split_drag(old_b) {
+            if let (Some(first), Some(second), Some(leg_a), Some(leg_b)) =
+                (old_a.contour.track_centerline(), old_b.contour.track_centerline(), a.contour.track_centerline(), b.contour.track_centerline())
+            {
+                let requested_a = self.drag_ends.get(&old_a.name).copied().unwrap_or(leg_a);
+                let requested_b = self.drag_ends.get(&old_b.name).copied().unwrap_or(leg_b);
+                let station =
+                    follows_station(first, second, requested_a, requested_b).or_else(|| follows_station(second, first, requested_b, requested_a));
+                return station.is_some_and(|p| {
+                    let joint = PadContour::capsule(p, p, 0.);
+                    // A nearby continuation can depart within the junction's clearance
+                    // envelope. Actual contact still has to occur at the protected station.
+                    (!a.contour.touches(&b.contour) || (super::chains::on_leg(p, leg_a[0], leg_a[1]) && super::chains::on_leg(p, leg_b[0], leg_b[1])))
+                        && local_departure(&a.contour, &b.contour, &joint, clearance)
+                        && local_departure(&b.contour, &a.contour, &joint, clearance)
+                });
+            }
+            return retained_joint(old_a, old_b, &a.contour, &b.contour, clearance);
+        }
+        if self.split_fragments.contains_key(&old_b.name) {
+            return retained_split_joint(&old_a.contour, &old_b.contour, &a.contour, &b.contour, clearance);
+        }
+        if self.split_fragments.contains_key(&old_a.name) {
+            return retained_split_joint(&old_b.contour, &old_a.contour, &b.contour, &a.contour, clearance);
+        }
+        retained_joint(old_a, old_b, &a.contour, &b.contour, clearance)
+    }
+
     /// A manually submitted replacement may meet the first route leg at its
     /// original endpoint. Neither leg may double back or follow the other outside
     /// that pickup's clearance neighborhood.
     fn preserves_pickup(&self, source: &ClearanceQuery, original: usize, moved: &PadContour, incoming: &PadContour, clearance: f64) -> bool {
-        let (pickup, layer, _) = self.origin;
+        let Some((pickup, layer, _)) = self.origin else { return false };
         let source = &source.objects()[original];
         let Some([a, b]) = source.contour.track_centerline() else { return false };
         if !source.layers.contains(&layer) || (a != pickup && b != pickup) {
@@ -279,9 +460,12 @@ impl Validation {
     /// fragments inherit the original pickup contact, never the contacts of a speculative path.
     fn with_source_intent(&mut self, source: &ClearanceQuery) -> Result<ClearanceQuery, CommandError> {
         let by_name: BTreeMap<_, _> = source.objects().iter().enumerate().map(|(i, o)| (o.name.as_str(), (i, o))).collect();
-        let (at, layer, width) = self.origin;
-        let pickup = PadContour::segment(at, at, width)?;
-        let contacts: Vec<_> = source.candidates(&pickup, &[layer])?.into_iter().filter(|i| source.objects()[*i].contour.touches(&pickup)).collect();
+        let contacts: Vec<_> = if let Some((at, layer, width)) = self.origin {
+            let pickup = PadContour::segment(at, at, width)?;
+            source.candidates(&pickup, &[layer])?.into_iter().filter(|i| source.objects()[*i].contour.touches(&pickup)).collect()
+        } else {
+            Vec::new()
+        };
         let nets: Vec<_> =
             contacts.iter().flat_map(|i| source.objects()[*i].intended_nets.iter().copied()).collect::<BTreeSet<_>>().into_iter().collect();
         let island = contacts.first().map_or(usize::MAX, |i| source.objects()[*i].island);
@@ -290,7 +474,7 @@ impl Validation {
             let id = Uuid::parse_str(&item.name).ok();
             let original = id.and_then(|id| self.origins.get(&id)).map(Uuid::to_string);
             let inherited = by_name.get(original.as_deref().unwrap_or(&item.name));
-            self.final_displaced.push(id.is_some_and(|id| self.origins.contains_key(&id)));
+            self.final_displaced.push(id.is_some_and(|id| self.origins.contains_key(&id) || self.joints.contains(&id)));
             if let Some((index, original)) = inherited {
                 self.final_origins.push(Some(*index));
                 item.intended_nets = original.intended_nets.clone();
@@ -337,6 +521,127 @@ pub(crate) fn schema() -> Value {
     json!({"type":"array","maxItems":MAX_TRACKS,"items":{"type":"object","properties":{
         "track":{"type":"string","format":"uuid"},"points":path_schema()
     },"required":["track","points"],"additionalProperties":false}})
+}
+
+/// A translated through via keeps its identity, span, net assignment, diameter and drill.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ViaMove {
+    pub via: Uuid,
+    pub at: Point,
+}
+
+/// Decode source-addressed via motion before applying any part of the compound edit.
+pub(crate) fn via_moves(value: &Value) -> Result<Vec<ViaMove>, CommandError> {
+    if value.as_array().is_none_or(|v| v.len() > MAX_VIAS) {
+        return Err(CommandError::InvalidParams("Via displacements exceed the board capacity.".into()));
+    }
+    let moves: Vec<ViaMove> = serde_json::from_value(value.clone()).map_err(|e| CommandError::InvalidParams(e.to_string()))?;
+    let mut ids = BTreeSet::new();
+    if moves.iter().any(|m| m.via.is_nil() || !ids.insert(m.via) || !crate::wire::valid_point(&m.at)) {
+        return Err(CommandError::InvalidParams("Each via needs a unique UUID and a bounded center.".into()));
+    }
+    Ok(moves)
+}
+
+/// Publish the same bounded, source-addressed rows accepted by confirmation.
+pub(crate) fn via_moves_schema() -> Value {
+    json!({"type":"array","maxItems":MAX_VIAS,"items":{"type":"object","properties":{"via":{"type":"string","format":"uuid"},"at":crate::point_schema()},"required":["via","at"],"additionalProperties":false}})
+}
+
+/// Use source feature types to distinguish an oval land from a trace. Pad contacts
+/// keep their fixed ends, and tracks following a moved via must follow its center.
+pub(crate) fn retained_joint(a: &Object, b: &Object, new_a: &PadContour, new_b: &PadContour, clearance: f64) -> bool {
+    if !a.contour.touches(&b.contour) || !new_a.touches(new_b) {
+        return false;
+    }
+    match (a.kind, b.kind) {
+        (ObjectKind::Track, ObjectKind::Track) => retained_track_joint(&a.contour, &b.contour, new_a, new_b, clearance),
+        (ObjectKind::Pad | ObjectKind::Via, ObjectKind::Track) => retained_land_contact(b, a, new_b, new_a),
+        (ObjectKind::Track, ObjectKind::Pad | ObjectKind::Via) => retained_land_contact(a, b, new_a, new_b),
+        _ => false,
+    }
+}
+
+/// An unchanged track end may stay inside a stationary land, including off the pad axis.
+/// A displaced via can keep contact only by moving its original centered endpoint with it.
+fn retained_land_contact(track: &Object, land: &Object, new_track: &PadContour, new_land: &PadContour) -> bool {
+    let (Some(old), Some(moved)) = (track.contour.track_centerline(), new_track.track_centerline()) else { return false };
+    let stationary = land.contour.core == new_land.core && land.contour.radius == new_land.radius;
+    (0..2).any(|i| {
+        if stationary {
+            old[i] == moved[i] && PadContour::capsule(old[i], old[i], track.contour.radius).touches(&land.contour)
+        } else {
+            land.kind == ObjectKind::Via && old[i] == land.contour.core[0] && moved[i] == new_land.core[0]
+        }
+    })
+}
+
+/// Preserve a trace-to-trace station and its clearance departure in both directions.
+fn retained_track_joint(a: &PadContour, b: &PadContour, new_a: &PadContour, new_b: &PadContour, clearance: f64) -> bool {
+    let (Some(first), Some(second), Some(moved), Some(other)) =
+        (a.track_centerline(), b.track_centerline(), new_a.track_centerline(), new_b.track_centerline())
+    else {
+        return false;
+    };
+    let station = follows_station(first, second, moved, other).or_else(|| follows_station(second, first, other, moved));
+    station.is_some_and(|point| {
+        let joint = PadContour::capsule(point, point, 0.);
+        local_departure(new_a, new_b, &joint, clearance) && local_departure(new_b, new_a, &joint, clearance)
+    })
+}
+
+/// A displaced chain can split around a protected contact. Verify the fixed source station
+/// on the actual final fragment, including its clearance departure from the moved joint.
+fn retained_split_joint(joint: &PadContour, track: &PadContour, moved: &PadContour, fragment: &PadContour, clearance: f64) -> bool {
+    let (Some(old), Some(support), Some(new), Some(piece)) =
+        (joint.track_centerline(), track.track_centerline(), moved.track_centerline(), fragment.track_centerline())
+    else {
+        return false;
+    };
+    let on_leg = |point, line: [Point; 2]| super::chains::on_leg(point, line[0], line[1]);
+    let at_source_end = (0..2).filter_map(|i| (old[i] == new[i] && on_leg(old[i], support)).then_some(old[i]));
+    at_source_end.chain(follows_station(support, old, support, new)).any(|point| {
+        if !on_leg(point, piece) || new.iter().any(|a| piece.iter().any(|b| super::chains::backtracks(*a, point, *b))) {
+            return false;
+        }
+        let contact = PadContour::capsule(point, point, 0.);
+        local_departure(moved, fragment, &contact, clearance) && local_departure(fragment, moved, &contact, clearance)
+    })
+}
+
+/// A branch end on another segment must follow the same longitudinal station.
+/// Check displacement in widened integer arithmetic, allowing half a nanometre per axis
+/// for the editor's interpolation to the nearest lattice point. A branch cannot fold back
+/// along the supporting segment after it moves.
+fn follows_station(branch: [Point; 2], support: [Point; 2], moved: [Point; 2], new_support: [Point; 2]) -> Option<Point> {
+    let delta = |a: i64, b: i64| i128::from(a) - i128::from(b);
+    let dx = delta(support[1].x_nm, support[0].x_nm);
+    let dy = delta(support[1].y_nm, support[0].y_nm);
+    let length = dx * dx + dy * dy;
+    (0..2)
+        .find(|&i| {
+            if !super::chains::on_leg(branch[i], support[0], support[1]) {
+                return false;
+            }
+            let projection = delta(branch[i].x_nm, support[0].x_nm) * dx + delta(branch[i].y_nm, support[0].y_nm) * dy;
+            let follows = |a: i64, b: i64, x: i64| 2 * (delta(x, a) * length - projection * delta(b, a)).abs() <= length;
+            follows(new_support[0].x_nm, new_support[1].x_nm, moved[i].x_nm)
+                && follows(new_support[0].y_nm, new_support[1].y_nm, moved[i].y_nm)
+                && new_support.iter().all(|p| !super::chains::backtracks(moved[1 - i], moved[i], *p))
+        })
+        .map(|i| moved[i])
+}
+
+/// Validate the dimensions that a moved joint retains against the resolved rules on its layers.
+pub(crate) fn joint_sizes(view: BoardView<'_>, id: Uuid, contour: &PadContour, rules: crate::board::rules::Values) -> bool {
+    if contour.track_centerline().is_some() {
+        return contour.radius * 2. >= rules.min_track_width_nm as f64;
+    }
+    view.vias().binary_search_by_key(&id, |via| via.id).ok().is_some_and(|index| {
+        let via = &view.vias()[index];
+        rules.validate_sizes(rules.min_track_width_nm, via.diameter_nm, via.drill_nm).is_ok()
+    })
 }
 
 #[cfg(test)]

@@ -67,9 +67,9 @@ fn wire_no_connect_storage_roundtrips_and_rejects_invalid_records() {
     let docs = persistence::encode_documents(p.clone()).unwrap();
     let sheet_path = docs.keys().find(|path| path.starts_with("sheets/")).unwrap().clone();
     let sheet: Value = serde_json::from_slice(&docs[&sheet_path]).unwrap();
-    assert_eq!(sheet["format"], "pcbcraft-sheet/9");
+    assert_eq!(sheet["format"], crate::persistence::CURRENT_SHEET_FORMAT);
     let entry: Value = serde_json::from_slice(&docs["project.json"]).unwrap();
-    assert_eq!(entry["format"], "pcbcraft-project/19");
+    assert_eq!(entry["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
     let folder = persistence::decode_documents(&docs).unwrap();
     let archive = persistence::decode_packed(&persistence::encode_packed(p).unwrap()).unwrap().project;
     for reopened in [folder, archive] {

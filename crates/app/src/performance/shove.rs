@@ -103,6 +103,9 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
         return Err("shove iterations must be between 1 and 1000".into());
     }
     let artifact = load_artifact(artifact_json)?;
+    if artifact.recipe.starts_with("shove-joints-v1-") {
+        return run_joints(&artifact, environment, iterations, digest(artifact_json.as_bytes()));
+    }
     if !artifact.recipe.starts_with("shove-v1-") {
         return Err("use a saved shove-v1 derivative".into());
     }
@@ -218,9 +221,18 @@ pub fn run(artifact_json: &str, environment: Environment, iterations: usize) -> 
 
 /// Check final changed copper against the exhaustive contour oracle and exact native history.
 fn verify(session: &mut Session, source: &std::sync::Arc<pcbcraft_engine::Project>, board: BoardTarget, plan: &Plan) -> Result<()> {
+    verify_changed(session, source, board, plan.replacements.iter().map(|r| r.track).chain(plan.via_moves.iter().map(|m| m.via)).collect())
+}
+
+/// Verify the changed source IDs and every newly allocated fragment against the exhaustive oracle.
+fn verify_changed(
+    session: &mut Session,
+    source: &std::sync::Arc<pcbcraft_engine::Project>,
+    board: BoardTarget,
+    replaced: BTreeSet<Uuid>,
+) -> Result<()> {
     let before = source.board_view(board).ok_or("missing source")?;
     let old: BTreeSet<_> = before.tracks().iter().map(|t| t.id).chain(before.vias().iter().map(|v| v.id)).collect();
-    let replaced: BTreeSet<_> = plan.replacements.iter().map(|r| r.track).collect();
     let query = session.clearance_query_with_rules(board, &json!({})).map_err(|e| e.to_string())?;
     let changed = |i: usize| Uuid::parse_str(&query.objects()[i].name).is_ok_and(|id| !old.contains(&id) || replaced.contains(&id));
     if query
@@ -260,6 +272,41 @@ pub fn rendered_fixture(artifact_json: &str) -> Result<String> {
     serde_json::to_string(&artifact).map_err(|e| e.to_string())
 }
 
+/// Keep the joint board's saved bytes while substituting a held-drag trace.
+pub fn held_drag_fixture(artifact_json: &str) -> Result<String> {
+    let mut artifact = load_artifact(artifact_json)?;
+    if !artifact.recipe.starts_with("shove-joints-v1-") {
+        return Err("held drag requires a saved shove joint fixture".into());
+    }
+    artifact.trace_id = super::replay::HELD_DRAG_TRACE_ID.into();
+    artifact.trace = super::replay::Step::held_drag();
+    serde_json::to_string(&artifact).map_err(|e| e.to_string())
+}
+
+/// Verify the release moved the requested track and follower, shoved the fixed-input rail,
+/// and produced one clearance-checked edit with exact history and native reopen.
+pub(super) fn verify_held_drag_replay(session: &mut Session, original: &[u8], board: BoardTarget) -> Result<()> {
+    let project = decode_packed(original)?.project;
+    let before = project.board_view(board).ok_or("missing drag source")?;
+    let after = session.project().and_then(|p| p.board_view(board)).ok_or("missing held drag result")?;
+    let fixed = point(-58_000_000, -16_000_000);
+    let old_joint = point(-58_000_000, -18_000_000);
+    let joint = point(-58_000_000, -19_900_000);
+    let rail_start = point(-60_000_000, -20_000_000);
+    let source = |start| before.tracks().iter().find(|track| track.start == start).ok_or("missing held drag source track");
+    let primary = source(old_joint)?;
+    let follower = source(fixed)?;
+    let rail = source(rail_start)?;
+    if !after.tracks().iter().any(|track| track.id == primary.id && track.start == joint && track.end == point(-52_000_000, joint.y_nm))
+        || !after.tracks().iter().any(|track| track.id == follower.id && track.start == fixed && track.end == joint)
+        || !after.tracks().iter().any(|track| track.id == rail.id && track != rail)
+        || after.vias() != before.vias()
+    {
+        return Err("held drag did not publish the moved joint and displaced rail".into());
+    }
+    verify_changed(session, &project, board, BTreeSet::from([primary.id, follower.id, rail.id]))
+}
+
 /// Validate the real editor commit against the same saved single-neighbor source and oracle.
 pub(super) fn verify_replay(session: &mut Session, original: &[u8], board: BoardTarget) -> Result<()> {
     let project = decode_packed(original)?.project;
@@ -285,4 +332,188 @@ pub(super) fn verify_replay(session: &mut Session, original: &[u8], board: Board
         return Err("rendered shove has no displaced source".into());
     }
     verify(session, &project, board, &plan)
+}
+
+/// Extend a saved shove workload with the via/follower and connected D-drag cases from #446.
+/// UUIDs are allocated by the commands, so the generated archive is saved once for replay.
+pub fn joint_fixture(artifact_json: &str, revision: &str) -> Result<String> {
+    let mut artifact = load_artifact(artifact_json)?;
+    if !artifact.recipe.starts_with("shove-v1-") || revision.trim().is_empty() {
+        return Err("joint fixtures require a saved shove-v1 artifact and generator revision".into());
+    }
+    let mut session = Session::default();
+    session.open_snapshot(decode_packed(&artifact.project)?.project);
+    let board = artifact.board;
+    let front = front(&session, board)?;
+    let back = session
+        .project()
+        .and_then(|p| p.board_view(board))
+        .ok_or("missing board")?
+        .layers()
+        .into_iter()
+        .find(|l| l.purpose == LayerPurpose::Copper && l.side == Some(Side::Back))
+        .ok_or("missing back copper")?
+        .id;
+    let via = point(-55_000_000, -60_000_000);
+    fixture::apply(&mut session, pcbcraft_engine::ADD_VIA, json!({"board":board.board,"at":via}))?;
+    for layer in [front, back] {
+        fixture::apply(
+            &mut session,
+            ADD_TRACKS,
+            json!({"board":board.board,"layer":layer,"width_nm":250000,"points":[point(via.x_nm,via.y_nm-3_000_000),via]}),
+        )?;
+    }
+    fixture::apply(
+        &mut session,
+        ADD_TRACKS,
+        json!({"board":board.board,"layer":front,"width_nm":250000,"points":[point(-58_000_000,-16_000_000),point(-58_000_000,-18_000_000),point(-52_000_000,-18_000_000)]}),
+    )?;
+    artifact.recipe = format!("shove-joints-v1-{}", artifact.recipe);
+    artifact.generator_revision = revision.to_owned();
+    artifact.project = pcbcraft_engine::persistence::encode_packed(session.snapshot().ok_or("missing project")?).map_err(|e| e.to_string())?;
+    artifact.project_sha256 = digest(&artifact.project);
+    serde_json::to_string(&artifact).map_err(|e| e.to_string())
+}
+
+/// Measure the bounded preparation and atomic publication of one edit. Capture the independent
+/// drag preview before publication so that the fixture can compare it to the published geometry.
+fn replay_edit(
+    session: &mut Session,
+    command: &str,
+    mut params: Value,
+    name: &str,
+    samples: &mut BTreeMap<String, Vec<f64>>,
+) -> Result<Vec<pcbcraft_engine::board::track::replacements::Replacement>> {
+    let revision = session.revision();
+    params["expected_revision"] = json!(revision);
+    let mut edit = session.prepare_copper_edit(command, &params).map_err(|e| e.to_string())?;
+    drain(samples, &format!("{name}.prepare"), || edit.step(256))?;
+    let ready = edit.take_result().map_err(|e| format!("{name}: {e}"))?.ok_or("missing compound edit")?;
+    let neighbors = ready.drag_replacements().to_vec();
+    timed(samples, &format!("{name}.publish"), || session.commit_copper_edit(ready)).map_err(|e| e.to_string())?;
+    if session.revision() != revision + 1 {
+        return Err(format!("{name} must publish exactly one revision"));
+    }
+    Ok(neighbors)
+}
+
+/// Replay a connected D-drag and check the selected tracks and the complete pushed rail path.
+fn replay_drag(
+    project: &std::sync::Arc<pcbcraft_engine::Project>,
+    board: BoardTarget,
+    layer: Uuid,
+    samples: &mut BTreeMap<String, Vec<f64>>,
+    check_history: bool,
+) -> Result<()> {
+    let before = project.board_view(board).ok_or("missing board")?;
+    let by_start = |p| before.tracks().iter().find(|t| t.layer == layer && t.start == p).ok_or("missing drag fixture segment");
+    let fixed = point(-58_000_000, -16_000_000);
+    let joint = point(-58_000_000, -19_900_000);
+    let tip = point(-52_000_000, joint.y_nm);
+    let primary = by_start(point(-58_000_000, -18_000_000))?.id;
+    let follower = by_start(fixed)?.id;
+    let rail = by_start(point(-60_000_000, -20_000_000))?;
+    let mut session = Session::default();
+    session.open_snapshot(project.clone());
+    let params =
+        json!({"board":board.board,"mode":"shove","tracks":[{"track":primary,"start":joint,"end":tip},{"track":follower,"start":fixed,"end":joint}]});
+    let paths = replay_edit(&mut session, pcbcraft_engine::RESHAPE_TRACKS, params, "drag", samples)?;
+    let [path] = paths.as_slice() else {
+        return Err("drag must push one neighboring rail".into());
+    };
+    let after = session.project().and_then(|p| p.board_view(board)).ok_or("missing drag result")?;
+    if path.track != rail.id
+        || path.points.len() <= 2
+        || path.points.first() != Some(&rail.start)
+        || path.points.last() != Some(&rail.end)
+        || !after.tracks().iter().any(|t| t.id == primary && t.start == joint && t.end == tip)
+        || !after.tracks().iter().any(|t| t.id == follower && t.start == fixed && t.end == joint)
+        || !path.points.windows(2).enumerate().all(|(i, segment)| {
+            after
+                .tracks()
+                .iter()
+                .any(|t| (i != 0 || t.id == rail.id) && t.layer == rail.layer && t.width_nm == rail.width_nm && [t.start, t.end] == segment)
+        })
+    {
+        return Err("drag changed the joint, lost a rail endpoint or published a different path than its preview".into());
+    }
+    if check_history {
+        verify_changed(&mut session, project, board, BTreeSet::from([primary, follower, rail.id]))?;
+    }
+    Ok(())
+}
+
+/// Measure via planning, follower validation and connected drag using two fresh sessions per iteration.
+/// Exhaustive clearance, native reopen and exact history checks run outside the timed boundaries.
+fn run_joints(artifact: &Artifact, environment: Environment, iterations: usize, artifact_hash: String) -> Result<Value> {
+    let project = decode_packed(&artifact.project)?.project;
+    let mut source = Session::default();
+    source.open_snapshot(project.clone());
+    let board = artifact.board;
+    let layer = front(&source, board)?;
+    let start = point(-58_000_000, -59_700_000);
+    let end = point(-52_000_000, -59_700_000);
+    let request = Request {
+        head: start,
+        target: end,
+        layer,
+        origin: None,
+        width_nm: 250000,
+        mode: Mode::ShoveVias,
+        posture: Posture::Diagonal,
+        flipped: false,
+        fixed: Vec::new(),
+        previous: Vec::new(),
+        merge_same_net: false,
+    };
+    let view = project.board_view(board).ok_or("missing board")?;
+    let at = point(-55_000_000, -60_000_000);
+    let via = view.vias().iter().find(|v| v.at == at).ok_or("missing fixture via")?.id;
+    let followers: Vec<_> = view.tracks().iter().filter(|t| t.end == at).collect();
+    if followers.len() != 2 || followers[0].layer == followers[1].layer {
+        return Err("fixture must attach a follower on each side".into());
+    }
+    let mut samples = BTreeMap::new();
+    let mut first = None;
+    for iteration in 0..iterations {
+        let mut session = Session::default();
+        session.open_snapshot(project.clone());
+        let context = session.route_planning(board).map_err(|e| e.to_string())?;
+        let budget = request.mode.default_probe_budget();
+        let mut job = session.prepare_route_plan(&context, request.clone(), budget).map_err(|e| e.to_string())?;
+        drain(&mut samples, "via.plan", || job.step(256))?;
+        let plan = job.take_result().map_err(|e| e.to_string())?.ok_or("missing via plan")?;
+        if plan.outcome != Outcome::Reached
+            || plan.points != [start, end]
+            || plan.via_moves.len() != 1
+            || plan.via_moves[0].via != via
+            || plan.via_moves[0].at == at
+            || plan.replacements.len() != 2
+            || first.as_ref().is_some_and(|old| old != &plan)
+        {
+            return Err(format!("unexpected via displacement: {plan:?}"));
+        }
+        let params = json!({"board":board.board,"layer":layer,"points":plan.points,"width_nm":request.width_nm,"via_moves":plan.via_moves,"replacements":plan.replacements});
+        replay_edit(&mut session, ADD_TRACKS, params, "via", &mut samples)?;
+        let result = session.project().and_then(|p| p.board_view(board)).ok_or("missing via result")?;
+        let new_at = plan.via_moves[0].at;
+        if result.vias().iter().find(|v| v.id == via).is_none_or(|v| v.at != new_at)
+            || followers.iter().any(|source| {
+                !result.tracks().iter().any(|t| {
+                    t.id == source.id && t.layer == source.layer && t.start == source.start && t.end == new_at && t.width_nm == source.width_nm
+                })
+            })
+            || !result.tracks().iter().any(|t| t.layer == layer && t.start == start && t.end == end && t.width_nm == request.width_nm)
+        {
+            return Err("route, via and followers disagree with plan".into());
+        }
+        if iteration == 0 {
+            verify_changed(&mut session, &project, board, followers.iter().map(|t| t.id).chain([via]).collect())?;
+        }
+        replay_drag(&project, board, layer, &mut samples, iteration == 0)?;
+        first = Some(plan);
+    }
+    Ok(
+        json!({"schema":"pcbcraft-shove-joints/1","environment":environment,"recipe":artifact.recipe,"iterations":iterations,"artifact_sha256":artifact_hash,"project_sha256":artifact.project_sha256,"via_plan":first,"budget":request.mode.default_probe_budget(),"metrics":samples.into_iter().map(|(id,s)|Metric::new(&id,s)).collect::<Vec<_>>(),"correctness":"source-addressed via center and two layer endpoints; connected D drag and previewed rail path; exhaustive changed copper, native reopen, exact Undo/Redo","unmeasured":["visible latency","allocator overhead"]}),
+    )
 }

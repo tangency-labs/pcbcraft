@@ -19,12 +19,14 @@ mod archive;
 pub use archive::ArchiveEncoder;
 mod documents;
 pub(crate) use documents::check_board_document_size;
+#[cfg(test)]
+pub(crate) use documents::historical_documents;
 pub mod layout;
 mod part_group_storage;
 pub use documents::{
-    Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS, MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents,
-    encode_documents, is_document_path, migrate_board_layout, project_board_path, project_instances_path, project_layout_root,
-    project_registered_board_id,
+    CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, Documents, DocumentsEncoder, ENTRY_POINT, MAX_DOCUMENT_BYTES, MAX_DOCUMENTS,
+    MAX_DOCUMENTS_BYTES, convert_legacy_documents, decode_documents, encode_documents, is_document_path, migrate_board_layout, project_board_path,
+    project_instances_path, project_layout_root, project_registered_board_id,
 };
 mod packed;
 mod power_migration;
@@ -47,7 +49,7 @@ pub fn prepare_opened(project: Arc<Project>) -> Result<Arc<Project>, String> {
     Ok(adopt_paper(migrate_bundled_libraries(project)?))
 }
 
-/// Give every sheet without paper (decoded from before sheet/9) the smallest paper around its
+/// Give every sheet without paper the smallest paper around its
 /// drawing, centered on it. Nothing moves and no history is recorded. Returns the input `Arc`
 /// when every sheet already has paper.
 pub fn adopt_paper(project: Arc<Project>) -> Arc<Project> {

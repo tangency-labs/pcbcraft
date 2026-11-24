@@ -10,10 +10,12 @@ use serde_json::{Value, json};
 pub(super) const LAYERS: usize = 0;
 pub(super) const PROPERTIES: usize = 1;
 pub(super) const FILTERS: usize = 2;
+pub(super) const ROUTER: usize = 3;
+pub(super) const PANEL_COUNT: usize = 4;
 
 /// Fresh contextual cards reproduce the FigCraft left/right arrangement.
-pub(super) fn defaults() -> [Panel; 3] {
-    [Panel::new(Position::Left), Panel::new(Position::Right), Panel::new(Position::Right)]
+pub(super) fn defaults() -> [Panel; PANEL_COUNT] {
+    [Panel::new(Position::Left), Panel::new(Position::Right), Panel::new(Position::Right), Panel::new(Position::Floating)]
 }
 
 /// Older arrangement records have the same edge defaults as new views.
@@ -28,6 +30,7 @@ pub(super) struct SavedPanels {
     layers: PanelState,
     properties: PanelState,
     selection_filters: PanelState,
+    router_settings: PanelState,
 }
 
 impl Default for SavedPanels {
@@ -38,25 +41,41 @@ impl Default for SavedPanels {
 
 impl SavedPanels {
     /// Capture positions without serializing any active pointer gesture.
-    pub(super) fn capture(panels: &[Panel; 3]) -> Self {
-        Self { layers: panels[LAYERS].saved_state(), properties: panels[PROPERTIES].saved_state(), selection_filters: panels[FILTERS].saved_state() }
+    pub(super) fn capture(panels: &[Panel; PANEL_COUNT]) -> Self {
+        Self {
+            layers: panels[LAYERS].saved_state(),
+            properties: panels[PROPERTIES].saved_state(),
+            selection_filters: panels[FILTERS].saved_state(),
+            router_settings: panels[ROUTER].saved_state(),
+        }
     }
     /// Refuse invalid saved coordinates before adopting any part of the arrangement.
     pub(super) fn valid(&self) -> bool {
-        self.layers.valid() && self.properties.valid() && self.selection_filters.valid()
+        self.layers.valid() && self.properties.valid() && self.selection_filters.valid() && self.router_settings.valid()
     }
     /// Recreate runtime cards in their initial slot order with no drag ownership.
-    pub(super) fn restore(&self) -> [Panel; 3] {
-        [Panel::from_state(self.layers), Panel::from_state(self.properties), Panel::from_state(self.selection_filters)]
+    pub(super) fn restore(&self) -> [Panel; PANEL_COUNT] {
+        [
+            Panel::from_state(self.layers),
+            Panel::from_state(self.properties),
+            Panel::from_state(self.selection_filters),
+            Panel::from_state(self.router_settings),
+        ]
     }
 }
 
 /// Split edge slots between visible cards, keeping filters at the bottom and Browser above
 /// left-docked cards. Floating cards consume no dock slot and clamp against the full host instead.
-pub(super) fn areas(canvas: Rect, browser: Rect, panels: &[Panel; 3], visible: [bool; 3], schematic: bool) -> [Rect; 3] {
-    let mut result = [canvas; 3];
+pub(super) fn areas(
+    canvas: Rect,
+    browser: Rect,
+    panels: &[Panel; PANEL_COUNT],
+    visible: [bool; PANEL_COUNT],
+    schematic: bool,
+) -> [Rect; PANEL_COUNT] {
+    let mut result = [canvas; PANEL_COUNT];
     for side in [Position::Left, Position::Right] {
-        let members: Vec<_> = (0..3).filter(|i| visible[*i] && panels[*i].position() == side).collect();
+        let members: Vec<_> = (0..PANEL_COUNT).filter(|i| visible[*i] && panels[*i].position() == side).collect();
         if members.is_empty() {
             continue;
         }
@@ -105,7 +124,7 @@ pub(super) fn follow(slot: Rect, above: impl IntoIterator<Item = Rect>, compact:
 }
 
 /// The shown rectangle of card `index` when it is docked on `side`; nothing otherwise.
-pub(super) fn on_side(panels: &[Panel; 3], index: usize, side: Position, rect: Rect) -> Rect {
+pub(super) fn on_side(panels: &[Panel; PANEL_COUNT], index: usize, side: Position, rect: Rect) -> Rect {
     if panels[index].position() == side && side != Position::Floating { rect } else { Rect::NOTHING }
 }
 
@@ -175,7 +194,7 @@ impl PcbApp {
 
 /// Inspection uses stable panel identities, with placement expressed in logical host coordinates.
 #[cfg(not(target_arch = "wasm32"))]
-pub(super) fn inspect(panels: &[Panel; 3]) -> Value {
+pub(super) fn inspect(panels: &[Panel; PANEL_COUNT]) -> Value {
     json!({"layers":panels[LAYERS].saved_state(),"properties":panels[PROPERTIES].saved_state(),"selection_filters":panels[FILTERS].saved_state()})
 }
 

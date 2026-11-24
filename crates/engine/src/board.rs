@@ -508,6 +508,7 @@ impl Board {
 
     /// Distinguish physically eligible desired intent from accepted packages;
     /// excluded live choices remain authored without requiring a physical update.
+    #[cfg(test)]
     pub(crate) fn has_pending_package_intent(&self, project: &crate::Project) -> bool {
         self.baseline.as_ref().is_some_and(|baseline| {
             self.assignments

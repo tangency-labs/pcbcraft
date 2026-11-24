@@ -7,7 +7,7 @@ use crate::{
         publishing::{new_library, prepare},
     },
     board::{
-        definition::{CopperBinding, PadShape, RectPad},
+        definition::{CURRENT_FORMAT, CopperBinding, PadShape, RectPad},
         setup::{BoardSetup, LayerPurpose, Side},
         slot::PlatedSlot,
         track::Track,
@@ -455,7 +455,7 @@ fn footprint_preview_refuses_unknown_targets_offline_and_conflicting_sources() {
         .values_mut()
         .find(|text| {
             let native: Value = serde_json::from_str(text).unwrap();
-            native["format"] == "pcbcraft-footprint/1" && native["revision"] == 2
+            native["format"] == CURRENT_FORMAT && native["revision"] == 2
         })
         .unwrap();
     let mut native: Value = serde_json::from_str(second).unwrap();

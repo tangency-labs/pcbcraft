@@ -3,7 +3,9 @@ use crate::{
     authoring::{Action, Item, Kind, Primitive, Session as AuthoringSession, publishing::new_library},
     board::clipboard::{BoardFragment, BoardSelection},
     clipboard::Fragment,
-    library::parts::{LEGACY_PART_FORMAT, MAX_TERMINAL_RATINGS, PART_FORMAT, Package, PartDefinition, RATED_PART_FORMAT, SupplyRange},
+    library::parts::{
+        CURRENT_PART_FORMAT, LEGACY_PART_FORMAT, MAX_TERMINAL_RATINGS, PART_FORMAT, Package, PartDefinition, RATED_PART_FORMAT, SupplyRange,
+    },
     part_authoring::{Record as Draft, Session as DraftSession},
     schematic::ElectricalType,
 };
@@ -69,7 +71,11 @@ fn place(session: &mut Session, documents: &mut sources::Documents, draft: &Draf
     let prepared = prepare(session, documents, draft).unwrap();
     documents.extend(serde_json::from_value::<sources::Documents>(prepared["documents"].clone()).unwrap());
     load(session, documents);
-    let id = draft.reference().id;
+    place_published(session, &draft.reference().id, sheet)
+}
+
+/// Place an exact source revision so round-trip tests can also load historical records.
+fn place_published(session: &mut Session, id: &str, sheet: crate::SheetTarget) -> Json {
     let resolved = session.execute(sources::RESOLVE_PART, &json!({"library":LIBRARY,"definition":id,"definition_revision":1})).unwrap();
     let x_nm = session.project().unwrap().components().count() as i64 * 25_400_000;
     apply(
@@ -89,19 +95,26 @@ fn range(project: &crate::Project) -> Option<&SupplyRange> {
 /// Unrated /1 and /2 bytes remain stable and the same symbol works for different devices.
 #[test]
 fn supply_ranges_reopen_offline_without_raising_outer_formats() {
-    for (min, max, initial, expected) in [
-        ("4500 mV", "36 V", PART_FORMAT, RATED_PART_FORMAT),
-        ("-0.000000000000000001 V", "", PART_FORMAT, RATED_PART_FORMAT),
-        ("", "0 V", PART_FORMAT, RATED_PART_FORMAT),
-        ("", "", LEGACY_PART_FORMAT, LEGACY_PART_FORMAT),
-        ("", "", PART_FORMAT, PART_FORMAT),
+    for (min, max, expected) in [
+        ("4500 mV", "36 V", RATED_PART_FORMAT),
+        ("-0.000000000000000001 V", "", CURRENT_PART_FORMAT),
+        ("", "0 V", CURRENT_PART_FORMAT),
+        ("", "", LEGACY_PART_FORMAT),
+        ("", "", PART_FORMAT),
     ] {
         let (mut session, mut documents, mut draft) = source(false);
         let part = part_mut(&mut draft);
-        part.format = initial.into();
         part.set_supply_range(TERMINAL, min, max).unwrap();
         let sheet = session.project().unwrap().sheet_target();
-        let resolved = place(&mut session, &mut documents, &draft, sheet);
+        let resolved = if expected == CURRENT_PART_FORMAT {
+            place(&mut session, &mut documents, &draft, sheet)
+        } else {
+            part.format = expected.into();
+            part.library = LIBRARY.into();
+            documents.insert(format!("parts/{}.json", part.id), part.encode().unwrap());
+            load(&mut session, &documents);
+            place_published(&mut session, &part.id, sheet)
+        };
         let expected_range = SupplyRange::parse(TERMINAL, min, max).unwrap();
         assert_eq!(resolved["part"]["format"], expected);
         if min == "4500 mV" {
@@ -125,7 +138,7 @@ fn supply_ranges_reopen_offline_without_raising_outer_formats() {
         assert_eq!(encode_documents(reopened).unwrap(), native);
         assert_eq!(encode_packed(unpacked.project).unwrap(), packed);
         let header: Json = serde_json::from_slice(&native[crate::persistence::ENTRY_POINT]).unwrap();
-        assert_eq!(header["format"], "pcbcraft-project/16");
+        assert_eq!(header["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         let path = format!("library/parts/{LIBRARY}/regulator.r1.json");
         let part = PartDefinition::read(std::str::from_utf8(&native[&path]).unwrap()).unwrap();
         assert_eq!(part.format, expected);
@@ -529,7 +542,7 @@ fn rated_part_and_plated_slot_round_trip_through_both_clipboards() {
     crate::assert_same_content(&before, &session.snapshot().unwrap());
 }
 
-/// Draft editing, native encoding, native decoding and the part/4 schema all enforce the
+/// Draft editing, native encoding, native decoding and the native schema all enforce the
 /// same [`MAX_TERMINAL_RATINGS`] limit: 128 publishes and reopens, 129 is rejected everywhere.
 #[test]
 fn supply_range_limit_matches_draft_writer_reader_and_schema() {
@@ -597,7 +610,7 @@ fn supply_range_limit_matches_draft_writer_reader_and_schema() {
     editor.replace(1, rated.clone()).unwrap();
     let encoded = part_mut(&mut rated).encode().unwrap();
     let reopened = PartDefinition::read(&encoded).unwrap();
-    assert_eq!(reopened.format, RATED_PART_FORMAT);
+    assert_eq!(reopened.format, CURRENT_PART_FORMAT);
     assert_eq!(reopened.terminal_ratings.len(), MAX_TERMINAL_RATINGS);
     let prepared = prepare(&mut session, &documents, editor.record()).unwrap();
     documents.extend(serde_json::from_value::<sources::Documents>(prepared["documents"].clone()).unwrap());

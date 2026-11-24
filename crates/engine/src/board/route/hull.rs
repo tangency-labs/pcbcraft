@@ -76,6 +76,30 @@ impl Hull {
         self.corners = polygon;
     }
 
+    /// Nearest lattice exits from an enclosing hull, in each of the eight routing directions.
+    /// Equal distances retain direction order so via moves agree across clients.
+    pub(super) fn exits(&self, center: Point) -> Vec<Point> {
+        let mut exits = Vec::new();
+        for (x, y) in DIRS {
+            let step = Point { x_nm: x, y_nm: y };
+            let distance = (0..8)
+                .filter(|k| self.uses(*k))
+                .filter_map(|k| {
+                    let rate = dot(k, step);
+                    (rate > 0).then(|| (self.support[k] - dot(k, center) + rate - 1).div_euclid(rate))
+                })
+                .min();
+            if let Some(t) = distance.and_then(|n| i64::try_from(n).ok()).filter(|t| *t > 0) {
+                let at = Point { x_nm: center.x_nm + x * t, y_nm: center.y_nm + y * t };
+                if crate::wire::valid_point(&at) {
+                    exits.push((i128::from(t).pow(2) * i128::from(x * x + y * y), at));
+                }
+            }
+        }
+        exits.sort_by_key(|(distance, _)| *distance);
+        exits.into_iter().map(|(_, at)| at).collect()
+    }
+
     /// The union's hull: the larger support in every direction.
     pub(super) fn merge(&mut self, other: &Hull) {
         for (mine, theirs) in self.support.iter_mut().zip(other.support) {

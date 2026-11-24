@@ -906,16 +906,16 @@ impl EditorViews {
                 let parked = self.hosts.get_mut(&self.host).and_then(|host| host.parked.pop());
                 if let Some(id) = parked {
                     let library = self.active.library.clone();
+                    let manufacturing = self.active.manufacturing.as_mut().map(crate::manufacturing::State::fork);
+                    let definition = self.active.definition;
                     if let Some(view) = self.view_mut(id) {
                         view.library = library;
-                        if view.library.is_some() {
+                        view.manufacturing = manufacturing;
+                        if view.library.is_some() || view.manufacturing.is_some() {
                             view.definition = None;
+                        } else if definition.is_some() {
+                            view.definition = definition;
                         }
-                    }
-                    if let Some(document) = self.active.definition
-                        && let Some(view) = self.view_mut(id)
-                    {
-                        view.definition = Some(document);
                     }
                     let camera = self.active.camera.fork_navigation();
                     let workspace = self.active.workspace;
@@ -976,6 +976,9 @@ impl PcbApp {
         let t = pcbcraft_chrome::Tokens::get();
         let plain = || vec![egui::Shape::rect_filled(area, 0, t.canvas)];
         let Some(view) = self.views.view(id) else { return plain() };
+        if view.manufacturing.is_some() {
+            return vec![egui::Shape::rect_filled(area, 0, t.board_canvas)];
+        }
         if view.unavailable() || view.library.is_some() {
             return plain();
         }
@@ -1133,7 +1136,7 @@ impl PcbApp {
             area,
             self.browser.rect(),
             &slot_panels,
-            [false, self.properties_open || self.net_inspector.open, self.views.active.filters_open],
+            [false, self.properties_open || self.net_inspector.open, self.views.active.filters_open, false],
             true,
         );
         let properties_area = slots[crate::workspace_panels::PROPERTIES];
@@ -1175,12 +1178,12 @@ impl PcbApp {
             Rect::NOTHING
         };
         if board && let Some((panels, _)) = board_panel {
-            use crate::workspace_panels::{FILTERS, follow, on_side};
+            use crate::workspace_panels::{FILTERS, ROUTER, follow, on_side};
             use pcbcraft_chrome::workspace::panels::Position;
             // The DRC card floats on the right below Properties, leaving Layers and Properties clear.
             let mut drc_area = area;
-            // `board_panels` returns the Browser, Layers and Properties cards in that order.
-            drc_area.min.y = drc_area.min.y.max(panels[2].bottom() + if compact { 0. } else { 8. });
+            let router = on_side(&self.views.active.panels, ROUTER, Position::Right, panels[3]);
+            drc_area.min.y = drc_area.min.y.max(panels[2].bottom().max(router.bottom()) + if compact { 0. } else { 8. });
             // In Compact it also follows a right-docked Selection filters card instead of overlapping it.
             let drc_area = follow(drc_area, [on_side(&self.views.active.panels, FILTERS, Position::Right, filters_rect)], compact);
             let revision = self.session.revision();
@@ -1232,6 +1235,10 @@ impl PcbApp {
                 // Workspace painters may fill their maximum rectangle. Keep the shared
                 // pane header outside their clip, including Library and definition panes.
                 ui.set_clip_rect(ui.clip_rect().intersect(ui.available_rect_before_wrap()));
+                if self.views.view(id).is_some_and(|view| view.manufacturing.is_some()) {
+                    self.manufacturing_pane(ui, id);
+                    return;
+                }
                 if self.views.view(id).is_some_and(|view| view.library.is_some()) {
                     self.library_workspace_pane(ui, id);
                     return;
