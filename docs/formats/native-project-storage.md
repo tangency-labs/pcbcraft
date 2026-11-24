@@ -21,18 +21,15 @@ optional records and membership representations of the earlier envelopes.
 Project/22 adds [project parameters](#parameter-records); project/23 adds generated
 net numbers and can also store project parameters.
 Project/24 adds the [part-group catalog](part-groups.md); its expanded
-memberships live in the instance home and use instances/5 when board-owned.
-Project/39 and instances/7 carry the same memberships through a compact UUID
-dictionary when expanded membership exceeds the existing document-size limits;
-older files keep their representation while it still fits. Project/45 adds
+memberships live in the instance home. Historical instances/5 stored expanded
+memberships and instances/7 added the compact UUID dictionary. Project/45 added
 [explicit differential pair records](net-registry-storage.md#differential-pair-records)
-to the existing net registry. A board-owned pair list requires instances/8,
-which supports either part-group membership encoding. Byte-identical
-unchanged saves preserve canonical encoder output; accepted noncanonical input
-may normalize when saved.
+to the registry alongside either membership representation. The
+[current instance format](#board-instance-records) accepts these records
+together and keeps the same header when optional records are removed.
 
 Project/23 adds persistent generated net numbers to the same instance registry,
-using instances/4 when board-owned. A stored record's positive `generated_number`
+using instances/4 in its historical board-owned form. A stored record's positive `generated_number`
 is unique across live and historical identities. This envelope can also carry
 class catalogs, assignments, project parameters and no-connect intent. Older
 envelopes reject the number field. Migrating the entry point alone does not
@@ -83,8 +80,8 @@ does not confirm a durable write and does not clear the editor's dirty state.
 
 Opening or inspecting a supported older project leaves its files untouched.
 Folder saves and packed exports write `pcbcraft-project/61` for `project.json`,
-`pcbcraft-sheet/10` for each schematic sheet and `pcbcraft-board/42` for the
-registered `board.json` when a board exists.
+and `pcbcraft-sheet/10` for each schematic sheet. A registered board uses
+`pcbcraft-board/42` for `board.json` and `pcbcraft-instances/9` for `instances.json`.
 Version 61 uses the version 56 record vocabulary with optional designator
 locks. Earlier formats remain readable. The first save adopts the existing
 folder and occurrence migrations if needed. Subsequent unchanged saves are
@@ -101,8 +98,8 @@ The project entry point and native library authoring use fixed current write
 formats for [symbols](../libraries/symbol-schema.md),
 [footprints](../libraries/footprint-schema.md) and [parts](../libraries/part-schema.md).
 Placing a version-5 symbol in an older project adopts the folder and occurrence
-metadata in the placement edit. Instance and board setup profile writers still
-select formats by the records present.
+metadata in the placement edit. Board setup profile writers still select
+formats by the records present.
 
 ## Bundled library address migration
 
@@ -486,7 +483,7 @@ advance the footprint format.
 | File | Format | Contents |
 |---|---|---|
 | `project.json` | `pcbcraft-project/61` | Project UUID, name, numeric allocation watermark, board registration, ordered sheets and components, and optional authored records. Earlier project formats /5–/7, /9, /11–/17, /19–/24, /36, /39, /45, /48, /51 and /56 remain readable. |
-| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/1` through `/5`, `/7` or `/8` | Matching board UUID header, one circuit use and one occurrence per sheet; version 2 adds a net registry, version 3 adds class bindings, version 4 adds generated net numbers, version 5 adds part-group memberships, and version 7 compresses memberships through an explicit UUID dictionary; version 8 requires differential pairs and allows either membership representation; schematic-only projects embed these records in `project.json` instead |
+| `<layout_root>/boards/<folder>/instances.json` | `pcbcraft-instances/9` | Board UUID, one circuit use and one occurrence per sheet, optional net registry and either membership representation. See [board instance records](#board-instance-records). |
 | `sheets/<sheet-uuid>.json` | `pcbcraft-sheet/10` | Sheet UUID, hierarchy, named anchors, unit placements, junctions and wires, with optional appearance, intent and page records. Versions /1–/9 remain readable. See [current sheet records](#current-sheet-records). |
 | `<layout_root>/boards/<folder>/board.json` (historically `board.json`) | `pcbcraft-board/1` through `/26`, `/34`, `/35`, `/37` or `/41` | Footprints; version 2 adds layer/stackup setup, version 3 adds material reports and construction; version 4 supports footprint orientation; version 5 adds pinned physical footprint references and terminal mappings; version 6 stores physical silkscreen settings; version 7 separates component package assignments from placements; version 8 is the earlier local rectangle; version 9 stores layer-addressed Board Outline graphics; version 10 explicitly enables accepted update baselines; version 11 distinguishes pending desired package assignments from accepted geometry; version 12 stores copper tracks; version 13 adds through vias; version 14 adds bottom-side footprints; version 15 adds local reference offsets and printed text/appearance overrides; version 16 adds physical stroke widths on non-copper graphics; version 17 adds multi-pad and NC mappings; version 18 adds copper locks; version 19 adds board defaults; version 20 adds authored zone outlines; version 21 adds the placement origin; version 22 adds explicit assembly output profile revision adoptions; version 23 adds copper roles, base copper, copper thickness qualifiers and finished board thickness; version 24 adds explicit via net intent with optional profile and stack fields; version 25 adds thermal conductivity, thermal expansion, dielectric strength and CTI reports with optional earlier fields; version 26 adds exact circular copper tracks; version 34 adds placed-footprint lock metadata (storage only), with reports and earlier fields optional; version 35 carries arcs and active footprint locks together; version 37 adds straight-via teardrop intents and does not permit arcs; version 41 adds named copper-layer groups (written only when named groups exist) and retains earlier extensions; versions 27–33, 36 and 38–40 remain unsupported |
 | `library/symbols/<library>/<symbol>.r<revision>.json` | `pcbcraft-symbol/1` | One full pinned symbol copy, including its library ID |
@@ -543,6 +540,24 @@ existing placement may remain under an accepted baseline pending reviewed remova
 legacy boards without a baseline refuse that exclusion. Package
 assignment can remain pinned for later inclusion. Other flags retain authored
 intent for their respective future output/simulation consumers.
+
+### Board instance records
+
+A registered board's `instances.json` uses `pcbcraft-instances/9` with
+`project.json` at project/61. Its `board` UUID must match the registration.
+The instance document requires one `circuit_uses` entry and a
+`sheet_occurrences` entry for each sheet. It may carry `net_registry`,
+including class bindings, generated numbers or differential pairs, and either
+`part_group_memberships` or `compact_part_group_memberships`. Absent records
+are omitted. Compact memberships use the same bounds and UUID checks as the
+historical compact format. Schematic-only projects keep the same records under
+`project.json.schematic_instances`.
+
+The reader retains the format checks for instances/1–5, /7 and /8. The first
+Save or Download rewrites these documents at the registered path. Later
+unchanged saves preserve their bytes. The writer keeps instances/9 when optional
+records are cleared or when expanded memberships exceed the byte bounds and the
+encoder retries with compact records.
 
 ### Current sheet records
 
@@ -711,9 +726,8 @@ field command can also carry other edits, whose geometry, appearance and board-s
 effects are separate from the lock flag. Project/51 retains the optional
 project parameters, net-class catalog, assignments, net registry, no-connect
 intent, part groups and assembly profiles under their existing validation rules.
-Board-owned instance registries keep their existing instances/1–5, /7 or /8
-vocabulary according to their content. Projects with differential pairs keep all
-pair records when a lock is added. Board-owned pairs still use instances/8.
+Projects with differential pairs keep those records when a lock is added.
+Current board-owned records use [instances/9](#board-instance-records).
 Schematic-only projects keep the same embedded registry home.
 
 Setting the first lock adopts storage, allocation-watermark and sheet-occurrence
@@ -784,7 +798,8 @@ Both project/24 and project/39 require a nonempty `part_groups` catalog
 (`pcbcraft-part-groups/1`) directly after any `net_classes` record. Project/36,
 /45, /48, /51, /56 and /61 also accept the catalog, with either membership
 representation.
-Board-owned pairs keep instances/8 regardless of membership representation.
+Both membership representations compose with pairs in the
+[current instance format](#board-instance-records).
 Project/24, the expanded representation, is a superset of project/23: generated net numbers, net classes and
 their assignments, project parameters and no-connect intent are optional, each
 with its existing rules, and it requires adopted storage and occurrence metadata.
@@ -798,8 +813,9 @@ are rejected. `N` is the part instance's number, as in `components` and
 `component-N`; see [part groups](part-groups.md).
 
 Compact memberships replace that list with `compact_part_group_memberships`.
-Project/61 accepts either representation. Board-owned compact memberships use
-instances/8 with pairs and instances/7 without pairs.
+Current board-owned records use instances/9 for either representation.
+Historical instances/7 carries compact memberships without pairs. Instances/8
+allows either representation and requires pairs.
 Schematic-only memberships remain embedded in the entry point. The compact
 record contains a sorted UUID `groups` dictionary
 and sorted `part_instances` rows (`part_instance` plus sorted numeric `groups`

@@ -4,7 +4,7 @@ use crate::project_files::{Job, ProjectFiles, Update};
 use pcbcraft_engine::persistence::encode_packed;
 use pcbcraft_engine::{
     DELETE_SYMBOL, MOVE_SYMBOL, PLACE_FOOTPRINT, PLACE_SYMBOL, Session,
-    persistence::{CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, decode, encode_documents},
+    persistence::{CURRENT_BOARD_FORMAT, CURRENT_INSTANCES_FORMAT, CURRENT_PROJECT_FORMAT, CURRENT_SHEET_FORMAT, decode, encode_documents},
 };
 use serde_json::json;
 use std::{
@@ -21,7 +21,7 @@ fn unchanged_native_save_advances_only_the_project_header() {
     for archive in [false, true] {
         let dir = tempfile::tempdir().unwrap();
         let mut session = Session::default();
-        session.apply("project.new", &json!({"name":"Migration test","create_board":true})).unwrap();
+        session.apply("project.new", &json!({"name":"Migration test"})).unwrap();
         apply(&mut session, pcbcraft_engine::PLACE_RESISTOR, json!({"x_nm":0,"y_nm":0}));
         let expected = encode_documents(session.snapshot().unwrap()).unwrap();
         let mut old = expected.clone();
@@ -73,6 +73,40 @@ fn unchanged_native_save_migrates_only_the_old_sheet() {
         let opened = load(target).unwrap();
         assert!(opened.target.needs_upgrade());
         assert!(opened.opened.is_none(), "paper was already present");
+        assert_eq!(opened.target.documents.as_deref(), Some(&original));
+        save_target(opened.snapshot.clone(), Some(&opened.snapshot), opened.target, &mut |_| Ok(())).unwrap();
+
+        let reopened = load(target).unwrap();
+        assert!(!reopened.target.needs_upgrade());
+        assert_eq!(reopened.target.documents.as_deref(), Some(&canonical));
+        save_target(reopened.snapshot.clone(), Some(&reopened.snapshot), reopened.target, &mut |_| panic!("second save should be a no-op")).unwrap();
+        assert_eq!(load(target).unwrap().target.documents.as_deref(), Some(&canonical));
+    }
+}
+
+/// An old instance header alone triggers a one-time folder or packed save migration.
+#[test]
+fn unchanged_native_save_migrates_only_the_old_instances_document() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name":"Instance migration","create_board":true})).unwrap();
+    let snapshot = session.snapshot().unwrap();
+    let instance = snapshot.instances_document_path().unwrap();
+    let board = snapshot.board_document_path().unwrap();
+    let mut canonical = encode_documents(snapshot).unwrap();
+    canonical.get_mut(&board).unwrap().extend_from_slice(b"\n  ");
+    let mut original = canonical.clone();
+    let historical = String::from_utf8(canonical[&instance].clone()).unwrap().replacen(CURRENT_INSTANCES_FORMAT, "pcbcraft-instances/1", 1);
+    original.insert(instance, historical.into_bytes());
+
+    let root = dir.path().join("legacy");
+    let archive = dir.path().join("legacy.pc");
+    folder::save(&root, None, &original, &mut |_| Ok(())).unwrap();
+    fs::write(&archive, encode_packed_documents(original.clone()).unwrap()).unwrap();
+    for target in [&root, &archive] {
+        let opened = load(target).unwrap();
+        assert!(opened.target.needs_upgrade());
+        assert!(opened.opened.is_none());
         assert_eq!(opened.target.documents.as_deref(), Some(&original));
         save_target(opened.snapshot.clone(), Some(&opened.snapshot), opened.target, &mut |_| Ok(())).unwrap();
 
