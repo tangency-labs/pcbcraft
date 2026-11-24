@@ -103,9 +103,11 @@ Choose **Capture → Ground** to start placing GND directly. Press **P** to open
 the **Parts Catalog** at its Power library. Choose GND, VCC, **VCC (bar)** or
 another drawing, edit its **Value** in the preview
 if needed, then choose **Place** and click a pin, wire or grid point for its
-anchor, or drag the chosen power entry directly onto the sheet. **L** opens a local label form; **Ctrl+L** opens a global label form,
-where **Scope** selects either scope. **R** rotates a placement preview and
-**Esc** cancels it. Local names join within a sheet, while global labels and
+anchor, or drag the chosen power entry directly onto the sheet. **L** opens the
+local label form and **Ctrl+L** opens the global label form. When **Rotation**
+is set to **Auto (follow pin)**, the preview faces away from the pin it snaps to.
+Choose a fixed angle in the form or press **R** to rotate the preview manually.
+Press **Esc** to cancel placement. Local names join within a sheet, while global labels and
 power rails join matching names across sheets. Power symbols use the same
 properties and field tools as other components; their Value supplies the net
 name. Hover a symbol and press **E** to edit, **G** to move with wires attached,
@@ -231,6 +233,9 @@ the same `VCC` net name, which can be changed before placement.
    and **Open** ask **Save**, **Don't Save** or **Cancel**. **Save** carries on
    only once the save succeeds. In the browser, leaving or reloading the page
    shows the browser's own warning while the project is unsaved.
+   On the desktop, **Preferences → Saving** sets how often unsaved work is
+   copied to your recovery folder and whether a project that already has a
+   folder or file is saved on a timer. Both are off by default.
 
 The status bar shows the grid point under the pointer; click its unit, or press
 **Ctrl+U**, to read coordinates and the grid in mm instead of mil. The wheel zooms
@@ -249,6 +254,7 @@ PCB routing is under **Layout → Route**, and **Draw → Line / Rectangle** use
 the active layer. Copper shapes are conductive linework; technical-layer graphics
 retain a physical stroke. The layer, Track / line width and via dimensions stay
 visible across PCB tabs, with alignment actions in **Layout → Modify**.
+For exact spacing between footprint origins, use [set-pitch distribution through MCP](pcb-layout-workflow.md#set-pitch-distribution).
 The route preview walks around fixed copper, keeping its starting net through
 vertices and vias. An unconnected pad cannot acquire a named net by crossing it;
 blocked or incomplete searches keep the last legal preview and refuse that target.
@@ -357,6 +363,9 @@ pinned definition. The **Footprint**
 control opens the package chooser; apply pending component edits before changing
 packages. **View → Properties** controls this window's inspector.
 
+With nothing selected on a schematic sheet, use **Properties → Paper** to change
+the sheet's paper size, orientation, or frame.
+
 ### Designator locks
 
 Select a symbol and check **Lock designator** in compact Properties, then choose
@@ -394,25 +403,45 @@ and review again after a concurrent edit.
 Inspection reports `designator_locked` even when false. Automatic annotation and
 its skipped-item report are not implemented yet; the engine's
 `PartInstance::can_annotate_designator()` predicate exposes this lock policy for
-that implementation. Unit-letter locks and package completion remain separate
-work. See the [storage contract](native-project-storage.md#designator-locks).
+that implementation. There is no separate unit-letter lock. See the
+[storage contract](native-project-storage.md#designator-locks).
+
+### Complete loose packages
+
+To group equivalent loose units, opt in through the headless or live MCP
+[`schematic.complete_packages`](mcp.md#native-part-definitions-and-quantities)
+command. Preview with `dry_run: true` before applying. Locked owners stay as
+placed; ordinary placement does not complete packages automatically.
 
 ## Inspect a board beside its schematic
 
-Generate an original example into a directory that does not already exist:
+Generate an original example into a directory that does not already exist. This
+command uses a relative path beside your checkout, which works the same in
+PowerShell, cmd and POSIX shells:
 
 ```sh
-cargo run --locked -p pcbcraft-engine --example board_workspace -- /tmp/pcbcraft-board-example
+cargo run --locked -p pcbcraft-engine --example board_workspace -- ../pcbcraft-board-example
 ```
 
-Open `/tmp/pcbcraft-board-example/board-inspection/project.json` on desktop, or
+Open `board-inspection/project.json` from that directory on desktop, or
 upload the generated `board-inspection.pc` in the browser. The example has a
 resistor, a two-pin connector, two connections and two generic footprint
-placements. It is an inspection fixture, not a fabrication-ready board.
+placements. It draws no board outline and is an inspection fixture, not a
+fabrication-ready board. The generic placements have no assigned package, so each
+footprint appears only as pad-center markers, without copper pad shapes, body
+outlines, courtyards or silkscreen. The [sensor node demo](../examples/README.md)
+and [transistor flasher](../examples/flasher.md) described at the end of this
+section show complete packages.
 
 Click the workspace tile and choose **PCB layout** to switch the focused pane.
-Drag from empty canvas to enclose footprints in a selection window, or drag
-right-to-left to select footprints the box crosses; Shift adds and Ctrl/Command toggles.
+To select several footprints, start a drag on empty canvas. Dragging left to right
+selects only footprints entirely inside the box; dragging right to left also
+selects footprints the box crosses. The selectable area of each footprint
+extends a little beyond its markers, so leave some space around them when
+dragging left to right. Hold Shift to add to the current selection,
+or Ctrl/Command to toggle footprints in or out of it. If nothing can be selected,
+check the **Selection filters** card described below; **Reset** enables every
+object type again.
 To keep the schematic visible, click the split icon inside the PCB layout card
 (tooltip: **Open PCB layout beside current view**). On desktop, the adjacent
 window icon opens the board directly in another native window; repeat it to open
@@ -436,7 +465,11 @@ Choose any even copper count from 2 through 64; 10- and 12-layer boards are incl
 **Physical stackup** edits copper/dielectric thicknesses, tolerance and core/prepreg
 construction, with a laminate total and a cross-section aligned to the table rows. **Fit unlocked dielectrics**
 fits a target thickness while retaining copper and locked gaps. Values accept mm
-or mil, and blanks remain unspecified.
+or mil, and blanks remain unspecified. Select a copper stratum to set its role.
+**Layer groups** adds named sets of copper layers in the same draft; removing a
+layer drops its membership, and one Undo restores the complete setup. Mixed role
+belongs to both plane and signal. `pcb.inspect_layer_groups` reads these groups
+and the derived outer/inner/plane/signal sets without changing the board.
 
 **Materials** offers generic family choices and custom materials. **Add material**
 starts with basic identity fields; **Technical properties** expands sourced Tg/Dk/Df
@@ -892,6 +925,8 @@ mapping; Windows Shift+Delete remains Cut.
 With a configured board, a closed Board Outline and a resolvable placement origin,
 **Manufacture → Fabrication → Outputs** generates one ZIP without editing the design.
 The embedded `manifest.json` lists Gerber and drill member byte sizes and SHA-256.
+If the board has circular non-plated holes, the ZIP includes `-NPTH.drl`
+separately from the plated `-PTH.drl` file.
 Desktop can replace the same ZIP on re-export; cancellation, a busy output worker or
 destination errors can prevent a successful save. In the browser, Outputs requests
 one download; check that your browser saved it.
@@ -944,3 +979,27 @@ a current board net and confirm **Use net** before placing, or keep **Automatic*
 Selected-via Properties uses the same search form to change or clear
 that assignment; [via net assignments](via-net-assignments.md) explains how intent
 remains distinct from physical copper connections.
+
+## Try copper-zone fill
+
+Generate a command-built demonstration into a new directory:
+
+```sh
+cargo run --locked -p pcbcraft-engine --example zone_fill_fixture -- /tmp/pcbcraft-zone-demo
+```
+
+Open `/tmp/pcbcraft-zone-demo/project/project.json` on desktop, or upload
+`/tmp/pcbcraft-zone-demo/zone-fill.pc` in the browser. Switch to **PCB Layout**
+and choose **Fit board**. The front-copper zone connects three resistor pads with
+thermal spokes while clearing their other pads. Move a footprint or zone and
+wait for automatic refill; **Layout → Board → Pour copper** requests another
+calculation. Change the selected zone's Connection to Solid or None in Properties
+to compare pad contact and airwires. See the [zone guide](copper-zone-outlines.md)
+for checking, worker failures and current output limits.
+
+**Layout → Board → Remove pours** (Ctrl+B, or Command+B on macOS) removes the
+copper while retaining zone outlines and settings; affected airwires return.
+**Pour copper** (B) restores the fill and resumes automatic refill after edits.
+Fabrication export is unavailable on boards with copper zones. Each zone belongs
+to a chosen net and copper layer. Full-board zone generation from a layer's
+assigned default net is planned in #263.

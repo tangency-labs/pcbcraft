@@ -1,5 +1,6 @@
 //! Library definitions are document workspaces, separate from project instances and history.
 mod canvas;
+pub(super) mod courtyard;
 pub(super) mod editing;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod export_tests;
@@ -54,7 +55,10 @@ struct Document {
     drawing_stroke_nm: i64,
     drawing_fill: pcbcraft_engine::library_graphics::Fill,
     array_requested: bool,
+    courtyard_requested: bool,
     details_requested: bool,
+    show_courtyard: bool,
+    selected_vertex: Option<usize>,
     draft: Option<form::Draft>,
     camera: crate::canvas_camera::Camera,
     collapsed: [bool; 2],
@@ -285,7 +289,10 @@ impl Editors {
                 drawing_stroke_nm: 100_000,
                 drawing_fill: Default::default(),
                 array_requested: false,
+                courtyard_requested: false,
                 details_requested: false,
+                show_courtyard: true,
+                selected_vertex: None,
                 draft: None,
                 camera,
                 collapsed: [false, false],
@@ -388,6 +395,7 @@ impl Document {
             }
             self.selection = ids;
             self.selected = if self.selection.len() == 1 { self.selection.first().copied() } else { None };
+            self.selected_vertex = None;
             self.draft = None;
             self.tool = canvas::Tool::Select;
             self.error = None;
@@ -414,6 +422,8 @@ impl Document {
         }
         let selecting_unit = matches!(&action, Action::SelectUnit { .. } | Action::AddUnit { .. });
         let remapping = matches!(&action, Action::RemapPins { .. });
+        let transforming = matches!(&action, Action::Transform { .. });
+        let previous_selected = self.selected;
         let old = self.session.snapshot();
         let record = self.session.execute_change(revision, action)?;
         let next = self.session.snapshot();
@@ -436,7 +446,38 @@ impl Document {
         if self.selected.is_some_and(|id| !self.session.snapshot().objects.contains_key(&id)) {
             self.selected = None;
         }
+        // A vertex index belongs to the outline it was chosen on, never to a newly selected copy.
+        if self.selected != previous_selected {
+            self.selected_vertex = None;
+        }
+        self.remap_selected_vertex_after(&old, transforming);
         self.error = None;
+        Ok(())
+    }
+    /// Carry the chosen courtyard vertex across an edit already applied to the session: keep or
+    /// remap it by point identity while the selection is still a closed courtyard outline, and
+    /// clear it otherwise. Every path that replaces the selected outline goes through this.
+    fn remap_selected_vertex_after(&mut self, old: &Item, preserve_index: bool) {
+        use pcbcraft_engine::authoring::courtyard::courtyard_polygon;
+        let next = self.session.snapshot();
+        if let Some(id) = self.selected
+            && let Some((points, _)) = next.objects.get(&id).and_then(courtyard_polygon)
+        {
+            if let Some(idx) = self.selected_vertex {
+                let old_points = old.objects.get(&id).and_then(courtyard_polygon).map(|(pts, _)| pts);
+                self.selected_vertex = old_points.and_then(|old_pts| remap_selected_vertex(old_pts, points, idx, preserve_index));
+            }
+        } else {
+            self.selected_vertex = None;
+        }
+    }
+    /// Apply a validated Properties draft as one transaction, then remap the chosen courtyard
+    /// vertex exactly as `execute` does, so an inspector Apply never leaves a stale index.
+    fn apply_properties(&mut self, revision: u64, action: Action) -> Result<(), String> {
+        let transforming = matches!(&action, Action::Transform { .. });
+        let old = self.session.snapshot();
+        self.session.execute(revision, action)?;
+        self.remap_selected_vertex_after(&old, transforming);
         Ok(())
     }
     /// A form retains invalid input and its original revision until Apply or Reset.
@@ -480,6 +521,12 @@ impl Document {
             properties::identity(ui, &format!("{} objects", self.selection.len()), &self.session.snapshot().name);
             return;
         }
+        if let Some(id) = self.selected
+            && item.kind == Kind::Footprint
+            && self.courtyard_outline_inspector(ui, id, expanded)
+        {
+            return;
+        }
         if self.draft.as_ref().is_some_and(|draft| draft.revision != self.session.revision()) {
             if self.pending() {
                 self.error = Some("The library document changed; reset these fields before applying new edits.".into());
@@ -495,6 +542,7 @@ impl Document {
             ui.label(shell::error(error));
         }
         draft.show(ui, expanded);
+        let dirty = draft.dirty();
         if expanded
             && self.selected.is_none()
             && let Some(source) = &snapshot.original_source
@@ -505,20 +553,27 @@ impl Document {
                 ui.add(egui::Label::new(&source.locator).wrap());
             });
         }
+        if item.kind == Kind::Footprint && self.selected.is_none() {
+            ui.add_space(pcbcraft_chrome::Tokens::get().space_8);
+            self.courtyard_summary_section(ui);
+            ui.add_space(pcbcraft_chrome::Tokens::get().space_4);
+        }
         let (mut apply, mut reset) = (false, false);
         ui.horizontal(|ui| {
-            apply = pcbcraft_chrome::controls::enabled_button(ui, draft.dirty(), "Apply").clicked();
+            apply = pcbcraft_chrome::controls::enabled_button(ui, dirty, "Apply").clicked();
             reset = pcbcraft_chrome::controls::button(ui, "Reset").clicked();
         });
         if apply {
-            let result = draft.action().and_then(|action| self.session.execute(draft.revision, action));
-            match result {
-                Ok(_) => {
-                    self.draft = None;
-                    self.tool = canvas::Tool::Select;
-                    self.error = None;
+            if let Some((revision, action_result)) = self.draft.as_ref().map(|d| (d.revision, d.action())) {
+                let result = action_result.and_then(|action| self.apply_properties(revision, action));
+                match result {
+                    Ok(()) => {
+                        self.draft = None;
+                        self.tool = canvas::Tool::Select;
+                        self.error = None;
+                    }
+                    Err(error) => self.error = Some(error),
                 }
-                Err(error) => self.error = Some(error),
             }
         } else if reset {
             self.draft = None;
@@ -1186,4 +1241,37 @@ pub(super) fn browser_objects(item: &Item) -> Vec<(u64, &pcbcraft_engine::author
         (None, None) => id_a.cmp(id_b),
     });
     entries
+}
+
+/// Keep a selected courtyard vertex index only for genuine coordinate-only edits (unchanged
+/// outline, single-vertex coordinate move, uniform translation, or rigid `Action::Transform`).
+/// For structural edits or same-count reorderings, remap by unique point identity and clear if
+/// the selected point is gone or ambiguous.
+pub(super) fn remap_selected_vertex(
+    old_pts: &[pcbcraft_engine::schematic::Point],
+    new_pts: &[pcbcraft_engine::schematic::Point],
+    idx: usize,
+    preserve_index: bool,
+) -> Option<usize> {
+    let &point = old_pts.get(idx)?;
+    if old_pts.len() == new_pts.len() && (preserve_index || is_coordinate_only_vertex_edit(old_pts, new_pts)) {
+        return Some(idx);
+    }
+    let mut matches = new_pts.iter().enumerate().filter_map(|(i, &p)| (p == point).then_some(i));
+    matches.next().filter(|_| matches.next().is_none())
+}
+
+fn is_coordinate_only_vertex_edit(old_pts: &[pcbcraft_engine::schematic::Point], new_pts: &[pcbcraft_engine::schematic::Point]) -> bool {
+    if old_pts.len() != new_pts.len() {
+        return false;
+    }
+    if old_pts.iter().zip(new_pts).filter(|(a, b)| a != b).count() <= 1 {
+        return true;
+    }
+    if let (Some(first_old), Some(first_new)) = (old_pts.first(), new_pts.first())
+        && let (Some(dx), Some(dy)) = (first_new.x_nm.checked_sub(first_old.x_nm), first_new.y_nm.checked_sub(first_old.y_nm))
+    {
+        return old_pts.iter().zip(new_pts).all(|(a, b)| b.x_nm.checked_sub(a.x_nm) == Some(dx) && b.y_nm.checked_sub(a.y_nm) == Some(dy));
+    }
+    false
 }

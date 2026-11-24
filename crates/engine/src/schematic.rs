@@ -540,6 +540,48 @@ impl SymbolPlacement {
         self.unit_definition().pin_positions(self.position, self.rotation, self.mirrored)
     }
 
+    /// Return the counterclockwise angle in degrees that points away from the body along this pin's lead.
+    /// Legacy drawings supply a direction only when straight lead strokes at the pin agree.
+    pub fn pin_outward_rotation(&self, number: &str) -> Option<u16> {
+        let unit = self.unit_definition();
+        let pin = &unit.pins()[unit.pin_index(number)?];
+        let (x, y) = if let Some(appearance) = &pin.appearance {
+            let end = appearance.end(pin.offset);
+            (pin.offset.x_nm - end.x_nm, pin.offset.y_nm - end.y_nm)
+        } else {
+            use crate::library_graphics::{Geometry, Graphic};
+            let mut leads = unit.drawing.iter().filter_map(|shape| {
+                let (from, to) = match *shape {
+                    Shape::Line(from, to) | Shape::Graphic(Graphic { geometry: Geometry::Line { from, to }, .. }) => (from, to),
+                    _ => return None,
+                };
+                let inner = if from == pin.offset {
+                    to
+                } else if to == pin.offset {
+                    from
+                } else {
+                    return None;
+                };
+                let x = (pin.offset.x_nm - inner.x_nm).signum();
+                let y = (pin.offset.y_nm - inner.y_nm).signum();
+                ((x == 0) != (y == 0)).then_some((x, y))
+            });
+            let lead = leads.next()?;
+            if leads.any(|other| other != lead) {
+                return None;
+            }
+            lead
+        };
+        let (x, y) = place(x, y, self.turns(), self.is_mirrored());
+        match (x.signum(), y.signum()) {
+            (1, 0) => Some(0),
+            (0, -1) => Some(90),
+            (-1, 0) => Some(180),
+            (0, 1) => Some(270),
+            _ => None,
+        }
+    }
+
     /// Report the component and symbol IDs, the reference and value shown, the rotation, and the
     /// numbered pin coordinates with their electrical types and any names, such as an LED's polarity.
     pub(crate) fn inspect(&self, reference: &str, value: &str, choices: Option<&std::collections::BTreeMap<String, String>>) -> Value {

@@ -407,6 +407,11 @@ impl Planning {
     pub(super) fn busy(&self) -> bool {
         self.queue.busy() || (self.wanted.is_some() && !self.submitted && self.error.is_none())
     }
+    /// Whether an incremental or background planning job is currently queued or running.
+    #[cfg(all(test, feature = "performance-harness"))]
+    pub(super) fn queue_busy(&self) -> bool {
+        self.queue.busy()
+    }
 }
 
 #[cfg(test)]
