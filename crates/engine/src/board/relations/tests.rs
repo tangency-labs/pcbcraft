@@ -209,7 +209,7 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
     let docs = bytes(&s);
     let path = test_board_path(&docs);
     let board: Value = serde_json::from_slice(&docs[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/39");
+    assert_eq!(board["format"], "pcbcraft-board/58");
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
     for (key, value) in [("format", json!("pcbcraft-board/35")), ("format", json!("pcbcraft-board/38")), ("relations", Value::Null)] {
         let mut changed = board.clone();
@@ -249,7 +249,36 @@ fn a_format_p1_clipboard_and_driving_row_reader() {
     assert_eq!(rows[0]["refs"][1]["fp"], fp);
     run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
     let docs = bytes(&s);
-    assert_ne!(serde_json::from_slice::<Value>(&docs[&test_board_path(&docs)]).unwrap()["format"], "pcbcraft-board/39");
+    assert_ne!(serde_json::from_slice::<Value>(&docs[&test_board_path(&docs)]).unwrap()["format"], "pcbcraft-board/58");
+}
+
+/// A board with relations saves as board/58 and reopens with the same relation and bytes. The
+/// pre-release board/39 label is unsupported, and board/41 keeps main's rules, so neither carries relations.
+#[test]
+fn a_format_board_58_saves_and_reopens_relations() {
+    let mut s = fixture(false);
+    let a = pick(&mut s, 0, "fp.origin", None);
+    let id = add(&mut s, "horizontal", origin(), a);
+    let listed = run(&mut s, LIST, json!({})).unwrap()["relations"].clone();
+    let docs = bytes(&s);
+    let path = test_board_path(&docs);
+    let board: Value = serde_json::from_slice(&docs[&path]).unwrap();
+    assert_eq!(board["format"], "pcbcraft-board/58");
+    assert!(board["relations"].is_object());
+
+    let mut reopened = Session::default();
+    reopened.open_snapshot(decode_documents(&docs).unwrap());
+    assert_eq!(run(&mut reopened, LIST, json!({})).unwrap()["relations"], listed);
+    assert_eq!(listed[0]["id"], id);
+    assert_eq!(bytes(&reopened), docs);
+
+    for format in ["pcbcraft-board/39", "pcbcraft-board/41"] {
+        let mut changed = board.clone();
+        changed["format"] = json!(format);
+        let mut doc = docs.clone();
+        doc.insert(path.clone(), serde_json::to_vec(&changed).unwrap());
+        assert!(decode_documents(&doc).is_err(), "{format}");
+    }
 }
 
 /// Adding and deleting a reference-only horizontal dimension on a legacy `pcbcraft-project/6`
@@ -278,7 +307,7 @@ fn a_legacy_project_six_keeps_project_json_across_relation_add_and_delete() {
     assert!(s.project().unwrap().numeric_id_high_water.is_none());
     let with_relation = bytes(&s);
     assert_eq!(with_relation[crate::persistence::ENTRY_POINT], before[crate::persistence::ENTRY_POINT]);
-    assert_eq!(serde_json::from_slice::<Value>(&with_relation[&test_board_path(&with_relation)]).unwrap()["format"], "pcbcraft-board/39");
+    assert_eq!(serde_json::from_slice::<Value>(&with_relation[&test_board_path(&with_relation)]).unwrap()["format"], "pcbcraft-board/58");
     assert_eq!(encode_documents(decode_documents(&with_relation).unwrap()).unwrap(), with_relation);
 
     run(&mut s, DELETE, json!({"ids":[id]})).unwrap();

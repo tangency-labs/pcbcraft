@@ -365,7 +365,7 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         let saved = bytes(&s);
         let path = test_board_path(&saved);
         let f1: Value = serde_json::from_slice(&saved[&path]).unwrap();
-        assert_eq!(f1["format"], "pcbcraft-board/39");
+        assert_eq!(f1["format"], "pcbcraft-board/58");
         assert_eq!(f1.get("arcs").is_some(), arcs);
         assert_eq!(f1["footprints"][0].get("locked").is_some(), lock);
         let native_board: Value = serde_json::from_slice(&native[&path]).unwrap();
@@ -390,7 +390,7 @@ fn a_format_f1_composes_with_native_arc_lock_corpus() {
         run(&mut s, DELETE, json!({"ids":[id]})).unwrap();
         let final_docs = bytes(&s);
         let final_board: Value = serde_json::from_slice(&final_docs[&test_board_path(&final_docs)]).unwrap();
-        assert_ne!(final_board["format"], "pcbcraft-board/39");
+        assert_ne!(final_board["format"], "pcbcraft-board/58");
         assert_eq!(final_board["footprints"][0].get("locked").is_some(), lock);
     }
 }
@@ -426,7 +426,7 @@ fn a_format_f1_composes_with_assigned_via_and_material_report() {
         let id = add(&mut s, "horizontal", origin(), reference);
         let composed = bytes(&s);
         let mut b: Value = serde_json::from_slice(&composed[&path]).unwrap();
-        assert_eq!(b["format"], "pcbcraft-board/39");
+        assert_eq!(b["format"], "pcbcraft-board/58");
         assert_eq!(b.as_object_mut().unwrap().remove("relations").unwrap()["relations"][0]["id"], id);
         b["format"] = native_board["format"].clone();
         assert_eq!(b, native_board);

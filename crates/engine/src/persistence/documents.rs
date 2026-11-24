@@ -93,7 +93,7 @@ const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
 const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
-const RELATIONS_BOARD_FORMAT: &str = "pcbcraft-board/39";
+const RELATIONS_BOARD_FORMAT: &str = "pcbcraft-board/58";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
 const BOARD_FORMAT: &str = "pcbcraft-board/1";
 const CONFIGURED_BOARD_FORMAT: &str = "pcbcraft-board/2";
@@ -994,17 +994,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     // additional feature is mandatory, but no earlier feature is mandatory in it.
     let related = board.format == RELATIONS_BOARD_FORMAT;
     if related != board.relations.is_some() {
-        return Err("board.json: board/39 requires a nonempty relations record, which is not supported by earlier formats".into());
+        return Err("board.json: board/58 requires a nonempty relations record, which is not supported by earlier formats".into());
     }
     if let Some(relations) = &board.relations {
         relations.validate().map_err(|error| format!("board.json: {error}"))?;
     }
-    // Format 37 requires teardrops; F1 (format 39) and format 41 may carry them like every other native field.
+    // Format 37 requires teardrops; F1 (format 58) and format 41 may carry them like every other native field.
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
     if (!related && !grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
-        return Err("board.json: teardrops require board format 37 (or 39 or 41) and a nonempty array".into());
+        return Err("board.json: teardrops require board format 37 (or 41 or 58) and a nonempty array".into());
     }
-    // Formats 37 and 39 both accept the existing straight-board fields without requiring them.
+    // Formats 37 and 58 both accept the existing straight-board fields without requiring them.
     let native_superset = related || with_teardrops;
     let arc_and_footprint_lock_format = board.format == ARC_LOCKED_FOOTPRINT_BOARD_FORMAT;
     let curved = board.format == ARC_BOARD_FORMAT || arc_and_footprint_lock_format;
@@ -1288,13 +1288,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     {
         return Err("board.json: layer graphics require board format 9".into());
     }
-    // F1 (format 39) carries named layer groups like every other native field, but never an empty list.
+    // F1 (format 58) carries named layer groups like every other native field, but never an empty list.
     if !grouped && let Some(raw) = &board.setup {
         let value: serde_json::Value = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
         if let Some(groups) = value["stackup"].get("layer_groups")
             && !(related && groups.as_array().is_some_and(|groups| !groups.is_empty()))
         {
-            return Err("board.json: the layer_groups field requires board format 41 (or 39).".into());
+            return Err("board.json: the layer_groups field requires board format 41 (or 58).".into());
         }
     }
     let setup = match (board.format.as_str(), board.setup) {
@@ -2458,7 +2458,7 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
 }
 
 /// Preserve canonical legacy encodings until authored content requires a newer format. Relations
-/// select 39, which carries every other native field; named layer groups otherwise select 41; straight-via teardrop intents select 37; arcs alone select 26, active
+/// select 58, which carries every other native field; named layer groups otherwise select 41; straight-via teardrop intents select 37; arcs alone select 26, active
 /// footprint locks alone select 34, and both together select 35. These formats retain earlier
 /// physical fields. Material reports require at least 25; explicit via intent at least 24; copper
 /// roles, base copper, copper thickness qualifiers or finished board thickness at least 23;

@@ -1,5 +1,5 @@
 {
-  "format": "pcbcraft-board/39",
+  "format": "pcbcraft-board/58",
   "relations": {
     "relations": [
     {"id":"00000000-0000-4000-8000-000000000004","kind":"horizontal","refs":[{"tag":"board.origin"},{"tag":"fp.origin","fp":1,"def":{"library":"basic-components","id":"resistor-0402","revision":1}}],"datum":0,"value":1000000,"side":1,"driving":false,"suppressed":false,"state":{"kind":"lost","since_revision":1},"last_resolved":[{"kind":"point","at":{"x_nm":0,"y_nm":0}},{"kind":"point","at":{"x_nm":1000000,"y_nm":0}}]}
