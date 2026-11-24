@@ -522,6 +522,8 @@ pub struct EditJournal {
     generation: String,
     /// Byte length of the published `.pc` snapshot file.
     snapshot_bytes: u64,
+    /// SHA-256 of the packed archive following the published snapshot header.
+    snapshot_archive_sha256: [u8; 32],
     /// Unix `(dev, ino)` of the published `.pc` snapshot file.
     #[cfg(unix)]
     snapshot_file_id: Option<(u64, u64)>,
@@ -576,6 +578,7 @@ impl EditJournal {
             base_sha256: String::new(),
             generation: String::new(),
             snapshot_bytes: 0,
+            snapshot_archive_sha256: [0; 32],
             #[cfg(unix)]
             snapshot_file_id: None,
             journal_header_bytes: 0,
@@ -663,6 +666,7 @@ impl EditJournal {
             self.snapshot_file_id = None;
         }
         let published_file = published?;
+        self.snapshot_archive_sha256 = Sha256::digest(packed).into();
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
@@ -732,10 +736,10 @@ impl EditJournal {
     }
 
     /// Return whether `<id>.pc` still names the regular recovery snapshot publication this
-    /// recorder wrote (same file identity on Unix, same byte length, and matching header
-    /// generation and base hash). Missing, non-regular, or replaced files return `Ok(false)` so
-    /// [`Self::snapshot`] repairs the pair under the held entry lock; other metadata or open
-    /// errors propagate as faults.
+    /// recorder wrote. Checks file identity on Unix, byte length, the framed header and the
+    /// packed archive's digest. Missing, non-regular, replaced or damaged files return `Ok(false)`
+    /// so [`Self::snapshot`] repairs the pair under the held entry lock. Other metadata, open
+    /// or archive read errors propagate as faults.
     fn snapshot_matches_publication(&self) -> Result<bool, String> {
         let path = entry_file(&self.dir, &self.id, "pc");
         let metadata = match fs::symlink_metadata(&path) {
@@ -753,15 +757,21 @@ impl EditJournal {
                 return Ok(false);
             }
         }
-        let file = match File::open(&path) {
+        let mut file = match File::open(&path) {
             Ok(file) => file,
             Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(error.to_string()),
         };
-        let Ok(header) = read_recovery_header_from(file) else {
+        let Ok(header) = read_recovery_header_from(&mut file) else {
             return Ok(false);
         };
-        Ok(header.generation == self.generation && header.base_sha256 == self.base_sha256)
+        if header.generation != self.generation || header.base_sha256 != self.base_sha256 {
+            return Ok(false);
+        }
+        let mut digest = Sha256::new();
+        std::io::copy(&mut file.take(self.snapshot_bytes.saturating_add(1)), &mut digest).map_err(|error| error.to_string())?;
+        let archive_sha256: [u8; 32] = digest.finalize().into();
+        Ok(archive_sha256 == self.snapshot_archive_sha256)
     }
 
     /// Record that `edit` produced `documents`, and flush the record to disk before returning.

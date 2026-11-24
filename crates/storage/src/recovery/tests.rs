@@ -1789,6 +1789,37 @@ fn snapshot_republishes_when_pc_is_replaced_with_older_snapshot_or_other_file() 
     assert!(journal.snapshot(state_current).is_err());
 }
 
+/// A repeat snapshot repairs a damaged packed archive even when the header, size and file
+/// identity match the worker's publication.
+#[test]
+fn snapshot_republishes_when_packed_archive_is_damaged_in_place() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut session = Session::default();
+    session.apply("project.new", &json!({"name": "Recovery payload"})).unwrap();
+    let state = session.snapshot().unwrap();
+    let expected = encode_documents(state.clone()).unwrap();
+    let recorder = JournalRecorder::start(dir.path().to_path_buf(), "entry".to_owned()).unwrap();
+    recorder.snapshot(state.clone());
+    recorder.sync().unwrap();
+    assert_eq!(recover(dir.path(), "entry").unwrap().documents, expected);
+
+    let path = entry_file(dir.path(), "entry", "pc");
+    let mut bytes = fs::read(&path).unwrap();
+    let mut packed = &bytes[MAGIC.len()..];
+    read_frame(&mut packed).unwrap().unwrap();
+    let packed_offset = bytes.len() - packed.len();
+    let end = packed.windows(4).rposition(|signature| signature == b"PK\x05\x06").unwrap();
+    bytes[packed_offset + end] = b'X';
+    fs::write(&path, &bytes).unwrap();
+    assert!(recover(dir.path(), "entry").is_err(), "the damaged archive is unreadable");
+
+    recorder.snapshot(state);
+    recorder.sync().unwrap();
+    assert!(recorder.fault().is_none());
+    assert_eq!(recover(dir.path(), "entry").unwrap().documents, expected);
+    recorder.finish().unwrap();
+}
+
 /// If `same_open_file` returns a transient error after `append` has already flushed a record,
 /// `append` closes the journal handle so the next edit rebases instead of appending a record from
 /// the stale prior hash that replay would reject.
