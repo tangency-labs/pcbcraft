@@ -86,6 +86,7 @@ pub(super) struct Walker<'a> {
     layers: [Uuid; 1],
     half: f64,
     posture: Posture,
+    highlight: bool,
     head: Point,
     target: Point,
     /// An original gesture contact with resolved membership, lending it to every probe.
@@ -147,6 +148,7 @@ impl<'a> Walker<'a> {
             layers,
             half,
             posture: request.posture,
+            highlight: request.mode == super::Mode::Highlight,
             head: request.head,
             target: request.target,
             intended_from: contacts.iter().copied().find(|i| !objects[*i].intended_nets.is_empty()),
@@ -204,18 +206,18 @@ impl<'a> Walker<'a> {
     pub(super) async fn highlight(&mut self, request: &Request) -> Result<Plan, Stop> {
         let points = super::posture::elbow(request.head, request.target, request.posture, request.flipped);
         let head = self.check(self.head, self.head).await?;
-        if !head.legal {
-            let mut plan = self.plan(points, Outcome::Blocked { last_legal: self.head }, head.blockers.first().map(|b| b.0));
-            plan.start_blocked = true;
-            return Ok(plan);
-        }
+        let mut legal = head.legal;
+        let mut blockers = head.blockers;
         for pair in points.windows(2) {
             let leg = self.check(pair[0], pair[1]).await?;
-            if !leg.legal {
-                return Ok(self.plan(points, Outcome::Blocked { last_legal: self.head }, leg.blockers.first().map(|b| b.0)));
-            }
+            legal &= leg.legal;
+            blockers.extend(leg.blockers);
         }
-        Ok(self.plan(points, Outcome::Reached, None))
+        let outcome = if legal { Outcome::Reached } else { Outcome::Blocked { last_legal: self.head } };
+        let mut plan = self.plan(points, outcome, blockers.first().map(|b| b.0));
+        plan.start_blocked = !head.legal;
+        plan.collisions = blockers.into_iter().map(|(index, _)| self.query[index].name.clone()).collect();
+        Ok(plan)
     }
 
     /// Preserve an existing drag leg's angle when it clears all captured obstacles.
@@ -364,6 +366,7 @@ impl<'a> Walker<'a> {
             points,
             outcome,
             blocker,
+            collisions: Default::default(),
             probes: self.probes,
         }
     }
@@ -437,7 +440,7 @@ impl<'a> Walker<'a> {
                 continue;
             }
             legal = false;
-            if !same_net {
+            if !same_net || self.highlight {
                 blockers.push((decision.second, decision.clearance_nm));
             }
         }

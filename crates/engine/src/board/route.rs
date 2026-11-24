@@ -105,6 +105,9 @@ pub struct Plan {
     pub outcome: Outcome,
     /// Query address of the copper that stopped a blocked route, absent for the board edge.
     pub blocker: Option<String>,
+    /// Source addresses of the existing obstacles touched by a Highlight proposal.
+    #[serde(skip)]
+    pub collisions: std::collections::BTreeSet<String>,
     /// Exact probes charged, never more than the budget.
     pub probes: usize,
 }
@@ -159,6 +162,7 @@ impl Session {
                 points: Vec::new(),
                 outcome: Outcome::Stale,
                 blocker: None,
+                collisions: Default::default(),
                 probes: 0,
             });
         }
@@ -202,6 +206,7 @@ impl Session {
                 points: Vec::new(),
                 outcome: Outcome::Stale,
                 blocker: None,
+                collisions: Default::default(),
                 probes: 0,
             }
         } else {

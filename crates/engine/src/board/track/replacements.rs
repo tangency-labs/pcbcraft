@@ -107,6 +107,8 @@ pub(super) struct Validation {
     split_fragments: BTreeMap<String, Vec<usize>>,
     final_origins: Vec<Option<usize>>,
     final_displaced: Vec<bool>,
+    collisions: Option<BTreeSet<String>>,
+    blocked_candidate: bool,
     merge_same_net: bool,
     groups: BTreeMap<usize, usize>,
     cursor: usize,
@@ -197,6 +199,8 @@ impl Validation {
             final_geometry,
             final_origins: Vec::new(),
             final_displaced: Vec::new(),
+            collisions: None,
+            blocked_candidate: false,
             merge_same_net: params.get("merge_same_net").and_then(Value::as_bool).unwrap_or(false),
             origins,
             changed,
@@ -209,6 +213,12 @@ impl Validation {
             cursor: 0,
             phase: 0,
         })
+    }
+
+    /// Retain all stationary source obstacles when an interactive caller needs visual feedback.
+    pub(super) fn collect_collisions(mut self, enabled: bool) -> Self {
+        self.collisions = enabled.then(BTreeSet::new);
+        self
     }
 
     /// Preserve each source island as one final physical island, including interior pad and
@@ -309,7 +319,17 @@ impl Validation {
                 };
                 if decision.conflicting_nets || (other.mechanical && (decision.clearance_violation || joint_contact)) || (!exempt && needs_clearance)
                 {
-                    return Err(CommandError::InvalidParams("The compound route violates copper clearance or intended net membership.".into()));
+                    let Some(collisions) = &mut self.collisions else {
+                        return Err(CommandError::InvalidParams("The compound route violates copper clearance or intended net membership.".into()));
+                    };
+                    if !self.final_displaced[decision.second]
+                        && let Some(original) = self.final_origins[decision.second]
+                    {
+                        collisions.insert(source.objects()[original].name.clone());
+                    } else {
+                        // Candidate-only geometry still invalidates the edit but has no source address.
+                        self.blocked_candidate = true;
+                    }
                 }
             }
             let baseline = self.source.effective.values;
@@ -328,7 +348,15 @@ impl Validation {
             }
         }
         self.cursor = self.cursor.saturating_add(budget.min(8));
-        Ok(self.cursor >= query.objects().len())
+        if self.cursor < query.objects().len() {
+            return Ok(false);
+        }
+        if let Some(blockers) = self.collisions.take()
+            && (!blockers.is_empty() || self.blocked_candidate)
+        {
+            return Err(CommandError::CopperCollision { blockers });
+        }
+        Ok(true)
     }
 
     /// Within a source run, the complete stroke validator checks bends and

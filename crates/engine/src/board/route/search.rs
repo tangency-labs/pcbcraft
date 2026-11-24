@@ -43,6 +43,7 @@ pub(super) async fn walk(
             points: vec![request.head],
             outcome: Outcome::Incomplete,
             blocker: None,
+            collisions: Default::default(),
             probes: walker.probes(),
         }),
         Err(walkaround::Stop::Failed(error)) => Err(error),
@@ -74,6 +75,7 @@ pub(super) fn complete(query: &ClearanceQuery, request: &Request, budget: usize,
                 points: vec![request.head],
                 outcome: Outcome::Canceled,
                 blocker: None,
+                collisions: Default::default(),
                 probes: progress.load(Ordering::Relaxed),
             });
         }

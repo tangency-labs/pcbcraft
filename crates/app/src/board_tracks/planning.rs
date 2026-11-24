@@ -257,12 +257,20 @@ impl Planning {
             .into(),
         )
     }
-    /// Match the displayed path and its blocked appearance to the same source and prefix.
-    pub(super) fn preview(&self, draft: &Draft, width: i64) -> (Vec<Point>, bool) {
+    /// Retain displayed geometry under its captured source and fixed prefix.
+    pub(super) fn preview(&self, draft: &Draft, width: i64) -> Vec<Point> {
         let mut path = draft.points.clone();
-        let Some(plan) = self.displayed(draft, width) else { return (path, false) };
-        path.extend(plan.points.iter().copied().skip(1));
-        (path, matches!(plan.outcome, Outcome::Blocked { .. }))
+        if let Some(plan) = self.displayed(draft, width) {
+            path.extend(plan.points.iter().copied().skip(1));
+        }
+        path
+    }
+
+    /// A superseded result may still draw a path while replanning but cannot flag old blockers.
+    pub(super) fn collisions(&self) -> Option<&BTreeSet<String>> {
+        let ready = self.ready.as_ref()?;
+        self.wanted.as_ref().filter(|wanted| wanted.key == ready.key && !ready.plan.collisions.is_empty())?;
+        Some(&ready.plan.collisions)
     }
     /// Return displacement geometry only for the displayed route's source, prefix and sizes.
     /// Retained geometry cannot authorize placement without current full-path validation.
@@ -499,13 +507,13 @@ mod tests {
         assert!(p.current_ready());
         p.mark_preparation_requested();
         assert!(p.validation_current());
-        assert_eq!(p.preview(&draft, sizes.0).0.last(), Some(&a));
+        assert_eq!(p.preview(&draft, sizes.0).last(), Some(&a));
         // Exercise the deferred branch even when this clear target could finish inline.
         p.inline_source = None;
         p.request(&draft, view.board.target.unwrap(), b, false, sizes, Some(Action::Vertex { finish: true }));
         assert!(!p.current_ready());
         assert!(!p.validation_current());
-        assert_eq!(p.preview(&draft, sizes.0).0.last(), Some(&a));
+        assert_eq!(p.preview(&draft, sizes.0).last(), Some(&a));
         p.request(&draft, view.board.target.unwrap(), Point { x_nm: 9_000_000, y_nm: 0 }, false, sizes, None);
         let mut result = None;
         for _ in 0..100 {
@@ -609,7 +617,7 @@ mod tests {
         }
         assert!(p.current_ready());
         let visible = p.preview(&draft, sizes.0);
-        assert_eq!(visible.0.last(), Some(&good));
+        assert_eq!(visible.last(), Some(&good));
         // Retain the old display while the deliberately exhausted replacement is deferred.
         p.inline_source = None;
         p.request(&draft, view.board.target.unwrap(), Point { x_nm: 5_000_000, y_nm: 0 }, false, sizes, None);
@@ -632,7 +640,7 @@ mod tests {
         assert!(p.poll(&s, view.input(&s), Some(&draft.layer), sizes, Some(Ok(()))).unwrap().is_err());
         assert!(s.project().unwrap().board_view(view.board.target.unwrap()).unwrap().tracks().is_empty());
         p.cancel();
-        assert_eq!(p.preview(&draft, sizes.0), (draft.points, false));
+        assert_eq!(p.preview(&draft, sizes.0), draft.points);
     }
 
     /// Returning to the fixed head retains the old ghost but validates and adopts only

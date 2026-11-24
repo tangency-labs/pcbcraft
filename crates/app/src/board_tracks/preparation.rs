@@ -38,6 +38,7 @@ pub(super) struct Preparation {
     ready: Option<Ready>,
     generation: u64,
     notice: Option<String>,
+    pub(super) collisions: BTreeSet<String>,
     failed: bool,
     retryable_failure: bool,
     pub stale: u64,
@@ -72,6 +73,7 @@ impl Preparation {
         self.ready = self.ready.take().filter(|ready| ready.key == key);
         self.wanted = Some(Wanted { key, generation: self.generation, commit });
         self.notice = None;
+        self.collisions.clear();
         self.failed = false;
         self.retryable_failure = false;
         Ok(())
@@ -83,6 +85,7 @@ impl Preparation {
         self.ready = None;
         self.queue.cancel();
         self.notice = None;
+        self.collisions.clear();
         self.failed = false;
         self.retryable_failure = false;
     }
@@ -148,7 +151,16 @@ impl Preparation {
                 self.cancel();
             } else {
                 let retryable = completion.retryable();
-                match completion.report.and_then(|edit| edit.transpose().map_err(|error| error.to_string())) {
+                let result = completion.report.and_then(|edit| {
+                    edit.transpose().map_err(|error| {
+                        let message = error.to_string();
+                        if let CommandError::CopperCollision { blockers } = error {
+                            self.collisions = blockers;
+                        }
+                        message
+                    })
+                });
+                match result {
                     Ok(Some(edit)) => self.ready = Some(Ready { key: wanted.key.clone(), edit }),
                     Ok(None) => {}
                     Err(error) => {
@@ -318,7 +330,9 @@ impl PcbApp {
                 self.message = Some("Track start is blocked; choose another point.".into());
                 ctx.request_repaint();
             }
-            let waiting_for_drag = tracks.segment.is_some() && !tracks.preparation.ready();
+            let awaiting_preview = (tracks.segment.is_some() || tracks.planning.validation_current())
+                && !tracks.preparation.ready()
+                && tracks.preparation.refusal().is_none();
             let completion = tracks.preparation.poll(&self.session, source, target, layer.as_deref(), sizes);
             if let Some(completion) = completion {
                 let result = completion.and_then(|(input, edit)| {
@@ -345,7 +359,10 @@ impl PcbApp {
                 }
                 ctx.request_repaint();
             }
-            if tracks.preparation.busy() || tracks.planning.busy() || waiting_for_drag && tracks.preparation.ready() {
+            if tracks.preparation.busy()
+                || tracks.planning.busy()
+                || awaiting_preview && (tracks.preparation.ready() || tracks.preparation.refusal().is_some())
+            {
                 ctx.request_repaint();
             }
         }

@@ -290,6 +290,19 @@ impl State {
     pub(super) fn policy(&self) -> (Mode, bool) {
         (self.mode, self.merge_same_net)
     }
+
+    /// Existing board objects blocking the active Highlight route or segment drag.
+    pub(super) fn routing_collisions(&self) -> Option<&BTreeSet<String>> {
+        if self.draft.as_ref().is_some_and(|draft| draft.mode == Mode::Highlight) {
+            self.planning
+                .collisions()
+                .or_else(|| (self.planning.validation_current() && !self.preparation.collisions.is_empty()).then_some(&self.preparation.collisions))
+        } else if self.segment.as_ref().is_some_and(|drag| drag.mode == Mode::Highlight) && !self.preparation.collisions.is_empty() {
+            Some(&self.preparation.collisions)
+        } else {
+            None
+        }
+    }
     /// A held gesture, fixed prefix or latched publication keeps its captured policy.
     pub(super) fn can_change_policy(&self) -> bool {
         self.segment.is_none()
@@ -1510,11 +1523,7 @@ pub(super) fn paint(
         let ends = [camera.screen(start, rect), camera.screen(end, rect)];
         let width = width_px(camera, rect, track.width_nm);
         labels.cover_track(ends, width);
-        if state.segment.is_some() && reshaped_track.is_some() && state.preparation.refusal().is_some() {
-            pcbcraft_chrome::board::blocked_routing_track(&painter, ends, width);
-        } else {
-            segment(color, start, end, track.width_nm, selected, focus.map(|focus| focus.contains_copper(&track.id)));
-        }
+        segment(color, start, end, track.width_nm, selected, focus.map(|focus| focus.contains_copper(&track.id)));
         if let Some(name) = names.and_then(|names| names.get(&track.id)) {
             labels.track(ends, width, name, color);
         }
@@ -1551,12 +1560,15 @@ pub(super) fn paint(
         let selected = state.selected.contains(&item.id);
         let displaced = centers.get(&item.id);
         let center = displaced.copied().unwrap_or_else(|| moved(item.at, selected));
-        labels.cover_disc(camera.screen(center, rect), width_px(camera, rect, item.diameter_nm) / 2.);
+        let screen = camera.screen(center, rect);
+        let radius = width_px(camera, rect, item.diameter_nm) / 2.;
+        let drill = width_px(camera, rect, item.drill_nm) / 2.;
+        labels.cover_disc(screen, radius);
         pcbcraft_chrome::board::via(
             &painter,
-            camera.screen(center, rect),
-            width_px(camera, rect, item.diameter_nm) / 2.,
-            width_px(camera, rect, item.drill_nm) / 2.,
+            screen,
+            radius,
+            drill,
             selected,
             displaced.is_some(),
             focus.map(|focus| focus.contains_copper(&item.id)),
@@ -1567,6 +1579,30 @@ pub(super) fn paint(
         }
     }
     labels
+}
+
+/// Paint fixed blockers over the proposal so even a coincident route cannot cover the highlight.
+pub(super) fn paint_collisions(painter: &egui::Painter, rect: Rect, camera: &Camera, view: BoardView<'_>, state: &State, hidden: &BTreeSet<String>) {
+    let Some(collisions) = state.routing_collisions() else { return };
+    let (tracks, vias) = (view.tracks(), view.vias());
+    let color = pcbcraft_chrome::Tokens::get().route_collision;
+    for id in collisions.iter().filter_map(|address| Uuid::try_parse(address).ok()) {
+        if let Ok(index) = tracks.binary_search_by_key(&id, |track| track.id) {
+            let track = &tracks[index];
+            if !hidden.contains(&track.layer.to_string()) {
+                let ends = [camera.screen(track.start, rect), camera.screen(track.end, rect)];
+                pcbcraft_chrome::board::track(painter, ends, width_px(camera, rect, track.width_nm), color, false, false);
+            }
+        } else if let Ok(index) = vias.binary_search_by_key(&id, |via| via.id) {
+            let via = &vias[index];
+            pcbcraft_chrome::board::collision_via(
+                painter,
+                camera.screen(via.at, rect),
+                width_px(camera, rect, via.diameter_nm) / 2.,
+                width_px(camera, rect, via.drill_nm) / 2.,
+            );
+        }
+    }
 }
 
 /// Resolve requests before copper painting, keeping displaced originals and replacement
@@ -1684,9 +1720,7 @@ pub(super) fn paint_draft(
         (at, contact.is_some())
     });
     if let Some(draft) = &state.draft {
-        let (path, plan_blocked) = state.planning.preview(draft, state.width_nm);
-        let blocked =
-            draft.mode == Mode::Highlight && (plan_blocked || (state.planning.validation_current() && state.preparation.refusal().is_some()));
+        let path = state.planning.preview(draft, state.width_nm);
         let mut changes = draft.changes.clone();
         if let Some(next) = state.planning.via_layer()
             && path.len() > 1
@@ -1707,13 +1741,8 @@ pub(super) fn paint_draft(
         for (index, _) in &changes {
             pcbcraft_chrome::board::routing_clearance(painter, [path[*index]; 2], via_width.max(4.0), clearance);
         }
-        for (index, (pair, layer)) in path.windows(2).zip(layers).enumerate() {
-            let ends = [pair[0], pair[1]];
-            if blocked && index >= draft.points.len().saturating_sub(1) {
-                pcbcraft_chrome::board::blocked_routing_track(painter, ends, width);
-            } else {
-                pcbcraft_chrome::board::track(painter, ends, width, layer_color(view, appearance, layer), false, true);
-            }
+        for (pair, layer) in path.windows(2).zip(layers) {
+            pcbcraft_chrome::board::track(painter, [pair[0], pair[1]], width, layer_color(view, appearance, layer), false, true);
         }
         for (index, _) in &changes {
             pcbcraft_chrome::board::via(painter, path[*index], via_width / 2., width_px(camera, rect, state.via_drill_nm) / 2., false, true, None);

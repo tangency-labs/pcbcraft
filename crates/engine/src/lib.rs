@@ -2881,6 +2881,10 @@ pub fn command(id: &str) -> Option<&'static Command> {
 pub enum CommandError {
     Unknown(String),
     InvalidParams(String),
+    /// A proposed copper edit violates clearance or would join incompatible nets.
+    CopperCollision {
+        blockers: std::collections::BTreeSet<String>,
+    },
     /// The command is real, but can't run in this state, like undo with nothing to undo.
     Unavailable(String),
     /// The edit was prepared against a revision different from `current`.
@@ -2910,7 +2914,7 @@ impl CommandError {
         use error_codes::ErrorCode;
         match self {
             Self::Unknown(_) => ErrorCode::UnknownCommand,
-            Self::InvalidParams(_) => ErrorCode::InvalidParams,
+            Self::InvalidParams(_) | Self::CopperCollision { .. } => ErrorCode::InvalidParams,
             Self::Unavailable(_) => ErrorCode::Unavailable,
             Self::StaleRevision { .. } => ErrorCode::StaleRevision,
             Self::NotFound(_) => ErrorCode::NotFound,
@@ -2927,6 +2931,7 @@ impl CommandError {
             Self::StaleRevision { current } => json!({"current_revision": current}),
             Self::VersionMismatch { command, stated, current } => json!({"command": command, "stated_version": stated, "current_version": current}),
             Self::OutOfScope { command } => json!({"command": command, "scope": SessionScope::ReadOnly.as_str()}),
+            Self::CopperCollision { blockers } => json!({"blockers": blockers}),
             _ => json!({}),
         }
     }
@@ -2938,6 +2943,7 @@ impl std::fmt::Display for CommandError {
         match self {
             Self::Unknown(id) => write!(f, "unknown command `{id}`"),
             Self::InvalidParams(m) | Self::Unavailable(m) | Self::NotFound(m) | Self::CapExceeded(m) => f.write_str(m),
+            Self::CopperCollision { .. } => f.write_str("The compound route violates copper clearance or intended net membership."),
             Self::StaleRevision { current } => write!(f, "project changed, inspect the current revision ({current}) and retry"),
             Self::VersionMismatch { command, stated, current } => write!(
                 f,

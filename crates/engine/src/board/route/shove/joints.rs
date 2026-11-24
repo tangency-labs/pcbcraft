@@ -446,6 +446,7 @@ fn fixed_drag_plan(replacements: Vec<Replacement>, probes: usize) -> Plan {
         points: Vec::new(),
         outcome: Outcome::Reached,
         blocker: None,
+        collisions: Default::default(),
         probes,
     }
 }

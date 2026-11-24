@@ -384,6 +384,7 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
             points: vec![request.head],
             outcome,
             blocker: None,
+            collisions: Default::default(),
             probes: progress.load(Ordering::Relaxed),
         });
     }
@@ -399,6 +400,7 @@ pub(super) async fn run(query: &ClearanceQuery, request: &Request, budget: usize
                 points: vec![request.head],
                 outcome: Outcome::Incomplete,
                 blocker: None,
+                collisions: Default::default(),
                 probes: progress.load(Ordering::Relaxed),
             });
         }
@@ -600,6 +602,7 @@ impl<'a> Search<'a> {
                     via_moves: Vec::new(),
                     shove: None,
                     blocker: None,
+                    collisions: Default::default(),
                     probes: self.progress.load(Ordering::Relaxed),
                 },
                 Approach::Continue(points) => {
@@ -701,6 +704,7 @@ impl<'a> Search<'a> {
             points: vec![request.head],
             outcome: if incomplete { Outcome::Incomplete } else { Outcome::Blocked { last_legal: request.head } },
             blocker: if incomplete { None } else { blocker },
+            collisions: Default::default(),
             probes,
         })
     }
@@ -741,6 +745,7 @@ impl<'a> Search<'a> {
                         points: vec![request.head],
                         outcome: Outcome::Incomplete,
                         blocker: None,
+                        collisions: Default::default(),
                         probes: walker.probes(),
                     });
                 }
@@ -761,6 +766,7 @@ impl<'a> Search<'a> {
                 points: vec![request.head],
                 outcome: Outcome::Incomplete,
                 blocker: None,
+                collisions: Default::default(),
                 probes: walker.probes(),
             }),
             Err(super::walkaround::Stop::Failed(error)) => Err(error),

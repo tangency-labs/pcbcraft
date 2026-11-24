@@ -193,8 +193,9 @@ Open **Layout › Route › Router Settings** to choose the policy for new route
 holding and dragging a track, or pressing **D** over a track. The setting belongs
 to the current PCB pane.
 
-- **Highlight collisions** keeps the proposed path and colors it when validation
-  finds a conflict. A conflicted proposal cannot be placed.
+- **Highlight collisions** marks existing tracks, pads and vias that block the
+  proposal. The proposed trace keeps its layer color. A conflicted proposal
+  cannot be placed.
 - **Walkaround** detours the proposed copper around fixed obstacles. For a drag,
   it can replace a dragged leg with a path between the same proposed endpoints.
 - **Shove** displaces eligible unlocked tracks. **Shove through vias** also lets

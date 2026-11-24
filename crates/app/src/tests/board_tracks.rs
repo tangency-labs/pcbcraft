@@ -390,21 +390,26 @@ fn preview_ends_at(h: &Harness<'_, PcbApp>, color: egui::Color32, end: egui::Pos
     })
 }
 
-/// The contrasting centerline identifies a blocked segment regardless of copper color.
-fn blocked_preview_ends_at(h: &Harness<'_, PcbApp>, end: egui::Pos2) -> bool {
-    let color = pcbcraft_chrome::Tokens::get().board_canvas;
+/// The collision color belongs to the stationary obstacle's actual screen geometry.
+fn collision_track_ends_at(h: &Harness<'_, PcbApp>, end: egui::Pos2) -> bool {
+    let color = pcbcraft_chrome::Tokens::get().route_collision;
     h.output().shapes.iter().any(|shape| {
         matches!(&shape.shape, egui::Shape::LineSegment { points, stroke }
         if stroke.color == color && points[1].distance(end) < 0.001)
     })
 }
 
-/// Highlight mode marks the obstructed proposal, protects the fixed prefix, and clears when the pointer backs away.
+/// Highlight shows a fixed track and via as obstacles while keeping the proposed route's color.
 #[test]
 fn highlight_collisions_distinguishes_blocked_route_preview() {
     let mut h = routable();
     let p = |x_nm, y_nm| Point { x_nm, y_nm };
-    add_track(&mut h, p(5_080_000, -7_620_000), p(5_080_000, -2_540_000));
+    let rail_end = p(5_080_000, -2_540_000);
+    add_track(&mut h, p(5_080_000, -7_620_000), rail_end);
+    let via = p(6_350_000, -5_080_000);
+    let revision = h.state().session.revision();
+    h.state_mut().run(pcbcraft_engine::ADD_VIA, &json!({"at":via,"via_diameter_nm":600_000,"via_drill_nm":300_000,"expected_revision":revision}));
+    h.run();
     let head = p(1_270_000, -5_080_000);
     let bend = p(2_540_000, -5_080_000);
     let blocked = p(7_620_000, -5_080_000);
@@ -419,18 +424,29 @@ fn highlight_collisions_distinguishes_blocked_route_preview() {
     h.hover_at(at(&h, blocked));
     h.run_steps(100);
     let ink = pcbcraft_chrome::Tokens::get().board_front;
-    assert!(blocked_preview_ends_at(&h, at(&h, blocked)));
+    let via_collides = |h: &Harness<'_, PcbApp>| {
+        let center = at(h, via);
+        let collision = pcbcraft_chrome::Tokens::get().route_collision;
+        h.output()
+            .shapes
+            .iter()
+            .any(|shape| matches!(&shape.shape, egui::Shape::Circle(circle) if circle.fill == collision && circle.center.distance(center) < 0.001))
+    };
+    assert!(collision_track_ends_at(&h, at(&h, rail_end)));
+    assert!(via_collides(&h));
+    assert!(preview_ends_at(&h, ink, at(&h, blocked)));
+    assert!(!collision_track_ends_at(&h, at(&h, blocked)));
     assert!(preview_ends_at(&h, ink, at(&h, bend)));
     click_route(&mut h, blocked);
     assert_eq!(encode_documents(h.state().session.snapshot().unwrap()).unwrap(), before);
 
     h.hover_at(at(&h, bend));
     h.run_steps(100);
-    assert!(!blocked_preview_ends_at(&h, at(&h, blocked)));
+    assert!(!collision_track_ends_at(&h, at(&h, rail_end)));
+    assert!(!via_collides(&h));
     h.hover_at(at(&h, clear));
     h.run_steps(100);
     assert!(preview_ends_at(&h, ink, at(&h, clear)));
-    assert!(!blocked_preview_ends_at(&h, at(&h, clear)));
 }
 
 /// Warm, clear pointer targets must paint in their input frame while authored copper stays fixed.
@@ -3608,7 +3624,8 @@ fn router_settings_govern_held_track_drags() {
             let status = h.state().views.active.board.tracks.preparation_status().unwrap();
             assert!(status.contains("clearance"), "{status}");
             assert!(paths.is_empty());
-            assert!(blocked_preview_ends_at(&h, at(&h, p(far.x_nm, -7_620_000))));
+            assert!(collision_track_ends_at(&h, at(&h, p(right, -7_720_000))));
+            assert!(!collision_track_ends_at(&h, at(&h, p(far.x_nm, -7_620_000))));
         } else {
             let replaced = if mode == Mode::Walkaround { segment } else { obstacle };
             assert!(paths.iter().any(|path| path.track == replaced), "{policy}: {:?}", h.state().views.active.board.tracks.preparation_status());
