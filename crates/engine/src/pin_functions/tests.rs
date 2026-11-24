@@ -654,7 +654,7 @@ fn pin_function_storage_with_output_recipes_keeps_the_current_header() {
         // The older pin-function headers refuse recipes.
         for older in ["pcbcraft-project/48", "pcbcraft-project/56"] {
             let error = decode_documents(&with_format(&docs, older)).err().unwrap();
-            assert!(error.contains("output_recipes requires project format 47, 57, 60, 62 or 63"), "{error}");
+            assert!(error.contains("output_recipes requires project format"), "{error}");
         }
         // A file saved earlier as project/60 still opens, and the next save writes the current format.
         let reopened = decode_documents(&with_format(&docs, "pcbcraft-project/60")).unwrap();

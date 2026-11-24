@@ -11,9 +11,10 @@ named anchors and hierarchy; the registry records identity and reconciliation.
 
 The current project entry point permits an optional registry in either
 instance home. Board-owned records use
-[instances/9](native-project-storage.md#board-instance-records) with optional
-[class bindings](net-class-assignments.md), numbers, pairs and either membership
-representation. Historical instances/2–5, /7 and /8 retain their existing
+[instances/12](native-project-storage.md#board-instance-records) with optional
+[class bindings](net-class-assignments.md), numbers, pairs, wire appearance,
+[authored electrical intent](electrical-intent.md) and either membership
+representation. Historical instances/2–5 and /7–/10 retain their existing
 validation rules. A numbered registry under the current format has a positive,
 unique `generated_number` on every record. Active, ambiguous and retired records
 reserve their numbers. An explicitly empty or malformed `net_registry` is

@@ -15,7 +15,7 @@ Board projects place `instances.json` beside the registered `board.json`.
 The instance document's `board` header must match the registered board UUID,
 and the reader rejects a second storage home.
 
-Current board-owned records use [instances/10](native-project-storage.md#board-instance-records),
+Current board-owned records use [instances/12](native-project-storage.md#board-instance-records),
 with optional net wire appearance and [authored electrical intent](electrical-intent.md)
 on registry records. Historical instances/1 stores occurrences only. Instances/2–4
 add support for the sparse net registry, class bindings and generated numbers.

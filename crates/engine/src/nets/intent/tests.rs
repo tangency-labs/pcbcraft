@@ -210,7 +210,10 @@ fn authored_electrical_intent_reference_survives_first_board_adoption() {
 }
 
 /// The one project header the writer produces; intent records never select another.
-const CURRENT: &str = crate::persistence::CURRENT_PROJECT_FORMAT;
+const CURRENT: &str = "pcbcraft-project/68";
+const CURRENT_INSTANCES: &str = "pcbcraft-instances/12";
+const PRE_INTENT_PROJECT: &str = "pcbcraft-project/63";
+const PRE_INTENT_INSTANCES: &str = "pcbcraft-instances/10";
 
 /// The reader's refusal of intent records under an older project header.
 const INTENT_REFUSAL: &str = "Authored electrical intent requires";
@@ -244,10 +247,8 @@ fn refused(docs: &Documents, reason: &str) {
     assert!(error.contains(reason), "expected {reason:?}, got {error:?}");
 }
 
-/// Both storage homes preserve exact values as optional records: the project, instance and
-/// net-class headers stay what the rest of the project selects, and an older project header
-/// refuses the records instead of treating them as unset. Clearing net-only values restores
-/// exact pre-edit native bytes; Undo restores exact intent bytes.
+/// Both storage homes emit the current envelopes with or without intent. Reopen and migrate
+/// pre-intent documents, refuse intent under older headers, and preserve bytes across clear/Undo.
 #[test]
 fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
     for board in [false, true] {
@@ -263,6 +264,13 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
         let old = encode_documents(session.snapshot().unwrap()).unwrap();
         assert_eq!(encode_documents(decode_documents(&old).unwrap()).unwrap(), old);
         assert_eq!(document(&old, ENTRY_POINT)["format"], CURRENT);
+        if board {
+            assert_eq!(document(&old, &path)["format"], CURRENT_INSTANCES);
+            let mixed = altered(&old, ENTRY_POINT, |v| v["format"] = json!(PRE_INTENT_PROJECT));
+            refused(&mixed, "unsupported instances format");
+        }
+        let predecessor = older_headers(&old, board.then_some(path.as_str()), PRE_INTENT_PROJECT, PRE_INTENT_INSTANCES);
+        assert_eq!(encode_documents(decode_documents(&predecessor).unwrap()).unwrap(), old);
         let values = json!({"working_voltage":{
             "magnitude":{"value":"0","unit":"V"},"basis":"dc","reference":{"kind":"net","address":reference}
         }});
@@ -273,9 +281,12 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
         assert_eq!(document(&net_only, ENTRY_POINT)["net_classes"]["format"], "pcbcraft-net-classes/1");
         let old_header = older_headers(&net_only, board.then_some(path.as_str()), "pcbcraft-project/23", "pcbcraft-instances/4");
         refused(&old_header, INTENT_REFUSAL);
+        refused(&older_headers(&net_only, board.then_some(path.as_str()), PRE_INTENT_PROJECT, PRE_INTENT_INSTANCES), INTENT_REFUSAL);
         if board {
-            assert_eq!(document(&net_only, &path)["format"], document(&old, &path)["format"]);
-            refused(&altered(&net_only, &path, |v| v["format"] = json!("pcbcraft-instances/9")), "unsupported instances format");
+            assert_eq!(document(&net_only, &path)["format"], CURRENT_INSTANCES);
+            for wrong_header in [PRE_INTENT_INSTANCES, "pcbcraft-instances/9"] {
+                refused(&altered(&net_only, &path, |v| v["format"] = json!(wrong_header)), "requires pcbcraft-instances/12");
+            }
         }
         assert_eq!(encode_documents(decode_documents(&net_only).unwrap()).unwrap(), net_only);
         let clear = request(&session, &net_target, &json!({}));
@@ -325,12 +336,17 @@ fn authored_electrical_intent_native_lazy_round_trip_and_refusals() {
         }
         assert_eq!(document(&class_only, ENTRY_POINT)["format"], CURRENT);
         refused(&older_headers(&class_only, board.then_some(path.as_str()), "pcbcraft-project/23", "pcbcraft-instances/4"), INTENT_REFUSAL);
+        refused(&older_headers(&class_only, board.then_some(path.as_str()), PRE_INTENT_PROJECT, PRE_INTENT_INSTANCES), INTENT_REFUSAL);
         assert_eq!(encode_documents(decode_documents(&class_only).unwrap()).unwrap(), class_only);
         let clear = request(&session, &class_target, &json!({}));
         session.apply(SET, &clear).unwrap();
         let cleared = encode_documents(session.snapshot().unwrap()).unwrap();
         assert_eq!(document(&cleared, ENTRY_POINT)["format"], CURRENT);
         assert_eq!(document(&cleared, ENTRY_POINT)["net_classes"]["format"], "pcbcraft-net-classes/1");
+        assert!(document(&cleared, ENTRY_POINT)["net_classes"]["definitions"][0]["authored_intent"].is_null());
+        if board {
+            assert_eq!(document(&cleared, &path)["format"], CURRENT_INSTANCES);
+        }
     }
 }
 
