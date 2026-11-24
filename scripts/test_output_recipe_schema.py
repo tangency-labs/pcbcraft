@@ -104,7 +104,11 @@ class OutputRecipeSchemaTests(unittest.TestCase):
             "assembly_profile": {"profile": "01234567-89ab-4cde-8fab-0123456789ac", "revision": 2},
         }
         self.assertTrue(self.content_validator.is_valid(recipe))
-        for field, path in [("origin.x_nm", ("origin", "x_nm")), ("assembly_profile.revision", ("assembly_profile", "revision"))]:
+        for field, path in [
+            ("origin.x_nm", ("origin", "x_nm")),
+            ("origin.y_nm", ("origin", "y_nm")),
+            ("assembly_profile.revision", ("assembly_profile", "revision")),
+        ]:
             for number, expected in [(2.0, True), (2.5, False)]:
                 with self.subTest(field=field, number=number):
                     content = json.loads(json.dumps(recipe))

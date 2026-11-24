@@ -494,7 +494,9 @@ fn recipe_integer_fields_accept_integer_valued_numbers_like_schema() {
     let revision = &properties["assembly_profile"]["properties"]["revision"];
     // A JSON Schema integer is any number with a zero fractional part.
     let schema_integer = |value: &Value| value.as_f64().is_some_and(|number| number.fract() == 0.0);
-    for (field, field_schema) in [("origin.x_nm", &point["properties"]["x_nm"]), ("assembly_profile.revision", revision)] {
+    for (field, field_schema) in
+        [("origin.x_nm", &point["properties"]["x_nm"]), ("origin.y_nm", &point["properties"]["y_nm"]), ("assembly_profile.revision", revision)]
+    {
         assert_eq!(field_schema["type"], "integer", "{field}");
         assert!(schema_integer(&json!(2.0)), "{field} schema should accept 2.0");
         assert!(!schema_integer(&json!(2.5)), "{field} schema should reject 2.5");
@@ -503,8 +505,9 @@ fn recipe_integer_fields_accept_integer_valued_numbers_like_schema() {
     let (mut session, content) = fixture();
     let revision = session.revision();
     let initial = session.snapshot().unwrap();
-    let edits: [(&str, fn(&mut Value, Value)); 2] = [
+    let edits: [(&str, fn(&mut Value, Value)); 3] = [
         ("origin.x_nm", |content, number| content["origin"]["x_nm"] = number),
+        ("origin.y_nm", |content, number| content["origin"]["y_nm"] = number),
         ("assembly_profile.revision", |content, number| content["assembly_profile"]["revision"] = number),
     ];
     for (field, edit) in edits {
@@ -525,7 +528,7 @@ fn recipe_integer_fields_accept_integer_valued_numbers_like_schema() {
     }
     set(&mut session, ID, &integer_valued).unwrap();
     let stored = &session.project().unwrap().output_recipes()[0].content;
-    assert_eq!(stored.origin, Some(Anchor::Point { x_nm: 2, y_nm: -200 }));
+    assert_eq!(stored.origin, Some(Anchor::Point { x_nm: 2, y_nm: 2 }));
     assert_eq!(stored.assembly_profile, Some(Adoption { profile: Uuid::from_u128(12), revision: 2 }));
     let accepted = session.revision();
     let mut exact = content;
