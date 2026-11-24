@@ -106,6 +106,36 @@ The starter NPN symbol uses 1 Base, 2 Emitter and 3 Collector, matching
 [Nexperia PMBT3904](https://assets.nexperia.com/documents/data-sheet/PMBT3904.pdf),
 16-Feb-2024. Q1 in the demo is an unwired package example.
 
+## Land patterns from component dimensions
+
+The engine can compute surface-mount lands from a component's data sheet limits
+(`board::land_pattern::calculate`). It implements the land pattern equations of
+IPC-7351 (February 2005), section 3.1.5:
+
+- `Zmax = Lmin + 2·JT + √(CL² + F² + P²)`, across the outer land ends;
+- `Gmin = Smax − 2·JH − √(CS² + F² + P²)`, between the inner land ends;
+- `Xmax = Wmin + 2·JS + √(CW² + F² + P²)`, across the land.
+
+`L` is the terminal-to-terminal length or lead span, `T` the terminal length and
+`W` the terminal width, each given as a minimum and maximum. `C` is the
+difference between those limits, `F` the land fabrication tolerance and `P` the
+placement accuracy. As in section 3.1.1, `Smin = Lmin − 2·Tmax`, and the inner
+span tolerance is its RMS value `CS = √(CL² + 2·CT²)`, added to `Smin` to give
+`Smax`. Results are whole nanometers before the standard's round-off.
+
+| Family | Toe, heel and side goals | Lands |
+|---|---|---|
+| `chip` | Table 3-5 from a 1608 metric (0603) nominal length, Table 3-6 below it | Pad 1 left and pad 2 right on the X axis |
+| `gull_wing` | Table 3-2 above 0.625 mm pitch, Table 3-3 at or below it | Two rows along Y; pin 1 at the top of the left row, numbered counterclockwise |
+
+The `density` level selects the A (most), B (nominal) or C (least) column. A
+gull-wing package whose `Smin` does not clear its maximum body width uses the
+reduced heel goals of note 1 to Tables 3-2 and 3-3, unless its terminal length
+tolerance exceeds 0.5 mm. The calculation refuses reversed or out-of-range limits,
+terminals that meet inside the body, opposite lands that would meet and
+gull-wing lands no narrower than their pitch. Tools following the later B or C
+revisions of IPC-7351 may give different values.
+
 ## Definition and placement contract
 
 The [footprint format specification](footprint-schema.md) defines field ownership,
