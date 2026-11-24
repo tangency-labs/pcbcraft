@@ -280,7 +280,7 @@ fn optional_pairs_keep_the_current_project_format_and_refuse_mismatched_instance
                 downgraded = replaced(&downgraded, &path, &instance);
             }
             let error = decode_documents(&downgraded).unwrap_err();
-            assert!(error.contains("Differential pairs require project format"), "{error}");
+            assert!(error.contains(&format!("differential pairs not allowed in {project_format}")), "{error}");
         }
         if board {
             for version in [
@@ -563,7 +563,7 @@ fn pair_envelope_preserves_unnumbered_registry_and_rejects_partial_numbers() {
     let mut value: Value = serde_json::from_slice(&documents[ENTRY_POINT]).unwrap();
     stored_registry(&mut value)["records"][0]["generated_number"] = json!(1);
     let error = decode_documents(&replaced(&documents, ENTRY_POINT, &value)).unwrap_err();
-    assert!(error.contains("with a number on every record"), "{error}");
+    assert!(error.contains("must specify generated_number on every record"), "{error}");
 }
 
 /// Pair-only candidates have no valid members and cannot publish a snapshot, revision or history

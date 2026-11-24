@@ -664,7 +664,7 @@ fn pin_function_storage_with_output_recipes_keeps_the_current_header() {
         // The older recipe envelopes without pin functions refuse the choice.
         let older = if locked { "pcbcraft-project/57" } else { "pcbcraft-project/47" };
         let error = decode_documents(&with_format(&docs, older)).err().unwrap();
-        assert!(error.contains("Alternate pin functions require"), "{error}");
+        assert!(error.contains(&format!("pin_functions are not allowed in {older}")), "{error}");
     }
 
     // Removing the recipes keeps the current header with the locked choice.

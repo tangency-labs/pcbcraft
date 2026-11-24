@@ -495,24 +495,31 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let mut output_recipes = project.output_recipes.take().unwrap_or_default();
     // The current envelope shares the project/56 vocabulary but makes locks optional.
-    project.format = project.layout_format().to_owned();
+    let layout_format = project.layout_format().to_owned();
+    let incoming_format = std::mem::replace(&mut project.format, layout_format);
     // Project/22 is a superset of project/21: it requires nonempty project parameters, and its
     // net-class catalog, class assignments, net registry and no-connect intent are optional.
     let lock_format = matches!(project.format.as_str(), DESIGNATOR_LOCK_PROJECT_FORMAT | PIN_FUNCTION_LOCK_PROJECT_FORMAT);
     let profile_format = project.format == ASSEMBLY_PROFILE_PROJECT_FORMAT;
     let pair_format = project.format == PAIR_PROJECT_FORMAT;
     let pin_function_format = matches!(project.format.as_str(), PIN_FUNCTION_PROJECT_FORMAT | PIN_FUNCTION_LOCK_PROJECT_FORMAT);
-    if (!lock_format && !pair_format && !pin_function_format && !recipe_format && profile_format != project.assembly_profiles.is_some())
-        || project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty())
-    {
-        return Err("project.json: assembly profiles require project format 36, 45, 48, 51 or 56 and a nonempty identity catalog.".into());
+    if !lock_format && !pair_format && !pin_function_format && !recipe_format {
+        check_project_field(&incoming_format, "assembly_profiles", profile_format, project.assembly_profiles.is_some())?;
+    }
+    if project.assembly_profiles.as_ref().is_some_and(|catalog| catalog.is_empty()) {
+        return Err(format!("{ENTRY_POINT}: assembly_profiles must be nonempty when present in {incoming_format}."));
     }
     let profile_catalog = project.assembly_profiles.take().unwrap_or_default();
     let parameter_format = project.format == PARAMETER_PROJECT_FORMAT;
-    if (!optional_locks && lock_format != project.components.iter().any(|part| part.designator_locked.is_some()))
-        || project.components.iter().any(|part| part.designator_locked == Some(false))
-    {
-        return Err("Designator locks require project format 51 or 56 and at least one true designator_locked flag; omit unlocked flags.".into());
+    if project.components.iter().any(|part| part.designator_locked == Some(false)) {
+        return Err(format!("{ENTRY_POINT}: designator_locked must be true when present in {incoming_format}; omit unlocked flags."));
+    }
+    if !optional_locks {
+        let has_lock = project.components.iter().any(|part| part.designator_locked.is_some());
+        if lock_format && !has_lock {
+            return Err(format!("{ENTRY_POINT}: {incoming_format} requires at least one true designator_locked flag."));
+        }
+        check_project_field(&incoming_format, "designator_locked", lock_format, has_lock)?;
     }
     let occurrences = matches!(
         project.format.as_str(),
@@ -554,21 +561,21 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PIN_FUNCTION_PROJECT_FORMAT
             | PIN_FUNCTION_LOCK_PROJECT_FORMAT
     );
-    if !parameter_format && !superset_format && class_format != project.net_classes.is_some() {
-        return Err("Net-class catalog requires project format 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56; any catalog must be nonempty.".into());
+    if !parameter_format && !superset_format {
+        check_project_field(&incoming_format, "net_classes", class_format, project.net_classes.is_some())?;
     }
-    if (!superset_format && parameter_format != project.parameters.is_some())
-        || (superset_format && project.parameters.as_ref().is_some_and(|items| items.is_empty()))
-    {
-        return Err("Project parameters require project format 22, 23, 24, 36, 39, 45, 48, 51 or 56, with a nonempty list.".into());
+    if !superset_format {
+        check_project_field(&incoming_format, "parameters", parameter_format, project.parameters.is_some())?;
+    } else if project.parameters.as_ref().is_some_and(|items| items.is_empty()) {
+        return Err(format!("{ENTRY_POINT}: parameters must be nonempty when present in {incoming_format}."));
     }
     let project_parameters = project.parameters.take().unwrap_or_default();
     if parameter_format && project_parameters.is_empty() {
         return Err("Empty project parameter lists must be omitted.".into());
     }
     crate::parameters::check(&project_parameters, crate::parameters::Scope::Project).map_err(|error| format!("{ENTRY_POINT}: {error}"))?;
-    if !optional_part_groups && part_group_format != project.part_groups.is_some() {
-        return Err("Part-group catalog requires project format 24, 36, 39, 45, 48, 51 or 56. Formats 24 and 39 require a nonempty catalog.".into());
+    if !optional_part_groups {
+        check_project_field(&incoming_format, "part_groups", part_group_format, project.part_groups.is_some())?;
     }
     let mut part_groups = project.part_groups.take();
     if let Some(catalog) = &mut part_groups {
@@ -587,10 +594,10 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         catalog.definitions.sort_by_key(|class| class.id);
     }
     if !no_connect_format && project.components.iter().any(|part| part.no_connects.is_some()) {
-        return Err("No-connect intent requires project format 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56.".into());
+        return Err(format!("{ENTRY_POINT}: no_connects are not allowed in {incoming_format}."));
     }
     if !pin_function_format && project.components.iter().any(|part| part.pin_functions.is_some()) {
-        return Err("Alternate pin functions require project format 48 or 56.".into());
+        return Err(format!("{ENTRY_POINT}: pin_functions are not allowed in {incoming_format}."));
     }
     let part_format = matches!(
         project.format.as_str(),
@@ -616,7 +623,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             .as_ref()
             .is_some_and(|choices| choices.iter().any(|choice| crate::library::parts::mapping::extended(&choice.mapping, &choice.unconnected_pads)))
     {
-        return Err("Extended package mappings require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56.".into());
+        return Err(format!("{ENTRY_POINT}: extended package mappings are not allowed in {incoming_format}."));
     }
     let (mut registrations, storage_layout) = project.registry()?;
     if !output_recipes.is_empty() {
@@ -662,27 +669,27 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PIN_FUNCTION_LOCK_PROJECT_FORMAT
     ) || registered != project.boards.is_some()
     {
-        return Err(format!("{ENTRY_POINT}: unsupported project format {}", project.format));
+        return Err(format!("{ENTRY_POINT}: unsupported project format or incompatible board registration for {incoming_format}."));
     }
     if !occurrences && project.schematic_instances.is_some() {
-        return Err("schematic_instances requires project format 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56".into());
+        return Err(format!("{ENTRY_POINT}: schematic_instances is not allowed in {incoming_format}."));
     }
-    if (!foldered && !part_format && (project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT) != schematic_packages)
-        || (schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()))
-        || project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS)
-    {
-        return Err(
-            "project footprint choices require format 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56, no board and a nonempty bounded list"
-                .into(),
-        );
+    if !foldered && !part_format {
+        check_project_field(&incoming_format, "footprint_choices", project.format == SCHEMATIC_PACKAGES_PROJECT_FORMAT, schematic_packages)?;
+    }
+    if project.footprint_choices.as_ref().is_some_and(|choices| choices.is_empty() || choices.len() > MAX_SYMBOLS) {
+        return Err(format!("{ENTRY_POINT}: footprint_choices must contain 1 to {MAX_SYMBOLS} entries in {incoming_format}."));
+    }
+    if schematic_packages && !project.boards.as_ref().is_some_and(|items| items.is_empty()) {
+        return Err(format!("{ENTRY_POINT}: footprint_choices require an empty boards list in {incoming_format}."));
     }
     if !part_format && project.components.iter().any(|component| component.part.is_some()) {
-        return Err("Pinned part selections require project format 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56.".into());
+        return Err(format!("{ENTRY_POINT}: pinned part selections are not allowed in {incoming_format}."));
     }
     if !fields && project.components.iter().any(|component| component.metadata.is_some()) {
-        return Err("component metadata requires project format 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56".into());
+        return Err(format!("{ENTRY_POINT}: component metadata is not allowed in {incoming_format}."));
     }
-    if matches!(
+    let requires_watermark = matches!(
         project.format.as_str(),
         WATERMARK_PROJECT_FORMAT
             | OPTIONAL_BOARD_PROJECT_FORMAT
@@ -704,17 +711,13 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | PAIR_PROJECT_FORMAT
             | PIN_FUNCTION_PROJECT_FORMAT
             | PIN_FUNCTION_LOCK_PROJECT_FORMAT
-    ) != project.numeric_id_high_water.is_some()
-    {
-        return Err(format!(
-            "{ENTRY_POINT}: numeric ID watermark requires project format 7, 9, 11, 12, 13, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56"
-        ));
-    }
+    );
+    check_project_field(&incoming_format, "numeric_id_high_water", requires_watermark, project.numeric_id_high_water.is_some())?;
     if project.sheets.is_empty()
         || project.sheets.len() > crate::sheets::MAX_SHEETS
         || (project.format == PREVIOUS_PROJECT_FORMAT && project.sheets.len() != 1)
     {
-        return Err(format!("{ENTRY_POINT}: invalid sheet count for {}", project.format));
+        return Err(format!("{ENTRY_POINT}: invalid sheet count for {incoming_format}."));
     }
     let mut sheet_ids = BTreeSet::from([project.id]);
     let mut sheet_names = BTreeSet::new();
@@ -785,7 +788,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 )
             }
             (None, Some(records)) if !supports_part_groups && records.part_group_memberships.is_some() => {
-                return Err("Part-group memberships require project format 24, 36, 39, 45, 48, 51 or 56.".into());
+                return Err(format!("{ENTRY_POINT}: part_group_memberships is not allowed in {incoming_format}."));
             }
             (None, Some(records)) => {
                 if optional_part_groups {
@@ -800,20 +803,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     };
     let has_bindings =
         instance_records.as_ref().and_then(|records| records.net_registry.as_ref()).is_some_and(crate::nets::Registry::has_class_bindings);
-    if (!parameter_format && !superset_format && binding_format != has_bindings)
-        || ((parameter_format || superset_format) && has_bindings && net_classes.is_none())
-    {
-        return Err("Net class assignments require project format 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 with a net-class catalog and a compatible instance format when board-owned; project format 21 requires nonempty assignments.".into());
+    if !parameter_format && !superset_format {
+        check_project_field(&incoming_format, "net class assignments", binding_format, has_bindings)?;
+    } else if has_bindings && net_classes.is_none() {
+        return Err(format!("{ENTRY_POINT}: net class assignments require a net-class catalog in {incoming_format}."));
     }
     let stored_registry = instance_records.as_ref().and_then(|records| records.net_registry.as_ref());
     if !supports_appearance && stored_registry.is_some_and(crate::nets::Registry::has_appearance) {
         return Err("Net wire appearance requires project format 68, 63 or legacy format 52.".into());
     }
-    if !lock_format && !recipe_format && !pin_function_format && pair_format != stored_registry.is_some_and(crate::nets::Registry::has_pairs) {
-        return Err(
-            "Differential pairs require project format 45, 48, 51 or 56 and a compatible instance format when board-owned; the pair envelope requires a nonempty pair list (project format 45)."
-                .into(),
-        );
+    if !lock_format && !recipe_format && !pin_function_format {
+        check_project_field(&incoming_format, "differential pairs", pair_format, stored_registry.is_some_and(crate::nets::Registry::has_pairs))?;
     }
     // The project envelope versions authored net and class intent, including fields nested
     // inside the project-owned net-classes/1 catalog. Older projects cannot carry them.
@@ -823,21 +823,17 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         return Err(format!("Authored electrical intent requires {CURRENT_PROJECT_FORMAT}."));
     }
     let has_numbers = stored_registry.is_some_and(crate::nets::Registry::has_generated_numbers);
-    if (!supports_part_groups && generated_net_format != has_numbers)
-        || (superset_format
-            && has_numbers
-            && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none())))
-    {
-        return Err(
-            "Generated net numbers require project format 23, 24, 36, 39, 45, 48, 51 or 56 and a compatible instance format when board-owned, with a number on every record."
-                .into(),
-        );
+    if !supports_part_groups {
+        check_project_field(&incoming_format, "generated net numbers", generated_net_format, has_numbers)?;
     }
-    if !no_connect_format && net_format != instance_records.as_ref().is_some_and(|records| records.net_registry.is_some()) {
-        return Err(
-            "Net registry records require project format 17, 19, 20, 21, 22, 23, 24, 36, 39, 45, 48, 51 or 56 and the corresponding instance vocabulary."
-                .into(),
-        );
+    if superset_format
+        && has_numbers
+        && stored_registry.is_some_and(|registry| registry.records.iter().any(|record| record.generated_number.is_none()))
+    {
+        return Err(format!("{ENTRY_POINT}: a numbered net registry must specify generated_number on every record in {incoming_format}."));
+    }
+    if !no_connect_format {
+        check_project_field(&incoming_format, "net_registry", net_format, stored_registry.is_some())?;
     }
     let mut layouts = Vec::new();
     let mut hierarchy_ids = BTreeSet::new();
@@ -1469,7 +1465,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
                 return Err(format!("{path}: saved symbol identity does not match its file name"));
             }
             if !pin_function_format && definition.format() == crate::library::SYMBOL_FORMAT_V5 {
-                return Err(format!("{path}: alternate-capable symbol definitions require project format 48 or 56"));
+                return Err(format!("{path}: alternate-capable symbol definitions are not allowed in {incoming_format}."));
             }
             symbol_copies.insert((definition.library.clone(), definition.id.clone(), definition.revision()), definition);
             definitions.push(value);
@@ -1742,6 +1738,15 @@ pub(super) fn check_documents(documents: &Documents) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Report required or forbidden fields using the incoming envelope, not its layout alias.
+fn check_project_field(format: &str, field: &str, required: bool, present: bool) -> Result<(), String> {
+    match (required, present) {
+        (true, false) => Err(format!("{ENTRY_POINT}: {format} requires {field}.")),
+        (false, true) => Err(format!("{ENTRY_POINT}: {field} not allowed in {format}.")),
+        _ => Ok(()),
+    }
 }
 
 /// Parse a required document and keep its filename in syntax and schema errors.

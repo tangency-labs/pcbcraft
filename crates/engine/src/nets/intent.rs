@@ -292,7 +292,7 @@ impl ExactDecimal {
 }
 
 impl IntentV1 {
-    /// Empty intent selects the old native vocabulary; explicit zero is not empty.
+    /// Empty intent is omitted from native storage; explicit zero is not empty.
     pub(crate) fn is_empty(&self) -> bool {
         self.voltage.is_none()
     }
