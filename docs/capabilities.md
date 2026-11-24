@@ -215,8 +215,8 @@ strokes through saves and clipboard operations. Silkscreen, mask and paste
 artwork is included in the matching fabrication layer; documentation-layer
 graphics remain native board content. [Gerber X2 copper exports](editor-guide.md#pcb-layout)
 include net and component ownership attributes and identify pins on outer copper.
-The Gerber profile plots each closed Board Outline path once as a closed loop;
-open outline paths are plotted as drawn, without the Profile function.
+The Gerber profile plots each closed Board Outline path as a separate loop,
+including cutouts. Export omits open outline paths.
 For exported pads, Gerber retains C flashes for round pads. R/O flashes require individually quarter-turn library and placement rotations
 and nondegenerate resolved axis rectangles; R also requires a midpoint at the integer pad
 center, and O requires matching width/height parity for integral capsule endpoints. Other

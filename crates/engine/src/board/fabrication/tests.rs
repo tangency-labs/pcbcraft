@@ -2143,27 +2143,23 @@ fn outputs_require_setup_and_a_closed_outline() {
     assert!(error.contains("closed Board Outline"), "{error}");
 }
 
-/// Ucamco Gerber 2026.05 §§5.6.10 and 6.5: a disconnected line is not the physical profile.
-/// Preserve the existing line and loop coordinates but separate the same-width apertures.
+/// Open outline artwork stays in the board document while export uses the closed profile.
 #[test]
-fn only_the_closed_outline_drawing_gets_the_profile_function() {
+fn fabrication_omits_open_outline_artwork_from_the_profile_file() {
+    use crate::persistence::encode_documents;
+
     let mut s = routed_fixture();
     outline(&mut s);
-    let layer = view(&s).layers().into_iter().find(|layer| layer.purpose == LayerPurpose::Outline).unwrap().id;
+    let original = view(&s).fabrication_outputs().unwrap();
     let stray = [Point { x_nm: 30_000_000, y_nm: 0 }, Point { x_nm: 35_000_000, y_nm: 0 }];
-    s.apply(crate::ADD_DRAWING, &json!({"layer":layer,"points":stray,"closed":false,"expected_revision":s.revision()})).unwrap();
+    add_fabrication_drawing(&mut s, LayerPurpose::Outline, &stray, false);
+    assert!(view(&s).drawings().iter().any(|drawing| !drawing.closed && drawing.points == stray));
+    let revision = s.revision();
+    let saved = encode_documents(s.snapshot().unwrap()).unwrap();
     let outputs = view(&s).fabrication_outputs().unwrap();
-    let read = read_gerber(&outputs, ("-Outline.gbr", "Profile,NP", "Positive"));
-    let profile = ReadAperture { kind: 'C', width: 100_000, height: 100_000, function: Some("Profile") };
-    let loop_points =
-        [(-5_000_000, 5_000_000), (25_000_000, 5_000_000), (25_000_000, -35_000_000), (-5_000_000, -35_000_000), (-5_000_000, 5_000_000)]
-            .map(|(x_nm, y_nm)| Point { x_nm, y_nm });
-    let expected: Vec<_> = loop_points.windows(2).map(|pair| (pair[0], pair[1], profile)).collect();
-    let (tagged, untagged): (Vec<_>, Vec<_>) = read.strokes.into_iter().partition(|(_, _, aperture)| aperture.function.is_some());
-    assert_eq!(read.apertures.len(), 2);
-    assert!(read.flashes.is_empty() && read.regions.is_empty());
-    assert_eq!(tagged, expected);
-    assert_eq!(untagged, [(stray[0], stray[1], ReadAperture { function: None, ..profile })]);
+    assert_eq!(file(&outputs, "-Outline.gbr"), file(&original, "-Outline.gbr"));
+    assert_eq!(s.revision(), revision);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }
 
 /// Add an open or closed path through the shared drawing command, not by mutating a test board.
@@ -2173,10 +2169,9 @@ fn add_fabrication_drawing(s: &mut Session, purpose: LayerPurpose, points: &[Poi
         .unwrap();
 }
 
-/// An open path alone is not a board edge: export stays unavailable and leaves no undo step.
-/// Once a loop is closed, the open path is plotted as drawn, without the Profile function.
+/// Refuse export on a board with only an almost closed path and preserve its undo history.
 #[test]
-fn fabrication_requires_a_closed_loop_and_plots_open_outline_paths_as_drawn() {
+fn fabrication_requires_a_closed_outline_loop() {
     use crate::persistence::encode_documents;
 
     let mut s = routed_fixture();
@@ -2200,17 +2195,7 @@ fn fabrication_requires_a_closed_loop_and_plots_open_outline_paths_as_drawn() {
     s.apply("edit.undo", &json!({})).unwrap();
     assert_eq!(view(&s).drawings().len(), drawings);
     s.apply("edit.redo", &json!({})).unwrap();
-
-    outline(&mut s);
-    let outputs = view(&s).fabrication_outputs().unwrap();
-    let read = read_gerber(&outputs, ("-Outline.gbr", "Profile,NP", "Positive"));
-    let profile = ReadAperture { kind: 'C', width: 100_000, height: 100_000, function: Some("Profile") };
-    let untagged = ReadAperture { function: None, ..profile };
-    let (tagged, plain): (Vec<_>, Vec<_>) = read.strokes.into_iter().partition(|(_, _, aperture)| aperture.function.is_some());
-    assert_eq!(tagged.len(), 4);
-    assert!(tagged.iter().all(|&(_, _, aperture)| aperture == profile));
-    let drawn: Vec<_> = open.map(|point| Point { x_nm: point.x_nm, y_nm: -point.y_nm }).windows(2).map(|pair| (pair[0], pair[1], untagged)).collect();
-    assert_eq!(plain, drawn);
+    assert_eq!(encode_documents(s.snapshot().unwrap()).unwrap(), saved);
 }
 
 /// Read the profile's exact move and draw sequence at its existing nanometre resolution.

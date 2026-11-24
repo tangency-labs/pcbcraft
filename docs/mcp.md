@@ -557,8 +557,8 @@ and `fabrication.origin`, the placement origin used for coordinates in the gener
 files: Gerber X2 copper per layer, mask, paste and silkscreen for both sides, and the
 outline, plus one Excellon plated drill file. Boards with placed circular non-plated
 holes also get a separate non-plated drill file. Export requires a board setup, a
-resolvable placement origin, and at least one closed Board Outline loop. Open Board
-Outline paths are exported as drawn, without the Profile function. Boards with copper
+resolvable placement origin, and at least one closed Board Outline loop. The Gerber
+profile includes the closed loops and omits open outline paths. Boards with copper
 zones or non-plated holes whose diameters round to zero in the drill file are refused
 before any output is returned.
 File names are deterministic and unique after portable-name sanitization,
