@@ -93,6 +93,8 @@ const LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/34";
 const ARC_LOCKED_FOOTPRINT_BOARD_FORMAT: &str = "pcbcraft-board/35";
 const TEARDROP_BOARD_FORMAT: &str = "pcbcraft-board/37";
 const GROUP_BOARD_FORMAT: &str = "pcbcraft-board/41";
+/// Current board write format, with an optional setup and optional authored records.
+pub const CURRENT_BOARD_FORMAT: &str = "pcbcraft-board/42";
 const PROFILE_BOARD_FORMAT: &str = "pcbcraft-board/22";
 const STACK_BOARD_FORMAT: &str = "pcbcraft-board/23";
 const REPORT_BOARD_FORMAT: &str = "pcbcraft-board/25";
@@ -988,24 +990,24 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         }
     };
 
-    // Format 12 carries tracks only, as first released; format 13 adds vias, with tracks optional;
-    // format 14 adds bottom-side footprints, and format 15 adds reference placement and print overrides. Each may carry every
-    // earlier field. Empty arrays are never written, so they are refused.
+    // Current boards use one record vocabulary. The older headers still require or forbid
+    // particular records, while all versions share the record and geometry validators.
+    let current = board.format == CURRENT_BOARD_FORMAT;
     let grouped = board.format == GROUP_BOARD_FORMAT;
     let with_teardrops = board.format == TEARDROP_BOARD_FORMAT;
-    if (!grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
+    if (!current && !grouped && with_teardrops != board.teardrops.is_some()) || board.teardrops.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: teardrops require board format 37 or 41 and a nonempty array".into());
     }
     let arc_and_footprint_lock_format = board.format == ARC_LOCKED_FOOTPRINT_BOARD_FORMAT;
     let curved = board.format == ARC_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if (!grouped && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
+    if (!current && !grouped && curved != board.arcs.is_some()) || board.arcs.as_ref().is_some_and(Vec::is_empty) {
         return Err("board.json: arcs require format 26 or 35 and a nonempty array; format 26 requires arcs, as does format 35.".into());
     }
     let footprint_locks = board.format == LOCKED_FOOTPRINT_BOARD_FORMAT || arc_and_footprint_lock_format;
-    if !grouped && !with_teardrops && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
+    if !current && !grouped && !with_teardrops && footprint_locks != board.footprints.iter().any(|footprint| footprint.locked) {
         return Err("board.json: footprint locks require board format 34 or 35; each requires an authored footprint lock.".into());
     }
-    let extended_board_format = grouped || curved || footprint_locks || with_teardrops;
+    let extended_board_format = current || grouped || curved || footprint_locks || with_teardrops;
     let reported = board.format == REPORT_BOARD_FORMAT;
     let assigned_vias = board.format == ASSIGNED_VIA_BOARD_FORMAT;
     let has_assigned_vias = board.vias.as_ref().is_some_and(|vias| vias.iter().any(|via| via.net_assignment.is_some()));
@@ -1086,7 +1088,8 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     let sided = board.format == SIDE_BOARD_FORMAT;
     let references = board.format == REFERENCE_BOARD_FORMAT;
-    let tracked = with_teardrops
+    let tracked = current
+        || with_teardrops
         || matches!(
             board.format.as_str(),
             TRACK_BOARD_FORMAT
@@ -1113,6 +1116,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     if (board.format == VIA_BOARD_FORMAT && board.vias.is_none())
         || (board.vias.is_some()
+            && !current
             && !with_teardrops
             && !matches!(
                 board.format.as_str(),
@@ -1162,20 +1166,20 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             return Err("board.json: accepted baseline has a foreign project owner".into());
         }
     }
-    // Apply the same physical-membership rule as the encoder before constructing
-    // Project. Excluded choices remain validated authored intent below, but do not
-    // require the pending-physical-package format guard.
-    let eligible: BTreeSet<_> = project
-        .components
-        .iter()
-        .filter(|component| !component.metadata.as_ref().is_some_and(|metadata| metadata.attributes.exclude_from_board))
-        .map(|component| component.id)
-        .collect();
-    let pending_intent = board.baseline.as_ref().is_some_and(|baseline| {
-        board.assignments.iter().flatten().any(|assignment| eligible.contains(&assignment.component) && !baseline.validate_assignment(assignment))
-    });
-    if !tracked && (board.format == INTENT_BOARD_FORMAT) != pending_intent {
-        return Err("board.json: pending desired packages require board format 11".into());
+    // Historical headers distinguish pending intent only for physically eligible parts.
+    if !tracked {
+        let eligible: BTreeSet<_> = project
+            .components
+            .iter()
+            .filter(|component| !component.metadata.as_ref().is_some_and(|metadata| metadata.attributes.exclude_from_board))
+            .map(|component| component.id)
+            .collect();
+        let pending_intent = board.baseline.as_ref().is_some_and(|baseline| {
+            board.assignments.iter().flatten().any(|assignment| eligible.contains(&assignment.component) && !baseline.validate_assignment(assignment))
+        });
+        if (board.format == INTENT_BOARD_FORMAT) != pending_intent {
+            return Err("board.json: pending desired packages require board format 11".into());
+        }
     }
     if board.format != ROTATED_BOARD_FORMAT
         && board.format != PHYSICAL_BOARD_FORMAT
@@ -1227,38 +1231,41 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
             | LOCKED_FOOTPRINT_BOARD_FORMAT
             | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
             | GROUP_BOARD_FORMAT
-    ) && !with_teardrops
+    ) && !current
+        && !with_teardrops
         && (board.format == SILKSCREEN_BOARD_FORMAT) != board.silkscreen.is_some()
     {
         return Err("board.json: explicit silkscreen settings require board format 6".into());
     }
     if (board.format == ASSIGNED_BOARD_FORMAT && board.assignments.is_none())
-        || (!matches!(
-            board.format.as_str(),
-            ASSIGNED_BOARD_FORMAT
-                | OUTLINE_BOARD_FORMAT
-                | DRAWING_BOARD_FORMAT
-                | BASELINE_BOARD_FORMAT
-                | INTENT_BOARD_FORMAT
-                | TRACK_BOARD_FORMAT
-                | VIA_BOARD_FORMAT
-                | SIDE_BOARD_FORMAT
-                | REFERENCE_BOARD_FORMAT
-                | STROKED_BOARD_FORMAT
-                | MULTIPAD_BOARD_FORMAT
-                | LOCKED_COPPER_BOARD_FORMAT
-                | RULES_BOARD_FORMAT
-                | ASSIGNED_VIA_BOARD_FORMAT
-                | ORIGIN_BOARD_FORMAT
-                | PROFILE_BOARD_FORMAT
-                | STACK_BOARD_FORMAT
-                | REPORT_BOARD_FORMAT
-                | ZONE_BOARD_FORMAT
-                | ARC_BOARD_FORMAT
-                | LOCKED_FOOTPRINT_BOARD_FORMAT
-                | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
-                | GROUP_BOARD_FORMAT
-        ) && !with_teardrops
+        || (!current
+            && !matches!(
+                board.format.as_str(),
+                ASSIGNED_BOARD_FORMAT
+                    | OUTLINE_BOARD_FORMAT
+                    | DRAWING_BOARD_FORMAT
+                    | BASELINE_BOARD_FORMAT
+                    | INTENT_BOARD_FORMAT
+                    | TRACK_BOARD_FORMAT
+                    | VIA_BOARD_FORMAT
+                    | SIDE_BOARD_FORMAT
+                    | REFERENCE_BOARD_FORMAT
+                    | STROKED_BOARD_FORMAT
+                    | MULTIPAD_BOARD_FORMAT
+                    | LOCKED_COPPER_BOARD_FORMAT
+                    | RULES_BOARD_FORMAT
+                    | ASSIGNED_VIA_BOARD_FORMAT
+                    | ORIGIN_BOARD_FORMAT
+                    | PROFILE_BOARD_FORMAT
+                    | STACK_BOARD_FORMAT
+                    | REPORT_BOARD_FORMAT
+                    | ZONE_BOARD_FORMAT
+                    | ARC_BOARD_FORMAT
+                    | LOCKED_FOOTPRINT_BOARD_FORMAT
+                    | ARC_LOCKED_FOOTPRINT_BOARD_FORMAT
+                    | GROUP_BOARD_FORMAT
+            )
+            && !with_teardrops
             && board.assignments.is_some())
         || board.assignments.as_ref().is_some_and(|a| a.is_empty() || a.len() > MAX_SYMBOLS)
     {
@@ -1278,12 +1285,18 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
     }
     if !grouped && let Some(raw) = &board.setup {
         let value: serde_json::Value = serde_json::from_str(raw.get()).map_err(|error| format!("board.json: {error}"))?;
-        if value["stackup"].get("layer_groups").is_some() {
-            return Err("board.json: the layer_groups field requires board format 41.".into());
+        if let Some(groups) = value["stackup"].get("layer_groups") {
+            if !current {
+                return Err("board.json: the layer_groups field requires board format 41.".into());
+            }
+            if groups.as_array().is_some_and(Vec::is_empty) {
+                return Err("board.json: layer_groups must be omitted when empty.".into());
+            }
         }
     }
     let setup = match (board.format.as_str(), board.setup) {
-        (GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (CURRENT_BOARD_FORMAT | GROUP_BOARD_FORMAT, Some(value)) => Some(decode_setup(&value, false)?),
+        (CURRENT_BOARD_FORMAT, None) => None,
         (
             ARC_BOARD_FORMAT
             | LOCKED_FOOTPRINT_BOARD_FORMAT
@@ -1345,7 +1358,7 @@ pub fn decode_documents(documents: &Documents) -> Result<Arc<Project>, String> {
         _ => return Err(format!("board.json: unsupported board format or incompatible setup: {}", board.format)),
     };
     let has_groups = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_group_format);
-    if grouped != has_groups {
+    if !current && grouped != has_groups {
         return Err("board.json: named layer groups require board format 41, which requires at least one group.".into());
     }
     let material_reports = setup.as_ref().is_some_and(crate::board::setup::BoardSetup::requires_report_format);
@@ -1744,7 +1757,7 @@ pub struct DocumentsEncoder {
     sheet_mirrored: bool,
     sheet_wire_index: BTreeMap<u64, usize>,
     live_generated_legs: Vec<usize>,
-    board_facts: BoardFacts,
+    board_checks: BoardChecks,
     baseline_encoding: crate::board::update::BaselineEncoding,
     net_record_encoding: crate::nets::RecordEncoding,
     registry_validation: crate::nets::RegistryValidation,
@@ -1796,7 +1809,7 @@ impl DocumentsEncoder {
             sheet_mirrored: false,
             sheet_wire_index: BTreeMap::new(),
             live_generated_legs: Vec::new(),
-            board_facts: BoardFacts::default(),
+            board_checks: BoardChecks::default(),
             baseline_encoding: crate::board::update::BaselineEncoding::default(),
             net_record_encoding: crate::nets::RecordEncoding::default(),
             registry_validation: crate::nets::RegistryValidation::default(),
@@ -2345,8 +2358,8 @@ impl DocumentsEncoder {
                     }
                 }
                 31 => {
-                    if self.board_facts.step(&self.project)? {
-                        board_metadata_header(&mut self.bytes, &self.project, &self.board_facts)?;
+                    if self.board_checks.step(&self.project)? {
+                        board_metadata_header(&mut self.bytes, &self.project)?;
                         if self.project.board.baseline.is_some() {
                             self.bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
                         }
@@ -2662,9 +2675,9 @@ impl Write for BoardByteCounter {
 /// maps. Use the native writer's header, record framing, serialized fields and closing bytes.
 pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String> {
     let mut bytes = BoardByteCounter::default();
-    let mut facts = BoardFacts::default();
-    while !facts.step(project)? {}
-    board_metadata_header(&mut bytes, project, &facts)?;
+    let mut checks = BoardChecks::default();
+    while !checks.step(project)? {}
+    board_metadata_header(&mut bytes, project)?;
     if let Some(baseline) = &project.board.baseline {
         bytes.write_all(b"  \"baseline\": ").map_err(|error| error.to_string())?;
         let mut encoding = crate::board::update::BaselineEncoding::default();
@@ -2691,91 +2704,13 @@ pub(crate) fn check_board_document_size(project: &Project) -> Result<(), String>
     bytes.write_all(DOCUMENT_END).map_err(|error| error.to_string())
 }
 
-/// Preserve canonical legacy encodings until authored content requires a newer format. Named
-/// layer groups select 41; straight-via teardrop intents select 37, which retains active
-/// footprint locks; arcs alone select 26, active footprint locks alone select 34, and both
-/// together select 35. These formats retain earlier physical fields. Material reports require at
-/// least 25; explicit via intent at least 24; copper roles, base copper, copper thickness
-/// qualifiers or finished board thickness at least 23; assembly profile adoptions at least 22; a
-/// placement origin at least 21; zone outlines at least 20; validated board rules at least 19; and
-/// authored copper locks at least 18. Earlier extensions remain subject to their own
-/// prerequisites. Independent assignments use version 7, earlier local rectangles version 8, layer
-/// graphics version 9, explicitly enabled accepted baselines version 10, pending desired package
-/// choices version 11, copper tracks version 12, vias version 13, bottom-side footprints version
-/// 14, and reference placement/print overrides version 15. Versions 12 to 15 are supersets: each
-/// may carry any earlier field, so routing or flipping never drops baseline or intent data.
-/// Version 12 stays tracks-only and 13 has no bottom-side parts, so their released readers keep
-/// working.
-fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &BoardFacts) -> Result<(), String> {
+/// Emit the current header for folder saves, packed saves and board size preflight. Zone, arc
+/// and teardrop checks ran in the preceding metered passes; optional records are omitted when absent.
+fn board_metadata_header(bytes: &mut impl Write, project: &Project) -> Result<(), String> {
     let board = &project.board;
-    let setup = board.setup.as_ref();
-    let silkscreen = board.silkscreen.as_ref();
-    let outline = board.outline.as_ref();
-    let assignments = !board.assignments.is_empty();
-    let physical = !board.definitions.is_empty();
-    let arc_or_lock_format = match (!board.arcs.is_empty(), facts.footprint_lock) {
-        (true, true) => Some(ARC_LOCKED_FOOTPRINT_BOARD_FORMAT),
-        (true, false) => Some(ARC_BOARD_FORMAT),
-        (false, true) => Some(LOCKED_FOOTPRINT_BOARD_FORMAT),
-        (false, false) => None,
-    };
-    let format = if setup.is_some_and(|setup| setup.requires_group_format()) {
-        GROUP_BOARD_FORMAT
-    } else if !board.teardrops.is_empty() {
-        TEARDROP_BOARD_FORMAT
-    } else if let Some(format) = arc_or_lock_format {
-        format
-    } else if setup.is_some_and(|setup| setup.requires_report_format()) {
-        REPORT_BOARD_FORMAT
-    } else if facts.assigned_via {
-        ASSIGNED_VIA_BOARD_FORMAT
-    } else if setup.is_some_and(|setup| setup.requires_stack_format()) {
-        STACK_BOARD_FORMAT
-    } else if !board.assembly_profiles.is_empty() {
-        PROFILE_BOARD_FORMAT
-    } else if board.placement_origin.is_some() {
-        ORIGIN_BOARD_FORMAT
-    } else if !board.zones.is_empty() {
-        ZONE_BOARD_FORMAT
-    } else if board.rules.is_some() {
-        RULES_BOARD_FORMAT
-    } else if facts.copper_lock {
-        LOCKED_COPPER_BOARD_FORMAT
-    } else if facts.extended {
-        MULTIPAD_BOARD_FORMAT
-    } else if facts.stroked {
-        STROKED_BOARD_FORMAT
-    } else if facts.references {
-        REFERENCE_BOARD_FORMAT
-    } else if facts.bottom {
-        SIDE_BOARD_FORMAT
-    } else if !board.vias.is_empty() {
-        VIA_BOARD_FORMAT
-    } else if !board.tracks.is_empty() {
-        TRACK_BOARD_FORMAT
-    } else if facts.pending {
-        INTENT_BOARD_FORMAT
-    } else if board.baseline.is_some() {
-        BASELINE_BOARD_FORMAT
-    } else if board.drawings.is_some() {
-        DRAWING_BOARD_FORMAT
-    } else if outline.is_some() {
-        OUTLINE_BOARD_FORMAT
-    } else if assignments {
-        ASSIGNED_BOARD_FORMAT
-    } else if silkscreen.is_some() {
-        SILKSCREEN_BOARD_FORMAT
-    } else if physical {
-        PHYSICAL_BOARD_FORMAT
-    } else if facts.rotated {
-        ROTATED_BOARD_FORMAT
-    } else if let Some(setup) = setup {
-        if setup.requires_material_format() { MATERIAL_BOARD_FORMAT } else { CONFIGURED_BOARD_FORMAT }
-    } else {
-        BOARD_FORMAT
-    };
-    if let Some(setup) = setup {
-        bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n  \"setup\": {{\n").as_bytes()).map_err(|error| error.to_string())?;
+    write!(bytes, "{{\n  \"format\": \"{CURRENT_BOARD_FORMAT}\",\n").map_err(|error| error.to_string())?;
+    if let Some(setup) = &board.setup {
+        bytes.write_all(b"  \"setup\": {\n").map_err(|error| error.to_string())?;
         if !setup.materials().is_empty() {
             bytes.write_all(b"    \"materials\": [\n").map_err(|error| error.to_string())?;
             let mut first = true;
@@ -2814,8 +2749,6 @@ fn board_metadata_header(bytes: &mut impl Write, project: &Project, facts: &Boar
             }
         }
         bytes.write_all(b"\n    }\n  },\n").map_err(|error| error.to_string())?;
-    } else {
-        bytes.write_all(format!("{{\n  \"format\": \"{format}\",\n").as_bytes()).map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -2843,33 +2776,19 @@ fn board_metadata_tail(bytes: &mut impl Write, project: &Project) -> Result<(), 
     Ok(())
 }
 
-/// Select the native header without visiting all board records in one encoder step. The
-/// membership sets also validate zone and arc ownership before emitting their native rows.
+/// Check zone, arc and teardrop ownership before the header without visiting all board
+/// records in one encoder step.
 #[derive(Default)]
-struct BoardFacts {
+struct BoardChecks {
     phase: u8,
     index: usize,
-    key: u64,
     zones: crate::board::zones::ZoneValidation,
     copper_ids: BTreeSet<uuid::Uuid>,
     teardrop_sites: BTreeSet<(uuid::Uuid, uuid::Uuid)>,
-    assigned_via: bool,
-    footprint_lock: bool,
-    copper_lock: bool,
-    extended: bool,
-    references: bool,
-    rotated: bool,
-    bottom: bool,
-    pending: bool,
-    stroked: bool,
-    #[cfg(test)]
-    pending_checks: usize,
-    #[cfg(test)]
-    extended_checks: usize,
 }
 
-impl BoardFacts {
-    /// Collect one authored format flag or check one row's board ownership and validity.
+impl BoardChecks {
+    /// Check one row's board ownership and validity, or release one membership entry.
     fn step(&mut self, project: &Project) -> Result<bool, String> {
         let board = &project.board;
         match self.phase {
@@ -2890,7 +2809,6 @@ impl BoardFacts {
             }
             2 => {
                 if let Some(track) = board.tracks.get(self.index) {
-                    self.copper_lock |= track.locked;
                     if !board.arcs.is_empty() || !board.teardrops.is_empty() {
                         self.copper_ids.insert(track.id);
                     }
@@ -2901,8 +2819,6 @@ impl BoardFacts {
             }
             3 => {
                 if let Some(via) = board.vias.get(self.index) {
-                    self.copper_lock |= via.locked;
-                    self.assigned_via |= via.net_assignment.is_some();
                     if !board.arcs.is_empty() || !board.teardrops.is_empty() {
                         self.copper_ids.insert(via.id);
                     }
@@ -2946,78 +2862,10 @@ impl BoardFacts {
             }
             6 => {
                 if self.copper_ids.pop_first().is_none() && self.teardrop_sites.pop_first().is_none() {
-                    self.advance();
-                }
-            }
-            7 => {
-                if let Some(footprint) = board.footprints().get(self.index) {
-                    self.rotated |= footprint.rotation != 0;
-                    self.references |= footprint.reference_offset.is_some() || footprint.reference_text.is_some();
-                    if !self.extended {
-                        #[cfg(test)]
-                        {
-                            self.extended_checks += 1;
-                        }
-                        self.extended = footprint
-                            .mapping
-                            .as_ref()
-                            .is_some_and(|mapping| crate::library::parts::mapping::extended(mapping, &footprint.unconnected_pads));
-                    }
-                    self.footprint_lock |= footprint.locked;
-                    self.bottom |= footprint.bottom;
-                    self.index += 1;
-                } else {
-                    self.advance();
-                }
-            }
-            8 => {
-                if let Some((&id, assignment)) = board.assignments.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next() {
-                    if !self.extended {
-                        #[cfg(test)]
-                        {
-                            self.extended_checks += 1;
-                        }
-                        self.extended = crate::library::parts::mapping::extended(&assignment.mapping, &assignment.unconnected_pads);
-                    }
-                    if !self.pending && board.tracks.is_empty() && board.vias.is_empty() {
-                        #[cfg(test)]
-                        {
-                            self.pending_checks += 1;
-                        }
-                        self.pending = board.has_pending_assignment(project, assignment);
-                    }
-                    self.key = id;
-                } else {
-                    self.advance();
-                }
-            }
-            9 => {
-                let next = board
-                    .baseline
-                    .as_ref()
-                    .and_then(|baseline| baseline.components.range((std::ops::Bound::Excluded(self.key), std::ops::Bound::Unbounded)).next());
-                if let Some((&id, component)) = next {
-                    if !self.extended {
-                        #[cfg(test)]
-                        {
-                            self.extended_checks += 1;
-                        }
-                        self.extended = component.package.as_ref().is_some_and(|package| package.extended());
-                    }
-                    self.key = id;
-                } else {
-                    self.advance();
-                }
-            }
-            10 => {
-                if let Some(item) = board.drawings.as_ref().and_then(|drawing| drawing.items.get(self.index)) {
-                    self.stroked |= item.stroke_nm.is_some();
-                    self.index += 1;
-                } else {
                     return Ok(true);
                 }
             }
-            _ => return Err("Unexpected board format phase.".into()),
+            _ => return Err("Unexpected board check phase.".into()),
         }
         Ok(false)
     }
@@ -3025,7 +2873,6 @@ impl BoardFacts {
     fn advance(&mut self) {
         self.phase += 1;
         self.index = 0;
-        self.key = 0;
     }
 }
 
@@ -3216,212 +3063,5 @@ fn sheet_header(bytes: &mut Vec<u8>, sheet: &crate::sheets::SchematicSheet, fiel
     } else {
         bytes.extend_from_slice(b"  \"symbols\": [\n");
         Ok(4)
-    }
-}
-
-#[cfg(test)]
-mod board_facts_tests {
-    use serde_json::{Value, json};
-
-    use super::{BoardFacts, Project};
-    use crate::{
-        ADD_TRACKS, ADD_VIA, APPLY_UPDATE, ASSIGN_FOOTPRINT, INITIALIZE_BOARD_SETUP, INITIALIZE_UPDATE_BASELINE, PLACE_ASSIGNED_FOOTPRINT,
-        PLACE_RESISTOR, PREVIEW_UPDATE, Session, board::setup::LayerPurpose,
-    };
-
-    fn apply(session: &mut Session, command: &str, mut params: Value) {
-        params["expected_revision"] = json!(session.revision());
-        session.apply(command, &params).unwrap();
-    }
-
-    fn scan(project: &Project) -> BoardFacts {
-        let mut facts = BoardFacts::default();
-        while !facts.step(project).unwrap() {}
-        facts
-    }
-
-    fn two_pending_assignments() -> (Session, u64, u64) {
-        let mut session = Session::default();
-        session.apply("project.new", &json!({"name": "BoardFacts pending scan", "create_board": true})).unwrap();
-        apply(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers": 2}));
-        apply(&mut session, INITIALIZE_UPDATE_BASELINE, json!({}));
-        apply(&mut session, PLACE_RESISTOR, json!({"x_nm": 0, "y_nm": 0}));
-        apply(&mut session, PLACE_RESISTOR, json!({"x_nm": 10_000_000, "y_nm": 0}));
-        let ids: Vec<u64> = session.project().unwrap().components.keys().copied().collect();
-        assert_eq!(ids.len(), 2);
-        let definition = crate::board::definition::basic_components("resistor-0402").unwrap();
-        for &id in &ids {
-            apply(
-                &mut session,
-                ASSIGN_FOOTPRINT,
-                json!({
-                    "component": format!("component-{id}"),
-                    "library": definition.library,
-                    "definition": definition.id,
-                    "definition_revision": definition.revision,
-                    "mapping": {"1": "1", "2": "2"},
-                }),
-            );
-        }
-        (session, ids[0], ids[1])
-    }
-
-    #[test]
-    fn board_facts_skips_pending_check_when_routed_and_stops_after_first_pending() {
-        let (base_session, first_id, second_id) = two_pending_assignments();
-        let base_snapshot = base_session.snapshot().unwrap();
-        let make_project = |session: &Session| {
-            let mut project = (*session.snapshot().unwrap()).clone();
-            std::sync::Arc::make_mut(&mut project.board).assignments.get_mut(&second_id).unwrap().unconnected_pads.push("NC".to_owned());
-            project
-        };
-
-        // Unrouted with two pending assignments (first plain, second extended):
-        // stops checking pending after the first pending assignment while still scanning `extended`.
-        let unrouted = make_project(&base_session);
-        assert!(unrouted.board.has_pending_assignment(&unrouted, &unrouted.board.assignments[&first_id]));
-        assert!(unrouted.board.has_pending_assignment(&unrouted, &unrouted.board.assignments[&second_id]));
-        let facts = scan(&unrouted);
-        assert!(facts.pending);
-        assert!(facts.extended);
-        assert_eq!(facts.pending_checks, 1);
-
-        // Track present: routing takes priority, so pending checks are skipped while `extended` is still scanned.
-        let mut with_track = Session::default();
-        with_track.open_snapshot(base_snapshot.clone());
-        let copper =
-            with_track.project().unwrap().board_setup().unwrap().layers().iter().find(|layer| layer.purpose == LayerPurpose::Copper).unwrap().id;
-        apply(
-            &mut with_track,
-            ADD_TRACKS,
-            json!({"layer": copper, "width_nm": 250_000, "points": [{"x_nm": 0, "y_nm": 0}, {"x_nm": 5_000_000, "y_nm": 0}]}),
-        );
-        let track_facts = scan(&make_project(&with_track));
-        assert!(!track_facts.pending);
-        assert!(track_facts.extended);
-        assert_eq!(track_facts.pending_checks, 0);
-
-        // Via present (no tracks): routing takes priority, so pending checks are skipped while `extended` is still scanned.
-        let mut with_via = Session::default();
-        with_via.open_snapshot(base_snapshot);
-        apply(&mut with_via, ADD_VIA, json!({"at": {"x_nm": 5_000_000, "y_nm": 0}, "via_diameter_nm": 600_000, "via_drill_nm": 300_000}));
-        let via_facts = scan(&make_project(&with_via));
-        assert!(!via_facts.pending);
-        assert!(via_facts.extended);
-        assert_eq!(via_facts.pending_checks, 0);
-    }
-
-    /// Two accepted and placed parts, then two newer parts whose assignments are still pending.
-    fn accepted_footprints_and_pending_assignments() -> (Project, Vec<u64>) {
-        let mut session = Session::default();
-        session.apply("project.new", &json!({"name": "BoardFacts extended scan", "create_board": true})).unwrap();
-        apply(&mut session, INITIALIZE_BOARD_SETUP, json!({"copper_layers": 2}));
-        let definition = crate::board::definition::basic_components("resistor-0402").unwrap();
-        let place_and_assign = |session: &mut Session, x_nm: i64| {
-            apply(session, PLACE_RESISTOR, json!({"x_nm": x_nm, "y_nm": 0}));
-            let id = *session.project().unwrap().components.keys().next_back().unwrap();
-            apply(
-                session,
-                ASSIGN_FOOTPRINT,
-                json!({
-                    "component": format!("component-{id}"),
-                    "library": definition.library,
-                    "definition": definition.id,
-                    "definition_revision": definition.revision,
-                    "mapping": {"1": "1", "2": "2"},
-                }),
-            );
-            id
-        };
-        let accepted = [place_and_assign(&mut session, 0), place_and_assign(&mut session, 10_000_000)];
-        let preview = session.execute(PREVIEW_UPDATE, &json!({"expected_revision": session.revision()})).unwrap()["board_update_preview"].clone();
-        apply(&mut session, APPLY_UPDATE, json!({"plan_token": preview["plan_token"]}));
-        for (index, id) in accepted.into_iter().enumerate() {
-            apply(
-                &mut session,
-                PLACE_ASSIGNED_FOOTPRINT,
-                json!({"component": format!("component-{id}"), "x_nm": index as i64 * 10_000_000, "y_nm": 0}),
-            );
-        }
-        let pending = vec![place_and_assign(&mut session, 20_000_000), place_and_assign(&mut session, 30_000_000)];
-        ((*session.snapshot().unwrap()).clone(), pending)
-    }
-
-    /// Once one footprint, assignment or accepted package needs the multipad format, the scan
-    /// stops checking the remaining rows for it; the selected facts are unchanged.
-    #[test]
-    fn board_facts_stops_extended_mapping_checks_after_first_extended_row() {
-        let (plain, pending) = accepted_footprints_and_pending_assignments();
-        let footprints = plain.board.footprints().len();
-        let assignments = plain.board.assignments.len();
-        let accepted = plain.board.baseline.as_ref().map_or(0, |baseline| baseline.components.len());
-        assert_eq!(footprints, 2);
-        assert_eq!(accepted, 2);
-        assert!(pending.iter().all(|id| plain.board.assignments.contains_key(id)));
-        assert!(assignments >= 2);
-
-        let edit = |change: &dyn Fn(&mut crate::board::Board)| {
-            let mut project = plain.clone();
-            change(std::sync::Arc::make_mut(&mut project.board));
-            project
-        };
-        let mark_assignments = |count: usize, skip: usize| {
-            edit(&|board| {
-                for assignment in board.assignments.values_mut().skip(skip).take(count) {
-                    assignment.unconnected_pads.push("NC".to_owned());
-                }
-            })
-        };
-
-        // Nothing extended: every footprint, assignment and accepted package is checked.
-        let none = scan(&plain);
-        assert!(!none.extended);
-        assert_eq!(none.extended_checks, footprints + assignments + accepted);
-
-        // The first footprint is extended: nothing after it is checked.
-        let footprint_first = edit(&|board| {
-            let mut placed = board.footprints().to_vec();
-            let (baseline, saved_assignments, definitions) = (board.baseline.take(), board.assignments.clone(), board.definitions.clone());
-            for footprint in &placed {
-                board.remove_component(footprint.component, None);
-            }
-            board.definitions = definitions;
-            placed[0].unconnected_pads.push("NC".to_owned());
-            for footprint in placed {
-                board.append(footprint).unwrap();
-            }
-            board.assignments = saved_assignments;
-            board.baseline = baseline;
-        });
-        assert_eq!(footprint_first.board.footprints().len(), footprints);
-        assert!(!footprint_first.board.footprints()[0].unconnected_pads.is_empty());
-        let footprint_facts = scan(&footprint_first);
-        assert!(footprint_facts.extended);
-        assert_eq!(footprint_facts.extended_checks, 1);
-
-        // The first assignment is extended: later assignments and accepted packages are not checked.
-        let first = scan(&mark_assignments(1, 0));
-        assert!(first.extended);
-        assert_eq!(first.extended_checks, footprints + 1);
-
-        // Every assignment extended: still one assignment check, with the same facts.
-        let all = scan(&mark_assignments(assignments, 0));
-        assert!(all.extended);
-        assert_eq!(all.extended_checks, footprints + 1);
-        assert_eq!((all.pending, all.pending_checks), (first.pending, first.pending_checks));
-
-        // Only the second assignment is extended: two assignment checks, and accepted packages are not checked.
-        let second = scan(&mark_assignments(1, 1));
-        assert!(second.extended);
-        assert_eq!(second.extended_checks, footprints + 2);
-
-        // The first accepted package is extended: the second accepted package is not checked.
-        let accepted_first = edit(&|board| {
-            let baseline = std::sync::Arc::make_mut(board.baseline.as_mut().unwrap());
-            baseline.components.values_mut().next().unwrap().package.as_mut().unwrap().unconnected_pads.push("NC".to_owned());
-        });
-        let accepted_facts = scan(&accepted_first);
-        assert!(accepted_facts.extended);
-        assert_eq!(accepted_facts.extended_checks, footprints + assignments + 1);
     }
 }

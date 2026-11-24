@@ -232,7 +232,7 @@ fn profiles_leave_fabrication_and_legacy_markers_alone() {
     // Format 22 carries the tracks, vias, outline, setup and accepted baseline beside the profile.
     let documents = encode_documents(s.snapshot().unwrap()).unwrap();
     let saved: Value = serde_json::from_slice(&documents[&test_board_path(&documents)]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/22");
+    assert_eq!(saved["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(saved["tracks"].is_array() && saved["vias"].is_array() && saved["baseline"].is_object());
     assert_eq!(encode_documents(decode_documents(&documents).unwrap()).unwrap(), documents);
 
@@ -564,7 +564,7 @@ fn largest_allowed_profile_catalog_serializes_under_two_mebibytes() {
     refused_because(catalog.validate(&adoptions), "128 revisions");
 }
 
-/// The current project format pins profiles and board/22 adopts them; Undo retains only issuance metadata beyond restored content.
+/// Current project and board records retain exact profile revisions through save and Undo.
 #[test]
 fn profile_format_round_trips_and_undo_restores_authored_content() {
     let (mut s, _) = placed();
@@ -585,7 +585,7 @@ fn profile_format_round_trips_and_undo_restores_authored_content() {
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
     let path = test_board_path(&docs);
     let saved: Value = serde_json::from_slice(&docs[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/22");
+    assert_eq!(saved["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(saved["rules"].is_object() && saved["placement_origin"].is_object());
     let project: Value = serde_json::from_slice(&docs["project.json"]).unwrap();
     assert_eq!(project["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
@@ -741,7 +741,7 @@ fn profile_without_origin_round_trips() {
     set(&mut s, None, json!({"name":"Only"})).unwrap();
     let docs = encode_documents(s.snapshot().unwrap()).unwrap();
     let saved: Value = serde_json::from_slice(&docs[&test_board_path(&docs)]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/22");
+    assert_eq!(saved["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(saved.get("placement_origin").is_none() && saved.get("rules").is_none());
     assert_eq!(encode_documents(decode_documents(&docs).unwrap()).unwrap(), docs);
 }
@@ -762,13 +762,13 @@ fn stack_format_carries_an_assembly_profile_adoption() {
     let pinned = encode_documents(s.snapshot().unwrap()).unwrap();
     let path = test_board_path(&pinned);
     let board: Value = serde_json::from_slice(&pinned[&path]).unwrap();
-    assert_eq!(board["format"], "pcbcraft-board/23");
+    assert_eq!(board["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert!(board.get("assembly_profiles").is_none());
 
     adopt(&mut s, id, Some(1)).unwrap();
     let adopted = encode_documents(s.snapshot().unwrap()).unwrap();
     let mut saved: Value = serde_json::from_slice(&adopted[&path]).unwrap();
-    assert_eq!(saved["format"], "pcbcraft-board/23");
+    assert_eq!(saved["format"], crate::persistence::CURRENT_BOARD_FORMAT);
     assert_eq!(saved["setup"], board["setup"]);
     assert_eq!(saved["placement_origin"], board["placement_origin"]);
     assert_eq!(saved["assembly_profiles"], json!([{"profile":id,"revision":1}]));
@@ -1278,6 +1278,7 @@ fn saved_catalog_and_adoption_edges_are_refused() {
     older["format"] = json!("pcbcraft-board/21");
     check(&path, older, "adoptions require format 22");
     let mut omitted = board.clone();
+    omitted["format"] = json!("pcbcraft-board/22");
     omitted.as_object_mut().unwrap().remove("assembly_profiles");
     check(&path, omitted, "adoptions require format 22");
     let mut duplicates = board;

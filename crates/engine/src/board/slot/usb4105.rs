@@ -16,7 +16,7 @@ use crate::{
     Session,
     authoring::{Action, Item, Kind, Primitive},
     board::{
-        definition::{CircularNpth, CopperBinding, PadShape},
+        definition::{CURRENT_FORMAT, CircularNpth, CopperBinding, PadShape},
         drc::{Kind as Finding, Rules},
         track::tests::view,
     },
@@ -73,7 +73,7 @@ fn usb4105() -> std::sync::Arc<Item> {
 fn usb4105_published_shell_slots_place_exactly() {
     let item = usb4105();
     let definition = item.footprint().unwrap();
-    assert_eq!(definition.format, "pcbcraft-footprint/5");
+    assert_eq!(definition.format, CURRENT_FORMAT);
     let session: Session = place(&item, "GCT USB4105 shell slots");
     let footprint = view(&session).footprints().next().unwrap();
     assert!(!footprint.bottom);
