@@ -13,7 +13,7 @@ use inspection::Finished;
 use pcbcraft_engine::persistence::Encoding;
 use pcbcraft_engine::{
     Project, Session,
-    persistence::{CURRENT_PROJECT_FORMAT, Documents, ENTRY_POINT, project_board_path},
+    persistence::{CURRENT_BOARD_FORMAT, CURRENT_PROJECT_FORMAT, Documents, ENTRY_POINT, project_board_path},
 };
 
 /// Desktop working folders and portable archives use the same split documents.
@@ -35,21 +35,24 @@ mod stand_in;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
-/// Check the stored header before reusing source bytes. Older entry points always migrate.
-fn has_current_entry_point(documents: &Documents) -> bool {
+/// Check a stored header before retaining raw bytes during a save.
+fn has_document_format(documents: &Documents, path: &str, expected: &str) -> bool {
     #[derive(serde::Deserialize)]
     struct Header {
         format: String,
     }
-    documents
-        .get(ENTRY_POINT)
-        .and_then(|bytes| serde_json::from_slice::<Header>(bytes).ok())
-        .is_some_and(|header| header.format == CURRENT_PROJECT_FORMAT)
+    documents.get(path).and_then(|bytes| serde_json::from_slice::<Header>(bytes).ok()).is_some_and(|header| header.format == expected)
 }
 
-/// Keep exact unaffected bytes, including board files moved by first-save layout adoption.
-/// Compare against the current encoding of the old snapshot and use its actual on-disk path
-/// to recover the original bytes. The migrated entry point always uses the current encoding.
+/// A save may reuse the entire source only when both write formats are current.
+fn has_current_write_formats(documents: &Documents, snapshot: &Project) -> bool {
+    has_document_format(documents, ENTRY_POINT, CURRENT_PROJECT_FORMAT)
+        && snapshot.board_document_path().is_none_or(|path| has_document_format(documents, &path, CURRENT_BOARD_FORMAT))
+}
+
+/// Keep exact unaffected bytes by comparing the snapshots' current encodings and looking up
+/// the corresponding source path. Entry points and board documents use current write formats
+/// on Save even when their authored data is unchanged.
 fn retain_unchanged_documents(
     documents: &mut Documents,
     canonical: &Documents,
@@ -57,14 +60,18 @@ fn retain_unchanged_documents(
     old_board: Option<&str>,
     new_board: Option<&str>,
 ) -> Result<(), String> {
-    let current = has_current_entry_point(original);
+    let current = has_document_format(original, ENTRY_POINT, CURRENT_PROJECT_FORMAT);
     let canonical_board = project_board_path(&canonical[ENTRY_POINT])?;
     for (path, bytes) in documents {
         if path == ENTRY_POINT && !current {
             continue;
         }
         let (comparison, source) = if Some(path.as_str()) == new_board {
-            (canonical_board.as_deref().unwrap_or(path), old_board.unwrap_or(path))
+            let source = old_board.unwrap_or(path);
+            if !has_document_format(original, source, CURRENT_BOARD_FORMAT) {
+                continue;
+            }
+            (canonical_board.as_deref().unwrap_or(path), source)
         } else {
             (path.as_str(), path.as_str())
         };

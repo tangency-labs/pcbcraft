@@ -12,7 +12,7 @@ use pcbcraft_engine::{
     persistence::{Documents, ENTRY_POINT, Encoding, decode_documents, decode_packed, encode_documents, encode_packed_documents, read_bytes},
 };
 
-use super::{Outcome, SaveFormat, Saved, Upgrades, file_name_for, has_current_entry_point, retain_unchanged_documents};
+use super::{Outcome, SaveFormat, Saved, Upgrades, file_name_for, has_current_write_formats, retain_unchanged_documents};
 use pcbcraft_storage as folder;
 
 #[derive(Clone, Debug)]
@@ -117,7 +117,8 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
         return Err(pcbcraft_engine::persistence::UNSUPPORTED_PROJECT_LAYOUT.to_owned());
     }
     let packed = decode_packed(&bytes)?;
-    let needs_upgrade = packed.needs_manifest || !has_current_entry_point(&packed.documents) || snapshot_needs_layout_upgrade(&packed.project);
+    let needs_upgrade =
+        packed.needs_manifest || !has_current_write_formats(&packed.documents, &packed.project) || snapshot_needs_layout_upgrade(&packed.project);
     let (snapshot, documents, needs_manifest) = (packed.project, Some(Arc::new(packed.documents)), packed.needs_manifest);
     Saved {
         snapshot,
@@ -132,7 +133,7 @@ pub(super) fn load(path: &Path) -> Result<Saved, String> {
 fn load_folder(root: &Path) -> Result<Saved, String> {
     let (documents, migrated_documents) = folder::load_with_upgrade(root)?;
     let snapshot = decode_documents(&documents)?;
-    let needs_upgrade = migrated_documents || !has_current_entry_point(&documents) || snapshot_needs_layout_upgrade(&snapshot);
+    let needs_upgrade = migrated_documents || !has_current_write_formats(&documents, &snapshot) || snapshot_needs_layout_upgrade(&snapshot);
     Saved {
         snapshot,
         opened: None,
@@ -237,9 +238,9 @@ fn name_for(snapshot: &Project, saved_before: bool, path: &Path) -> Option<Proje
     snapshot.renamed(stem(path.file_name()?.to_str()?)).ok()
 }
 
-/// Keep exact source bytes for every logically unchanged document, including Save As conversion.
+/// Save with current headers and retain exact unaffected bytes, including on Save As.
 fn working_documents(snapshot: &Arc<Project>, previous: Option<&Arc<Project>>, original: Option<&Documents>) -> Result<Documents, String> {
-    let current = original.is_some_and(has_current_entry_point);
+    let current = original.is_some_and(|documents| has_current_write_formats(documents, snapshot));
     if previous.is_some_and(|old| Arc::ptr_eq(old, snapshot))
         && current
         && let Some(original) = original
