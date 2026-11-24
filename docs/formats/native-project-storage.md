@@ -490,8 +490,9 @@ or both. Each present flag is `top`, `bottom`, or `both`, relative to the board
 faces. Omission means unmarked. Empty or null lists, null or empty flags,
 and duplicate or unresolved targets are refused. A pad must be a land in the
 pinned footprint, including lands without assigned terminals. Legacy markers are
-not physical lands. Records are written in incremental batches: pads in
-placement ID and pad-number order, then vias in UUID order.
+not physical lands. Records, targets and flags are JSON objects; positional
+arrays are refused. Records are written in incremental batches: pads in
+placement ID and pad-label (string) order, then vias in UUID order.
 
 Marks combine with every other current board record, including named layer
 groups. Clearing the last mark keeps the board header at version 43 and drops

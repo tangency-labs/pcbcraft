@@ -222,6 +222,8 @@ fn validation_rejects_bad_addresses_sides_purposes_and_stale_revisions_atomicall
         ("target", json!({"kind":"via","via":Uuid::from_u128(1)}), "No such pad or via"),
         ("target", json!({"kind":"via","via":Uuid::nil()}), "must identify one placed pad or via"),
         ("target", json!({"kind":"pad","footprint":pad["footprint"],"pad":"1","via":Uuid::from_u128(1)}), "must identify one placed pad or via"),
+        ("target", json!(["pad", pad["footprint"], "1"]), "must identify one placed pad or via"),
+        ("target", json!(["via", Uuid::from_u128(1)]), "must identify one placed pad or via"),
         ("purpose", json!("any"), "must be assembly or fabrication"),
         ("sides", json!("left"), "must be top, bottom, both or null"),
     ] {
@@ -290,10 +292,10 @@ fn marked_format_composes_and_refuses_invalid_records() {
     assert_eq!(save(&session), original);
 }
 
-/// Raw board JSON must reject positional JSON arrays and unknown fields on both `Record` and `Flags`.
+/// Raw board JSON must reject positional JSON arrays and unknown fields on `Record`, its `target` and `Flags`.
 #[test]
 fn raw_text_test_points_reject_positional_arrays_and_unknown_fields() {
-    let (mut session, pad, _) = fixture();
+    let (mut session, pad, via) = fixture();
     set(&mut session, &pad, "assembly", json!("top")).unwrap();
     let marked = save(&session);
     let path = test_board_path(&marked);
@@ -301,9 +303,14 @@ fn raw_text_test_points_reject_positional_arrays_and_unknown_fields() {
     let start = text.find("\"test_points\":").expect("canonical board.json must contain test_points");
     let end = start + text[start..].find("],").expect("canonical test_points array must terminate") + 1;
     let pad_json = serde_json::to_string(&pad).unwrap();
+    let footprint = serde_json::to_string(&pad["footprint"]).unwrap();
+    let via = serde_json::to_string(&via["via"]).unwrap();
     for (replacement, expected) in [
         (format!(r#""test_points":[[{pad_json},{{"assembly":"top"}}]]"#), "expected a JSON object"),
         (format!(r#""test_points":[{{"target":{pad_json},"flags":["top",null]}}]"#), "expected a JSON object"),
+        (format!(r#""test_points":[{{"target":["pad",{footprint},"1"],"flags":{{"assembly":"top"}}}}]"#), "expected a JSON object"),
+        (format!(r#""test_points":[{{"target":["via",{via}],"flags":{{"assembly":"top"}}}}]"#), "expected a JSON object"),
+        (format!(r#""test_points":[{{"target":{{"kind":"via","via":{via},"extra":1}},"flags":{{"assembly":"top"}}}}]"#), "unknown field `extra`"),
         (format!(r#""test_points":[{{"target":{pad_json},"flags":{{"assembly":"top"}},"extra":1}}]"#), "unknown field `extra`"),
         (format!(r#""test_points":[{{"target":{pad_json},"flags":{{"assembly":"top","extra":1}}}}]"#), "unknown field `extra`"),
     ] {

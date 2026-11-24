@@ -88,11 +88,28 @@ pub(crate) enum Purpose {
 }
 
 /// External object address in both command parameters and native board records.
-#[derive(Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum Address {
     Pad { footprint: String, pad: String },
     Via { via: Uuid },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum RawAddress {
+    Pad { footprint: String, pad: String },
+    Via { via: Uuid },
+}
+
+impl<'de> Deserialize<'de> for Address {
+    /// Serde's internally tagged decoder also reads `[kind, ...]` sequences; accept only objects.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match deserialize_object(deserializer)? {
+            RawAddress::Pad { footprint, pad } => Self::Pad { footprint, pad },
+            RawAddress::Via { via } => Self::Via { via },
+        })
+    }
 }
 
 /// Validated object identity scoped to the board containing the record.
