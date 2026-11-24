@@ -78,10 +78,8 @@ bindings, origins and identities.
 
 The current project format stores bindings with a nonempty class catalog.
 Schematic-only bindings remain under `schematic_instances.net_registry`.
-Board-owned bindings use `pcbcraft-instances/3`, or instances/4 for a numbered
-registry. Expanded and compact memberships use instances/5 and /7 respectively,
-unless differential pairs require instances/8. A catalog without memberships
-keeps the instance format required by the other records. First-board creation moves
+Board-owned bindings use the [current instance format](native-project-storage.md#board-instance-records)
+alongside optional numbers, memberships and pairs. First-board creation moves
 the live registry and requalifies its anchors without changing net IDs or
 binding origins. Physical `board.json` bytes, accepted connectivity baselines and
 pending board updates remain independent of classification edits.

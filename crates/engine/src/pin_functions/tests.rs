@@ -486,7 +486,7 @@ fn pin_function_storage_preserves_differential_pairs() {
         assert_eq!(serde_json::from_slice::<Value>(&docs[ENTRY_POINT]).unwrap()["format"], crate::persistence::CURRENT_PROJECT_FORMAT);
         if let Some(path) = session.project().unwrap().instances_document_path() {
             assert_eq!(docs[&path], before[&path]);
-            assert_eq!(serde_json::from_slice::<Value>(&docs[&path]).unwrap()["format"], "pcbcraft-instances/8");
+            assert_eq!(serde_json::from_slice::<Value>(&docs[&path]).unwrap()["format"], crate::persistence::CURRENT_INSTANCES_FORMAT);
         }
         let reopened = decode_documents(&docs).unwrap();
         assert_eq!(reopened.net_registry.pairs.as_ref(), &[Arc::new(pair)]);
