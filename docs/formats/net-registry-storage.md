@@ -88,7 +88,7 @@ encoding instances/8 contains. Removing the last pair restores the envelope
 required by the remaining records. No sheet, board or `.pc` container version
 changes.
 
-At most 2,048 pairs fit alongside 4,096 net records. Pair content counts toward
+At most 4,096 pairs fit alongside 8,192 net records. Pair content counts toward
 the registry's existing 8 MiB serialized limit. Incremental writing charges one
 record per pair, and history snapshots share the pair list and individual values.
 Read-only registry inspection includes `pairs` only when present. There is no
