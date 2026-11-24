@@ -29,7 +29,7 @@ pub const MAX_GROUPS: usize = crate::net_classes::MAX_CLASSES;
 /// Every part instance may belong to every group, and no more.
 pub const MAX_MEMBERSHIPS: usize = crate::schematic::MAX_SYMBOLS * MAX_GROUPS;
 /// The published address prefix of a part instance. The legacy word stays because saved
-/// projects, commands and reports already use these addresses (see docs/part-schema.md).
+/// projects, commands and reports already use these addresses (see docs/libraries/part-schema.md).
 const PART_INSTANCE_ADDRESS_PREFIX: &str = "component-";
 
 /// One independently revisioned part group, addressed by UUID rather than display name.
